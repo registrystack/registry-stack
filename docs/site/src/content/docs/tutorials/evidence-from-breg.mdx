@@ -40,8 +40,8 @@ It selects PublicSchema's Organization concept and name property. BReg adds a
 required unique code; these are registry modeling choices, with no Evidence setup.
 
 ```yaml
-apiVersion: registry.registrystack.org/breg-model-selection/v1alpha1
-kind: ModelSelection
+apiVersion: id.registrystack.org/formats/breg/model-selection/v1alpha1
+kind: BRegModelSelection
 model: publicschema
 modelVersion: "0.3.0"
 modelRevision: "e5cfbbc0161e4d2c802d1acd752ec193253f7820"
@@ -319,7 +319,7 @@ no production target, and deploys neither component.
 
 A renamed or removed field changes the fact the export produces. When a
 derivation still reads the old fact name, `source diff`, `source update`, and
-`check` refuse with `evidence.authoring.derivation-fact-undeclared` and name
+`check` refuse with `evidence.derivation.fact-undeclared` and name
 the derivation file. Update the derivation to the new fact name in the same
 change. The check reads the project, not the running registry: a field renamed
 in a registry that already serves a deployed candidate still fails that

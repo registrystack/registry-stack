@@ -22,6 +22,22 @@ CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 \
 CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 \
   cargo run --locked --quiet -p registry-evidence-oid4vci -- openapi \
   --output "$generated_root/registry-evidence-oid4vci.openapi.json"
+CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 \
+  cargo run --locked --quiet -p registry-evidence-oid4vci --features schema \
+  --example runtime-schema -- --output "$generated_root/oid4vci-runtime"
+CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 \
+  cargo run --locked --quiet -p registry-evidence-client --features schema \
+  --example client-schema -- --output "$generated_root"
+# The code list JSON Schema, products/evidence/generated/codelist/codelist.schema.json,
+# is derived from the reader types in crates/registry-evidence/src/codelist.rs.
+CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 \
+  cargo run --locked --quiet -p registry-evidence --features schema --example codelist-schema -- \
+  --output "$generated_root/codelist"
+# The fixture JSON Schema, products/evidence/generated/fixture/fixture.schema.json,
+# states what crates/registry-evidence/src/fixture.rs reads.
+CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 \
+  cargo run --locked --quiet -p registry-evidence --features schema --example fixture-schema -- \
+  --output "$generated_root/fixture"
 
 if ! diff -ru "$committed_root" "$generated_root"; then
   echo 'Evidence generated contracts differ from the committed artifacts.' >&2

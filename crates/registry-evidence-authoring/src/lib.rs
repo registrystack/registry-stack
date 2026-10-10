@@ -11,17 +11,18 @@
 //! # Crate invariant: no input or output
 //!
 //! Nothing here reads a file, opens a socket, or starts a process. Every entry
-//! point takes text or already-parsed values and returns values or
-//! [`Finding`]s. Reading the bytes is the caller's job, which is what lets an
-//! editor run these checks against an unsaved buffer and a compiler run them
-//! against a file on disk without either of them owning a second copy of the
-//! rules.
+//! point takes text or already-parsed values and returns values, [`Finding`]s,
+//! or the shared reader's diagnostics. Reading the bytes is the caller's job,
+//! which is what lets an editor run these checks against an unsaved buffer and
+//! a compiler run them against a file on disk without either of them owning a
+//! second copy of the rules.
 //!
 //! The invariant is enforced by `tests/no_io.rs`, which sweeps this crate's own
 //! sources and its dependency list rather than trusting this paragraph.
 
 pub mod derivation;
 pub mod finding;
+pub mod formats;
 pub mod layout;
 pub mod marker;
 pub mod model;
@@ -35,8 +36,7 @@ pub mod validate;
 pub use derivation::{validate_answer_fact_reads, validate_authored_answer};
 pub use finding::{FieldPath, FieldStep, Finding};
 pub use marker::{
-    default_project_marker_document, parse_project_marker, ProjectKind, ProjectMarker,
-    PROJECT_MARKER_FILE,
+    default_project_marker_document, parse_project_marker, ProjectMarker, PROJECT_MARKER_FILE,
 };
 pub use model::{
     default_response_formats, AccessPolicy, AnswerType, FactCombination, Question, QuestionAnswer,

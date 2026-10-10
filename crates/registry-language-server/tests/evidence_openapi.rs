@@ -44,7 +44,7 @@ fn the_worked_compact_form_project_reports_nothing() {
 }
 
 /// Edge 1: `source.operation` names an operationId the description publishes. Paired with
-/// `unique_operation` in `crates/registry-evidencectl/src/authoring.rs:1532-1573`, which scans all
+/// `unique_operation` in `crates/registry-evidencectl/src/authoring.rs`, which scans all
 /// eight HTTP methods of every path item for the exact `operationId` and refuses the project with
 /// "source.operation must resolve to exactly one OpenAPI operationId" when the matches are not
 /// exactly one.
@@ -107,7 +107,7 @@ fn an_operation_the_description_does_not_publish_is_reported() {
     );
     assert_eq!(
         diagnostic.code.as_deref(),
-        Some("evidence/unknown-operation")
+        Some("evidence.project.unknown-operation")
     );
 }
 
@@ -138,7 +138,7 @@ fn an_operation_identifier_two_operations_publish_is_reported() {
     );
     assert_eq!(
         diagnostic.code.as_deref(),
-        Some("evidence/ambiguous-operation")
+        Some("evidence.project.ambiguous-operation")
     );
 }
 
@@ -148,7 +148,7 @@ fn an_operation_identifier_two_operations_publish_is_reported() {
 /// `Description::published` (`crates/registry-language-server/src/evidence/openapi.rs:139`) yields a
 /// repeated `operationId` once per operation on purpose, and every published operation is defined
 /// as a symbol whether or not a question names it, so both definitions really are in the index.
-/// `unique_operation` (`crates/registry-evidencectl/src/authoring.rs:1565-1567`) refuses an
+/// `unique_operation` (`crates/registry-evidencectl/src/authoring.rs`) refuses an
 /// ambiguous identifier only where a question spells it, so nothing refuses this description. The
 /// exemption in `SymbolKind::reports_duplicates` is what keeps the editor quiet over it, and this
 /// test fails if that exemption is removed.
@@ -229,14 +229,15 @@ fn an_operation_published_under_another_method_still_resolves() {
         index
             .diagnostics()
             .iter()
-            .all(|diagnostic| diagnostic.code.as_deref() != Some("evidence/unknown-operation")),
+            .all(|diagnostic| diagnostic.code.as_deref()
+                != Some("evidence.project.unknown-operation")),
         "{:?}",
         index.diagnostics()
     );
 }
 
 /// Edge 2: `subject.selector` names one of the operation's required string path parameters. Paired
-/// with `exact_path_selectors` in `crates/registry-evidencectl/src/authoring.rs:1575-1646`, which
+/// with `exact_path_selectors` in `crates/registry-evidencectl/src/authoring.rs`, which
 /// gathers the path item's and the operation's `parameters`, keeps the ones that are `in: path`,
 /// `required: true` and `schema.type: string`, and refuses the project with "question selectors must
 /// equal the operation's required string path parameters" when the question's selectors are not
@@ -260,11 +261,11 @@ fn a_subject_selector_the_operation_has_no_path_parameter_for_is_reported() {
     );
     assert_eq!(
         diagnostic.message,
-        "Subject selector 'person_ref' is not a required string path parameter of operation 'readPerson'"
+        "This subject selector is not a required string path parameter of the question's operation"
     );
     assert_eq!(
         diagnostic.code.as_deref(),
-        Some("evidence/subject-selector")
+        Some("evidence.question.subject-selector")
     );
 }
 
@@ -308,9 +309,9 @@ fn a_selector_of_an_operation_whose_parameters_cannot_be_read_is_left_alone() {
 }
 
 /// Edge 3: each `source.facts[].path` selects a leaf the operation's response offers. Paired with
-/// `compile_facts` in `crates/registry-evidencectl/src/authoring.rs:1648-1679`, which asks
+/// `compile_facts` in `crates/registry-evidencectl/src/authoring.rs`, which asks
 /// `registry_evidence_authoring::openapi::selectable_leaves` for the same set at :1661 and refuses
-/// the project with "source fact `<name>` path `<path>` is not a selectable scalar leaf in the 200
+/// the project with "source fact `<name>` path is not a selectable scalar leaf in the 200
 /// application/json response".
 #[test]
 fn a_fact_path_the_response_does_not_offer_is_reported() {
@@ -331,18 +332,44 @@ fn a_fact_path_the_response_does_not_offer_is_reported() {
     );
     assert_eq!(
         diagnostic.message,
-        "Fact path '/records/*/name' is not a selectable leaf of the 200 application/json response of operation 'readPerson'"
+        "This fact path is not a selectable leaf of the 200 application/json response of the question's operation"
     );
     assert_eq!(
         diagnostic.code.as_deref(),
-        Some("evidence/unselectable-fact-path")
+        Some("evidence.question.unselectable-fact-path")
+    );
+}
+
+/// A fact path is a scalar read from the document, so the diagnostic locates it and never repeats it.
+#[test]
+fn an_unselectable_fact_path_is_reported_without_repeating_it() {
+    let project = EvidenceProject::new(&replacing(
+        &operation_question_project(),
+        QUESTION_PATH,
+        &OPERATION_QUESTION.replace(
+            "path: <|fact-path|>/records/*/date_of_birth",
+            "path: <|fact-path|>/records/*/PRIVATE_CANARY",
+        ),
+    ));
+    let index = project.index();
+
+    let diagnostic = only_diagnostic_in(&index, &project, QUESTION_PATH);
+    assert_eq!(
+        diagnostic.range.start,
+        project.cursor(QUESTION_PATH, "fact-path")
+    );
+    assert!(
+        !diagnostic.message.contains("PRIVATE_CANARY")
+            && !diagnostic.message.contains("readPerson"),
+        "{}",
+        diagnostic.message
     );
 }
 
 /// The same rule where the member really is there. `/records/*` is a member the response has and is
 /// not a scalar, which is the case `compile_facts` refuses at :1666-1674 itself; a member that is
 /// not there at all is refused one check earlier, by `validate_selected_schema_path` at
-/// `crates/registry-evidencectl/src/authoring.rs:1659`, with a sentence of its own. Both are
+/// `crates/registry-evidencectl/src/authoring.rs`, with a sentence of its own. Both are
 /// projects the build will not compile, and the field the author has to change is the same one.
 #[test]
 fn a_fact_path_at_something_that_is_not_a_scalar_leaf_is_reported() {
@@ -359,11 +386,11 @@ fn a_fact_path_at_something_that_is_not_a_scalar_leaf_is_reported() {
     let diagnostic = only_diagnostic_in(&index, &project, QUESTION_PATH);
     assert_eq!(
         diagnostic.message,
-        "Fact path '/records/*' is not a selectable leaf of the 200 application/json response of operation 'readPerson'"
+        "This fact path is not a selectable leaf of the 200 application/json response of the question's operation"
     );
     assert_eq!(
         diagnostic.code.as_deref(),
-        Some("evidence/unselectable-fact-path")
+        Some("evidence.question.unselectable-fact-path")
     );
 }
 
@@ -383,7 +410,7 @@ fn a_fact_path_of_an_operation_with_no_readable_response_is_left_alone() {
 
 /// Edge 4: every key of `source.collectionBounds` names a collection some fact path visits, and
 /// every collection they visit is bounded. Paired with `compile_facts` in
-/// `crates/registry-evidencectl/src/authoring.rs:1681-1705`, which settles the two sets against each
+/// `crates/registry-evidencectl/src/authoring.rs`, which settles the two sets against each
 /// other and refuses the project with "source.collectionBounds must exactly name every selected
 /// collection (missing: ...; unused: ...)".
 #[test]
@@ -430,7 +457,7 @@ fn a_collection_bound_no_fact_visits_is_reported() {
     );
     assert_eq!(
         diagnostic.code.as_deref(),
-        Some("evidence/unknown-collection")
+        Some("evidence.project.unknown-collection")
     );
 }
 
@@ -453,11 +480,11 @@ fn a_collection_no_bound_names_is_reported() {
     );
     assert_eq!(
         diagnostic.message,
-        "This path visits the collection '/records', which source.collectionBounds does not bound"
+        "This path visits a collection that source.collectionBounds does not bound"
     );
     assert_eq!(
         diagnostic.code.as_deref(),
-        Some("evidence/undeclared-collection")
+        Some("evidence.question.undeclared-collection")
     );
 }
 
@@ -501,7 +528,7 @@ fn two_facts_visiting_one_collection_declare_it_once() {
 /// One mistake, one sentence. An operation that does not resolve leaves the selector, the fact path
 /// and the collection bound with nothing to be read against, and the compiler stops at
 /// `unique_operation` without judging any of them
-/// (`crates/registry-evidencectl/src/authoring.rs:990`).
+/// (`crates/registry-evidencectl/src/authoring.rs`).
 #[test]
 fn an_unresolved_operation_reports_nothing_about_the_fields_that_read_it() {
     let project = EvidenceProject::new(&replacing(
@@ -530,14 +557,14 @@ fn an_unresolved_operation_reports_nothing_about_the_fields_that_read_it() {
     let diagnostic = only_diagnostic_in(&index, &project, QUESTION_PATH);
     assert_eq!(
         diagnostic.code.as_deref(),
-        Some("evidence/unknown-operation")
+        Some("evidence.project.unknown-operation")
     );
 }
 
 /// The same discipline one rung earlier. A question the authoring form refuses is one
 /// `compile_question_plan` never reads, because it takes its inline source out with
 /// `.expect("inline source was validated")`
-/// (`crates/registry-evidencectl/src/authoring.rs:989`), so the field the form names is the only
+/// (`crates/registry-evidencectl/src/authoring.rs`), so the field the form names is the only
 /// thing the author is told about.
 #[test]
 fn a_question_the_form_refuses_reports_only_its_own_problem() {
@@ -559,7 +586,7 @@ fn a_question_the_form_refuses_reports_only_its_own_problem() {
     let diagnostic = only_diagnostic_in(&index, &project, QUESTION_PATH);
     assert_eq!(
         diagnostic.code.as_deref(),
-        Some("evidence/operation-identifier")
+        Some("evidence.question.operation-identifier")
     );
 }
 
@@ -577,7 +604,7 @@ fn a_question_written_in_the_referenced_form_draws_no_operation_edge() {
 /// operations is one the editor says nothing about.
 ///
 /// These two are refused later inside `unique_operation`
-/// (`crates/registry-evidencectl/src/authoring.rs:1536-1547`). Unlike a missing or invalid retained
+/// (`crates/registry-evidencectl/src/authoring.rs`). Unlike a missing or invalid retained
 /// document, they are not reasons to stop the earlier authoring diagnostics.
 #[test]
 fn a_description_unavailable_after_prerequisites_leaves_every_edge_alone() {
@@ -624,7 +651,7 @@ fn a_project_with_no_description_leaves_every_edge_alone() {
     assert_eq!(reported.len(), 1, "{reported:?}");
     assert_eq!(
         reported[0].code.as_deref(),
-        Some("evidence/openapi-prerequisite")
+        Some("evidence.openapi.prerequisite")
     );
 }
 
@@ -644,7 +671,7 @@ fn a_description_past_the_ceiling_the_authoring_form_sets_leaves_every_edge_alon
     assert_eq!(reported.len(), 1, "{reported:?}");
     assert_eq!(
         reported[0].code.as_deref(),
-        Some("evidence/openapi-prerequisite")
+        Some("evidence.openapi.prerequisite")
     );
     assert!(index
         .definitions_at(
@@ -659,7 +686,7 @@ fn a_description_past_the_ceiling_the_authoring_form_sets_leaves_every_edge_alon
 ///
 /// The degradation cases assert that the editor says nothing, and a project the compiler accepts
 /// says nothing either way: the silence would prove only that the fixture was correct. This one
-/// reports `evidence/unknown-operation` the moment the description is read at all
+/// reports `evidence.project.unknown-operation` the moment the description is read at all
 /// (`an_operation_the_description_does_not_publish_is_reported` is the same question against a
 /// description that reads), so silence over it means the edge was never drawn.
 fn speaks_when_the_description_is_read() -> Vec<ProjectFile> {
@@ -755,7 +782,7 @@ fn one_question_naming_an_operation_makes_the_description_a_prerequisite() {
     assert_eq!(reported[0].path, project.path(OPENAPI_PATH));
     assert_eq!(
         reported[0].code.as_deref(),
-        Some("evidence/openapi-prerequisite")
+        Some("evidence.openapi.prerequisite")
     );
     assert_eq!(
         reported[0].message,
@@ -765,9 +792,10 @@ fn one_question_naming_an_operation_makes_the_description_a_prerequisite() {
 
 /// A question the form refuses is not a question that needs a description.
 ///
-/// `read_inputs` stops at `first_finding(validate_question(&question))?` before any question is
-/// compiled, so the sentence the author gets from the build is the one about the question. Adding a
-/// second sentence about a missing file would send them to a file that is not the problem.
+/// `read_inputs` gathers what `check_question` reports for the question and stops at the gathered
+/// errors before any question is compiled, so the sentence the author gets from the build is the
+/// one about the question. Adding a second sentence about a missing file would send them to a file
+/// that is not the problem.
 #[test]
 fn a_question_the_form_refuses_does_not_make_the_description_a_prerequisite() {
     let project = EvidenceProject::new(&replacing(
@@ -781,7 +809,7 @@ fn a_question_the_form_refuses_does_not_make_the_description_a_prerequisite() {
     assert_eq!(reported[0].path, project.path(QUESTION_PATH));
     assert_eq!(
         reported[0].code.as_deref(),
-        Some("evidence/answer-concept-identifier")
+        Some("evidence.question.answer-concept-identifier")
     );
 }
 
@@ -802,7 +830,7 @@ fn a_linked_description_is_refused_whatever_the_questions_name() {
     assert_eq!(reported[0].path, project.path(OPENAPI_PATH));
     assert_eq!(
         reported[0].code.as_deref(),
-        Some("evidence/openapi-prerequisite")
+        Some("evidence.openapi.prerequisite")
     );
     assert_eq!(
         reported[0].message,

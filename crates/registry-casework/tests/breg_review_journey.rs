@@ -1,5 +1,8 @@
+#![allow(
+    clippy::disallowed_methods,
+    reason = "tests read back the YAML the code under test wrote, or a published contract or fixture, to assert on it; they read no operator configuration"
+)]
 // SPDX-License-Identifier: Apache-2.0
-
 #![cfg(feature = "postgres-test")]
 
 #[path = "../../registry-breg/tests/support/postgres_harness.rs"]
@@ -498,10 +501,10 @@ fn breg_project() -> registry_breg::CompiledRegistry {
             }}
           ],
           "accessProfiles":[
-            {"id":"steward","principalClaim":"registry_principal","requiredScopes":["breg:steward"],"permissions":[{"entity":"asset","operations":["create","get"],"readableFields":["owner","label"],"writableFields":["owner","label"],"rowBoundaries":[]}]},
-            {"id":"submitter","principalClaim":"registry_principal","requiredScopes":["breg:submit"],"permissions":[{"entity":"correction-request","operations":["create","get","submit_request","cancel_request","revise_request"],"readableFields":["owner","asset","label"],"writableFields":["owner","asset","label"],"rowBoundaries":[]}]},
-            {"id":"casework-reviewer","principalClaim":"registry_principal","requiredScopes":["breg:review-read"],"permissions":[{"entity":"correction-request","operations":["get"],"readableFields":["owner","asset","label"],"rowBoundaries":[]}]},
-            {"id":"manual-applier","principalClaim":"registry_principal","requiredScopes":["breg:apply"],"permissions":[{"entity":"correction-request","operations":["get","apply_request"],"readableFields":["owner","asset","label"],"applyTargets":[{"entity":"asset","rowBoundaries":[]}],"rowBoundaries":[]}]}
+            {"id":"steward","principalClaim":"registry_principal","requiredScopes":["breg:steward"],"permissions":[{"entity":"asset","operations":["create","get"],"readableFields":["owner","label"],"writableFields":["owner","label"],"rowBoundaries":"unrestricted"}]},
+            {"id":"submitter","principalClaim":"registry_principal","requiredScopes":["breg:submit"],"permissions":[{"entity":"correction-request","operations":["create","get","submit_request","cancel_request","revise_request"],"readableFields":["owner","asset","label"],"writableFields":["owner","asset","label"],"rowBoundaries":"unrestricted"}]},
+            {"id":"casework-reviewer","principalClaim":"registry_principal","requiredScopes":["breg:review-read"],"permissions":[{"entity":"correction-request","operations":["get"],"readableFields":["owner","asset","label"],"rowBoundaries":"unrestricted"}]},
+            {"id":"manual-applier","principalClaim":"registry_principal","requiredScopes":["breg:apply"],"permissions":[{"entity":"correction-request","operations":["get","apply_request"],"readableFields":["owner","asset","label"],"applyTargets":[{"entity":"asset","rowBoundaries":"unrestricted"}],"rowBoundaries":"unrestricted"}]}
           ]
         }"#,
     )
@@ -1771,7 +1774,7 @@ fn starter_registry_with_casework_reader() -> Value {
             "requiredScopes":["casework:source-reader"],"requiredPurposes":["casework-sync"],
             "permissions":[{"entity":"scope-correction","operations":["get","list"],
                 "readableFields":["authorization-conditions","licensed-activities","record","supporting-reference"],
-                "readableRequestFields":["review_state"],"rowBoundaries":[]}]
+                "readableRequestFields":["review_state"],"rowBoundaries":"unrestricted"}]
         }));
     project
 }

@@ -468,7 +468,8 @@ fn package_refuses_a_package_root_inside_the_output() {
     let message = stderr(&output);
     assert!(message.contains("evidence.package.root-unstable"));
     assert!(message.contains("runtime.yaml:/package/root"));
-    assert!(message.contains(&unstable_package_directory));
+    // The refusal names the member, never the value written there.
+    assert!(!message.contains(&unstable_package_directory), "{message}");
     fixture.assert_no_staging_residue();
 }
 
@@ -595,7 +596,7 @@ fn production_metadata_and_fixture_completeness_fail_before_runtime_delegation()
         match label {
             "missing-governance" => fixture.remove_governance(),
             "missing-stable-concept" => {
-                fixture.replace_in_question("    id: urn:example:concepts:allowed\n", "")
+                fixture.replace_in_question("    uri: urn:example:concepts:allowed\n", "")
             }
             "missing-fixture" => fs::remove_file(fixture.project.join("fixtures/answer.yaml"))
                 .expect("remove fixture"),
@@ -722,7 +723,7 @@ fn check_production_reports_the_same_review_marker_package_would_refuse() {
     let fixture = Fixture::new();
     fs::write(
         fixture.project.join("evidence-project.yaml"),
-        "version: 1\nproject: evidence-authoring\n",
+        registry_evidence_authoring::default_project_marker_document(),
     )
     .expect("project marker");
     fs::write(
@@ -738,11 +739,12 @@ fn check_production_reports_the_same_review_marker_package_would_refuse() {
     assert_value_free(&output);
     let report: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("JSON check report");
-    let findings = report["findings"].as_array().expect("findings array");
+    assert!(report.get("findings").is_none(), "{report}");
+    let diagnostics = report["diagnostics"].as_array().expect("diagnostics list");
     assert!(
-        findings.iter().any(
-            |finding| finding["code"] == "evidence.package.review-marker"
-                && finding["path"] == "bundle/fixtures/answer.yaml"
+        diagnostics.iter().any(
+            |diagnostic| diagnostic["code"] == "evidence.package.review-marker"
+                && diagnostic["source"]["file"] == "bundle/fixtures/answer.yaml"
         ),
         "{report}"
     );
@@ -929,7 +931,9 @@ impl Fixture {
         .expect("retained OpenAPI");
         fs::write(
             project.join("selectors/subject-reference-v1.yaml"),
-            "maximumAggregateBytes: 128\nfields:\n  reference: {type: string, minimumBytes: 1, maximumBytes: 128}\n",
+            "apiVersion: id.registrystack.org/formats/evidence/selector/v1alpha1
+kind: EvidenceSelector
+maximumAggregateBytes: 128\nfields:\n  reference: {type: string, minimumBytes: 1, maximumBytes: 128}\n",
         )
         .expect("selector profile");
         fs::write(project.join("sources/registry.yaml"), SOURCE).expect("source");
@@ -1041,7 +1045,7 @@ impl Fixture {
             .arg("--target")
             .arg(&self.target)
             .arg("--production")
-            .arg("--deny-findings")
+            .arg("--deny-warnings")
             .env("EVIDENCE_BIN", &self.evidence)
             .env("FAKE_EVIDENCE_LOG", &self.log)
             .env(
@@ -1064,7 +1068,6 @@ impl Fixture {
             .arg("target")
             .arg("explain")
             .arg(&self.target)
-            .arg("--project")
             .arg(&self.project)
             .env("EVIDENCE_BIN", &self.evidence)
             .env("FAKE_EVIDENCE_LOG", &self.log)
@@ -1250,7 +1253,9 @@ fn make_tree_writable(path: &Path) -> std::io::Result<()> {
 
 fn question(id: &str) -> String {
     format!(
-        r#"id: {id}
+        r#"apiVersion: id.registrystack.org/formats/evidence/question/v1alpha1
+kind: EvidenceQuestion
+id: {id}
 question: Is the governed condition satisfied?
 purpose: eligibility
 subject:
@@ -1261,7 +1266,7 @@ source:
   ref: registry
 answers:
   - concept: allowed
-    id: urn:example:concepts:allowed
+    uri: urn:example:concepts:allowed
     type: boolean
 derivation: derivations/{id}.rhai
 disclosure:
@@ -1376,7 +1381,9 @@ fn workspace_root() -> PathBuf {
         .to_path_buf()
 }
 
-const SOURCE: &str = r#"transport: http-json
+const SOURCE: &str = r#"apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1
+kind: EvidenceSource
+transport: http-json
 baseUrl: https://registry.invalid
 posture: field-projected
 authentication: {kind: static-authorization, tokenRef: 'secret:file/source-token'}
@@ -1402,7 +1409,9 @@ extractScript: adapters/source-extract.rhai
 factSchema: schemas/facts.schema.yaml
 "#;
 
-const SQLITE_SOURCE: &str = r#"transport: sqlite-extract
+const SQLITE_SOURCE: &str = r#"apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1
+kind: EvidenceSource
+transport: sqlite-extract
 posture: source-derived
 extractProfile: registry-snapshot
 maximumExtractAgeSeconds: 86400
@@ -1427,7 +1436,8 @@ extractScript: adapters/source-extract.rhai
 factSchema: schemas/facts.schema.yaml
 "#;
 
-const GOVERNANCE: &str = r#"version: 1
+const GOVERNANCE: &str = r#"apiVersion: id.registrystack.org/formats/evidence/target-governance/v1alpha1
+kind: EvidenceTargetGovernance
 assuranceProfile: production
 service: {providerId: urn:example:providers:evidence, trustDomain: urn:example:trust-domains:evidence}
 issuer: {id: urn:example:issuers:evidence}

@@ -441,9 +441,9 @@ fn compiled_registry() -> CompiledRegistry {
                 {"id":"label","type":"string","maxLength":128,"required":true,"classification":"restricted"}],
             "accessLog":{"subjectField":"subject"}}],
         "accessProfiles":[
-            {"id":"reader","default":true,"principalClaim":"sub","requiredPurposes":[PURPOSE],"permissions":[
+            {"id":"reader","default":true,"principalClaim":"sub","requiredScopes":"unrestricted","requiredPurposes":[PURPOSE],"permissions":[
                 {"entity":"entry","operations":["get","list","snapshot","revisions"],"readableFields":["label"],
-                    "revisionAccess":true,"rowBoundaries":[]}]}
+                    "revisionAccess":true,"rowBoundaries":"unrestricted"}]}
         ]
     });
     compile_project(

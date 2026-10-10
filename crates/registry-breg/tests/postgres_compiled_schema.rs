@@ -1687,12 +1687,13 @@ fn additive_catalog_registry(variant: AdditiveCatalogVariant) -> registry_breg::
             "id": "writer",
             "default": true,
             "principalClaim": "registry_principal",
+            "requiredScopes": "unrestricted",
             "permissions": [{
                 "entity": "entry",
                 "operations": ["create", "get", "list", "patch"],
                 "readableFields": writable_fields,
                 "writableFields": writable_fields,
-              "rowBoundaries": []
+              "rowBoundaries": "unrestricted"
             }]
         }]
     });
@@ -1728,12 +1729,13 @@ fn length_catalog_registry(max_length: u32) -> registry_breg::CompiledRegistry {
             "id": "writer",
             "default": true,
             "principalClaim": "registry_principal",
+            "requiredScopes": "unrestricted",
             "permissions": [{
                 "entity": "entry",
                 "operations": ["create", "get", "list", "patch"],
                 "readableFields": ["note"],
                 "writableFields": ["note"],
-                "rowBoundaries": []
+                "rowBoundaries": "unrestricted"
             }]
         }]
     });
@@ -1766,12 +1768,13 @@ fn string_length_catalog_registry(min_length: u32) -> registry_breg::CompiledReg
             "id": "writer",
             "default": true,
             "principalClaim": "registry_principal",
+            "requiredScopes": "unrestricted",
             "permissions": [{
                 "entity": "entry",
                 "operations": ["create", "get", "list", "patch"],
                 "readableFields": ["note"],
                 "writableFields": ["note"],
-                "rowBoundaries": []
+                "rowBoundaries": "unrestricted"
             }]
         }]
     });
@@ -1819,12 +1822,13 @@ fn vocabulary_catalog_registry_with_constraints(
             "id": "writer",
             "default": true,
             "principalClaim": "registry_principal",
+            "requiredScopes": "unrestricted",
             "permissions": [{
                 "entity": "entry",
                 "operations": ["create", "get", "list", "patch"],
                 "readableFields": ["status", "kind"],
                 "writableFields": ["status", "kind"],
-                "rowBoundaries": []
+                "rowBoundaries": "unrestricted"
             }]
         }]
     });
@@ -1858,7 +1862,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
           ],
           "accessProfiles":[
             {
-              "id":"writer","default":true,"principalClaim":"registry_principal",
+              "id":"writer","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
               "requiredPurposes":["operations"],
               "permissions":[
                 {
@@ -1873,12 +1877,12 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
                 {
                   "entity":"event","operations":["create","get","list"],
                   "readableFields":["tenant"],"writableFields":["tenant"],
-                  "rowBoundaries": []
+                  "rowBoundaries": "unrestricted"
                 }
               ]
             },
             {
-              "id":"reviewer","principalClaim":"registry_principal",
+              "id":"reviewer","principalClaim":"registry_principal","requiredScopes":"unrestricted",
               "requiredPurposes":["review"],
               "permissions":[{
                 "entity":"entry","operations":["get","list"],
@@ -1918,7 +1922,7 @@ fn derived_registry() -> registry_breg::CompiledRegistry {
             }]
           }],
           "accessProfiles":[{
-            "id":"operator","default":true,"principalClaim":"registry_principal","permissions":[{
+            "id":"operator","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted","permissions":[{
               "entity":"household","operations":["create","get","list"],
               "readableFields":["tenant","size","child-count","observed-on"],
               "writableFields":["tenant","size"],

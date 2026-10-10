@@ -2,12 +2,12 @@
 # Change both baseUrl and region together for the AWS region you use. The
 # credentials are secret references resolved at startup, never package values.
 baseUrl: https://sms-voice.af-south-1.amazonaws.com/
-timeoutMilliseconds: 10000
+attemptTimeoutMilliseconds: 10000
 maximumResponseBytes: 65536
-concurrencyLimit: 8
+maximumConcurrentRequests: 8
 redirects: deny
 authentication:
-  kind: aws-sigv4
+  type: aws-sigv4
   region: af-south-1
   service: sms-voice
   accessKeyIdRef: secret:file/aws-access-key-id

@@ -1,0 +1,17 @@
+id: control-character
+rules: [CFG-VAL-1, CFG-SEC-3]
+summary: A text value holding an escaped C0 or C1 control character is refused at the value, and the value is not repeated.
+mutation:
+  append: |
+    conformanceControl: "{marker}\x1b[2J"
+    conformanceControlC1: "{marker}\u009b2J"
+expect:
+  exit: 1
+  diagnostics:
+    - code: yaml.control-character
+      path: /conformanceControl
+      at: {line: 1, column: 21}
+      suggestedAction: 'Remove the character; in a double-quoted value, look for an escape such as `\0`, `\a`, `\e`, or `\x01`.'
+    - code: yaml.control-character
+      path: /conformanceControlC1
+      at: {line: 2, column: 23}

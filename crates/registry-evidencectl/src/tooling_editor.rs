@@ -96,11 +96,35 @@ struct EditorSchema {
 // worktree-root matching would need an editor extension, because neither the
 // VS Code nor the Zed settings surface exposes a project-root token.
 //
-// The catalogue holds only the document kinds a Rust type stands behind. The
-// other authored parts of a project (sources, selectors, derivations, answer
-// schemas, fixtures, access policies) get no mapping, because a schema written
-// by hand for one of them would drift from the checks the moment either moved.
-const EDITOR_SCHEMA_CATALOG: [EditorSchema; 2] = [
+// The catalogue holds only the document kinds a schema generated from a Rust
+// type stands behind. The other authored parts of a project (derivations,
+// answer schemas) get no mapping, because a schema written by hand for one of
+// them would drift from the checks the moment either moved.
+const EDITOR_SCHEMA_CATALOG: [EditorSchema; 9] = [
+    EditorSchema {
+        name: "access-client",
+        filename: "access-client.schema.json",
+        file_glob: "access/clients/*.yaml",
+        document: include_str!("../schemas/authoring/access-client.schema.json"),
+    },
+    EditorSchema {
+        name: "access-policy",
+        filename: "access-policy.schema.json",
+        file_glob: "access/policies/*.yaml",
+        document: include_str!("../schemas/authoring/access-policy.schema.json"),
+    },
+    EditorSchema {
+        name: "fixture",
+        filename: "fixture.schema.json",
+        file_glob: "fixtures/*.yaml",
+        document: include_str!("../../../products/evidence/generated/fixture/fixture.schema.json"),
+    },
+    EditorSchema {
+        name: "mock-plan",
+        filename: "mock-plan.schema.json",
+        file_glob: "mocks/source.yaml",
+        document: include_str!("../schemas/authoring/mock-plan.schema.json"),
+    },
     EditorSchema {
         name: "project-marker",
         filename: "project-marker.schema.json",
@@ -113,6 +137,24 @@ const EDITOR_SCHEMA_CATALOG: [EditorSchema; 2] = [
         file_glob: "questions/*.yaml",
         document: include_str!("../schemas/authoring/question.schema.json"),
     },
+    EditorSchema {
+        name: "selector",
+        filename: "selector.schema.json",
+        file_glob: "selectors/*.yaml",
+        document: include_str!("../schemas/authoring/selector.schema.json"),
+    },
+    EditorSchema {
+        name: "source",
+        filename: "source.schema.json",
+        file_glob: "sources/*.yaml",
+        document: include_str!("../schemas/authoring/source.schema.json"),
+    },
+    EditorSchema {
+        name: "target-settings",
+        filename: "target-settings.schema.json",
+        file_glob: "targets/*/settings.yaml",
+        document: include_str!("../schemas/authoring/target-settings.schema.json"),
+    },
 ];
 
 #[derive(Debug, Args)]
@@ -123,14 +165,6 @@ pub struct EditorArgs {
     /// sources/ beside evidence-project.yaml.
     #[arg(value_name = "PROJECT", default_value = ".")]
     pub project: PathBuf,
-    /// Retired spelling of the project directory argument, still accepted.
-    #[arg(
-        long = "project",
-        value_name = "PROJECT",
-        hide = true,
-        conflicts_with = "project"
-    )]
-    pub legacy_project: Option<PathBuf>,
 
     /// Editor workspace directory containing the Evidence project.
     ///
@@ -219,10 +253,7 @@ std::thread_local! {
     };
 }
 
-pub fn run(mut args: EditorArgs, format: crate::OutputFormat) -> Result<ExitCode> {
-    if let Some(project) = args.legacy_project.take() {
-        args.project = project;
-    }
+pub fn run(args: EditorArgs, format: crate::OutputFormat) -> Result<ExitCode> {
     let report = setup_workspace_editor(
         &args.project,
         args.workspace.as_deref().unwrap_or(&args.project),
@@ -538,7 +569,7 @@ fn manual_editor_recovery(project: &Path, files: &[EditorFile]) -> String {
         "'{}'",
         project.display().to_string().replace('\'', "'\"'\"'")
     );
-    format!("no files were changed. Keep existing settings. If schemas are not yet present, run `evidencectl tooling editor --project {quoted_project}` to prepare component-local schemas. Add the following mappings to your workspace settings, preserving other keys (VS Code requires the redhat.vscode-yaml extension):\n{settings}")
+    format!("no files were changed. Keep existing settings. If schemas are not yet present, run `evidencectl tooling editor {quoted_project}` to prepare component-local schemas. Add the following mappings to your workspace settings, preserving other keys (VS Code requires the redhat.vscode-yaml extension):\n{settings}")
 }
 
 fn managed_editor_recovery(_current_files: &[EditorFile]) -> String {
@@ -1172,10 +1203,17 @@ mod tests {
     use registry_evidence_authoring::default_project_marker_document;
 
     /// The complete set of files one run owns, as an author would list them.
-    const MANAGED_FILES: [&str; 6] = [
+    const MANAGED_FILES: [&str; 13] = [
         ".evidence-editor/manifest.json",
+        ".evidence-editor/schemas/access-client.schema.json",
+        ".evidence-editor/schemas/access-policy.schema.json",
+        ".evidence-editor/schemas/fixture.schema.json",
+        ".evidence-editor/schemas/mock-plan.schema.json",
         ".evidence-editor/schemas/project-marker.schema.json",
         ".evidence-editor/schemas/question.schema.json",
+        ".evidence-editor/schemas/selector.schema.json",
+        ".evidence-editor/schemas/source.schema.json",
+        ".evidence-editor/schemas/target-settings.schema.json",
         ".vscode/extensions.json",
         ".vscode/settings.json",
         ".zed/settings.json",
@@ -1235,6 +1273,10 @@ mod tests {
         assert_eq!(
             mappings["./.evidence-editor/schemas/question.schema.json"],
             "authoring-project/questions/*.yaml"
+        );
+        assert_eq!(
+            mappings["./.evidence-editor/schemas/fixture.schema.json"],
+            "authoring-project/fixtures/*.yaml"
         );
         assert_eq!(
             mappings["./.evidence-editor/schemas/project-marker.schema.json"],
@@ -1331,7 +1373,7 @@ mod tests {
         for expected in [
             "no files were changed",
             "Keep existing settings",
-            "evidencectl tooling editor --project",
+            "evidencectl tooling editor '",
             "authoring-project/questions/*.yaml",
             "./authoring-project/.evidence-editor/schemas/question.schema.json",
             ".vscode/settings.json",
@@ -1346,6 +1388,37 @@ mod tests {
         assert!(!workspace.join(EDITOR_ROOT).exists());
         assert!(!project.join(EDITOR_ROOT).exists());
         assert!(!workspace.join(".zed").exists());
+    }
+
+    #[test]
+    fn recovery_next_step_names_a_command_the_cli_parses() {
+        use clap::Parser as _;
+        let temporary = tempfile::tempdir().unwrap();
+        let project = project(&temporary);
+        let workspace = temporary.path();
+        fs::create_dir(workspace.join(".vscode")).unwrap();
+        fs::write(workspace.join(".vscode/settings.json"), b"{}\n").unwrap();
+        let error = setup_workspace_editor(&project, workspace).unwrap_err();
+        let diagnostic = format!("{error:#}");
+        let command = diagnostic
+            .split('`')
+            .find(|part| part.starts_with("evidencectl tooling editor"))
+            .unwrap_or_else(|| panic!("no command in {diagnostic}"));
+        // The temporary project path holds no single quote, so unquoting the
+        // last word is the whole of the shell's work.
+        let mut words: Vec<String> = command.split(' ').map(str::to_owned).collect();
+        let last = words.pop().unwrap();
+        words.push(last.trim_matches('\'').to_owned());
+        let cli = crate::Cli::try_parse_from(&words)
+            .unwrap_or_else(|error| panic!("`{command}` does not parse: {error}"));
+        let crate::Command::Tooling(crate::tooling::ToolingCommand::Editor(args)) = cli.command
+        else {
+            panic!("`{command}` is not the tooling editor command");
+        };
+        assert_eq!(
+            args.project.canonicalize().unwrap(),
+            project.canonicalize().unwrap()
+        );
     }
 
     #[test]
@@ -1450,6 +1523,7 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(globs.contains(&PROJECT_MARKER_FILE));
         assert!(globs.contains(&format!("{QUESTIONS_DIRECTORY}/*.yaml").as_str()));
+        assert!(globs.contains(&"fixtures/*.yaml"));
     }
 
     #[test]

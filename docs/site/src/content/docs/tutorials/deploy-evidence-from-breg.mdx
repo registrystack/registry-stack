@@ -82,8 +82,8 @@ deployment repository. Copy the local settings to a separate file for editing:
 cp ./evidence/targets/local/settings.yaml ./production-settings.yaml
 ```
 
-The settings document contains `formatVersion: 1`, the complete `governance` and
-`runtime` documents, and a `publicKeys` map. This is a packaging format for the
+The settings document opens with `apiVersion` and `kind: EvidenceTargetSettings`, then holds the
+complete `governance` and `runtime` documents and a `publicKeys` map. This is a packaging format for the
 existing configuration, not an overlay. Review every environment-dependent field:
 
 | Area | Operated value and owner |
@@ -198,10 +198,11 @@ evidence check --runtime-config ./evidence/targets/production/runtime.yaml
 Package uses the matching Evidence runtime to validate the generated package and required
 fixtures before publishing. A refused package publishes nothing at `--output`; rerun the exact
 `evidencectl test` command for the complete fixture diagnosis. The check then verifies and compiles
-the installed immutable package and validates mounted secret material exactly as startup does. It
-reports the package digest and the number of requirements it compiled. Run it in a context where
-the target runtime file's absolute `package.root` and secret root already resolve: a packaging host
-that does not carry those paths cannot run the target-host check until the package is installed.
+the installed package offline, reading no secret material, and reports the package digest and the
+number of requirements it compiled. Run it in a context where the target runtime file's absolute
+`package.root` already resolves: a packaging host that does not carry that path cannot run the
+check until the package is installed. The target-host proof below adds
+`--require-runtime-dependencies`, which validates mounted secret material exactly as startup does.
 Neither command
 contacts the source, caller issuer or Transit service.
 

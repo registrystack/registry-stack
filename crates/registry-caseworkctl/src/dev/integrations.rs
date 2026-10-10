@@ -2,8 +2,10 @@
 //! remains source-free unless this closed integration block is configured.
 use super::{config, private, State};
 use anyhow::{bail, Context, Result};
-use registry_casework_core::CaseworkProject;
+use registry_casework_core::{typed, CaseworkProject, ConfigFinding};
+use registry_platform_config::SecretReference;
 use registry_thunderid_tooling::{description::*, local};
+use serde::Deserializer;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
@@ -12,49 +14,184 @@ use std::{
 };
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct Integrations {
+pub(crate) struct Integrations {
     /// Explicit shared audience accepted independently by Casework and each source.
     pub resource: String,
-    #[serde(default)]
-    pub sources: BTreeMap<String, registry_casework_breg::BregBinding>,
+    /// One binding for each source `casework.yaml` declares.
+    #[serde(
+        default,
+        deserialize_with = "typed::local_id_keys",
+        skip_serializing_if = "BTreeMap::is_empty"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "BTreeMap<registry_platform_yaml::LocalId, SourceBinding>")
+    )]
+    pub sources: BTreeMap<String, SourceBinding>,
     /// Files copied once to source-prefixed references in the retained private root.
-    #[serde(default)]
+    #[serde(
+        default,
+        deserialize_with = "typed::local_id_keys",
+        skip_serializing_if = "BTreeMap::is_empty"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "BTreeMap<registry_platform_yaml::LocalId, PathBuf>")
+    )]
     pub secret_files: BTreeMap<String, PathBuf>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub service_clients: Vec<ServiceClient>,
     /// Interactive OAuth clients explicitly admitted from a borrowed issuer.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub browser_clients: Vec<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task_authority: Option<TaskAuthority>,
 }
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct ServiceClient {
+pub(crate) struct ServiceClient {
+    #[serde(deserialize_with = "typed::local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
     /// Omission means this Casework session's generated audience.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resource: Option<String>,
     pub scopes: Vec<String>,
-    #[serde(default)]
-    pub claims: BTreeMap<String, Value>,
+    /// Token claims of at most 256 bytes each, written as text.
+    #[serde(
+        default,
+        deserialize_with = "typed::external_id_keys",
+        skip_serializing_if = "BTreeMap::is_empty"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "BTreeMap<registry_platform_yaml::ExternalId, String>")
+    )]
+    pub claims: BTreeMap<String, String>,
     #[serde(default)]
     pub task_exchange: bool,
 }
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct TaskAuthority {
-    /// Logical issuer, independent of the local API transport URL.
+pub(crate) struct TaskAuthority {
+    /// Logical issuer, independent of the local API transport URL; an
+    /// `https` URL.
+    #[serde(deserialize_with = "typed::url")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::Url"))]
     pub issuer: String,
     /// Public-key-only listener, reachable from the stock issuer container.
+    #[serde(deserialize_with = "typed::bounded_u16::<_, 1, 65_535>")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::BoundedU32<1, 65_535>")
+    )]
     pub jwks_port: u16,
+    #[serde(deserialize_with = "typed::local_id_keys")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "BTreeMap<registry_platform_yaml::LocalId, String>")
+    )]
     pub status_clients: BTreeMap<String, String>,
 }
 
+/// One source binding as the clients file writes it. The session copies it
+/// into the runtime configuration it writes, where it is that source's
+/// `sources.<id>` binding with the runtime's default timeouts and
+/// reconciliation interval.
+#[derive(Clone, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct SourceBinding {
+    #[serde(deserialize_with = "typed::url")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::Url"))]
+    pub base_url: String,
+    pub reader_profile: String,
+    pub token_endpoint: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_assertion_audience: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scopes: Option<Vec<String>>,
+    #[serde(deserialize_with = "secret_reference")]
+    #[cfg_attr(feature = "schema", schemars(with = "SecretReference"))]
+    pub client_id_ref: String,
+    #[serde(deserialize_with = "secret_reference")]
+    #[cfg_attr(feature = "schema", schemars(with = "SecretReference"))]
+    pub client_assertion_key_ref: String,
+    #[serde(deserialize_with = "secret_reference")]
+    #[cfg_attr(feature = "schema", schemars(with = "SecretReference"))]
+    pub webhook_secret_ref: String,
+    pub event_source: String,
+    #[serde(
+        default,
+        deserialize_with = "optional_secret_reference",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(feature = "schema", schemars(with = "Option<SecretReference>"))]
+    pub trusted_root_certificates_ref: Option<String>,
+}
+
+impl std::fmt::Debug for SourceBinding {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("SourceBinding")
+            .field("base_url", &"[REDACTED]")
+            .field("reader_profile", &self.reader_profile)
+            .field("token_endpoint", &"[REDACTED]")
+            .field("client_assertion_audience", &"[REDACTED]")
+            .field("resource", &"[REDACTED]")
+            .field("scopes", &"[REDACTED]")
+            .field("client_id_ref", &"[REDACTED]")
+            .field("client_assertion_key_ref", &"[REDACTED]")
+            .field("webhook_secret_ref", &"[REDACTED]")
+            .field("event_source", &self.event_source)
+            .finish_non_exhaustive()
+    }
+}
+
+/// A secret reference, `secret:env/NAME` or `secret:file/name`, kept as
+/// written. The reader refuses any other spelling at its position without
+/// repeating it.
+fn secret_reference<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    SecretReference::deserialize(deserializer).map(|reference| reference.as_str().to_owned())
+}
+
+/// An optional member holding a secret reference; absent reads as `None`
+/// through `serde(default)`.
+fn optional_secret_reference<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    secret_reference(deserializer).map(Some)
+}
+
+const SERVICE_SCOPE_MESSAGE: &str =
+    "expected an RFC 6749 scope-token of 1 to 128 bytes without '*': printable ASCII without space, '\"', or '\\'";
+
 impl Integrations {
-    pub fn validate(&self, clients: &config::Clients, policy: &CaseworkProject) -> Result<()> {
+    /// Every finding of the integrations block against the clients beside it
+    /// and the authored project, placed below `/integrations`.
+    pub(super) fn validate(
+        &self,
+        clients: &config::Clients,
+        policy: &CaseworkProject,
+    ) -> Result<(), Vec<ConfigFinding>> {
+        let mut found = Vec::new();
         if !registry_platform_httputil::valid_resource_uri(&self.resource) {
-            bail!("integrations.resource must explicitly name the shared Casework/source audience");
+            found.push(ConfigFinding::new(
+                "casework.dev-clients.invalid-resource",
+                "/integrations/resource",
+                "expected an absolute URI naming the audience Casework and each source accept",
+                "Write the shared audience as a URI, such as urn:casework:source-group.",
+            ));
         }
         let declared = policy
             .sources
@@ -62,92 +199,174 @@ impl Integrations {
             .map(|source| &source.id)
             .collect::<BTreeSet<_>>();
         if self.sources.keys().collect::<BTreeSet<_>>() != declared {
-            bail!("source-backed development needs exactly the declared source bindings");
+            found.push(ConfigFinding::new(
+                "casework.dev-clients.source-bindings-mismatch",
+                "/integrations/sources",
+                "expected exactly one binding for each source casework.yaml declares, and no other",
+                "Bind each source casework.yaml declares under sources, by its ID.",
+            ));
         }
-        if self.secret_files.len() > 64
-            || self.service_clients.len() > 32
-            || self.browser_clients.len() > 8
-        {
-            bail!("local integrations exceed their bounded secret or client count");
+        for (key, length, maximum, what) in [
+            ("secretFiles", self.secret_files.len(), 64, "secret files"),
+            (
+                "serviceClients",
+                self.service_clients.len(),
+                32,
+                "service clients",
+            ),
+            (
+                "browserClients",
+                self.browser_clients.len(),
+                8,
+                "browser clients",
+            ),
+        ] {
+            if length > maximum {
+                found.push(ConfigFinding::new(
+                    "casework.dev-clients.too-many-integrations",
+                    format!("/integrations/{key}"),
+                    format!("expected at most {maximum} {what}"),
+                    format!("Keep at most {maximum} {what}."),
+                ));
+            }
         }
         for (name, path) in &self.secret_files {
             if !name.starts_with("source-") || !config::identifier(name) || !path.is_absolute() {
-                bail!(
-                    "source secret inputs need source-prefixed names and absolute owner-only files"
-                );
+                found.push(ConfigFinding::new(
+                    "casework.dev-clients.invalid-secret-file",
+                    config::member("/integrations/secretFiles", name),
+                    "expected a lowercase name starting with source- and the absolute path of an owner-only file",
+                    "Name the file source-<name> and write its absolute path.",
+                ));
             }
         }
-        let mut ids = clients
-            .clients
-            .iter()
-            .map(|client| &client.id)
-            .collect::<BTreeSet<_>>();
-        for client in &self.service_clients {
-            if !config::identifier(&client.id)
-                || client.id == "issuer"
-                || !ids.insert(&client.id)
-                || client.scopes.is_empty()
-                || client.scopes.len() > 32
-                || client.scopes.iter().collect::<BTreeSet<_>>().len() != client.scopes.len()
-                || client.scopes.iter().any(|scope| {
-                    scope.len() > 128
-                        || scope.contains('*')
-                        || !registry_platform_httputil::valid_scope_token(scope)
-                })
-                || client.resource.as_ref().is_some_and(|resource| {
-                    !registry_platform_httputil::valid_resource_uri(resource)
-                })
-                || client.claims.contains_key("registry_actor_kind")
+        let mut ids = config::FirstSeen::default();
+        for (index, client) in clients.clients.iter().enumerate() {
+            ids.repeat(&client.id, &format!("/clients/{index}/id"));
+        }
+        for (index, client) in self.service_clients.iter().enumerate() {
+            let at = format!("/integrations/serviceClients/{index}");
+            client_id(&mut found, &mut ids, &client.id, &format!("{at}/id"));
+            config::scope_findings(
+                &mut found,
+                &format!("{at}/scopes"),
+                &client.scopes,
+                128,
+                SERVICE_SCOPE_MESSAGE,
+            );
+            if client.scopes.iter().any(|scope| scope.contains('*')) {
+                found.push(ConfigFinding::new(
+                    "casework.dev-clients.invalid-scope",
+                    format!("{at}/scopes"),
+                    SERVICE_SCOPE_MESSAGE,
+                    "Write each scope exactly, without a wildcard.",
+                ));
+            }
+            if client
+                .resource
+                .as_ref()
+                .is_some_and(|resource| !registry_platform_httputil::valid_resource_uri(resource))
             {
-                bail!("service clients need distinct IDs, exact resources/scopes and no caller-selected actor marker");
+                found.push(ConfigFinding::new(
+                    "casework.dev-clients.invalid-resource",
+                    format!("{at}/resource"),
+                    "expected an absolute URI",
+                    "Write the resource as a URI, or leave it out for this session's Casework audience.",
+                ));
+            }
+            if client.claims.contains_key(config::HUMAN_CLAIM) {
+                found.push(ConfigFinding::new(
+                    "casework.dev-clients.service-client-human-claim",
+                    config::member(&format!("{at}/claims"), config::HUMAN_CLAIM),
+                    "a service client is a calling system, so it may not choose registry_actor_kind",
+                    "Remove registry_actor_kind from this service client's claims.",
+                ));
             }
             if client.task_exchange
                 && (self.task_authority.is_none()
                     || client.resource.is_some()
                     || client.scopes != ["casework:grants:assert"])
             {
-                bail!("task-exchange clients receive only casework:grants:assert at this session's Casework audience");
+                found.push(ConfigFinding::new(
+                    "casework.dev-clients.invalid-task-exchange",
+                    format!("{at}/taskExchange"),
+                    "a task-exchange client needs a taskAuthority, no resource, and exactly the scope casework:grants:assert",
+                    "Declare taskAuthority, leave resource out, and write scopes: [casework:grants:assert].",
+                ));
             }
         }
-        for id in &self.browser_clients {
-            if !config::identifier(id) || !ids.insert(id) {
-                bail!("interactive local clients need distinct bounded IDs");
-            }
+        for (index, id) in self.browser_clients.iter().enumerate() {
+            client_id(
+                &mut found,
+                &mut ids,
+                id,
+                &format!("/integrations/browserClients/{index}"),
+            );
         }
         if !policy.task_templates.is_empty() && self.task_authority.is_none() {
-            bail!("governed task templates require an explicit local taskAuthority");
+            found.push(ConfigFinding::new(
+                "casework.dev-clients.missing-task-authority",
+                "/integrations/taskAuthority",
+                "casework.yaml declares task templates, which need a local taskAuthority",
+                "Add taskAuthority with an issuer, a jwksPort, and its statusClients.",
+            ));
         }
         if let Some(authority) = &self.task_authority {
-            if !authority.issuer.starts_with("https://")
-                || !registry_platform_httputil::valid_resource_uri(&authority.issuer)
-                || authority.jwks_port == 0
-                || authority.status_clients.len() > 32
-                || authority.status_clients.iter().any(|(id, resource)| {
-                    !registry_platform_httputil::valid_resource_uri(resource)
-                        || !self.service_clients.iter().any(|client| {
-                            &client.id == id
-                                && !client.task_exchange
-                                && client.resource.is_none()
-                                && client.scopes == ["casework:grants:status"]
-                        })
-                })
-            {
-                bail!("taskAuthority requires a distinct public JWKS port and exact local status clients");
+            if !authority.issuer.starts_with("https://") {
+                found.push(ConfigFinding::new(
+                    "casework.dev-clients.invalid-task-authority-issuer",
+                    "/integrations/taskAuthority/issuer",
+                    "expected an https URL",
+                    "Write the logical issuer as an https URL, such as https://casework.local.example.",
+                ));
             }
-            for template in &policy.task_templates {
+            if authority.status_clients.len() > 32 {
+                found.push(ConfigFinding::new(
+                    "casework.dev-clients.too-many-integrations",
+                    "/integrations/taskAuthority/statusClients",
+                    "expected at most 32 status clients",
+                    "Keep at most 32 status clients.",
+                ));
+            }
+            for (id, resource) in &authority.status_clients {
+                let exact = self.service_clients.iter().any(|client| {
+                    &client.id == id
+                        && !client.task_exchange
+                        && client.resource.is_none()
+                        && client.scopes == ["casework:grants:status"]
+                });
+                if !registry_platform_httputil::valid_resource_uri(resource) || !exact {
+                    found.push(ConfigFinding::new(
+                        "casework.dev-clients.invalid-status-client",
+                        config::member("/integrations/taskAuthority/statusClients", id),
+                        "expected a resource URI, keyed by a service client with exactly the scope casework:grants:status, no resource, and no taskExchange",
+                        "Key the entry by such a service client and write its resource as a URI.",
+                    ));
+                }
+            }
+            for (index, template) in policy.task_templates.iter().enumerate() {
                 if !self
                     .service_clients
                     .iter()
                     .any(|client| client.id == template.client && client.task_exchange)
                 {
-                    bail!("task templates must bind a declared task-exchange client");
+                    found.push(ConfigFinding::new(
+                        "casework.dev-clients.missing-task-exchange-client",
+                        "/integrations/serviceClients",
+                        format!("no task-exchange service client is the client of the task template casework.yaml declares at /taskTemplates/{index}"),
+                        "Declare that client under serviceClients with taskExchange: true.",
+                    ));
                 }
             }
         }
-        Ok(())
+        if found.is_empty() {
+            Ok(())
+        } else {
+            Err(found)
+        }
     }
 
-    pub fn validate_session(&self, state: &State, policy: &CaseworkProject) -> Result<()> {
+    pub(super) fn validate_session(&self, state: &State, policy: &CaseworkProject) -> Result<()> {
         if state.issuer_project.is_some() {
             config::require_stable_borrowed_principals(policy)?;
         }
@@ -271,7 +490,7 @@ impl Integrations {
         Ok(())
     }
 
-    pub fn prepare(
+    pub(super) fn prepare(
         &self,
         root: &Path,
         state: &State,
@@ -384,7 +603,11 @@ impl Integrations {
         }
         for client in &self.service_clients {
             let directory = root.join("credentials").join(&client.id);
-            let mut attributes = client.claims.clone();
+            let mut attributes = client
+                .claims
+                .iter()
+                .map(|(name, value)| (name.clone(), json!(value)))
+                .collect::<BTreeMap<_, _>>();
             attributes.insert(
                 "registry_actor_kind".into(),
                 json!(if client.task_exchange {
@@ -469,7 +692,7 @@ impl Integrations {
         Ok(())
     }
 
-    pub fn operator(
+    pub(super) fn operator(
         &self,
         state: &State,
         clients: &config::Clients,
@@ -509,7 +732,11 @@ impl Integrations {
         Ok(())
     }
 
-    pub fn token_parameters(&self, state: &State, id: &str) -> Option<(String, Vec<String>)> {
+    pub(super) fn token_parameters(
+        &self,
+        state: &State,
+        id: &str,
+    ) -> Option<(String, Vec<String>)> {
         self.service_clients
             .iter()
             .find(|client| client.id == id)
@@ -544,4 +771,39 @@ pub(super) fn validate_bindings(root: &Path, project: &Path) -> Result<()> {
             .map_err(|_| anyhow::anyhow!("local source binding is invalid; check its exact BREG event source, reader profile, source description and credential references before starting services"))?;
     }
     Ok(())
+}
+
+/// Report one service or browser client ID: its grammar, the reserved
+/// issuer ID, and a repeat of any client ID before it.
+fn client_id<'a>(
+    found: &mut Vec<ConfigFinding>,
+    ids: &mut config::FirstSeen<'a>,
+    id: &'a str,
+    pointer: &str,
+) {
+    if id == "issuer" {
+        found.push(ConfigFinding::new(
+            "casework.dev-clients.reserved-id",
+            pointer,
+            "the local token issuer reserves this client ID",
+            "Choose another client ID.",
+        ));
+    } else if !config::identifier(id) {
+        found.push(ConfigFinding::new(
+            "casework.dev-clients.invalid-id",
+            pointer,
+            config::CLIENT_ID_MESSAGE,
+            "Write a lowercase client ID, such as seed.",
+        ));
+    } else if let Some(first) = ids.repeat(id, pointer) {
+        found.push(
+            ConfigFinding::new(
+                "casework.dev-clients.duplicate-id",
+                pointer,
+                "another client already declares this ID",
+                "Give each client its own ID.",
+            )
+            .with_related(first, "first declared here"),
+        );
+    }
 }

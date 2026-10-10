@@ -21,9 +21,9 @@ fn provenance_project() -> registry_breg::contract::RegistryProject {
             "fields":[{"id":"root-field","type":"string","maxLength":8,"classification":"internal"}]
           }],
           "accessProfiles":[{
-            "id":"reader","default":true,"principalClaim":"principal","permissions":[
-              {"entity":"root-case","operations":["get"],"readableFields":["root-field"],"rowBoundaries":[]},
-              {"entity":"module-case","operations":["get"],"readableFields":["base-field","extra-field"],"rowBoundaries":[]}
+            "id":"reader","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[
+              {"entity":"root-case","operations":["get"],"readableFields":["root-field"],"rowBoundaries":"unrestricted"},
+              {"entity":"module-case","operations":["get"],"readableFields":["base-field","extra-field"],"rowBoundaries":"unrestricted"}
             ]
           }]
         }"#,
@@ -182,8 +182,8 @@ fn module_free_project_omits_source_module_and_module_origins() {
             "constraints":[{"kind":"unique","fields":["label"]}]
           }],
           "accessProfiles":[{
-            "id":"reader","default":true,"principalClaim":"principal","permissions":[
-              {"entity":"case","operations":["get"],"readableFields":["label"],"rowBoundaries":[]}
+            "id":"reader","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[
+              {"entity":"case","operations":["get"],"readableFields":["label"],"rowBoundaries":"unrestricted"}
             ]
           }]
         }"#,

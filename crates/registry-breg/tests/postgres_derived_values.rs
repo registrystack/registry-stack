@@ -345,12 +345,12 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
             }]
         }],
         "accessProfiles":[{
-            "id":"reader","default":true,"principalClaim":"registry_principal",
+            "id":"reader","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "permissions":[{
                 "entity":"entry","operations":["create","get","list"],
                 "readableFields":["scenario","short-code","description","amount","count","state"],
                 "writableFields":["scenario"],
-                "rowBoundaries":[]
+                "rowBoundaries":"unrestricted"
             }]
         }]
     }"#)

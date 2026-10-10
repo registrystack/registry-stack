@@ -1,8 +1,9 @@
-apiVersion: registry.registrystack.org/scheduling-policy-package/v1alpha1
-kind: SchedulingPolicyPackage
-scheduling:
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/scheduling/project/project.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/scheduling/project/v1alpha1
+kind: SchedulingProject
+project:
   id: registry-updates
-  version: 1
+  version: "1"
 services:
   - id: registry-update
     label: Registry record update
@@ -21,16 +22,14 @@ offerings:
       horizonDays: 60
       pool: update-stations
       startIncrementMinutes: 30
-      maxRecipients: 1
+      maximumRecipients: 1
     cancellationCutoffMinutes: 240
     reminders:
-      - minutesBefore: 1440
+      - offsetMinutes: 1440
         because: One reminder the day before a counter update.
-      - minutesBefore: 120
+      - offsetMinutes: 120
         because: A second reminder two hours before, when stations are scarce.
     duplicateActiveKey: subject
-    requiresCapabilities: []
-    prerequisites: []
   - id: fold-day-update-30
     service: registry-update
     label: 30-minute fold-day update
@@ -45,15 +44,12 @@ offerings:
       horizonDays: 3650
       pool: hall-stations
       startIncrementMinutes: 30
-      maxRecipients: 1
+      maximumRecipients: 1
     cancellationCutoffMinutes: 240
-    requiresCapabilities: []
-    prerequisites: []
 holidaySets:
   - id: office-holidays
     revision: 1
     because: Public holidays observed by the registry offices.
-    dates: []
 openings:
   - id: bangkok-counter-hours
     location: bangkok-counter
@@ -73,7 +69,8 @@ openings:
     effectiveFrom: "2026-11-01"
     effectiveUntil: "2026-11-01"
     because: Fold-day hours whose endpoints sit outside the repeated local hour.
+channels: [public, assisted]
 holdPolicy:
   ttlMinutes: 5
-  maxPerCaller: 3
+  maximumPerCaller: 3
   because: Holds are short because counter capacity is scarce.

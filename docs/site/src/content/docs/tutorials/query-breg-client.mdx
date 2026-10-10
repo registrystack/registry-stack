@@ -358,12 +358,12 @@ inspect a refused write through one error type.
 | `pip` or `npm` finds no matching version | The registry is older than v0.26.1, or `version` does not match `breg --version` | Install a v0.26.1 or later release, start the registry with it, and reinstall at its exact version |
 | `KeyError: 'REGISTRY_URL'` in Python, or `configuration` in Node | `REGISTRY_URL` is not set | Prefix the command with both assignments as shown in [Construct a client and probe the registry](#construct-a-client-and-probe-the-registry) |
 | `KeyError: 'REGISTRY_TOKEN_FILE'` in Python, or a `TypeError` naming the `path` argument in Node | `REGISTRY_TOKEN_FILE` is not set | Prefix the command with both assignments |
-| `problem` with status `401` and code `authentication.refused` | The token is older than five minutes | Renew it with the `bregctl dev token` command in [Before you start](#before-you-start) and rerun |
+| `problem` with status `401` and code `authentication.refused` | The token is older than five minutes, or the request carried no bearer | Check the token file is not empty, renew it with the `bregctl dev token` command in [Before you start](#before-you-start), and rerun |
 | `transport` with a `connect` transport kind | The registry is not running | Start it again with the first tutorial's `bregctl dev` command and renew the token |
 | `problem` with status `400` and code `query.invalid` | A filter names a field the profile does not allow | Filter on `code` or `status` only |
 | `metadata_selection` with code `not_found` or `profile_mismatch` | The operation identifier or the profile does not match the project | Use `records.record.create` with the `operator` profile |
 | `configuration` while constructing the client | The base URL is not HTTPS or loopback HTTP, or carries credentials, a query, or a fragment | Use the loopback `breg url` the first tutorial's report shows |
-| `problem` with status `404` and code `resource.not_found` | The identifier names no record, or the request carried no bearer | Read the identifier from a list result and check the token file is not empty |
+| `problem` with status `404` and code `resource.not_found` | The identifier names no record | Read the identifier from a list result |
 
 ## Next
 

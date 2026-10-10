@@ -1,0 +1,15 @@
+id: substitution-in-references
+rules: [CFG-SEC-2, CFG-SEC-3]
+summary: A substitution expression in an item of a member ending in `Refs` is refused at the item.
+appliesTo:
+  audiences: [operator]
+mutation:
+  append: |
+    conformanceRefs:
+      - "${REGISTRY_CONFORMANCE_VALUE}"
+expect:
+  exit: 1
+  diagnostics:
+    - code: config.substitution-not-allowed
+      path: /conformanceRefs/0
+      at: {line: 2, column: 5}

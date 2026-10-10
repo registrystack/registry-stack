@@ -1208,7 +1208,7 @@ async fn the_audit_journal_names_pseudonyms_actions_and_outcomes() {
 async fn limited(global_burst: u32, citizen_burst: u32) -> Harness {
     Harness::start_with(Options {
         extra_document: format!(
-            "limits:\n  globalSignIn: {{ requestsPerMinute: 1, burst: {global_burst} }}\n  \
+            "rateLimits:\n  globalSignIn: {{ requestsPerMinute: 1, burst: {global_burst} }}\n  \
              perCitizen: {{ requestsPerMinute: 1, burst: {citizen_burst} }}\n"
         ),
         ..Options::default()
@@ -1263,7 +1263,8 @@ async fn the_global_cap_still_limits_sign_in_starts() {
 async fn a_throttled_callback_ends_the_sign_in_whose_cookie_it_clears() {
     // Two sign-in requests in a burst, refilling one a second.
     let harness = Harness::start_with(Options {
-        extra_document: "limits:\n  globalSignIn: { requestsPerMinute: 60, burst: 2 }\n".to_owned(),
+        extra_document: "rateLimits:\n  globalSignIn: { requestsPerMinute: 60, burst: 2 }\n"
+            .to_owned(),
         ..Options::default()
     })
     .await;
@@ -1495,7 +1496,7 @@ async fn start_custom_issuer_page(issuer: &str) -> CustomIssuerPage {
     let audit_path = audit_directory.join("audit.jsonl");
     let config_path = root.join("runtime.yaml");
     let document = format!(
-        "apiVersion: registry.registrystack.org/breg-review-runtime/v1alpha1\n\
+        "apiVersion: id.registrystack.org/formats/breg/review-runtime/v1alpha1\n\
          kind: BRegReviewRuntimeConfig\n\
          listener:\n  bind: \"{address}\"\n  tlsTermination: development-loopback\n\
          publicOrigin: {origin}\n\

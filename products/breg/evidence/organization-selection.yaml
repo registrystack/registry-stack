@@ -1,5 +1,5 @@
-apiVersion: registry.registrystack.org/breg-model-selection/v1alpha1
-kind: ModelSelection
+apiVersion: id.registrystack.org/formats/breg/model-selection/v1alpha1
+kind: BRegModelSelection
 model: publicschema
 modelVersion: "0.3.0"
 modelRevision: "e5cfbbc0161e4d2c802d1acd752ec193253f7820"

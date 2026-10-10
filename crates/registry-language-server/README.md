@@ -19,8 +19,8 @@ holding several products can be read without guessing which tool is talking.
 | Evidence | `evidence-project.yaml`, or both `source.openapi.yaml` and a `questions/` directory | `evidence` |
 | BReg | `registry.yaml`: `RegistryProject` or BReg `apiVersion` | `breg` |
 | Casework | `casework.yaml`: `CaseworkProject` or Casework `apiVersion` | `casework` |
-| Scheduling | `scheduling.yaml`: `SchedulingPolicyPackage` or Scheduling `apiVersion` | `scheduling` |
-| Messaging | `messaging.yaml`: `MessagingPackage` or Messaging `apiVersion` | `messaging` |
+| Scheduling | `scheduling.yaml`: `SchedulingProject` or Scheduling `apiVersion` | `scheduling` |
+| Messaging | `messaging.yaml`: `MessagingProject` or Messaging `apiVersion` | `messaging` |
 | Discovery | `origins.yaml` with a Discovery origins `schemaVersion` | `discovery` |
 | Manifest | `metadata.yaml` with `schema_version: registry-manifest/v1`, or an explicit project marker | `manifest` |
 | Render | `manifest.yaml`: `RenderBundle` or Render `apiVersion` | `render` |
@@ -101,7 +101,7 @@ symbols, completion, and hover for their modeled local authoring edges.
 | Discovery | Origin, mapping, requirement, and evidence-type-list declarations. External evidence type identifiers are not treated as local references. |
 | Manifest | Catalog, dataset, service, distribution, codelist, entity and field names; dataset/service/distribution relationships, entity-scoped identifiers, requirements and evidence lists, and Registry Evidence evaluation profiles. |
 | Render | Document identifiers, governed entry/schema files, and locale label files. |
-| Evidence OID4VCI | Native configuration section symbols and `tokenClient.privateKeyFile` navigation. Key contents are never read or indexed. |
+| Evidence OID4VCI | Native configuration section symbols. `tokenClient.privateKeyRef` is a secret reference, not a file path, so it offers no navigation; key contents are never read or indexed. |
 
 For arbitrary Manifest and OID4VCI configuration filenames, create
 `.registry-stack-editor/project.json` containing `{"product":"manifest","document":"config/metadata.yaml"}`
@@ -123,14 +123,18 @@ module directory, including modules awaiting a lock entry; `bregctl check` owns 
 
 ## Diagnostics
 
-Every diagnostic this server publishes has severity `Error`. Evidence semantic diagnostics carry what its authoring reader or compiler refuses.
+Most diagnostics this server publishes have severity `Error`. A warning the shared configuration reader raises on an accepted document is published with severity `Warning`. Evidence semantic diagnostics carry what its authoring reader or compiler refuses.
+Evidence source and selector documents (`sources/<id>.yaml`, `selectors/<id>.yaml`) get navigation but no editor diagnostics; `evidencectl check` is what checks them.
 The additional products diagnose their explicitly modeled local authoring relationships. The separately named indexing-ceiling diagnostics explain when the editor cannot
 safely build an index and do not claim that the compiler applies the same operational budget.
 
-Evidence diagnostics carry a code naming the rule, such as `evidence/unknown-source`,
-`evidence/question-file-name`, `evidence/question-shape`, and the authoring library's own finding
-codes under the same prefix. A client that disagrees with one rule can filter that rule rather than
-the whole server.
+Evidence diagnostics carry a code naming the rule. A marker, question, or access policy the shared
+configuration reader refuses carries the reader's own code and sentence, such as
+`config.unknown-key` or `yaml.unexpected-end`, at the line and column `evidencectl check` reports.
+The authoring library's findings carry codes under `evidence.<area>.`, such as
+`evidence.question.answer-concept-identifier`, and the editor's cross-document rules carry codes such
+as `evidence.project.unknown-source` and `evidence.question.file-name`. A client that disagrees with
+one rule can filter that rule rather than the whole server.
 
 ## Discovery
 
@@ -149,7 +153,7 @@ document. Every root also applies an editor-only aggregate budget of 1,024 index
 MiB across the YAML and JSON documents it parses. A project past either aggregate limit gets one
 project-ceiling diagnostic and no partial index, so the editor does not invent unresolved-reference
 errors for documents it deliberately left out. Evidence names that rule
-`evidence/project-ceiling`. Reduce the
+`evidence.project.ceiling`. Reduce the
 project and save or close a document to retry the complete index. Each document is read and closed
 as the scan reaches it, so a session keeps the same handful of descriptors open whatever the size
 of the project.
@@ -158,7 +162,9 @@ of the project.
 
 Parsing is tolerant. A document with a syntax error still contributes every symbol and reference the
 parser recovered, and reports exactly one syntax diagnostic at the point the parse broke, so an
-in-progress edit in one file never blinds the rest of the project.
+in-progress edit in one file never blinds the rest of the project. When the shared configuration
+reader has already reported that document's syntax, the editor reports the reader's sentence in place
+of its own, so the editor and `evidencectl check` name the same break.
 
 ## Run
 

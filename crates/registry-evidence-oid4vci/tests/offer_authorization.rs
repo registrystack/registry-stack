@@ -20,7 +20,7 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use registry_evidence_client::{PrivateKeyJwt, PrivateKeyJwtConfig, TokenProvider};
 use registry_evidence_oid4vci::{
     authorizer::{verifier_profile, AuthorizationError, MintResourceServer, OfferAuthorizer},
-    config::{AccessTokenAlgorithm, OfferAuthorizationConfig},
+    config::{AccessTokenAlgorithm, OfferAuthorizationConfig, Restriction},
 };
 use registry_platform_crypto::{sign, PrivateJwk, PublicJwk};
 use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig, TokenVerifier};
@@ -71,7 +71,7 @@ fn resource_server(config: &OfferAuthorizationConfig, key_set: &Value) -> MintRe
         fetcher,
     )))
     .with_claim_names(config.claims.clone())
-    .with_required_scopes(config.required_scopes.clone().unwrap_or_default())
+    .with_required_scopes(config.required_scopes.items().to_vec())
 }
 
 fn offer_config(
@@ -85,8 +85,8 @@ fn offer_config(
         jwks_uri: format!("{issuer}/oauth2/jwks"),
         audiences: vec![audience.to_owned()],
         algorithms: vec![algorithm],
-        authorized_clients: Vec::new(),
-        required_scopes: None,
+        authorized_clients: Restriction::Unrestricted,
+        required_scopes: Restriction::Unrestricted,
         maximum_token_lifetime_seconds: 900,
     }
 }
@@ -97,7 +97,7 @@ fn offer_config(
 async fn a_token_without_the_required_offer_scope_is_refused() {
     let (issued, key_set) = signed_offer_fixture(json!({"scope":"offers:read"}));
     let mut config = offer_config(FIXTURE_ISSUER, OFFER_AUDIENCE, AccessTokenAlgorithm::ES256);
-    config.required_scopes = Some(vec!["oid4vci:offer".to_owned()]);
+    config.required_scopes = Restriction::Listed(vec!["oid4vci:offer".to_owned()]);
     assert_eq!(
         resource_server(&config, &key_set).authorize(&issued).await,
         Err(AuthorizationError::Refused),
@@ -181,7 +181,7 @@ async fn task_bound_and_partial_grants_cannot_create_deferred_wallet_offers() {
     }));
     let config = {
         let mut config = offer_config(FIXTURE_ISSUER, OFFER_AUDIENCE, AccessTokenAlgorithm::ES256);
-        config.required_scopes = Some(vec!["oid4vci:offer".to_owned()]);
+        config.required_scopes = Restriction::Listed(vec!["oid4vci:offer".to_owned()]);
         config
     };
     assert_eq!(
@@ -203,7 +203,7 @@ async fn an_ordinary_service_offer_with_purpose_but_no_grant_remains_supported()
         "registry_purpose":"credential-delivery"
     }));
     let mut config = offer_config(FIXTURE_ISSUER, OFFER_AUDIENCE, AccessTokenAlgorithm::ES256);
-    config.required_scopes = Some(vec!["oid4vci:offer".to_owned()]);
+    config.required_scopes = Restriction::Listed(vec!["oid4vci:offer".to_owned()]);
     resource_server(&config, &keys)
         .authorize(&ordinary)
         .await

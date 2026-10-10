@@ -100,9 +100,11 @@ impl<'de> serde::Deserialize<'de> for SecretReference {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let value = <String as serde::Deserialize>::deserialize(deserializer)?;
         Self::parse(value).map_err(|_| {
-            serde::de::Error::custom(
-                "expected an exact secret:env/NAME or secret:file/name reference",
+            registry_platform_yaml::Invalid::expected(
+                "an exact secret:env/NAME or secret:file/name reference",
+                "Write the reference as secret:env/NAME or secret:file/name.",
             )
+            .into_error()
         })
     }
 }
@@ -340,7 +342,7 @@ mod tests {
     }
 
     #[test]
-    fn references_use_only_the_two_exact_contract_grammars() {
+    fn cfg_sec_1_references_use_only_the_two_exact_contract_grammars() {
         for (valid, provider, name) in [
             ("secret:env/A", SecretProvider::Environment, "A"),
             (
@@ -382,6 +384,33 @@ mod tests {
             SecretReference::parse(format!("secret:env/A{}", "B".repeat(128))),
             Err(SecretError::InvalidReference)
         );
+        assert!(SecretReference::parse(format!("secret:file/a{}", "b".repeat(127))).is_ok());
+        assert_eq!(
+            SecretReference::parse(format!("secret:file/a{}", "b".repeat(128))),
+            Err(SecretError::InvalidReference)
+        );
+    }
+
+    #[test]
+    fn cfg_sec_1_a_refused_reference_names_the_grammar_and_never_the_value() {
+        use registry_platform_yaml::{EnvelopeRule, Expect, FormatSpec, Reader};
+        const REFERENCE: FormatSpec = FormatSpec {
+            kind: "SecretReference",
+            envelope: EnvelopeRule::Exempt {
+                reason: "a secret reference read alone by its unit test",
+            },
+            removed_keys: &[],
+        };
+        let report = Reader::new("reference.yaml")
+            .decode::<SecretReference>(b"canary-inline-secret", &Expect::one(&REFERENCE))
+            .expect_err("a literal is not a reference");
+        let message = &report.diagnostics()[0].message;
+        assert!(
+            message.starts_with("expected an exact secret:env/NAME or secret:file/name reference"),
+            "{message:?}"
+        );
+        let rendered = report.render_human();
+        assert!(!rendered.contains("canary-inline-secret"), "{rendered:?}");
     }
 
     #[test]

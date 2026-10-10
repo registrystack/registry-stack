@@ -2217,12 +2217,12 @@ mod tests {
     }
 
     fn path_token_verifier() -> serde_json::Value {
-        json!({"kind": "path-token", "tokenRef": "secret:file/callback-token"})
+        json!({"type": "path-token", "tokenRef": "secret:file/callback-token"})
     }
 
     fn body_verifier() -> serde_json::Value {
         json!({
-            "kind": "hmac-sha256-body",
+            "type": "hmac-sha256-body",
             "header": "x-gateway-signature",
             "encoding": "hex",
             "secretRef": "secret:file/callback-secret"

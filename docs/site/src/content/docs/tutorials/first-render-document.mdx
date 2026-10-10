@@ -101,12 +101,17 @@ package anything. `registry-render package` copies those exact validated source 
 directory and writes sorted `SHA256SUMS`; `--revision` adds operator metadata that is hashed like
 every other package file. The package command prints its `sha256:` digest. The second check
 verifies that envelope before inspecting the same product content. You know it worked when check
-prints the document line and the bundle line:
+exits 0 and prints the document line, the bundle line, and a summary with no errors:
 
 ```text
 document letter           v1  entry templates/letter.typ  labels [en]  pdf plain
-bundle render-work/package v1 hash <digest prefix> (19 fonts, 1 documents, 14 governed files)
+bundle render-work/package v1 hash <digest prefix> (19 fonts, 1 documents, 9 governed files)
+0 errors, 0 warnings in 3 files
 ```
+
+When check finds a problem, it exits 1 and prints every finding on standard error, each with the
+file, line, and column it is about and the change that fixes it. Add `--format json` for the same
+report as one JSON document.
 
 The shared envelope is what serve trusts, not the directory listing: a changed, missing, or extra
 file is refused by name. After an intentional template edit, build a new output directory. The
@@ -134,7 +139,7 @@ under the declared `secretProviders.file.root`:
 ```sh
 work="$(cd render-work && pwd -P)"
 cat > render-work/deploy/runtime.yaml <<EOF
-apiVersion: registry.registrystack.org/render-runtime/v1alpha1
+apiVersion: id.registrystack.org/formats/render/runtime/v1alpha1
 kind: RenderRuntimeConfig
 listener:
   bind: 127.0.0.1:64123
@@ -147,9 +152,9 @@ auth:
   apiKeyRef: secret:file/api.key
 limits:
   renderTimeoutSeconds: 20
-  maxOutputBytes: 8388608
-  maxRequestBodyBytes: 8388608
-  maxConcurrency: 2
+  maximumOutputBytes: 8388608
+  maximumRequestBytes: 8388608
+  maximumConcurrentRenders: 2
 audit:
   path: $work/audit/render.jsonl
 EOF
@@ -169,8 +174,9 @@ You know it is serving when health answers with the package hash and the rendere
 {"bundleHash":"<package digest without sha256:>","bundleVersion":1,"rendererVersion":"<version> (typst 0.15.1)","status":"ok","typstPin":"0.15.1"}
 ```
 
-If startup fails instead, the refusal names the file and the field: check that `package.root` is
-the package directory and that the API key file sits under `secretProviders.file.root`.
+If startup fails instead, the refusal names the file, the line, and the field, with the fix on its
+`next:` line: check that `package.root` is the package directory and that the API key file sits
+under `secretProviders.file.root`.
 
 {/* Evidence: crates/registry-render/src/runtime.rs, RenderRuntime and validate_bind;
     crates/registry-render/src/audit.rs, RenderAudit. */}

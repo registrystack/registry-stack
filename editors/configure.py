@@ -20,6 +20,8 @@ ROOT = Path(__file__).resolve().parent.parent
 MANAGED = ".registry-stack-editor"
 PRODUCT_FILES = {
     "breg": "registry.yaml",
+    "breg-mcp": "runtime.yaml",
+    "breg-review": "runtime.yaml",
     "casework": "casework.yaml",
     "scheduling": "scheduling.yaml",
     "messaging": "messaging.yaml",
@@ -27,26 +29,67 @@ PRODUCT_FILES = {
     "manifest": "metadata.yaml",
     "render": "manifest.yaml",
     "evidence": "evidence-project.yaml",
+    "platform": "task-connection.yaml",
+    "evidence-deployment": "runtime.yaml",
 }
 PRODUCTS = (*PRODUCT_FILES, "evidence-oid4vci")
+# A pattern ending in `.json` names a JSON format, mapped through the JSON
+# language server; every other pattern is YAML.
 SCHEMAS = {
     "breg": (
         ("products/breg/generated/authoring/registry-project.schema.json", "registry.yaml"),
         ("products/breg/generated/authoring/registry-module.schema.json", "modules/**/module.yaml"),
         ("products/breg/generated/runtime/runtime.schema.json", "runtime.yaml"),
+        ("products/breg/generated/runtime/runtime.schema.json", "runtime-test.yaml"),
         ("products/breg/generated/runtime/runtime.schema.json", "runtime.example.yaml"),
+        ("products/breg/generated/tools/journeys.v1.schema.json", "tests/journeys.yaml"),
+        ("products/breg/generated/tools/schema-test-credentials.v1.schema.json", "credentials.yaml"),
+        ("products/breg/generated/tools/model-selection.v1alpha1.schema.json", "model/selection.yaml"),
+        (
+            "products/breg/generated/tools/model-selection.v1alpha1.schema.json",
+            "publicschema/starters/*.yaml",
+        ),
+        ("products/breg/generated/tools/backup-binding.v1alpha1.schema.json", "*-binding.json"),
+        ("products/breg/generated/tools/dev-clients.v1alpha1.schema.json", "dev-clients.yaml"),
+        ("products/breg/generated/tools/example-scenarios.v1alpha1.schema.json", "examples/scenarios.json"),
     ),
+    "breg-mcp": (("products/breg/generated/mcp-runtime/mcp-runtime.schema.json", "runtime.yaml"),),
+    "breg-review": (("products/breg/generated/review-runtime/review-runtime.schema.json", "runtime.yaml"),),
     "casework": (
+        ("products/casework/generated/project/project.schema.json", "casework.yaml"),
         ("products/casework/generated/runtime/runtime.schema.json", "runtime.yaml"),
         ("products/casework/generated/runtime/runtime.schema.json", "runtime.example.yaml"),
+        ("products/casework/generated/fixture/fixture.schema.json", "fixtures/*.yaml"),
+        ("products/casework/generated/fixture/fixture.schema.json", "fixtures/*.yml"),
+        ("products/casework/generated/simulation/simulation.schema.json", "simulations/*.yaml"),
+        ("products/casework/generated/simulation/simulation.schema.json", "simulations/*.yml"),
+        (
+            "products/casework/generated/holiday-set/holiday-set.schema.json",
+            "simulations/holiday-sets/*.yaml",
+        ),
+        (
+            "products/casework/generated/holiday-set/holiday-set.schema.json",
+            "simulations/holiday-sets/*.yml",
+        ),
+        ("products/casework/generated/dev-clients/dev-clients.schema.json", "dev-clients.yaml"),
     ),
     "scheduling": (
+        ("products/scheduling/generated/project/project.schema.json", "scheduling.yaml"),
         ("products/scheduling/generated/runtime/runtime.schema.json", "runtime.yaml"),
         ("products/scheduling/generated/runtime/runtime.schema.json", "runtime.example.yaml"),
+        ("products/scheduling/generated/records/records.schema.json", "records.yaml"),
+        ("products/scheduling/generated/fixture/fixture.schema.json", "fixtures/*.yaml"),
+        ("products/scheduling/generated/fixture/fixture.schema.json", "fixtures/*.yml"),
     ),
     "messaging": (
+        ("products/messaging/generated/authoring/project.schema.json", "messaging.yaml"),
+        ("products/messaging/generated/authoring/template.schema.json", "templates/*/*/template.yaml"),
+        ("products/messaging/generated/authoring/provider.schema.json", "providers/*/provider.yaml"),
         ("products/messaging/generated/runtime/runtime.schema.json", "runtime.yaml"),
         ("products/messaging/generated/runtime/runtime.schema.json", "runtime.example.yaml"),
+    ),
+    "evidence-oid4vci": (
+        ("products/evidence/generated/oid4vci-runtime/oid4vci-runtime.schema.json", "{document}"),
     ),
     "discovery": (
         ("products/discovery/schemas/origins.schema.json", "origins.yaml"),
@@ -54,9 +97,59 @@ SCHEMAS = {
         ("products/discovery/schemas/evidence-mapping.schema.json", "mappings/*.yaml"),
         ("products/discovery/schemas/evidence-mapping.schema.json", "mappings/*.yml"),
     ),
+    "render": (
+        ("products/render/schemas/bundle.schema.json", "manifest.yaml"),
+        ("products/render/schemas/labels.schema.json", "labels/*.yaml"),
+        ("products/render/schemas/runtime.schema.json", "runtime.yaml"),
+    ),
+    "manifest": (
+        ("products/manifest/schemas/metadata.schema.json", "{document}"),
+        ("products/manifest/schemas/profile.schema.json", "**/profile.yaml"),
+    ),
+    "platform": (
+        ("products/platform/schemas/task-connection.schema.json", "task-connection.yaml"),
+    ),
+    "evidence": (
+        (
+            "crates/registry-evidencectl/schemas/authoring/source-resolution.schema.json",
+            "*.resolutions.json",
+        ),
+        (
+            "crates/registry-evidencectl/schemas/authoring/source-resolution.schema.json",
+            "source-resolutions.json",
+        ),
+        (
+            "crates/registry-evidencectl/schemas/authoring/selector.schema.json",
+            "selectors/*.yaml",
+        ),
+        (
+            "crates/registry-evidencectl/schemas/authoring/source.schema.json",
+            "sources/*.yaml",
+        ),
+        (
+            "crates/registry-evidencectl/schemas/authoring/target-settings.schema.json",
+            "targets/*/settings.yaml",
+        ),
+        ("products/evidence/generated/client-profile/client-profile.schema.json", "client-profile.json"),
+        ("products/evidence/generated/client-profile/client-profile.schema.json", "*.profile.json"),
+    ),
+    "evidence-deployment": (
+        (
+            "crates/registry-evidencectl/schemas/authoring/target-governance.schema.json",
+            "governance.yaml",
+        ),
+        ("products/evidence/contracts/runtime.schema.yaml", "runtime.yaml"),
+        ("products/evidence/contracts/bundle.schema.yaml", "bundle/evidence.yaml"),
+        ("products/evidence/contracts/holder-bound-verification-policy.schema.yaml", "holder-bound*.policy.yaml"),
+        ("products/evidence/contracts/verification-policy.schema.yaml", "verification*.policy.yaml"),
+        ("products/evidence/generated/codelist/codelist.schema.json", "bundle/codelists/*.yaml"),
+        ("products/evidence/generated/fixture/fixture.schema.json", "bundle/fixtures/*.yaml"),
+    ),
 }
 CHECKS = {
     "breg": ("bregctl", "check", "{project}"),
+    "breg-mcp": ("breg-mcp", "--runtime-config", "{entry}", "check"),
+    "breg-review": ("breg-review", "--runtime-config", "{entry}", "check"),
     "casework": ("caseworkctl", "check", "{project}"),
     "scheduling": ("schedulingctl", "check", "{project}"),
     "messaging": ("messagingctl", "check", "--project", "{project}"),
@@ -64,6 +157,9 @@ CHECKS = {
     "manifest": ("registry-manifest", "validate", "{document}"),
     "render": ("registry-render", "check", "--bundle", "{project}"),
     "evidence": ("evidencectl", "check", "{project}"),
+    "platform": ("evidencectl", "dev", "check", "task-connection.yaml"),
+    "evidence-oid4vci": ("evidence-oid4vci", "check", "--config", "{document}"),
+    "evidence-deployment": ("evidence", "check", "--runtime-config", "runtime.yaml"),
 }
 
 
@@ -174,7 +270,10 @@ def task_for(product: str, project: Path, document: Path | None) -> tuple[dict[s
         return None
     command = spec[0]
     args = [
-        str(project) if arg == "{project}" else str(document) if arg == "{document}" else arg
+        str(project) if arg == "{project}"
+        else str(document) if arg == "{document}"
+        else str(project / PRODUCT_FILES[product]) if arg == "{entry}"
+        else arg
         for arg in spec[1:]
     ]
     label = f"Registry Stack: check {product} ({project})"
@@ -190,24 +289,66 @@ def task_for(product: str, project: Path, document: Path | None) -> tuple[dict[s
     return vscode, zed
 
 
+def zed_language_server_settings(result: dict[str, Any], server_name: str, section: str) -> dict[str, Any]:
+    lsp = result.setdefault("lsp", {})
+    if not isinstance(lsp, dict):
+        raise SetupError("Zed lsp setting must be an object")
+    server = lsp.setdefault(server_name, {})
+    if not isinstance(server, dict):
+        raise SetupError(f"Zed {server_name} setting must be an object")
+    settings = server.setdefault("settings", {})
+    if not isinstance(settings, dict):
+        raise SetupError("Zed language-server settings must be an object")
+    block = settings.setdefault(section, {})
+    if not isinstance(block, dict):
+        raise SetupError(f"Zed {section} settings must be an object")
+    return block
+
+
+def updated_json_schemas(
+    schemas: Any, previous: dict[str, list[str]], desired: dict[str, list[str]]
+) -> list[Any]:
+    if not isinstance(schemas, list):
+        raise SetupError("JSON schema mappings must be an array")
+    result = list(schemas)
+    for url, patterns in previous.items():
+        entry = {"fileMatch": patterns, "url": url}
+        if entry in result:
+            result.remove(entry)
+        elif any(isinstance(item, dict) and item.get("url") == url for item in result):
+            raise SetupError(f"managed schema mapping was edited: {url}")
+    for url, patterns in desired.items():
+        if any(isinstance(item, dict) and item.get("url") == url for item in result):
+            raise SetupError(f"schema mapping already exists: {url}")
+        result.append({"fileMatch": patterns, "url": url})
+    return result
+
+
 def updated_settings(
-    original: dict[str, Any], previous: dict[str, list[str]], desired: dict[str, list[str]], zed: bool
+    original: dict[str, Any],
+    previous: dict[str, list[str]],
+    desired: dict[str, list[str]],
+    zed: bool,
+    previous_json: dict[str, list[str]] | None = None,
+    desired_json: dict[str, list[str]] | None = None,
 ) -> dict[str, Any]:
     result = json.loads(json.dumps(original))
+    if previous_json or desired_json:
+        if zed:
+            block = zed_language_server_settings(result, "json-language-server", "json")
+            block["schemas"] = updated_json_schemas(
+                block.get("schemas", []), previous_json or {}, desired_json or {}
+            )
+        else:
+            result["json.schemas"] = updated_json_schemas(
+                result.get("json.schemas", []), previous_json or {}, desired_json or {}
+            )
+    if not previous and not desired and (previous_json or desired_json):
+        return result
     if zed:
-        lsp = result.setdefault("lsp", {})
-        if not isinstance(lsp, dict):
-            raise SetupError("Zed lsp setting must be an object")
-        server = lsp.setdefault("yaml-language-server", {})
-        if not isinstance(server, dict):
-            raise SetupError("Zed yaml-language-server setting must be an object")
-        settings = server.setdefault("settings", {})
-        if not isinstance(settings, dict):
-            raise SetupError("Zed language-server settings must be an object")
-        yaml = settings.setdefault("yaml", {})
-        if not isinstance(yaml, dict):
-            raise SetupError("Zed yaml settings must be an object")
-        mappings = yaml.setdefault("schemas", {})
+        mappings = zed_language_server_settings(result, "yaml-language-server", "yaml").setdefault(
+            "schemas", {}
+        )
     else:
         mappings = result.setdefault("yaml.schemas", {})
     if not isinstance(mappings, dict):
@@ -296,25 +437,30 @@ def configure(product: str, project: Path, workspace: Path, document_arg: str | 
 
     schema_bytes: dict[Path, bytes] = {}
     mappings: dict[str, list[str]] = {}
+    json_mappings: dict[str, list[str]] = {}
     for source_name, relative_pattern in SCHEMAS.get(product, ()):
         source = ROOT / source_name
         if not source.is_file():
             raise SetupError(f"maintained schema is missing: {source}")
         destination = project / MANAGED / "schemas" / source.name
         content = source.read_bytes()
-        expected_hash = prior.get("schema_hashes", {}).get(str(destination))
-        if destination.exists() or destination.is_symlink():
-            refuse_symlink_below(destination, project)
-            current_hash = hashlib.sha256(destination.read_bytes()).hexdigest()
-            if expected_hash is None or current_hash != expected_hash:
-                raise SetupError(f"managed schema was edited or not owned: {destination}")
-        schema_bytes[destination] = content
-        mappings.setdefault(destination.as_uri(), []).append(str(project / relative_pattern))
+        if destination not in schema_bytes:
+            expected_hash = prior.get("schema_hashes", {}).get(str(destination))
+            if destination.exists() or destination.is_symlink():
+                refuse_symlink_below(destination, project)
+                current_hash = hashlib.sha256(destination.read_bytes()).hexdigest()
+                if expected_hash is None or current_hash != expected_hash:
+                    raise SetupError(f"managed schema was edited or not owned: {destination}")
+            schema_bytes[destination] = content
+        pattern = document_name if relative_pattern == "{document}" else relative_pattern
+        target = json_mappings if pattern.endswith(".json") else mappings
+        target.setdefault(destination.as_uri(), []).append(str(project / pattern))
 
     task_pair = task_for(product, project, document)
     vscode_task, zed_task = task_pair if task_pair else (None, None)
     writes: dict[Path, bytes] = {}
     old_mappings = prior.get("mappings", {})
+    old_json_mappings = prior.get("json_mappings", {})
     old_vscode_task = prior.get("vscode_task")
     old_zed_task = prior.get("zed_task")
     for editor, is_zed, task, old_task in (
@@ -322,13 +468,17 @@ def configure(product: str, project: Path, workspace: Path, document_arg: str | 
         ("zed", True, zed_task, old_zed_task),
     ):
         settings_path = workspace / f".{editor}" / "settings.json"
-        if mappings or old_mappings:
+        if mappings or old_mappings or json_mappings or old_json_mappings:
             original = read_json(settings_path, {}, workspace)
             if not isinstance(original, dict):
                 raise SetupError(f"{settings_path} must contain an object")
             prepare_file(
                 settings_path,
-                json_bytes(updated_settings(original, old_mappings, mappings, is_zed)),
+                json_bytes(
+                    updated_settings(
+                        original, old_mappings, mappings, is_zed, old_json_mappings, json_mappings
+                    )
+                ),
                 writes,
                 workspace,
             )
@@ -365,6 +515,7 @@ def configure(product: str, project: Path, workspace: Path, document_arg: str | 
             for source_name, _ in SCHEMAS.get(product, ())
         },
         "mappings": mappings,
+        "json_mappings": json_mappings,
         "schema_hashes": {
             str(path): hashlib.sha256(content).hexdigest() for path, content in schema_bytes.items()
         },

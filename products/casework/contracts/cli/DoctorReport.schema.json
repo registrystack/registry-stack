@@ -1,8 +1,22 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://registrystack.org/caseworkctl/v1alpha3/DoctorReport.schema.json",
+  "$id": "https://id.registrystack.org/schemas/casework/doctor-report/doctor-report.v1alpha3.schema.json",
   "title": "DoctorReport",
   "description": "Versioned JSON report emitted by caseworkctl for doctor.",
+  "type": "object",
+  "required": [
+    "apiVersion",
+    "kind"
+  ],
+  "properties": {
+    "apiVersion": {
+      "const": "registry.registrystack.org/caseworkctl/v1alpha3"
+    },
+    "kind": {
+      "const": "DoctorReport"
+    }
+  },
+  "unevaluatedProperties": false,
   "oneOf": [
     {
       "type": "object",
@@ -47,8 +61,7 @@
           "type": "string"
         },
         "packageDigest": {
-          "type": "string",
-          "pattern": "^sha256:[0-9a-f]{64}$"
+          "$ref": "#/$defs/Digest"
         },
         "checks": {
           "$ref": "#/$defs/doctorChecks"
@@ -56,13 +69,13 @@
         "secretFileChecks": {
           "type": "array",
           "items": {
-            "type": "object"
+            "$ref": "#/$defs/secretFileCheck"
           }
         },
         "sourceChecks": {
           "type": "array",
           "items": {
-            "type": "object"
+            "$ref": "#/$defs/sourceCheck"
           }
         },
         "pinnedWork": {
@@ -82,7 +95,7 @@
             "conflicts": {
               "type": "array",
               "items": {
-                "type": "object"
+                "$ref": "#/$defs/strandedWork"
               }
             }
           }
@@ -154,7 +167,6 @@
       "required": [
         "severity",
         "code",
-        "artifact",
         "path",
         "message",
         "suggestedAction"
@@ -177,13 +189,80 @@
         },
         "suggestedAction": {
           "type": "string"
+        },
+        "source": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "file"
+          ],
+          "properties": {
+            "file": {
+              "type": "string"
+            },
+            "line": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1048577
+            },
+            "column": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1048577
+            }
+          }
+        },
+        "related": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "file",
+              "path",
+              "message"
+            ],
+            "properties": {
+              "file": {
+                "type": "string"
+              },
+              "line": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 1048577
+              },
+              "column": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 1048577
+              },
+              "path": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              }
+            }
+          }
         }
       }
     },
-    "findings": {
+    "warnings": {
       "type": "array",
       "items": {
-        "$ref": "#/$defs/diagnostic"
+        "allOf": [
+          {
+            "$ref": "#/$defs/diagnostic"
+          },
+          {
+            "properties": {
+              "severity": {
+                "const": "warning"
+              }
+            }
+          }
+        ],
+        "unevaluatedProperties": false
       }
     },
     "doctorChecks": {
@@ -237,6 +316,166 @@
           "const": "ready"
         }
       }
+    },
+    "secretFileCheck": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "setting",
+        "provider",
+        "status"
+      ],
+      "properties": {
+        "setting": {
+          "type": "string"
+        },
+        "provider": {
+          "enum": [
+            "file",
+            "environment"
+          ]
+        },
+        "status": {
+          "enum": [
+            "ready",
+            "not-checked"
+          ]
+        },
+        "refusal": {
+          "type": "string"
+        }
+      }
+    },
+    "sourceCheck": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sourceId",
+        "runtime",
+        "readerProfile",
+        "requiredGrants",
+        "eventWiring",
+        "reconciliation"
+      ],
+      "properties": {
+        "sourceId": {
+          "type": "string"
+        },
+        "runtime": {
+          "const": "ready"
+        },
+        "readerProfile": {
+          "const": "ready"
+        },
+        "requiredGrants": {
+          "const": "ready"
+        },
+        "eventWiring": {
+          "const": "unknown"
+        },
+        "reconciliation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "consecutiveFailures",
+            "lastSucceededAt",
+            "lastFailedAt",
+            "lastFailure"
+          ],
+          "properties": {
+            "consecutiveFailures": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 2147483647
+            },
+            "lastSucceededAt": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "date-time"
+            },
+            "lastFailedAt": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "date-time"
+            },
+            "lastFailure": {
+              "oneOf": [
+                {
+                  "enum": [
+                    "source-unavailable",
+                    "source-refused",
+                    "store",
+                    "configuration"
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    "strandedWork": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "reason",
+        "reviews"
+      ],
+      "properties": {
+        "reason": {
+          "enum": [
+            "queue-removed",
+            "profile-removed",
+            "review-kind-changed",
+            "source-removed",
+            "context-field-not-displayed",
+            "displayed-field-not-projected"
+          ]
+        },
+        "queue": {
+          "type": "string"
+        },
+        "profile": {
+          "type": "string"
+        },
+        "reviewKind": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        },
+        "entity": {
+          "type": "string"
+        },
+        "field": {
+          "type": "string"
+        },
+        "reviews": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "workItems": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      }
+    },
+    "Digest": {
+      "description": "A SHA-256 digest: `sha256:` followed by 64 lowercase hex digits.",
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
     }
   }
 }

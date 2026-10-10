@@ -1,0 +1,7 @@
+apiVersion: id.registrystack.org/formats/fuzz/runtime/v1
+kind: FuzzRuntimeConfig
+port: ${PORT}
+name: ${NAME:-fallback}
+key${X}: 1
+required: ${TOKEN:?set it}
+apiVersionCopy: ${V}

@@ -79,7 +79,7 @@ accessProfiles:
   - membership:use
   permissions:
   - entity: facility
-    rowBoundaries: []
+    rowBoundaries: unrestricted
     operations:
     - get
     - list
@@ -110,7 +110,7 @@ accessProfiles:
   - membership:use
   permissions:
   - entity: organization
-    rowBoundaries: []
+    rowBoundaries: unrestricted
     operations:
     - create
     - get
@@ -119,7 +119,7 @@ accessProfiles:
     writableFields:
     - name
   - entity: membership
-    rowBoundaries: []
+    rowBoundaries: unrestricted
     operations:
     - create
     - get
@@ -134,7 +134,7 @@ accessProfiles:
     - active
     - private-note
   - entity: facility
-    rowBoundaries: []
+    rowBoundaries: unrestricted
     operations:
     - create
     - get

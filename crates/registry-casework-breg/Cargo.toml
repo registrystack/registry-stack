@@ -10,7 +10,11 @@ description = "Bounded Base Registry Engine source adapter for Registry Casework
 
 [features]
 default = []
-schema = ["dep:schemars"]
+schema = [
+    "dep:schemars",
+    "registry-platform-config/schema",
+    "registry-platform-yaml/schema",
+]
 
 [lints]
 workspace = true
@@ -24,6 +28,7 @@ registry-platform-config.workspace = true
 registry-platform-crypto.workspace = true
 registry-platform-hooks.workspace = true
 registry-platform-httputil.workspace = true
+registry-platform-yaml.workspace = true
 schemars = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true

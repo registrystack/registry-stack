@@ -404,11 +404,12 @@ def test_request_attachment_journey() -> None:
                     and "no-store" in download_headers.get("cache-control", "")
                     and download_headers.get("content-disposition", "").split(";", 1)[0] == "attachment",
                     "Download response lacks safe binary headers")
-        for role, profile, requested_version in [(None, "owner", version),
-                                                 ("other-owner", "owner", version),
-                                                 ("reviewer", "reviewer", version + 1)]:
-            require(request("GET", attachment_path, role, profile=profile, version=requested_version)[0] == 404,
-                    "Unauthorized or wrong-version download revealed attachment content")
+        for role, profile, requested_version, refusal in [(None, "owner", version, 401),
+                                                          ("other-owner", "owner", version, 404),
+                                                          ("reviewer", "reviewer", version + 1, 404)]:
+            status, _, content = request("GET", attachment_path, role, profile=profile, version=requested_version)
+            require(status == refusal and evidence not in content,
+                    f"Unauthorized or wrong-version download expected HTTP {refusal} without evidence bytes, received {status}")
         unchanged, _ = document(request("GET", f"/v1/records/records/{record_id}", "operator"), 200,
                                 "Read target before explicit application")
         require(unchanged["data"]["domainData"]["label"] == "Original label",

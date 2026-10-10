@@ -9,13 +9,16 @@ use std::collections::BTreeSet;
 
 use libfuzzer_sys::fuzz_target;
 use registry_evidence_authoring::{
+    formats::{check_access_policy, check_question},
     parse_project_marker, question_subjects, validate_access_policy, validate_answer,
     validate_answer_fact_reads, validate_answer_schema_document, validate_authored_answer,
     validate_question, AccessPolicy, Question, QuestionAnswer,
 };
 
 fuzz_target!(|data: &[u8]| {
-    let _ = parse_project_marker(data);
+    let _ = parse_project_marker("evidence-project.yaml", data);
+    let _ = check_question("questions/fuzz.yaml", data);
+    let _ = check_access_policy("access/policies/fuzz.yaml", data);
     let Some(text) = std::str::from_utf8(data)
         .ok()
         .map(|text| text.chars().take(8192).collect::<String>())

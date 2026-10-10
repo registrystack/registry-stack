@@ -1,0 +1,1519 @@
+{
+  "$defs": {
+    "AccessRights": {
+      "enum": [
+        "public",
+        "restricted",
+        "non_public"
+      ],
+      "type": "string"
+    },
+    "AdmsStatus": {
+      "enum": [
+        "under_development",
+        "active",
+        "completed",
+        "deprecated",
+        "withdrawn"
+      ],
+      "type": "string"
+    },
+    "ApplicationProfile": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "version"
+      ],
+      "type": "object"
+    },
+    "AuthorityManifest": {
+      "additionalProperties": false,
+      "properties": {
+        "authority_type": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "iri": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "spatial": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name"
+      ],
+      "type": "object"
+    },
+    "CatalogManifest": {
+      "additionalProperties": false,
+      "properties": {
+        "application_profiles": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ApplicationProfile"
+          },
+          "type": "array"
+        },
+        "base_url": {
+          "type": "string"
+        },
+        "conforms_to": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "description": {
+          "$ref": "#/$defs/LocalizedText"
+        },
+        "id": {
+          "type": "string"
+        },
+        "participant_id": {
+          "type": "string"
+        },
+        "publisher": {
+          "$ref": "#/$defs/PublisherManifest"
+        },
+        "standards": {
+          "$ref": "#/$defs/StandardsManifest",
+          "default": {}
+        },
+        "title": {
+          "$ref": "#/$defs/LocalizedText"
+        }
+      },
+      "required": [
+        "id",
+        "base_url",
+        "title",
+        "publisher"
+      ],
+      "type": "object"
+    },
+    "ChannelManifest": {
+      "additionalProperties": false,
+      "properties": {
+        "access_url": {
+          "type": "string"
+        },
+        "description": {
+          "$ref": "#/$defs/LocalizedText"
+        },
+        "id": {
+          "type": "string"
+        },
+        "iri": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "title": {
+          "$ref": "#/$defs/LocalizedText"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
+    "CodelistConcept": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "iri": {
+          "type": "string"
+        },
+        "label": {
+          "$ref": "#/$defs/LocalizedText"
+        }
+      },
+      "required": [
+        "code"
+      ],
+      "type": "object"
+    },
+    "CodelistManifest": {
+      "additionalProperties": false,
+      "properties": {
+        "concepts": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/CodelistConcept"
+          },
+          "type": "array"
+        },
+        "external_ref": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "scheme_iri": {
+          "type": "string"
+        },
+        "valid_from": {
+          "type": "string"
+        },
+        "valid_to": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "scheme_iri"
+      ],
+      "type": "object"
+    },
+    "DataServiceManifest": {
+      "additionalProperties": false,
+      "properties": {
+        "conforms_to": {
+          "type": "string"
+        },
+        "description": {
+          "$ref": "#/$defs/LocalizedText"
+        },
+        "endpoint_description": {
+          "type": "string"
+        },
+        "endpoint_url": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "iri": {
+          "type": "string"
+        },
+        "serves_datasets": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "title": {
+          "$ref": "#/$defs/LocalizedText"
+        }
+      },
+      "required": [
+        "id",
+        "title"
+      ],
+      "type": "object"
+    },
+    "DatasetManifest": {
+      "additionalProperties": false,
+      "properties": {
+        "access_rights": {
+          "$ref": "#/$defs/AccessRights",
+          "default": "restricted"
+        },
+        "applicable_legislation": {
+          "default": [],
+          "description": "DCAT-AP `dcatap:applicableLegislation` IRIs. These are standard\nevidence links only; downstream systems may use them to infer legal\nreadiness, but metadata publication does not establish an authority verdict.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "conforms_to": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "description": {
+          "$ref": "#/$defs/LocalizedText"
+        },
+        "entities": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/EntityManifest"
+          },
+          "type": "array"
+        },
+        "evidence_offerings": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/EvidenceOfferingManifest"
+          },
+          "type": "array"
+        },
+        "id": {
+          "type": "string"
+        },
+        "iri": {
+          "type": "string"
+        },
+        "owner": {
+          "type": "string"
+        },
+        "policy": {
+          "$ref": "#/$defs/DatasetPolicyManifest"
+        },
+        "public_services": {
+          "default": [],
+          "description": "Related CPSV public services that produce this dataset. Published as\nJSON-LD `cpsv:PublicService` nodes with `cpsv:produces`; consumers can\ninterpret that evidence, but the manifest does not declare\nsource-of-truth status.",
+          "items": {
+            "$ref": "#/$defs/PublicServiceManifest"
+          },
+          "type": "array"
+        },
+        "sensitivity": {
+          "$ref": "#/$defs/Sensitivity",
+          "default": "public"
+        },
+        "spatial_coverage": {
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/AdmsStatus"
+        },
+        "title": {
+          "$ref": "#/$defs/LocalizedText"
+        },
+        "update_frequency": {
+          "$ref": "#/$defs/UpdateFrequency",
+          "default": "unknown"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "title"
+      ],
+      "type": "object"
+    },
+    "DatasetPolicyManifest": {
+      "additionalProperties": false,
+      "properties": {
+        "assigner": {
+          "type": "string"
+        },
+        "obligations": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/PolicyDutyManifest"
+          },
+          "type": "array"
+        },
+        "permissions": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/PolicyRuleManifest"
+          },
+          "type": "array"
+        },
+        "profile": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "prohibitions": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/PolicyRuleManifest"
+          },
+          "type": "array"
+        },
+        "uid": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "DistributionManifest": {
+      "additionalProperties": false,
+      "properties": {
+        "access_service": {
+          "type": "string"
+        },
+        "access_url": {
+          "type": "string"
+        },
+        "dataset": {
+          "type": "string"
+        },
+        "description": {
+          "$ref": "#/$defs/LocalizedText"
+        },
+        "download_url": {
+          "type": "string"
+        },
+        "format": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "iri": {
+          "type": "string"
+        },
+        "media_type": {
+          "type": "string"
+        },
+        "title": {
+          "$ref": "#/$defs/LocalizedText"
+        }
+      },
+      "required": [
+        "id",
+        "dataset"
+      ],
+      "type": "object"
+    },
+    "EcosystemBindingManifest": {
+      "additionalProperties": false,
+      "properties": {
+        "assurance_model": true,
+        "conformance": true,
+        "credential_format": true,
+        "description": {
+          "$ref": "#/$defs/LocalizedText"
+        },
+        "evidence_pack": {
+          "$ref": "#/$defs/EvidencePackMetadata"
+        },
+        "id": {
+          "type": "string"
+        },
+        "profile": {
+          "type": "string"
+        },
+        "profiles": {
+          "items": {
+            "$ref": "#/$defs/ProfileClaim"
+          },
+          "type": "array"
+        },
+        "request_envelope": true,
+        "response_envelope": true,
+        "title": {
+          "$ref": "#/$defs/LocalizedText"
+        },
+        "transport": true,
+        "trust_framework": true,
+        "type": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        },
+        "vocabulary": true
+      },
+      "required": [
+        "id",
+        "version",
+        "profile",
+        "type"
+      ],
+      "type": "object"
+    },
+    "EntityManifest": {
+      "additionalProperties": false,
+      "properties": {
+        "concept_uri": {
+          "type": "string"
+        },
+        "description": {
+          "$ref": "#/$defs/LocalizedText"
+        },
+        "fields": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/FieldManifest"
+          },
+          "type": "array"
+        },
+        "identifiers": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/IdentifierManifest"
+          },
+          "type": "array"
+        },
+        "name": {
+          "type": "string"
+        },
+        "relationships": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/RelationshipManifest"
+          },
+          "type": "array"
+        },
+        "title": {
+          "$ref": "#/$defs/LocalizedText"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "EvaluationProfileManifest": {
+      "additionalProperties": false,
+      "properties": {
+        "claim_id": {
+          "type": "string"
+        },
+        "evidence_pack": {
+          "$ref": "#/$defs/EvidencePackMetadata"
+        },
+        "id": {
+          "type": "string"
+        },
+        "max_source_observed_age_seconds": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "ruleset": {
+          "type": "string"
+        },
+        "subject_id_type": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "ruleset",
+        "claim_id",
+        "subject_id_type"
+      ],
+      "type": "object"
+    },
+    "EvidenceOfferingAccessManifest": {
+      "additionalProperties": false,
+      "properties": {
+        "conforms_to": {
+          "type": "string"
+        },
+        "discovery_url": {
+          "type": "string"
+        },
+        "endpoint_url": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "ruleset": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "ruleset"
+      ],
+      "type": "object"
+    },
+    "EvidenceOfferingManifest": {
+      "additionalProperties": false,
+      "properties": {
+        "access": {
+          "$ref": "#/$defs/EvidenceOfferingAccessManifest"
+        },
+        "attestation_id": {
+          "type": "string"
+        },
+        "description": {
+          "$ref": "#/$defs/LocalizedText"
+        },
+        "entity": {
+          "type": "string"
+        },
+        "evidence_type": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "iri": {
+          "type": "string"
+        },
+        "issuing_authority": {
+          "$ref": "#/$defs/IssuingAuthorityManifest"
+        },
+        "jurisdiction": {
+          "$ref": "#/$defs/JurisdictionManifest"
+        },
+        "level_of_assurance": {
+          "type": "string"
+        },
+        "lookup_keys": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "policy": {
+          "$ref": "#/$defs/EvidenceOfferingPolicyManifest"
+        },
+        "procedure_contexts": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "title": {
+          "$ref": "#/$defs/LocalizedText"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "evidence_type",
+        "issuing_authority",
+        "entity",
+        "access"
+      ],
+      "type": "object"
+    },
+    "EvidenceOfferingPolicyManifest": {
+      "additionalProperties": false,
+      "properties": {
+        "purpose": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "EvidencePackMetadata": {
+      "additionalProperties": false,
+      "properties": {
+        "allowed_outputs": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "evidence_envelope": true,
+        "fixtures": {
+          "items": true,
+          "type": "array"
+        },
+        "odrl_enforcement": {
+          "$ref": "#/$defs/OdrlEnforcementProfile"
+        },
+        "odrl_policy_url": {
+          "type": "string"
+        },
+        "pack_id": {
+          "type": "string"
+        },
+        "pack_version": {
+          "type": "string"
+        },
+        "policy": true,
+        "policy_hash": {
+          "type": "string"
+        },
+        "policy_id": {
+          "type": "string"
+        },
+        "policy_version": {
+          "type": "string"
+        },
+        "required_gates": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "semantic_profile": true,
+        "source_basis": true,
+        "source_mapping": true,
+        "synthetic_data": {
+          "items": true,
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "EvidenceTypeListManifest": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "$ref": "#/$defs/LocalizedText"
+        },
+        "evidence_types": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "id": {
+          "type": "string"
+        },
+        "title": {
+          "$ref": "#/$defs/LocalizedText"
+        }
+      },
+      "type": "object"
+    },
+    "EvidenceTypeManifest": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "$ref": "#/$defs/LocalizedText"
+        },
+        "id": {
+          "type": "string"
+        },
+        "information_concepts": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "iri": {
+          "type": "string"
+        },
+        "proves": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "title": {
+          "$ref": "#/$defs/LocalizedText"
+        }
+      },
+      "required": [
+        "id",
+        "title"
+      ],
+      "type": "object"
+    },
+    "FieldConstraints": {
+      "additionalProperties": false,
+      "properties": {
+        "in": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "max_length": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "min_length": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "pattern": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "FieldManifest": {
+      "additionalProperties": false,
+      "properties": {
+        "codelist": {
+          "type": "string"
+        },
+        "concepts": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "constraints": {
+          "$ref": "#/$defs/FieldConstraints",
+          "default": {
+            "in": []
+          }
+        },
+        "language": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "required": {
+          "default": false,
+          "type": "boolean"
+        },
+        "type": {
+          "$ref": "#/$defs/FieldType"
+        },
+        "unit": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "type"
+      ],
+      "type": "object"
+    },
+    "FieldType": {
+      "enum": [
+        "string",
+        "number",
+        "integer",
+        "boolean",
+        "date",
+        "timestamp",
+        "code"
+      ],
+      "type": "string"
+    },
+    "FormFieldManifest": {
+      "additionalProperties": false,
+      "properties": {
+        "concept": {
+          "type": "string"
+        },
+        "data_type": {
+          "type": "string"
+        },
+        "fulfillment": {
+          "$ref": "#/$defs/FormFulfillmentManifest"
+        },
+        "id": {
+          "type": "string"
+        },
+        "label": {
+          "$ref": "#/$defs/LocalizedText"
+        },
+        "max_occurs": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "min_occurs": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "name": {
+          "type": "string"
+        },
+        "required": {
+          "default": false,
+          "type": "boolean"
+        },
+        "supports_requirement": {
+          "type": "string"
+        },
+        "visible_when": {
+          "$ref": "#/$defs/FormVisibilityManifest"
+        },
+        "widget_type": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "label"
+      ],
+      "type": "object"
+    },
+    "FormFulfillmentManifest": {
+      "additionalProperties": false,
+      "properties": {
+        "modes": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "preferred_mode": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "FormManifest": {
+      "additionalProperties": false,
+      "properties": {
+        "channel": {
+          "type": "string"
+        },
+        "description": {
+          "$ref": "#/$defs/LocalizedText"
+        },
+        "fields": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/FormFieldManifest"
+          },
+          "type": "array"
+        },
+        "id": {
+          "type": "string"
+        },
+        "iri": {
+          "type": "string"
+        },
+        "sections": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/FormSectionManifest"
+          },
+          "type": "array"
+        },
+        "service": {
+          "type": "string"
+        },
+        "title": {
+          "$ref": "#/$defs/LocalizedText"
+        },
+        "validates_with": {
+          "$ref": "#/$defs/FormValidationManifest"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "service"
+      ],
+      "type": "object"
+    },
+    "FormSectionManifest": {
+      "additionalProperties": false,
+      "properties": {
+        "fields": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/FormFieldManifest"
+          },
+          "type": "array"
+        },
+        "id": {
+          "type": "string"
+        },
+        "max_occurs": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "min_occurs": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "repeatable": {
+          "default": false,
+          "type": "boolean"
+        },
+        "title": {
+          "$ref": "#/$defs/LocalizedText"
+        },
+        "visible_when": {
+          "$ref": "#/$defs/FormVisibilityManifest"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
+    "FormValidationManifest": {
+      "additionalProperties": false,
+      "properties": {
+        "json_schema": {
+          "type": "string"
+        },
+        "shacl": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "FormVisibilityManifest": {
+      "additionalProperties": false,
+      "properties": {
+        "equals": {
+          "type": "string"
+        },
+        "field": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "field",
+        "equals"
+      ],
+      "type": "object"
+    },
+    "IdentifierManifest": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "kind"
+      ],
+      "type": "object"
+    },
+    "IssuingAuthorityManifest": {
+      "additionalProperties": false,
+      "properties": {
+        "country": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "iri": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name"
+      ],
+      "type": "object"
+    },
+    "JurisdictionManifest": {
+      "additionalProperties": false,
+      "properties": {
+        "country": {
+          "type": "string"
+        },
+        "region": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "LocalizedText": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        }
+      ],
+      "description": "Text written either as one string or as a mapping from language tag to\ntext. The node kind chooses the variant, so a decoding error inside either\nform keeps its position. Each variant serializes as the form it was\nwritten in."
+    },
+    "OdrlEnforcementProfile": {
+      "additionalProperties": false,
+      "properties": {
+        "constraint_terms": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "profile": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "profile"
+      ],
+      "type": "object"
+    },
+    "PolicyConstraintManifest": {
+      "additionalProperties": false,
+      "properties": {
+        "datatype": {
+          "type": "string"
+        },
+        "left_operand": {
+          "type": "string"
+        },
+        "operator": {
+          "type": "string"
+        },
+        "right_operand": {
+          "$ref": "#/$defs/PolicyOperandValue"
+        },
+        "unit": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "left_operand",
+        "operator",
+        "right_operand"
+      ],
+      "type": "object"
+    },
+    "PolicyDutyManifest": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "type": "string"
+        },
+        "assignee": {
+          "type": "string"
+        },
+        "constraints": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/PolicyConstraintManifest"
+          },
+          "type": "array"
+        },
+        "target": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "type": "object"
+    },
+    "PolicyOperandValue": {
+      "additionalProperties": false,
+      "properties": {
+        "iri": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "PolicyRuleManifest": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "type": "string"
+        },
+        "assignee": {
+          "type": "string"
+        },
+        "constraints": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/PolicyConstraintManifest"
+          },
+          "type": "array"
+        },
+        "duties": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/PolicyDutyManifest"
+          },
+          "type": "array"
+        },
+        "target": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "type": "object"
+    },
+    "ProfileClaim": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "version"
+      ],
+      "type": "object"
+    },
+    "PublicServiceManifest": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "$ref": "#/$defs/LocalizedText"
+        },
+        "id": {
+          "type": "string"
+        },
+        "title": {
+          "$ref": "#/$defs/LocalizedText"
+        }
+      },
+      "required": [
+        "title"
+      ],
+      "type": "object"
+    },
+    "PublisherManifest": {
+      "additionalProperties": false,
+      "properties": {
+        "authority_type": {
+          "type": "string"
+        },
+        "iri": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "ReferenceFrameworkManifest": {
+      "additionalProperties": false,
+      "properties": {
+        "identifier": {
+          "type": "string"
+        },
+        "iri": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "iri",
+        "identifier"
+      ],
+      "type": "object"
+    },
+    "RelationshipManifest": {
+      "additionalProperties": false,
+      "properties": {
+        "cardinality": {
+          "type": "string"
+        },
+        "concept_uri": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "role": {
+          "type": "string"
+        },
+        "target": {
+          "type": "string"
+        },
+        "target_entity": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "RequirementManifest": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "$ref": "#/$defs/LocalizedText"
+        },
+        "evidence_type_lists": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/EvidenceTypeListManifest"
+          },
+          "type": "array"
+        },
+        "id": {
+          "type": "string"
+        },
+        "iri": {
+          "type": "string"
+        },
+        "procedure_contexts": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "rdf_type": {
+          "type": "string"
+        },
+        "reference_frameworks": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ReferenceFrameworkManifest"
+          },
+          "type": "array"
+        },
+        "title": {
+          "$ref": "#/$defs/LocalizedText"
+        }
+      },
+      "required": [
+        "id",
+        "title"
+      ],
+      "type": "object"
+    },
+    "Sensitivity": {
+      "enum": [
+        "public",
+        "internal",
+        "personal",
+        "confidential",
+        "secret"
+      ],
+      "type": "string"
+    },
+    "ServiceManifest": {
+      "additionalProperties": false,
+      "properties": {
+        "channels": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ChannelManifest"
+          },
+          "type": "array"
+        },
+        "competent_authority": {
+          "type": "string"
+        },
+        "data_services": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "description": {
+          "$ref": "#/$defs/LocalizedText"
+        },
+        "forms": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "holds_requirements": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "id": {
+          "type": "string"
+        },
+        "iri": {
+          "type": "string"
+        },
+        "jurisdiction": {
+          "type": "string"
+        },
+        "produces": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "title": {
+          "$ref": "#/$defs/LocalizedText"
+        }
+      },
+      "required": [
+        "id",
+        "title"
+      ],
+      "type": "object"
+    },
+    "StandardsManifest": {
+      "additionalProperties": false,
+      "properties": {
+        "dcat": {
+          "type": "string"
+        },
+        "json_schema": {
+          "type": "string"
+        },
+        "shacl": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "UpdateFrequency": {
+      "enum": [
+        "continuous",
+        "daily",
+        "weekly",
+        "termly",
+        "monthly",
+        "quarterly",
+        "annual",
+        "irregular",
+        "as_needed",
+        "unknown"
+      ],
+      "type": "string"
+    }
+  },
+  "$id": "https://id.registrystack.org/schemas/manifest/metadata/metadata.v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "A metadata manifest as written, decoded member by member. A reader that\nkeeps source positions decodes this type, refuses runtime-only and\nsecret-bearing keys itself, and converts it with `MetadataManifest::from`;\ndeserializing `MetadataManifest` directly applies the same key refusals\nwithout positions.",
+  "properties": {
+    "authorities": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/AuthorityManifest"
+      },
+      "type": "array"
+    },
+    "catalog": {
+      "$ref": "#/$defs/CatalogManifest"
+    },
+    "codelists": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/CodelistManifest"
+      },
+      "type": "array"
+    },
+    "data_services": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/DataServiceManifest"
+      },
+      "type": "array"
+    },
+    "datasets": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/DatasetManifest"
+      },
+      "type": "array"
+    },
+    "distributions": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/DistributionManifest"
+      },
+      "type": "array"
+    },
+    "ecosystem_bindings": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/EcosystemBindingManifest"
+      },
+      "type": "array"
+    },
+    "evaluation_profiles": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/EvaluationProfileManifest"
+      },
+      "type": "array"
+    },
+    "evidence_types": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/EvidenceTypeManifest"
+      },
+      "type": "array"
+    },
+    "forms": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/FormManifest"
+      },
+      "type": "array"
+    },
+    "profiles": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/ProfileClaim"
+      },
+      "type": "array"
+    },
+    "public_services": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/ServiceManifest"
+      },
+      "type": "array"
+    },
+    "requirements": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/RequirementManifest"
+      },
+      "type": "array"
+    },
+    "schema_version": {
+      "const": "registry-manifest/v1",
+      "type": "string"
+    },
+    "vocabularies": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "type": "object"
+    }
+  },
+  "required": [
+    "schema_version",
+    "catalog"
+  ],
+  "title": "Registry Manifest metadata manifest",
+  "type": "object"
+}

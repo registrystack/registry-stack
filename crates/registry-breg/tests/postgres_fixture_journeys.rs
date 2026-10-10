@@ -1,10 +1,15 @@
+#![allow(
+    clippy::disallowed_methods,
+    reason = "tests read back the YAML the code under test wrote, or a published contract or fixture, to assert on it; they read no operator configuration"
+)]
 // SPDX-License-Identifier: Apache-2.0
-
 #![cfg(all(feature = "postgres-test", feature = "tooling", unix))]
 
 #[path = "support/postgres_harness.rs"]
 #[allow(dead_code)]
 mod postgres_harness;
+#[path = "support/source_bytes.rs"]
+mod source_bytes;
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -92,36 +97,43 @@ const QUICKSTART_INSTANCE_ID: &str = "generic_registry_local";
 // not overlap within this integration-test process.
 static WASM_RUNTIME_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-const IMPORT_JOURNEY_SOURCE: &[u8] = br#"apiVersion: registry.registrystack.org/breg-journeys/v1
+const IMPORT_JOURNEY_SOURCE: &[u8] = br#"apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
 journeys:
   - id: import-reference-data
     steps:
       - id: import-widget
         entity: widget
         accessProfile: operator
-        claims: &operator_claims
+        claims:
           principal: fixture-operator
           purpose: case-management
           directClaims: {jurisdiction: zone-a}
         request:
-          operation: import
+          type: import
           items:
             - {jurisdiction: zone-a, label: imported, note: reference, quantity: 1}
         expect: {outcome: success, status: 200}
       - id: list-imported-widget
         entity: widget
         accessProfile: operator
-        claims: *operator_claims
-        request: {operation: list}
+        claims:
+          principal: fixture-operator
+          purpose: case-management
+          directClaims: {jurisdiction: zone-a}
+        request: {type: list}
         expect: {outcome: success, status: 200, count: 1}
   - id: refuse-import-outside-boundary
     steps:
       - id: import-other-jurisdiction
         entity: widget
         accessProfile: operator
-        claims: *operator_claims
+        claims:
+          principal: fixture-operator
+          purpose: case-management
+          directClaims: {jurisdiction: zone-a}
         request:
-          operation: import
+          type: import
           items:
             - {jurisdiction: zone-b, label: refused, note: reference, quantity: 1}
         expect: {outcome: refusal, status: 412, problemCode: precondition.failed}
@@ -1224,6 +1236,7 @@ authentication:
     accessTokenType: JWT
     scopeClaim: scope
     scopeSeparator: " "
+    allowedClients: unrestricted
     maxTokenLifetimeSeconds: 3600
     leewayMilliseconds: 60000
     jwksSource:
@@ -1337,6 +1350,7 @@ authentication:
     accessTokenType: JWT
     scopeClaim: scope
     scopeSeparator: " "
+    allowedClients: unrestricted
     maxTokenLifetimeSeconds: 3600
     leewayMilliseconds: 60000
     jwksSource:
@@ -1484,21 +1498,25 @@ fn spatial_credential_bindings(
                 "create-edge-service-site",
                 Zeroizing::new(spatial_admin_token(idp)),
             ),
-            SchemaTestCredentialBinding::anonymous(
+            SchemaTestCredentialBinding::bearer(
                 "service-site-source-profile-smoke",
                 "public-map-reader-lists-public-point-fields",
+                Zeroizing::new(spatial_public_map_token(idp)),
             ),
-            SchemaTestCredentialBinding::anonymous(
+            SchemaTestCredentialBinding::bearer(
                 "service-site-source-profile-smoke",
                 "public-map-reader-bbox-finds-central-site",
+                Zeroizing::new(spatial_public_map_token(idp)),
             ),
-            SchemaTestCredentialBinding::anonymous(
+            SchemaTestCredentialBinding::bearer(
                 "service-site-source-profile-smoke",
                 "directory-reader-lists-without-geometry",
+                Zeroizing::new(spatial_public_directory_token(idp)),
             ),
-            SchemaTestCredentialBinding::anonymous(
+            SchemaTestCredentialBinding::bearer(
                 "service-site-source-profile-smoke",
                 "directory-reader-bbox-is-refused",
+                Zeroizing::new(spatial_public_directory_token(idp)),
             ),
             SchemaTestCredentialBinding::bearer(
                 "service-site-source-profile-smoke",
@@ -1643,6 +1661,26 @@ fn spatial_map_token(idp: &MockIdp) -> String {
         "registry_purpose": "service-site-map",
         "scope": "service-sites:map.read",
         "service_zones": "central",
+    }))
+}
+
+fn spatial_public_map_token(idp: &MockIdp) -> String {
+    idp.mint_token(json!({
+        "aud": AUDIENCE,
+        "registry_actor_kind": "service",
+        "registry_principal": "synthetic-public-map",
+        "registry_purpose": "service-site-public-map",
+        "scope": "service-sites:public.read",
+    }))
+}
+
+fn spatial_public_directory_token(idp: &MockIdp) -> String {
+    idp.mint_token(json!({
+        "aud": AUDIENCE,
+        "registry_actor_kind": "service",
+        "registry_principal": "synthetic-public-directory",
+        "registry_purpose": "service-site-public-directory",
+        "scope": "service-sites:public.read",
     }))
 }
 
@@ -1859,7 +1897,7 @@ fn compiled_household_fixture(
         CompileProfile::Production,
     )
     .expect("household acceptance project compiles in Production");
-    let source = serde_json::to_vec(&project).expect("household project serializes");
+    let source = source_bytes::source_bytes(&project);
     let modules = vec![
         PackageModuleSource {
             id: "publicschema-household-core".to_owned(),

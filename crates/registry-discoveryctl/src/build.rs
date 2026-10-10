@@ -7,8 +7,8 @@ use std::time::Duration;
 use registry_discovery::{
     canonical_index_bytes, catalog_revision, mapping_revision, validate_index,
     CompiledEvidenceMapping, DiscoveryIndex, EvidenceTypeAlternative, OriginSummary, ServiceRecord,
-    INDEX_FILE, INDEX_SCHEMA, MAXIMUM_INDEX_BYTES, MAXIMUM_PACKAGE_BYTES, MAXIMUM_PACKAGE_DEPTH,
-    MAXIMUM_PACKAGE_FILES, PACKAGE_COMMAND,
+    INDEX_API_VERSION, INDEX_FILE, INDEX_KIND, MAXIMUM_INDEX_BYTES, MAXIMUM_PACKAGE_BYTES,
+    MAXIMUM_PACKAGE_DEPTH, MAXIMUM_PACKAGE_FILES, PACKAGE_COMMAND,
 };
 use registry_platform_config::{write_package, PackageError, PackageLimits, VerifiedPackage};
 use registry_platform_httputil::{read_bounded, validate_response_headers, FetchUrlPolicy};
@@ -16,7 +16,6 @@ use reqwest::header::{ACCEPT, CONTENT_ENCODING, CONTENT_TYPE};
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
-use url::Url;
 
 use crate::project::{check_project, AuthoredEvidenceMapping, CheckedProject, ProjectError};
 
@@ -35,7 +34,7 @@ fn package_limits() -> PackageLimits {
 
 #[derive(Debug, Error)]
 pub enum BuildError {
-    #[error("the Discovery authoring project is invalid")]
+    #[error("{0}")]
     Project(#[from] ProjectError),
     #[error("an approved Discovery origin could not be fetched safely")]
     Fetch,
@@ -124,7 +123,8 @@ async fn package_project_with_timeouts(
         .map_err(|_| BuildError::Compile)?;
 
     let index = DiscoveryIndex {
-        schema_version: INDEX_SCHEMA.to_owned(),
+        api_version: INDEX_API_VERSION.to_owned(),
+        kind: INDEX_KIND.to_owned(),
         catalog_revision,
         mapping_revision,
         built_at: timestamp,
@@ -171,7 +171,7 @@ async fn fetch_origins(
     let mut record_ids = BTreeSet::new();
 
     for approved in project.origins.iter().filter(|origin| origin.enabled) {
-        let url = Url::parse(&approved.catalog_url).map_err(|_| BuildError::Fetch)?;
+        let url = approved.catalog_url.to_url();
         let validated = policy
             .validate_dns_pinned_for_immediate_fetch_with_timeout(&url, dns_timeout)
             .await
@@ -215,7 +215,7 @@ async fn fetch_origins(
         let content_digest = sha256_digest(&bytes);
         origins.push(OriginSummary {
             origin_id: approved.origin_id.clone(),
-            catalog_url: approved.catalog_url.clone(),
+            catalog_url: approved.catalog_url.to_string(),
             content_digest: content_digest.clone(),
             fetched_at: fetched_at.clone(),
         });
@@ -244,7 +244,7 @@ async fn fetch_origins(
                 semantic_class_ids: advertised.semantic_class_ids().to_vec(),
                 operation_family_ids: advertised.operation_family_ids().to_vec(),
                 origin_id: approved.origin_id.clone(),
-                origin_url: approved.catalog_url.clone(),
+                origin_url: approved.catalog_url.to_string(),
                 origin_content_digest: content_digest.clone(),
                 origin_fetched_at: fetched_at.clone(),
             });
@@ -275,7 +275,7 @@ fn compile_mappings(mappings: Vec<AuthoredEvidenceMapping>) -> Vec<CompiledEvide
                 .into_iter()
                 .map(|alternative| EvidenceTypeAlternative {
                     evidence_type_list_id: alternative.evidence_type_list_id,
-                    evidence_type_ids: alternative.evidence_type_ids,
+                    evidence_type_ids: alternative.evidence_type_ids.into_vec(),
                 })
                 .collect(),
         })
@@ -324,7 +324,8 @@ mod tests {
         let services = Vec::new();
         let mappings = Vec::new();
         let index = DiscoveryIndex {
-            schema_version: INDEX_SCHEMA.into(),
+            api_version: INDEX_API_VERSION.into(),
+            kind: INDEX_KIND.into(),
             catalog_revision: catalog_revision(&services).expect("catalog revision"),
             mapping_revision: mapping_revision(&mappings).expect("mapping revision"),
             built_at: "2026-08-14T00:00:00Z".into(),
@@ -351,7 +352,8 @@ mod tests {
         let services = Vec::new();
         let mappings = Vec::new();
         let index = DiscoveryIndex {
-            schema_version: INDEX_SCHEMA.into(),
+            api_version: INDEX_API_VERSION.into(),
+            kind: INDEX_KIND.into(),
             catalog_revision: catalog_revision(&services).expect("catalog revision"),
             mapping_revision: mapping_revision(&mappings).expect("mapping revision"),
             built_at: "2026-08-14T00:00:00Z".into(),

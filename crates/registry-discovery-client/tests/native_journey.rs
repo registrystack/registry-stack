@@ -411,9 +411,13 @@ fn evidence_description(provider_base: &str, untrusted: bool) -> Vec<u8> {
         .expect("the maintained fixture publishes Discovery metadata");
     if untrusted {
         publication.service_id = UNTRUSTED_EVIDENCE_SERVICE.into();
-        publication.endpoint_url = format!("{provider_base}/untrusted-evidence/");
+        publication.endpoint_url = format!("{provider_base}/untrusted-evidence/")
+            .parse()
+            .expect("the local untrusted endpoint is a URL");
     } else {
-        publication.endpoint_url = format!("{provider_base}/evidence/");
+        publication.endpoint_url = format!("{provider_base}/evidence/")
+            .parse()
+            .expect("the local endpoint is a URL");
     }
     config
         .validate()

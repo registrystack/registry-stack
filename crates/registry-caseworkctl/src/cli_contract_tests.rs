@@ -1,3 +1,7 @@
+#![allow(
+    clippy::disallowed_methods,
+    reason = "tests read back the YAML the code under test wrote, or a published contract or fixture, to assert on it; they read no operator configuration"
+)]
 // SPDX-License-Identifier: Apache-2.0
 
 //! Conformance gate for the versioned `caseworkctl --format json` reports.
@@ -79,17 +83,7 @@ fn assert_matches_contract(label: &str, kind: &str, report: &Value) {
         "{label}: {report:#?}"
     );
     assert_eq!(report["kind"], kind, "{label}: {report:#?}");
-    let path = repo_root()
-        .join("products/casework/contracts/cli")
-        .join(format!("{kind}.schema.json"));
-    let schema: Value = serde_json::from_slice(
-        &std::fs::read(&path).unwrap_or_else(|error| panic!("schema {path:?} reads: {error}")),
-    )
-    .unwrap_or_else(|error| panic!("schema {path:?} parses: {error}"));
-    let compiled = JSONSchema::options()
-        .with_draft(Draft::Draft202012)
-        .compile(&schema)
-        .unwrap_or_else(|error| panic!("schema {path:?} compiles: {error}"));
+    let compiled = contract_schema(kind);
     let validation = compiled.validate(report);
     if let Err(errors) = validation {
         let details = errors
@@ -100,6 +94,33 @@ fn assert_matches_contract(label: &str, kind: &str, report: &Value) {
     }
 }
 
+fn contract_schema(kind: &str) -> JSONSchema {
+    let path = repo_root()
+        .join("products/casework/contracts/cli")
+        .join(format!("{kind}.schema.json"));
+    let schema: Value = serde_json::from_slice(
+        &std::fs::read(&path).unwrap_or_else(|error| panic!("schema {path:?} reads: {error}")),
+    )
+    .unwrap_or_else(|error| panic!("schema {path:?} parses: {error}"));
+    // A report that carries part of the authored project refers to the
+    // project schema's definitions of it.
+    let project_path = repo_root().join("products/casework/generated/project/project.schema.json");
+    let project_schema: Value = serde_json::from_slice(
+        &std::fs::read(&project_path)
+            .unwrap_or_else(|error| panic!("schema {project_path:?} reads: {error}")),
+    )
+    .unwrap_or_else(|error| panic!("schema {project_path:?} parses: {error}"));
+    let project_id = project_schema["$id"]
+        .as_str()
+        .expect("the project schema names its identifier")
+        .to_owned();
+    JSONSchema::options()
+        .with_draft(Draft::Draft202012)
+        .with_document(project_id, project_schema)
+        .compile(&schema)
+        .unwrap_or_else(|error| panic!("schema {path:?} compiles: {error}"))
+}
+
 #[test]
 fn generated_schemas_are_current() {
     let status = ProcessCommand::new("python3")
@@ -108,6 +129,76 @@ fn generated_schemas_are_current() {
         .status()
         .expect("Python starts for the schema freshness check");
     assert!(status.success(), "generated caseworkctl schemas are stale");
+}
+
+#[test]
+fn every_committed_report_example_matches_its_schema() {
+    let directory = repo_root().join("products/casework/examples/formats/reports");
+    let mut examples = std::fs::read_dir(&directory)
+        .unwrap_or_else(|error| panic!("examples {directory:?} list: {error}"))
+        .map(|entry| entry.expect("example entry").path())
+        .collect::<Vec<_>>();
+    examples.sort();
+    assert_eq!(examples.len(), 21, "{examples:?}");
+    for path in examples {
+        let report: Value = serde_json::from_slice(&std::fs::read(&path).unwrap())
+            .unwrap_or_else(|error| panic!("example {path:?} parses: {error}"));
+        let kind = report["kind"].as_str().expect("the example names its kind");
+        let label = path.display().to_string();
+        assert_matches_contract(&label, kind, &report);
+    }
+}
+
+#[test]
+fn a_checked_request_target_is_closed_and_names_a_local_id() {
+    let example = repo_root().join("products/casework/examples/professional-review");
+    let (exit, report) = invoke(project_arguments("check", &example));
+    assert_eq!(exit, ExitCode::SUCCESS, "{report:#?}");
+    let target = "/effective/sources/0/requests/0/target";
+    assert_eq!(
+        report.pointer(target),
+        Some(&json!({"id": "first-review-response", "elapsed": "PT48H"})),
+        "{report:#?}"
+    );
+    assert_matches_contract("check", "CheckReport", &report);
+    let schema = contract_schema("CheckReport");
+    for (member, value) in [
+        ("note", json!("an unknown member")),
+        ("id", json!("First Review")),
+        ("elapsed", json!(172800)),
+    ] {
+        let mut changed = report.clone();
+        changed.pointer_mut(target).expect("target")[member] = value;
+        assert!(!schema.is_valid(&changed), "{member}");
+    }
+    let mut missing = report.clone();
+    missing
+        .pointer_mut(target)
+        .and_then(Value::as_object_mut)
+        .expect("target")
+        .remove("elapsed");
+    assert!(!schema.is_valid(&missing));
+    let mut none = report;
+    *none.pointer_mut(target).expect("target") = Value::Null;
+    assert!(schema.is_valid(&none));
+}
+
+#[test]
+fn the_files_checked_bound_is_the_most_files_a_check_reads() {
+    // The project file, the runtime configuration, `dev-clients.yaml`, and the
+    // retained session state, then the sources and the three directories.
+    let most =
+        4 + registry_casework_core::MAXIMUM_SOURCES + 3 * crate::offline::MAXIMUM_DIRECTORY_FILES;
+    for kind in ["CheckReport", "TestReport"] {
+        let path = repo_root()
+            .join("products/casework/contracts/cli")
+            .join(format!("{kind}.schema.json"));
+        let schema: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(
+            schema["oneOf"][0]["properties"]["filesChecked"]["maximum"], most,
+            "{kind}"
+        );
+    }
 }
 
 #[test]
@@ -281,6 +372,35 @@ fn every_public_json_report_matches_its_schema() {
         reports.push((label, kind, report));
     }
 
+    // A refused project carries the reader's diagnostics unchanged, with
+    // their positions and the places they relate to.
+    let refused = root.path().join("refused");
+    let (exit, _) = invoke(vec![
+        OsString::from("init"),
+        refused.as_os_str().to_owned(),
+        OsString::from("--template"),
+        OsString::from("standalone-decision"),
+    ]);
+    assert_eq!(exit, ExitCode::SUCCESS);
+    let policy = refused.join("casework.yaml");
+    let text = std::fs::read_to_string(&policy).unwrap();
+    std::fs::write(
+        &policy,
+        text.replace("    recoveryDays: 30\n", "    recoveryDays: 91\n"),
+    )
+    .unwrap();
+    let (exit, check) = invoke(project_arguments("check", &refused));
+    assert_eq!(exit, ExitCode::from(1), "{check:#?}");
+    assert!(
+        check["diagnostics"][0]["source"]["line"].is_u64(),
+        "{check:#?}"
+    );
+    assert!(
+        check["diagnostics"][0]["related"][0]["line"].is_u64(),
+        "{check:#?}"
+    );
+    reports.push(("refused check", "CheckReport", check));
+
     let (exit, usage) = invoke(arguments(&["--not-a-real-argument"]));
     assert_eq!(exit, ExitCode::from(2));
     reports.push(("usage", "UsageReport", usage));
@@ -289,7 +409,7 @@ fn every_public_json_report_matches_its_schema() {
     assert_eq!(exit, ExitCode::from(2));
     reports.push(("removed command", "UsageReport", removed));
 
-    assert_eq!(reports.len(), 22);
+    assert_eq!(reports.len(), 23);
     for (label, kind, report) in reports {
         assert_matches_contract(label, kind, &report);
     }
@@ -698,17 +818,13 @@ fn check_against_a_breg_package_refuses_a_stale_pin_naming_the_check_and_the_rep
     assert_eq!(report["ok"], false);
     let diagnostic = &report["diagnostics"][0];
     assert_eq!(diagnostic["code"], "casework.source-revision.stale");
-    assert_eq!(diagnostic["artifact"], "source_description");
-    assert_eq!(diagnostic["path"], "casework.yaml:/sources/0/description");
+    assert_eq!(diagnostic["artifact"], "CaseworkProject");
+    assert_eq!(diagnostic["path"], "/sources/0/description");
+    assert_eq!(diagnostic["related"][0]["path"], "/sourceRevision");
+    // Neither revision is repeated (CFG-SEC-3); the related entry names
+    // where the pinned one is written.
     let message = diagnostic["message"].as_str().unwrap();
-    assert!(
-        message.contains("sha256:regional-source-revision"),
-        "{message}"
-    );
-    assert!(
-        message.contains("sha256:rederived-by-the-package"),
-        "{message}"
-    );
+    assert!(!message.contains("sha256:"), "{message}");
     let action = diagnostic["suggestedAction"].as_str().unwrap();
     assert!(
         action.contains("caseworkctl source add BREG_PROJECT --project ")
@@ -735,12 +851,15 @@ fn check_against_a_breg_package_selects_one_source_and_never_guesses() {
 
     let (exit, report) = check_against_breg_package(&fake, package.path(), &[]);
     assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT), "{report:#?}");
-    let message = report["diagnostics"][0]["message"].as_str().unwrap();
+    let diagnostic = &report["diagnostics"][0];
+    assert_eq!(diagnostic["code"], "casework.source.ambiguous");
+    assert_eq!(diagnostic["path"], "/sources");
+    let message = diagnostic["message"].as_str().unwrap();
+    assert!(message.contains("--source-id"), "{message}");
+    let action = diagnostic["suggestedAction"].as_str().unwrap();
     assert!(
-        message.contains("--source-id")
-            && message.contains("regional-register")
-            && message.contains("response-register"),
-        "{message}"
+        action.contains("regional-register") && action.contains("response-register"),
+        "{action}"
     );
 
     let (exit, report) =

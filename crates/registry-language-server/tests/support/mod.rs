@@ -240,7 +240,9 @@ paths:
 
 /// The question [`operation_question_project`] holds: the same adult-status question written in the
 /// compact form, so it names an operation instead of a source and projects its own facts.
-pub const OPERATION_QUESTION: &str = r#"id: adult-status
+pub const OPERATION_QUESTION: &str = r#"apiVersion: id.registrystack.org/formats/evidence/question/v1alpha1
+kind: EvidenceQuestion
+id: adult-status
 question: Is the person at least 18 years old?
 purpose: fixture-eligibility
 subject:
@@ -256,14 +258,16 @@ source:
     <|collection-bound|>/records: 16
 answers:
   - concept: <|concept|>is_adult
-    id: urn:example:concepts:is-adult
+    uri: urn:example:concepts:is-adult
     type: boolean
 derivation: <|derivation|>derivations/adult-status.rhai
 disclosure:
   allow: [<|allow|>is_adult]
 "#;
 
-pub const QUESTION: &str = r#"id: <|id|>adult-status
+pub const QUESTION: &str = r#"apiVersion: id.registrystack.org/formats/evidence/question/v1alpha1
+kind: EvidenceQuestion
+id: <|id|>adult-status
 question: Is the person at least 18 years old?
 purpose: fixture-eligibility
 subject:
@@ -274,7 +278,7 @@ source:
   ref: <|source-ref|>people
 answers:
   - concept: <|concept|>is_adult
-    id: urn:example:concepts:is-adult
+    uri: urn:example:concepts:is-adult
     type: boolean
 derivation: <|derivation|>derivations/adult-status.rhai
 disclosure:
@@ -325,7 +329,9 @@ pub fn question_with_plural_subjects() -> String {
 
 pub const DERIVATION: &str = "fn answer(facts, selectors, context) {\n    #{is_adult: true}\n}\n";
 
-pub const SOURCE: &str = r#"transport: http-json
+pub const SOURCE: &str = r#"apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1
+kind: EvidenceSource
+transport: http-json
 baseUrl: https://source.invalid
 posture: field-projected
 authentication: {kind: static-bearer, tokenRef: 'secret:file/source-token'}
@@ -352,7 +358,7 @@ extractScript: <|extract-script|>adapters/people-extract.rhai
 factSchema: <|fact-schema|>schemas/people-facts.schema.yaml
 "#;
 
-pub const SELECTOR: &str = "maximumAggregateBytes: 200\nfields:\n  person_id: {type: string, minimumBytes: 1, maximumBytes: 200}\n";
+pub const SELECTOR: &str = "apiVersion: id.registrystack.org/formats/evidence/selector/v1alpha1\nkind: EvidenceSelector\nmaximumAggregateBytes: 200\nfields:\n  person_id: {type: string, minimumBytes: 1, maximumBytes: 200}\n";
 
 pub const SCHEMA: &str = "type: object\nadditionalProperties: false\n";
 
@@ -364,7 +370,9 @@ pub const SCHEMA_JSON: &str = "{\"type\": \"object\", \"additionalProperties\": 
 pub const ADAPTER: &str = "fn prepare(selectors, context) {\n    #{query: [], body: #{}}\n}\n";
 
 pub const FIXTURE: &str =
-    "fixture: registry.evidence.acceptance.editor/v1\nsynthetic_only: true\ncases: []\n";
+    "apiVersion: id.registrystack.org/formats/evidence/fixture/v1alpha1\nkind: EvidenceFixture\nsynthetic_only: true\ncases: []\n";
 
 pub const ACCESS_POLICY: &str =
-    "version: 1\nid: <|policy-id|>adult-checks\nquestions: [<|policy-question|>adult-status]\n";
+    "apiVersion: id.registrystack.org/formats/evidence/access-policy/v1alpha1\n\
+     kind: EvidenceAccessPolicy\n\
+     id: <|policy-id|>adult-checks\nquestions: [<|policy-question|>adult-status]\n";

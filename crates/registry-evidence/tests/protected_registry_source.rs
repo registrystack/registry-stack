@@ -170,23 +170,32 @@ fn request_limits(config: &PreparationLimits) -> RequestPartsLimits {
         channel(config.query),
         channel(config.json_body),
         RequestPartsBounds {
-            maximum_query_pairs: configured(config.maximum_query_pairs, MAXIMUM_QUERY_PAIRS),
+            maximum_query_pairs: configured(
+                config.maximum_query_pairs.map(|value| value.get()),
+                MAXIMUM_QUERY_PAIRS,
+            ),
             maximum_query_name_bytes: configured(
-                config.maximum_query_name_bytes,
+                config.maximum_query_name_bytes.map(|value| value.get()),
                 MAXIMUM_QUERY_NAME_BYTES,
             ),
             maximum_query_value_bytes: configured(
-                config.maximum_query_value_bytes,
+                config.maximum_query_value_bytes.map(|value| value.get()),
                 MAXIMUM_QUERY_VALUE_BYTES,
             ),
-            maximum_json_depth: configured(config.maximum_json_depth, MAXIMUM_JSON_BODY_DEPTH),
+            maximum_json_depth: configured(
+                config.maximum_json_depth.map(|value| value.get()),
+                MAXIMUM_JSON_BODY_DEPTH,
+            ),
             maximum_collection_items: configured(
-                config.maximum_collection_items,
+                config.maximum_collection_items.map(|value| value.get()),
                 MAXIMUM_ARRAY_ITEMS,
             ),
-            maximum_string_bytes: configured(config.maximum_string_bytes, MAXIMUM_STRING_BYTES),
+            maximum_string_bytes: configured(
+                config.maximum_string_bytes.map(|value| value.get()),
+                MAXIMUM_STRING_BYTES,
+            ),
             maximum_normalized_bytes: configured(
-                config.maximum_normalized_bytes,
+                config.maximum_normalized_bytes.map(|value| value.get()),
                 MAXIMUM_REQUEST_PARTS_BYTES,
             ),
         },

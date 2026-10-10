@@ -15,7 +15,7 @@ fn source() -> Value {
             {"id":"label", "apiName":"newLabel", "type":"string", "maxLength":40, "required":true, "classification":"internal"}
         ], "effects":[{"id":"renamed", "target":{"fromField":"item"}, "operation":"patch", "set":{"label":{"fromField":"label"}}}]}],
         "accessProfiles":[{"id":"operator", "default":true, "principalClaim":"principal", "requiredScopes":["item.rename"],
-            "permissions":[{"action":"rename-item", "operations":["invoke"], "targets":[{"entity":"item", "rowBoundaries":[]}], "results":["renamed"]}]}]
+            "permissions":[{"action":"rename-item", "operations":["invoke"], "targets":[{"entity":"item", "rowBoundaries":"unrestricted"}], "results":["renamed"]}]}]
     })
 }
 
@@ -40,14 +40,14 @@ fn ordinary_policy_source(auditor_operations: Option<&[&str]>) -> Value {
                 {"id":"person-code", "type":"string", "maxLength":40, "required":true, "classification":"internal"},
                 {"id":"sensitive-note", "type":"string", "maxLength":120, "classification":"internal"}
             ]}],
-        "accessProfiles":[{"id":"operator", "default":true, "principalClaim":"principal",
+        "accessProfiles":[{"id":"operator", "default":true, "principalClaim":"principal","requiredScopes":"unrestricted",
             "permissions":[{"entity":"person", "operations":["create","get","list"],
                 "readableFields":["person-code","sensitive-note"],
-                "writableFields":["person-code","sensitive-note"], "rowBoundaries":[]}]}]
+                "writableFields":["person-code","sensitive-note"], "rowBoundaries":"unrestricted"}]}]
     });
     if let Some(operations) = auditor_operations {
         let mut permission = json!({
-            "entity":"person", "operations":operations, "rowBoundaries":[]
+            "entity":"person", "operations":operations, "rowBoundaries":"unrestricted"
         });
         if operations
             .iter()
@@ -291,7 +291,8 @@ fn reviewed_successor_does_not_duplicate_action_policies_for_new_entity() {
         "id":"task-operator",
         "default":true,
         "principalClaim":"principal",
-        "permissions":[{"action":"create-task", "operations":["invoke"], "targets":[{"entity":"task", "rowBoundaries":[]}], "results":["task"]}]
+        "requiredScopes":"unrestricted",
+        "permissions":[{"action":"create-task", "operations":["invoke"], "targets":[{"entity":"task", "rowBoundaries":"unrestricted"}], "results":["task"]}]
     }]);
     let after = compile(&candidate);
     let plan = reviewed_plan(&before, &after);
@@ -376,7 +377,7 @@ fn reviewed_successor_tracks_link_only_reference_policies() {
         .as_array_mut()
         .unwrap()
         .push(json!({
-            "entity":"group", "rowBoundaries":[]
+            "entity":"group", "rowBoundaries":"unrestricted"
         }));
     let before = compile(&without_action);
     let after = compile(&with_action);
@@ -460,12 +461,12 @@ fn change_request_source(operator_operations: &[&str]) -> Value {
             }
         }],
         "accessProfiles":[{
-            "id":"operator", "default":true, "principalClaim":"principal",
+            "id":"operator", "default":true, "principalClaim":"principal","requiredScopes":"unrestricted",
             "permissions":[{
                 "entity":"asset-request", "operations": operator_operations,
                 "readableFields":["asset","label"], "writableFields":["asset","label"],
-                "applyTargets":[{"entity":"asset", "rowBoundaries":[]}],
-                "rowBoundaries":[]
+                "applyTargets":[{"entity":"asset", "rowBoundaries":"unrestricted"}],
+                "rowBoundaries":"unrestricted"
             }]
         }]
     })
@@ -509,11 +510,11 @@ fn change_request_source_with_reviewer_profile(reviewer_operations: &[&str]) -> 
         .as_array_mut()
         .expect("accessProfiles array")
         .push(json!({
-            "id":"reviewer-extra", "principalClaim":"principal",
+            "id":"reviewer-extra", "principalClaim":"principal","requiredScopes":"unrestricted",
             "permissions":[{
                 "entity":"asset-request", "operations": reviewer_operations,
                 "readableFields":["asset","label"], "writableFields":["asset","label"],
-                "rowBoundaries":[]
+                "rowBoundaries":"unrestricted"
             }]
         }));
     source
@@ -550,17 +551,17 @@ fn change_request_source_with_presence_profile(include_presence: bool) -> Value 
     let mut viewer_permission = json!({
         "entity":"asset", "operations":["get"],
         "readableFields":["label"], "writableFields":[],
-        "rowBoundaries":[]
+        "rowBoundaries":"unrestricted"
     });
     if include_presence {
         viewer_permission["requestPresence"] =
-            json!([{"requestType":"asset-request","rowBoundaries":[]}]);
+            json!([{"requestType":"asset-request","rowBoundaries":"unrestricted"}]);
     }
     source["accessProfiles"]
         .as_array_mut()
         .expect("accessProfiles array")
         .push(json!({
-            "id":"asset-viewer", "principalClaim":"principal",
+            "id":"asset-viewer", "principalClaim":"principal","requiredScopes":"unrestricted",
             "permissions":[viewer_permission]
         }));
     source

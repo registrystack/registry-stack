@@ -1,0 +1,175 @@
+{
+  "$defs": {
+    "ApplicationMode": {
+      "description": "How the source applies an approved request.",
+      "enum": [
+        "manual",
+        "automatic"
+      ],
+      "type": "string"
+    },
+    "ElapsedTarget": {
+      "additionalProperties": false,
+      "properties": {
+        "elapsedMinutes": {
+          "format": "uint64",
+          "maximum": 153722867280912930,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "elapsedMinutes"
+      ],
+      "type": "object"
+    },
+    "ExternalId": {
+      "description": "An identifier another system issues, written exactly as its issuer gives it.",
+      "maxLength": 512,
+      "minLength": 1,
+      "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
+      "type": "string"
+    },
+    "FixtureExpectation": {
+      "additionalProperties": false,
+      "description": "What a fixture expects. An absent member is not checked (CFG-EMPTY-6).",
+      "properties": {
+        "applicationMode": {
+          "$ref": "#/$defs/ApplicationMode",
+          "description": "How the source applies an approved request."
+        },
+        "outcomes": {
+          "description": "The outcome ids the review kind offers.",
+          "items": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "queue": {
+          "$ref": "#/$defs/ExternalId",
+          "description": "The queue a review kind's first stage, or a source request, uses."
+        },
+        "target": {
+          "$ref": "#/$defs/TargetExpectation",
+          "description": "The request's elapsed target, or `none` for a request with no target."
+        }
+      },
+      "required": [
+        "queue"
+      ],
+      "type": "object"
+    },
+    "FixtureRequest": {
+      "additionalProperties": false,
+      "description": "The source request a fixture checks.",
+      "properties": {
+        "entity": {
+          "$ref": "#/$defs/ExternalId",
+          "description": "The request entity a `sources[].requests[].entity` names."
+        },
+        "source": {
+          "$ref": "#/$defs/ExternalId",
+          "description": "The `sources[].id` in `casework.yaml`."
+        }
+      },
+      "required": [
+        "source",
+        "entity"
+      ],
+      "type": "object"
+    },
+    "FixtureReview": {
+      "additionalProperties": false,
+      "description": "The review kind a fixture checks.",
+      "properties": {
+        "display": {
+          "additionalProperties": {
+            "description": "A value the review kind's displaySchema declares for this name.",
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "object",
+              "array"
+            ],
+            "x-registry-foreign": "casework-review-display"
+          },
+          "description": "A display the kind's `displaySchema` must accept, keyed by the\nproperty names that schema declares.",
+          "propertyNames": {
+            "$ref": "#/$defs/ExternalId"
+          },
+          "type": "object"
+        },
+        "kind": {
+          "$ref": "#/$defs/LocalId",
+          "description": "The `reviewKinds[].id` in `casework.yaml`."
+        }
+      },
+      "required": [
+        "kind",
+        "display"
+      ],
+      "type": "object"
+    },
+    "LocalId": {
+      "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+      "type": "string"
+    },
+    "NoTarget": {
+      "description": "`none`: the request has no target.",
+      "enum": [
+        "none"
+      ],
+      "type": "string"
+    },
+    "TargetExpectation": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/NoTarget"
+        },
+        {
+          "$ref": "#/$defs/ElapsedTarget"
+        }
+      ],
+      "description": "A source request's elapsed target: `none`, or `{elapsedMinutes: N}`."
+    }
+  },
+  "$id": "https://id.registrystack.org/schemas/casework/fixture/fixture.v1alpha1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "One offline check of a review kind or a source request.",
+  "properties": {
+    "apiVersion": {
+      "const": "id.registrystack.org/formats/casework/fixture/v1alpha1",
+      "type": "string"
+    },
+    "expect": {
+      "$ref": "#/$defs/FixtureExpectation"
+    },
+    "id": {
+      "$ref": "#/$defs/LocalId"
+    },
+    "kind": {
+      "const": "CaseworkFixture",
+      "type": "string"
+    },
+    "request": {
+      "$ref": "#/$defs/FixtureRequest",
+      "description": "A source request; write this or `review`."
+    },
+    "review": {
+      "$ref": "#/$defs/FixtureReview",
+      "description": "A review kind and the display a producer sends; write this or\n`request`."
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind",
+    "id",
+    "expect"
+  ],
+  "title": "Registry Casework fixture",
+  "type": "object"
+}

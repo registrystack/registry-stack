@@ -14,9 +14,13 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use registry_platform_audit::{AuditDestination, AuditDestinationError, AuditDestinationKind};
 pub use registry_platform_config::SecretReference;
 use registry_platform_config::{
-    reject_environment_expressions_in_authored_yaml, AuditKeyConfig, JwksSource, ListenerBind,
-    LoadedRuntimeConfig, OidcIssuerConfig, PackageConfig, RemovedKey, RuntimeConfigError,
-    RuntimeConfigErrorKind, RuntimeConfigLoader, RuntimeEnvelope, SecretProvidersConfig,
+    contains_environment_expression, AuditKeyConfig, JwksSource, ListenerBind, LoadedRuntimeConfig,
+    OidcIssuerConfig, PackageConfig, RemovedKey, RuntimeConfigLoader, RuntimeEnvelope,
+    SecretProvidersConfig,
+};
+use registry_platform_yaml::{
+    BoundedU32, BoundedU64, Document, EnvelopeRule, Expect, FormatSpec, Invalid, Reader, Refusal,
+    Report, ScalarHook, ScalarSite, Severity, UniqueList,
 };
 use schemars::JsonSchema;
 use serde::de::{self, MapAccess, Visitor};
@@ -33,6 +37,106 @@ pub const MAX_CONFIG_BYTES: usize = 1024 * 1024;
 pub const MAX_SAFE_INTEGER: i64 = 9_007_199_254_740_991;
 pub const MAXIMUM_SOURCE_BATCH_ITEMS: u16 = 16;
 
+/// Writes one tagged union in its documented flat form: the tag member names
+/// the variant and the variant's members follow it. The derived serializer of
+/// a `remote = "Self"` union produces the externally tagged form
+/// `{variant: {members}}`; this helper flattens that single entry so the
+/// serialized document, and every digest computed over it, is unchanged.
+fn serialize_tagged<S: Serializer>(
+    external: Result<serde_json::Value, serde_json::Error>,
+    tag: &'static str,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    let external = external.map_err(serde::ser::Error::custom)?;
+    let serde_json::Value::Object(entries) = external else {
+        return Err(serde::ser::Error::custom(
+            "a tagged union serialized as a non-object",
+        ));
+    };
+    let mut entries = entries.into_iter();
+    let (Some((variant, members)), None) = (entries.next(), entries.next()) else {
+        return Err(serde::ser::Error::custom(
+            "a tagged union serialized without exactly one variant",
+        ));
+    };
+    let serde_json::Value::Object(members) = members else {
+        return Err(serde::ser::Error::custom(
+            "a tagged union variant serialized as a non-object",
+        ));
+    };
+    let mut map = serializer.serialize_map(Some(members.len() + 1))?;
+    map.serialize_entry(tag, &variant)?;
+    for (key, value) in &members {
+        map.serialize_entry(key, value)?;
+    }
+    map.end()
+}
+
+/// Implements `Serialize` for a `remote = "Self"` union whose `Deserialize`
+/// comes from `registry_platform_yaml::tagged_union!`.
+macro_rules! serialize_tagged_union {
+    ($type:ty, tag = $tag:literal) => {
+        impl Serialize for $type {
+            fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+                serialize_tagged(
+                    <$type>::serialize(self, serde_json::value::Serializer),
+                    $tag,
+                    serializer,
+                )
+            }
+        }
+    };
+}
+
+/// Serialize a struct that hosts a platform shared block with the block's
+/// members beside the host's own, the shape the bundle is written in.
+fn serialize_with_shared_block<S: Serializer>(
+    external: Result<serde_json::Value, serde_json::Error>,
+    block: &'static str,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    let external = external.map_err(serde::ser::Error::custom)?;
+    let serde_json::Value::Object(mut members) = external else {
+        return Err(serde::ser::Error::custom(
+            "a shared-block host serialized as a non-object",
+        ));
+    };
+    let Some(serde_json::Value::Object(block_members)) = members.remove(block) else {
+        return Err(serde::ser::Error::custom(
+            "a shared-block host serialized without its block",
+        ));
+    };
+    let mut map = serializer.serialize_map(Some(members.len() + block_members.len()))?;
+    for (key, value) in block_members.iter().chain(members.iter()) {
+        map.serialize_entry(key, value)?;
+    }
+    map.end()
+}
+
+/// Implement `Deserialize` and `Serialize` for a struct declared with
+/// `#[serde(remote = "Self")]` whose `$block` field carries the shared-block
+/// marker, so the reader keeps positions inside the block (CFG-SCHEMA-8) and
+/// the serialized form places the block's members beside the host's.
+macro_rules! shared_block_host {
+    ($type:ty, block = $block:literal) => {
+        impl<'de> Deserialize<'de> for $type {
+            fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+                <$type>::deserialize(deserializer)
+            }
+        }
+
+        impl Serialize for $type {
+            fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+                serialize_with_shared_block(
+                    <$type>::serialize(self, serde_json::value::Serializer),
+                    $block,
+                    serializer,
+                )
+            }
+        }
+    };
+}
+
 /// Whether one logical request batch can use a source's optional one-call
 /// optimization. Selection is complete before preparation, credential
 /// resolution, or source I/O, and an optimized execution never falls back to
@@ -45,6 +149,12 @@ pub enum SourceBatchPlan {
 
 #[derive(Debug, Error, Clone, Eq, PartialEq)]
 pub enum ConfigError {
+    /// The shared configuration reader refused the document. The report
+    /// carries the reader's diagnostics unchanged (CFG-DIAG-1): each names
+    /// the file, the pointer, the line and column, and the fix, and none
+    /// repeats a value from the document or the environment.
+    #[error("{}", render_refusal(.0))]
+    Refused(Box<Report>),
     #[error("configuration YAML does not match the Evidence Version 1 schema: {0}")]
     InvalidYaml(SchemaFault),
     #[error("configuration exceeds the Evidence Version 1 size limit")]
@@ -65,12 +175,69 @@ impl ConfigError {
     /// every configuration failure carries the same safe shape.
     pub fn fault(&self) -> SchemaFault {
         match self {
+            Self::Refused(_) => {
+                SchemaFault::because("the configuration reader refused the document")
+            }
             Self::InvalidYaml(fault) => fault.clone(),
             Self::TooLarge => SchemaFault::because("document exceeds the Version 1 size limit"),
             Self::Invalid(cause) => SchemaFault::because(cause),
             Self::InvalidField(cause, field) => SchemaFault::because_in_field(cause, field),
         }
     }
+}
+
+impl ConfigError {
+    /// The reader's diagnostics, when the shared configuration reader refused
+    /// the document.
+    pub fn report(&self) -> Option<&Report> {
+        match self {
+            Self::Refused(report) => Some(report),
+            _ => None,
+        }
+    }
+
+    /// The same refusal with every diagnostic naming `file`, the path the
+    /// document was read from as the command was given it (CFG-DIAG-1).
+    #[must_use]
+    pub fn in_file(self, file: &str) -> Self {
+        match self {
+            Self::Refused(report) => Self::Refused(Box::new(report_in_file(*report, file))),
+            other => other,
+        }
+    }
+}
+
+/// Every diagnostic in the human form (CFG-DIAG-2), ending in the summary
+/// line and without a trailing newline.
+pub(crate) fn render_refusal(report: &Report) -> String {
+    let mut rendered = report.render_human();
+    rendered.truncate(rendered.trim_end().len());
+    rendered
+}
+
+/// The report with every diagnostic's file, and every related location's
+/// file, renamed to `file`. A document read from bytes carries the name it
+/// was read under; the command knows the path it was given.
+pub(crate) fn report_in_file(report: Report, file: &str) -> Report {
+    let files_checked = report.files_checked();
+    let diagnostics = report
+        .into_diagnostics()
+        .into_iter()
+        .map(|mut diagnostic| {
+            if let Some(source) = diagnostic.source.as_mut() {
+                source.file = file.to_owned();
+            }
+            for related in &mut diagnostic.related {
+                related.file = file.to_owned();
+            }
+            diagnostic
+        })
+        .collect();
+    let mut renamed = Report::new(diagnostics);
+    if let Some(files) = files_checked {
+        renamed.set_files_checked(files);
+    }
+    renamed
 }
 
 /// A one-based text position inside a deployment artifact.
@@ -130,45 +297,6 @@ impl From<CompactLocation> for TextLocation {
     }
 }
 
-/// The longest schema path a diagnostic will carry.
-const MAX_SCHEMA_PATH_BYTES: usize = 256;
-
-/// Decoder message prefixes mapped to their value-free cause.
-///
-/// The prefixes are the fixed leading text of `serde` and `serde_norway`
-/// messages. Everything after a prefix can quote document content and is
-/// never read.
-const DECODE_CAUSES: [(&str, &str); 13] = [
-    ("unknown field", "unknown field"),
-    ("missing field", "required field is missing"),
-    ("duplicate field", "duplicate field"),
-    ("duplicate entry", "duplicate mapping key"),
-    ("invalid type", "field has the wrong type"),
-    ("invalid value", "field value is not accepted"),
-    ("invalid length", "field has the wrong length"),
-    (
-        "unknown variant",
-        "field value is not one of the accepted variants",
-    ),
-    (
-        "data did not match any variant",
-        "field value is not one of the accepted variants",
-    ),
-    (
-        "EOF while parsing",
-        "document ends before a value is complete",
-    ),
-    ("recursion limit exceeded", "document nests too deeply"),
-    (
-        "repetition limit exceeded",
-        "document repeats an alias too often",
-    ),
-    (
-        "deserializing from YAML containing more than one document",
-        "document contains more than one YAML document",
-    ),
-];
-
 impl SchemaFault {
     /// A fault that names only its cause.
     pub fn because(cause: &'static str) -> Self {
@@ -225,39 +353,6 @@ impl SchemaFault {
     pub fn remedy(&self) -> Option<&'static str> {
         self.remedy
     }
-
-    /// The same fault, pointing at a schema path. The path is kept only when
-    /// it matches the structural path grammar.
-    fn at_path(mut self, path: &str) -> Self {
-        if is_safe_schema_path(path) {
-            self.path = Some(path.into());
-        }
-        self
-    }
-
-    fn with_remedy(mut self, remedy: &'static str) -> Self {
-        self.remedy = Some(remedy);
-        self
-    }
-
-    /// Reduce a decoder error to a location, a safe schema path, and a cause.
-    fn from_yaml_error(error: &serde_norway::Error, fallback: &'static str) -> Self {
-        let rendered = error.to_string();
-        let (path, message) = split_schema_path(&rendered);
-        Self {
-            location: error.location().map(|location| {
-                TextLocation {
-                    line: location.line(),
-                    column: location.column(),
-                }
-                .into()
-            }),
-            path: path.map(String::into_boxed_str),
-            cause: classify_decode_cause(message, fallback),
-            field: None,
-            remedy: None,
-        }
-    }
 }
 
 impl fmt::Display for SchemaFault {
@@ -279,287 +374,193 @@ impl fmt::Display for SchemaFault {
     }
 }
 
-/// Split a rendered decoder error into its schema path and its message.
-///
-/// `serde_norway` prefixes a message with the path to the offending value when
-/// it knows one. The candidate prefix is accepted only when it matches the
-/// path grammar, which no message text can satisfy, so a message that merely
-/// contains a colon never becomes a path.
-fn split_schema_path(rendered: &str) -> (Option<String>, &str) {
-    match rendered.split_once(": ") {
-        Some((candidate, message)) if is_safe_schema_path(candidate) => {
-            (Some(candidate.to_owned()), message)
-        }
-        _ => (None, rendered),
-    }
-}
+/// The kind the reader names an Evidence bundle by in its diagnostics.
+pub const EVIDENCE_BUNDLE_KIND: &str = "EvidenceBundle";
 
-/// Accept only paths built from mapping keys and numeric sequence indices.
-///
-/// Mapping keys are structural names in a reviewed bundle, never values, and
-/// this grammar admits no whitespace, quoting, or punctuation that a quoted
-/// scalar would carry.
-fn is_safe_schema_path(candidate: &str) -> bool {
-    if candidate.is_empty() || candidate.len() > MAX_SCHEMA_PATH_BYTES {
-        return false;
-    }
-    let mut index_digits: Option<usize> = None;
-    for character in candidate.chars() {
-        match index_digits {
-            Some(digits) => match character {
-                '0'..='9' => index_digits = Some(digits + 1),
-                ']' if digits > 0 => index_digits = None,
-                _ => return false,
-            },
-            None => match character {
-                '[' => index_digits = Some(0),
-                '.' | '-' | '_' | '?' => {}
-                _ if character.is_ascii_alphanumeric() => {}
-                _ => return false,
-            },
-        }
-    }
-    index_digits.is_none()
-}
+/// The name the reader gives a bundle read from bytes. The command that read
+/// the file renames it to the path it was given.
+const BUNDLE_DOCUMENT_NAME: &str = "evidence.yaml";
 
-/// Map a decoder message to one static cause, reading only its fixed prefix.
-fn classify_decode_cause(message: &str, fallback: &'static str) -> &'static str {
-    DECODE_CAUSES
-        .iter()
-        .find(|(prefix, _)| message.starts_with(prefix))
-        .map_or(fallback, |(_, cause)| cause)
-}
-
-/// Decode one YAML document into a closed typed schema.
-///
-/// The bytes are parsed as untyped YAML first so that a syntax failure is
-/// reported as a syntax failure rather than as a schema mismatch.
-fn decode_yaml<T: serde::de::DeserializeOwned>(text: &str) -> Result<T, ConfigError> {
-    if let Err(error) = serde_norway::from_str::<YamlValue>(text) {
-        return Err(ConfigError::InvalidYaml(SchemaFault::from_yaml_error(
-            &error,
-            "document is not well-formed YAML",
-        )));
-    }
-    serde_norway::from_str(text).map_err(|error| {
-        ConfigError::InvalidYaml(SchemaFault::from_yaml_error(
-            &error,
-            "document does not match the closed schema",
-        ))
-    })
-}
+/// The Evidence bundle format. The frozen Version 1 grammar declares
+/// `version: 1` and neither `apiVersion` nor `kind`; the envelope arrives
+/// with the move to the stable format line.
+pub const EVIDENCE_BUNDLE_FORMAT: FormatSpec<'static> = FormatSpec {
+    kind: EVIDENCE_BUNDLE_KIND,
+    envelope: EnvelopeRule::Exempt {
+        reason: "the frozen Version 1 bundle grammar declares version: 1 and no apiVersion or kind",
+    },
+    removed_keys: EVIDENCE_BUNDLE_REMOVED_KEYS,
+};
 
 /// Bundle keys an earlier grammar accepted, each refused with the key that
 /// replaced it. The access-token rules moved under `authentication.oidc`.
-const REMOVED_BUNDLE_KEYS: &[(&str, &str)] = &[
-    (
-        "authentication.kind",
-        "Evidence accepts OIDC access tokens only; declare the rules under authentication.oidc",
-    ),
-    (
-        "authentication.issuer",
-        "declare authentication.oidc.issuer instead",
-    ),
-    (
-        "authentication.audiences",
-        "declare the one accepted audience as authentication.oidc.audience",
-    ),
-    (
-        "authentication.jwksUri",
-        "declare authentication.oidc.jwksSource with kind: uri and uri: <JWKS URL>",
-    ),
-    (
-        "authentication.tokenTypes",
-        "declare authentication.oidc.tokenTypes instead",
-    ),
-    (
-        "authentication.algorithms",
-        "declare authentication.oidc.algorithms instead",
-    ),
-    (
-        "authentication.principalClaim",
-        "declare authentication.oidc.principalClaim instead",
-    ),
-    (
-        "authentication.requesterTagsClaim",
-        "declare authentication.oidc.requesterTagsClaim instead",
-    ),
-    (
-        "authentication.evidenceAudienceClaim",
-        "declare authentication.oidc.evidenceAudienceClaim instead",
-    ),
-    (
-        "authentication.claims",
-        "declare authentication.oidc.claims instead",
-    ),
-    (
-        "authentication.maximumTokenLifetimeSeconds",
-        "declare authentication.oidc.maximumTokenLifetimeSeconds instead",
-    ),
-    (
-        "authentication.revokedKeyIds",
-        "declare authentication.oidc.revokedKeyIds instead",
-    ),
-    (
-        "authentication.allowedClients",
-        "declare authentication.oidc.allowedClients instead",
-    ),
-    (
-        "authentication.assertionIssuers",
-        "declare authentication.oidc.assertionIssuers instead",
-    ),
-    (
-        "authentication.requiredScopes",
-        "declare authentication.oidc.requiredScopes instead",
-    ),
-    (
-        "authentication.actorClaim",
-        "declare authentication.oidc.actorClaim instead",
-    ),
-    (
-        "authentication.tlsTrustProfile",
-        "declare authentication.oidc.tlsTrustProfile instead",
-    ),
-    (
-        "authentication.oidc.kind",
-        "Evidence accepts OIDC access tokens only; remove kind",
-    ),
-    (
-        "authentication.oidc.audiences",
-        "declare the one accepted audience as authentication.oidc.audience",
-    ),
-    (
-        "authentication.oidc.jwksUri",
-        "declare authentication.oidc.jwksSource with kind: uri and uri: <JWKS URL>",
-    ),
-    ("audit.hashSecretRef", "declare audit.hashKeyRef instead"),
+pub const EVIDENCE_BUNDLE_REMOVED_KEYS: &[registry_platform_yaml::RemovedKey<'static>] = &[
+    registry_platform_yaml::RemovedKey {
+        pointer: "/authentication/kind",
+        replacement:
+            "Evidence accepts OIDC access tokens only; declare the rules under authentication.oidc.",
+    },
+    registry_platform_yaml::RemovedKey {
+        pointer: "/authentication/issuer",
+        replacement: "Declare authentication.oidc.issuer instead.",
+    },
+    registry_platform_yaml::RemovedKey {
+        pointer: "/authentication/audiences",
+        replacement: "Declare the one accepted audience as authentication.oidc.audience.",
+    },
+    registry_platform_yaml::RemovedKey {
+        pointer: "/authentication/jwksUri",
+        replacement: "Declare authentication.oidc.jwksSource with kind: uri and uri: <JWKS URL>.",
+    },
+    registry_platform_yaml::RemovedKey {
+        pointer: "/authentication/tokenTypes",
+        replacement: "Declare authentication.oidc.tokenTypes instead.",
+    },
+    registry_platform_yaml::RemovedKey {
+        pointer: "/authentication/algorithms",
+        replacement: "Declare authentication.oidc.algorithms instead.",
+    },
+    registry_platform_yaml::RemovedKey {
+        pointer: "/authentication/principalClaim",
+        replacement: "Declare authentication.oidc.principalClaim instead.",
+    },
+    registry_platform_yaml::RemovedKey {
+        pointer: "/authentication/requesterTagsClaim",
+        replacement: "Declare authentication.oidc.requesterTagsClaim instead.",
+    },
+    registry_platform_yaml::RemovedKey {
+        pointer: "/authentication/evidenceAudienceClaim",
+        replacement: "Declare authentication.oidc.evidenceAudienceClaim instead.",
+    },
+    registry_platform_yaml::RemovedKey {
+        pointer: "/authentication/claims",
+        replacement: "Declare authentication.oidc.claims instead.",
+    },
+    registry_platform_yaml::RemovedKey {
+        pointer: "/authentication/maximumTokenLifetimeSeconds",
+        replacement: "Declare authentication.oidc.maximumTokenLifetimeSeconds instead.",
+    },
+    registry_platform_yaml::RemovedKey {
+        pointer: "/authentication/revokedKeyIds",
+        replacement: "Declare authentication.oidc.revokedKeyIds instead.",
+    },
+    registry_platform_yaml::RemovedKey {
+        pointer: "/authentication/allowedClients",
+        replacement: "Declare authentication.oidc.allowedClients instead.",
+    },
+    registry_platform_yaml::RemovedKey {
+        pointer: "/authentication/assertionIssuers",
+        replacement: "Declare authentication.oidc.assertionIssuers instead.",
+    },
+    registry_platform_yaml::RemovedKey {
+        pointer: "/authentication/requiredScopes",
+        replacement: "Declare authentication.oidc.requiredScopes instead.",
+    },
+    registry_platform_yaml::RemovedKey {
+        pointer: "/authentication/actorClaim",
+        replacement: "Declare authentication.oidc.actorClaim instead.",
+    },
+    registry_platform_yaml::RemovedKey {
+        pointer: "/authentication/tlsTrustProfile",
+        replacement: "Declare authentication.oidc.tlsTrustProfile instead.",
+    },
+    registry_platform_yaml::RemovedKey {
+        pointer: "/authentication/oidc/kind",
+        replacement: "Evidence accepts OIDC access tokens only; remove kind.",
+    },
+    registry_platform_yaml::RemovedKey {
+        pointer: "/authentication/oidc/audiences",
+        replacement: "Declare the one accepted audience as authentication.oidc.audience.",
+    },
+    registry_platform_yaml::RemovedKey {
+        pointer: "/authentication/oidc/jwksUri",
+        replacement: "Declare authentication.oidc.jwksSource with kind: uri and uri: <JWKS URL>.",
+    },
+    registry_platform_yaml::RemovedKey {
+        pointer: "/audit/hashSecretRef",
+        replacement: "Declare audit.hashKeyRef instead.",
+    },
 ];
 
-/// Refuse a bundle key an earlier grammar accepted, naming its replacement.
-///
-/// A document that is not a YAML mapping is left to the closed decoder, which
-/// reports it with a location.
-fn reject_removed_bundle_keys(text: &str) -> Result<(), ConfigError> {
-    let Ok(YamlValue::Mapping(document)) = serde_norway::from_str::<YamlValue>(text) else {
-        return Ok(());
-    };
-    for (path, replacement) in REMOVED_BUNDLE_KEYS {
-        let mut node = Some(&document);
-        let mut segments = path.split('.').peekable();
-        while let (Some(mapping), Some(segment)) = (node, segments.next()) {
-            let Some(value) = mapping.get(segment) else {
-                break;
-            };
-            if segments.peek().is_none() {
-                return Err(ConfigError::InvalidYaml(
-                    SchemaFault::because("key is no longer accepted")
-                        .at_path(path)
-                        .with_remedy(replacement),
-                ));
-            }
-            node = value.as_mapping();
-        }
+/// The code a bundle rule's refusal carries (CFG-DIAG-3), one per top-level
+/// block of the bundle.
+fn bundle_rule_code(pointer: &str) -> &'static str {
+    match pointer.split('/').nth(1).unwrap_or_default() {
+        "service" => "evidence.bundle.invalid-service",
+        "issuer" => "evidence.bundle.invalid-issuer",
+        "publication" => "evidence.bundle.invalid-publication",
+        "authentication" => "evidence.bundle.invalid-authentication",
+        "subjectBinding" => "evidence.bundle.invalid-subject-binding",
+        "signing" => "evidence.bundle.invalid-signing",
+        "responseFormats" => "evidence.bundle.invalid-response-formats",
+        "selectorProfiles" => "evidence.bundle.invalid-selector-profile",
+        "sources" => "evidence.bundle.invalid-source",
+        "sourceConnections" => "evidence.bundle.invalid-source-connection",
+        "authorityProfiles" => "evidence.bundle.invalid-authority-profile",
+        "acquisitionCapabilities" => "evidence.bundle.invalid-acquisition-capabilities",
+        "requirements" => "evidence.bundle.invalid-requirement",
+        _ => "evidence.bundle.invalid-configuration",
     }
-    Ok(())
 }
 
-/// Refuse a `${...}` expression anywhere in the governed bundle.
+/// The action a bundle rule's refusal names when the rule carries none of
+/// its own.
+const BUNDLE_RULE_ACTION: &str = "Change this member so it meets the rule the message states.";
+
+impl Violation {
+    /// The violation as a diagnostic placed in `document`. A member the rule
+    /// concerns that is not written, such as a missing optional block, is
+    /// placed at the nearest member that is.
+    fn diagnostic(&self, document: &Document) -> registry_platform_yaml::Diagnostic {
+        let fault = self.error.fault();
+        let message = match fault.field() {
+            Some(field) => format!("{} ({field})", fault.cause()),
+            None => fault.cause().to_owned(),
+        };
+        let action = fault.remedy().unwrap_or(BUNDLE_RULE_ACTION);
+        let code = bundle_rule_code(&self.pointer);
+        let mut written = self.pointer.as_str();
+        while document.span_of(written).is_none() {
+            written = written.rsplit_once('/').map_or("", |(parent, _)| parent);
+        }
+        let mut diagnostic = if self.at_key && written == self.pointer {
+            document.diagnostic_at_key(Severity::Error, code, written, &message, action)
+        } else {
+            document.diagnostic_at_value(Severity::Error, code, written, &message, action)
+        };
+        diagnostic.path.clone_from(&self.pointer);
+        diagnostic
+    }
+}
+
+/// Refuses a `${...}` expression in a bundle key or text value.
 ///
 /// Substitution applies to `runtime.yaml` only, so the reviewed bundle is the
-/// one that runs. The fault names the field and never the expression. A
-/// document that is not YAML is left to the closed decoder.
-fn reject_bundle_environment_expressions(text: &str) -> Result<(), ConfigError> {
-    match reject_environment_expressions_in_authored_yaml(text) {
-        Err(error) if error.kind() == RuntimeConfigErrorKind::AuthoredExpression => {
-            let fault = SchemaFault::because(
-                "environment expressions are not accepted in the governed bundle",
-            )
-            .with_remedy("write the value in the bundle directly");
-            Err(ConfigError::InvalidYaml(if error.field() == "/" {
-                fault
-            } else {
-                fault.at_path(error.field())
-            }))
+/// one that runs. There is no escape for a literal `${NAME}` in the bundle.
+pub(crate) struct BundleExpressions;
+
+impl BundleExpressions {
+    fn check(text: &str) -> Result<(), Refusal> {
+        if contains_environment_expression(text) {
+            return Err(Refusal {
+                code: "config.substitution-not-allowed".to_owned(),
+                message: "a `${...}` expression is written in the governed bundle; \
+                          substitution applies to runtime.yaml only"
+                    .to_owned(),
+                suggested_action: "Write the value in the bundle directly.".to_owned(),
+            });
         }
-        _ => Ok(()),
+        Ok(())
     }
 }
 
-/// Reduce a shared-loader refusal of the runtime file to a value-free fault.
-///
-/// The loader's message is read only for its fixed leading text and then
-/// discarded, like a decoder message: the cause is static, the path is kept
-/// only when it matches the structural path grammar, and a removed key or a
-/// wrong envelope carries the fixed sentence naming what to write instead.
-fn runtime_fault(error: &RuntimeConfigError) -> SchemaFault {
-    let field = error.field();
-    let fault = match error.kind() {
-        RuntimeConfigErrorKind::RemovedKey => {
-            let remedy = EVIDENCE_RUNTIME_REMOVED_KEYS
-                .iter()
-                .find(|removed| removed.path == field)
-                .map_or(EVIDENCE_RUNTIME_ENVELOPE_REMEDY, |removed| {
-                    removed.replacement
-                });
-            SchemaFault::because("key is no longer accepted").with_remedy(remedy)
-        }
-        RuntimeConfigErrorKind::Envelope => {
-            SchemaFault::because("document does not declare the Evidence runtime envelope")
-                .with_remedy(EVIDENCE_RUNTIME_ENVELOPE_REMEDY)
-        }
-        RuntimeConfigErrorKind::Syntax => {
-            let message = error.message();
-            let cause = match message.split_once("is not valid YAML: ") {
-                Some((_, decoder)) => {
-                    classify_decode_cause(decoder, "document is not well-formed YAML")
-                }
-                None if message.ends_with("must be a YAML mapping") => {
-                    "document is not a YAML mapping"
-                }
-                None if message.contains("key that is not a string") => {
-                    "mapping key is not a string"
-                }
-                None if message.contains("YAML tag") => "document carries a YAML tag",
-                None => "document is not well-formed YAML",
-            };
-            SchemaFault::because(cause)
-        }
-        RuntimeConfigErrorKind::Substitution => {
-            SchemaFault::because("environment expression cannot be substituted")
-        }
-        RuntimeConfigErrorKind::SubstitutionInReference => SchemaFault::because(
-            "environment expressions are not accepted in secret references or secretProviders",
-        ),
-        RuntimeConfigErrorKind::InvalidValue => {
-            let reason = error
-                .message()
-                .split_once(" is invalid: ")
-                .map_or("", |(_, reason)| reason);
-            let cause = RUNTIME_VALUE_CAUSES
-                .iter()
-                .find(|(prefix, _)| reason.starts_with(prefix))
-                .map_or_else(
-                    || classify_decode_cause(reason, "document does not match the closed schema"),
-                    |(_, cause)| cause,
-                );
-            SchemaFault::because(cause)
-        }
-        RuntimeConfigErrorKind::Bounds => {
-            SchemaFault::because("document exceeds the Version 1 size limit")
-        }
-        RuntimeConfigErrorKind::Encoding => SchemaFault::because("document is not UTF-8"),
-        RuntimeConfigErrorKind::Path
-        | RuntimeConfigErrorKind::UnsafeFile
-        | RuntimeConfigErrorKind::Unavailable
-        | RuntimeConfigErrorKind::AuthoredExpression
-        | RuntimeConfigErrorKind::AuthoredSyntax => {
-            SchemaFault::because("document could not be read as a runtime configuration")
-        }
-    };
-    if field == "/" {
-        fault
-    } else {
-        fault.at_path(field)
+impl ScalarHook for BundleExpressions {
+    fn key(&mut self, site: &ScalarSite<'_>) -> Result<(), Refusal> {
+        Self::check(site.text)
+    }
+
+    fn value(&mut self, site: &ScalarSite<'_>) -> Result<Option<String>, Refusal> {
+        Self::check(site.text).map(|()| None)
     }
 }
 
@@ -602,6 +603,19 @@ impl<T> OrderedMap<T> {
     pub fn keys(&self) -> impl Iterator<Item = &str> {
         self.0.iter().map(|(key, _)| key.as_str())
     }
+
+    pub fn values_mut(&mut self) -> impl Iterator<Item = &mut T> {
+        self.0.iter_mut().map(|(_, value)| value)
+    }
+
+    /// Set `key` to `value`, in place when the key is present and appended
+    /// when it is not, so each key stays named once.
+    pub fn insert(&mut self, key: String, value: T) {
+        match self.0.iter_mut().find(|(candidate, _)| *candidate == key) {
+            Some((_, slot)) => *slot = value,
+            None => self.0.push((key, value)),
+        }
+    }
 }
 
 impl<T: fmt::Debug> fmt::Debug for OrderedMap<T> {
@@ -641,7 +655,11 @@ where
                 let mut seen = BTreeSet::new();
                 while let Some((key, value)) = map.next_entry::<String, T>()? {
                     if !seen.insert(key.clone()) {
-                        return Err(de::Error::custom("duplicate mapping key"));
+                        return Err(Invalid::expected(
+                            "a mapping that names each key once",
+                            "Remove the repeated key.",
+                        )
+                        .into_error());
                     }
                     entries.push((key, value));
                 }
@@ -669,7 +687,7 @@ impl<T: Serialize> Serialize for OrderedMap<T> {
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EvidenceConfig {
-    pub version: u8,
+    pub version: BoundedU32<1, 1>,
     /// The governed assurance boundary for this immutable bundle.
     pub assurance_profile: AssuranceProfile,
     pub service: ServiceConfig,
@@ -705,7 +723,8 @@ pub struct EvidenceConfig {
     /// serve a batch, and the key is omitted when absent because the projected
     /// configuration is what a requirement's `configurationRevision` digests.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub holder_bound_batch_max_size: Option<u16>,
+    pub holder_bound_batch_max_size:
+        Option<BoundedU32<1, { MAXIMUM_HOLDER_BOUND_BATCH_SIZE as u32 }>>,
     pub requirements: Vec<RequirementConfig>,
 }
 
@@ -770,36 +789,24 @@ pub fn subject_binding_permits_response_format(
 /// A principal's bucket never holds more than the burst, so a request that
 /// costs more is refused however long its caller waits. That can be deliberate,
 /// a way to cap how much one principal asks for at once, so it is reported as
-/// a warning rather than refused. It carries configured numbers only, never a
-/// request value.
+/// a warning rather than refused. It names which ceiling sets the cost, never
+/// a configured value.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub struct BurstShortfall {
-    pub burst: u64,
-    pub largest_request_cost: u16,
-}
-
-impl fmt::Display for BurstShortfall {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let Self {
-            burst,
-            largest_request_cost: cost,
-        } = self;
-        write!(
-            formatter,
-            "rateLimits.burstPerPrincipal is {burst}, below {cost}, the largest request cost \
-             this bundle admits: a request batch or holder-bound release that costs more than \
-             the burst is always refused as evidence.invalid_request. Raise \
-             rateLimits.burstPerPrincipal to at least {cost} unless capping those requests \
-             below {cost} is intended"
-        )
-    }
+pub enum BurstShortfall {
+    /// The request-batch route's item ceiling, a product constant, sets the
+    /// cost.
+    RequestBatch,
+    /// The declared `holderBoundBatchMaxSize` sets the cost.
+    HolderBoundBatch,
 }
 
 impl EvidenceConfig {
     /// The declared holder-bound batch ceiling, or one when none is declared.
     pub fn holder_bound_batch_ceiling(&self) -> u16 {
         self.holder_bound_batch_max_size
-            .unwrap_or(DEFAULT_HOLDER_BOUND_BATCH_SIZE)
+            .map_or(DEFAULT_HOLDER_BOUND_BATCH_SIZE, |size| {
+                u16::try_from(size.get()).unwrap_or(MAXIMUM_HOLDER_BOUND_BATCH_SIZE)
+            })
     }
 
     /// The largest request-rate cost a request this bundle can serve charges.
@@ -812,6 +819,13 @@ impl EvidenceConfig {
     /// bundle both enables the batch container and declares a holder-bound
     /// requirement, up to the declared ceiling. Every other request costs one.
     pub fn largest_request_cost(&self) -> u16 {
+        let (request_batch, holder_bound_release) = self.request_costs();
+        request_batch.max(holder_bound_release).max(1)
+    }
+
+    /// The largest request-batch cost and the largest holder-bound release
+    /// cost, as [`Self::largest_request_cost`] describes them.
+    fn request_costs(&self) -> (u16, u16) {
         let request_batch = if self.requirements.iter().any(|requirement| {
             requirement.subject_binding_mode() == SubjectBindingMode::AudienceScoped
         }) {
@@ -829,19 +843,20 @@ impl EvidenceConfig {
         } else {
             1
         };
-        request_batch.max(holder_bound_release).max(1)
+        (request_batch, holder_bound_release)
     }
 
-    /// The shortfall when the configured burst cannot hold the largest request
-    /// cost this bundle admits, so some requests could never be admitted.
+    /// The ceiling that sets the largest request cost when the configured
+    /// burst cannot hold it, so some requests could never be admitted.
     pub fn burst_shortfall(&self) -> Option<BurstShortfall> {
-        let largest_request_cost = self.largest_request_cost();
-        (self.rate_limits.burst_per_principal < u64::from(largest_request_cost)).then_some(
-            BurstShortfall {
-                burst: self.rate_limits.burst_per_principal,
-                largest_request_cost,
-            },
-        )
+        let (request_batch, holder_bound_release) = self.request_costs();
+        let bound = if holder_bound_release > request_batch {
+            BurstShortfall::HolderBoundBatch
+        } else {
+            BurstShortfall::RequestBatch
+        };
+        (self.rate_limits.burst_per_principal.get() < u32::from(self.largest_request_cost()))
+            .then_some(bound)
     }
 
     pub fn requirement_acquisition_posture(
@@ -860,39 +875,91 @@ impl EvidenceConfig {
             .reduce(AcquisitionPosture::weakest)
     }
 
+    /// [`Self::parse_yaml`], with a bundle rule's refusal returned as the
+    /// rule's own error after checking that the reader placed it.
+    #[cfg(test)]
+    pub(crate) fn parse_yaml_reporting_rule(bytes: &[u8]) -> Result<Self, ConfigError> {
+        match Self::parse_yaml(bytes) {
+            Err(ConfigError::Refused(report))
+                if report.diagnostics().first().is_some_and(|diagnostic| {
+                    diagnostic.code.starts_with("evidence.bundle.invalid-")
+                }) =>
+            {
+                let diagnostic = &report.diagnostics()[0];
+                assert!(
+                    diagnostic
+                        .source
+                        .as_ref()
+                        .is_some_and(|source| source.line.is_some()),
+                    "a bundle rule's refusal is placed in the document"
+                );
+                Err(Self::decode_without_rules(bytes)
+                    .check_rules()
+                    .expect_err("a bundle rule refused the document")
+                    .error)
+            }
+            other => other,
+        }
+    }
+
+    /// A bundle the closed schema accepts, decoded without its rules, for
+    /// tests that build a configuration no deployment could load.
+    #[cfg(test)]
+    pub(crate) fn decode_without_rules(bytes: &[u8]) -> Self {
+        Reader::new(BUNDLE_DOCUMENT_NAME)
+            .decode::<Self>(bytes, &Expect::one(&EVIDENCE_BUNDLE_FORMAT))
+            .expect("the schema accepted the document")
+            .value
+    }
+
+    /// Read one bundle through the shared reader and check its rules. Every
+    /// refusal is a [`ConfigError::Refused`] report whose diagnostics name
+    /// the member, its line and column, and the fix (CFG-DIAG-1).
     pub fn parse_yaml(bytes: &[u8]) -> Result<Self, ConfigError> {
         if bytes.len() > MAX_CONFIG_BYTES {
             return Err(ConfigError::TooLarge);
         }
-        let text = std::str::from_utf8(bytes)
-            .map_err(|_| ConfigError::InvalidYaml(SchemaFault::because("document is not UTF-8")))?;
-        reject_removed_bundle_keys(text)?;
-        reject_bundle_environment_expressions(text)?;
-        let config: Self = decode_yaml(text)?;
-        config.validate()?;
-        Ok(config)
+        let mut hook = BundleExpressions;
+        let decoded = Reader::new(BUNDLE_DOCUMENT_NAME)
+            .with_hook(&mut hook)
+            .decode::<Self>(bytes, &Expect::one(&EVIDENCE_BUNDLE_FORMAT))
+            .map_err(|report| ConfigError::Refused(Box::new(report)))?;
+        if let Err(violation) = decoded.value.check_rules() {
+            return Err(ConfigError::Refused(Box::new(Report::new(vec![
+                violation.diagnostic(&decoded.document)
+            ]))));
+        }
+        Ok(decoded.value)
     }
 
+    /// Refuse the bundle with the first rule it breaks, as startup does.
     pub fn validate(&self) -> Result<(), ConfigError> {
-        if self.version != 1 {
-            return invalid("version must equal 1");
-        }
-        validate_uri(&self.service.provider_id)?;
-        validate_uri(&self.service.trust_domain)?;
-        validate_public_origin(&self.service.public_origin, self.assurance_profile)?;
-        validate_uri(&self.issuer.id)?;
+        self.check_rules().map_err(|violation| violation.error)
+    }
+
+    /// The first rule this decoded bundle breaks, with the member it
+    /// concerns, in the order startup checks them.
+    pub(crate) fn check_rules(&self) -> Result<(), Violation> {
+        validate_uri(&self.service.provider_id).at("/service/providerId")?;
+        validate_uri(&self.service.trust_domain).at("/service/trustDomain")?;
+        validate_public_origin(&self.service.public_origin, self.assurance_profile)
+            .at("/service/publicOrigin")?;
+        validate_uri(&self.issuer.id).at("/issuer/id")?;
         if let Some(publication) = &self.publication {
-            publication.validate(self.assurance_profile)?;
+            publication
+                .validate(self.assurance_profile)
+                .at("/publication")?;
         }
-        self.authentication.validate(self.assurance_profile)?;
-        self.audit.validate()?;
-        self.subject_binding.validate()?;
+        self.authentication
+            .validate(self.assurance_profile)
+            .at("/authentication/oidc")?;
         if self.audit.key.hash_key_ref == self.subject_binding.secret_ref {
-            return invalid("audit and subject-binding secret references must be distinct");
+            return invalid("audit and subject-binding secret references must be distinct")
+                .at("/subjectBinding/secretRef");
         }
-        self.rate_limits.validate()?;
-        self.signing.validate()?;
-        validate_response_formats(&self.response_formats, "bundle response formats")?;
+        self.signing.validate().at("/signing")?;
+        validate_response_formats(&self.response_formats, "bundle response formats")
+            .at("/responseFormats")?;
         // Both SD-JWT VC serializations name their issuer by origin, the batch
         // container as much as the singular form it batches, so either one
         // enabled outside the local assurance profile forces the origin.
@@ -902,49 +969,63 @@ impl EvidenceConfig {
                 .iter()
                 .any(|format| HOLDER_BOUND_RESPONSE_FORMATS.contains(format))
         {
-            validate_https_origin(&self.service.provider_id)?;
+            validate_https_origin(&self.service.provider_id).at("/service/providerId")?;
         }
-        validate_named_map(&self.selector_profiles, 1, 128, |profile| {
-            profile.validate()
-        })?;
-        validate_named_map(&self.sources, 1, 128, |source| {
+        validate_named_map(
+            &self.selector_profiles,
+            1,
+            128,
+            "/selectorProfiles",
+            |profile| profile.validate(),
+        )?;
+        validate_named_map(&self.sources, 1, 128, "/sources", |source| {
             source.validate(self.assurance_profile)
         })?;
-        validate_named_map(&self.source_connections, 0, 128, |connection| {
-            connection.validate(self.assurance_profile)
-        })?;
-        for (_, source) in self.sources.iter() {
+        validate_named_map(
+            &self.source_connections,
+            0,
+            128,
+            "/sourceConnections",
+            |connection| connection.validate(self.assurance_profile),
+        )?;
+        for (source_id, source) in self.sources.iter() {
             if let Some(connection_id) = source.connection() {
-                let connection =
-                    self.source_connections
-                        .get(connection_id)
-                        .ok_or(ConfigError::Invalid(
-                            "source connection reference is not declared",
-                        ))?;
+                let at = format!("{}/connection", named("/sources", source_id));
+                let connection = self
+                    .source_connections
+                    .get(connection_id)
+                    .ok_or(ConfigError::Invalid(
+                        "source connection reference is not declared",
+                    ))
+                    .at(&at)?;
                 if !connection.matches_source(source) {
-                    return invalid("resolved source differs from its named connection");
+                    return invalid("resolved source differs from its named connection").at(at);
                 }
             }
         }
-        validate_named_map(&self.authority_profiles, 1, 128, |profile| {
-            profile.validate()
-        })?;
+        validate_named_map(
+            &self.authority_profiles,
+            1,
+            128,
+            "/authorityProfiles",
+            |profile| profile.validate(),
+        )?;
         let task_grant_profiles = self
             .authority_profiles
             .iter()
-            .map(|(_, profile)| profile)
-            .filter(|profile| !profile.requester_clients.is_empty())
+            .filter(|(_, profile)| !profile.requester_clients.is_empty())
             .collect::<Vec<_>>();
         if !task_grant_profiles.is_empty() {
-            let allowed_clients =
-                self.authentication
-                    .oidc
-                    .allowed_clients
-                    .as_ref()
-                    .ok_or(ConfigError::Invalid(
-                        "task-grant authority profiles require authentication allowedClients",
-                    ))?;
-            if task_grant_profiles.iter().any(|profile| {
+            let allowed_clients = self
+                .authentication
+                .oidc
+                .allowed_clients
+                .as_ref()
+                .ok_or(ConfigError::Invalid(
+                    "task-grant authority profiles require authentication allowedClients",
+                ))
+                .at("/authentication/oidc/allowedClients")?;
+            if let Some((profile_id, _)) = task_grant_profiles.iter().find(|(_, profile)| {
                 profile
                     .requester_clients
                     .iter()
@@ -952,10 +1033,14 @@ impl EvidenceConfig {
             }) {
                 return invalid(
                     "task-grant requester clients must be admitted by authentication allowedClients",
-                );
+                )
+                .at(format!(
+                    "{}/requesterClients",
+                    named("/authorityProfiles", profile_id)
+                ));
             }
         }
-        validate_len(self.requirements.len(), 1, 128, "requirements")?;
+        validate_len(self.requirements.len(), 1, 128, "requirements").at("/requirements")?;
 
         let mut requirement_ids = BTreeSet::new();
         let mut requirement_handles = BTreeSet::new();
@@ -987,30 +1072,35 @@ impl EvidenceConfig {
             || !response_schemas.is_disjoint(&fact_schemas)
             || !response_schemas.is_disjoint(&parameter_schemas)
         {
-            return invalid("source schema roles must not overlap across sources");
+            return invalid("source schema roles must not overlap across sources").at("/sources");
         }
-        for requirement in &self.requirements {
-            requirement.validate()?;
+        for (index, requirement) in self.requirements.iter().enumerate() {
+            let at = format!("/requirements/{index}");
+            requirement.validate().at(&at)?;
             if self.assurance_profile.requires_fixtures() && requirement.fixtures.is_none() {
-                return invalid("production and evidence-grade requirements must declare fixtures");
+                return invalid("production and evidence-grade requirements must declare fixtures")
+                    .at(at);
             }
             if !requirement_ids.insert(requirement.id.as_str()) {
-                return invalid("requirement identifiers must be unique");
+                return invalid("requirement identifiers must be unique").at(format!("{at}/id"));
             }
             if !requirement_handles.insert(requirement.handle.as_str()) {
-                return invalid("requirement handles must be unique");
+                return invalid("requirement handles must be unique").at(format!("{at}/handle"));
             }
             if !evidence_types.insert(requirement.evidence_type.as_str()) {
-                return invalid("Evidence Type identifiers must be unique");
+                return invalid("Evidence Type identifiers must be unique")
+                    .at(format!("{at}/evidenceType"));
             }
-            for concept in &requirement.concepts {
+            for (concept_index, concept) in requirement.concepts.iter().enumerate() {
                 if !concept_ids.insert(concept.id.as_str()) {
-                    return invalid("concept identifiers must be unique");
+                    return invalid("concept identifiers must be unique")
+                        .at(format!("{at}/concepts/{concept_index}/id"));
                 }
             }
-            for family in &requirement.disclosure_guard.families {
+            for (family_index, family) in requirement.disclosure_guard.families.iter().enumerate() {
                 if !disclosure_families.insert(family.as_str()) {
-                    return invalid("enabled requirements share a disclosure family");
+                    return invalid("enabled requirements share a disclosure family")
+                        .at(format!("{at}/disclosureGuard/families/{family_index}"));
                 }
             }
         }
@@ -1019,7 +1109,7 @@ impl EvidenceConfig {
         self.validate_holder_bound_requirements()?;
         self.validate_cross_references()?;
         if self.publication.is_some() && crate::discovery::render(self).is_err() {
-            return invalid("provider publication cannot be rendered");
+            return invalid("provider publication cannot be rendered").at("/publication");
         }
         Ok(())
     }
@@ -1031,17 +1121,12 @@ impl EvidenceConfig {
     /// binds, so a deployment either serves every holder-bound requirement it
     /// declares or does not start. Each cause names the rule and no configured
     /// value.
-    fn validate_holder_bound_requirements(&self) -> Result<(), ConfigError> {
-        if self
-            .holder_bound_batch_max_size
-            .is_some_and(|size| size == 0 || size > MAXIMUM_HOLDER_BOUND_BATCH_SIZE)
-        {
-            return invalid("holder-bound batch size is outside the permitted range");
-        }
-        for requirement in &self.requirements {
+    fn validate_holder_bound_requirements(&self) -> Result<(), Violation> {
+        for (index, requirement) in self.requirements.iter().enumerate() {
             if requirement.subject_binding_mode() != SubjectBindingMode::HolderBound {
                 continue;
             }
+            let at = format!("/requirements/{index}");
             // An entity reference is a pointer only the one relying party it was
             // scoped to can resolve. A holder-bound assertion has no such party,
             // so a value form that emits one cannot be disclosed under this mode.
@@ -1053,7 +1138,8 @@ impl EvidenceConfig {
             }) {
                 return invalid(
                     "holder-bound requirement must not disclose an entity-reference value form",
-                );
+                )
+                .at(format!("{at}/concepts"));
             }
             let bundle_permits = self.response_formats.iter().any(|format| {
                 subject_binding_permits_response_format(SubjectBindingMode::HolderBound, *format)
@@ -1061,7 +1147,8 @@ impl EvidenceConfig {
             if !bundle_permits {
                 return invalid(
                     "holder-bound requirement needs a bundle response format its mode permits",
-                );
+                )
+                .at(at);
             }
             // Both permission halves, on the one grant that would have to carry
             // the request. Permissions are never unioned across grants, so a
@@ -1085,7 +1172,8 @@ impl EvidenceConfig {
             if !reachable {
                 return invalid(
                     "holder-bound requirement needs one grant permitting the mode and a permitted response format",
-                );
+                )
+                .at(at);
             }
         }
         Ok(())
@@ -1095,28 +1183,32 @@ impl EvidenceConfig {
     /// adding the form to the runtime cannot widen what an already-deployed
     /// bundle does. The forms that predate the declaration keep serving
     /// without one.
-    fn validate_acquisition_capabilities(&self) -> Result<(), ConfigError> {
+    fn validate_acquisition_capabilities(&self) -> Result<(), Violation> {
         let declared = declared_acquisition_capabilities(
             &self.acquisition_capabilities,
             "bundle acquisition capabilities name an unknown acquisition kind",
             "bundle acquisition capabilities must be unique",
             "bundle acquisition capabilities",
-        )?;
-        if self
+        )
+        .at("/acquisitionCapabilities")?;
+        if let Some((source_id, _)) = self
             .sources
             .iter()
-            .any(|(_, source)| source.batch().is_some())
-            && !declared.contains(SOURCE_BATCH_CAPABILITY)
+            .find(|(_, source)| source.batch().is_some())
         {
-            return invalid("source batch optimization is not a declared bundle capability");
+            if !declared.contains(SOURCE_BATCH_CAPABILITY) {
+                return invalid("source batch optimization is not a declared bundle capability")
+                    .at(format!("{}/batch", named("/sources", source_id)));
+            }
         }
-        for requirement in &self.requirements {
+        for (index, requirement) in self.requirements.iter().enumerate() {
             if requirement
                 .acquisition
                 .required_capability()
                 .is_some_and(|capability| !declared.contains(capability))
             {
-                return invalid("requirement acquisition kind is not a declared bundle capability");
+                return invalid("requirement acquisition kind is not a declared bundle capability")
+                    .at(format!("/requirements/{index}/acquisition"));
             }
         }
         Ok(())
@@ -1205,7 +1297,8 @@ impl EvidenceConfig {
         };
         if request.path.is_none()
             || request.path_template.is_some()
-            || item_count > usize::from(batch.maximum_items)
+            || u64::try_from(item_count)
+                .map_or(true, |count| count > u64::from(batch.maximum_items.get()))
         {
             return SourceBatchPlan::Sequential;
         }
@@ -1214,15 +1307,18 @@ impl EvidenceConfig {
         }
     }
 
-    fn validate_cross_references(&self) -> Result<(), ConfigError> {
-        for (_, source) in self.sources.iter() {
+    fn validate_cross_references(&self) -> Result<(), Violation> {
+        for (source_id, source) in self.sources.iter() {
+            let at = named("/sources", source_id);
             for input in source.selector_inputs() {
                 for alternative in &input.alternatives {
-                    let profile = self.selector_profiles.get(&alternative.profile).ok_or(
-                        ConfigError::Invalid(
+                    let profile = self
+                        .selector_profiles
+                        .get(&alternative.profile)
+                        .ok_or(ConfigError::Invalid(
                             "source selector input references an unknown selector profile",
-                        ),
-                    )?;
+                        ))
+                        .at(&at)?;
                     if alternative
                         .fields
                         .iter()
@@ -1230,19 +1326,22 @@ impl EvidenceConfig {
                     {
                         return invalid(
                             "source selector input references an unknown selector field",
-                        );
+                        )
+                        .at(at);
                     }
                 }
             }
             for binding in source.selector_bindings() {
-                let profile_config =
-                    self.selector_profiles
-                        .get(binding.profile)
-                        .ok_or(ConfigError::Invalid(
-                            "source path binding references an unknown selector profile",
-                        ))?;
+                let profile_config = self
+                    .selector_profiles
+                    .get(binding.profile)
+                    .ok_or(ConfigError::Invalid(
+                        "source path binding references an unknown selector profile",
+                    ))
+                    .at(&at)?;
                 if !profile_config.fields.contains_key(binding.field) {
-                    return invalid("source path binding references an unknown selector field");
+                    return invalid("source path binding references an unknown selector field")
+                        .at(at);
                 }
                 if !source.selector_inputs().iter().any(|input| {
                     input.role == binding.role
@@ -1254,7 +1353,8 @@ impl EvidenceConfig {
                                     .any(|field| field == binding.field)
                         })
                 }) {
-                    return invalid("source path binding is not declared as a selector input");
+                    return invalid("source path binding is not declared as a selector input")
+                        .at(at);
                 }
             }
         }
@@ -1271,34 +1371,40 @@ impl EvidenceConfig {
             .collect::<BTreeSet<_>>();
         for (source_id, source) in self.sources.iter() {
             if initial_sources.contains(source_id) && source.selector_inputs().is_empty() {
-                return invalid("single and search sources must declare selector inputs");
+                return invalid("single and search sources must declare selector inputs")
+                    .at(named("/sources", source_id));
             }
             if !source.prior_fact_bindings().is_empty()
                 && (!fetch_sources.contains(source_id) || initial_sources.contains(source_id))
             {
-                return invalid("prior-fact path bindings are permitted only on fetch sources");
+                return invalid("prior-fact path bindings are permitted only on fetch sources")
+                    .at(named("/sources", source_id));
             }
         }
 
-        for requirement in &self.requirements {
+        for (index, requirement) in self.requirements.iter().enumerate() {
+            let at = format!("/requirements/{index}");
             for source_id in requirement.acquisition.source_ids() {
                 if !self.sources.contains_key(source_id) {
-                    return invalid("requirement acquisition references an unknown source");
+                    return invalid("requirement acquisition references an unknown source")
+                        .at(format!("{at}/acquisition"));
                 }
             }
             if requirement.validity_seconds > self.signing.maximum_assertion_validity_seconds {
-                return invalid("requirement validity exceeds signing maximum validity");
+                return invalid("requirement validity exceeds signing maximum validity")
+                    .at(format!("{at}/validitySeconds"));
             }
-            for role in &requirement.subject_roles {
+            for (role_index, role) in requirement.subject_roles.iter().enumerate() {
                 for profile_id in &role.selector_profiles {
                     self.selector_profiles
                         .get(profile_id)
                         .ok_or(ConfigError::Invalid(
                             "requirement references an unknown selector profile",
-                        ))?;
+                        ))
+                        .at(format!("{at}/subjectRoles/{role_index}/selectorProfiles"))?;
                 }
             }
-            validate_derivation_selector_inputs(requirement, &self.selector_profiles)?;
+            validate_derivation_selector_inputs(requirement, &self.selector_profiles).at(&at)?;
         }
 
         let requirements = self
@@ -1309,28 +1415,34 @@ impl EvidenceConfig {
         let mut authorized_combinations = BTreeSet::new();
         let mut source_selector_sets: BTreeMap<String, BTreeSet<SourceSelectorSet>> =
             BTreeMap::new();
-        for (_, authority) in self.authority_profiles.iter() {
-            for grant in &authority.grants {
-                let requirement =
-                    requirements
-                        .get(grant.requirement.as_str())
-                        .ok_or(ConfigError::Invalid(
-                            "authority grant references an unknown requirement",
-                        ))?;
+        for (authority_id, authority) in self.authority_profiles.iter() {
+            let authority_at = named("/authorityProfiles", authority_id);
+            for (grant_index, grant) in authority.grants.iter().enumerate() {
+                let at = format!("{authority_at}/grants/{grant_index}");
+                let requirement = requirements
+                    .get(grant.requirement.as_str())
+                    .ok_or(ConfigError::Invalid(
+                        "authority grant references an unknown requirement",
+                    ))
+                    .at(format!("{at}/requirement"))?;
                 if !requirement
                     .purposes
                     .iter()
                     .any(|purpose| purpose == &grant.purpose)
                 {
-                    return invalid("authority grant references an unauthorized purpose");
+                    return invalid("authority grant references an unauthorized purpose")
+                        .at(format!("{at}/purpose"));
                 }
                 if grant.subjects.len() != requirement.subject_roles.len() {
-                    return invalid("authority grant must bind the complete subject-role set");
+                    return invalid("authority grant must bind the complete subject-role set")
+                        .at(format!("{at}/subjects"));
                 }
                 let mut seen_roles = BTreeSet::new();
-                for subject in &grant.subjects {
+                for (subject_index, subject) in grant.subjects.iter().enumerate() {
+                    let subject_at = format!("{at}/subjects/{subject_index}");
                     if !seen_roles.insert(subject.role.as_str()) {
-                        return invalid("authority grant subject roles must be unique");
+                        return invalid("authority grant subject roles must be unique")
+                            .at(format!("{subject_at}/role"));
                     }
                     let role = requirement
                         .subject_roles
@@ -1338,21 +1450,24 @@ impl EvidenceConfig {
                         .find(|role| role.role == subject.role)
                         .ok_or(ConfigError::Invalid(
                             "authority grant references an unknown subject role",
-                        ))?;
+                        ))
+                        .at(format!("{subject_at}/role"))?;
                     if !role
                         .selector_profiles
                         .iter()
                         .any(|profile| profile == &subject.selector_profile)
                     {
-                        return invalid("authority grant selector profile is not allowed for role");
+                        return invalid("authority grant selector profile is not allowed for role")
+                            .at(format!("{subject_at}/selectorProfile"));
                     }
                     let profile = self
                         .selector_profiles
                         .get(&subject.selector_profile)
                         .ok_or(ConfigError::Invalid(
                             "authority grant references an unknown selector profile",
-                        ))?;
-                    subject.validate_value_claims(profile)?;
+                        ))
+                        .at(format!("{subject_at}/selectorProfile"))?;
+                    subject.validate_value_claims(profile).at(&subject_at)?;
                     authorized_combinations.insert((
                         grant.requirement.as_str(),
                         grant.purpose.as_str(),
@@ -1365,12 +1480,17 @@ impl EvidenceConfig {
                     .iter()
                     .any(|role| !seen_roles.contains(role.role.as_str()))
                 {
-                    return invalid("authority grant omits a required subject role");
+                    return invalid("authority grant omits a required subject role")
+                        .at(format!("{at}/subjects"));
                 }
                 for source_id in requirement.acquisition.source_ids() {
-                    let source = self.sources.get(source_id).ok_or(ConfigError::Invalid(
-                        "requirement acquisition references an unknown source",
-                    ))?;
+                    let source = self
+                        .sources
+                        .get(source_id)
+                        .ok_or(ConfigError::Invalid(
+                            "requirement acquisition references an unknown source",
+                        ))
+                        .at(&at)?;
                     let mut source_selector_set = grant
                         .subjects
                         .iter()
@@ -1387,7 +1507,8 @@ impl EvidenceConfig {
                     if source_selector_set.is_empty() && !source.selector_inputs().is_empty() {
                         return invalid(
                             "authority path does not activate any declared source selector input",
-                        );
+                        )
+                        .at(at);
                     }
                     source_selector_set.sort();
                     source_selector_sets
@@ -1402,11 +1523,12 @@ impl EvidenceConfig {
             {
                 return invalid(
                     "requesterClients and grantSourceIssuer require an authenticated-grant subject",
-                );
+                )
+                .at(authority_at);
             }
         }
 
-        for requirement in &self.requirements {
+        for (index, requirement) in self.requirements.iter().enumerate() {
             for purpose in &requirement.purposes {
                 for role in &requirement.subject_roles {
                     for profile in &role.selector_profiles {
@@ -1418,7 +1540,8 @@ impl EvidenceConfig {
                         )) {
                             return invalid(
                                 "requirement role and selector profile lack an authority path",
-                            );
+                            )
+                            .at(format!("/requirements/{index}/subjectRoles"));
                         }
                     }
                 }
@@ -1431,11 +1554,15 @@ impl EvidenceConfig {
     fn validate_source_selector_sets(
         &self,
         allowed: &BTreeMap<String, BTreeSet<SourceSelectorSet>>,
-    ) -> Result<(), ConfigError> {
+    ) -> Result<(), Violation> {
         for (source_id, source) in self.sources.iter() {
-            let sets = allowed.get(source_id).ok_or(ConfigError::Invalid(
-                "configured source is unreachable from every authority grant",
-            ))?;
+            let at = named("/sources", source_id);
+            let sets = allowed
+                .get(source_id)
+                .ok_or(ConfigError::Invalid(
+                    "configured source is unreachable from every authority grant",
+                ))
+                .at(&at)?;
             let reachable = sets
                 .iter()
                 .flatten()
@@ -1448,7 +1575,8 @@ impl EvidenceConfig {
             }) {
                 return invalid(
                     "source selector input is unreachable from every complete authority path",
-                );
+                )
+                .at(at);
             }
         }
         Ok(())
@@ -1518,7 +1646,7 @@ pub struct ServiceConfig {
     pub provider_id: String,
     pub trust_domain: String,
     /// Exact public resource-server origin used by RFC 9728 discovery.
-    pub public_origin: String,
+    pub public_origin: registry_platform_yaml::Url,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
@@ -1535,7 +1663,7 @@ pub struct PublicationConfig {
     pub service_id: String,
     pub title: String,
     pub description: String,
-    pub endpoint_url: String,
+    pub endpoint_url: registry_platform_yaml::Url,
     pub jurisdictions: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub publisher_id: Option<String>,
@@ -1605,52 +1733,147 @@ pub const EVIDENCE_RUNTIME_ENVELOPE: RuntimeEnvelope = RuntimeEnvelope {
     kind: EVIDENCE_RUNTIME_KIND,
 };
 
-/// What an operator writes when the envelope is missing or wrong.
-const EVIDENCE_RUNTIME_ENVELOPE_REMEDY: &str = "declare apiVersion: \
-     registry.registrystack.org/evidence-runtime/v1alpha1 and kind: EvidenceRuntimeConfig";
+/// The name the shared loader gives a runtime document read from bytes. The
+/// command that read the file renames it to the path it was given.
+const RUNTIME_DOCUMENT_NAME: &str = "runtime.yaml";
+
+/// The reader's refusal of bytes that are not text it can read: larger than
+/// its bound or not UTF-8.
+fn unreadable_document(file: &str, bytes: &[u8]) -> ConfigError {
+    match Reader::new(file).scan(bytes) {
+        Err(report) => ConfigError::Refused(Box::new(report)),
+        Ok(_) => ConfigError::Invalid("document is not UTF-8"),
+    }
+}
 
 /// Keys an earlier Evidence runtime file accepted, each refused with the key
 /// that replaced it.
 pub const EVIDENCE_RUNTIME_REMOVED_KEYS: &[RemovedKey] = &[
     RemovedKey {
         path: "version",
-        replacement: "declare apiVersion: registry.registrystack.org/evidence-runtime/v1alpha1 \
-             and kind: EvidenceRuntimeConfig",
+        replacement: "Declare apiVersion: registry.registrystack.org/evidence-runtime/v1alpha1 \
+             and kind: EvidenceRuntimeConfig.",
     },
     RemovedKey {
         path: "bundleDirectory",
-        replacement: "declare package.root as the absolute path of the package directory",
+        replacement: "Declare package.root as the absolute path of the package directory.",
     },
     RemovedKey {
         path: "listener.bindHost",
-        replacement: "declare listener.bind as host:port, such as 127.0.0.1:8080",
+        replacement: "Declare listener.bind as host:port, such as 127.0.0.1:8080.",
     },
     RemovedKey {
         path: "listener.port",
-        replacement: "declare listener.bind as host:port, such as 127.0.0.1:8080",
+        replacement: "Declare listener.bind as host:port, such as 127.0.0.1:8080.",
     },
     RemovedKey {
         path: "metricsListener.bindHost",
-        replacement: "declare metricsListener.bind as host:port, such as 127.0.0.1:9090",
+        replacement: "Declare metricsListener.bind as host:port, such as 127.0.0.1:9090.",
     },
     RemovedKey {
         path: "metricsListener.port",
-        replacement: "declare metricsListener.bind as host:port, such as 127.0.0.1:9090",
+        replacement: "Declare metricsListener.bind as host:port, such as 127.0.0.1:9090.",
     },
 ];
 
-/// Runtime refusals the shared loader reports in its own words, each mapped to
-/// one value-free cause. Only the fixed leading text is read.
-const RUNTIME_VALUE_CAUSES: [(&str, &str); 2] = [
-    (
-        "listener.bind must be host:port",
-        "listener bind must be host:port with an IP address host",
-    ),
-    (
-        "expected an exact secret:env/NAME or secret:file/name reference",
-        "secret reference does not use an exact permitted grammar",
-    ),
-];
+/// The codes a runtime file's semantic findings carry (CFG-DIAG-3), one per
+/// block of the file.
+pub const RUNTIME_PACKAGE_CODE: &str = "evidence.runtime.invalid-package";
+pub const RUNTIME_LISTENER_CODE: &str = "evidence.runtime.invalid-listener";
+pub const RUNTIME_METRICS_LISTENER_CODE: &str = "evidence.runtime.invalid-metrics-listener";
+pub const RUNTIME_SECRET_PROVIDERS_CODE: &str = "evidence.runtime.invalid-secret-providers";
+pub const RUNTIME_SIGNER_CODE: &str = "evidence.runtime.invalid-signer";
+pub const RUNTIME_AUDIT_CODE: &str = "evidence.runtime.invalid-audit";
+pub const RUNTIME_OUTBOUND_TLS_CODE: &str = "evidence.runtime.invalid-outbound-tls";
+pub const RUNTIME_SOURCE_EXTRACT_CODE: &str = "evidence.runtime.invalid-source-extract";
+pub const RUNTIME_ACQUISITION_CAPABILITIES_CODE: &str =
+    "evidence.runtime.invalid-acquisition-capabilities";
+
+const ABSOLUTE_PATH_ACTION: &str =
+    "Write an absolute path of at most 512 bytes, without . or .. segments.";
+const LOCAL_ID_ACTION: &str = "Write a local identifier of at most 128 bytes: a lowercase ASCII letter, then lowercase letters, digits, dots, underscores, or hyphens.";
+const LISTENER_PORT_ACTION: &str = "Name a port from 1 to 65535 after the host.";
+
+/// One rule a decoded runtime document breaks, naming the member it
+/// concerns. The message is the error's fixed cause and the action a fixed
+/// sentence, so neither repeats a value from the document (CFG-SEC-3).
+#[derive(Debug)]
+pub struct RuntimeFinding {
+    pub code: &'static str,
+    /// RFC 6901 pointer of the member the finding concerns.
+    pub pointer: String,
+    /// Whether the finding points at the member's key, as it does for a
+    /// member that is missing or not allowed, rather than at its value.
+    pub at_key: bool,
+    pub error: ConfigError,
+    pub action: String,
+}
+
+impl RuntimeFinding {
+    fn at_value(code: &'static str, pointer: &str, error: ConfigError, action: &str) -> Self {
+        Self {
+            code,
+            pointer: pointer.to_owned(),
+            at_key: false,
+            error,
+            action: action.to_owned(),
+        }
+    }
+
+    fn at_key(code: &'static str, pointer: &str, error: ConfigError, action: &str) -> Self {
+        Self {
+            at_key: true,
+            ..Self::at_value(code, pointer, error, action)
+        }
+    }
+
+    /// The fixed cause the finding reports.
+    pub fn message(&self) -> &'static str {
+        self.error.fault().cause()
+    }
+}
+
+/// The findings of a named map whose entries each bind one absolute path:
+/// at most 64 entries, each named by a local identifier.
+fn absolute_path_map_findings<T>(
+    map: &OrderedMap<T>,
+    pointer: &str,
+    code: &'static str,
+    member: &str,
+    path_of: impl Fn(&T) -> &String,
+    findings: &mut Vec<RuntimeFinding>,
+) {
+    if let Err(error) = validate_len(map.len(), 0, 64, "named configuration map") {
+        findings.push(RuntimeFinding::at_key(
+            code,
+            pointer,
+            error,
+            "Bind at most 64 entries.",
+        ));
+    }
+    for (name, value) in map.iter() {
+        let entry = format!(
+            "{pointer}/{}",
+            registry_platform_yaml::escape_pointer_segment(name)
+        );
+        if !valid_local_id(name) {
+            findings.push(RuntimeFinding::at_key(
+                code,
+                &entry,
+                ConfigError::Invalid("local identifier is invalid"),
+                LOCAL_ID_ACTION,
+            ));
+        }
+        if let Err(error) = validate_absolute_path(path_of(value)) {
+            findings.push(RuntimeFinding::at_value(
+                code,
+                &format!("{entry}/{member}"),
+                error,
+                ABSOLUTE_PATH_ACTION,
+            ));
+        }
+    }
+}
 
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -1691,7 +1914,6 @@ impl RuntimeConfig {
     pub fn loader() -> RuntimeConfigLoader {
         RuntimeConfigLoader::new(EVIDENCE_RUNTIME_ENVELOPE)
             .removed_keys(EVIDENCE_RUNTIME_REMOVED_KEYS)
-            .max_bytes(MAX_CONFIG_BYTES as u64)
     }
 
     /// Parse and validate one runtime document with no environment: an
@@ -1707,53 +1929,128 @@ impl RuntimeConfig {
         bytes: &[u8],
         lookup: impl Fn(&str) -> Option<String>,
     ) -> Result<LoadedRuntimeConfig<Self>, ConfigError> {
-        if bytes.len() > MAX_CONFIG_BYTES {
-            return Err(ConfigError::TooLarge);
-        }
-        let text = std::str::from_utf8(bytes)
-            .map_err(|_| ConfigError::InvalidYaml(SchemaFault::because("document is not UTF-8")))?;
-        let loaded = Self::loader()
-            .parse_str::<Self>(text, lookup)
-            .map_err(|error| ConfigError::InvalidYaml(runtime_fault(&error)))?;
+        let loaded = Self::decode_yaml_with(bytes, lookup)?;
         loaded.config.validate()?;
         Ok(loaded)
     }
 
+    /// Read and decode one runtime document through the shared loader,
+    /// substituting environment expressions in string values from `lookup`,
+    /// without the semantic checks [`RuntimeConfig::findings`] applies.
+    pub fn decode_yaml_with(
+        bytes: &[u8],
+        lookup: impl Fn(&str) -> Option<String>,
+    ) -> Result<LoadedRuntimeConfig<Self>, ConfigError> {
+        // The reader refuses a document over its size bound or not in UTF-8
+        // with its own diagnostic; text it can read goes to the loader, which
+        // substitutes environment expressions while the reader builds it.
+        let Ok(text) = std::str::from_utf8(bytes) else {
+            return Err(unreadable_document(RUNTIME_DOCUMENT_NAME, bytes));
+        };
+        Self::loader()
+            .parse_str::<Self>(text, lookup)
+            .map_err(|error| {
+                ConfigError::Refused(Box::new(Report::new(error.diagnostics().to_vec())))
+            })
+    }
+
+    /// Refuse the document with the first rule it breaks, as startup does.
     pub fn validate(&self) -> Result<(), ConfigError> {
-        self.package.check().map_err(|error| match error.kind() {
-            registry_platform_config::ConfigBlockErrorKind::InvalidDigest => {
-                ConfigError::InvalidField(
-                    "package expectedDigest must be sha256: followed by 64 lowercase hex digits",
-                    "package.expectedDigest",
-                )
+        match self.findings().into_iter().next() {
+            Some(finding) => Err(finding.error),
+            None => Ok(()),
+        }
+    }
+
+    /// Every rule this decoded document breaks, each naming the member it
+    /// concerns, in the order startup checks them: the first is the refusal
+    /// [`RuntimeConfig::validate`] returns.
+    pub fn findings(&self) -> Vec<RuntimeFinding> {
+        let mut findings = Vec::new();
+        match self.package.check() {
+            Err(error)
+                if error.kind()
+                    == registry_platform_config::ConfigBlockErrorKind::InvalidDigest =>
+            {
+                findings.push(RuntimeFinding::at_value(
+                    RUNTIME_PACKAGE_CODE,
+                    "/package/expectedDigest",
+                    ConfigError::InvalidField(
+                        "package expectedDigest must be sha256: followed by 64 lowercase hex digits",
+                        "package.expectedDigest",
+                    ),
+                    "Write the digest `evidencectl package` printed, sha256: followed by 64 lowercase hex digits.",
+                ));
             }
-            _ => ConfigError::InvalidField("package root must be an absolute path", "package.root"),
-        })?;
-        validate_absolute_path(&self.package.root.to_string_lossy())?;
-        self.listener.validate()?;
+            Err(_) => findings.push(RuntimeFinding::at_value(
+                RUNTIME_PACKAGE_CODE,
+                "/package/root",
+                ConfigError::InvalidField("package root must be an absolute path", "package.root"),
+                ABSOLUTE_PATH_ACTION,
+            )),
+            Ok(()) => {
+                if let Err(error) = validate_absolute_path(&self.package.root.to_string_lossy()) {
+                    findings.push(RuntimeFinding::at_value(
+                        RUNTIME_PACKAGE_CODE,
+                        "/package/root",
+                        error,
+                        ABSOLUTE_PATH_ACTION,
+                    ));
+                }
+            }
+        }
+        self.listener.findings(&mut findings);
         if let Some(metrics) = &self.metrics_listener {
-            metrics.validate(&self.listener)?;
+            metrics.findings(&self.listener, &mut findings);
         }
-        self.secret_providers.check().map_err(|_| {
-            ConfigError::InvalidField(
-                "secretProviders must enable file, environment, or both, and a file root must be absolute",
-                "secretProviders",
-            )
-        })?;
+        let providers_enabled = self.secret_providers.check().is_ok();
+        if !providers_enabled {
+            findings.push(RuntimeFinding::at_key(
+                RUNTIME_SECRET_PROVIDERS_CODE,
+                "/secretProviders",
+                ConfigError::InvalidField(
+                    "secretProviders must enable file, environment, or both, and a file root must be absolute",
+                    "secretProviders",
+                ),
+                "Enable file with an absolute root, environment, or both.",
+            ));
+        }
         if let Some(file) = &self.secret_providers.file {
-            validate_absolute_path(&file.root.to_string_lossy())?;
+            if let Err(error) = validate_absolute_path(&file.root.to_string_lossy()) {
+                findings.push(RuntimeFinding::at_value(
+                    RUNTIME_SECRET_PROVIDERS_CODE,
+                    "/secretProviders/file/root",
+                    error,
+                    ABSOLUTE_PATH_ACTION,
+                ));
+            }
         }
-        self.signer.validate(&self.secret_providers)?;
-        self.audit.validate()?;
-        self.outbound_tls.validate()?;
-        validate_named_map(&self.source_extracts, 0, 64, SourceExtractBinding::validate)?;
-        declared_acquisition_capabilities(
+        self.signer
+            .findings(&self.secret_providers, providers_enabled, &mut findings);
+        self.audit.findings(&mut findings);
+        self.outbound_tls.findings(&mut findings);
+        absolute_path_map_findings(
+            &self.source_extracts,
+            "/sourceExtracts",
+            RUNTIME_SOURCE_EXTRACT_CODE,
+            "path",
+            |binding| &binding.path,
+            &mut findings,
+        );
+        if let Err(error) = declared_acquisition_capabilities(
             &self.acquisition_capabilities,
             "runtime acquisition capabilities name an unknown acquisition kind",
             "runtime acquisition capabilities must be unique",
             "runtime acquisition capabilities",
-        )?;
-        Ok(())
+        ) {
+            findings.push(RuntimeFinding::at_key(
+                RUNTIME_ACQUISITION_CAPABILITIES_CODE,
+                "/acquisitionCapabilities",
+                error,
+                "Name each gated acquisition kind this deployment serves once.",
+            ));
+        }
+        findings
     }
 
     /// Whether the operator enabled one gated acquisition kind on this
@@ -1768,37 +2065,41 @@ impl RuntimeConfig {
 
 /// Closed process-local signer binding. Production deployments reach Transit
 /// only over a workload-local Unix socket and never receive a provider token.
-#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
+///
+/// The `kind` member names the variant. The shared reader chooses the variant
+/// from the node itself, so a refusal inside a variant keeps its full path,
+/// line, and column.
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize)]
+#[serde(
+    remote = "Self",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
 pub enum RuntimeSignerConfig {
     LocalJwk {
-        #[serde(rename = "privateKeyRef")]
         private_key_ref: SecretReference,
     },
     Transit {
-        #[serde(rename = "unixSocketPath")]
         unix_socket_path: String,
         mount: String,
-        #[serde(rename = "keyName")]
         key_name: String,
-        #[serde(rename = "keyVersion")]
-        key_version: u32,
-        #[serde(rename = "timeoutMilliseconds")]
-        timeout_milliseconds: u64,
+        key_version: BoundedU32<1, { u32::MAX }>,
+        timeout_milliseconds: BoundedU64<1, 30_000>,
     },
 }
+registry_platform_yaml::tagged_union!(RuntimeSignerConfig, tag = "kind");
 
-impl RuntimeSignerConfig {
-    fn validate(&self, secret_providers: &SecretProvidersConfig) -> Result<(), ConfigError> {
+/// The tagged form the file is written in: `kind` beside the variant's
+/// members.
+impl Serialize for RuntimeSignerConfig {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut map = serializer.serialize_map(None)?;
         match self {
-            Self::LocalJwk { private_key_ref } => secret_providers
-                .check_reference("signer.privateKeyRef", private_key_ref.as_str())
-                .map_err(|_| {
-                    ConfigError::InvalidField(
-                        "the secret reference names a provider secretProviders does not enable",
-                        "signer.privateKeyRef",
-                    )
-                }),
+            Self::LocalJwk { private_key_ref } => {
+                map.serialize_entry("kind", "local-jwk")?;
+                map.serialize_entry("privateKeyRef", private_key_ref)?;
+            }
             Self::Transit {
                 unix_socket_path,
                 mount,
@@ -1806,19 +2107,72 @@ impl RuntimeSignerConfig {
                 key_version,
                 timeout_milliseconds,
             } => {
-                validate_absolute_path(unix_socket_path)?;
-                if !valid_local_id(mount) || !valid_local_id(key_name) {
-                    return invalid("Transit signer mount and keyName must be local identifiers");
+                map.serialize_entry("kind", "transit")?;
+                map.serialize_entry("unixSocketPath", unix_socket_path)?;
+                map.serialize_entry("mount", mount)?;
+                map.serialize_entry("keyName", key_name)?;
+                map.serialize_entry("keyVersion", key_version)?;
+                map.serialize_entry("timeoutMilliseconds", timeout_milliseconds)?;
+            }
+        }
+        map.end()
+    }
+}
+
+impl RuntimeSignerConfig {
+    /// The signer's findings. A secret reference is checked against the
+    /// enabled providers only when `secretProviders` itself is valid, so one
+    /// mistake there is not reported twice.
+    fn findings(
+        &self,
+        secret_providers: &SecretProvidersConfig,
+        providers_enabled: bool,
+        findings: &mut Vec<RuntimeFinding>,
+    ) {
+        match self {
+            Self::LocalJwk { private_key_ref } => {
+                if providers_enabled
+                    && secret_providers
+                        .check_reference("signer.privateKeyRef", private_key_ref.as_str())
+                        .is_err()
+                {
+                    findings.push(RuntimeFinding::at_value(
+                        RUNTIME_SIGNER_CODE,
+                        "/signer/privateKeyRef",
+                        ConfigError::InvalidField(
+                            "the secret reference names a provider secretProviders does not enable",
+                            "signer.privateKeyRef",
+                        ),
+                        "Enable the provider the reference names under secretProviders, or reference the key through an enabled provider.",
+                    ));
                 }
-                if *key_version == 0 {
-                    return invalid("Transit signer keyVersion must be positive");
+            }
+            Self::Transit {
+                unix_socket_path,
+                mount,
+                key_name,
+                ..
+            } => {
+                if let Err(error) = validate_absolute_path(unix_socket_path) {
+                    findings.push(RuntimeFinding::at_value(
+                        RUNTIME_SIGNER_CODE,
+                        "/signer/unixSocketPath",
+                        error,
+                        ABSOLUTE_PATH_ACTION,
+                    ));
                 }
-                validate_range(
-                    *timeout_milliseconds,
-                    1,
-                    30_000,
-                    "Transit signer timeoutMilliseconds",
-                )
+                for (pointer, name) in [("/signer/mount", mount), ("/signer/keyName", key_name)] {
+                    if !valid_local_id(name) {
+                        findings.push(RuntimeFinding::at_value(
+                            RUNTIME_SIGNER_CODE,
+                            pointer,
+                            ConfigError::Invalid(
+                                "Transit signer mount and keyName must be local identifiers",
+                            ),
+                            LOCAL_ID_ACTION,
+                        ));
+                    }
+                }
             }
         }
     }
@@ -1850,46 +2204,112 @@ pub struct RuntimeAuditConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub rotate_bytes: Option<u64>,
+    pub rotate_bytes: Option<
+        BoundedU64<{ registry_platform_audit::MIN_AUDIT_ROTATE_BYTES }, { u32::MAX as u64 }>,
+    >,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub retain_days: Option<u32>,
+    pub retain_days: Option<BoundedU32<1, { registry_platform_audit::MAX_AUDIT_RETAIN_DAYS }>>,
 }
 
 impl RuntimeAuditConfig {
-    fn validate(&self) -> Result<(), ConfigError> {
-        if let Some(path) = &self.path {
-            validate_absolute_path(path)?;
+    fn findings(&self, findings: &mut Vec<RuntimeFinding>) {
+        if let Some(Err(error)) = self.path.as_deref().map(validate_absolute_path) {
+            findings.push(RuntimeFinding::at_value(
+                RUNTIME_AUDIT_CODE,
+                "/audit/path",
+                error,
+                ABSOLUTE_PATH_ACTION,
+            ));
+            return;
         }
-        self.destination().map(|_| ())
+        if let Err(error) = self.settings() {
+            let refusal = audit_refusal(&error);
+            findings.push(RuntimeFinding {
+                code: RUNTIME_AUDIT_CODE,
+                pointer: refusal.pointer,
+                at_key: refusal.at_key,
+                error: ConfigError::Invalid(refusal.cause),
+                action: refusal.action,
+            });
+        }
+    }
+
+    fn settings(&self) -> Result<AuditDestination, AuditDestinationError> {
+        AuditDestination::from_settings(
+            self.destination,
+            self.path.as_deref().map(PathBuf::from),
+            self.rotate_bytes.map(BoundedU64::get),
+            self.retain_days.map(BoundedU32::get),
+        )
     }
 
     /// The destination the writer opens, with the platform defaults applied
     /// and file-only settings refused for `stdout`.
     pub fn destination(&self) -> Result<AuditDestination, ConfigError> {
-        AuditDestination::from_settings(
-            self.destination,
-            self.path.as_deref().map(PathBuf::from),
-            self.rotate_bytes,
-            self.retain_days,
-        )
-        .map_err(|error| {
-            ConfigError::Invalid(match error {
-                AuditDestinationError::MissingPath => {
-                    "audit path is required when audit destination is file"
-                }
-                AuditDestinationError::RelativePath => "audit path must be absolute",
-                AuditDestinationError::FileOnlyField { .. } => {
-                    "audit path, rotateBytes, and retainDays apply only when audit destination is file"
-                }
-                AuditDestinationError::RotateBytesOutOfRange { .. } => {
-                    "audit rotateBytes is outside the platform bounds"
-                }
-                AuditDestinationError::RetainDaysOutOfRange { .. } => {
-                    "audit retainDays is outside the platform bounds"
-                }
-                _ => "audit destination is invalid",
-            })
-        })
+        self.settings()
+            .map_err(|error| ConfigError::Invalid(audit_refusal(&error).cause))
+    }
+}
+
+/// How a refused audit destination is reported: the fixed cause, the member
+/// it concerns, and the fix.
+struct AuditRefusal {
+    cause: &'static str,
+    pointer: String,
+    at_key: bool,
+    action: String,
+}
+
+fn audit_refusal(error: &AuditDestinationError) -> AuditRefusal {
+    let refusal = |cause, pointer: &str, at_key, action: &str| AuditRefusal {
+        cause,
+        pointer: pointer.to_owned(),
+        at_key,
+        action: action.to_owned(),
+    };
+    match error {
+        AuditDestinationError::MissingPath => refusal(
+            "audit path is required when audit destination is file",
+            "/audit",
+            true,
+            "Add audit.path, the absolute path of the audit file, or write destination: stdout.",
+        ),
+        AuditDestinationError::RelativePath => refusal(
+            "audit path must be absolute",
+            "/audit/path",
+            false,
+            ABSOLUTE_PATH_ACTION,
+        ),
+        AuditDestinationError::FileOnlyField { field } => refusal(
+            "audit path, rotateBytes, and retainDays apply only when audit destination is file",
+            &format!("/audit/{field}"),
+            true,
+            "Remove the key, or write destination: file.",
+        ),
+        AuditDestinationError::RotateBytesOutOfRange { minimum, maximum } => AuditRefusal {
+            action: format!("Write a whole number of bytes from {minimum} to {maximum}."),
+            ..refusal(
+                "audit rotateBytes is outside the platform bounds",
+                "/audit/rotateBytes",
+                false,
+                "",
+            )
+        },
+        AuditDestinationError::RetainDaysOutOfRange { maximum } => AuditRefusal {
+            action: format!("Write a whole number of days from 1 to {maximum}."),
+            ..refusal(
+                "audit retainDays is outside the platform bounds",
+                "/audit/retainDays",
+                false,
+                "",
+            )
+        },
+        _ => refusal(
+            "audit destination is invalid",
+            "/audit/path",
+            false,
+            "Write the absolute path of the audit file, ending in a short file name.",
+        ),
     }
 }
 
@@ -1901,11 +2321,23 @@ pub struct OutboundTlsConfig {
 }
 
 impl OutboundTlsConfig {
-    fn validate(&self) -> Result<(), ConfigError> {
+    fn findings(&self, findings: &mut Vec<RuntimeFinding>) {
         if !self.system_roots {
-            return invalid("outbound TLS system roots must remain enabled");
+            findings.push(RuntimeFinding::at_value(
+                RUNTIME_OUTBOUND_TLS_CODE,
+                "/outboundTls/systemRoots",
+                ConfigError::Invalid("outbound TLS system roots must remain enabled"),
+                "Write true; a trust profile adds its CA bundle beside the system roots.",
+            ));
         }
-        validate_named_map(&self.trust_profiles, 0, 64, TrustProfileBinding::validate)
+        absolute_path_map_findings(
+            &self.trust_profiles,
+            "/outboundTls/trustProfiles",
+            RUNTIME_OUTBOUND_TLS_CODE,
+            "caBundleFile",
+            |binding| &binding.ca_bundle_file,
+            findings,
+        );
     }
 }
 
@@ -1913,12 +2345,6 @@ impl OutboundTlsConfig {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TrustProfileBinding {
     pub ca_bundle_file: String,
-}
-
-impl TrustProfileBinding {
-    fn validate(&self) -> Result<(), ConfigError> {
-        validate_absolute_path(&self.ca_bundle_file)
-    }
 }
 
 /// One logical extract name bound to the process-local file that holds it.
@@ -1932,12 +2358,6 @@ pub struct SourceExtractBinding {
     pub path: String,
 }
 
-impl SourceExtractBinding {
-    fn validate(&self) -> Result<(), ConfigError> {
-        validate_absolute_path(&self.path)
-    }
-}
-
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ListenerConfig {
@@ -1947,50 +2367,44 @@ pub struct ListenerConfig {
     pub network_exposure: ListenerNetworkExposure,
     pub tls_termination: TlsTermination,
     pub trust_proxy_identity_headers: bool,
-    pub maximum_request_bytes: u64,
-    pub maximum_concurrent_requests: u32,
-    pub request_timeout_milliseconds: u64,
-    pub shutdown_grace_milliseconds: u64,
+    pub maximum_request_bytes: BoundedU64<1_024, 1_048_576>,
+    pub maximum_concurrent_requests: BoundedU32<1, 4_096>,
+    pub request_timeout_milliseconds: BoundedU64<1, 30_000>,
+    pub shutdown_grace_milliseconds: BoundedU64<1, 120_000>,
 }
 
 impl ListenerConfig {
-    fn validate(&self) -> Result<(), ConfigError> {
-        match self.network_exposure {
-            ListenerNetworkExposure::PrivateAddress => {
-                validate_private_bind_host(self.bind.ip())?;
-            }
+    fn findings(&self, findings: &mut Vec<RuntimeFinding>) {
+        let host = match self.network_exposure {
+            ListenerNetworkExposure::PrivateAddress => validate_private_bind_host(self.bind.ip()),
             ListenerNetworkExposure::ContainerPrivate => {
-                validate_container_private_bind_host(self.bind.ip())?;
+                validate_container_private_bind_host(self.bind.ip())
             }
+        };
+        if let Err(error) = host {
+            findings.push(RuntimeFinding::at_value(
+                RUNTIME_LISTENER_CODE,
+                "/listener/bind",
+                error,
+                "Bind a loopback or private address, or declare networkExposure: container-private on a container network.",
+            ));
         }
-        validate_listener_port(self.bind.socket_addr().port())?;
+        if let Err(error) = validate_listener_port(self.bind.socket_addr().port()) {
+            findings.push(RuntimeFinding::at_value(
+                RUNTIME_LISTENER_CODE,
+                "/listener/bind",
+                error,
+                LISTENER_PORT_ACTION,
+            ));
+        }
         if self.trust_proxy_identity_headers {
-            return invalid("proxy identity headers must not be trusted");
+            findings.push(RuntimeFinding::at_value(
+                RUNTIME_LISTENER_CODE,
+                "/listener/trustProxyIdentityHeaders",
+                ConfigError::Invalid("proxy identity headers must not be trusted"),
+                "Write false; Evidence authenticates every request itself.",
+            ));
         }
-        validate_range(
-            self.maximum_request_bytes,
-            1_024,
-            1_048_576,
-            "maximumRequestBytes",
-        )?;
-        validate_range(
-            u64::from(self.maximum_concurrent_requests),
-            1,
-            4_096,
-            "maximumConcurrentRequests",
-        )?;
-        validate_range(
-            self.request_timeout_milliseconds,
-            1,
-            30_000,
-            "requestTimeoutMilliseconds",
-        )?;
-        validate_range(
-            self.shutdown_grace_milliseconds,
-            1,
-            120_000,
-            "shutdownGraceMilliseconds",
-        )
     }
 }
 
@@ -2021,9 +2435,33 @@ pub struct MetricsListenerConfig {
 }
 
 impl MetricsListenerConfig {
-    fn validate(&self, evidence_listener: &ListenerConfig) -> Result<(), ConfigError> {
-        validate_private_bind_host(self.bind.ip())?;
-        validate_listener_port(self.bind.socket_addr().port())?;
+    fn findings(&self, evidence_listener: &ListenerConfig, findings: &mut Vec<RuntimeFinding>) {
+        for (error, action) in [
+            (
+                validate_private_bind_host(self.bind.ip()),
+                "Bind the metrics listener to a loopback or private address.",
+            ),
+            (
+                validate_listener_port(self.bind.socket_addr().port()),
+                LISTENER_PORT_ACTION,
+            ),
+            (
+                self.validate_separate(evidence_listener),
+                "Bind the metrics listener to a port the evidence listener does not use.",
+            ),
+        ] {
+            if let Err(error) = error {
+                findings.push(RuntimeFinding::at_value(
+                    RUNTIME_METRICS_LISTENER_CODE,
+                    "/metricsListener/bind",
+                    error,
+                    action,
+                ));
+            }
+        }
+    }
+
+    fn validate_separate(&self, evidence_listener: &ListenerConfig) -> Result<(), ConfigError> {
         // Sharing the evidence binding would publish the counters on the
         // listener the public contract describes, which is the separation this
         // block exists to enforce.
@@ -2115,11 +2553,11 @@ impl AuthenticationConfig {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(remote = "Self", rename_all = "camelCase", deny_unknown_fields)]
 pub struct OidcAuthenticationConfig {
     /// The exact issuer, the one audience every token carries, and the JWKS
     /// source. Evidence reads keys only from an explicit `uri` source.
-    #[serde(flatten)]
+    #[serde(rename(deserialize = "registry-platform-yaml/shared-block/provider"))]
     pub provider: OidcIssuerConfig,
     pub token_types: Vec<AccessTokenType>,
     pub algorithms: Vec<AccessTokenAlgorithm>,
@@ -2133,9 +2571,9 @@ pub struct OidcAuthenticationConfig {
     pub claims: registry_platform_oidc::ClaimNames,
     /// Maximum lifetime accepted for inbound access tokens. The verifier
     /// requires `iat`, requires `exp > iat`, and applies this bound.
-    pub maximum_token_lifetime_seconds: u64,
+    pub maximum_token_lifetime_seconds: BoundedU64<1, 86_400>,
     /// Emergency denylist applied before JWKS cache selection.
-    pub revoked_key_ids: Vec<String>,
+    pub revoked_key_ids: UniqueList<String>,
     /// Explicit machine-client admission, matched against the token's
     /// `client_id`/`azp` the platform verifier already reads. Absent keeps
     /// the issuer-vouched-client behavior; present requires a nonempty,
@@ -2147,7 +2585,7 @@ pub struct OidcAuthenticationConfig {
     /// while still emitting the client's attributes. `required_scopes` closes
     /// that gap.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub allowed_clients: Option<Vec<String>>,
+    pub allowed_clients: Option<UniqueList<String>>,
     /// Per-client assertion-authority admission for a token that carries the
     /// platform verifier's `registry_assertion_issuer` claim, keyed by the
     /// client (matched against the token's `azp`, falling back to
@@ -2159,13 +2597,13 @@ pub struct OidcAuthenticationConfig {
     /// carries no such claim, an ordinary client-credentials token, is never
     /// affected by this admission.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub assertion_issuers: Option<BTreeMap<String, Vec<String>>>,
+    pub assertion_issuers: Option<BTreeMap<String, UniqueList<String>>>,
     /// Scopes every inbound token must carry, checked against the verified
     /// token's scope set after signature verification and before any authority
     /// claim is read. Absent keeps the no-scope-gate behavior; present
     /// requires a nonempty, bounded, unique list of RFC 6749 scope-tokens.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub required_scopes: Option<Vec<String>>,
+    pub required_scopes: Option<UniqueList<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub actor_claim: Option<String>,
     /// Logical name of the private certificate authority the runtime file
@@ -2174,6 +2612,8 @@ pub struct OidcAuthenticationConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tls_trust_profile: Option<String>,
 }
+
+shared_block_host!(OidcAuthenticationConfig, block = "provider");
 
 impl OidcAuthenticationConfig {
     /// The exact issuer accepted in `iss`.
@@ -2257,13 +2697,7 @@ impl OidcAuthenticationConfig {
         }
         validate_unique(&self.token_types, 1, 4, "authentication tokenTypes")?;
         validate_unique(&self.algorithms, 1, 3, "authentication algorithms")?;
-        validate_range(
-            self.maximum_token_lifetime_seconds,
-            1,
-            86_400,
-            "authentication maximumTokenLifetimeSeconds",
-        )?;
-        validate_unique_strings(
+        validate_strings(
             &self.revoked_key_ids,
             0,
             32,
@@ -2276,17 +2710,17 @@ impl OidcAuthenticationConfig {
         // scope requirement gates nothing, and both are almost certainly a
         // mis-authored key rather than a deliberate posture.
         if let Some(clients) = &self.allowed_clients {
-            validate_unique_strings(clients, 1, 32, 1, 128, "authentication allowedClients")?;
+            validate_strings(clients, 1, 32, 1, 128, "authentication allowedClients")?;
         }
         if let Some(assertion_issuers) = &self.assertion_issuers {
             let clients: Vec<String> = assertion_issuers.keys().cloned().collect();
-            validate_unique_strings(&clients, 1, 32, 1, 128, "authentication assertionIssuers")?;
+            validate_strings(&clients, 1, 32, 1, 128, "authentication assertionIssuers")?;
             for issuers in assertion_issuers.values() {
-                validate_unique_strings(issuers, 1, 8, 1, 512, "authentication assertionIssuers")?;
+                validate_strings(issuers, 1, 8, 1, 512, "authentication assertionIssuers")?;
             }
         }
         if let Some(scopes) = &self.required_scopes {
-            validate_unique_strings(scopes, 1, 32, 1, 256, "authentication requiredScopes")?;
+            validate_strings(scopes, 1, 32, 1, 256, "authentication requiredScopes")?;
             if scopes
                 .iter()
                 .any(|scope| !registry_platform_httputil::valid_scope_token(scope))
@@ -2432,65 +2866,35 @@ pub enum AccessTokenAlgorithm {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(remote = "Self", rename_all = "camelCase", deny_unknown_fields)]
 pub struct AuditConfig {
     /// The secret keying audit pseudonyms.
-    #[serde(flatten)]
+    #[serde(rename(deserialize = "registry-platform-yaml/shared-block/key"))]
     pub key: AuditKeyConfig,
     /// Labels the pseudonym key generation, so a rotated key is told apart
     /// from the one it replaced.
-    pub hash_key_version: u32,
+    pub hash_key_version: BoundedU32<1, MAXIMUM_BUNDLE_KEY_VERSION>,
 }
 
-impl AuditConfig {
-    fn validate(&self) -> Result<(), ConfigError> {
-        if self.hash_key_version == 0 {
-            return invalid("audit hash key must be versioned");
-        }
-        Ok(())
-    }
-}
+shared_block_host!(AuditConfig, block = "key");
+
+/// The bundle contract's ceiling for the audit and subject-binding key
+/// versions.
+const MAXIMUM_BUNDLE_KEY_VERSION: u32 = 2_147_483_647;
 
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SubjectBindingConfig {
     pub secret_ref: SecretReference,
-    pub key_version: u32,
-}
-
-impl SubjectBindingConfig {
-    fn validate(&self) -> Result<(), ConfigError> {
-        if self.key_version == 0 {
-            return invalid("subject binding keyVersion must be positive");
-        }
-        Ok(())
-    }
+    pub key_version: BoundedU32<1, MAXIMUM_BUNDLE_KEY_VERSION>,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RateLimitConfig {
-    pub requests_per_principal_per_minute: u64,
-    pub burst_per_principal: u64,
-    pub failed_selector_attempts_per_principal_authority_per_minute: u64,
-}
-
-impl RateLimitConfig {
-    fn validate(&self) -> Result<(), ConfigError> {
-        validate_range(
-            self.requests_per_principal_per_minute,
-            1,
-            1_000_000,
-            "request rate limit",
-        )?;
-        validate_range(self.burst_per_principal, 1, 100_000, "burst rate limit")?;
-        validate_range(
-            self.failed_selector_attempts_per_principal_authority_per_minute,
-            1,
-            100_000,
-            "failed-selector rate limit",
-        )
-    }
+    pub requests_per_principal_per_minute: BoundedU32<1, 1_000_000>,
+    pub burst_per_principal: BoundedU32<1, 100_000>,
+    pub failed_selector_attempts_per_principal_authority_per_minute: BoundedU32<1, 100_000>,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
@@ -2500,10 +2904,10 @@ pub struct SigningConfig {
     pub algorithm: SigningAlgorithm,
     pub active_public_jwk_file: PublicJwkPath,
     pub published_public_jwk_files: Vec<PublicJwkPath>,
-    pub revoked_key_ids: Vec<String>,
+    pub revoked_key_ids: UniqueList<String>,
     pub jwks_path: String,
-    pub maximum_assertion_validity_seconds: u64,
-    pub verifier_clock_skew_seconds: u64,
+    pub maximum_assertion_validity_seconds: BoundedU64<1, 31_536_000>,
+    pub verifier_clock_skew_seconds: BoundedU64<0, 300>,
 }
 
 impl SigningConfig {
@@ -2525,21 +2929,7 @@ impl SigningConfig {
         if self.jwks_path != "/.well-known/evidence/jwks.json" {
             return invalid("JWKS path is not the Version 1 discovery path");
         }
-        validate_range(
-            self.maximum_assertion_validity_seconds,
-            1,
-            31_536_000,
-            "maximum assertion validity",
-        )?;
-        // The same bound the relying party's `clockSkewSeconds` carries: an
-        // advertised skew a conformant verification policy cannot express would
-        // be unusable advice. Widening either one alone is a contract change.
-        validate_range(
-            self.verifier_clock_skew_seconds,
-            0,
-            300,
-            "verifier clock skew",
-        )
+        Ok(())
     }
 }
 
@@ -2559,7 +2949,7 @@ fn validate_key_identifiers(
     maximum: usize,
     label: &'static str,
 ) -> Result<(), ConfigError> {
-    validate_unique_strings(identifiers, 0, maximum, 43, 43, label)?;
+    validate_strings(identifiers, 0, maximum, 43, 43, label)?;
     if identifiers.iter().any(|identifier| {
         let alphabet_is_valid = identifier
             .bytes()
@@ -2601,7 +2991,11 @@ impl<'de> Deserialize<'de> for PublicJwkPath {
         if is_public_jwk_path(&value) {
             Ok(Self(value))
         } else {
-            Err(de::Error::custom("invalid public JWK path"))
+            Err(Invalid::expected(
+                "a path public-keys/<name>.jwk.json, where the name uses ASCII letters, digits, dots, underscores, or hyphens",
+                "Name a public key file under public-keys/ ending in .jwk.json.",
+            )
+            .into_error())
         }
     }
 }
@@ -2631,52 +3025,49 @@ fn is_public_jwk_path(value: &str) -> bool {
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SelectorProfile {
-    pub maximum_aggregate_bytes: u64,
+    pub maximum_aggregate_bytes: BoundedU64<1, 8_192>,
     pub fields: OrderedMap<SelectorField>,
 }
 
 impl SelectorProfile {
     fn validate(&self) -> Result<(), ConfigError> {
-        validate_range(
-            self.maximum_aggregate_bytes,
-            1,
-            8_192,
-            "selector maximumAggregateBytes",
-        )?;
         validate_len(self.fields.len(), 1, 16, "selector fields")?;
         for (name, field) in self.fields.iter() {
             if !valid_field_name(name) {
                 return invalid("selector field name is invalid");
             }
-            field.validate(self.maximum_aggregate_bytes)?;
+            field.validate(self.maximum_aggregate_bytes.get())?;
         }
         Ok(())
     }
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(tag = "type", rename_all = "kebab-case", deny_unknown_fields)]
+#[serde(remote = "Self", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum SelectorField {
     String {
         #[serde(rename = "minimumBytes")]
-        minimum_bytes: u64,
+        minimum_bytes: BoundedU64<1, 8_192>,
         #[serde(rename = "maximumBytes")]
-        maximum_bytes: u64,
+        maximum_bytes: BoundedU64<1, 8_192>,
     },
-    Date,
+    Date {},
     Integer {
         minimum: i64,
         maximum: i64,
     },
-    Boolean,
+    Boolean {},
     ControlledCode {
         codelist: ArtifactPath,
         #[serde(rename = "codelistVersion")]
         codelist_version: String,
         #[serde(rename = "maximumBytes")]
-        maximum_bytes: u64,
+        maximum_bytes: BoundedU64<1, 8_192>,
     },
 }
+
+registry_platform_yaml::tagged_union!(SelectorField, tag = "type");
+serialize_tagged_union!(SelectorField, tag = "type");
 
 impl SelectorField {
     fn validate(&self, aggregate_maximum: u64) -> Result<(), ConfigError> {
@@ -2685,9 +3076,7 @@ impl SelectorField {
                 minimum_bytes,
                 maximum_bytes,
             } => {
-                validate_range(*minimum_bytes, 1, 8_192, "selector string minimumBytes")?;
-                validate_range(*maximum_bytes, 1, 8_192, "selector string maximumBytes")?;
-                if minimum_bytes > maximum_bytes || maximum_bytes > &aggregate_maximum {
+                if minimum_bytes > maximum_bytes || maximum_bytes.get() > aggregate_maximum {
                     return invalid("selector string byte bounds are inconsistent");
                 }
             }
@@ -2704,12 +3093,11 @@ impl SelectorField {
             } => {
                 require_artifact_prefix(codelist, "codelists/")?;
                 validate_string(codelist_version, 1, 128, "selector codelist version")?;
-                validate_range(*maximum_bytes, 1, 8_192, "selector code maximumBytes")?;
-                if maximum_bytes > &aggregate_maximum {
+                if maximum_bytes.get() > aggregate_maximum {
                     return invalid("selector code exceeds aggregate byte bound");
                 }
             }
-            Self::Date | Self::Boolean => {}
+            Self::Date {} | Self::Boolean {} => {}
         }
         Ok(())
     }
@@ -2746,7 +3134,13 @@ impl<'de> Deserialize<'de> for ArtifactPath {
         D: Deserializer<'de>,
     {
         let value = String::deserialize(deserializer)?;
-        Self::parse(&value).map_err(de::Error::custom)
+        Self::parse(&value).map_err(|_| {
+            Invalid::expected(
+                "a relative path under adapters/, derivations/, schemas/, codelists/, fixtures/, or queries/, using ASCII letters, digits, dots, underscores, hyphens, and slashes, without . or .. segments",
+                "Name a package file by its relative path under one of the package directories.",
+            )
+            .into_error()
+        })
     }
 }
 
@@ -2785,23 +3179,23 @@ fn valid_artifact_path(value: &str) -> bool {
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SourceConnectionConfig {
-    pub base_url: String,
+    pub base_url: registry_platform_yaml::Url,
     pub authentication: Box<SourceAuthentication>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tls_trust_profile: Option<String>,
     #[serde(default = "default_connection_concurrency")]
-    pub concurrency_limit: u16,
+    pub concurrency_limit: BoundedU32<1, 256>,
     #[serde(default = "default_connection_timeout")]
-    pub admission_timeout_milliseconds: u64,
+    pub admission_timeout_milliseconds: BoundedU64<1, 30_000>,
     #[serde(default = "default_connection_timeout")]
-    pub token_timeout_milliseconds: u64,
+    pub token_timeout_milliseconds: BoundedU64<1, 30_000>,
 }
 
-fn default_connection_concurrency() -> u16 {
-    4
+fn default_connection_concurrency() -> BoundedU32<1, 256> {
+    BoundedU32::new(4).expect("the default connection concurrency is in range")
 }
-fn default_connection_timeout() -> u64 {
-    5_000
+fn default_connection_timeout() -> BoundedU64<1, 30_000> {
+    BoundedU64::new(5_000).expect("the default connection timeout is in range")
 }
 
 impl SourceConnectionConfig {
@@ -2826,24 +3220,7 @@ impl SourceConnectionConfig {
                 );
             }
         }
-        validate_range(
-            u64::from(self.concurrency_limit),
-            1,
-            256,
-            "connection concurrency",
-        )?;
-        validate_range(
-            self.admission_timeout_milliseconds,
-            1,
-            30_000,
-            "connection admission timeout",
-        )?;
-        validate_range(
-            self.token_timeout_milliseconds,
-            1,
-            30_000,
-            "connection token timeout",
-        )
+        Ok(())
     }
 
     pub(crate) fn matches_source(&self, source: &SourceConfig) -> bool {
@@ -2871,12 +3248,12 @@ impl SourceConnectionConfig {
 /// material sits behind a pointer, so one transport's request does not set the
 /// size of every source.
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(tag = "transport", rename_all = "kebab-case", deny_unknown_fields)]
+#[serde(remote = "Self", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum SourceConfig {
     /// One fixed HTTP request against a JSON API.
     #[serde(rename_all = "camelCase")]
     HttpJson {
-        base_url: String,
+        base_url: registry_platform_yaml::Url,
         /// Optional explicit resource owner. The resolved values stay fixed in
         /// this bundle and must equal the named connection's governed values.
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2927,7 +3304,7 @@ pub enum SourceConfig {
         request: Box<SqliteRequest>,
         /// Oldest extract this source accepts, so a stale file is refused
         /// rather than answered from.
-        maximum_extract_age_seconds: u64,
+        maximum_extract_age_seconds: BoundedU64<1, 2_592_000>,
         /// Shape contract for the projected result, validated by Rust before
         /// extraction runs, so the script maps a result it can rely on.
         response_schema: ArtifactPath,
@@ -2935,6 +3312,9 @@ pub enum SourceConfig {
         fact_schema: ArtifactPath,
     },
 }
+
+registry_platform_yaml::tagged_union!(SourceConfig, tag = "transport");
+serialize_tagged_union!(SourceConfig, tag = "transport");
 
 impl SourceConfig {
     fn validate(&self, assurance_profile: AssuranceProfile) -> Result<(), ConfigError> {
@@ -3020,19 +3400,12 @@ impl SourceConfig {
             Self::SqliteExtract {
                 extract_profile,
                 request,
-                maximum_extract_age_seconds,
                 ..
             } => {
                 if !valid_local_id(extract_profile) {
                     return invalid("source extract profile identifier is invalid");
                 }
                 request.validate()?;
-                validate_range(
-                    *maximum_extract_age_seconds,
-                    1,
-                    2_592_000,
-                    "source extract age",
-                )?;
             }
         }
         let extract_script = self.extract_script();
@@ -3280,22 +3653,22 @@ impl SourceConfig {
 
     pub fn timeout_milliseconds(&self) -> u64 {
         match self {
-            Self::HttpJson { request, .. } => request.timeout_milliseconds,
-            Self::SqliteExtract { request, .. } => request.timeout_milliseconds,
+            Self::HttpJson { request, .. } => request.timeout_milliseconds.get(),
+            Self::SqliteExtract { request, .. } => request.timeout_milliseconds.get(),
         }
     }
 
     pub fn maximum_response_bytes(&self) -> u64 {
         match self {
-            Self::HttpJson { request, .. } => request.maximum_response_bytes,
-            Self::SqliteExtract { request, .. } => request.maximum_response_bytes,
+            Self::HttpJson { request, .. } => request.maximum_response_bytes.get(),
+            Self::SqliteExtract { request, .. } => request.maximum_response_bytes.get(),
         }
     }
 
-    pub fn concurrency_limit(&self) -> u16 {
+    pub fn concurrency_limit(&self) -> u32 {
         match self {
-            Self::HttpJson { request, .. } => request.concurrency_limit,
-            Self::SqliteExtract { request, .. } => request.concurrency_limit,
+            Self::HttpJson { request, .. } => request.concurrency_limit.get(),
+            Self::SqliteExtract { request, .. } => request.concurrency_limit.get(),
         }
     }
 }
@@ -3305,7 +3678,7 @@ impl SourceConfig {
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DeclaredUnresolvedProblem {
-    pub status: u16,
+    pub status: BoundedU32<404, 404>,
     #[serde(rename = "type")]
     pub type_uri: String,
     pub code: String,
@@ -3313,9 +3686,6 @@ pub struct DeclaredUnresolvedProblem {
 
 impl DeclaredUnresolvedProblem {
     fn validate(&self) -> Result<(), ConfigError> {
-        if self.status != 404 {
-            return invalid("declared unresolved problem status must be 404");
-        }
         if self.type_uri.chars().count() > 512 {
             return invalid("declared unresolved problem type is too long");
         }
@@ -3373,7 +3743,7 @@ impl AcquisitionPosture {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
+#[serde(remote = "Self", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum SourceAuthentication {
     /// No outbound credential is sent.
     ///
@@ -3468,7 +3838,7 @@ pub enum SourceAuthentication {
         )]
         credential_placement: Option<CredentialPlacement>,
         #[serde(rename = "maximumCacheSeconds")]
-        maximum_cache_seconds: u64,
+        maximum_cache_seconds: BoundedU64<0, 86_400>,
         /// Lifetime assumed when the provider omits `expires_in`.
         ///
         /// RFC 6749 section 5.1 makes `expires_in` recommended rather than
@@ -3481,9 +3851,12 @@ pub enum SourceAuthentication {
             default,
             skip_serializing_if = "Option::is_none"
         )]
-        assumed_lifetime_seconds: Option<u64>,
+        assumed_lifetime_seconds: Option<BoundedU64<1, 86_400>>,
     },
 }
+
+registry_platform_yaml::tagged_union!(SourceAuthentication, tag = "kind");
+serialize_tagged_union!(SourceAuthentication, tag = "kind");
 
 impl SourceAuthentication {
     fn validate(&self) -> Result<(), ConfigError> {
@@ -3515,8 +3888,6 @@ impl SourceAuthentication {
                 audience,
                 resource,
                 credential_placement,
-                maximum_cache_seconds,
-                assumed_lifetime_seconds,
                 ..
             } => {
                 let token_endpoint = validate_source_url(token_endpoint, false)?;
@@ -3570,20 +3941,7 @@ impl SourceAuthentication {
                 if let Some(resource) = resource {
                     validate_oauth_resource(resource)?;
                 }
-                if let Some(assumed_lifetime_seconds) = assumed_lifetime_seconds {
-                    validate_range(
-                        *assumed_lifetime_seconds,
-                        1,
-                        86_400,
-                        "OAuth assumed token lifetime",
-                    )?;
-                }
-                validate_range(
-                    *maximum_cache_seconds,
-                    0,
-                    86_400,
-                    "OAuth maximum cache lifetime",
-                )
+                Ok(())
             }
         }
     }
@@ -3657,11 +4015,11 @@ pub struct FixedRequest {
     pub adapter_parameters: OrderedMap<AdapterParameterValue>,
     pub adapter_parameters_schema: ArtifactPath,
     pub preparation_limits: PreparationLimits,
-    pub projection: Vec<String>,
+    pub projection: UniqueList<String>,
     pub redirects: RedirectPolicy,
-    pub timeout_milliseconds: u64,
-    pub maximum_response_bytes: u64,
-    pub concurrency_limit: u16,
+    pub timeout_milliseconds: BoundedU64<1, 30_000>,
+    pub maximum_response_bytes: BoundedU64<1, 1_048_576>,
+    pub concurrency_limit: BoundedU32<1, 256>,
 }
 
 /// Reviewed scripts and response contract for one physical HTTP call serving
@@ -3669,21 +4027,15 @@ pub struct FixedRequest {
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HttpBatchConfig {
-    pub maximum_items: u16,
+    pub maximum_items: BoundedU32<1, { MAXIMUM_SOURCE_BATCH_ITEMS as u32 }>,
     pub prepare_script: ArtifactPath,
     pub extract_script: ArtifactPath,
     pub response_schema: ArtifactPath,
-    pub projection: Vec<String>,
+    pub projection: UniqueList<String>,
 }
 
 impl HttpBatchConfig {
     fn validate(&self) -> Result<(), ConfigError> {
-        validate_range(
-            u64::from(self.maximum_items),
-            1,
-            u64::from(MAXIMUM_SOURCE_BATCH_ITEMS),
-            "source batch items",
-        )?;
         for script in [&self.prepare_script, &self.extract_script] {
             require_artifact_prefix(script, "adapters/")?;
             if !script.as_str().ends_with(".rhai") {
@@ -3738,19 +4090,6 @@ impl FixedRequest {
             return invalid("GET source requests must forbid the JSON body channel");
         }
         validate_projection(&self.projection)?;
-        validate_range(self.timeout_milliseconds, 1, 30_000, "source timeout")?;
-        validate_range(
-            self.maximum_response_bytes,
-            1,
-            1_048_576,
-            "source response size",
-        )?;
-        validate_range(
-            u64::from(self.concurrency_limit),
-            1,
-            256,
-            "source concurrency",
-        )?;
 
         Ok(())
     }
@@ -3802,13 +4141,13 @@ pub struct SqliteRequest {
     /// a preparation script to bound.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preparation_limits: Option<SqlitePreparationLimits>,
-    pub maximum_rows: u64,
-    pub maximum_cell_bytes: u64,
-    pub maximum_statement_steps: u64,
-    pub projection: Vec<String>,
-    pub timeout_milliseconds: u64,
-    pub maximum_response_bytes: u64,
-    pub concurrency_limit: u16,
+    pub maximum_rows: BoundedU64<1, 256>,
+    pub maximum_cell_bytes: BoundedU64<1, 65_536>,
+    pub maximum_statement_steps: BoundedU64<1, 1_000_000>,
+    pub projection: UniqueList<String>,
+    pub timeout_milliseconds: BoundedU64<1, 30_000>,
+    pub maximum_response_bytes: BoundedU64<1, 1_048_576>,
+    pub concurrency_limit: BoundedU32<1, 256>,
 }
 
 impl SqliteRequest {
@@ -3890,11 +4229,10 @@ impl SqliteRequest {
         // together or not at all.
         match (&self.prepare_script, &self.preparation_limits) {
             (Some(_), Some(limits)) => {
-                limits.validate()?;
                 // A script allowed to return fewer parameters than the source
                 // declares prepared can never fill them all, so the bound is
                 // read against the work it has to admit.
-                if limits.maximum_parameters < prepared_parameters {
+                if limits.maximum_parameters.get() < prepared_parameters {
                     return invalid(
                         "statement preparation limits must admit every prepared parameter",
                     );
@@ -3912,27 +4250,6 @@ impl SqliteRequest {
         if !statement_projection_preserves_columns(&self.projection, &self.columns) {
             return invalid("statement projection must preserve every declared result column");
         }
-        validate_range(self.maximum_rows, 1, 256, "statement rows")?;
-        validate_range(self.maximum_cell_bytes, 1, 65_536, "statement cell size")?;
-        validate_range(
-            self.maximum_statement_steps,
-            1,
-            1_000_000,
-            "statement steps",
-        )?;
-        validate_range(self.timeout_milliseconds, 1, 30_000, "source timeout")?;
-        validate_range(
-            self.maximum_response_bytes,
-            1,
-            1_048_576,
-            "source response size",
-        )?;
-        validate_range(
-            u64::from(self.concurrency_limit),
-            1,
-            256,
-            "source concurrency",
-        )?;
 
         Ok(())
     }
@@ -3961,7 +4278,7 @@ pub enum SqliteColumnType {
 /// A parameter has one origin and exactly one, so reading the declared bindings
 /// is enough to know where every value the statement binds came from.
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
+#[serde(remote = "Self", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum SqliteParameterBinding {
     Selector {
         role: String,
@@ -3978,6 +4295,9 @@ pub enum SqliteParameterBinding {
     /// silently accept `{kind: prepared, role: subject}`.
     Prepared {},
 }
+
+registry_platform_yaml::tagged_union!(SqliteParameterBinding, tag = "kind");
+serialize_tagged_union!(SqliteParameterBinding, tag = "kind");
 
 impl SqliteParameterBinding {
     fn validate(&self) -> Result<(), ConfigError> {
@@ -4017,21 +4337,9 @@ impl SqliteParameterBinding {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SqlitePreparationLimits {
     /// Entries the returned `parameters` map may carry.
-    pub maximum_parameters: u64,
+    pub maximum_parameters: BoundedU64<1, 64>,
     /// Bytes one returned parameter value may carry.
-    pub maximum_parameter_value_bytes: u64,
-}
-
-impl SqlitePreparationLimits {
-    fn validate(&self) -> Result<(), ConfigError> {
-        validate_range(self.maximum_parameters, 1, 64, "prepared parameters")?;
-        validate_range(
-            self.maximum_parameter_value_bytes,
-            1,
-            4_096,
-            "prepared parameter value size",
-        )
-    }
+    pub maximum_parameter_value_bytes: BoundedU64<1, 4_096>,
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Deserialize, Serialize)]
@@ -4064,11 +4372,11 @@ pub struct SelectorInput {
 #[serde(deny_unknown_fields)]
 pub struct SelectorInputAlternative {
     pub profile: String,
-    pub fields: Vec<String>,
+    pub fields: UniqueList<String>,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(tag = "from", rename_all = "kebab-case", deny_unknown_fields)]
+#[serde(remote = "Self", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum PathBindingConfig {
     Selector {
         role: String,
@@ -4079,6 +4387,9 @@ pub enum PathBindingConfig {
         field: String,
     },
 }
+
+registry_platform_yaml::tagged_union!(PathBindingConfig, tag = "from");
+serialize_tagged_union!(PathBindingConfig, tag = "from");
 
 impl PathBindingConfig {
     fn validate(&self) -> Result<(), ConfigError> {
@@ -4106,14 +4417,86 @@ impl PathBindingConfig {
     }
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(untagged)]
+/// One adapter parameter value: a scalar, a list of values, or a mapping of
+/// values, chosen by the node's kind (CFG-SCHEMA-8).
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub enum AdapterParameterValue {
-    Boolean(bool),
-    Integer(i64),
-    String(String),
+    Scalar(ScalarParameter),
     Array(Vec<AdapterParameterValue>),
     Object(OrderedMap<AdapterParameterValue>),
+}
+
+registry_platform_yaml::shape_union!(AdapterParameterValue {
+    scalar => Scalar,
+    list => Array,
+    mapping => Object,
+});
+
+impl Serialize for AdapterParameterValue {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Scalar(value) => value.serialize(serializer),
+            Self::Array(values) => values.serialize(serializer),
+            Self::Object(values) => values.serialize(serializer),
+        }
+    }
+}
+
+/// One scalar parameter value: text, an integer, or a boolean, as the
+/// scalar resolves. Any other scalar is refused.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum ScalarParameter {
+    String(String),
+    Integer(i64),
+    Boolean(bool),
+}
+
+impl<'de> Deserialize<'de> for ScalarParameter {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct ScalarVisitor;
+
+        impl Visitor<'_> for ScalarVisitor {
+            type Value = ScalarParameter;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("text, an integer, or a boolean")
+            }
+
+            fn visit_bool<E: de::Error>(self, value: bool) -> Result<Self::Value, E> {
+                Ok(ScalarParameter::Boolean(value))
+            }
+
+            fn visit_i64<E: de::Error>(self, value: i64) -> Result<Self::Value, E> {
+                Ok(ScalarParameter::Integer(value))
+            }
+
+            fn visit_u64<E: de::Error>(self, value: u64) -> Result<Self::Value, E> {
+                i64::try_from(value)
+                    .map(ScalarParameter::Integer)
+                    .map_err(|_| E::custom(Invalid::out_of_range(i64::MIN, i64::MAX)))
+            }
+
+            fn visit_str<E: de::Error>(self, value: &str) -> Result<Self::Value, E> {
+                Ok(ScalarParameter::String(value.to_owned()))
+            }
+
+            fn visit_string<E: de::Error>(self, value: String) -> Result<Self::Value, E> {
+                Ok(ScalarParameter::String(value))
+            }
+        }
+
+        deserializer.deserialize_any(ScalarVisitor)
+    }
+}
+
+impl Serialize for ScalarParameter {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::String(value) => serializer.serialize_str(value),
+            Self::Integer(value) => serializer.serialize_i64(*value),
+            Self::Boolean(value) => serializer.serialize_bool(*value),
+        }
+    }
 }
 
 impl AdapterParameterValue {
@@ -4122,8 +4505,10 @@ impl AdapterParameterValue {
             return invalid("adapter parameter nesting exceeds Version 1 bounds");
         }
         match self {
-            Self::Boolean(_) | Self::Integer(_) => Ok(()),
-            Self::String(value) => validate_string(value, 0, 16_384, "adapter parameter string"),
+            Self::Scalar(ScalarParameter::Boolean(_) | ScalarParameter::Integer(_)) => Ok(()),
+            Self::Scalar(ScalarParameter::String(value)) => {
+                validate_string(value, 0, 16_384, "adapter parameter string")
+            }
             Self::Array(values) => {
                 validate_len(values.len(), 0, 256, "adapter parameter array")?;
                 for value in values {
@@ -4151,19 +4536,19 @@ pub struct PreparationLimits {
     pub query: PreparationChannelPolicy,
     pub json_body: PreparationChannelPolicy,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub maximum_query_pairs: Option<u64>,
+    pub maximum_query_pairs: Option<BoundedU64<1, 64>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub maximum_query_name_bytes: Option<u64>,
+    pub maximum_query_name_bytes: Option<BoundedU64<1, 64>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub maximum_query_value_bytes: Option<u64>,
+    pub maximum_query_value_bytes: Option<BoundedU64<1, 4_096>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub maximum_json_depth: Option<u64>,
+    pub maximum_json_depth: Option<BoundedU64<1, 32>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub maximum_collection_items: Option<u64>,
+    pub maximum_collection_items: Option<BoundedU64<1, 256>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub maximum_string_bytes: Option<u64>,
+    pub maximum_string_bytes: Option<BoundedU64<1, 16_384>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub maximum_normalized_bytes: Option<u64>,
+    pub maximum_normalized_bytes: Option<BoundedU64<1, 65_536>>,
 }
 
 impl PreparationLimits {
@@ -4173,13 +4558,7 @@ impl PreparationLimits {
         {
             return invalid("at least one preparation output channel must be usable");
         }
-        validate_optional_range(self.maximum_query_pairs, 1, 64)?;
-        validate_optional_range(self.maximum_query_name_bytes, 1, 64)?;
-        validate_optional_range(self.maximum_query_value_bytes, 1, 4_096)?;
-        validate_optional_range(self.maximum_json_depth, 1, 32)?;
-        validate_optional_range(self.maximum_collection_items, 1, 256)?;
-        validate_optional_range(self.maximum_string_bytes, 1, 16_384)?;
-        validate_optional_range(self.maximum_normalized_bytes, 1, 65_536)
+        Ok(())
     }
 }
 
@@ -4199,12 +4578,12 @@ pub struct AuthorityProfile {
     /// exercising standing authority without an authenticated task grant.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub actor_kind: Option<registry_platform_oidc::ActorKind>,
-    pub requester_tags: Vec<String>,
+    pub requester_tags: UniqueList<String>,
     /// Verified OAuth clients allowed to exercise a grant-bound authority
     /// path. Required only when one of this profile's subjects is sourced from
     /// an authenticated task grant.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub requester_clients: Vec<String>,
+    #[serde(default, skip_serializing_if = "<[String]>::is_empty")]
+    pub requester_clients: UniqueList<String>,
     /// Trusted issuer that supplied the immutable grant context before token
     /// exchange. The resource server compares it exactly with the signed grant.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -4223,11 +4602,11 @@ impl AuthorityProfile {
     }
 
     fn validate(&self) -> Result<(), ConfigError> {
-        validate_unique_strings(&self.requester_tags, 1, 32, 1, 128, "requester tags")?;
+        validate_strings(&self.requester_tags, 1, 32, 1, 128, "requester tags")?;
         if self.requester_tags.iter().any(|tag| !valid_local_id(tag)) {
             return invalid("requester tag is invalid");
         }
-        validate_unique_strings(
+        validate_strings(
             &self.requester_clients,
             0,
             32,
@@ -4491,7 +4870,7 @@ const MAXIMUM_ACQUISITION_MILLISECONDS: u64 = 30_000;
 /// fixed at read time without introducing a general workflow or
 /// source-planning model.
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
+#[serde(remote = "Self", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum AcquisitionConfig {
     Single {
         source: String,
@@ -4504,9 +4883,12 @@ pub enum AcquisitionConfig {
         search: String,
         fetch: Vec<FetchSetMember>,
         #[serde(rename = "maximumAcquisitionMilliseconds")]
-        maximum_acquisition_milliseconds: u64,
+        maximum_acquisition_milliseconds: BoundedU64<1, MAXIMUM_ACQUISITION_MILLISECONDS>,
     },
 }
+
+registry_platform_yaml::tagged_union!(AcquisitionConfig, tag = "kind");
+serialize_tagged_union!(AcquisitionConfig, tag = "kind");
 
 impl AcquisitionConfig {
     fn validate(&self) -> Result<(), ConfigError> {
@@ -4521,11 +4903,7 @@ impl AcquisitionConfig {
                     return invalid("search-then-fetch source identifiers are invalid");
                 }
             }
-            Self::SearchThenFetchSet {
-                search,
-                fetch,
-                maximum_acquisition_milliseconds,
-            } => {
+            Self::SearchThenFetchSet { search, fetch, .. } => {
                 if fetch.len() < MINIMUM_FETCH_SET_MEMBERS {
                     return invalid("requirement acquisition declares too few fetch members");
                 }
@@ -4548,11 +4926,6 @@ impl AcquisitionConfig {
                         );
                     }
                     member.validate()?;
-                }
-                if !(1..=MAXIMUM_ACQUISITION_MILLISECONDS)
-                    .contains(maximum_acquisition_milliseconds)
-                {
-                    return invalid("requirement acquisition budget is outside Version 1 bounds");
                 }
             }
         }
@@ -4633,7 +5006,7 @@ impl AcquisitionConfig {
                         )
                     }))
                     .collect(),
-                budget_milliseconds: Some(*maximum_acquisition_milliseconds),
+                budget_milliseconds: Some(maximum_acquisition_milliseconds.get()),
             },
         }
     }
@@ -4759,13 +5132,13 @@ pub struct RequirementConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subject_binding: Option<SubjectBindingMode>,
     pub acquisition: AcquisitionConfig,
-    pub purposes: Vec<String>,
+    pub purposes: UniqueList<String>,
     pub subject_roles: Vec<SubjectRole>,
-    pub reference_frameworks: Vec<String>,
+    pub reference_frameworks: UniqueList<String>,
     pub evidence_type: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub observation_timezone: Option<String>,
-    pub validity_seconds: u64,
+    pub validity_seconds: BoundedU64<1, 31_536_000>,
     pub derivation: DerivationConfig,
     pub concepts: Vec<ConceptConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -4792,7 +5165,7 @@ impl RequirementConfig {
         }
         validate_uri(&self.id)?;
         self.acquisition.validate()?;
-        validate_unique_strings(&self.purposes, 1, 32, 1, 128, "requirement purposes")?;
+        validate_strings(&self.purposes, 1, 32, 1, 128, "requirement purposes")?;
         for purpose in &self.purposes {
             validate_purpose(purpose)?;
         }
@@ -4804,7 +5177,7 @@ impl RequirementConfig {
                 return invalid("requirement subject roles must be unique");
             }
         }
-        validate_unique_strings(
+        validate_strings(
             &self.reference_frameworks,
             1,
             16,
@@ -4822,7 +5195,6 @@ impl RequirementConfig {
                 ConfigError::Invalid("observation timezone is not an IANA timezone")
             })?;
         }
-        validate_range(self.validity_seconds, 1, 31_536_000, "requirement validity")?;
         self.derivation.validate()?;
         validate_len(self.concepts.len(), 1, 16, "requirement concepts")?;
         let mut concepts = BTreeSet::new();
@@ -4862,7 +5234,7 @@ pub enum RequirementKind {
 pub struct SubjectRole {
     pub role: String,
     pub cardinality: SubjectCardinality,
-    pub selector_profiles: Vec<String>,
+    pub selector_profiles: UniqueList<String>,
 }
 
 impl SubjectRole {
@@ -4870,7 +5242,7 @@ impl SubjectRole {
         if self.role.len() > 64 || !valid_local_id(&self.role) {
             return invalid("subject role identifier is invalid");
         }
-        validate_unique_strings(
+        validate_strings(
             &self.selector_profiles,
             1,
             16,
@@ -4922,28 +5294,45 @@ impl DerivationConfig {
     }
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(untagged)]
+/// One derivation parameter value: a scalar, a decimal mapping, or a list of
+/// bucket boundaries, chosen by the node's kind (CFG-SCHEMA-8).
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub enum ParameterValue {
-    String(String),
-    Integer(i64),
-    Boolean(bool),
+    Scalar(ScalarParameter),
     Decimal(DecimalValue),
     BucketBoundaries(Vec<BucketBoundary>),
+}
+
+registry_platform_yaml::shape_union!(ParameterValue {
+    scalar => Scalar,
+    mapping => Decimal,
+    list => BucketBoundaries,
+});
+
+impl Serialize for ParameterValue {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Scalar(value) => value.serialize(serializer),
+            Self::Decimal(value) => value.serialize(serializer),
+            Self::BucketBoundaries(boundaries) => boundaries.serialize(serializer),
+        }
+    }
 }
 
 impl ParameterValue {
     fn validate(&self) -> Result<(), ConfigError> {
         match self {
-            Self::String(value) => validate_string(value, 0, 1_024, "derivation string parameter"),
-            Self::Integer(value) => {
+            Self::Scalar(ScalarParameter::String(value)) => {
+                validate_string(value, 0, 1_024, "derivation string parameter")
+            }
+            Self::Scalar(ScalarParameter::Integer(value)) => {
                 if value.unsigned_abs() > MAX_SAFE_INTEGER as u64 {
                     invalid("derivation integer parameter exceeds safe bounds")
                 } else {
                     Ok(())
                 }
             }
-            Self::Boolean(_) => Ok(()),
+            Self::Scalar(ScalarParameter::Boolean(_)) => Ok(()),
             Self::Decimal(value) => value.validate(),
             Self::BucketBoundaries(boundaries) => validate_bucket_boundaries(boundaries),
         }
@@ -5052,12 +5441,12 @@ pub enum ConceptForm {
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct DisclosureGuard {
-    pub families: Vec<String>,
+    pub families: UniqueList<String>,
 }
 
 impl DisclosureGuard {
     fn validate(&self) -> Result<(), ConfigError> {
-        validate_unique_strings(&self.families, 1, 16, 1, 512, "disclosure families")?;
+        validate_strings(&self.families, 1, 16, 1, 512, "disclosure families")?;
         for family in &self.families {
             validate_uri(family)?;
         }
@@ -5071,20 +5460,68 @@ pub enum ExistenceDisclosure {
     CollapseUnresolved,
 }
 
+/// Validate a map of named items written at `pointer`: its size, each name,
+/// and each item, naming the item a rule concerns.
 fn validate_named_map<T>(
     map: &OrderedMap<T>,
     minimum: usize,
     maximum: usize,
+    pointer: &str,
     validate: impl Fn(&T) -> Result<(), ConfigError>,
-) -> Result<(), ConfigError> {
-    validate_len(map.len(), minimum, maximum, "named configuration map")?;
+) -> Result<(), Violation> {
+    validate_len(map.len(), minimum, maximum, "named configuration map").at(pointer)?;
     for (name, value) in map.iter() {
+        let at = named(pointer, name);
         if !valid_local_id(name) {
-            return invalid("local identifier is invalid");
+            return invalid("local identifier is invalid").at_key(at);
         }
-        validate(value)?;
+        validate(value).at(at)?;
     }
     Ok(())
+}
+
+/// The pointer of the item `name` inside the map at `pointer`.
+fn named(pointer: &str, name: &str) -> String {
+    format!(
+        "{pointer}/{}",
+        registry_platform_yaml::escape_pointer_segment(name)
+    )
+}
+
+/// One rule a decoded bundle breaks and the member it concerns, as an RFC
+/// 6901 pointer into the document. The error carries a fixed cause, so the
+/// violation never repeats a value from the document (CFG-SEC-3).
+#[derive(Debug)]
+pub(crate) struct Violation {
+    pub(crate) pointer: String,
+    /// Whether the rule concerns the member's key, as a malformed item name
+    /// does, rather than its value.
+    pub(crate) at_key: bool,
+    pub(crate) error: ConfigError,
+}
+
+/// Names the member a failed check concerns.
+trait At<T> {
+    fn at(self, pointer: impl Into<String>) -> Result<T, Violation>;
+    fn at_key(self, pointer: impl Into<String>) -> Result<T, Violation>;
+}
+
+impl<T> At<T> for Result<T, ConfigError> {
+    fn at(self, pointer: impl Into<String>) -> Result<T, Violation> {
+        self.map_err(|error| Violation {
+            pointer: pointer.into(),
+            at_key: false,
+            error,
+        })
+    }
+
+    fn at_key(self, pointer: impl Into<String>) -> Result<T, Violation> {
+        self.map_err(|error| Violation {
+            pointer: pointer.into(),
+            at_key: true,
+            error,
+        })
+    }
 }
 
 fn require_artifact_prefix(path: &ArtifactPath, prefix: &'static str) -> Result<(), ConfigError> {
@@ -5120,7 +5557,7 @@ fn validate_derivation_input_shape(inputs: &[SelectorInput]) -> Result<(), Confi
             {
                 return invalid("selector-input profiles must be valid and unique per role");
             }
-            validate_unique_strings(&alternative.fields, 1, 16, 1, 64, "selector-input fields")?;
+            validate_strings(&alternative.fields, 1, 16, 1, 64, "selector-input fields")?;
             if alternative
                 .fields
                 .iter()
@@ -5404,7 +5841,7 @@ fn validate_path_template(
 }
 
 fn validate_projection(projection: &[String]) -> Result<(), ConfigError> {
-    validate_unique_strings(projection, 1, 64, 2, 256, "source projection")?;
+    validate_strings(projection, 1, 64, 2, 256, "source projection")?;
     let paths = projection
         .iter()
         .map(|path| parse_projection_pointer(path))
@@ -5465,16 +5902,6 @@ fn projection_paths_overlap(left: &[ProjectionSegment], right: &[ProjectionSegme
         left == right
             || matches!(left, ProjectionSegment::Wildcard)
             || matches!(right, ProjectionSegment::Wildcard)
-    })
-}
-
-fn validate_optional_range(
-    value: Option<u64>,
-    minimum: u64,
-    maximum: u64,
-) -> Result<(), ConfigError> {
-    value.map_or(Ok(()), |value| {
-        validate_range(value, minimum, maximum, "optional bound")
     })
 }
 
@@ -6227,7 +6654,7 @@ fn validate_unique<T: Ord>(
     Ok(())
 }
 
-fn validate_unique_strings(
+fn validate_strings(
     values: &[String],
     minimum_items: usize,
     maximum_items: usize,
@@ -6236,12 +6663,8 @@ fn validate_unique_strings(
     field: &'static str,
 ) -> Result<(), ConfigError> {
     validate_len(values.len(), minimum_items, maximum_items, field)?;
-    let mut seen = BTreeSet::new();
     for value in values {
         validate_string(value, minimum_bytes, maximum_bytes, field)?;
-        if !seen.insert(value.as_str()) {
-            return invalid("collection values must be unique");
-        }
     }
     Ok(())
 }
@@ -6252,7 +6675,38 @@ fn invalid<T>(reason: &'static str) -> Result<T, ConfigError> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(
+        clippy::disallowed_methods,
+        reason = "tests read back the YAML the code under test wrote, or a published contract or fixture, to assert on it; they read no operator configuration"
+    )]
     use super::*;
+
+    #[test]
+    fn a_repeated_string_in_a_set_is_refused_at_the_repeated_item() {
+        let bytes = String::from_utf8(
+            include_bytes!(
+                "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
+            )
+            .to_vec(),
+        )
+        .expect("acceptance configuration is UTF-8")
+        .replace(
+            "requesterTags: [fixture-agency]",
+            "requesterTags: [fixture-agency, fixture-agency]",
+        );
+        let ConfigError::Refused(report) =
+            EvidenceConfig::parse_yaml(bytes.as_bytes()).expect_err("a repeated tag is refused")
+        else {
+            panic!("the refusal is a report");
+        };
+        let diagnostic = report.diagnostics().first().expect("a diagnostic");
+        assert_eq!(diagnostic.code, "config.duplicate-item");
+        assert!(
+            diagnostic.path.ends_with("/requesterTags/1"),
+            "{}",
+            diagnostic.path
+        );
+    }
 
     #[test]
     fn named_source_connections_reject_retargeting_and_preserve_authentication_defaults() {
@@ -6275,9 +6729,9 @@ mod tests {
             "tlsTrustProfile": "private-ca"
         }))
         .expect("the complete authentication union parses");
-        assert_eq!(connection.concurrency_limit, 4);
-        assert_eq!(connection.admission_timeout_milliseconds, 5000);
-        assert_eq!(connection.token_timeout_milliseconds, 5000);
+        assert_eq!(connection.concurrency_limit.get(), 4);
+        assert_eq!(connection.admission_timeout_milliseconds.get(), 5000);
+        assert_eq!(connection.token_timeout_milliseconds.get(), 5000);
         if let SourceConfig::HttpJson {
             base_url,
             authentication,
@@ -6297,7 +6751,7 @@ mod tests {
         config.validate().expect("the resolved candidate validates");
         let before = config.clone();
         if let SourceConfig::HttpJson { base_url, .. } = &mut config.sources.0[0].1 {
-            *base_url = "https://another.example".to_owned();
+            *base_url = typed_url("https://another.example");
         }
         assert!(
             config.validate().is_err(),
@@ -6335,7 +6789,10 @@ mod tests {
                         }
                     }
                     "tlsTrustProfile" => *tls_trust_profile = None,
-                    _ => request.concurrency_limit = 2,
+                    _ => {
+                        request.concurrency_limit =
+                            BoundedU32::new(2).expect("two is a valid concurrency limit");
+                    }
                 }
             }
             assert!(
@@ -6386,7 +6843,7 @@ mod tests {
         ))
         .expect("strict fixture validates");
         config.assurance_profile = AssuranceProfile::Production;
-        config.service.public_origin = "https://evidence.example.test".to_owned();
+        config.service.public_origin = typed_url("https://evidence.example.test");
         config.validate().expect("canonical HTTPS origin validates");
 
         for invalid in [
@@ -6397,13 +6854,18 @@ mod tests {
             "http://evidence.example.test",
             "http://127.0.0.1:8080",
         ] {
-            let mut candidate = config.clone();
-            candidate.service.public_origin = invalid.to_owned();
-            assert!(candidate.validate().is_err(), "accepted {invalid}");
+            assert!(
+                url_refused(invalid, |url| {
+                    let mut candidate = config.clone();
+                    candidate.service.public_origin = url;
+                    candidate.validate().is_err()
+                }),
+                "accepted {invalid}"
+            );
         }
 
         config.assurance_profile = AssuranceProfile::Local;
-        config.service.public_origin = "http://127.0.0.1:8080".to_owned();
+        config.service.public_origin = typed_url("http://127.0.0.1:8080");
         config
             .validate()
             .expect("the exact tutorial loopback origin validates locally");
@@ -6413,9 +6875,66 @@ mod tests {
             "http://127.0.0.2:8080",
             "http://[::1]:8080",
         ] {
-            let mut candidate = config.clone();
-            candidate.service.public_origin = invalid.to_owned();
-            assert!(candidate.validate().is_err(), "accepted {invalid}");
+            assert!(
+                url_refused(invalid, |url| {
+                    let mut candidate = config.clone();
+                    candidate.service.public_origin = url;
+                    candidate.validate().is_err()
+                }),
+                "accepted {invalid}"
+            );
+        }
+    }
+
+    #[test]
+    fn bundle_urls_are_read_through_the_shared_url_type_the_schema_names() {
+        let validator = bundle_contract_validator();
+        for (from, to) in [
+            (
+                "publicOrigin: https://evidence.invalid,",
+                "publicOrigin: https://operator@evidence.invalid,",
+            ),
+            (
+                "endpointUrl: https://evidence.example.invalid,",
+                "endpointUrl: https://operator@evidence.example.invalid,",
+            ),
+            (
+                "    baseUrl: https://source.invalid\n",
+                "    baseUrl: https://operator@source.invalid\n",
+            ),
+            (
+                "    baseUrl: https://source.invalid\n",
+                "    baseUrl: source.invalid\n",
+            ),
+        ] {
+            let document = edited(acceptance_fixture(), from, to);
+            assert_eq!(decode_cause(&document), "config.invalid-value", "{to}");
+            assert!(
+                !validator.is_valid(&bundle_contract_instance(document.as_bytes())),
+                "the schema accepted {to}"
+            );
+        }
+        // The shared OIDC block reads these two as text; validation holds
+        // them to the rule the schema's `Url` states.
+        for (from, to) in [
+            (
+                "    issuer: https://identity.invalid\n",
+                "    issuer: https://operator@identity.invalid\n",
+            ),
+            (
+                "      uri: https://identity.invalid/.well-known/jwks.json\n",
+                "      uri: https://operator@identity.invalid/.well-known/jwks.json\n",
+            ),
+        ] {
+            let document = edited(acceptance_fixture(), from, to);
+            assert!(
+                EvidenceConfig::parse_yaml(document.as_bytes()).is_err(),
+                "the reader accepted {to}"
+            );
+            assert!(
+                !validator.is_valid(&bundle_contract_instance(document.as_bytes())),
+                "the schema accepted {to}"
+            );
         }
     }
 
@@ -6474,6 +6993,21 @@ mod tests {
     // unnoticed.
     use crate::rhai_runtime::MAXIMUM_STATEMENT_PARAMETER_NAME_BYTES;
 
+    /// Text as the shared URL type a bundle URL member is read into.
+    fn typed_url(text: &str) -> registry_platform_yaml::Url {
+        registry_platform_yaml::Url::new(text).expect("the shared URL type accepts the text")
+    }
+
+    /// Whether a bundle URL member holding `text` is refused: either the
+    /// shared URL type refuses it while the bundle is read, or `validated`
+    /// reports that validation refuses the typed value.
+    fn url_refused(
+        text: &str,
+        validated: impl FnOnce(registry_platform_yaml::Url) -> bool,
+    ) -> bool {
+        registry_platform_yaml::Url::new(text).map_or(true, validated)
+    }
+
     /// Borrow the base URL of a parsed fixture's first source.
     ///
     /// Every acceptance fixture these tests parse declares one `http-json`
@@ -6482,7 +7016,7 @@ mod tests {
     /// Every acceptance fixture these tests parse declares one `http-json`
     /// source, so a test that mutates HTTP request material names the
     /// transport through these four helpers rather than at each call.
-    fn http_base_url(config: &mut EvidenceConfig) -> &mut String {
+    fn http_base_url(config: &mut EvidenceConfig) -> &mut registry_platform_yaml::Url {
         match &mut config.sources.0[0].1 {
             SourceConfig::HttpJson { base_url, .. } => base_url,
             SourceConfig::SqliteExtract { .. } => panic!("{NOT_HTTP_JSON}"),
@@ -6683,19 +7217,18 @@ mod tests {
             .validate()
             .expect("absent admission fields keep the existing behavior");
 
-        config.authentication.oidc.allowed_clients = Some(vec!["records-reader".to_owned()]);
-        config.authentication.oidc.required_scopes = Some(vec!["evidence:invoke".to_owned()]);
+        config.authentication.oidc.allowed_clients = Some(set(["records-reader".to_owned()]));
+        config.authentication.oidc.required_scopes = Some(set(["evidence:invoke".to_owned()]));
         config.validate().expect("stated admission validates");
 
         for clients in [
             Vec::new(),
             vec!["".to_owned()],
             vec!["a".repeat(129)],
-            vec!["reader".to_owned(); 33],
-            vec!["reader".to_owned(), "reader".to_owned()],
+            (0..33).map(|index| format!("reader-{index}")).collect(),
         ] {
             let mut candidate = config.clone();
-            candidate.authentication.oidc.allowed_clients = Some(clients.clone());
+            candidate.authentication.oidc.allowed_clients = Some(set(clients.clone()));
             assert!(
                 candidate.validate().is_err(),
                 "accepted allowedClients {clients:?}"
@@ -6706,11 +7239,10 @@ mod tests {
             vec!["".to_owned()],
             vec!["a".repeat(257)],
             vec!["not a scope".to_owned()],
-            vec!["evidence:invoke".to_owned(); 33],
-            vec!["evidence:invoke".to_owned(), "evidence:invoke".to_owned()],
+            (0..33).map(|index| format!("scope:{index}")).collect(),
         ] {
             let mut candidate = config.clone();
-            candidate.authentication.oidc.required_scopes = Some(scopes.clone());
+            candidate.authentication.oidc.required_scopes = Some(set(scopes.clone()));
             assert!(
                 candidate.validate().is_err(),
                 "accepted requiredScopes {scopes:?}"
@@ -6734,14 +7266,14 @@ mod tests {
         config.authentication.oidc.assertion_issuers = Some(BTreeMap::from([
             (
                 "evidence-task-agent".to_owned(),
-                vec!["https://identity.invalid".to_owned()],
+                set(["https://identity.invalid".to_owned()]),
             ),
             (
                 "portal-exchange".to_owned(),
-                vec![
+                set([
                     "https://casework.invalid".to_owned(),
                     "https://portal.invalid".to_owned(),
-                ],
+                ]),
             ),
         ]));
         config
@@ -6750,13 +7282,13 @@ mod tests {
 
         for clients in [
             BTreeMap::new(),
-            BTreeMap::from([("".to_owned(), vec!["https://issuer.invalid".to_owned()])]),
-            BTreeMap::from([("a".repeat(129), vec!["https://issuer.invalid".to_owned()])]),
+            BTreeMap::from([("".to_owned(), set(["https://issuer.invalid".to_owned()]))]),
+            BTreeMap::from([("a".repeat(129), set(["https://issuer.invalid".to_owned()]))]),
             (0..33)
                 .map(|index| {
                     (
                         format!("client-{index}"),
-                        vec!["https://issuer.invalid".to_owned()],
+                        set(["https://issuer.invalid".to_owned()]),
                     )
                 })
                 .collect(),
@@ -6772,16 +7304,14 @@ mod tests {
             Vec::new(),
             vec!["".to_owned()],
             vec!["a".repeat(513)],
-            vec!["https://issuer.invalid".to_owned(); 9],
-            vec![
-                "https://issuer.invalid".to_owned(),
-                "https://issuer.invalid".to_owned(),
-            ],
+            (0..9)
+                .map(|index| format!("https://issuer-{index}.invalid"))
+                .collect(),
         ] {
             let mut candidate = config.clone();
             candidate.authentication.oidc.assertion_issuers = Some(BTreeMap::from([(
                 "evidence-task-agent".to_owned(),
-                issuers.clone(),
+                set(issuers.clone()),
             )]));
             assert!(
                 candidate.validate().is_err(),
@@ -6797,7 +7327,7 @@ mod tests {
         ))
         .expect("strict fixture validates");
         let publication = config.publication.as_mut().expect("publication configured");
-        publication.endpoint_url = "http://evidence.example.invalid".to_owned();
+        publication.endpoint_url = typed_url("http://evidence.example.invalid");
         assert!(
             config.validate().is_err(),
             "a non-local deployment must reject cleartext publication"
@@ -6813,7 +7343,7 @@ mod tests {
                 .publication
                 .as_mut()
                 .expect("publication configured")
-                .endpoint_url = endpoint.to_owned();
+                .endpoint_url = typed_url(endpoint);
             config
                 .validate()
                 .unwrap_or_else(|_| panic!("local assurance rejected {endpoint}"));
@@ -6830,12 +7360,17 @@ mod tests {
             "http://127.0.0.1:8080/catalog .jsonld",
             "http://127.0.0.1:8080/catalog\u{0007}.jsonld",
         ] {
-            config
-                .publication
-                .as_mut()
-                .expect("publication configured")
-                .endpoint_url = endpoint.to_owned();
-            assert!(config.validate().is_err(), "accepted {endpoint:?}");
+            assert!(
+                url_refused(endpoint, |url| {
+                    config
+                        .publication
+                        .as_mut()
+                        .expect("publication configured")
+                        .endpoint_url = url;
+                    config.validate().is_err()
+                }),
+                "accepted {endpoint:?}"
+            );
         }
     }
 
@@ -6920,7 +7455,7 @@ mod tests {
                 let publication = config.publication.as_mut().expect("publication configured");
                 match field {
                     "serviceId" => publication.service_id.clone_from(value),
-                    "endpointUrl" => publication.endpoint_url.clone_from(value),
+                    "endpointUrl" => publication.endpoint_url = typed_url(value),
                     "jurisdictions" => publication.jurisdictions = vec![value.clone()],
                     "publisherId" => publication.publisher_id = Some(value.clone()),
                     "operatorId" => publication.operator_id = Some(value.clone()),
@@ -7125,8 +7660,7 @@ mod tests {
         let mut no_profile_clients = config.clone();
         no_profile_clients.authority_profiles.0[0]
             .1
-            .requester_clients
-            .clear();
+            .requester_clients = UniqueList::default();
         assert!(no_profile_clients.validate().is_err());
 
         let mut no_source = config.clone();
@@ -7145,7 +7679,7 @@ mod tests {
 
         let mut client_not_admitted = config;
         client_not_admitted.authentication.oidc.allowed_clients =
-            Some(vec!["other-client".to_owned()]);
+            Some(set(["other-client".to_owned()]));
         assert_eq!(
             client_not_admitted.validate(),
             invalid(
@@ -7166,10 +7700,10 @@ mod tests {
 
         let mut requester_clients = config.clone();
         requester_clients.authentication.oidc.allowed_clients =
-            Some(vec!["evidence-cli".to_owned()]);
+            Some(set(["evidence-cli".to_owned()]));
         requester_clients.authority_profiles.0[0]
             .1
-            .requester_clients = vec!["evidence-cli".to_owned()];
+            .requester_clients = set(["evidence-cli".to_owned()]);
         assert_eq!(requester_clients.validate(), expected);
 
         let mut source_issuer = config;
@@ -7194,7 +7728,7 @@ mod tests {
             "http://[::1]:65535",
         ] {
             let mut candidate = local.clone();
-            *http_base_url(&mut candidate) = origin.to_owned();
+            *http_base_url(&mut candidate) = typed_url(origin);
             candidate
                 .validate()
                 .unwrap_or_else(|_| panic!("local assurance rejected {origin}"));
@@ -7216,16 +7750,18 @@ mod tests {
             "http://user@127.0.0.1:18081",
             "http://192.168.1.2:18081",
         ] {
-            let mut candidate = local.clone();
-            *http_base_url(&mut candidate) = origin.to_owned();
             assert!(
-                candidate.validate().is_err(),
+                url_refused(origin, |url| {
+                    let mut candidate = local.clone();
+                    *http_base_url(&mut candidate) = url;
+                    candidate.validate().is_err()
+                }),
                 "local assurance accepted unauthenticated origin {origin}"
             );
         }
 
         let mut with_tls_profile = local.clone();
-        *http_base_url(&mut with_tls_profile) = "http://127.0.0.1:18081".to_owned();
+        *http_base_url(&mut with_tls_profile) = typed_url("http://127.0.0.1:18081");
         *http_tls_trust_profile(&mut with_tls_profile) = Some("unused-local-ca".to_owned());
         assert!(with_tls_profile.validate().is_err());
 
@@ -7235,7 +7771,7 @@ mod tests {
         ] {
             let mut candidate = local.clone();
             candidate.assurance_profile = profile;
-            *http_base_url(&mut candidate) = "http://127.0.0.1:18081".to_owned();
+            *http_base_url(&mut candidate) = typed_url("http://127.0.0.1:18081");
             assert!(
                 candidate.validate().is_err(),
                 "{profile:?} accepted an unauthenticated source"
@@ -7488,27 +8024,40 @@ mod tests {
         format!("{head}sources:\n{SQLITE_SOURCE}authorityProfiles:\n{tail}")
     }
 
+    /// A set built from items the test knows to be distinct.
+    fn set<I: IntoIterator<Item = String>>(items: I) -> UniqueList<String> {
+        UniqueList::new(items.into_iter().collect()).expect("the items are distinct")
+    }
+
     /// Replace exactly one line of a document, and prove the edit applied.
     fn edited(document: &str, from: &str, to: &str) -> String {
         assert_eq!(document.matches(from).count(), 1, "{from} is not unique");
         document.replace(from, to)
     }
 
-    fn decode_cause(document: &str) -> &'static str {
+    /// The code of the first diagnostic the reader reports for a document
+    /// the closed schema refuses.
+    fn decode_cause(document: &str) -> String {
         let error =
             EvidenceConfig::parse_yaml(document.as_bytes()).expect_err("the document was accepted");
-        let ConfigError::InvalidYaml(fault) = &error else {
-            panic!("the document was not rejected by the closed schema: {error}");
+        let ConfigError::Refused(report) = error else {
+            panic!("the document was not refused by the reader: {error}");
         };
-        fault.cause()
+        let diagnostic = report.diagnostics().first().expect("a diagnostic");
+        assert!(
+            !diagnostic.code.starts_with("evidence.bundle."),
+            "the document was refused by a bundle rule, not the schema: {}",
+            diagnostic.message
+        );
+        diagnostic.code.clone()
     }
 
+    /// The reason a bundle rule gives for a document the schema accepts.
     fn invalid_reason(document: &str) -> &'static str {
-        let error =
-            EvidenceConfig::parse_yaml(document.as_bytes()).expect_err("the document was accepted");
-        match error {
-            ConfigError::Invalid(reason) | ConfigError::InvalidField(reason, _) => reason,
-            _ => panic!("the document was not rejected by a validation rule: {error}"),
+        match EvidenceConfig::parse_yaml_reporting_rule(document.as_bytes()) {
+            Err(ConfigError::Invalid(reason) | ConfigError::InvalidField(reason, _)) => reason,
+            Err(error) => panic!("the document was not rejected by a validation rule: {error}"),
+            Ok(_) => panic!("the document was accepted"),
         }
     }
 
@@ -7528,7 +8077,7 @@ mod tests {
         };
         assert_eq!(extract_profile, "residence-register");
         assert_eq!(request.statement.as_str(), "queries/residence-region.sql");
-        assert_eq!(*maximum_extract_age_seconds, 86_400);
+        assert_eq!(maximum_extract_age_seconds.get(), 86_400);
         assert_eq!(config.sources.0[0].1.prepare_script(), None);
         assert_eq!(config.sources.0[0].1.adapter_parameters_schema(), None);
         assert!(config.sources.0[0].1.fixed_headers().is_empty());
@@ -7576,7 +8125,7 @@ mod tests {
                 ),
             ),
         ] {
-            assert_eq!(decode_cause(&candidate), "unknown field", "{label}");
+            assert_eq!(decode_cause(&candidate), "config.unknown-key", "{label}");
         }
 
         assert_eq!(
@@ -7585,11 +8134,11 @@ mod tests {
                 "    transport: sqlite-extract\n",
                 "    transport: sqlite-extracts\n",
             )),
-            "field value is not one of the accepted variants",
+            "config.unknown-variant",
         );
         assert_eq!(
             decode_cause(&edited(&document, "    transport: sqlite-extract\n", "")),
-            "required field is missing",
+            "config.missing-key",
         );
     }
 
@@ -7610,7 +8159,7 @@ mod tests {
                 "      statement: queries/residence-region.sql\n",
                 "      statement: residence-region.sql\n",
             )),
-            "document does not match the closed schema",
+            "config.invalid-value",
             "a path under no bundle root is not an artifact path at all",
         );
         assert_eq!(
@@ -7687,7 +8236,7 @@ mod tests {
                 "record_reference: {kind: selector,",
                 "record_reference: {kind: prior-fact,",
             )),
-            "field value is not one of the accepted variants",
+            "config.unknown-variant",
         );
     }
 
@@ -7769,7 +8318,7 @@ mod tests {
                 "columns: [{name: id, type: string}, {name: region, type: string}]",
                 "columns: [{name: id, type: blob}, {name: region, type: string}]",
             )),
-            "field value is not one of the accepted variants",
+            "config.unknown-variant",
         );
     }
 
@@ -7790,8 +8339,8 @@ mod tests {
                 .expect("every bound is declared as a mapping entry");
             for value in [0, maximum + 1] {
                 assert_eq!(
-                    invalid_reason(&edited(&document, declared, &format!("{key}: {value}"))),
-                    "numeric value is outside Version 1 bounds",
+                    decode_cause(&edited(&document, declared, &format!("{key}: {value}"))),
+                    "config.out-of-range",
                     "{key} accepted {value}",
                 );
             }
@@ -7866,7 +8415,7 @@ mod tests {
                 true,
                 Some("{maximumParameters: 8, maximumParameterValueBytes: 1024, surprise: 1}"),
             )),
-            "unknown field",
+            "config.unknown-key",
         );
     }
 
@@ -7939,7 +8488,7 @@ mod tests {
             PREPARED_BINDING,
             "        normalized_reference: {kind: prepared, role: subject}\n",
         );
-        assert_eq!(decode_cause(&two_origins), "unknown field");
+        assert_eq!(decode_cause(&two_origins), "config.unknown-key");
         assert!(
             !bundle_contract_validator()
                 .is_valid(&bundle_contract_instance(two_origins.as_bytes())),
@@ -7983,8 +8532,8 @@ mod tests {
             };
             for value in [0, maximum + 1] {
                 assert_eq!(
-                    invalid_reason(&prepared_statement_document(true, Some(&limits(value)))),
-                    "numeric value is outside Version 1 bounds",
+                    decode_cause(&prepared_statement_document(true, Some(&limits(value)))),
+                    "config.out-of-range",
                     "{key} accepted {value}",
                 );
             }
@@ -8039,7 +8588,7 @@ mod tests {
     ];
 
     #[test]
-    fn decode_failures_report_a_safe_path_a_location_and_a_value_free_cause() {
+    fn decode_failures_report_a_pointer_a_position_and_no_document_value() {
         let reference = include_str!("../../../products/evidence/reference/request-adapter/deployment-projects/opencrvs-family-evidence/bundle/evidence.yaml");
         let unknown_nested = reference.replacen(
             "      timeoutMilliseconds: 3000",
@@ -8047,106 +8596,102 @@ mod tests {
             1,
         );
         assert_ne!(unknown_nested, reference, "nested mutation applies");
-        let cases: [(&str, String, &str, Option<&str>, bool); 6] = [
+        let unknown_nested_line = line_of(&unknown_nested, "surprise:");
+        // Label, document, code, pointer, and line of the expected refusal.
+        type Case = (
+            &'static str,
+            String,
+            &'static str,
+            Option<&'static str>,
+            Option<usize>,
+        );
+        let out_of_range = reference.replacen(
+            "      timeoutMilliseconds: 3000",
+            "      timeoutMilliseconds: 987654321",
+            1,
+        );
+        assert_ne!(out_of_range, reference, "range mutation applies");
+        let out_of_range_line = line_of(&out_of_range, "timeoutMilliseconds: 987654321");
+        let cases: [Case; 7] = [
             (
                 "malformed YAML",
                 format!("version: 1\nbroken: [{}\n", CANARY_VALUES[0]),
-                "document is not well-formed YAML",
+                "yaml.unexpected-end",
                 None,
-                true,
+                None,
             ),
             (
                 "unknown top-level field",
                 format!("version: 1\nbogusField: {}\n", CANARY_VALUES[1]),
-                "unknown field",
-                None,
-                true,
+                "config.unknown-key",
+                Some("/bogusField"),
+                Some(2),
             ),
             (
-                // A source is read through an internally tagged transport, so
-                // the decoder buffers the whole source mapping to find the tag
-                // before it can reject a field inside it. The reported path is
-                // the map the buffered value was read under; the cause and the
-                // location still point the operator at the offending line.
+                // A source is read through its tagged transport with
+                // positions kept inside the variant, so the refusal names the
+                // member itself.
                 "unknown nested field",
                 unknown_nested,
-                "unknown field",
-                Some("sources"),
-                true,
+                "config.unknown-key",
+                None,
+                Some(unknown_nested_line),
             ),
             (
                 "wrong type",
                 format!("version: {}\n", CANARY_VALUES[2]),
-                "field has the wrong type",
-                Some("version"),
-                true,
+                "config.expected-integer",
+                Some("/version"),
+                Some(1),
+            ),
+            (
+                "integer outside its bound",
+                out_of_range,
+                "config.out-of-range",
+                None,
+                Some(out_of_range_line),
             ),
             (
                 "missing field",
                 "version: 1\n".to_owned(),
-                "required field is missing",
-                None,
-                true,
+                "config.missing-key",
+                Some(""),
+                Some(1),
             ),
             (
                 "more than one document",
                 format!("version: 1\n---\nversion: {}\n", CANARY_VALUES[3]),
-                "document contains more than one YAML document",
+                "yaml.multiple-documents",
                 None,
-                false,
+                None,
             ),
         ];
-        for (label, document, expected_cause, expected_path, expects_location) in cases {
-            let error = EvidenceConfig::parse_yaml(document.as_bytes())
-                .err()
-                .unwrap_or_else(|| panic!("{label} was accepted"));
-            let ConfigError::InvalidYaml(fault) = &error else {
-                panic!("{label} was not reported as a decode failure: {error}");
-            };
-            assert_eq!(fault.cause(), expected_cause, "{label} cause");
-            assert_eq!(fault.path(), expected_path, "{label} path");
-            assert_eq!(
-                fault.location().is_some(),
-                expects_location,
-                "{label} location presence"
-            );
-            let rendered = error.to_string();
-            for canary in CANARY_VALUES {
+        for (label, document, expected_code, expected_pointer, expected_line) in cases {
+            let diagnostics = bundle_refusal(&document);
+            let found = diagnostics
+                .iter()
+                .find(|diagnostic| {
+                    diagnostic.code == expected_code
+                        && expected_pointer.is_none_or(|pointer| diagnostic.path == pointer)
+                })
+                .unwrap_or_else(|| panic!("{label}: no {expected_code} in {diagnostics:?}"));
+            if let Some(line) = expected_line {
+                assert_eq!(
+                    found.source.as_ref().and_then(|source| source.line),
+                    Some(line),
+                    "{label} line"
+                );
+            }
+            let rendered = serde_json::to_string(&diagnostics).expect("diagnostics serialize");
+            for canary in CANARY_VALUES
+                .iter()
+                .chain(["s3cr3t-selector-value", "987654321"].iter())
+            {
                 assert!(
                     !rendered.contains(canary),
                     "{label} diagnostic leaked a document value: {rendered}"
                 );
             }
-        }
-    }
-
-    #[test]
-    fn schema_paths_are_accepted_only_when_they_carry_no_document_value() {
-        for safe in [
-            "version",
-            "sources.registered-birth-date.request",
-            "sources.a.request.fixedHeaders[0].name",
-            "requirements[12].concepts[3].id",
-            "sources.a.?",
-        ] {
-            assert!(is_safe_schema_path(safe), "{safe} is a schema path");
-        }
-        for unsafe_candidate in [
-            "",
-            "invalid type",
-            "invalid value",
-            "sources.urn:gov:example",
-            "sources.\"quoted key\"",
-            "sources.a[]",
-            "sources.a[x]",
-            "sources.a[0",
-            "sources.a/b",
-            &"a".repeat(MAX_SCHEMA_PATH_BYTES + 1),
-        ] {
-            assert!(
-                !is_safe_schema_path(unsafe_candidate),
-                "{unsafe_candidate} is not a schema path"
-            );
         }
     }
 
@@ -8206,7 +8751,7 @@ mod tests {
         let yaml = include_str!(
             "../../../products/evidence/fixtures/acceptance/all-definitions/evidence.yaml"
         );
-        assert!(EvidenceConfig::parse_yaml(yaml.as_bytes()).is_ok());
+        assert!(EvidenceConfig::parse_yaml_reporting_rule(yaml.as_bytes()).is_ok());
         let shrunk_maximum = yaml.replace(
             "maximumAssertionValiditySeconds: 300",
             "maximumAssertionValiditySeconds: 299",
@@ -8216,7 +8761,7 @@ mod tests {
             "fixture mutation must remain effective"
         );
         assert!(matches!(
-            EvidenceConfig::parse_yaml(shrunk_maximum.as_bytes()),
+            EvidenceConfig::parse_yaml_reporting_rule(shrunk_maximum.as_bytes()),
             Err(ConfigError::Invalid(
                 "requirement validity exceeds signing maximum validity"
             ))
@@ -8326,7 +8871,7 @@ mod tests {
         let role = |length: usize| SubjectRole {
             role: format!("a{}", "b".repeat(length - 1)),
             cardinality: SubjectCardinality::One,
-            selector_profiles: vec!["person-demographics-v1".to_owned()],
+            selector_profiles: set(["person-demographics-v1".to_owned()]),
         };
         assert!(role(64).validate().is_ok());
         assert!(role(65).validate().is_err());
@@ -8421,7 +8966,7 @@ mod tests {
         const SUPPORTED_VALUES: &str = include_str!(
             "../../../products/evidence/fixtures/conformance/supported-values/evidence.yaml"
         );
-        EvidenceConfig::parse_yaml(SUPPORTED_VALUES.as_bytes())
+        EvidenceConfig::parse_yaml_reporting_rule(SUPPORTED_VALUES.as_bytes())
             .expect("the conformance fixture validates as written");
 
         const INCOHERENT: &str = "collection constraints are invalid";
@@ -8483,7 +9028,7 @@ mod tests {
             "minimumItems: 1, maximumItems: 2, unique: true",
             "minimumItems: 2, maximumItems: 1, unique: true",
         );
-        let error = EvidenceConfig::parse_yaml(unreached.as_bytes())
+        let error = EvidenceConfig::parse_yaml_reporting_rule(unreached.as_bytes())
             .expect_err("an unreached list concept is refused before anything is evaluated");
         assert_eq!(error.fault().cause(), INCOHERENT);
     }
@@ -8598,7 +9143,7 @@ mod tests {
             "../../../products/evidence/fixtures/acceptance/all-definitions/evidence.yaml"
         ))
         .expect("fixture is UTF-8");
-        assert!(EvidenceConfig::parse_yaml(valid.as_bytes()).is_ok());
+        assert!(EvidenceConfig::parse_yaml_reporting_rule(valid.as_bytes()).is_ok());
 
         // One artifact validating a response for one source and facts for
         // another would make a single review cover two different contracts.
@@ -8609,7 +9154,7 @@ mod tests {
         );
         assert_ne!(crossed, valid, "fixture mutation must remain effective");
         assert!(matches!(
-            EvidenceConfig::parse_yaml(crossed.as_bytes()),
+            EvidenceConfig::parse_yaml_reporting_rule(crossed.as_bytes()),
             Err(ConfigError::Invalid(
                 "source schema roles must not overlap across sources"
             ))
@@ -8714,7 +9259,7 @@ mod tests {
             .alternatives
             .push(SelectorInputAlternative {
                 profile: "person-reference-v1".to_owned(),
-                fields: vec!["person_reference".to_owned()],
+                fields: set(["person_reference".to_owned()]),
             });
         assert_eq!(
             config.validate(),
@@ -8743,8 +9288,8 @@ mod tests {
         alternative.concepts[0].id =
             "urn:example:fixture:concept:adult-status-alternative".to_owned();
         alternative.concepts[0].handle = "adult-status-alternative".to_owned();
-        alternative.disclosure_guard.families[0] =
-            "urn:example:fixture:disclosure-family:adult-status-alternative".to_owned();
+        alternative.disclosure_guard.families =
+            set(["urn:example:fixture:disclosure-family:adult-status-alternative".to_owned()]);
 
         let mut grant = config.authority_profiles.0[0].1.grants[0].clone();
         grant.requirement = alternative.id.clone();
@@ -8880,7 +9425,7 @@ mod tests {
             "extractScript: adapters/Source-a.rhai",
         );
         assert_eq!(
-            EvidenceConfig::parse_yaml(uppercase_adapter.as_bytes()),
+            EvidenceConfig::parse_yaml_reporting_rule(uppercase_adapter.as_bytes()),
             Err(ConfigError::Invalid(
                 "source adapter name must be a local identifier"
             ))
@@ -8891,8 +9436,8 @@ mod tests {
             "?client_id=duplicate",
             "?fixed=true",
         ] {
-            let mut oauth =
-                EvidenceConfig::parse_yaml(valid.as_bytes()).expect("fixture validates");
+            let mut oauth = EvidenceConfig::parse_yaml_reporting_rule(valid.as_bytes())
+                .expect("fixture validates");
             *http_authentication(&mut oauth) = SourceAuthentication::Oauth2ClientCredentials {
                 token_endpoint: format!("https://source.invalid/token{query}"),
                 client_id_ref: SecretReference::parse("secret:file/oauth-client-id")
@@ -8906,7 +9451,7 @@ mod tests {
                 audience: None,
                 resource: None,
                 credential_placement: Some(CredentialPlacement::FormBody),
-                maximum_cache_seconds: 60,
+                maximum_cache_seconds: BoundedU64::new(60).expect("a valid cache bound"),
                 assumed_lifetime_seconds: None,
             };
             assert_eq!(
@@ -8960,25 +9505,20 @@ mod tests {
         ))
         .expect("fixture is UTF-8");
 
-        for (assumed_lifetime_seconds, expected) in [
-            (
-                Some(0),
-                Err(ConfigError::InvalidField(
-                    "numeric value is outside Version 1 bounds",
-                    "OAuth assumed token lifetime",
-                )),
-            ),
-            (Some(1), Ok(())),
-            (Some(86_400), Ok(())),
-            (
-                Some(86_401),
-                Err(ConfigError::InvalidField(
-                    "numeric value is outside Version 1 bounds",
-                    "OAuth assumed token lifetime",
-                )),
-            ),
-            (None, Ok(())),
+        for (assumed_lifetime_seconds, accepted) in [
+            (Some(0), false),
+            (Some(1), true),
+            (Some(86_400), true),
+            (Some(86_401), false),
+            (None, true),
         ] {
+            // The bound is the member's own type, so a value outside it
+            // cannot be constructed, let alone validated.
+            let Ok(assumed) = assumed_lifetime_seconds.map(BoundedU64::new).transpose() else {
+                assert!(!accepted, "{assumed_lifetime_seconds:?} was refused");
+                continue;
+            };
+            assert!(accepted, "{assumed_lifetime_seconds:?} was constructed");
             let mut oauth =
                 EvidenceConfig::parse_yaml(valid.as_bytes()).expect("fixture validates");
             *http_authentication(&mut oauth) = SourceAuthentication::Oauth2ClientCredentials {
@@ -8994,10 +9534,10 @@ mod tests {
                 audience: None,
                 resource: None,
                 credential_placement: Some(CredentialPlacement::FormBody),
-                maximum_cache_seconds: 60,
-                assumed_lifetime_seconds,
+                maximum_cache_seconds: BoundedU64::new(60).expect("a valid cache bound"),
+                assumed_lifetime_seconds: assumed,
             };
-            assert_eq!(oauth.validate(), expected, "{assumed_lifetime_seconds:?}");
+            assert_eq!(oauth.validate(), Ok(()), "{assumed_lifetime_seconds:?}");
         }
     }
 
@@ -9542,17 +10082,17 @@ outboundTls:
             candidate.extend_from_slice(format!("{governed_key}: {{}}\n").as_bytes());
             let rejection = RuntimeConfig::parse_yaml(&candidate)
                 .expect_err("runtime accepted governed bundle key {governed_key}");
-            let ConfigError::InvalidYaml(fault) = &rejection else {
+            let ConfigError::Refused(report) = &rejection else {
                 panic!("runtime accepted governed bundle key {governed_key}: {rejection}");
             };
+            let diagnostic = &report.diagnostics()[0];
             assert_eq!(
-                fault.cause(),
-                "unknown field",
+                diagnostic.code, "config.unknown-key",
                 "governed bundle key {governed_key} was rejected for the wrong reason"
             );
             assert_eq!(
-                fault.path(),
-                Some(governed_key),
+                diagnostic.path,
+                format!("/{governed_key}"),
                 "governed bundle key {governed_key} was rejected without naming it"
             );
             assert!(
@@ -9981,8 +10521,8 @@ outboundTls:
     #[test]
     fn source_batch_optimization_is_fixed_route_two_author_and_pre_io_planned() {
         let document = source_batch_document();
-        let config =
-            EvidenceConfig::parse_yaml(document.as_bytes()).expect("batch source validates");
+        let config = EvidenceConfig::parse_yaml_reporting_rule(document.as_bytes())
+            .expect("batch source validates");
         let requirement = &config.requirements[0].id;
         let runtime = runtime_for_source_batch(true);
         assert_eq!(
@@ -10005,7 +10545,7 @@ outboundTls:
         let without_bundle_capability =
             edited(&document, "acquisitionCapabilities: [source-batch]\n", "");
         assert_eq!(
-            EvidenceConfig::parse_yaml(without_bundle_capability.as_bytes()).err(),
+            EvidenceConfig::parse_yaml_reporting_rule(without_bundle_capability.as_bytes()).err(),
             Some(ConfigError::Invalid(
                 "source batch optimization is not a declared bundle capability"
             )),
@@ -10018,7 +10558,7 @@ outboundTls:
             "      pathTemplate: /v1/facts/{subject}\n      pathBindings:\n        subject: {from: selector, role: subject, profile: person-demographics-v1, field: given_name}\n",
         );
         assert_eq!(
-            EvidenceConfig::parse_yaml(templated.as_bytes()).err(),
+            EvidenceConfig::parse_yaml_reporting_rule(templated.as_bytes()).err(),
             Some(ConfigError::Invalid(
                 "source batch optimization requires a fixed request path"
             ))
@@ -10030,7 +10570,7 @@ outboundTls:
             "      extractScript: adapters/Source-extract-batch.rhai\n",
         );
         assert_eq!(
-            EvidenceConfig::parse_yaml(unsafe_adapter.as_bytes()).err(),
+            EvidenceConfig::parse_yaml_reporting_rule(unsafe_adapter.as_bytes()).err(),
             Some(ConfigError::Invalid(
                 "source batch adapter name must be a local identifier"
             )),
@@ -10043,7 +10583,7 @@ outboundTls:
             "    unresolvedProblem: {status: 404, type: https://id.example.invalid/problems/unresolved, code: consultation.unresolved}\n    batch:\n",
         );
         assert_eq!(
-            EvidenceConfig::parse_yaml(unresolved_batch.as_bytes()).err(),
+            EvidenceConfig::parse_yaml_reporting_rule(unresolved_batch.as_bytes()).err(),
             Some(ConfigError::Invalid(
                 "declared unresolved problems are not supported by source batching"
             )),
@@ -10054,7 +10594,7 @@ outboundTls:
     #[test]
     fn declared_unresolved_problem_tuple_is_closed_and_bounded() {
         DeclaredUnresolvedProblem {
-            status: 404,
+            status: BoundedU32::new(404).expect("404 is the declared status"),
             type_uri: "https://id.example.invalid/problems/unresolved".to_owned(),
             code: "consultation.unresolved".to_owned(),
         }
@@ -10063,17 +10603,9 @@ outboundTls:
 
         for (label, problem) in [
             (
-                "status",
-                DeclaredUnresolvedProblem {
-                    status: 403,
-                    type_uri: "https://id.example.invalid/problems/unresolved".to_owned(),
-                    code: "consultation.unresolved".to_owned(),
-                },
-            ),
-            (
                 "type",
                 DeclaredUnresolvedProblem {
-                    status: 404,
+                    status: BoundedU32::new(404).expect("404 is the declared status"),
                     type_uri: "http://id.example.invalid/problems/unresolved".to_owned(),
                     code: "consultation.unresolved".to_owned(),
                 },
@@ -10081,7 +10613,7 @@ outboundTls:
             (
                 "code",
                 DeclaredUnresolvedProblem {
-                    status: 404,
+                    status: BoundedU32::new(404).expect("404 is the declared status"),
                     type_uri: "https://id.example.invalid/problems/unresolved".to_owned(),
                     code: "Consultation Unresolved".to_owned(),
                 },
@@ -10089,6 +10621,20 @@ outboundTls:
         ] {
             assert!(problem.validate().is_err(), "{label}");
         }
+
+        // Only 404 is representable, so another status is refused as the
+        // bundle is read rather than by the tuple's own rule.
+        let other_status = acceptance_fixture().replacen(
+            "    posture: field-projected\n",
+            "    posture: field-projected\n    unresolvedProblem: {status: 403, type: https://id.example.invalid/problems/unresolved, code: consultation.unresolved}\n",
+            1,
+        );
+        assert!(
+            bundle_refusal(&other_status)
+                .iter()
+                .any(|diagnostic| diagnostic.code == "config.out-of-range"),
+            "a status other than 404 is out of range"
+        );
 
         let overlong_type = format!("https://id.example.invalid/problems/{}", "a".repeat(513));
         let candidate = acceptance_fixture().replacen(
@@ -10099,7 +10645,7 @@ outboundTls:
             1,
         );
         assert_eq!(
-            EvidenceConfig::parse_yaml(candidate.as_bytes()).err(),
+            EvidenceConfig::parse_yaml_reporting_rule(candidate.as_bytes()).err(),
             Some(ConfigError::Invalid(
                 "declared unresolved problem type is too long"
             )),
@@ -10108,7 +10654,7 @@ outboundTls:
 
         assert!(
             DeclaredUnresolvedProblem {
-                status: 404,
+                status: BoundedU32::new(404).expect("404 is the declared status"),
                 type_uri: "https://id.example.invalid/problems/unresolved".to_owned(),
                 code: format!("a{}", "x".repeat(63)),
             }
@@ -10118,7 +10664,7 @@ outboundTls:
         );
         assert!(
             DeclaredUnresolvedProblem {
-                status: 404,
+                status: BoundedU32::new(404).expect("404 is the declared status"),
                 type_uri: "https://id.example.invalid/problems/unresolved".to_owned(),
                 code: format!("a{}", "x".repeat(64)),
             }
@@ -10319,11 +10865,30 @@ outboundTls:
   trustProfiles: {}
 ";
 
-    fn runtime_refusal(text: &str) -> SchemaFault {
+    fn runtime_report(text: &str) -> Report {
         match RuntimeConfig::parse_yaml(text.as_bytes()) {
-            Err(ConfigError::InvalidYaml(fault)) => fault,
-            other => panic!("the runtime document was not refused as a schema fault: {other:?}"),
+            Err(ConfigError::Refused(report)) => *report,
+            other => panic!("the runtime document was not refused by the reader: {other:?}"),
         }
+    }
+
+    fn deciding(report: &Report) -> &registry_platform_yaml::Diagnostic {
+        report
+            .diagnostics()
+            .first()
+            .expect("a refusal carries a diagnostic")
+    }
+
+    fn position(diagnostic: &registry_platform_yaml::Diagnostic) -> (usize, usize) {
+        let source = diagnostic
+            .source
+            .as_ref()
+            .expect("the diagnostic names its source");
+        assert_eq!(source.file, "runtime.yaml");
+        (
+            source.line.expect("a line"),
+            source.column.expect("a column"),
+        )
     }
 
     #[test]
@@ -10337,19 +10902,22 @@ outboundTls:
                 "",
             )
             .replace("kind: EvidenceRuntimeConfig\n", "");
-        let fault = runtime_refusal(&unenveloped);
-        assert_eq!(
-            fault.cause(),
-            "document does not declare the Evidence runtime envelope"
+        let report = runtime_report(&unenveloped);
+        let diagnostic = deciding(&report);
+        assert_eq!(diagnostic.code, "config.missing-envelope");
+        assert!(
+            diagnostic
+                .suggested_action
+                .contains(EVIDENCE_RUNTIME_API_VERSION),
+            "the fix names the apiVersion to write: {diagnostic:?}"
         );
-        assert_eq!(fault.remedy(), Some(EVIDENCE_RUNTIME_ENVELOPE_REMEDY));
 
         let other_kind = LOADER_RUNTIME_DOCUMENT
             .replace("kind: EvidenceRuntimeConfig", "kind: RelayRuntimeConfig");
-        assert_eq!(
-            runtime_refusal(&other_kind).cause(),
-            "document does not declare the Evidence runtime envelope"
-        );
+        let report = runtime_report(&other_kind);
+        assert_eq!(deciding(&report).code, "config.wrong-kind");
+        assert_eq!(deciding(&report).path, "/kind");
+        assert_eq!(position(deciding(&report)), (2, 7));
     }
 
     #[test]
@@ -10362,20 +10930,21 @@ outboundTls:
             ),
         ];
         for (member, path) in cases {
-            let fault = runtime_refusal(&format!("{LOADER_RUNTIME_DOCUMENT}{member}"));
-            assert_eq!(fault.cause(), "key is no longer accepted", "{path}");
-            assert_eq!(fault.path(), Some(path));
+            let report = runtime_report(&format!("{LOADER_RUNTIME_DOCUMENT}{member}"));
+            let diagnostic = deciding(&report);
+            assert_eq!(diagnostic.code, "config.removed-key", "{path}");
+            assert_eq!(diagnostic.path, format!("/{path}"));
             let expected = EVIDENCE_RUNTIME_REMOVED_KEYS
                 .iter()
                 .find(|removed| removed.path == path)
                 .expect("the key is listed")
                 .replacement;
-            assert_eq!(fault.remedy(), Some(expected), "{path}");
+            assert!(
+                diagnostic.suggested_action.starts_with(expected),
+                "{path}: {diagnostic:?}"
+            );
         }
-        for (listener, path) in [
-            ("listener", "listener.bindHost"),
-            ("listener", "listener.port"),
-        ] {
+        for path in ["listener.bindHost", "listener.port"] {
             let member = path.rsplit('.').next().expect("a leaf");
             let value = if member == "port" {
                 "8080"
@@ -10383,31 +10952,241 @@ outboundTls:
                 "127.0.0.1"
             };
             let text = LOADER_RUNTIME_DOCUMENT.replace(
-                &format!("{listener}:\n  bind: 127.0.0.1:8080\n"),
-                &format!("{listener}:\n  bind: 127.0.0.1:8080\n  {member}: {value}\n"),
+                "listener:\n  bind: 127.0.0.1:8080\n",
+                &format!("listener:\n  bind: 127.0.0.1:8080\n  {member}: {value}\n"),
             );
-            let fault = runtime_refusal(&text);
-            assert_eq!(fault.path(), Some(path));
+            let report = runtime_report(&text);
+            let diagnostic = deciding(&report);
+            assert_eq!(diagnostic.path, format!("/listener/{member}"));
             assert!(
-                fault
-                    .remedy()
-                    .is_some_and(|remedy| remedy.contains("listener.bind")),
+                diagnostic.suggested_action.contains("listener.bind"),
                 "{path}"
             );
         }
         let metrics = format!(
             "{LOADER_RUNTIME_DOCUMENT}metricsListener:\n  bindHost: 127.0.0.1\n  port: 9090\n"
         );
-        let fault = runtime_refusal(&metrics);
-        assert!(fault
-            .remedy()
-            .is_some_and(|remedy| remedy.contains("metricsListener.bind")));
+        let report = runtime_report(&metrics);
+        let removed: Vec<_> = report
+            .diagnostics()
+            .iter()
+            .filter(|diagnostic| diagnostic.code == "config.removed-key")
+            .collect();
+        assert_eq!(removed.len(), 2, "{report:?}");
+        assert!(removed
+            .iter()
+            .all(|diagnostic| diagnostic.suggested_action.contains("metricsListener.bind")));
     }
 
     #[test]
     fn a_duplicated_runtime_key_is_refused() {
         let duplicated = format!("{LOADER_RUNTIME_DOCUMENT}kind: EvidenceRuntimeConfig\n");
-        assert!(RuntimeConfig::parse_yaml(duplicated.as_bytes()).is_err());
+        assert_eq!(
+            deciding(&runtime_report(&duplicated)).code,
+            "yaml.duplicate-key"
+        );
+    }
+
+    /// The runtime reports the shared reader's diagnostics unchanged: the
+    /// reader's code, the RFC 6901 path, the line and column, and the fix.
+    /// No diagnostic and no rendering repeats the value that was refused.
+    #[test]
+    fn every_runtime_refusal_carries_the_reader_diagnostic_unchanged() {
+        const CANARY: &str = "canary-runtime-value-7731";
+        let replaced = |from: &str, to: &str| {
+            let text = LOADER_RUNTIME_DOCUMENT.replace(from, to);
+            assert_ne!(text, LOADER_RUNTIME_DOCUMENT, "{from} is in the document");
+            text
+        };
+        let appended = |member: &str| format!("{LOADER_RUNTIME_DOCUMENT}{member}");
+        let nested = format!("{}{CANARY}{}", "[".repeat(200), "]".repeat(200));
+        let cases: Vec<(&str, String, &str, &str)> = vec![
+            (
+                "unknown key",
+                appended(&format!("bogusField: {CANARY}\n")),
+                "config.unknown-key",
+                "/bogusField",
+            ),
+            (
+                "missing key",
+                replaced(
+                    "audit:\n  path: /var/lib/registry-evidence/audit/evidence.jsonl\n",
+                    "",
+                ),
+                "config.missing-key",
+                "",
+            ),
+            (
+                "wrong type",
+                replaced(
+                    "maximumRequestBytes: 65536",
+                    &format!("maximumRequestBytes: {CANARY}"),
+                ),
+                "config.expected-integer",
+                "/listener/maximumRequestBytes",
+            ),
+            (
+                "null member",
+                replaced(
+                    "path: /var/lib/registry-evidence/audit/evidence.jsonl",
+                    "path: ~",
+                ),
+                "config.null-value",
+                "/audit/path",
+            ),
+            (
+                "unknown variant",
+                replaced(
+                    "tlsTermination: operator-controlled-upstream",
+                    &format!("tlsTermination: {CANARY}"),
+                ),
+                "config.unknown-variant",
+                "/listener/tlsTermination",
+            ),
+            (
+                "out of range",
+                replaced(
+                    "maximumConcurrentRequests: 64",
+                    "maximumConcurrentRequests: 99999999999",
+                ),
+                "config.out-of-range",
+                "/listener/maximumConcurrentRequests",
+            ),
+            (
+                "above the member's own bound",
+                replaced(
+                    "maximumConcurrentRequests: 64",
+                    "maximumConcurrentRequests: 4097",
+                ),
+                "config.out-of-range",
+                "/listener/maximumConcurrentRequests",
+            ),
+            (
+                "below the member's own bound",
+                replaced("maximumRequestBytes: 65536", "maximumRequestBytes: 1023"),
+                "config.out-of-range",
+                "/listener/maximumRequestBytes",
+            ),
+            (
+                "listener bind",
+                replaced(
+                    "bind: 127.0.0.1:8080",
+                    &format!("bind: {CANARY}.internal:8080"),
+                ),
+                "config.invalid-value",
+                "/listener/bind",
+            ),
+            (
+                "secret reference inside the signer",
+                replaced(
+                    "privateKeyRef: secret:file/signing-key",
+                    &format!("privateKeyRef: {CANARY}"),
+                ),
+                "config.invalid-value",
+                "/signer/privateKeyRef",
+            ),
+            (
+                "unknown signer kind",
+                replaced("kind: local-jwk", &format!("kind: {CANARY}")),
+                "config.unknown-variant",
+                "/signer/kind",
+            ),
+            (
+                "duplicate key",
+                appended(&format!("audit: {CANARY}\n")),
+                "yaml.duplicate-key",
+                "/audit",
+            ),
+            (
+                "more than one document",
+                appended(&format!("---\nbogusField: {CANARY}\n")),
+                "yaml.multiple-documents",
+                "",
+            ),
+            (
+                "nesting",
+                appended(&format!("bogusField: {nested}\n")),
+                "yaml.too-deep",
+                "",
+            ),
+            (
+                "tag",
+                replaced(
+                    "maximumRequestBytes: 65536",
+                    "maximumRequestBytes: !!int 65536",
+                ),
+                "yaml.tag",
+                "/listener/maximumRequestBytes",
+            ),
+            (
+                "key that is not a string",
+                appended(&format!("7: {CANARY}\n")),
+                "yaml.non-string-key",
+                "",
+            ),
+            (
+                "anchor",
+                replaced(
+                    "privateKeyRef: secret:file/signing-key",
+                    "privateKeyRef: &key secret:file/signing-key",
+                ),
+                "yaml.anchor",
+                "/signer/privateKeyRef",
+            ),
+            (
+                "not a mapping",
+                format!("- {CANARY}\n"),
+                "config.invalid-type",
+                "",
+            ),
+        ];
+        for (label, document, code, path) in cases {
+            let report = runtime_report(&document);
+            let diagnostic = deciding(&report);
+            assert_eq!(diagnostic.code, code, "{label}: {diagnostic:?}");
+            if !path.is_empty() {
+                assert_eq!(diagnostic.path, path, "{label}");
+            }
+            assert!(
+                !diagnostic.suggested_action.is_empty(),
+                "{label}: the diagnostic names its fix"
+            );
+            let error = ConfigError::Refused(Box::new(report.clone()));
+            assert!(
+                !error.to_string().contains(CANARY)
+                    && !report.to_json_value().to_string().contains(CANARY),
+                "{label}: the refusal repeats the refused value"
+            );
+        }
+    }
+
+    /// The signer is a tagged union the reader decodes itself, so a refusal
+    /// inside a variant keeps its full path, line, and column.
+    #[test]
+    fn a_bad_secret_reference_inside_the_signer_names_its_path_and_position() {
+        let text = LOADER_RUNTIME_DOCUMENT.replace(
+            "privateKeyRef: secret:file/signing-key",
+            "privateKeyRef: file/signing-key",
+        );
+        let report = runtime_report(&text);
+        let diagnostic = deciding(&report);
+        assert_eq!(diagnostic.code, "config.invalid-value");
+        assert_eq!(diagnostic.path, "/signer/privateKeyRef");
+        assert_eq!(position(diagnostic), (17, 18));
+        let rendered = ConfigError::Refused(Box::new(report)).to_string();
+        assert!(
+            rendered.contains("runtime.yaml:17:18 /signer/privateKeyRef"),
+            "{rendered}"
+        );
+
+        let transit = LOADER_RUNTIME_DOCUMENT.replace(
+            "  kind: local-jwk\n  privateKeyRef: secret:file/signing-key\n",
+            "  kind: transit\n  unixSocketPath: /run/transit.sock\n  mount: transit\n  \
+             keyName: evidence\n  keyVersion: seven\n  timeoutMilliseconds: 2000\n",
+        );
+        let report = runtime_report(&transit);
+        assert_eq!(deciding(&report).path, "/signer/keyVersion");
+        assert_eq!(position(deciding(&report)), (20, 15));
     }
 
     /// Substitution fills operator values from the environment. It never
@@ -10455,12 +11234,13 @@ outboundTls:
             let refused = RuntimeConfig::parse_yaml_with(text.as_bytes(), |_| {
                 Some("secret:file/other".to_owned())
             });
-            let Err(ConfigError::InvalidYaml(fault)) = refused else {
+            let Err(ConfigError::Refused(report)) = refused else {
                 panic!("substitution into {from} was accepted");
             };
             assert_eq!(
-                fault.cause(),
-                "environment expressions are not accepted in secret references or secretProviders"
+                report.diagnostics()[0].code,
+                "config.substitution-not-allowed",
+                "{from}"
             );
         }
     }
@@ -10516,18 +11296,41 @@ outboundTls:
         assert!(RuntimeConfig::parse_yaml(malformed.as_bytes()).is_err());
     }
 
-    #[test]
-    fn every_removed_bundle_authentication_and_audit_key_is_refused_with_its_replacement_named() {
-        let valid = String::from_utf8(
+    /// The adult-status acceptance bundle, which every bundle-reader test
+    /// edits into the case it proves.
+    fn acceptance_bundle() -> String {
+        String::from_utf8(
             include_bytes!(
                 "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
             )
             .to_vec(),
         )
-        .expect("fixture is UTF-8");
+        .expect("fixture is UTF-8")
+    }
+
+    /// The diagnostics a refused bundle carries.
+    fn bundle_refusal(text: &str) -> Vec<registry_platform_yaml::Diagnostic> {
+        match EvidenceConfig::parse_yaml(text.as_bytes()) {
+            Err(ConfigError::Refused(report)) => report.into_diagnostics(),
+            Err(other) => panic!("the bundle was refused outside the reader: {other}"),
+            Ok(_) => panic!("the bundle was accepted"),
+        }
+    }
+
+    /// The one-based line on which `needle` first appears in `text`.
+    fn line_of(text: &str, needle: &str) -> usize {
+        text.lines()
+            .position(|line| line.contains(needle))
+            .expect("the needle is in the text")
+            + 1
+    }
+
+    #[test]
+    fn every_removed_bundle_authentication_and_audit_key_is_refused_with_its_replacement_named() {
+        let valid = acceptance_bundle();
         EvidenceConfig::parse_yaml(valid.as_bytes()).expect("fixture validates");
-        for (path, replacement) in REMOVED_BUNDLE_KEYS {
-            let mut segments = path.split('.').collect::<Vec<_>>();
+        for removed in EVIDENCE_BUNDLE_REMOVED_KEYS {
+            let mut segments = removed.pointer[1..].split('/').collect::<Vec<_>>();
             let leaf = segments.pop().expect("a leaf");
             let mut value =
                 serde_norway::from_str::<serde_norway::Value>(&valid).expect("fixture parses");
@@ -10544,40 +11347,170 @@ outboundTls:
                 serde_norway::Value::from("x"),
             );
             let text = serde_norway::to_string(&value).expect("the candidate serializes");
-            let Err(ConfigError::InvalidYaml(fault)) = EvidenceConfig::parse_yaml(text.as_bytes())
-            else {
-                panic!("{path} was not refused as a removed key");
-            };
-            assert_eq!(fault.cause(), "key is no longer accepted", "{path}");
-            assert_eq!(fault.path(), Some(*path));
-            assert_eq!(fault.remedy(), Some(*replacement), "{path}");
+            let diagnostics = bundle_refusal(&text);
+            let refusal = diagnostics
+                .iter()
+                .find(|diagnostic| diagnostic.path == removed.pointer)
+                .unwrap_or_else(|| panic!("{} was not refused", removed.pointer));
+            assert_eq!(refusal.code, "config.removed-key", "{}", removed.pointer);
+            assert_eq!(
+                refusal.suggested_action, removed.replacement,
+                "{}",
+                removed.pointer
+            );
+            let source = refusal.source.as_ref().expect("a position");
+            assert!(source.line.is_some(), "{}", removed.pointer);
         }
     }
 
     #[test]
     fn an_authored_bundle_carrying_an_environment_expression_is_refused() {
-        let valid = String::from_utf8(
-            include_bytes!(
-                "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
-            )
-            .to_vec(),
-        )
-        .expect("fixture is UTF-8");
+        let valid = acceptance_bundle();
         let candidate = valid.replace(
             "publicOrigin: https://evidence.invalid",
             "publicOrigin: 'https://${EVIDENCE_HOST}'",
         );
         assert_ne!(candidate, valid, "the fixture carries the public origin");
-        let Err(ConfigError::InvalidYaml(fault)) = EvidenceConfig::parse_yaml(candidate.as_bytes())
-        else {
-            panic!("an environment expression in the bundle was not refused");
-        };
-        assert_eq!(
-            fault.cause(),
-            "environment expressions are not accepted in the governed bundle"
+        let diagnostics = bundle_refusal(&candidate);
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        let refusal = &diagnostics[0];
+        assert_eq!(refusal.code, "config.substitution-not-allowed");
+        assert_eq!(refusal.path, "/service/publicOrigin");
+        let source = refusal.source.as_ref().expect("a position");
+        assert_eq!(source.line, Some(line_of(&candidate, "publicOrigin:")));
+        let rendered = serde_json::to_string(&diagnostics).expect("diagnostics serialize");
+        assert!(!rendered.contains("EVIDENCE_HOST"));
+    }
+
+    #[test]
+    fn an_environment_expression_in_a_bundle_key_is_refused() {
+        let valid = acceptance_bundle();
+        let candidate = valid.replacen("    principalClaim:", "    ${EVIDENCE_KEY}:", 1);
+        assert_ne!(candidate, valid);
+        let diagnostics = bundle_refusal(&candidate);
+        let refusal = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "config.substitution-not-allowed")
+            .expect("the expression in the key is refused");
+        let source = refusal.source.as_ref().expect("a position");
+        assert_eq!(source.line, Some(line_of(&candidate, "${EVIDENCE_KEY}:")));
+    }
+
+    #[test]
+    fn a_bad_member_inside_a_tagged_source_reports_its_full_path_and_position() {
+        let valid = acceptance_bundle();
+        let candidate = valid.replacen(
+            "    transport: http-json",
+            "    transport: http-json\n    unexpectedMember: 1",
+            1,
         );
-        assert_eq!(fault.path(), Some("service.publicOrigin"));
-        assert!(!fault.to_string().contains("EVIDENCE_HOST"));
+        assert_ne!(candidate, valid, "the fixture declares an HTTP source");
+        let diagnostics = bundle_refusal(&candidate);
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        let refusal = &diagnostics[0];
+        assert_eq!(refusal.code, "config.unknown-key");
+        assert_eq!(refusal.path, "/sources/source-a/unexpectedMember");
+        let source = refusal.source.as_ref().expect("a position");
+        assert_eq!(source.line, Some(line_of(&candidate, "unexpectedMember")));
+        assert_eq!(source.column, Some(5));
+    }
+
+    #[test]
+    fn every_unknown_key_in_the_oidc_block_is_reported() {
+        let valid = acceptance_bundle();
+        let candidate = valid.replacen(
+            "    issuer:",
+            "    firstStray: 1\n    secondStray: 2\n    issuer:",
+            1,
+        );
+        assert_ne!(candidate, valid, "the fixture declares an OIDC issuer");
+        let diagnostics = bundle_refusal(&candidate);
+        let paths = diagnostics
+            .iter()
+            .map(|diagnostic| (diagnostic.code.as_str(), diagnostic.path.as_str()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            paths,
+            [
+                ("config.unknown-key", "/authentication/oidc/firstStray"),
+                ("config.unknown-key", "/authentication/oidc/secondStray"),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_bundle_rule_violation_is_placed_at_the_member_it_concerns() {
+        let valid = acceptance_bundle();
+        let candidate = valid.replacen(
+            "subjectBinding: {secretRef: secret:file/subject-binding-key,",
+            "subjectBinding: {secretRef: secret:file/audit-hash-key,",
+            1,
+        );
+        assert_ne!(
+            candidate, valid,
+            "the fixture binds subjects with its own key"
+        );
+        let diagnostics = bundle_refusal(&candidate);
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        let refusal = &diagnostics[0];
+        assert_eq!(refusal.code, "evidence.bundle.invalid-subject-binding");
+        assert_eq!(refusal.path, "/subjectBinding/secretRef");
+        let source = refusal.source.as_ref().expect("a position");
+        assert_eq!(source.line, Some(line_of(&candidate, "subjectBinding:")));
+    }
+
+    #[test]
+    fn a_quoted_integer_and_a_null_are_refused_in_the_bundle() {
+        let valid = acceptance_bundle();
+        let quoted = valid.replacen("hashKeyVersion: 1", "hashKeyVersion: '1'", 1);
+        assert_ne!(quoted, valid);
+        let diagnostics = bundle_refusal(&quoted);
+        assert_eq!(diagnostics[0].path, "/audit/hashKeyVersion");
+        assert_eq!(diagnostics[0].code, "config.expected-integer");
+        let null = valid.replacen("hashKeyVersion: 1", "hashKeyVersion: null", 1);
+        let diagnostics = bundle_refusal(&null);
+        assert_eq!(diagnostics[0].path, "/audit/hashKeyVersion");
+        assert_eq!(diagnostics[0].code, "config.null-value");
+    }
+
+    #[test]
+    fn bundle_key_versions_stay_inside_the_contract_range() {
+        let valid = acceptance_bundle();
+        let validator = bundle_contract_validator();
+        for (member, path) in [
+            ("hashKeyVersion: 1", "/audit/hashKeyVersion"),
+            ("keyVersion: 1", "/subjectBinding/keyVersion"),
+        ] {
+            let name = member.trim_end_matches(" 1");
+            for (version, accepted) in [
+                (0_u64, false),
+                (1, true),
+                (2_147_483_647, true),
+                (2_147_483_648, false),
+            ] {
+                let mutated = valid.replacen(member, &format!("{name} {version}"), 1);
+                assert!(
+                    version == 1 || mutated != valid,
+                    "the mutation applies at {path}"
+                );
+                assert_eq!(
+                    validator.is_valid(&bundle_contract_instance(mutated.as_bytes())),
+                    accepted,
+                    "the contract disagrees at {path} {version}"
+                );
+                if accepted {
+                    EvidenceConfig::parse_yaml(mutated.as_bytes())
+                        .unwrap_or_else(|_| panic!("{path} {version} is inside the range"));
+                } else {
+                    let diagnostics = bundle_refusal(&mutated);
+                    assert_eq!(
+                        diagnostics[0].code, "config.out-of-range",
+                        "{path} {version}"
+                    );
+                    assert_eq!(diagnostics[0].path, path, "{version}");
+                }
+            }
+        }
     }
 
     #[test]
@@ -10725,7 +11658,8 @@ outboundTls:
     fn fetch_set_acquisition_requires_two_to_four_distinct_configured_members() {
         let yaml = fetch_set_bundle();
         let validator = bundle_contract_validator();
-        EvidenceConfig::parse_yaml(yaml.as_bytes()).expect("the declared fetch set validates");
+        EvidenceConfig::parse_yaml_reporting_rule(yaml.as_bytes())
+            .expect("the declared fetch set validates");
         assert!(
             validator.is_valid(&bundle_contract_instance(yaml.as_bytes())),
             "the contract rejects the declared fetch set"
@@ -10769,7 +11703,7 @@ outboundTls:
             let mutated = yaml.replace(DECLARED_MEMBERS, members);
             assert_ne!(mutated, yaml, "{expected}");
             assert_eq!(
-                EvidenceConfig::parse_yaml(mutated.as_bytes()).err(),
+                EvidenceConfig::parse_yaml_reporting_rule(mutated.as_bytes()).err(),
                 Some(ConfigError::Invalid(expected)),
                 "{expected}"
             );
@@ -10791,17 +11725,11 @@ outboundTls:
                 &format!("      maximumAcquisitionMilliseconds: {budget}\n"),
             );
             assert_ne!(mutated, yaml, "{budget}");
-            let parsed = EvidenceConfig::parse_yaml(mutated.as_bytes());
             if accepted {
-                parsed.unwrap_or_else(|_| panic!("the budget {budget} is inside the range"));
+                EvidenceConfig::parse_yaml(mutated.as_bytes())
+                    .unwrap_or_else(|_| panic!("the budget {budget} is inside the range"));
             } else {
-                assert_eq!(
-                    parsed.err(),
-                    Some(ConfigError::Invalid(
-                        "requirement acquisition budget is outside Version 1 bounds"
-                    )),
-                    "{budget}"
-                );
+                assert_eq!(decode_cause(&mutated), "config.out-of-range", "{budget}");
             }
             assert_eq!(
                 validator.is_valid(&bundle_contract_instance(mutated.as_bytes())),
@@ -10840,7 +11768,7 @@ outboundTls:
             let mutated = yaml.replace(FIRST_MEMBER, &member);
             assert_ne!(mutated, yaml, "{expected}");
             assert_eq!(
-                EvidenceConfig::parse_yaml(mutated.as_bytes()).err(),
+                EvidenceConfig::parse_yaml_reporting_rule(mutated.as_bytes()).err(),
                 Some(ConfigError::Invalid(expected)),
                 "{expected}"
             );
@@ -10903,7 +11831,7 @@ outboundTls:
             );
             assert_ne!(mutated, yaml, "{capabilities}");
             assert_eq!(
-                EvidenceConfig::parse_yaml(mutated.as_bytes())
+                EvidenceConfig::parse_yaml_reporting_rule(mutated.as_bytes())
                     .err()
                     .map(|error| match error {
                         ConfigError::Invalid(cause) => cause,
@@ -10958,8 +11886,8 @@ outboundTls:
     #[test]
     fn fetch_set_members_are_the_acquisitions_fetch_sources() {
         let yaml = fetch_set_bundle();
-        let config =
-            EvidenceConfig::parse_yaml(yaml.as_bytes()).expect("the declared fetch set validates");
+        let config = EvidenceConfig::parse_yaml_reporting_rule(yaml.as_bytes())
+            .expect("the declared fetch set validates");
         let requirement = &config.requirements[0];
         assert_eq!(requirement.acquisition.initial_source(), "source-a");
         assert_eq!(
@@ -10987,7 +11915,7 @@ outboundTls:
         );
         assert_ne!(unfetched, yaml, "the single-call rewrite applies");
         assert_eq!(
-            EvidenceConfig::parse_yaml(unfetched.as_bytes()).err(),
+            EvidenceConfig::parse_yaml_reporting_rule(unfetched.as_bytes()).err(),
             Some(ConfigError::Invalid(
                 "prior-fact path bindings are permitted only on fetch sources"
             ))
@@ -11380,20 +12308,7 @@ outboundTls:
         let shortfall = audience_scoped
             .burst_shortfall()
             .expect("a burst of ten cannot hold a sixteen-item request batch");
-        assert_eq!(
-            shortfall,
-            BurstShortfall {
-                burst: 10,
-                largest_request_cost: 16
-            }
-        );
-        assert_eq!(
-            shortfall.to_string(),
-            "rateLimits.burstPerPrincipal is 10, below 16, the largest request cost this bundle \
-             admits: a request batch or holder-bound release that costs more than the burst is \
-             always refused as evidence.invalid_request. Raise rateLimits.burstPerPrincipal to at \
-             least 16 unless capping those requests below 16 is intended"
-        );
+        assert_eq!(shortfall, BurstShortfall::RequestBatch);
 
         let raised = all_definitions.replace("burstPerPrincipal: 10", "burstPerPrincipal: 16");
         assert_ne!(raised, all_definitions, "the burst mutation applies");
@@ -11415,10 +12330,7 @@ outboundTls:
             EvidenceConfig::parse_yaml(narrow.as_bytes())
                 .expect("fixture parses")
                 .burst_shortfall(),
-            Some(BurstShortfall {
-                burst: 3,
-                largest_request_cost: 4
-            })
+            Some(BurstShortfall::HolderBoundBatch)
         );
     }
 

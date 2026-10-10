@@ -1,0 +1,8 @@
+id: bom-accepted
+rules: [CFG-YAML-6]
+summary: A leading byte-order mark is accepted and ignored.
+encoding:
+  byteOrderMark: true
+expect:
+  exit: 0
+  diagnostics: []

@@ -6,6 +6,10 @@
 //! written into a temporary directory, and the command is asked to draft one
 //! source from them. Nothing here reaches the network, and no sample value is
 //! expected in any assertion: only bounds derived from the sample are.
+#![allow(
+    clippy::disallowed_methods,
+    reason = "tests read back the YAML the code under test wrote, or a published contract or fixture, to assert on it; they read no operator configuration"
+)]
 
 use std::{
     path::{Path, PathBuf},
@@ -99,7 +103,6 @@ fn drafts_into_a_project_and_then_refuses_to_overwrite_the_draft() {
         path_argument(&sample),
         "--source-id".to_owned(),
         "source-b".to_owned(),
-        "--project".to_owned(),
         path_argument(&project),
     ];
     let output = evidencectl(&arguments);
@@ -131,6 +134,11 @@ fn drafts_into_a_project_and_then_refuses_to_overwrite_the_draft() {
     let source: Value =
         serde_norway::from_str(&std::fs::read_to_string(&source_path).expect("read source object"))
             .expect("source object parses");
+    assert_eq!(
+        source["apiVersion"],
+        "id.registrystack.org/formats/evidence/source/v1alpha1"
+    );
+    assert_eq!(source["kind"], "EvidenceSource");
     assert_eq!(source["transport"], "http-json");
     assert!(
         source.get("sources").is_none(),
@@ -227,7 +235,6 @@ fn a_project_always_uses_its_retained_openapi() {
     let output = evidencectl(&[
         "source".to_owned(),
         "suggest".to_owned(),
-        "--project".to_owned(),
         path_argument(&project),
         "--openapi".to_owned(),
         path_argument(&other),
@@ -570,7 +577,9 @@ fn list_pointers_prints_the_selectable_leaves_in_both_formats() {
     assert_eq!(
         report,
         serde_json::json!({
+            "apiVersion": "id.registrystack.org/formats/evidence/ctl-report/v1alpha1",
             "command": "source suggest",
+            "kind": "EvidenceCtlReport",
             "notes": [],
             "ok": true,
             "pointers": EXPECTED,
@@ -683,7 +692,6 @@ fn a_delivered_draft_reports_the_written_files_and_equivalent_command_in_json() 
         "/total".to_owned(),
         "--source-id".to_owned(),
         "source-b".to_owned(),
-        "--project".to_owned(),
         path_argument(&project),
     ];
     let output = evidencectl(&arguments);

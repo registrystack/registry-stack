@@ -1,0 +1,9 @@
+id: document-start-accepted
+rules: [CFG-ENV-4]
+summary: A leading `---` is accepted.
+mutation:
+  prepend: |
+    ---
+expect:
+  exit: 0
+  diagnostics: []

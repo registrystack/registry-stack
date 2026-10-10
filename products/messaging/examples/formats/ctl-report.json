@@ -1,0 +1,61 @@
+{
+  "ok": true,
+  "command": "check",
+  "status": "complete",
+  "apiVersion": "id.registrystack.org/formats/messaging/ctl-report/v1alpha1",
+  "kind": "MessagingCtlReport",
+  "accessProfiles": [
+    {
+      "id": "case-notices",
+      "role": "sender"
+    },
+    {
+      "id": "operations",
+      "role": "operator"
+    }
+  ],
+  "diagnostics": [],
+  "filesChecked": 18,
+  "project": "products/messaging/examples/starter",
+  "projectDigest": "sha256:b819f6d18f1b32ede522cb7c4ad436056a1cc85e10523c891dcfe892623ecb5b",
+  "projectFiles": 18,
+  "templates": [
+    {
+      "channel": "email",
+      "id": "appointment-reminder",
+      "locales": [
+        "en",
+        "fr"
+      ],
+      "samples": [
+        {
+          "locale": "en",
+          "sms": null
+        },
+        {
+          "locale": "fr",
+          "sms": null
+        }
+      ],
+      "version": "1"
+    },
+    {
+      "channel": "sms",
+      "id": "appointment-reminder-sms",
+      "locales": [
+        "en"
+      ],
+      "samples": [
+        {
+          "locale": "en",
+          "sms": {
+            "encoding": "gsm7",
+            "segments": 1,
+            "units": 85
+          }
+        }
+      ],
+      "version": "1"
+    }
+  ]
+}

@@ -503,6 +503,8 @@ authoring only; a deployment must use a reviewed authenticated HTTPS source.
 Create `questions/fhir-coverage-status.yaml`:
 
 ```yaml title="questions/fhir-coverage-status.yaml" test-file
+apiVersion: id.registrystack.org/formats/evidence/question/v1alpha1
+kind: EvidenceQuestion
 id: fhir-coverage-status
 question: Does this coverage record report active coverage for the selected patient?
 purpose: coverage-record-verification
@@ -563,6 +565,8 @@ the payor, subscriber identifier, coverage class, period, and every other source
 Create `questions/fhir-healthcare-establishment.yaml`:
 
 ```yaml title="questions/fhir-healthcare-establishment.yaml" test-file
+apiVersion: id.registrystack.org/formats/evidence/question/v1alpha1
+kind: EvidenceQuestion
 id: fhir-healthcare-establishment
 question: Does this organization record report an active healthcare provider?
 purpose: healthcare-establishment-verification

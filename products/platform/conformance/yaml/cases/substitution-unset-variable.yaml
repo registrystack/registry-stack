@@ -1,0 +1,16 @@
+id: substitution-unset-variable
+rules: [CFG-SEC-2, CFG-CHECK-1]
+summary: With --environment, an unset variable is refused at the value, naming the variable.
+appliesTo:
+  audiences: [operator]
+args: [--environment]
+mutation:
+  member:
+    role: optionalText
+    value: '"${REGISTRY_CONFORMANCE_UNSET}"'
+expect:
+  exit: 1
+  diagnostics:
+    - code: config.substitution
+      path: "{pointer}"
+      at: {line: 1, column: 1}

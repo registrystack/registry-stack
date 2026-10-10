@@ -42,7 +42,7 @@ pub fn render(config: &EvidenceConfig) -> Result<Option<Vec<u8>>, ProfileError> 
                 ServiceKind::Evidence,
                 publication.title.clone(),
                 publication.description.clone(),
-                publication.endpoint_url.clone(),
+                publication.endpoint_url.as_str().to_owned(),
                 roles.clone(),
                 publication.jurisdictions.clone(),
                 vec![EVIDENCE_PROFILE_ID.to_owned(), capability],

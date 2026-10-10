@@ -240,9 +240,23 @@ async fn same_role_profiles_with_distinct_principals_require_distinct_scopes() {
     let mut alternate = profile("staff-by-employee", "casework:staff", CaseworkRole::Staff);
     alternate.principal_claim = "employee_id".to_owned();
     overlapping.access_profiles.push(alternate);
+    let findings = overlapping
+        .findings()
+        .into_iter()
+        .map(|finding| (finding.code, finding.pointer))
+        .collect::<Vec<_>>();
     assert_eq!(
-        overlapping.check(),
-        Err(registry_casework_core::ConfigError::AccessProfileScopes)
+        findings,
+        [
+            (
+                "casework.access-profile.shared-scopes",
+                "/accessProfiles/0/requiredScopes".to_owned()
+            ),
+            (
+                "casework.access-profile.shared-scopes",
+                "/accessProfiles/4/requiredScopes".to_owned()
+            ),
+        ]
     );
 
     let mut separated = project();

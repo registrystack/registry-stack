@@ -1,0 +1,464 @@
+{
+  "$defs": {
+    "AccessTokenAlgorithm": {
+      "description": "The signature algorithms an offer token may be signed with.\n\nThe same closed vocabulary Evidence accepts on its own resource-server\nprofile. Mixing families is refused when the configuration loads rather than\nwhen the first token arrives.",
+      "enum": [
+        "EdDSA",
+        "ES256",
+        "RS256"
+      ],
+      "type": "string"
+    },
+    "ClaimNamesDocument": {
+      "additionalProperties": false,
+      "description": "The contextual claim names an offer-token issuer uses. Each is distinct,\nand none is a registered or authentication claim.",
+      "properties": {
+        "actorKind": {
+          "$ref": "#/$defs/ExternalId",
+          "default": "registry_actor_kind"
+        },
+        "approver": {
+          "$ref": "#/$defs/ExternalId",
+          "default": "registry_approver"
+        },
+        "grantBounds": {
+          "$ref": "#/$defs/ExternalId",
+          "default": "registry_grant_bounds"
+        },
+        "grantClient": {
+          "$ref": "#/$defs/ExternalId",
+          "default": "registry_grant_client"
+        },
+        "grantExp": {
+          "$ref": "#/$defs/ExternalId",
+          "default": "registry_grant_exp"
+        },
+        "grantId": {
+          "$ref": "#/$defs/ExternalId",
+          "default": "registry_grant_id"
+        },
+        "grantResource": {
+          "$ref": "#/$defs/ExternalId",
+          "default": "registry_grant_resource"
+        },
+        "grantSourceIssuer": {
+          "$ref": "#/$defs/ExternalId",
+          "default": "registry_grant_source_issuer"
+        },
+        "purpose": {
+          "$ref": "#/$defs/ExternalId",
+          "default": "registry_purpose"
+        }
+      },
+      "type": "object"
+    },
+    "EnvironmentSecretProviderConfig": {
+      "additionalProperties": false,
+      "description": "The environment secret provider. It takes no settings.",
+      "type": "object"
+    },
+    "EvidenceDocument": {
+      "additionalProperties": false,
+      "description": "The Evidence deployment this service requests credentials from.",
+      "properties": {
+        "baseUrl": {
+          "$ref": "#/$defs/Url",
+          "description": "The Evidence base URL, with no query or fragment. https in strict mode."
+        }
+      },
+      "required": [
+        "baseUrl"
+      ],
+      "type": "object"
+    },
+    "ExternalId": {
+      "description": "An identifier another system issues, written exactly as its issuer gives it.",
+      "maxLength": 512,
+      "minLength": 1,
+      "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
+      "type": "string"
+    },
+    "FileSecretProviderConfig": {
+      "additionalProperties": false,
+      "description": "The file secret provider.",
+      "properties": {
+        "root": {
+          "description": "Absolute directory holding one file per secret. Each file must be a\nregular file owned by the runtime user, mode 0400 or 0600, with exactly\none hard link.",
+          "pattern": "^/",
+          "type": "string"
+        }
+      },
+      "required": [
+        "root"
+      ],
+      "type": "object"
+    },
+    "IdentifierRestriction": {
+      "anyOf": [
+        {
+          "const": "unrestricted",
+          "description": "Admit any value.",
+          "type": "string"
+        },
+        {
+          "description": "Admit exactly these values.",
+          "items": {
+            "$ref": "#/$defs/ExternalId"
+          },
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        }
+      ],
+      "description": "Which values a gate admits: the keyword `unrestricted`, or a nonempty list\nof the admitted values. An empty list is refused, because it reads as both\n\"nothing\" and \"anything\"."
+    },
+    "ListenerBind": {
+      "description": "Socket address the runtime listens on, written host:port with an IP address host ([addr]:port for IPv6).",
+      "maxLength": 128,
+      "minLength": 1,
+      "type": "string"
+    },
+    "ListenerConfig": {
+      "additionalProperties": false,
+      "description": "The listener of a runtime that declares no TLS or exposure settings.",
+      "properties": {
+        "bind": {
+          "$ref": "#/$defs/ListenerBind"
+        }
+      },
+      "required": [
+        "bind"
+      ],
+      "type": "object"
+    },
+    "ListenerDocument": {
+      "additionalProperties": false,
+      "description": "The listener a wallet and an adopter reach.",
+      "properties": {
+        "bind": {
+          "$ref": "#/$defs/ListenerBind"
+        },
+        "maximumRequestBytes": {
+          "default": 16384,
+          "description": "The largest request body accepted, in bytes. A limit no wallet request\ncan survive leaves the service reporting itself ready while every\nrequest fails.",
+          "format": "uint32",
+          "maximum": 1048576,
+          "minimum": 1024,
+          "type": "integer"
+        },
+        "requestTimeoutMilliseconds": {
+          "default": 5000,
+          "description": "How long one request may take, in milliseconds.",
+          "format": "uint64",
+          "maximum": 30000,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "bind"
+      ],
+      "type": "object"
+    },
+    "OffersDocument": {
+      "additionalProperties": false,
+      "description": "The authorization boundary of the adopter-facing offer endpoint.",
+      "properties": {
+        "algorithms": {
+          "default": [
+            "EdDSA"
+          ],
+          "description": "The one signature algorithm an offer token may be signed with.",
+          "items": {
+            "$ref": "#/$defs/AccessTokenAlgorithm"
+          },
+          "maxItems": 1,
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "audiences": {
+          "description": "The audiences this service answers to, each at most 256 bytes. A token\nissued for anything else is refused.",
+          "items": {
+            "$ref": "#/$defs/ExternalId"
+          },
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "authorizedClients": {
+          "$ref": "#/$defs/IdentifierRestriction",
+          "description": "Client identifiers permitted to create offers, each at most 128 bytes,\nor `unrestricted` for any client the issuer vouched for."
+        },
+        "claims": {
+          "$ref": "#/$defs/ClaimNamesDocument",
+          "default": {
+            "actorKind": "registry_actor_kind",
+            "approver": "registry_approver",
+            "grantBounds": "registry_grant_bounds",
+            "grantClient": "registry_grant_client",
+            "grantExp": "registry_grant_exp",
+            "grantId": "registry_grant_id",
+            "grantResource": "registry_grant_resource",
+            "grantSourceIssuer": "registry_grant_source_issuer",
+            "purpose": "registry_purpose"
+          },
+          "description": "Contextual claim names used by this offer-token issuer. Keep these\naligned with Evidence when both verify tokens from the same deployment."
+        },
+        "issuer": {
+          "$ref": "#/$defs/Url",
+          "description": "The authorization server that issues offer tokens, compared exactly\nagainst a token's `iss`. https in strict mode."
+        },
+        "jwksUri": {
+          "$ref": "#/$defs/Url",
+          "description": "The offer-token issuer's key set. https in strict mode."
+        },
+        "maximumTokenLifetimeSeconds": {
+          "default": 900,
+          "description": "The longest lifetime an offer token may carry, in seconds.",
+          "format": "uint64",
+          "maximum": 3600,
+          "minimum": 60,
+          "type": "integer"
+        },
+        "requiredScopes": {
+          "$ref": "#/$defs/IdentifierRestriction",
+          "description": "Scopes every offer token must carry, each an RFC 6749 scope token of at\nmost 256 bytes, or `unrestricted` for no scope gate. Generated\nconfigurations state `oid4vci:offer`."
+        }
+      },
+      "required": [
+        "issuer",
+        "jwksUri",
+        "audiences",
+        "authorizedClients",
+        "requiredScopes"
+      ],
+      "type": "object"
+    },
+    "SecretProvidersConfig": {
+      "additionalProperties": false,
+      "anyOf": [
+        {
+          "properties": {
+            "file": {
+              "$ref": "#/$defs/FileSecretProviderConfig"
+            }
+          },
+          "required": [
+            "file"
+          ]
+        },
+        {
+          "properties": {
+            "environment": {
+              "$ref": "#/$defs/EnvironmentSecretProviderConfig"
+            }
+          },
+          "required": [
+            "environment"
+          ]
+        }
+      ],
+      "description": "The secret providers a runtime enables. A reference is resolved only by a\nprovider declared here: `secret:file/name` under `file.root`, and\n`secret:env/NAME` only when `environment: {}` is present.",
+      "properties": {
+        "environment": {
+          "$ref": "#/$defs/EnvironmentSecretProviderConfig",
+          "description": "Enables `secret:env/NAME` references, read from the process\nenvironment. Declared as an empty mapping: `environment: {}`."
+        },
+        "file": {
+          "$ref": "#/$defs/FileSecretProviderConfig",
+          "description": "Enables `secret:file/name` references, read from files under `root`."
+        }
+      },
+      "type": "object"
+    },
+    "SecretReference": {
+      "description": "An exact secret reference: secret:file/name, resolved under secretProviders.file.root, or secret:env/NAME, resolved only when secretProviders.environment is declared.",
+      "pattern": "^(?:secret:env/[A-Z][A-Z0-9_]{0,127}|secret:file/[a-z][a-z0-9._-]{0,127})$",
+      "type": "string"
+    },
+    "StoreDocument": {
+      "additionalProperties": false,
+      "description": "The bounds of the in-memory store.",
+      "properties": {
+        "accessTokenLifetimeSeconds": {
+          "default": 300,
+          "description": "How long an access token lives, in seconds.",
+          "format": "uint64",
+          "maximum": 900,
+          "minimum": 60,
+          "type": "integer"
+        },
+        "maximumOffers": {
+          "default": 4096,
+          "description": "How many offers the store holds. A store too small to hold a\ndeployment's live offers refuses new ones rather than forgetting old\nones.",
+          "format": "uint32",
+          "maximum": 1048576,
+          "minimum": 256,
+          "type": "integer"
+        },
+        "maximumTransactionCodeAttempts": {
+          "default": 3,
+          "description": "How many wrong transaction codes an offer survives.",
+          "format": "uint32",
+          "maximum": 10,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "nonceLifetimeSeconds": {
+          "default": 120,
+          "description": "How long a nonce lives, in seconds; at most the access token lifetime.",
+          "format": "uint64",
+          "maximum": 900,
+          "minimum": 30,
+          "type": "integer"
+        },
+        "offerLifetimeSeconds": {
+          "default": 300,
+          "description": "How long an offer lives, in seconds. Minutes, in both directions:\nshorter than a person can scan a code and read a message, and the flow\ncannot complete; longer, and a stolen offer stays useful.",
+          "format": "uint64",
+          "maximum": 900,
+          "minimum": 60,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "TokenClientDocument": {
+      "additionalProperties": false,
+      "description": "The identity this service authenticates to its token issuer with.",
+      "properties": {
+        "clientAssertionAudience": {
+          "$ref": "#/$defs/Url",
+          "description": "The value the endpoint expects as the client assertion `aud`. Absent\nmeans the token endpoint, which is the usual registration."
+        },
+        "clientId": {
+          "$ref": "#/$defs/ExternalId",
+          "description": "The client identifier registered with the token issuer, at most 128\nbytes."
+        },
+        "privateKeyRef": {
+          "$ref": "#/$defs/SecretReference",
+          "description": "The client's own private JWK, as `secret:file/<name>` under\n`secretProviders.file.root` or `secret:env/<NAME>`. Resolved when the\noutbound client is built, never logged and never rendered."
+        },
+        "resource": {
+          "$ref": "#/$defs/ExternalId",
+          "description": "The fixed RFC 8707 resource identifier of the Evidence API: an\nabsolute URI with no fragment or user information."
+        },
+        "scopes": {
+          "description": "The exact scopes requested from the issuer for Evidence access: 1 to\n32 distinct RFC 6749 scope tokens. Absent requests no scope.",
+          "items": {
+            "$ref": "#/$defs/ExternalId"
+          },
+          "maxItems": 32,
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "tokenEndpoint": {
+          "$ref": "#/$defs/Url",
+          "description": "The token endpoint, with no query or fragment. https in strict mode."
+        }
+      },
+      "required": [
+        "tokenEndpoint",
+        "clientId",
+        "privateKeyRef"
+      ],
+      "type": "object"
+    },
+    "Url": {
+      "description": "An absolute http or https URL with a host and no user information.",
+      "format": "uri",
+      "maxLength": 2048,
+      "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://[^/?#@]+([/?#].*)?$",
+      "type": "string"
+    },
+    "ValidationMode": {
+      "description": "The transport validation boundary selected for this process.\n\nA two-axis transport vocabulary with deliberately no third assurance\nconcept: a delivery front end that graded itself on its own scale would\ninvent a security property nothing else in the stack recognizes.",
+      "oneOf": [
+        {
+          "const": "strict",
+          "description": "Every published and called origin uses https.",
+          "type": "string"
+        },
+        {
+          "const": "supervised-local-development",
+          "description": "One supervised process group on loopback: the credential issuer is a\ncanonical `http://127.0.0.1:<port>` origin the listener binds exactly,\nand every called origin is https or a 127.0.0.1 HTTP origin.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$id": "https://id.registrystack.org/schemas/evidence/oid4vci-runtime/oid4vci-runtime.v1alpha1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The wallet-delivery runtime file: one deployment of the OID4VCI delivery\nfront end for Evidence credentials.",
+  "properties": {
+    "apiVersion": {
+      "const": "id.registrystack.org/formats/evidence/oid4vci-runtime/v1alpha1",
+      "description": "The format version of this file.",
+      "type": "string"
+    },
+    "credentialIssuer": {
+      "$ref": "#/$defs/Url",
+      "description": "The `credential_issuer` identifier this service publishes, and the\nvalue a wallet proof must carry as its `aud`: a bare origin with no\npath, query, or fragment. https in strict mode. A trailing slash is\nremoved, so what is published and what is compared are the same bytes."
+    },
+    "evidence": {
+      "$ref": "#/$defs/EvidenceDocument",
+      "description": "The Evidence deployment this service requests credentials from."
+    },
+    "kind": {
+      "const": "EvidenceOid4vciRuntimeConfig",
+      "description": "The document kind.",
+      "type": "string"
+    },
+    "listener": {
+      "$ref": "#/$defs/ListenerDocument",
+      "description": "The listener a wallet and an adopter reach."
+    },
+    "metricsListener": {
+      "$ref": "#/$defs/ListenerConfig",
+      "description": "The optional operator-only metrics listener: a loopback or private\naddress the delivery listener does not use. Absent means no metrics\nendpoint exists."
+    },
+    "offers": {
+      "$ref": "#/$defs/OffersDocument",
+      "description": "The authorization boundary of the adopter-facing offer endpoint."
+    },
+    "secretProviders": {
+      "$ref": "#/$defs/SecretProvidersConfig",
+      "description": "The secret providers `tokenClient.privateKeyRef` may name."
+    },
+    "store": {
+      "$ref": "#/$defs/StoreDocument",
+      "default": {
+        "accessTokenLifetimeSeconds": 300,
+        "maximumOffers": 4096,
+        "maximumTransactionCodeAttempts": 3,
+        "nonceLifetimeSeconds": 120,
+        "offerLifetimeSeconds": 300
+      },
+      "description": "The bounds of the in-memory store."
+    },
+    "tokenClient": {
+      "$ref": "#/$defs/TokenClientDocument",
+      "description": "The identity this service authenticates to its token issuer with."
+    },
+    "validationMode": {
+      "$ref": "#/$defs/ValidationMode",
+      "default": "strict",
+      "description": "The transport validation boundary. Absent means strict."
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind",
+    "credentialIssuer",
+    "listener",
+    "secretProviders",
+    "evidence",
+    "tokenClient",
+    "offers"
+  ],
+  "title": "Evidence OID4VCI delivery runtime configuration",
+  "type": "object"
+}

@@ -1,8 +1,22 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://registrystack.org/caseworkctl/v1alpha3/DevGrantReport.schema.json",
+  "$id": "https://id.registrystack.org/schemas/casework/dev-grant-report/dev-grant-report.v1alpha3.schema.json",
   "title": "DevGrantReport",
   "description": "Versioned JSON report emitted by caseworkctl for dev grant.",
+  "type": "object",
+  "required": [
+    "apiVersion",
+    "kind"
+  ],
+  "properties": {
+    "apiVersion": {
+      "const": "registry.registrystack.org/caseworkctl/v1alpha3"
+    },
+    "kind": {
+      "const": "DevGrantReport"
+    }
+  },
+  "unevaluatedProperties": false,
   "oneOf": [
     {
       "type": "object",
@@ -14,7 +28,8 @@
         "apiVersion",
         "kind",
         "headerFile",
-        "grantExpiresAt"
+        "grantExpiresAt",
+        "diagnostics"
       ],
       "properties": {
         "ok": {
@@ -37,6 +52,9 @@
         },
         "grantExpiresAt": {
           "type": "string"
+        },
+        "diagnostics": {
+          "$ref": "#/$defs/warnings"
         }
       }
     },
@@ -90,7 +108,6 @@
       "required": [
         "severity",
         "code",
-        "artifact",
         "path",
         "message",
         "suggestedAction"
@@ -113,13 +130,80 @@
         },
         "suggestedAction": {
           "type": "string"
+        },
+        "source": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "file"
+          ],
+          "properties": {
+            "file": {
+              "type": "string"
+            },
+            "line": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1048577
+            },
+            "column": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1048577
+            }
+          }
+        },
+        "related": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "file",
+              "path",
+              "message"
+            ],
+            "properties": {
+              "file": {
+                "type": "string"
+              },
+              "line": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 1048577
+              },
+              "column": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 1048577
+              },
+              "path": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              }
+            }
+          }
         }
       }
     },
-    "findings": {
+    "warnings": {
       "type": "array",
       "items": {
-        "$ref": "#/$defs/diagnostic"
+        "allOf": [
+          {
+            "$ref": "#/$defs/diagnostic"
+          },
+          {
+            "properties": {
+              "severity": {
+                "const": "warning"
+              }
+            }
+          }
+        ],
+        "unevaluatedProperties": false
       }
     }
   }

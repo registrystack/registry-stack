@@ -50,7 +50,7 @@ fn signing_writes_private_and_public_jwk_with_expected_modes() {
     let out_dir = dir.path().join("keys");
 
     let output = evidencectl()
-        .args(["keygen", "signing", "--out-dir"])
+        .args(["keygen", "signing", "--output-dir"])
         .arg(&out_dir)
         .output()
         .expect("run evidencectl");
@@ -112,7 +112,7 @@ fn signing_rejects_user_supplied_kid() {
     let out_dir = dir.path().join("keys");
 
     let output = evidencectl()
-        .args(["keygen", "signing", "--out-dir"])
+        .args(["keygen", "signing", "--output-dir"])
         .arg(&out_dir)
         .args(["--kid", "custom-kid-1"])
         .output()
@@ -130,7 +130,7 @@ fn signing_rejects_an_empty_or_whitespace_only_kid() {
     let out_dir = dir.path().join("keys");
 
     let output = evidencectl()
-        .args(["keygen", "signing", "--out-dir"])
+        .args(["keygen", "signing", "--output-dir"])
         .arg(&out_dir)
         .args(["--kid", "   "])
         .output()
@@ -152,9 +152,9 @@ fn signing_public_out_overrides_the_default_public_path() {
     let public_out = dir.path().join("elsewhere").join("signing-public.json");
 
     let output = evidencectl()
-        .args(["keygen", "signing", "--out-dir"])
+        .args(["keygen", "signing", "--output-dir"])
         .arg(&out_dir)
-        .arg("--public-out")
+        .arg("--public-output")
         .arg(&public_out)
         .output()
         .expect("run evidencectl");
@@ -171,7 +171,7 @@ fn holder_writes_private_and_public_jwk_with_holder_filenames() {
     let out_dir = dir.path().join("holder-keys");
 
     let output = evidencectl()
-        .args(["keygen", "holder", "--out-dir"])
+        .args(["keygen", "holder", "--output-dir"])
         .arg(&out_dir)
         .output()
         .expect("run evidencectl");
@@ -201,7 +201,7 @@ fn secret_writes_exactly_32_raw_bytes_with_owner_only_mode() {
     let out = dir.path().join("secrets").join("audit-hmac-key");
 
     let output = evidencectl()
-        .args(["keygen", "secret", "--out"])
+        .args(["keygen", "secret", "--output"])
         .arg(&out)
         .output()
         .expect("run evidencectl");
@@ -222,7 +222,7 @@ fn secret_invocations_generate_independent_values() {
 
     for out in [&first, &second] {
         let output = evidencectl()
-            .args(["keygen", "secret", "--out"])
+            .args(["keygen", "secret", "--output"])
             .arg(out)
             .output()
             .expect("run evidencectl");
@@ -249,7 +249,7 @@ fn secret_never_contains_a_nul_byte() {
     for index in 0..64 {
         let out = dir.path().join(format!("secret-{index}.key"));
         let output = evidencectl()
-            .args(["keygen", "secret", "--out"])
+            .args(["keygen", "secret", "--output"])
             .arg(&out)
             .output()
             .expect("run evidencectl");
@@ -270,7 +270,7 @@ fn signing_refuses_overwrite_and_force_option() {
     let out_dir = dir.path().join("keys");
 
     let first = evidencectl()
-        .args(["keygen", "signing", "--out-dir"])
+        .args(["keygen", "signing", "--output-dir"])
         .arg(&out_dir)
         .output()
         .expect("run evidencectl");
@@ -280,7 +280,7 @@ fn signing_refuses_overwrite_and_force_option() {
     let original_private = fs::read_to_string(&private_path).expect("read private jwk");
 
     let second = evidencectl()
-        .args(["keygen", "signing", "--out-dir"])
+        .args(["keygen", "signing", "--output-dir"])
         .arg(&out_dir)
         .output()
         .expect("run evidencectl");
@@ -295,7 +295,7 @@ fn signing_refuses_overwrite_and_force_option() {
     );
 
     let force = evidencectl()
-        .args(["keygen", "signing", "--out-dir"])
+        .args(["keygen", "signing", "--output-dir"])
         .arg(&out_dir)
         .arg("--force")
         .output()
@@ -313,7 +313,7 @@ fn secret_refuses_overwrite_and_force_option() {
     let out = dir.path().join("secret.key");
 
     let first = evidencectl()
-        .args(["keygen", "secret", "--out"])
+        .args(["keygen", "secret", "--output"])
         .arg(&out)
         .output()
         .expect("run evidencectl");
@@ -321,7 +321,7 @@ fn secret_refuses_overwrite_and_force_option() {
     let original = fs::read(&out).expect("read secret");
 
     let second = evidencectl()
-        .args(["keygen", "secret", "--out"])
+        .args(["keygen", "secret", "--output"])
         .arg(&out)
         .output()
         .expect("run evidencectl");
@@ -329,7 +329,7 @@ fn secret_refuses_overwrite_and_force_option() {
     assert_eq!(fs::read(&out).expect("read secret"), original);
 
     let force = evidencectl()
-        .args(["keygen", "secret", "--out"])
+        .args(["keygen", "secret", "--output"])
         .arg(&out)
         .arg("--force")
         .output()
@@ -349,7 +349,7 @@ fn signing_batch_abort_leaves_the_private_file_unwritten() {
     fs::write(out_dir.join("signing-p256-public.jwk.json"), b"stale").expect("seed public file");
 
     let output = evidencectl()
-        .args(["keygen", "signing", "--out-dir"])
+        .args(["keygen", "signing", "--output-dir"])
         .arg(&out_dir)
         .output()
         .expect("run evidencectl");
@@ -375,7 +375,7 @@ fn secret_leaves_a_pre_existing_parent_directorys_mode_untouched() {
 
     let out = parent.join("audit-hmac-key");
     let output = evidencectl()
-        .args(["keygen", "secret", "--out"])
+        .args(["keygen", "secret", "--output"])
         .arg(&out)
         .output()
         .expect("run evidencectl");
@@ -396,7 +396,7 @@ fn signing_out_dir_mode_is_normalized_to_0700_when_pre_created_looser() {
     fs::set_permissions(&out_dir, fs::Permissions::from_mode(0o755)).expect("loosen out-dir mode");
 
     let output = evidencectl()
-        .args(["keygen", "signing", "--out-dir"])
+        .args(["keygen", "signing", "--output-dir"])
         .arg(&out_dir)
         .output()
         .expect("run evidencectl");
@@ -424,7 +424,7 @@ fn signing_refuses_a_symlinked_private_path_without_writing_through_it() {
     symlink(&target, &private_path).expect("create symlink at the private path");
 
     let output = evidencectl()
-        .args(["keygen", "signing", "--out-dir"])
+        .args(["keygen", "signing", "--output-dir"])
         .arg(&out_dir)
         .output()
         .expect("run evidencectl");
@@ -454,7 +454,7 @@ fn signing_error_names_the_offending_paths() {
     fs::write(out_dir.join("signing-p256-private-jwk"), b"stale").expect("seed private file");
 
     let output = evidencectl()
-        .args(["keygen", "signing", "--out-dir"])
+        .args(["keygen", "signing", "--output-dir"])
         .arg(&out_dir)
         .output()
         .expect("run evidencectl");
@@ -476,7 +476,7 @@ fn token_writes_a_header_safe_value_with_owner_only_mode() {
     let out = dir.path().join("secrets").join("source-bearer-token");
 
     let output = evidencectl()
-        .args(["keygen", "token", "--out"])
+        .args(["keygen", "token", "--output"])
         .arg(&out)
         .output()
         .expect("run evidencectl");
@@ -509,7 +509,7 @@ fn token_invocations_generate_independent_values() {
 
     for out in [&first, &second] {
         let output = evidencectl()
-            .args(["keygen", "token", "--out"])
+            .args(["keygen", "token", "--output"])
             .arg(out)
             .output()
             .expect("run evidencectl");
@@ -529,7 +529,7 @@ fn token_refuses_overwrite_and_force_option() {
     fs::write(&out, b"already here").expect("seed token");
 
     let refused = evidencectl()
-        .args(["keygen", "token", "--out"])
+        .args(["keygen", "token", "--output"])
         .arg(&out)
         .output()
         .expect("run evidencectl");
@@ -541,7 +541,7 @@ fn token_refuses_overwrite_and_force_option() {
     );
 
     let force = evidencectl()
-        .args(["keygen", "token", "--force", "--out"])
+        .args(["keygen", "token", "--force", "--output"])
         .arg(&out)
         .output()
         .expect("run evidencectl");
@@ -561,7 +561,7 @@ fn client_assertion_defaults_to_es384_with_expected_modes() {
     let out_dir = dir.path().join("keys");
 
     let output = evidencectl()
-        .args(["keygen", "client-assertion", "--out-dir"])
+        .args(["keygen", "client-assertion", "--output-dir"])
         .arg(&out_dir)
         .output()
         .expect("run evidencectl");
@@ -620,7 +620,7 @@ fn client_assertion_rs384_writes_an_rsa_key_under_its_own_filenames() {
             "client-assertion",
             "--algorithm",
             "rs384",
-            "--out-dir",
+            "--output-dir",
         ])
         .arg(&out_dir)
         .output()
@@ -683,7 +683,7 @@ fn client_assertion_rejects_an_unknown_algorithm() {
             "client-assertion",
             "--algorithm",
             "es256",
-            "--out-dir",
+            "--output-dir",
         ])
         .arg(&out_dir)
         .output()
@@ -705,9 +705,9 @@ fn client_assertion_public_out_overrides_the_default_public_path() {
     let public_out = dir.path().join("elsewhere").join("client-public.json");
 
     let output = evidencectl()
-        .args(["keygen", "client-assertion", "--out-dir"])
+        .args(["keygen", "client-assertion", "--output-dir"])
         .arg(&out_dir)
-        .arg("--public-out")
+        .arg("--public-output")
         .arg(&public_out)
         .output()
         .expect("run evidencectl");
@@ -733,7 +733,7 @@ fn client_assertion_names_a_second_key_in_the_same_secret_root() {
 
     for name in ["records-authority-key", "registry-authority-key"] {
         let output = evidencectl()
-            .args(["keygen", "client-assertion", "--out-dir"])
+            .args(["keygen", "client-assertion", "--output-dir"])
             .arg(&out_dir)
             .args(["--private-name", name])
             .output()
@@ -792,7 +792,7 @@ fn client_assertion_refuses_a_private_name_no_bundle_could_reference() {
         let dir = tempfile::tempdir().expect("tempdir");
         let out_dir = dir.path().join("keys");
         let output = evidencectl()
-            .args(["keygen", "client-assertion", "--out-dir"])
+            .args(["keygen", "client-assertion", "--output-dir"])
             .arg(&out_dir)
             .args(["--private-name", name])
             .output()
@@ -814,7 +814,7 @@ fn client_assertion_refuses_overwrite_and_force_option() {
     let out_dir = dir.path().join("keys");
 
     let first = evidencectl()
-        .args(["keygen", "client-assertion", "--out-dir"])
+        .args(["keygen", "client-assertion", "--output-dir"])
         .arg(&out_dir)
         .output()
         .expect("run evidencectl");
@@ -824,7 +824,7 @@ fn client_assertion_refuses_overwrite_and_force_option() {
     let original_private = fs::read_to_string(&private_path).expect("read private jwk");
 
     let second = evidencectl()
-        .args(["keygen", "client-assertion", "--out-dir"])
+        .args(["keygen", "client-assertion", "--output-dir"])
         .arg(&out_dir)
         .output()
         .expect("run evidencectl");
@@ -839,7 +839,7 @@ fn client_assertion_refuses_overwrite_and_force_option() {
     );
 
     let force = evidencectl()
-        .args(["keygen", "client-assertion", "--out-dir"])
+        .args(["keygen", "client-assertion", "--output-dir"])
         .arg(&out_dir)
         .arg("--force")
         .output()
@@ -859,7 +859,7 @@ fn client_assertion_invocations_generate_independent_keys() {
     for index in 0..2 {
         let out_dir = dir.path().join(format!("keys-{index}"));
         let output = evidencectl()
-            .args(["keygen", "client-assertion", "--out-dir"])
+            .args(["keygen", "client-assertion", "--output-dir"])
             .arg(&out_dir)
             .output()
             .expect("run evidencectl");

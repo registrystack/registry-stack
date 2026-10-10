@@ -82,7 +82,7 @@ accessProfiles:
         operations: [create, get, list]
         readableFields: [person-code, legal-name, district]
         writableFields: [person-code, legal-name, district]
-        rowBoundaries: []
+        rowBoundaries: unrestricted
   - id: food-targeting
     principalClaim: registry_principal
     actorKind: service
@@ -94,7 +94,7 @@ accessProfiles:
         operations: [get, list]
         readableFields: [person-code, legal-name, district]
         allowCount: true
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         requireConsent:
           - {record: person-consent-decision, on: id}
   - id: person-consent-self
@@ -102,7 +102,7 @@ accessProfiles:
     requiredScopes: ['consent:person:self']
     permissions:
     - entity: person-consent-decision
-      rowBoundaries: []
+      rowBoundaries: unrestricted
       membershipBoundaries:
       - {field: subject, membershipEntity: person-consent-link, membershipKeyField: subject, principalField: principal, activeField: active}
       operations: [get, list]
@@ -113,88 +113,88 @@ accessProfiles:
       operations: [get, list]
       readableFields: [subject, active]
     - entity: person-privacy-notice
-      rowBoundaries: []
+      rowBoundaries: unrestricted
       operations: [get, list]
       readableFields: [notice-version, language, title, text, text-uri, controller-name, controller-contact, jurisdiction, legal-basis, rights-statement, rights-uri, withdrawal-method, published-at]
     - entity: person-notice-clause
-      rowBoundaries: []
+      rowBoundaries: unrestricted
       operations: [get, list]
       readableFields: [notice, recipient, purpose, scope, data-life, description]
     - action: give-person-consent
       operations: [invoke]
       targets:
       - {entity: person-consent-link, rowBoundaries: [{field: principal, claim: registry_principal, operator: equals}]}
-      - {entity: person, rowBoundaries: []}
-      - {entity: person-notice-clause, rowBoundaries: []}
-      - {entity: person-consent-decision, rowBoundaries: []}
+      - {entity: person, rowBoundaries: unrestricted}
+      - {entity: person-notice-clause, rowBoundaries: unrestricted}
+      - {entity: person-consent-decision, rowBoundaries: unrestricted}
       results: [decision]
     - action: refuse-person-consent
       operations: [invoke]
       targets:
       - {entity: person-consent-link, rowBoundaries: [{field: principal, claim: registry_principal, operator: equals}]}
-      - {entity: person, rowBoundaries: []}
-      - {entity: person-notice-clause, rowBoundaries: []}
-      - {entity: person-consent-decision, rowBoundaries: []}
+      - {entity: person, rowBoundaries: unrestricted}
+      - {entity: person-notice-clause, rowBoundaries: unrestricted}
+      - {entity: person-consent-decision, rowBoundaries: unrestricted}
       results: [decision]
     - action: withdraw-person-consent
       operations: [invoke]
       targets:
       - {entity: person-consent-link, rowBoundaries: [{field: principal, claim: registry_principal, operator: equals}]}
-      - {entity: person, rowBoundaries: []}
-      - {entity: person-notice-clause, rowBoundaries: []}
-      - {entity: person-consent-decision, rowBoundaries: []}
+      - {entity: person, rowBoundaries: unrestricted}
+      - {entity: person-notice-clause, rowBoundaries: unrestricted}
+      - {entity: person-consent-decision, rowBoundaries: unrestricted}
       results: [decision]
   - id: person-consent-assisted-capture
     principalClaim: registry_principal
     requiredScopes: ['consent:person:capture']
     permissions:
     - entity: person-notice-clause
-      rowBoundaries: []
+      rowBoundaries: unrestricted
       operations: [get, list]
       readableFields: [notice, recipient, purpose, scope, data-life, description]
     - action: record-person-consent-assisted
       operations: [invoke]
       targets:
-      - {entity: person, rowBoundaries: []}
-      - {entity: person-notice-clause, rowBoundaries: []}
-      - {entity: person-consent-decision, rowBoundaries: []}
+      - {entity: person, rowBoundaries: unrestricted}
+      - {entity: person-notice-clause, rowBoundaries: unrestricted}
+      - {entity: person-consent-decision, rowBoundaries: unrestricted}
       results: [decision]
   - id: person-consent-steward
     principalClaim: registry_principal
     requiredScopes: ['consent:person:steward']
     permissions:
     - entity: person-privacy-notice
-      rowBoundaries: []
+      rowBoundaries: unrestricted
       operations: [create, get, list]
       readableFields: [notice-version, language, title, text, text-uri, controller-name, controller-contact, jurisdiction, legal-basis, rights-statement, rights-uri, withdrawal-method, published-at]
       writableFields: [notice-version, language, title, text, text-uri, controller-name, controller-contact, jurisdiction, legal-basis, rights-statement, rights-uri, withdrawal-method, published-at]
     - entity: person-notice-clause
-      rowBoundaries: []
+      rowBoundaries: unrestricted
       operations: [create, get, list]
       readableFields: [notice, recipient, purpose, scope, data-life, description]
       writableFields: [notice, recipient, purpose, scope, data-life, description]
     - entity: person-consent-decision
-      rowBoundaries: []
+      rowBoundaries: unrestricted
       operations: [get, list]
       readableFields: [subject, link, notice, clause, recipient, purpose, scope, decision, effective-at, expires-at, channel, evidence, witness, invalidation-reason, source-reference]
     - action: invalidate-person-consent
       operations: [invoke]
       targets:
-      - {entity: person, rowBoundaries: []}
-      - {entity: person-consent-decision, rowBoundaries: []}
+      - {entity: person, rowBoundaries: unrestricted}
+      - {entity: person-consent-decision, rowBoundaries: unrestricted}
       results: [decision]
     - action: import-person-consent
       operations: [invoke]
       targets:
-      - {entity: person, rowBoundaries: []}
-      - {entity: person-consent-decision, rowBoundaries: []}
+      - {entity: person, rowBoundaries: unrestricted}
+      - {entity: person-consent-decision, rowBoundaries: unrestricted}
       results: [decision]
   - id: person-consent-link-steward
     principalClaim: registry_principal
     requiredScopes: ['consent:person:link']
     permissions:
     - entity: person-consent-link
-      rowBoundaries: []
+      rowBoundaries: unrestricted
       operations: [create, get, list, patch]
       readableFields: [subject, principal, active]
       writableFields: [subject, principal, active]

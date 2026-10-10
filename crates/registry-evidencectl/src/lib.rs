@@ -12,6 +12,7 @@ use clap::{
 
 mod access;
 mod audit_view;
+mod authored;
 mod authoring;
 mod build;
 mod check;
@@ -19,6 +20,7 @@ mod client;
 mod dev;
 mod doctor;
 mod evidence_binary;
+mod file_check;
 mod fixtures;
 mod junit;
 mod jwk;
@@ -37,6 +39,9 @@ mod target;
 mod tooling;
 mod tooling_editor;
 mod verify;
+
+#[cfg(feature = "schema")]
+pub mod schema;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -141,16 +146,25 @@ enum CliFormat {
 
 #[derive(Debug, Args)]
 struct CheckArgs {
-    /// Editable Evidence project directory.
-    project: PathBuf,
+    /// Editable Evidence project directory. Required unless --file is given.
+    #[arg(required_unless_present = "file")]
+    project: Option<PathBuf>,
+    /// Check one tooling file on its own, offline: a client profile, reviewed
+    /// contracts, development state, a source-import baseline or journal, a
+    /// source resolution file, or a source export manifest.
+    #[arg(long, conflicts_with_all = ["project", "target", "production"])]
+    file: Option<PathBuf>,
     /// Explicit deployment target whose governance and runtime structure are checked.
     #[arg(long)]
     target: Option<PathBuf>,
     /// Require a production or evidence-grade target and complete deployment closure.
-    #[arg(long)]
+    #[arg(long, requires = "target")]
     production: bool,
-    /// Refuse an otherwise valid but incomplete authoring project.
-    #[arg(long)]
+    /// Refuse a project whose check reports any warning.
+    #[arg(long, conflicts_with = "file")]
+    deny_warnings: bool,
+    /// The flag's former spelling, accepted only to name `--deny-warnings`.
+    #[arg(long, hide = true)]
     deny_findings: bool,
 }
 
@@ -182,6 +196,9 @@ struct TestArgs {
     /// Include the runtime's structured value-free evaluation trace.
     #[arg(long)]
     explain: bool,
+    /// Refuse a run whose fixture files carry any reader warning.
+    #[arg(long)]
+    deny_warnings: bool,
     #[arg(long, hide = true)]
     evidence_bin: Option<PathBuf>,
 }
@@ -261,7 +278,6 @@ const HUMAN_ONLY_COMMANDS: &[&[&str]] = &[
     &["client", "contracts", "fetch"],
     &["source", "mock", "serve"],
     &["source", "mock", "generate"],
-    &["source", "mock", "check"],
     &["source", "detach"],
     &["target", "new"],
     &["request", "prepare"],
@@ -430,6 +446,10 @@ fn run_entry() -> ExitCode {
             return ExitCode::from(report::USAGE_EXIT);
         }
     }
+    if matches!(&cli.command, Command::Check(args) if args.deny_findings) {
+        write_report_failure(&command_path, report::USAGE_EXIT, &renamed_flag(), format);
+        return ExitCode::from(report::USAGE_EXIT);
+    }
     let result = match cli.command {
         Command::Init(args) => {
             let artifact = args.directory.display().to_string();
@@ -441,8 +461,11 @@ fn run_entry() -> ExitCode {
                 "Use a new destination and correct the starter or import input named by the command.",
             )
         }
+        Command::Check(CheckArgs {
+            file: Some(file), ..
+        }) => Ok(file_check::run(&file, format)),
         Command::Check(args) => {
-            let artifact = args.project.display().to_string();
+            let artifact = project_of(&args).display().to_string();
             safe_command(
                 run_check_command(args, format),
                 "evidence.check.failed",
@@ -463,6 +486,7 @@ fn run_entry() -> ExitCode {
         }
         Command::Test(args) => {
             let artifact = args.project.display().to_string();
+            let project = args.project.clone();
             safe_command(
                 fixtures::run(fixtures::FixturesCommand::Run(fixtures::RunArgs {
                     project: args.project,
@@ -475,8 +499,9 @@ fn run_entry() -> ExitCode {
                     junit,
                     command: "test",
                     explain: args.explain,
-                    legacy_project: None,
-                })),
+                    deny_warnings: args.deny_warnings,
+                }))
+                .map_err(|error| authored::project_refusal(error, &project, &project)),
                 "evidence.test.failed",
                 artifact,
                 "Evidence could not complete the selected offline fixture run.",
@@ -485,6 +510,7 @@ fn run_entry() -> ExitCode {
         }
         Command::Package(args) => {
             let artifact = args.project.display().to_string();
+            let project = args.project.clone();
             safe_command(
                 build::run_package_with_format(
                     build::BuildArgs {
@@ -494,7 +520,8 @@ fn run_entry() -> ExitCode {
                         revision: args.revision,
                     },
                     format,
-                ),
+                )
+                .map_err(|error| authored::project_refusal(error, &project, &project)),
                 "evidence.package.failed",
                 artifact,
                 "Evidence could not compile the selected deployment candidate.",
@@ -561,6 +588,13 @@ fn run_entry() -> ExitCode {
     match result {
         Ok(code) => code,
         Err(error) => {
+            if let Some(found) = authored::report_in(&error) {
+                if junit {
+                    write_junit_setup_failure(&command_path, &found.summary());
+                }
+                write_report_failure(&command_path, report::DOMAIN_REFUSAL_EXIT, found, format);
+                return ExitCode::from(report::DOMAIN_REFUSAL_EXIT);
+            }
             if let Some(failure) = error.downcast_ref::<SafeCliFailure>() {
                 if junit {
                     write_junit_setup_failure(
@@ -577,6 +611,10 @@ fn run_entry() -> ExitCode {
             }
             if let Some(mismatch) = error.downcast_ref::<source_add::BregctlVersionMismatch>() {
                 write_bregctl_version_mismatch(mismatch, format);
+                return ExitCode::from(report::DOMAIN_REFUSAL_EXIT);
+            }
+            if let Some(refused) = error.downcast_ref::<source_import::DocumentRefused>() {
+                write_document_refusal(refused, &command_path, format);
                 return ExitCode::from(report::DOMAIN_REFUSAL_EXIT);
             }
             let operational = operational_cause(&error);
@@ -835,6 +873,38 @@ fn write_usage_failure(format: OutputFormat) {
     }
 }
 
+/// The usage refusal for `--deny-findings`, which names its new spelling.
+fn renamed_flag() -> registry_platform_yaml::Report {
+    registry_platform_yaml::Report::new(vec![registry_platform_yaml::Diagnostic::error(
+        "evidence.usage.flag-renamed",
+        "",
+        "--deny-findings was renamed to --deny-warnings",
+        "Rerun the command with --deny-warnings in place of --deny-findings.",
+    )])
+}
+
+/// Write a refusal that is a report of diagnostics: the diagnostics and the
+/// summary line on standard error, or the failure envelope carrying them.
+fn write_report_failure(
+    command: &str,
+    exit: u8,
+    found: &registry_platform_yaml::Report,
+    format: OutputFormat,
+) {
+    match format {
+        OutputFormat::Human => eprint!("{}", found.render_human()),
+        OutputFormat::Json => print_report(&report::failure(
+            command,
+            exit,
+            found
+                .to_json_value()
+                .as_array()
+                .cloned()
+                .unwrap_or_default(),
+        )),
+    }
+}
+
 fn safe_command(
     result: anyhow::Result<ExitCode>,
     code: &'static str,
@@ -843,7 +913,8 @@ fn safe_command(
     suggested_action: &'static str,
 ) -> anyhow::Result<ExitCode> {
     result.map_err(|error| {
-        if error.downcast_ref::<SafeCliFailure>().is_some() {
+        if error.downcast_ref::<SafeCliFailure>().is_some() || authored::report_in(&error).is_some()
+        {
             return error;
         }
         if let Some(diagnostic) = error
@@ -1049,6 +1120,31 @@ fn write_bregctl_version_mismatch(
     }
 }
 
+/// A document the shared reader refused: its diagnostics, unchanged.
+fn write_document_refusal(
+    refused: &source_import::DocumentRefused,
+    command: &str,
+    format: OutputFormat,
+) {
+    match format {
+        OutputFormat::Human => eprint!(
+            "evidencectl {command} refused the {}.\n{}",
+            refused.document,
+            refused.report.render_human()
+        ),
+        OutputFormat::Json => {
+            let serde_json::Value::Array(diagnostics) = refused.report.to_json_value() else {
+                unreachable!("the reader's diagnostics are a JSON array");
+            };
+            print_report(&report::failure(
+                command,
+                report::DOMAIN_REFUSAL_EXIT,
+                diagnostics,
+            ));
+        }
+    }
+}
+
 /// The envelope every successful `--format json` command report shares, with
 /// the command's own members merged in.
 pub(crate) fn command_report(command: &str, members: serde_json::Value) -> serde_json::Value {
@@ -1122,50 +1218,63 @@ fn normalize_arguments(mut arguments: Vec<OsString>) -> Vec<OsString> {
     arguments
 }
 
+/// The project a project check was given; clap requires it unless `--file`
+/// is present, and the file check never reaches this.
+fn project_of(args: &CheckArgs) -> &std::path::Path {
+    args.project
+        .as_deref()
+        .expect("clap requires a project unless --file is given")
+}
+
 fn run_check_command(args: CheckArgs, format: OutputFormat) -> anyhow::Result<ExitCode> {
-    match check::check(
-        &args.project,
+    let project = project_of(&args);
+    let checked = check::check(
+        project,
         args.target.as_deref(),
         args.production,
-        args.deny_findings,
-    ) {
-        Ok(report) => {
-            write_check_report(&report, format)?;
-            Ok(ExitCode::SUCCESS)
-        }
-        Err(error) => match error.downcast::<check::DeniedFindings>() {
-            Ok(denied) => {
-                let report =
-                    check::refused_check_report(&args.project, args.target.as_deref(), denied.0);
-                write_check_report(&report, format)?;
-                Ok(ExitCode::from(report::DOMAIN_REFUSAL_EXIT))
-            }
-            Err(error) => Err(error),
-        },
-    }
+        args.deny_warnings,
+    );
+    write_checked(checked, format, |found| {
+        check::refused_check_report(project, args.target.as_deref(), found)
+    })
 }
 
 fn run_explain_command(args: ExplainArgs, format: OutputFormat) -> anyhow::Result<ExitCode> {
-    match check::explain(&args.project, args.target.as_deref()) {
-        Ok(report) => {
-            write_check_report(&report, format)?;
+    let checked = check::explain(&args.project, args.target.as_deref());
+    write_checked(checked, format, |found| {
+        check::refused_explain_report(&args.project, args.target.as_deref(), found)
+    })
+}
+
+/// Write a check or explain verdict: its report when it was reached, or the
+/// refused report carrying every diagnostic that refused it.
+fn write_checked(
+    checked: anyhow::Result<check::Checked>,
+    format: OutputFormat,
+    refused: impl FnOnce(&registry_platform_yaml::Report) -> serde_json::Value,
+) -> anyhow::Result<ExitCode> {
+    match checked {
+        Ok(checked) => {
+            write_check_report(&checked.report, &checked.diagnostics, format)?;
             Ok(ExitCode::SUCCESS)
         }
-        Err(error) => match error.downcast::<check::DeniedFindings>() {
-            Ok(denied) => {
-                let report =
-                    check::refused_explain_report(&args.project, args.target.as_deref(), denied.0);
-                write_check_report(&report, format)?;
+        Err(error) => match authored::report_in(&error) {
+            Some(found) => {
+                write_check_report(&refused(found), found, format)?;
                 Ok(ExitCode::from(report::DOMAIN_REFUSAL_EXIT))
             }
-            Err(error) => Err(error),
+            None => Err(error),
         },
     }
 }
 
-fn write_check_report(report: &serde_json::Value, format: OutputFormat) -> anyhow::Result<()> {
+fn write_check_report(
+    report: &serde_json::Value,
+    diagnostics: &registry_platform_yaml::Report,
+    format: OutputFormat,
+) -> anyhow::Result<()> {
     match format {
-        OutputFormat::Human => check::render_human(report, &mut std::io::stdout())?,
+        OutputFormat::Human => check::render_human(report, diagnostics, &mut std::io::stdout())?,
         OutputFormat::Json => report::print(report)?,
     }
     Ok(())
@@ -1205,10 +1314,10 @@ mod tests {
         assert_eq!(failure.exit(), report::OPERATIONAL_FAILURE_EXIT);
     }
 
-    /// The retired `--project` spelling of `source suggest` stays accepted
-    /// but hidden, so the usage line names only the documented alternatives.
+    /// The usage line of `source suggest` names the two alternatives and no
+    /// `--project` flag.
     #[test]
-    fn source_suggest_usage_omits_the_retired_project_flag() {
+    fn source_suggest_usage_names_the_two_alternatives() {
         let mut command = command();
         let suggest = command
             .find_subcommand_mut("source")
@@ -1217,10 +1326,6 @@ mod tests {
         let usage = suggest.render_usage().to_string();
         assert!(usage.contains("<--openapi <OPENAPI>|PROJECT>"), "{usage}");
         assert!(!usage.contains("--project"), "{usage}");
-        assert!(
-            Cli::try_parse_from(["evidencectl", "source", "suggest", "--project", "project"])
-                .is_ok()
-        );
     }
 
     #[test]
@@ -1260,12 +1365,14 @@ mod tests {
         "dev clean",
         "dev token",
         "dev grant",
+        "dev check",
         "audit show",
         "source add",
         "source suggest",
         "source diff",
         "source import",
         "source update",
+        "source mock check",
         "target explain",
         "tooling editor",
     ];
@@ -1357,9 +1464,7 @@ mod tests {
         .is_ok());
         assert!(Cli::try_parse_from(["evidencectl", "dev", "--detach"]).is_ok());
         assert!(Cli::try_parse_from(["evidencectl", "dev", "stop"]).is_ok());
-        assert!(
-            Cli::try_parse_from(["evidencectl", "dev", "stop", "--project", "project",]).is_ok()
-        );
+        assert!(Cli::try_parse_from(["evidencectl", "dev", "stop", "project"]).is_ok());
 
         // The bare-form compatibility flags stay parseable beside an action
         // subcommand so `run_with_format` can refuse them while naming both
@@ -1436,7 +1541,18 @@ mod tests {
 
     #[test]
     fn production_check_and_runtime_doctor_require_explicit_inputs() {
-        assert!(Cli::try_parse_from(["evidencectl", "check", "project", "--production"]).is_ok());
+        let error = Cli::try_parse_from(["evidencectl", "check", "project", "--production"])
+            .expect_err("--production names the target it holds to production");
+        assert_eq!(error.kind(), ErrorKind::MissingRequiredArgument);
+        assert!(Cli::try_parse_from([
+            "evidencectl",
+            "check",
+            "project",
+            "--production",
+            "--target",
+            "target"
+        ])
+        .is_ok());
 
         assert!(Cli::try_parse_from([
             "evidencectl",
@@ -1827,17 +1943,13 @@ mod tests {
             projects.iter().map(|(path, _)| path).collect::<Vec<_>>()
         );
 
-        // A hidden `--project` beside a positional PROJECT is the retired
-        // spelling of that same argument, still parseable.
+        // A positional PROJECT has no second spelling as a flag.
         for (path, argument) in &projects {
-            if argument.get_id() == "legacy_project" {
-                assert!(
-                    projects.iter().any(|(other, positional)| other == path
-                        && positional.get_id() == "project"
-                        && positional.is_positional()),
-                    "{path} keeps --project only as the retired spelling of its positional PROJECT"
-                );
-            }
+            assert_ne!(
+                argument.get_id(),
+                "legacy_project",
+                "{path} must not keep `--project` beside its positional PROJECT"
+            );
         }
 
         // These commands name their own project shape in their help and are
@@ -1996,7 +2108,7 @@ mod tests {
     }
 
     #[test]
-    fn retired_output_spellings_keep_parsing() {
+    fn retired_output_spellings_are_refused() {
         for arguments in [
             vec!["evidencectl", "keygen", "secret", "--out", "audit-hmac-key"],
             vec!["evidencectl", "keygen", "token", "--out", "source-token"],
@@ -2005,7 +2117,7 @@ mod tests {
                 "evidencectl",
                 "keygen",
                 "signing",
-                "--out-dir",
+                "--output-dir",
                 "secrets",
                 "--public-out",
                 "signing.jwk.json",
@@ -2015,7 +2127,7 @@ mod tests {
                 "evidencectl",
                 "keygen",
                 "client-assertion",
-                "--out-dir",
+                "--output-dir",
                 "secrets",
                 "--public-out",
                 "assertion.jwk.json",
@@ -2027,34 +2139,36 @@ mod tests {
                 "trusted-issuer-keys.json",
                 "signing-p256-public.jwk.json",
             ],
-            vec![
-                "evidencectl",
-                "client",
-                "contracts",
-                "fetch",
-                "--profile",
-                "client-profile.json",
-                "--out",
-                "contracts.json",
-            ],
-            vec![
-                "evidencectl",
-                "client",
-                "profile",
-                "create",
-                "--base-url",
-                "https://evidence.example.test",
-                "--client-id",
-                "reporting",
-                "--private-key-file",
-                "client-private-jwk",
-                "--out",
-                "client-profile.json",
-            ],
         ] {
-            assert!(
-                Cli::try_parse_from(&arguments).is_ok(),
-                "{arguments:?} must keep working as already published"
+            let error = Cli::try_parse_from(&arguments).expect_err("the old spelling is refused");
+            assert_eq!(
+                error.kind(),
+                clap::error::ErrorKind::UnknownArgument,
+                "{arguments:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_project_flag_is_refused_where_the_project_is_positional() {
+        for command in [
+            &["target", "explain"][..],
+            &["dev", "stop"],
+            &["dev", "clean"],
+            &["source", "add"],
+            &["source", "suggest"],
+            &["source", "detach"],
+            &["fixtures", "run"],
+            &["tooling", "editor"],
+        ] {
+            let mut arguments = vec!["evidencectl"];
+            arguments.extend_from_slice(command);
+            arguments.extend(["--project", "."]);
+            let error = Cli::try_parse_from(&arguments).expect_err("--project is refused");
+            assert_eq!(
+                error.kind(),
+                clap::error::ErrorKind::UnknownArgument,
+                "{arguments:?}"
             );
         }
     }

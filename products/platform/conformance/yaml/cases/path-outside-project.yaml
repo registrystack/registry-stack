@@ -1,0 +1,15 @@
+id: path-outside-project
+rules: [CFG-VAL-8]
+summary: A relative path that climbs out of the project directory is refused at the path member.
+appliesTo:
+  audiences: [authored]
+mutation:
+  pathOutside:
+    role: relativePath
+    via: parent
+expect:
+  exit: 1
+  diagnostics:
+    - code: any
+      path: "{pointer}"
+      at: {line: 1, column: 1}

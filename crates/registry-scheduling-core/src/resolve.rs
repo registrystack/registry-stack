@@ -154,7 +154,7 @@ pub fn location_closure_intervals(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::policy::parse_policy_yaml;
+    use crate::naming::AUTHORED_POLICY_FILE;
     use registry_platform_calendar::{CalendarException, CalendarExceptionKind};
 
     fn opening(id: &str, start: &str, end: &str) -> String {
@@ -166,11 +166,11 @@ mod tests {
     fn policy_with(openings: &str) -> SchedulingPolicy {
         let text = format!(
             r#"
-apiVersion: registry.registrystack.org/scheduling-policy-package/v1alpha1
-kind: SchedulingPolicyPackage
-scheduling:
+apiVersion: id.registrystack.org/formats/scheduling/project/v1alpha1
+kind: SchedulingProject
+project:
   id: registry-updates
-  version: 1
+  version: "1"
 services:
   - id: registry-update
     label: Registry record update
@@ -189,23 +189,23 @@ offerings:
       horizonDays: 30
       pool: update-stations
       startIncrementMinutes: 30
-      maxRecipients: 1
+      maximumRecipients: 1
     cancellationCutoffMinutes: 240
-    requiresCapabilities: []
-    prerequisites: []
 holidaySets:
   - id: office-holidays
     revision: 1
     because: Public holidays observed by the registry office.
-    dates: []
 openings:
-{openings}holdPolicy:
+{openings}channels: [public]
+holdPolicy:
   ttlMinutes: 5
-  maxPerCaller: 3
+  maximumPerCaller: 3
   because: Holds are short because counter capacity is scarce.
 "#
         );
-        parse_policy_yaml(&text).expect("the policy parses")
+        SchedulingPolicy::decode(AUTHORED_POLICY_FILE, text.as_bytes())
+            .unwrap_or_else(|report| panic!("{}", report.render_human()))
+            .value
     }
 
     fn resolve(policy: &SchedulingPolicy) -> Vec<CalendarInterval> {

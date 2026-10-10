@@ -1,0 +1,73 @@
+{
+  "$defs": {
+    "Digest": {
+      "description": "A SHA-256 digest: `sha256:` followed by 64 lowercase hex digits.",
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    }
+  },
+  "$id": "https://id.registrystack.org/schemas/breg/backup-binding/backup-binding.v1alpha1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The operator's backup binding. Rust field names keep their engine\nspelling; each serde rename names the document member.",
+  "properties": {
+    "apiVersion": {
+      "const": "id.registrystack.org/formats/breg/backup-binding/v1alpha1",
+      "description": "The format and version this file is written in.",
+      "type": "string"
+    },
+    "backupFile": {
+      "type": "string"
+    },
+    "createdAt": {
+      "type": "string"
+    },
+    "database": {
+      "description": "The document member `database`: the database identity the binding\nwas taken from.",
+      "type": "string"
+    },
+    "digest": {
+      "$ref": "#/$defs/Digest",
+      "description": "The document member `digest`."
+    },
+    "kind": {
+      "const": "BRegBackupBinding",
+      "description": "The kind of document this file is.",
+      "type": "string"
+    },
+    "maximumAgeSeconds": {
+      "description": "The document member `maximumAgeSeconds`.",
+      "format": "uint64",
+      "maximum": 2678400,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "priorPackageDigest": {
+      "$ref": "#/$defs/Digest"
+    },
+    "priorSchemaFingerprint": {
+      "$ref": "#/$defs/Digest"
+    },
+    "sizeBytes": {
+      "description": "The document member `sizeBytes`.",
+      "format": "uint64",
+      "maximum": 18446744073709551615,
+      "minimum": 1,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind",
+    "database",
+    "priorPackageDigest",
+    "priorSchemaFingerprint",
+    "backupFile",
+    "digest",
+    "sizeBytes",
+    "createdAt",
+    "maximumAgeSeconds"
+  ],
+  "title": "Base Registry Engine external backup binding",
+  "type": "object"
+}

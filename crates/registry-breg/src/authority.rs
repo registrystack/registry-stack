@@ -40,8 +40,6 @@ pub struct AuthorityClaimUse {
 #[derive(Clone, Copy, Debug, Error, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AuthorityInventoryError {
-    #[error("a compiled anonymous grant carries authority")]
-    AnonymousProfileCarriesAuthority,
     #[error("a compiled authenticated grant has no principal claim")]
     PrincipalClaimMissing,
     #[error("a compiled authority target entity does not exist")]
@@ -66,11 +64,8 @@ pub fn authority_inventory(
     for entity in registry.entities().values() {
         for profile in entity.access_profiles.values() {
             inventory.profile(
-                profile.anonymous,
                 profile.principal_claim.as_deref(),
-                &profile.required_scopes,
                 &profile.required_purposes,
-                !profile.row_boundaries.is_empty() || !profile.membership_boundaries.is_empty(),
             )?;
             let surface = format!("entities/{}/profiles/{}", entity.id, profile.id);
             inventory.boundaries(entity, &profile.id, &surface, &profile.row_boundaries)?;
@@ -136,16 +131,7 @@ pub fn authority_inventory(
     }
     for action in &registry.actions().actions {
         for grant in &action.permissions {
-            inventory.profile(
-                grant.anonymous,
-                grant.principal_claim.as_deref(),
-                &grant.required_scopes,
-                &grant.required_purposes,
-                grant
-                    .targets
-                    .iter()
-                    .any(|target| !target.row_boundaries.is_empty()),
-            )?;
+            inventory.profile(grant.principal_claim.as_deref(), &grant.required_purposes)?;
             for target in grant.entity_target_locks() {
                 inventory.boundaries(
                     target_entity(registry, &target.entity_id)?,
@@ -175,24 +161,15 @@ fn target_entity<'a>(
 impl AuthorityInventory {
     fn profile(
         &mut self,
-        anonymous: bool,
         principal: Option<&str>,
-        scopes: &BTreeSet<String>,
         purposes: &BTreeSet<String>,
-        boundaries: bool,
     ) -> Result<(), AuthorityInventoryError> {
-        if anonymous {
-            if principal.is_some() || !scopes.is_empty() || !purposes.is_empty() || boundaries {
-                return Err(AuthorityInventoryError::AnonymousProfileCarriesAuthority);
-            }
-        } else {
-            self.principal_claims.insert(
-                principal
-                    .ok_or(AuthorityInventoryError::PrincipalClaimMissing)?
-                    .to_owned(),
-            );
-            self.purpose_required |= !purposes.is_empty();
-        }
+        self.principal_claims.insert(
+            principal
+                .ok_or(AuthorityInventoryError::PrincipalClaimMissing)?
+                .to_owned(),
+        );
+        self.purpose_required |= !purposes.is_empty();
         Ok(())
     }
 

@@ -178,9 +178,15 @@ async fn real_postgres_export_is_authenticated_projected_audited_and_resumable()
         ),
     ] {
         let mut forged = partial.clone();
-        forged["nextCursor"] = next_cursor;
+        // A checkpoint without a cursor leaves the member out.
+        if next_cursor.is_null() {
+            forged.as_object_mut().unwrap().remove("nextCursor");
+        } else {
+            forged["nextCursor"] = next_cursor;
+        }
         forged["complete"] = json!(complete);
         let error = DataExportCheckpoint::from_json(
+            "export.checkpoint.json",
             &canonicalize_json(&forged).unwrap(),
             &export_plan,
             &identity.activation_id,
@@ -193,6 +199,7 @@ async fn real_postgres_export_is_authenticated_projected_audited_and_resumable()
         assert!(!format!("{error:?} {error}").contains("SUBSTITUTED-CURSOR"));
     }
     let mut resumed = DataExportCheckpoint::from_json(
+        "export.checkpoint.json",
         &serialized,
         &export_plan,
         &identity.activation_id,
@@ -223,6 +230,7 @@ async fn real_postgres_export_is_authenticated_projected_audited_and_resumable()
         .canonical_json()
         .expect("complete checkpoint serializes");
     DataExportCheckpoint::from_json(
+        "export.checkpoint.json",
         &complete_json,
         &export_plan,
         &identity.activation_id,
@@ -369,7 +377,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
             "hooks":[{"phase":"after","id":"entry-created","trigger":"created","projection":["code"]}]
         }],
         "accessProfiles":[{
-            "id":PROFILE, "principalClaim":"registry_principal",
+            "id":PROFILE, "principalClaim":"registry_principal","requiredScopes":"unrestricted",
                 "requiredPurposes":["data-export"],
             "permissions":[{
                 "entity":"entry",

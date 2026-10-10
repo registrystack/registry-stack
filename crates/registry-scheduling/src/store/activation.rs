@@ -327,7 +327,7 @@ impl PostgresStore {
             .execute(
                 "UPDATE scheduling_meta SET scheduling_id=$1, updated_at=now() \
                  WHERE singleton AND scheduling_id=''",
-                &[&request.policy.scheduling.id],
+                &[&&*request.policy.project.id],
             )
             .await?
             == 1;
@@ -338,7 +338,7 @@ impl PostgresStore {
             )
             .await?
             .get(0);
-        if stored_id != request.policy.scheduling.id {
+        if stored_id != *request.policy.project.id {
             return Err(StoreError::DeploymentIdentity);
         }
         let publication =
@@ -730,7 +730,7 @@ fn refuse_foreign_scheduling_id(
     deployed: &DeployedPolicy,
     policy: &SchedulingPolicy,
 ) -> Result<(), StoreError> {
-    if deployed.scheduling_id.is_empty() || deployed.scheduling_id == policy.scheduling.id {
+    if deployed.scheduling_id.is_empty() || deployed.scheduling_id == *policy.project.id {
         Ok(())
     } else {
         Err(StoreError::DeploymentIdentity)

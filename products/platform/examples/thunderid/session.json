@@ -1,0 +1,6 @@
+{
+  "apiVersion": "id.registrystack.org/formats/platform/thunderid-session/v1alpha1",
+  "kind": "PlatformThunderidSession",
+  "setupComplete": true,
+  "containerName": "thunderid-breg-dev-example-0197aaaa-000-4f1c2a9b7d3e"
+}

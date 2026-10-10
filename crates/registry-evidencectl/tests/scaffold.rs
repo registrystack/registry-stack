@@ -307,12 +307,20 @@ fn target_check_refuses_a_requirement_validity_above_the_target_signing_maximum(
         "{printed}"
     );
     assert!(
-        printed.contains("questions/record-status.yaml:/governance/validitySeconds"),
+        printed.contains("questions/record-status.yaml:"),
         "{printed}"
     );
     assert!(
-        printed.contains("the deployment target's 300 second signing maximum"),
+        printed.contains(" /governance/validitySeconds"),
         "{printed}"
+    );
+    assert!(
+        printed.contains("the deployment target's signing maximum"),
+        "{printed}"
+    );
+    assert!(
+        !printed.contains("900") && !printed.contains(" 300 "),
+        "the refusal repeats no configured value: {printed}"
     );
 
     fs::write(
@@ -892,7 +900,17 @@ fn assert_editor_schema_mappings(project: &Path) {
     );
     assert_eq!(
         entries(&project.join(".evidence-editor/schemas")),
-        vec!["project-marker.schema.json", "question.schema.json"]
+        vec![
+            "access-client.schema.json",
+            "access-policy.schema.json",
+            "fixture.schema.json",
+            "mock-plan.schema.json",
+            "project-marker.schema.json",
+            "question.schema.json",
+            "selector.schema.json",
+            "source.schema.json",
+            "target-settings.schema.json"
+        ]
     );
     assert_eq!(
         entries(&project.join(".vscode")),
@@ -904,12 +922,40 @@ fn assert_editor_schema_mappings(project: &Path) {
     // byte for byte, or the drift gate is guarding nothing an adopter sees.
     for (relative, committed) in [
         (
+            ".evidence-editor/schemas/access-client.schema.json",
+            include_str!("../schemas/authoring/access-client.schema.json"),
+        ),
+        (
+            ".evidence-editor/schemas/access-policy.schema.json",
+            include_str!("../schemas/authoring/access-policy.schema.json"),
+        ),
+        (
+            ".evidence-editor/schemas/mock-plan.schema.json",
+            include_str!("../schemas/authoring/mock-plan.schema.json"),
+        ),
+        (
             ".evidence-editor/schemas/question.schema.json",
             include_str!("../schemas/authoring/question.schema.json"),
         ),
         (
             ".evidence-editor/schemas/project-marker.schema.json",
             include_str!("../schemas/authoring/project-marker.schema.json"),
+        ),
+        (
+            ".evidence-editor/schemas/fixture.schema.json",
+            include_str!("../../../products/evidence/generated/fixture/fixture.schema.json"),
+        ),
+        (
+            ".evidence-editor/schemas/selector.schema.json",
+            include_str!("../schemas/authoring/selector.schema.json"),
+        ),
+        (
+            ".evidence-editor/schemas/source.schema.json",
+            include_str!("../schemas/authoring/source.schema.json"),
+        ),
+        (
+            ".evidence-editor/schemas/target-settings.schema.json",
+            include_str!("../schemas/authoring/target-settings.schema.json"),
         ),
     ] {
         assert_eq!(
@@ -1098,7 +1144,7 @@ fn write_local_starter(root: &Path) -> PathBuf {
         ),
         (
             "targets/local/settings.example.yaml",
-            b"formatVersion: 1\n".as_slice(),
+            b"apiVersion: id.registrystack.org/formats/evidence/target-settings/v1alpha1\nkind: EvidenceTargetSettings\n".as_slice(),
         ),
     ] {
         let path = starter.join(relative);

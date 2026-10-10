@@ -11,6 +11,10 @@ publish = false
 [lints]
 workspace = true
 
+[features]
+# Derive the JSON Schema of the client profile and reviewed contracts files.
+schema = ["dep:schemars", "registry-platform-yaml/schema"]
+
 [dependencies]
 base64.workspace = true
 chrono.workspace = true
@@ -19,7 +23,9 @@ registry-evidence-verifier.workspace = true
 registry-platform-crypto.workspace = true
 registry-platform-httpsec = { workspace = true, default-features = false }
 registry-platform-httputil.workspace = true
+registry-platform-yaml.workspace = true
 reqwest.workspace = true
+schemars = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
@@ -32,6 +38,7 @@ zeroize.workspace = true
 
 [dev-dependencies]
 ed25519-dalek.workspace = true
+jsonschema.workspace = true
 p256.workspace = true
 registry-evidence.workspace = true
 registry-thunderid-tooling.workspace = true

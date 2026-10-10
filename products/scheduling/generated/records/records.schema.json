@@ -1,0 +1,480 @@
+{
+  "$defs": {
+    "AboveHighestBand": {
+      "description": "What a party above the highest band costs, or that it is refused, chosen\nby its `type` member.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "refuse",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "units",
+              "type": "string"
+            },
+            "units": {
+              "format": "uint32",
+              "maximum": 2147483647,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "type",
+            "units"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "BandedInput": {
+      "description": "The closed input set a banded table may read. Tier 1 reads exactly one.",
+      "enum": [
+        "service-recipient-count"
+      ],
+      "type": "string"
+    },
+    "CalendarExceptionRecord": {
+      "additionalProperties": false,
+      "description": "An owned dated exception over local wall-clock time, the record form of\n`registry_platform_calendar::CalendarException`. An exception is scoped to\none location: a closure at one counter never closes another.",
+      "properties": {
+        "authority": {
+          "type": "string"
+        },
+        "date": {
+          "description": "The local date, `YYYY-MM-DD`.",
+          "type": "string"
+        },
+        "endTime": {
+          "description": "The local end time, `HH:MM`.",
+          "type": "string"
+        },
+        "id": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "kind": {
+          "$ref": "#/$defs/ExceptionRecordKind"
+        },
+        "location": {
+          "$ref": "#/$defs/LocalId",
+          "description": "The location this exception applies to."
+        },
+        "reopens": {
+          "type": "string"
+        },
+        "startTime": {
+          "description": "The local start time, `HH:MM`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "location",
+        "kind",
+        "date",
+        "startTime",
+        "endTime"
+      ],
+      "type": "object"
+    },
+    "Channel": {
+      "description": "The authenticated channel a subquota limits.",
+      "enum": [
+        "public",
+        "assisted",
+        "urgent",
+        "walk-in"
+      ],
+      "type": "string"
+    },
+    "ExceptionRecordKind": {
+      "description": "The layer an exception occupies, mirrored for records.",
+      "enum": [
+        "closure",
+        "opening"
+      ],
+      "type": "string"
+    },
+    "LeftoverCapacityPolicy": {
+      "description": "What a window says happens to its leftover capacity when it closes. The\ndeclaration names an intent; this version of the runtime reads none of\nit, so `check` refuses a window that declares one rather than accept a\npromise nothing keeps. There is no default and no borrowing from the\nnext window.",
+      "oneOf": [
+        {
+          "const": "expires-unused",
+          "description": "Leftover units would lapse with the window.",
+          "type": "string"
+        },
+        {
+          "const": "becomes-walk-in",
+          "description": "Leftover units would become available to the walk-in channel.",
+          "type": "string"
+        }
+      ]
+    },
+    "LocalId": {
+      "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+      "type": "string"
+    },
+    "LocationRecord": {
+      "additionalProperties": false,
+      "description": "A location record: the layer of configuration an operator maintains at\nruntime, not inside the authored policy.",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "timezone": {
+          "description": "A named IANA timezone such as `Asia/Bangkok`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "timezone"
+      ],
+      "type": "object"
+    },
+    "PoolMember": {
+      "additionalProperties": false,
+      "description": "One interchangeable member of a resource pool.\n\n`available` carries no reason. Why a member is unavailable is private staff\ninformation; the public answer to a caller is that capacity is exhausted.",
+      "properties": {
+        "available": {
+          "type": "boolean"
+        },
+        "capabilities": {
+          "description": "The capabilities this member carries. Omitted or `[]`, it carries\nnone and serves only offerings that require none.",
+          "items": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "maxItems": 256,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "resourceId": {
+          "$ref": "#/$defs/LocalId"
+        }
+      },
+      "required": [
+        "resourceId",
+        "available"
+      ],
+      "type": "object"
+    },
+    "PublishedWindow": {
+      "additionalProperties": false,
+      "description": "A published arrival window with its capacity.",
+      "properties": {
+        "because": {
+          "type": "string"
+        },
+        "end": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "id": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "leftover": {
+          "$ref": "#/$defs/LeftoverCapacityPolicy",
+          "description": "Declared intent for the window's leftover capacity. Nothing reads it\nin this version, so a declaration is refused at authoring; the field\nstays so a refusal can name it."
+        },
+        "location": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "offering": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "revision": {
+          "format": "uint64",
+          "maximum": 9223372036854775807,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "staffing": {
+          "$ref": "#/$defs/WindowStaffing"
+        },
+        "start": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "subquotas": {
+          "description": "Per-channel ceilings within `units`. A window that limits no channel\nomits the member.",
+          "items": {
+            "$ref": "#/$defs/WindowSubquota"
+          },
+          "maxItems": 4,
+          "minItems": 1,
+          "type": "array"
+        },
+        "units": {
+          "description": "Published capacity in the unit basis the units policy defines.",
+          "format": "uint32",
+          "maximum": 2147483647,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "unitsPolicy": {
+          "$ref": "#/$defs/RequiredUnitsPolicy"
+        }
+      },
+      "required": [
+        "id",
+        "revision",
+        "offering",
+        "location",
+        "start",
+        "end",
+        "units",
+        "unitsPolicy",
+        "because"
+      ],
+      "type": "object"
+    },
+    "RequiredUnitsPolicy": {
+      "description": "How an offering converts a party into consumed recipient units, chosen by\nits `type` member.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Every party costs the same fixed units.",
+          "properties": {
+            "because": {
+              "type": "string"
+            },
+            "type": {
+              "const": "fixed",
+              "type": "string"
+            },
+            "units": {
+              "format": "uint32",
+              "maximum": 2147483647,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "type",
+            "units",
+            "because"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A party costs its recipient count times `per_recipient`.",
+          "properties": {
+            "because": {
+              "type": "string"
+            },
+            "perRecipient": {
+              "format": "uint32",
+              "maximum": 2147483647,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "type": {
+              "const": "per-recipient",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "perRecipient",
+            "because"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A party costs whatever band its recipient count falls in.",
+          "properties": {
+            "aboveHighestBand": {
+              "$ref": "#/$defs/AboveHighestBand"
+            },
+            "bands": {
+              "items": {
+                "$ref": "#/$defs/UnitBand"
+              },
+              "minItems": 1,
+              "type": "array"
+            },
+            "because": {
+              "type": "string"
+            },
+            "input": {
+              "$ref": "#/$defs/BandedInput"
+            },
+            "type": {
+              "const": "banded-table",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "input",
+            "bands",
+            "aboveHighestBand",
+            "because"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ResourcePool": {
+      "additionalProperties": false,
+      "description": "A pool of interchangeable resources backing exact-time offerings. A pool is\nits concrete members, never an independent counter.",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "members": {
+          "items": {
+            "$ref": "#/$defs/PoolMember"
+          },
+          "maxItems": 256,
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "members"
+      ],
+      "type": "object"
+    },
+    "UnitBand": {
+      "additionalProperties": false,
+      "description": "One band of a banded units table: parties up to `up_to` recipients cost\n`units`.",
+      "properties": {
+        "because": {
+          "type": "string"
+        },
+        "units": {
+          "format": "uint32",
+          "maximum": 2147483647,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "upTo": {
+          "format": "uint32",
+          "maximum": 2147483647,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "upTo",
+        "units",
+        "because"
+      ],
+      "type": "object"
+    },
+    "WindowStaffing": {
+      "additionalProperties": false,
+      "description": "The staffing block a window's supply is carved from, when the window is\nbacked by the same concrete resources an exact-time pool sells.\n\nA pool that backs a window may not also back an exact-time offering: a\nwindow claim occupies the window's own supply while an exact-time claim\noccupies the member it books, so the two modes would double-book the same\nstaffing in a ledger that cannot see the conflict. That mix is refused at\npublication whatever this block declares.\n\n`reserved_members` records how many pool members the window's supply is\nintended to use. The current ledger does not enforce that partition between\nwindows, so two windows backed by the same pool may not overlap, whatever\neither staffing block declares. Disjoint windows may reuse the pool.",
+      "properties": {
+        "because": {
+          "type": "string"
+        },
+        "pool": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "reservedMembers": {
+          "format": "uint32",
+          "maximum": 256,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "pool",
+        "because"
+      ],
+      "type": "object"
+    },
+    "WindowSubquota": {
+      "additionalProperties": false,
+      "description": "A per-channel ceiling within a window's published capacity.",
+      "properties": {
+        "because": {
+          "type": "string"
+        },
+        "channel": {
+          "$ref": "#/$defs/Channel"
+        },
+        "id": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "units": {
+          "format": "uint32",
+          "maximum": 2147483647,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "channel",
+        "units",
+        "because"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://id.registrystack.org/schemas/scheduling/records/records.v1alpha1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The operator records document a deployment applies with\n`schedulingctl records apply`: its locations, pools and their members,\npublished windows, and dated exceptions.",
+  "properties": {
+    "apiVersion": {
+      "const": "id.registrystack.org/formats/scheduling/records/v1alpha1",
+      "type": "string"
+    },
+    "exceptions": {
+      "items": {
+        "$ref": "#/$defs/CalendarExceptionRecord"
+      },
+      "maxItems": 256,
+      "type": "array"
+    },
+    "kind": {
+      "const": "SchedulingRecords",
+      "type": "string"
+    },
+    "locations": {
+      "items": {
+        "$ref": "#/$defs/LocationRecord"
+      },
+      "maxItems": 256,
+      "type": "array"
+    },
+    "pools": {
+      "items": {
+        "$ref": "#/$defs/ResourcePool"
+      },
+      "maxItems": 256,
+      "type": "array"
+    },
+    "windows": {
+      "items": {
+        "$ref": "#/$defs/PublishedWindow"
+      },
+      "maxItems": 256,
+      "type": "array"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind"
+  ],
+  "title": "Registry Scheduling records",
+  "type": "object"
+}

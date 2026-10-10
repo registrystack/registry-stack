@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! `schedulingctl`, the Registry Scheduling authoring and local operator
-//! tooling: `init` writes a complete starter project, `check` validates the
-//! authored policy offline, `test` replays every fixture offline, `explain`
+//! tooling: `init` writes a complete starter project, `check` reads and
+//! checks every project file offline, and with `--runtime-config` the
+//! runtime file too, `test` replays every fixture offline, `explain`
 //! publishes what the runtime would serve, `package` writes the deployment
 //! identity the runtime verifies, `plan`, `apply`, and `status` activate a
 //! verified package on a deployment's database and report its activation
@@ -20,6 +21,7 @@ mod templates;
 use anyhow::Result;
 use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use registry_platform_audit::AuditUnavailable;
+use registry_platform_yaml::{Diagnostic, Report};
 use registry_scheduling::config::RuntimeConfigError;
 use registry_scheduling::hooks::HookActivationError;
 use registry_scheduling::runtime::RuntimeError;
@@ -50,7 +52,7 @@ struct Cli {
 enum Command {
     /// Create a complete Registry Scheduling authoring project in a new directory.
     Init(InitArgs),
-    /// Validate the authored policy offline and print effective defaults.
+    /// Check every project file offline and print effective defaults.
     Check(CheckArgs),
     /// Run every fixture's replay cases offline.
     Test(ProjectArgs),
@@ -85,9 +87,19 @@ struct CheckArgs {
     /// Authored scheduling project directory.
     #[arg(value_name = "PROJECT")]
     project: PathBuf,
-    /// Exit unsuccessfully when the authoring check reports any finding.
+    /// Exit 1 when the check reports any warning.
     #[arg(long)]
-    deny_findings: bool,
+    deny_warnings: bool,
+    /// Runtime configuration to check offline against PROJECT, as scheduling
+    /// serve reads it, with no package, database, network, or secret material
+    /// (package.root is not read; scheduling serve verifies the package at
+    /// startup).
+    #[arg(long, value_name = "FILE")]
+    runtime_config: Option<PathBuf>,
+    /// Substitute the runtime file's environment variable expressions from
+    /// this process's environment and check the values they produce.
+    #[arg(long, requires = "runtime_config")]
+    environment: bool,
 }
 
 #[derive(Debug, Args)]
@@ -210,12 +222,16 @@ where
         Err(error) => {
             let message = report::usage_message(&error);
             if machine_mode {
-                write_failure(
+                if write_failure(
                     &usage_failure(message, USAGE_ACTION),
                     OutputFormat::Json,
                     stdout,
                     stderr,
-                );
+                )
+                .is_err()
+                {
+                    return output_failed(stderr);
+                }
             } else {
                 let _ = writeln!(stderr, "error: {message}\n  next: {USAGE_ACTION}");
             }
@@ -229,12 +245,16 @@ where
                 activation::MAX_BACKUP_REFERENCES
             );
             if machine_mode {
-                write_failure(
+                if write_failure(
                     &usage_failure(message, "Correct the command arguments and retry."),
                     OutputFormat::Json,
                     stdout,
                     stderr,
-                );
+                )
+                .is_err()
+                {
+                    return output_failed(stderr);
+                }
             } else {
                 let _ = writeln!(stderr, "error: {message}");
             }
@@ -243,13 +263,12 @@ where
     }
     let format = cli.format;
     let command = command_path(&cli.command);
-    let deny_findings = matches!(&cli.command, Command::Check(args) if args.deny_findings);
     match run(cli) {
         Ok(mut report) => {
             // The exit code already tells the caller whether this refused;
             // the JSON must agree instead of reporting "ok": true underneath
             // a nonzero exit.
-            let refusal = report_is_refusal(&report, deny_findings);
+            let refusal = report_is_refusal(&report);
             if format == OutputFormat::Json {
                 report = completed_report(report, command, refusal);
             } else if refusal {
@@ -266,13 +285,26 @@ where
             }
         }
         Err(error) => {
+            if let Some(configuration) = configuration_report(&error) {
+                let exit = configuration_exit(&error);
+                if write_configuration_report(configuration, format, command, exit, stdout, stderr)
+                    .is_err()
+                {
+                    return output_failed(stderr);
+                }
+                return ExitCode::from(exit);
+            }
             let (exit, diagnostic) = classify_failure(&error);
-            write_failure(
+            if write_failure(
                 &report::failure(command, exit, vec![diagnostic]),
                 format,
                 stdout,
                 stderr,
-            );
+            )
+            .is_err()
+            {
+                return output_failed(stderr);
+            }
             ExitCode::from(exit)
         }
     }
@@ -299,7 +331,19 @@ fn command_path(command: &Command) -> &'static str {
 fn run(cli: Cli) -> Result<Value> {
     match cli.command {
         Command::Init(args) => project::init(&args.project, &args.template),
-        Command::Check(args) => project::check(&args.project),
+        Command::Check(args) => {
+            let checked = project::check(&args.project, args.deny_warnings);
+            match &args.runtime_config {
+                Some(runtime_config) => project::check_runtime_config(
+                    &args.project,
+                    runtime_config,
+                    args.environment,
+                    args.deny_warnings,
+                    checked,
+                ),
+                None => checked,
+            }
+        }
         Command::Test(args) => project::test(&args.project),
         Command::Explain(args) => project::explain(&args.project),
         Command::Package(args) => match args.output {
@@ -320,15 +364,14 @@ fn run(cli: Cli) -> Result<Value> {
     }
 }
 
-/// A completed report may still describe a refusal: an authoring check that
-/// found something when the caller passed `--deny-findings`, a value whose
-/// text is outside its grammar (never gated behind `--deny-findings`, because
-/// there is nothing to opt into), or a fixture run with failing cases, which
-/// always fails the build. An activation plan that names a refusal apply
-/// would raise is a refusal too, except that the candidate is already the
-/// active package: that plan reports `changesPending: false` and nothing
-/// else. The report is the evidence; the exit code is the signal.
-fn report_is_refusal(report: &Value, deny_findings: bool) -> bool {
+/// A completed report may still describe a refusal: a fixture run with
+/// failing cases, which always fails the build. An activation plan that
+/// names a refusal apply would raise is a refusal too, except that the
+/// candidate is already the active package: that plan reports
+/// `changesPending: false` and nothing else. A check that refuses never
+/// completes: its diagnostics are the refusal. The report is the evidence;
+/// the exit code is the signal.
+fn report_is_refusal(report: &Value) -> bool {
     if report["command"] == "plan" {
         return report["refusals"].as_array().is_some_and(|refusals| {
             refusals
@@ -336,21 +379,16 @@ fn report_is_refusal(report: &Value, deny_findings: bool) -> bool {
                 .any(|refusal| refusal["code"] != "schedulingctl.activation.package-already-active")
         });
     }
-    if report["command"] == "check" {
-        return report["status"] == "invalid"
-            || (deny_findings && report["status"] == "incomplete");
-    }
-    report["authoringStatus"] == "invalid"
-        || report["fixtures"]
-            .as_array()
-            .is_some_and(|fixtures| fixtures.iter().any(|fixture| fixture["status"] == "failed"))
+    report["fixtures"]
+        .as_array()
+        .is_some_and(|fixtures| fixtures.iter().any(|fixture| fixture["status"] == "failed"))
 }
 
 /// Complete a command's own report into the shared envelope: `ok` agrees
 /// with the exit code, `status` names what happened, and a refusal points at
-/// the member that says what to correct. A check keeps its own status
-/// (`complete`, `incomplete`, or `invalid`), and a plan keeps its own
-/// `refusals` list.
+/// the member that says what to correct. A plan keeps its own `refusals`
+/// list, and a fixture run's refusal joins the diagnostics its files
+/// reported.
 fn completed_report(mut report: Value, command: &str, refusal: bool) -> Value {
     report["ok"] = json!(!refusal);
     report["command"] = json!(command);
@@ -366,45 +404,36 @@ fn completed_report(mut report: Value, command: &str, refusal: bool) -> Value {
         };
         report["status"] = json!(status);
     }
-    if refusal && report.get("diagnostics").is_none() {
-        let (code, artifact, path, message, action) = match command {
-            "plan" => (
+    if refusal {
+        let (code, artifact, path, message, action) = if command == "plan" {
+            (
                 "schedulingctl.plan.refused",
                 "database",
                 "$.refusals",
                 "The activation plan names a refusal apply would raise.",
                 "Resolve each entry under refusals as its message names, then rerun schedulingctl plan --runtime-config FILE.",
-            ),
-            "test" if failed_fixtures => (
+            )
+        } else {
+            (
                 "schedulingctl.test.fixtures-failed",
                 "scheduling_project",
                 "$.fixtures",
                 "One or more offline synthetic fixture cases failed.",
                 "Correct each failing case under fixtures, or the policy it exercises, then rerun schedulingctl test PROJECT.",
-            ),
-            "test" => (
-                "schedulingctl.test.refused",
-                "scheduling_project",
-                "$.findings",
-                "The authored policy has a value outside its grammar, so no fixture ran.",
-                "Correct each entry under findings, then rerun schedulingctl test PROJECT.",
-            ),
-            _ => (
-                "schedulingctl.check.refused",
-                "scheduling_project",
-                "$.findings",
-                "The authoring check refused the project.",
-                "Correct each entry under findings, then rerun schedulingctl check PROJECT.",
-            ),
+            )
         };
-        report["diagnostics"] = json!([{
+        let diagnostic = json!({
             "severity": "error",
             "code": code,
             "artifact": artifact,
             "path": path,
             "message": message,
             "suggestedAction": action,
-        }]);
+        });
+        match report["diagnostics"].as_array_mut() {
+            Some(diagnostics) => diagnostics.push(diagnostic),
+            None => report["diagnostics"] = json!([diagnostic]),
+        }
     }
     report
 }
@@ -426,6 +455,68 @@ fn usage_failure(message: String, action: &str) -> Value {
             "suggestedAction": action,
         })],
     )
+}
+
+/// The reader's report when a command refused a configuration file: the
+/// project's own files, or a runtime file a command read.
+pub(crate) fn configuration_report(error: &anyhow::Error) -> Option<&Report> {
+    error.chain().find_map(|cause| {
+        cause
+            .downcast_ref::<project::RuntimeConfigRefusal>()
+            .map(|refusal| &refusal.report)
+            .or_else(|| cause.downcast_ref::<Report>())
+    })
+}
+
+/// The exit code of a configuration refusal: an operational failure when the
+/// runtime file could not be read at all, and otherwise a domain refusal.
+fn configuration_exit(error: &anyhow::Error) -> u8 {
+    let unavailable = error.chain().any(|cause| {
+        cause
+            .downcast_ref::<project::RuntimeConfigRefusal>()
+            .is_some_and(|refusal| refusal.unavailable)
+    });
+    if unavailable {
+        OPERATIONAL_FAILURE_EXIT
+    } else {
+        DOMAIN_REFUSAL_EXIT
+    }
+}
+
+/// Print a configuration refusal unchanged: the CFG-DIAG-2 lines on stderr,
+/// or, with `--format json`, the CFG-DIAG-1 diagnostics in the report
+/// envelope on stdout.
+fn write_configuration_report(
+    report: &Report,
+    format: OutputFormat,
+    command: &str,
+    exit: u8,
+    stdout: &mut dyn io::Write,
+    stderr: &mut dyn io::Write,
+) -> io::Result<()> {
+    if format == OutputFormat::Json {
+        let mut envelope = json!({
+            "ok": false,
+            "command": command,
+            "status": report::failure_status(exit),
+            "diagnostics": report.to_json_value(),
+        });
+        if let Some(files) = report.files_checked() {
+            envelope["filesChecked"] = json!(files);
+        }
+        report::write(&envelope, stdout)
+    } else {
+        write_check_verdict(command, stderr);
+        let _ = write!(stderr, "{}", report.render_human());
+        Ok(())
+    }
+}
+
+/// The line that opens a refused check, as the other check commands print it.
+fn write_check_verdict(command: &str, stderr: &mut dyn io::Write) {
+    if command == "check" {
+        let _ = writeln!(stderr, "schedulingctl check refused the input.");
+    }
 }
 
 fn classify_failure(error: &anyhow::Error) -> (u8, Value) {
@@ -576,9 +667,14 @@ fn write_success(
     if result.is_ok() {
         ExitCode::SUCCESS
     } else {
-        let _ = writeln!(stderr, "schedulingctl: output could not be written");
-        ExitCode::from(OPERATIONAL_FAILURE_EXIT)
+        output_failed(stderr)
     }
+}
+
+/// The exit for a report that could not be written to standard output.
+fn output_failed(stderr: &mut dyn io::Write) -> ExitCode {
+    let _ = writeln!(stderr, "schedulingctl: output could not be written");
+    ExitCode::from(OPERATIONAL_FAILURE_EXIT)
 }
 
 fn write_failure(
@@ -586,11 +682,11 @@ fn write_failure(
     format: OutputFormat,
     stdout: &mut dyn io::Write,
     stderr: &mut dyn io::Write,
-) {
+) -> io::Result<()> {
     if format == OutputFormat::Json {
-        let _ = report::write(report, stdout);
-        return;
+        return report::write(report, stdout);
     }
+    write_check_verdict(report["command"].as_str().unwrap_or(""), stderr);
     if let Some(diagnostics) = report["diagnostics"].as_array() {
         for finding in diagnostics {
             let _ = writeln!(
@@ -606,6 +702,14 @@ fn write_failure(
             }
         }
     }
+    if report["command"] == "check" {
+        if let Ok(diagnostics) =
+            serde_json::from_value::<Vec<Diagnostic>>(report["diagnostics"].clone())
+        {
+            let _ = writeln!(stderr, "{}", Report::new(diagnostics).summary());
+        }
+    }
+    Ok(())
 }
 
 fn human_lead(report: &Value) -> String {
@@ -613,42 +717,20 @@ fn human_lead(report: &Value) -> String {
     let failed_fixtures = report["fixtures"]
         .as_array()
         .is_some_and(|fixtures| fixtures.iter().any(|fixture| fixture["status"] == "failed"));
-    match (
-        command,
-        report["status"].as_str(),
-        report["authoringStatus"].as_str(),
-    ) {
-        ("check", Some("invalid"), _) => {
-            "Authoring check refused: a value's text is outside the grammar its field requires."
-                .to_owned()
-        }
-        ("check", Some("incomplete"), _) => {
-            "Authoring check completed with incomplete inputs.".to_owned()
-        }
-        ("check", Some("complete"), _) => "Authoring check passed with complete inputs.".to_owned(),
-        ("test", _, _) if failed_fixtures => {
-            "Offline synthetic fixtures reported failures.".to_owned()
-        }
-        ("test", _, Some("invalid")) => {
-            "Offline synthetic fixtures were not run: a value's text is outside the grammar its field requires."
-                .to_owned()
-        }
-        ("test", _, Some("incomplete")) => {
-            "Offline synthetic fixtures passed with incomplete authored inputs.".to_owned()
-        }
-        ("test", _, _) => "Offline synthetic fixtures passed.".to_owned(),
-        ("package", _, _) if report["dryRun"] == true => {
-            "Package planned; nothing was written.".to_owned()
-        }
-        ("package", _, _) => "Package written.".to_owned(),
-        ("plan", _, _) if report["changesPending"] == false => {
+    match command {
+        "check" => "Authoring check passed.".to_owned(),
+        "test" if failed_fixtures => "Offline synthetic fixtures reported failures.".to_owned(),
+        "test" => "Offline synthetic fixtures passed.".to_owned(),
+        "package" if report["dryRun"] == true => "Package planned; nothing was written.".to_owned(),
+        "package" => "Package written.".to_owned(),
+        "plan" if report["changesPending"] == false => {
             "Activation planned: the package is already active; nothing needs applying.".to_owned()
         }
-        ("plan", _, _) => "Activation planned; nothing was written.".to_owned(),
-        ("apply", _, _) => "Package activated.".to_owned(),
-        ("status", _, _) => "Activation status read.".to_owned(),
-        ("records apply", _, _) => "Environment records applied.".to_owned(),
-        ("intents", _, _) => "Undelivered delivery intents listed.".to_owned(),
+        "plan" => "Activation planned; nothing was written.".to_owned(),
+        "apply" => "Package activated.".to_owned(),
+        "status" => "Activation status read.".to_owned(),
+        "records apply" => "Environment records applied.".to_owned(),
+        "intents" => "Undelivered delivery intents listed.".to_owned(),
         _ => format!("{command} succeeded."),
     }
 }
@@ -657,8 +739,10 @@ fn render_human(report: &Value, stdout: &mut dyn io::Write) -> io::Result<()> {
     writeln!(stdout, "{}", human_lead(report))?;
     if let Some(fields) = report.as_object() {
         for (key, value) in fields {
-            if matches!(key.as_str(), "ok" | "command" | "findings" | "diagnostics")
-                || value.is_null()
+            if matches!(
+                key.as_str(),
+                "ok" | "command" | "diagnostics" | "filesChecked"
+            ) || value.is_null()
             {
                 continue;
             }
@@ -669,17 +753,30 @@ fn render_human(report: &Value, stdout: &mut dyn io::Write) -> io::Result<()> {
             writeln!(stdout, "{key}: {rendered}")?;
         }
     }
-    if let Some(findings) = report["findings"].as_array() {
-        for finding in findings {
-            writeln!(
-                stdout,
-                "finding {}: {}",
-                finding["path"].as_str().unwrap_or(AUTHORED_POLICY_FILE),
-                finding["reason"].as_str().unwrap_or("review required"),
-            )?;
-        }
+    if let Some(checked) = checked_diagnostics(report)? {
+        write!(stdout, "{}", checked.render_human())?;
     }
     Ok(())
+}
+
+/// The diagnostics a command that read the project's files reports beside
+/// its outcome, as the shared report that renders them with its summary line
+/// (CFG-DIAG-2). A refusal's diagnostics are written by
+/// [`write_configuration_report`].
+fn checked_diagnostics(report: &Value) -> io::Result<Option<Report>> {
+    let Some(diagnostics) = report
+        .get("diagnostics")
+        .filter(|_| report.get("filesChecked").is_some())
+    else {
+        return Ok(None);
+    };
+    let diagnostics =
+        serde_json::from_value::<Vec<Diagnostic>>(diagnostics.clone()).map_err(io::Error::other)?;
+    let mut checked = Report::new(diagnostics);
+    if let Some(files) = report["filesChecked"].as_u64() {
+        checked.set_files_checked(usize::try_from(files).map_err(io::Error::other)?);
+    }
+    Ok(Some(checked))
 }
 
 /// Command tree available to command-reference tooling.
@@ -690,6 +787,10 @@ pub fn command() -> clap::Command {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
+    use registry_scheduling_core::{SCHEDULING_CTL_REPORT_API_VERSION, SCHEDULING_CTL_REPORT_KIND};
+
     use super::*;
 
     /// Run one invocation in JSON mode and return its exit code, its report
@@ -709,17 +810,24 @@ mod tests {
     }
 
     /// Every JSON report opens with `ok`, `command`, and `status` in that
-    /// order; `ok` is true exactly when the process exits zero, and a report
-    /// that is not ok carries at least one diagnostic naming the next step.
+    /// order, then names its format; `ok` is true exactly when the process
+    /// exits zero, and a report that is not ok carries at least one
+    /// diagnostic naming the next step.
     fn assert_envelope(stdout: &[u8], report: &Value, exit: ExitCode) {
         let text = String::from_utf8_lossy(stdout);
         let head = text
             .lines()
             .filter_map(|line| line.strip_prefix("  \""))
             .filter_map(|line| line.split_once('"').map(|(key, _)| key))
-            .take(3)
+            .take(5)
             .collect::<Vec<_>>();
-        assert_eq!(head, ["ok", "command", "status"], "{text}");
+        assert_eq!(
+            head,
+            ["ok", "command", "status", "apiVersion", "kind"],
+            "{text}"
+        );
+        assert_eq!(report["apiVersion"], SCHEDULING_CTL_REPORT_API_VERSION);
+        assert_eq!(report["kind"], SCHEDULING_CTL_REPORT_KIND);
         assert!(report["command"].as_str().is_some_and(|c| !c.is_empty()));
         assert!(report["status"].as_str().is_some_and(|s| !s.is_empty()));
         assert_eq!(report["ok"], json!(exit == ExitCode::SUCCESS), "{text}");
@@ -749,6 +857,30 @@ mod tests {
         assert_eq!(report["status"], "complete");
         let (_, report, _) = run_json(&["package", project, "--dry-run"]);
         assert_eq!(report["status"], "complete");
+    }
+
+    /// The committed report example is what `schedulingctl check
+    /// products/scheduling/examples/standalone-exact-time --format json`
+    /// writes from the repository root, byte for byte.
+    #[test]
+    fn the_committed_report_example_is_check_output() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let relative = "products/scheduling/examples/standalone-exact-time";
+        let project = root.join(relative);
+        let (exit, mut report, _) = run_json(&["check", project.to_str().unwrap()]);
+        assert_eq!(exit, ExitCode::SUCCESS);
+        report["project"] = json!(relative);
+        let mut written = Vec::new();
+        report::write(&report, &mut written).unwrap();
+        let committed =
+            std::fs::read(root.join("products/scheduling/examples/formats/ctl-report.json"))
+                .unwrap();
+        assert!(
+            written == committed,
+            "products/scheduling/examples/formats/ctl-report.json drifted; rerun \
+             `schedulingctl check {relative} --format json` from the repository root \
+             and commit its output"
+        );
     }
 
     #[test]
@@ -929,22 +1061,17 @@ mod tests {
                     .collect::<Vec<_>>(),
             })
         };
-        assert!(!report_is_refusal(&plan(&[]), false));
-        assert!(!report_is_refusal(
-            &plan(&["schedulingctl.activation.package-already-active"]),
-            false
-        ));
-        assert!(report_is_refusal(
-            &plan(&["schedulingctl.activation.database-id-mismatch"]),
-            false
-        ));
-        assert!(report_is_refusal(
-            &plan(&[
-                "schedulingctl.activation.package-already-active",
-                "schedulingctl.activation.database-id-mismatch"
-            ]),
-            false
-        ));
+        assert!(!report_is_refusal(&plan(&[])));
+        assert!(!report_is_refusal(&plan(&[
+            "schedulingctl.activation.package-already-active"
+        ])));
+        assert!(report_is_refusal(&plan(&[
+            "schedulingctl.activation.database-id-mismatch"
+        ])));
+        assert!(report_is_refusal(&plan(&[
+            "schedulingctl.activation.package-already-active",
+            "schedulingctl.activation.database-id-mismatch"
+        ])));
     }
 
     #[test]
@@ -958,6 +1085,18 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("run `schedulingctl plan --runtime-config FILE` then `schedulingctl apply --runtime-config FILE`"));
+
+        let (exit, diagnostic) =
+            classify_failure(&activation::refusal_or_failure(StoreError::EarlierRelease));
+        assert_eq!(exit, DOMAIN_REFUSAL_EXIT);
+        assert_eq!(
+            diagnostic["code"],
+            "schedulingctl.activation.earlier-release"
+        );
+        assert!(diagnostic["message"]
+            .as_str()
+            .unwrap()
+            .contains("start from a new database"));
 
         let (exit, diagnostic) =
             classify_failure(&activation::refusal_or_failure(StoreError::Corrupt));
@@ -1025,6 +1164,50 @@ mod tests {
             .contains("`schedulingctl status --runtime-config FILE`"));
     }
 
+    /// A failure report that cannot be written is an operational failure that
+    /// says so on standard error, not a refusal whose report silently vanished.
+    #[test]
+    fn a_failure_report_that_cannot_be_written_is_an_operational_failure() {
+        struct ClosedStdout;
+        impl io::Write for ClosedStdout {
+            fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+                Err(io::Error::from(io::ErrorKind::BrokenPipe))
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        for arguments in [
+            vec!["schedulingctl", "--format=json", "no-such-command"],
+            vec![
+                "schedulingctl",
+                "--format=json",
+                "check",
+                "/nonexistent/schedulingctl-project",
+            ],
+            vec![
+                "schedulingctl",
+                "--format=json",
+                "check",
+                "--runtime-config",
+                "/nonexistent/runtime.yaml",
+            ],
+        ] {
+            let mut stderr = Vec::new();
+            let exit = main_entry_from(arguments.clone(), &mut ClosedStdout, &mut stderr);
+            assert_eq!(
+                exit,
+                ExitCode::from(OPERATIONAL_FAILURE_EXIT),
+                "{arguments:?}"
+            );
+            assert!(
+                String::from_utf8_lossy(&stderr).contains("output could not be written"),
+                "{arguments:?}: {}",
+                String::from_utf8_lossy(&stderr)
+            );
+        }
+    }
+
     fn initialized(template: &str) -> (tempfile::TempDir, PathBuf) {
         // Canonical, because the runtime configuration loader refuses a path
         // reached through a symbolic link and the system temporary
@@ -1044,7 +1227,8 @@ mod tests {
             panic!("expected check")
         };
         assert_eq!(args.project, PathBuf::from("/tmp/project"));
-        assert!(!args.deny_findings);
+        assert!(!args.deny_warnings);
+        assert!(args.runtime_config.is_none() && !args.environment);
 
         // `--format` matches every sibling ctl's value names: `human` and
         // `json`, never `text`.
@@ -1066,13 +1250,33 @@ mod tests {
         ])
         .is_err());
 
-        let cli =
-            Cli::try_parse_from(["schedulingctl", "check", "/tmp/project", "--deny-findings"])
-                .unwrap();
+        let cli = Cli::try_parse_from([
+            "schedulingctl",
+            "check",
+            "/tmp/project",
+            "--deny-warnings",
+            "--runtime-config",
+            "/tmp/runtime.yaml",
+            "--environment",
+        ])
+        .unwrap();
         let Command::Check(args) = cli.command else {
             panic!("expected check")
         };
-        assert!(args.deny_findings);
+        assert!(args.deny_warnings && args.environment);
+        assert_eq!(
+            args.runtime_config,
+            Some(PathBuf::from("/tmp/runtime.yaml"))
+        );
+        // Substitution applies only to a runtime file the check reads.
+        assert!(
+            Cli::try_parse_from(["schedulingctl", "check", "/tmp/project", "--environment"])
+                .is_err()
+        );
+        assert!(
+            Cli::try_parse_from(["schedulingctl", "check", "/tmp/project", "--deny-findings"])
+                .is_err()
+        );
 
         let cli =
             Cli::try_parse_from(["schedulingctl", "--format", "json", "test", "/tmp/project"])
@@ -1225,120 +1429,76 @@ mod tests {
         }
     }
 
-    /// A check that completes reports its findings and exits zero, so a human
-    /// reads the report without parsing an exit code; `--deny-findings` is the
-    /// CI switch that makes the same finding fail the build. A complete check
-    /// passes either way.
-    #[test]
-    fn an_incomplete_check_exits_zero_unless_findings_are_denied() {
-        let (_root, project) = initialized("standalone-exact-time");
-        let policy_path = project.join("scheduling.yaml");
-        let broken = std::fs::read_to_string(&policy_path).unwrap().replacen(
-            "version: 1\n",
-            "version: 0\n",
-            1,
-        );
-        std::fs::write(&policy_path, broken).unwrap();
-        let (exit, report, stderr) = run_json(&["check", project.to_str().unwrap()]);
-        assert_eq!(exit, ExitCode::SUCCESS);
-        assert!(stderr.is_empty());
-        assert_eq!(report["status"], "incomplete");
-        // Findings alone, without --deny-findings, are not a refusal.
-        assert_eq!(report["ok"], true);
-        assert!(report["findings"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|finding| {
-                finding["path"] == "scheduling.version" && finding["reason"] == "invalid-bound"
-            }));
-
-        let (exit, report, stderr) =
-            run_json(&["check", "--deny-findings", project.to_str().unwrap()]);
-        assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT));
-        assert!(stderr.is_empty());
-        assert_eq!(report["status"], "incomplete");
-        // The exit code already says this refused; the JSON must agree.
-        assert_eq!(report["ok"], false);
-        assert_eq!(
-            report["diagnostics"][0]["code"],
-            "schedulingctl.check.refused"
-        );
-        assert_eq!(report["diagnostics"][0]["path"], "$.findings");
-
-        let (_root, clean) = initialized("standalone-exact-time");
-        let (exit, report, stderr) =
-            run_json(&["check", "--deny-findings", clean.to_str().unwrap()]);
-        assert_eq!(exit, ExitCode::SUCCESS);
-        assert!(stderr.is_empty());
-        assert_eq!(report["status"], "complete");
-        assert_eq!(report["ok"], true);
-    }
-
-    /// A value whose text is outside its grammar (a clock that is not
-    /// `HH:MM`) is not unfinished authoring: no `--deny-findings` switch
-    /// governs it, because there is nothing to opt into. `check` refuses it
-    /// unconditionally, and the `version: 0` case above must keep exiting
-    /// zero without `--deny-findings` so the two families stay separated.
-    #[test]
-    fn a_malformed_value_refuses_check_regardless_of_deny_findings() {
-        let (_root, project) = initialized("standalone-exact-time");
-        let policy_path = project.join("scheduling.yaml");
+    /// Break the exact-time template's first opening clock, a value outside
+    /// its `HH:MM` grammar.
+    fn malformed_clock(project: &Path) {
+        let policy_path = project.join(AUTHORED_POLICY_FILE);
         let broken = std::fs::read_to_string(&policy_path).unwrap().replacen(
             "startTime: \"09:00\"",
             "startTime: \"9:00\"",
             1,
         );
         std::fs::write(&policy_path, broken).unwrap();
+    }
 
-        let (exit, report, stderr) = run_json(&["check", project.to_str().unwrap()]);
-        assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT));
-        assert!(stderr.is_empty());
-        assert_eq!(report["status"], "invalid");
-        assert_eq!(report["ok"], false);
-        assert!(report["findings"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|finding| {
-                finding["path"] == "openings[0].startTime" && finding["reason"] == "malformed-value"
-            }));
-
-        // --deny-findings changes nothing here: the refusal does not depend
-        // on it.
-        let (exit, report, stderr) =
-            run_json(&["check", "--deny-findings", project.to_str().unwrap()]);
-        assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT));
-        assert!(stderr.is_empty());
-        assert_eq!(report["status"], "invalid");
-        assert_eq!(report["ok"], false);
+    /// A refused check reports every diagnostic at its position, in the
+    /// shared envelope with the files it read, and exits one whether or not
+    /// warnings are denied: every finding is an error.
+    #[test]
+    fn a_refused_check_reports_its_diagnostics_and_exits_one() {
+        let (_root, project) = initialized("standalone-exact-time");
+        malformed_clock(&project);
+        for deny in [false, true] {
+            let mut arguments = vec!["check", project.to_str().unwrap()];
+            if deny {
+                arguments.push("--deny-warnings");
+            }
+            let (exit, report, stderr) = run_json(&arguments);
+            assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT));
+            assert!(stderr.is_empty());
+            assert_eq!(report["status"], "domain-refusal");
+            assert_eq!(report["filesChecked"], 5);
+            let diagnostics = report["diagnostics"].as_array().unwrap();
+            assert_eq!(diagnostics.len(), 1, "{report}");
+            assert_eq!(diagnostics[0]["path"], "/openings/0/startTime");
+            assert_eq!(diagnostics[0]["severity"], "error");
+            assert!(diagnostics[0]["source"]["line"].as_u64().is_some());
+            // The diagnostic names the rule, never the refused value.
+            assert!(!report.to_string().contains("9:00\""), "{report}");
+        }
     }
 
     /// A malformed policy has no business running fixtures against it:
-    /// `test` refuses the same way `check` does, before it ever reads the
-    /// fixtures directory.
+    /// `test` refuses the same way `check` does, before it replays anything.
     #[test]
     fn a_malformed_value_refuses_test_without_running_fixtures() {
         let (_root, project) = initialized("standalone-exact-time");
-        let policy_path = project.join("scheduling.yaml");
-        let broken = std::fs::read_to_string(&policy_path).unwrap().replacen(
-            "startTime: \"09:00\"",
-            "startTime: \"9:00\"",
-            1,
-        );
-        std::fs::write(&policy_path, broken).unwrap();
-
+        malformed_clock(&project);
         let (exit, report, stderr) = run_json(&["test", project.to_str().unwrap()]);
         assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT));
         assert!(stderr.is_empty());
-        assert_eq!(report["authoringStatus"], "invalid");
-        assert_eq!(report["ok"], false);
-        assert_eq!(report["fixtures"].as_array().unwrap().len(), 0);
-        assert_eq!(report["status"], "refused");
-        assert_eq!(
-            report["diagnostics"][0]["code"],
-            "schedulingctl.test.refused"
+        assert_eq!(report["status"], "domain-refusal");
+        assert!(report.get("fixtures").is_none(), "{report}");
+        assert_eq!(report["diagnostics"][0]["path"], "/openings/0/startTime");
+    }
+
+    /// A reschedule target no claim carries is an authoring error the
+    /// report names by member, never by the configured value.
+    #[test]
+    fn an_unknown_reschedule_target_is_reported_without_its_value() {
+        let (_root, project) = initialized("standalone-exact-time");
+        let fixture_path = project.join("fixtures/counter-stations.yaml");
+        let edited = std::fs::read_to_string(&fixture_path).unwrap().replacen(
+            "      policyRevision: 1\n",
+            "      policyRevision: 1\n      rescheduleOf: private/secret-marker\n",
+            1,
         );
+        std::fs::write(&fixture_path, edited).unwrap();
+        let (exit, report, stderr) = run_json(&["test", project.to_str().unwrap()]);
+        assert_ne!(exit, ExitCode::SUCCESS);
+        let output = format!("{report}{}", String::from_utf8_lossy(&stderr));
+        assert!(!output.contains("secret-marker"), "{output}");
+        assert!(output.contains("rescheduleOf"), "{output}");
     }
 
     #[test]
@@ -1385,7 +1545,7 @@ mod tests {
     }
 
     #[test]
-    fn a_fixture_that_cannot_replay_is_a_domain_refusal_with_a_diagnostic() {
+    fn a_fixture_naming_an_unknown_problem_code_is_refused_at_its_position() {
         let (_root, project) = initialized("standalone-exact-time");
         let fixture_path = project.join("fixtures/counter-stations.yaml");
         let broken = std::fs::read_to_string(&fixture_path).unwrap().replacen(
@@ -1394,28 +1554,37 @@ mod tests {
             1,
         );
         std::fs::write(&fixture_path, broken).unwrap();
-        let (exit, report, stderr) = run_json(&["test", project.to_str().unwrap()]);
-        assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT));
-        assert!(stderr.is_empty());
-        let diagnostic = &report["diagnostics"][0];
-        for field in [
-            "severity",
-            "code",
-            "artifact",
-            "path",
-            "message",
-            "suggestedAction",
-        ] {
-            assert!(diagnostic.get(field).is_some(), "missing {field}");
+        for command in ["check", "test"] {
+            let (exit, report, stderr) = run_json(&[command, project.to_str().unwrap()]);
+            assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT));
+            assert!(stderr.is_empty());
+            let diagnostics = report["diagnostics"].as_array().unwrap();
+            assert_eq!(diagnostics.len(), 1, "{report}");
+            let diagnostic = &diagnostics[0];
+            for field in [
+                "severity",
+                "code",
+                "artifact",
+                "path",
+                "message",
+                "suggestedAction",
+                "source",
+            ] {
+                assert!(diagnostic.get(field).is_some(), "missing {field}");
+            }
+            assert!(diagnostic["path"]
+                .as_str()
+                .unwrap()
+                .ends_with("/expect/code"));
+            assert!(diagnostic["source"]["file"]
+                .as_str()
+                .unwrap()
+                .ends_with("counter-stations.yaml"));
+            assert!(
+                !report.to_string().contains("not-a-problem-code"),
+                "{report}"
+            );
         }
-        assert_eq!(diagnostic["code"], "schedulingctl.refused");
-        // The path names the authored policy file by the crate's own
-        // constant, not a literal that could drift from it.
-        assert_eq!(diagnostic["path"], AUTHORED_POLICY_FILE);
-        assert!(diagnostic["message"]
-            .as_str()
-            .unwrap()
-            .contains("not-a-problem-code"));
     }
 
     #[test]
@@ -1476,7 +1645,14 @@ mod tests {
         );
         assert_eq!(exit, ExitCode::from(OPERATIONAL_FAILURE_EXIT));
         assert!(stdout.is_empty());
-        assert!(String::from_utf8_lossy(&stderr).starts_with("error[schedulingctl.io-failure]"));
+        let text = String::from_utf8_lossy(&stderr);
+        assert!(
+            text.starts_with(
+                "schedulingctl check refused the input.\nerror[schedulingctl.io-failure]"
+            ),
+            "{text}"
+        );
+        assert!(text.ends_with("1 error, 0 warnings\n"), "{text}");
     }
 
     #[test]
@@ -1505,29 +1681,52 @@ mod tests {
         );
         assert_eq!(exit, ExitCode::SUCCESS);
         let text = String::from_utf8(stdout).unwrap();
-        assert!(text.starts_with("Authoring check passed with complete inputs."));
-        // Nested report objects render as compact JSON.
-        assert!(text.contains("\"schedulingId\":\"registry-updates\""));
-
-        // An incomplete check renders its findings in text mode too, and
-        // exits zero unless findings were denied.
-        let policy_path = project.join("scheduling.yaml");
-        let broken = std::fs::read_to_string(&policy_path).unwrap().replacen(
-            "version: 1\n",
-            "version: 0\n",
-            1,
+        assert!(text.starts_with("Authoring check passed."));
+        // Nested report objects render as compact JSON, and the files the
+        // check read close the report.
+        assert!(text.contains("\"projectId\":\"registry-updates\""));
+        assert!(
+            text.ends_with("0 errors, 0 warnings in 5 files\n"),
+            "{text}"
         );
-        std::fs::write(&policy_path, broken).unwrap();
+
+        // A refused check writes its diagnostics to stderr as the reader
+        // renders them, each with its position and next step.
+        malformed_clock(&project);
         let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
         let exit = main_entry_from(
             ["schedulingctl", "check", project.to_str().unwrap()],
             &mut stdout,
             &mut stderr,
         );
+        assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT));
+        assert!(stdout.is_empty());
+        let text = String::from_utf8(stderr).unwrap();
+        assert!(
+            text.starts_with("schedulingctl check refused the input.\nerror["),
+            "{text}"
+        );
+        assert!(text.contains("scheduling.yaml:"), "{text}");
+        assert!(text.contains(" /openings/0/startTime\n"), "{text}");
+        assert!(text.contains("\n  next: "), "{text}");
+        assert!(text.ends_with("1 error, 0 warnings in 5 files\n"), "{text}");
+    }
+
+    #[test]
+    fn check_help_says_the_runtime_check_does_not_read_the_package() {
+        let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
+        let exit = main_entry_from(
+            ["schedulingctl", "check", "--help"],
+            &mut stdout,
+            &mut stderr,
+        );
         assert_eq!(exit, ExitCode::SUCCESS);
-        let text = String::from_utf8(stdout).unwrap();
-        assert!(text.starts_with("Authoring check completed with incomplete inputs."));
-        assert!(text.contains("finding scheduling.version: invalid-bound"));
+        let help = String::from_utf8(stdout).unwrap().replace("\n  ", " ");
+        assert!(
+            help.contains("package.root is not read; scheduling serve verifies the package"),
+            "{help}"
+        );
     }
 
     #[test]
@@ -1613,15 +1812,9 @@ mod tests {
     }
 
     #[test]
-    fn package_refuses_incomplete_authoring_and_writes_nothing() {
+    fn package_refuses_a_policy_that_fails_its_checks_and_writes_nothing() {
         let (_root, project) = initialized("standalone-exact-time");
-        let policy_path = project.join("scheduling.yaml");
-        let broken = std::fs::read_to_string(&policy_path).unwrap().replacen(
-            "version: 1\n",
-            "version: 0\n",
-            1,
-        );
-        std::fs::write(&policy_path, broken).unwrap();
+        malformed_clock(&project);
         let output = project.with_file_name("package");
         let (exit, report, stderr) = run_json(&[
             "package",
@@ -1631,10 +1824,7 @@ mod tests {
         ]);
         assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT));
         assert!(stderr.is_empty());
-        assert!(report["diagnostics"][0]["message"]
-            .as_str()
-            .unwrap()
-            .contains("finding"));
+        assert_eq!(report["diagnostics"][0]["path"], "/openings/0/startTime");
         assert!(!output.exists());
     }
 
@@ -1659,13 +1849,14 @@ mod tests {
         .unwrap();
         let (exit, report, _) = run_json(&["check", project.to_str().unwrap()]);
         assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT));
+        assert_eq!(report["diagnostics"][0]["path"], "/offerings/0/because");
         let message = report["diagnostics"][0]["message"].as_str().unwrap();
         assert!(message.contains("runtime.yaml only"), "{message}");
     }
 
     #[test]
     fn runtime_configuration_and_store_failures_map_to_their_own_diagnostics() {
-        let config_error = anyhow::Error::new(RuntimeConfigError::InvalidEnvelope);
+        let config_error = anyhow::Error::new(RuntimeConfigError::InvalidApiVersion);
         let (exit, diagnostic) = classify_failure(&config_error);
         assert_eq!(exit, DOMAIN_REFUSAL_EXIT);
         assert_eq!(
@@ -1691,40 +1882,80 @@ mod tests {
         }
     }
 
-    /// A records document that does not hold together is refused in its own
-    /// terms before any connection is opened: the write path never reaches
-    /// the database with a document the store would reject mid-swap.
+    /// The exact-time template's runtime example, with its package root set
+    /// to a package of `project` and its state root to `root`, written to
+    /// `root/runtime.yaml`.
+    fn runtime_config(root: &Path, project: &Path) -> PathBuf {
+        let package = root.join("package");
+        project::package(project, &package, None).unwrap();
+        let text = std::fs::read_to_string(project.join("runtime.example.yaml"))
+            .unwrap()
+            .replace(
+                "/srv/registry-scheduling/package",
+                package.to_str().unwrap(),
+            )
+            .replace("/var/lib/registry-scheduling", root.to_str().unwrap());
+        let path = root.join("runtime.yaml");
+        std::fs::write(&path, text).unwrap();
+        path
+    }
+
+    /// `check --runtime-config` reads the runtime file beside the project,
+    /// offline, and refuses it with the project's files still counted.
+    #[test]
+    fn check_reads_a_runtime_file_beside_the_project() {
+        let (root, project) = initialized("standalone-exact-time");
+        let runtime = runtime_config(root.path(), &project);
+        let project = project.to_str().unwrap();
+        let runtime_text = std::fs::read_to_string(&runtime).unwrap();
+        let runtime = runtime.to_str().unwrap();
+
+        let (exit, report, stderr) = run_json(&["check", project, "--runtime-config", runtime]);
+        assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+        assert!(stderr.is_empty());
+        assert_eq!(report["status"], "complete");
+        assert_eq!(report["filesChecked"], 6);
+        assert_eq!(report["runtimeConfig"], runtime);
+        assert_eq!(report["diagnostics"], json!([]));
+
+        std::fs::write(
+            runtime,
+            runtime_text.replacen("retention:\n", "retention:\n  stray: 1\n", 1),
+        )
+        .unwrap();
+        let (exit, report, stderr) = run_json(&["check", project, "--runtime-config", runtime]);
+        assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT));
+        assert!(stderr.is_empty());
+        assert_eq!(report["status"], "domain-refusal");
+        assert_eq!(report["filesChecked"], 6);
+        assert_eq!(report["diagnostics"][0]["path"], "/retention/stray");
+        assert_eq!(report["diagnostics"][0]["source"]["file"], runtime);
+
+        // A runtime file that cannot be read is an operational failure.
+        let missing = root.path().join("missing.yaml");
+        let (exit, report, _) = run_json(&[
+            "check",
+            project,
+            "--runtime-config",
+            missing.to_str().unwrap(),
+        ]);
+        assert_eq!(exit, ExitCode::from(OPERATIONAL_FAILURE_EXIT));
+        assert_eq!(report["status"], "operational-failure");
+    }
+
+    /// A records document that does not hold together is refused at its
+    /// positions before any connection is opened: the write path never
+    /// reaches the database with a document the store would reject mid-swap.
     #[test]
     fn records_apply_refuses_an_invalid_document_before_touching_a_database() {
         let (root, project) = initialized("standalone-exact-time");
-        let package = root.path().join("package");
-        project::package(&project, &package, None).unwrap();
-        let config_path = root.path().join("runtime.yaml");
-        std::fs::write(
-            &config_path,
-            format!(
-                "apiVersion: registry.registrystack.org/scheduling-runtime/v1alpha1\n\
-                 kind: SchedulingRuntimeConfig\n\
-                 package:\n  root: {}\n\
-                 listener:\n  bind: 127.0.0.1:8105\n  tlsTermination: development-loopback\n\
-                 secretProviders:\n  environment: {{}}\n\
-                 identity:\n  databaseId: scheduling-ctl-test\n\
-                 authentication:\n  oidc:\n    issuer: https://issuer.example.test\n\
-                 \x20   audience: scheduling-api\n\
-                 database:\n  runtimeUrlRef: secret:env/SCHEDULINGCTL_TEST_DATABASE\n\
-                 \x20 migrationUrlRef: secret:env/SCHEDULINGCTL_TEST_DATABASE\n\
-                 audit:\n  path: {}/audit.jsonl\n\
-                 \x20 hashKeyRef: secret:env/SCHEDULINGCTL_TEST_AUDIT\n\
-                 retention:\n  attemptReceiptDays: 2\n",
-                package.display(),
-                root.path().display()
-            ),
-        )
-        .unwrap();
+        let config_path = runtime_config(root.path(), &project);
         let records_path = root.path().join("records.yaml");
         std::fs::write(
             &records_path,
-            "locations:\n  - id: bangkok-counter\n    timezone: Asia/Nowhere\n",
+            "apiVersion: id.registrystack.org/formats/scheduling/records/v1alpha1\n\
+             kind: SchedulingRecords\n\
+             locations:\n  - id: bangkok-counter\n    timezone: Asia/Nowhere\n",
         )
         .unwrap();
         let (exit, report, stderr) = run_json(&[
@@ -1737,13 +1968,10 @@ mod tests {
         assert!(stderr.is_empty());
         assert_eq!(report["command"], "records apply");
         assert_eq!(report["status"], "domain-refusal");
-        let message = report["diagnostics"][0]["message"]
-            .as_str()
-            .unwrap()
-            .to_owned();
-        assert!(
-            message.contains("unknown timezone Asia/Nowhere"),
-            "{message}"
-        );
+        let diagnostic = &report["diagnostics"][0];
+        assert_eq!(diagnostic["path"], "/locations/0/timezone");
+        assert_eq!(diagnostic["code"], "scheduling.records.unknown-timezone");
+        assert_eq!(diagnostic["source"]["line"], 5);
+        assert!(!report.to_string().contains("Asia/Nowhere"), "{report}");
     }
 }

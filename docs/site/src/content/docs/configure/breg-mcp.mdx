@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-09-25"
+last_reviewed: "2026-10-08"
 doc_type: reference
 locale: en
 standards_referenced: []
@@ -193,13 +193,14 @@ services different keys.
 
 `breg-mcp` reads one closed YAML document named by `--runtime-config`, which must be an absolute
 path with no symlink components. The shared loader accepts one UTF-8 YAML document up to 1 MiB,
-refuses duplicate and unknown keys, and reports the file and field without echoing configured values.
-Ordinary string values support `${VAR}`, `${VAR:-default}`, and `${VAR:?message}` substitution.
+refuses duplicate and unknown keys, and reports each problem as a diagnostic with a code, the field,
+and its line and column, without echoing configured values. A file that still names a renamed key is
+refused with the key to write instead. Ordinary string values support `${VAR}`, `${VAR:-default}`, and `${VAR:?message}` substitution.
 Secret references and `secretProviders` never accept environment expressions; use a declared
 secret provider for credentials.
 
 ```yaml
-apiVersion: registry.registrystack.org/breg-mcp-runtime/v1alpha1
+apiVersion: id.registrystack.org/formats/breg/mcp-runtime/v1alpha1
 kind: BRegMcpRuntimeConfig
 listener:
   bind: 10.0.0.10:8110
@@ -282,9 +283,9 @@ addresses the listener may bind:
 | `allowedClients` | The chat-host clients whose tokens are accepted |
 | `requiredScopes` | Scopes every accepted token must carry |
 | `scopeClaim` | The claim holding scopes; defaults to `scope` |
-| `maxTokenLifetimeSeconds` | The longest token lifetime accepted; defaults to 3600 |
+| `maximumTokenLifetimeSeconds` | The longest token lifetime accepted, from 1 to 86400; defaults to 3600 |
 
-`allowedClients` and `requiredScopes` take between 1 and 128 entries. In production, a discovered
+`algorithms`, `allowedClients`, and `requiredScopes` each take between 1 and 128 distinct entries. In production, a discovered
 or `jwksSource.uri` key set is fetched under a strict policy that refuses loopback, private-range,
 and cloud-metadata addresses. Use a `static` key set when the issuer's keys are reachable only
 on a private network. `development-loopback` permits loopback HTTP for local evaluation, while
@@ -298,8 +299,8 @@ publishes RFC 9728 protected-resource metadata naming the issuer and the require
 | `registry.baseUrl` | The BReg deployment the gateway acts on |
 | `registry.accessProfile` | The standing agent access profile every call names |
 | `registry.audience` | The registry's RFC 8707 resource, requested in the exchange; must differ from `resourceServer.resource` |
-| `registry.scopes` | The scopes requested for the delegated token |
-| `registry.requestTimeoutMilliseconds` | The timeout for each registry call; defaults to 10000 |
+| `registry.scopes` | 1 to 128 distinct scopes requested for the delegated token |
+| `registry.attemptTimeoutMilliseconds` | The timeout for each registry call, from 100 to 120000; defaults to 10000 |
 | `exchange.tokenEndpoint` | The authorization server's token endpoint |
 | `exchange.clientId` | The gateway's own client; must not appear in `resourceServer.allowedClients` |
 | `exchange.privateKeyRef` | The secret holding that client's private JWK |
@@ -317,7 +318,7 @@ publishes RFC 9728 protected-resource metadata naming the issuer and the require
 | `application.ownerField` | The field identifier of the field recording the citizen's principal |
 | `reviewBaseUrl` | The review page's `publicOrigin`, with no path; the gateway returns `<reviewBaseUrl>/requests/<id>` |
 
-`name`, `description`, and `disclosure` are each at most 4096 bytes. The two field keys take the
+`name`, `description`, and `disclosure` are each at most 4096 characters, and none may be blank. The two field keys take the
 field identifier as the project declares it, such as `new-address-line`, not the API name
 `newAddressLine` the registry's metadata publishes for it, and must name two different fields.
 
@@ -325,21 +326,20 @@ field identifier as the project declares it, such as `new-address-line`, not the
 
 `audit.hashKeyRef` names the key used for pseudonyms and gateway retry identity. With
 `audit.destination: file` (the default), `audit.path` is the absolute active-file path.
-`audit.rotateBytes` defaults to 104857600 (100 MiB), and `audit.retainDays` defaults to 90.
+`audit.rotateBytes` defaults to 104857600 (100 MiB), and `audit.retentionDays` defaults to 90.
 Sealed segments are written beside the active file and expire under that retention policy.
 Ship them to your audit store before expiry.
 
-`audit.destination: stdout` accepts no `path`, `rotateBytes`, or `retainDays`. It flushes entries
+`audit.destination: stdout` accepts no `path`, `rotateBytes`, or `retentionDays`. It flushes entries
 to standard output but cannot prove durable storage; use `file` when local durable acceptance
 is required. See [audit operation](../../operate/breg-mcp/#keep-the-audit-journals).
 
 `rateLimits.perCitizen` and `rateLimits.perClient` are required, each with `requestsPerMinute` and
-`burst` greater than zero. `limits.maxRequestBodyBytes` defaults to 64 KiB and accepts at most
+`burst` from 1 to 1000000. `limits.maximumRequestBytes` defaults to 64 KiB and accepts at most
 1 MiB.
 
-{/* Evidence: crates/registry-breg-mcp/src/config.rs, RuntimeConfig,
-    default_max_token_lifetime(), default_registry_timeout(),
-    ExchangeClientAdmittedInbound, AudienceReused;
+{/* Evidence: crates/registry-breg-mcp/src/config.rs, RuntimeConfig, REMOVED_KEYS,
+    default_maximum_token_lifetime(), default_attempt_timeout(), findings();
     crates/registry-breg-mcp/src/inbound.rs, jwks_fetch_policy(), METADATA_PREFIX;
     crates/registry-breg-mcp/src/gateway.rs, prepare_review;
     crates/registry-breg-mcp/tests/support/gateway.rs, document(). */}
@@ -350,7 +350,7 @@ is required. See [audit operation](../../operate/breg-mcp/#keep-the-audit-journa
 messages.
 
 ```yaml
-apiVersion: registry.registrystack.org/breg-review-runtime/v1alpha1
+apiVersion: id.registrystack.org/formats/breg/review-runtime/v1alpha1
 kind: BRegReviewRuntimeConfig
 listener:
   bind: 10.0.0.11:8115
@@ -400,28 +400,28 @@ In production the page fetches the issuer's discovery document, key set, and tok
 a strict policy that refuses loopback, private-range, and cloud-metadata addresses, so the
 authorization server must be reachable at a public address.
 
-### Limits and sessions
+### Rate limits and sessions
 
-Both sections are optional:
+Both sections are optional. Each rate takes `requestsPerMinute` and `burst` from 1 to 1000000:
 
 | Key | Default |
 |---|---|
-| `limits.perCitizen` | 120 requests per minute, burst 30, for each signed-in citizen |
-| `limits.globalSignIn` | 600 requests per minute, burst 120, shared by everyone on the sign-in routes |
+| `rateLimits.perCitizen` | 120 requests per minute, burst 30, for each signed-in citizen |
+| `rateLimits.globalSignIn` | 600 requests per minute, burst 120, shared by everyone on the sign-in routes |
 | `session.maximumSessions` | 10000, from 1 to 1000000 |
 | `session.maximumPendingSignIns` | 10000, from 1 to 1000000 |
 | `session.maximumLifetimeSeconds` | 3600, from 60 to 86400 |
 | `session.signInLifetimeSeconds` | 600, from 60 to 3600 |
 
-Startup refuses a `maximumPendingSignIns` smaller than the sign-ins `globalSignIn` admits within
+`check` and startup refuse a `maximumPendingSignIns` smaller than the sign-ins `globalSignIn` admits within
 `signInLifetimeSeconds`: its burst plus its rate over that lifetime. A session ends at
 `maximumLifetimeSeconds` or when the citizen's access token expires, whichever comes first. One
 citizen holds at most three sessions at once: signing in a fourth time ends their oldest session
 rather than take another slot, so one citizen takes at most three of the `maximumSessions` slots.
 A full store answers a `sessions-exhausted` page.
 
-{/* Evidence: crates/registry-breg-review/src/config.rs, RuntimeConfig, CALLBACK_PATH,
-    default_per_citizen(), default_global_sign_in(), PendingSignInsFillable;
+{/* Evidence: crates/registry-breg-review/src/config.rs, RuntimeConfig, REMOVED_KEYS, CALLBACK_PATH,
+    default_per_citizen(), default_global_sign_in(), findings();
     crates/registry-breg-review/src/session.rs, MAXIMUM_SESSIONS_PER_CITIZEN, Store::insert;
     crates/registry-breg-review/src/lib.rs, router(), FetchUrlPolicy;
     crates/registry-breg-review/README.md. */}
@@ -435,13 +435,24 @@ breg-mcp --runtime-config /etc/breg-mcp/runtime.yaml check
 breg-review --runtime-config /etc/breg-review/runtime.yaml check
 ```
 
-`breg-mcp check` resolves every secret without opening a socket or the audit journal.
-`breg-review check` reads and parses its secrets and refuses a client key `serve` would refuse,
-such as one without a `kid`, without fetching the issuer's discovery document or opening its
-journal. Neither command proves the authorization server or the registry accepts
-the configuration; the first `serve` does.
+Each command reads the file offline, as `serve` reads it, and reports what it refuses in the
+diagnostic shape [configuration files](../../reference/configuration-files/) describes. It reads no
+secret, calls no provider, opens no socket, and writes no audit file. Add `--format json` for one
+report document, `BRegMcpCtlReport` or `BRegReviewCtlReport`, on standard output. Both exit 0 when
+the file is accepted, 1 when something is refused, 2 on a usage error, and 3 when the file cannot be
+read. With `--deny-warnings`, a warning also exits 1.
 
-{/* Evidence: crates/registry-breg-mcp/src/main.rs; crates/registry-breg-review/src/lib.rs, check(). */}
+A `${NAME}` expression is checked by syntax and position only. Add `--environment` to substitute
+each expression from the environment first and check the value it produces.
+
+So a secret file with unsafe permissions, a missing secret, a `breg-review` client key without a
+`kid`, or an audit directory the service cannot write is refused when `serve` starts, before it
+binds its listener. Neither command proves the authorization server or the registry accepts the
+configuration; the first `serve` does.
+
+{/* Evidence: crates/registry-breg-mcp/src/check.rs, run();
+    crates/registry-breg-review/src/check.rs, run();
+    crates/registry-breg-review/tests/binary.rs. */}
 
 ## MCP tool reference
 

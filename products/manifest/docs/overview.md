@@ -167,13 +167,16 @@ becomes a full IRI) and resolves codelist concept references before any renderer
 
 The `registry-manifest` binary exposes four subcommands:
 
-- `validate`: parse and validate a manifest file. Exits non-zero on any validation error.
+- `validate`: check one manifest file offline. Reports every finding with its code, file,
+  line, column, and fix, and exits 1 on a refusal, 2 on a usage error, and 3 when the file
+  cannot be read. `--format json` writes a machine-readable report.
 - `render`: compile a manifest and write one renderer's output to stdout. Accepts
   `--format`, `--profile`, `--dataset`, `--entity`, `--form`, and `--offering` selectors.
 - `publish`: compile a manifest, run all renderers, write every artifact to an output
   directory, and generate an `index.json` manifest of the bundle.
-- `validate-profiles`: scan a `profiles/` directory for profile descriptors, validate
-  their schema, and validate all referenced fixture manifests.
+- `validate-profiles`: scan a `profiles/` directory for profile descriptors, check each
+  descriptor, and check every fixture manifest it lists against its expectations, with the
+  same findings, exit codes, and `--format json` report as `validate`.
 
 See [Validate and render a manifest](./validate-and-render.md) for the `validate`, `render`,
 and `publish` subcommands in steps.
@@ -184,10 +187,11 @@ See [Validate against profile fixtures](./profile-fixtures.md) for `validate-pro
 The `profiles/` directory contains non-normative profile descriptors and fixture manifests.
 A profile descriptor (schema version `registry-manifest-profile/v1`) declares:
 
+- The input artifacts the profile reads.
 - Required and optional concept IRIs a conforming manifest must reference.
 - Required identifiers and codelists with expected code values.
 - Cardinality expectations per entity field.
-- Runtime-only keys that must not appear in a portable fixture manifest.
+- The conformance checks the profile names, and the fixtures that demonstrate it.
 
 Five example profiles ship in the repository: `example-civil-registration`,
 `example-social-benefits`, `example-person-schema`, `example-benefits-sync`,

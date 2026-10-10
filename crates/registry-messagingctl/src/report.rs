@@ -4,13 +4,15 @@
 //! sibling ctls.
 //!
 //! A report is one JSON object on standard output. It opens with `ok`,
-//! `command`, and `status`, in that order, followed by the command's own
-//! camelCase members. `ok` is true exactly when the process exits zero;
+//! `command`, and `status`, in that order, then names its own format with
+//! `apiVersion` and `kind`, followed by the command's own camelCase members.
+//! `ok` is true exactly when the process exits zero;
 //! `status` names what happened. A report that is not ok carries a non-empty
 //! `diagnostics` array whose entries each name a `suggestedAction`.
 
 use std::io;
 
+use registry_messaging_core::{MESSAGING_CTL_REPORT_API_VERSION, MESSAGING_CTL_REPORT_KIND};
 use serde::ser::{Serialize, SerializeMap as _, Serializer};
 use serde_json::Value;
 
@@ -26,6 +28,11 @@ pub(crate) const OPERATIONAL_FAILURE_EXIT: u8 = 3;
 
 /// The members every report opens with, in the order they are written.
 const HEAD: [&str; 3] = ["ok", "command", "status"];
+/// The members that name the report's format, written after [`HEAD`].
+const FORMAT: [(&str, &str); 2] = [
+    ("apiVersion", MESSAGING_CTL_REPORT_API_VERSION),
+    ("kind", MESSAGING_CTL_REPORT_KIND),
+];
 
 /// The status a failure envelope carries for each exit class.
 pub(crate) fn failure_status(exit: u8) -> &'static str {
@@ -144,14 +151,23 @@ impl Serialize for Ordered<'_> {
         let Value::Object(members) = self.0 else {
             return self.0.serialize(serializer);
         };
-        let mut map = serializer.serialize_map(Some(members.len()))?;
+        let named = |key: &str| HEAD.contains(&key) || FORMAT.iter().any(|(name, _)| *name == key);
+        let own = members.keys().filter(|key| !named(key)).count();
+        let head = HEAD
+            .iter()
+            .filter(|key| members.contains_key(**key))
+            .count();
+        let mut map = serializer.serialize_map(Some(head + FORMAT.len() + own))?;
         for key in HEAD {
             if let Some(value) = members.get(key) {
                 map.serialize_entry(key, value)?;
             }
         }
+        for (key, value) in FORMAT {
+            map.serialize_entry(key, value)?;
+        }
         for (key, value) in members {
-            if !HEAD.contains(&key.as_str()) {
+            if !named(key) {
                 map.serialize_entry(key, value)?;
             }
         }
@@ -214,7 +230,7 @@ mod tests {
     }
 
     #[test]
-    fn a_report_opens_with_ok_command_and_status_in_that_order() {
+    fn a_report_opens_with_ok_command_and_status_then_names_its_format() {
         let mut out = Vec::new();
         write(
             &json!({"alpha": 1, "status": "complete", "command": "check", "ok": true}),
@@ -222,14 +238,18 @@ mod tests {
         )
         .unwrap();
         let text = String::from_utf8(out).unwrap();
-        assert!(
-            text.starts_with("{\n  \"ok\": true,\n  \"command\": \"check\",\n  \"status\": \"complete\",\n  \"alpha\": 1"),
-            "{text}"
+        assert_eq!(
+            text,
+            concat!(
+                "{\n  \"ok\": true,\n  \"command\": \"check\",\n  \"status\": \"complete\",\n",
+                "  \"apiVersion\": \"id.registrystack.org/formats/messaging/ctl-report/v1alpha1\",\n",
+                "  \"kind\": \"MessagingCtlReport\",\n  \"alpha\": 1\n}\n"
+            )
         );
     }
 
     #[test]
-    fn a_one_line_report_opens_with_ok_command_and_status_in_that_order() {
+    fn a_one_line_report_opens_with_ok_command_and_status_then_names_its_format() {
         let mut out = Vec::new();
         write_line(
             &json!({"alpha": 1, "status": "ready", "command": "dev", "ok": true}),
@@ -238,8 +258,26 @@ mod tests {
         .unwrap();
         assert_eq!(
             String::from_utf8(out).unwrap(),
-            "{\"ok\":true,\"command\":\"dev\",\"status\":\"ready\",\"alpha\":1}\n"
+            concat!(
+                "{\"ok\":true,\"command\":\"dev\",\"status\":\"ready\",",
+                "\"apiVersion\":\"id.registrystack.org/formats/messaging/ctl-report/v1alpha1\",",
+                "\"kind\":\"MessagingCtlReport\",\"alpha\":1}\n"
+            )
         );
+    }
+
+    #[test]
+    fn a_command_cannot_rename_the_report_format() {
+        let mut out = Vec::new();
+        write(
+            &json!({"ok": true, "command": "check", "status": "complete", "kind": "Other", "apiVersion": "other/v1"}),
+            &mut out,
+        )
+        .unwrap();
+        let report: Value = serde_json::from_slice(&out).unwrap();
+        assert_eq!(report["apiVersion"], MESSAGING_CTL_REPORT_API_VERSION);
+        assert_eq!(report["kind"], MESSAGING_CTL_REPORT_KIND);
+        assert_eq!(report.as_object().unwrap().len(), 5);
     }
 
     #[test]

@@ -7,7 +7,7 @@ checks current Casework status before each new governed mutation. Task agents
 use change-request drafts and lifecycle operations; a task grant does not
 authorize direct changes to the target records, including imports. A task-grant profile cannot
 hold `apply_request`: the compiler refuses it with
-`access_profile.task_grant.operation_forbidden`.
+`breg.access-profile.task-grant-operation-forbidden`.
 
 The authored access profile selects `actorKind: agent`, exact
 `requesterClients`, `requiredPurposes`, and a `taskGrant` containing the exact
@@ -16,7 +16,7 @@ and the compiled collection and operation bounds. A task token cannot fall back
 to a standing access profile. Ordinary profiles retain their own authority.
 A `taskGrant` is authored only in project `accessProfiles`; a module cannot
 contribute a task-grant profile, and the compiler refuses one with
-`access_profile.task_grant.module_forbidden`.
+`breg.access-profile.task-grant-module-forbidden`.
 
 An authored `permissions` entry is the Registry's governed ceiling for a
 profile. A delegated `taskGrant` is signed, short-lived authority for one task
@@ -59,14 +59,14 @@ agent carries none, so the human must confirm the change themselves by
 submitting it. A standing agent profile may read and may create, read, and
 patch change-request drafts. The compiler refuses it when it holds
 `submit_request`, `revise_request`, `cancel_request`, or `apply_request`,
-with `access_profile.standing_agent.operation_forbidden`, and when it holds
+with `breg.access-profile.standing-agent-operation-forbidden`, and when it holds
 `create` or `patch` on an entity without a `changeRequest`, or `import`,
 `tombstone`, or `batch` on any entity, with
-`access_profile.standing_agent.direct_mutation_forbidden`. Profiles
+`breg.access-profile.standing-agent-direct-mutation-forbidden`. Profiles
 contributed by modules meet the same ceiling. An immediate action commits its
 effects at once, with no draft for the human to confirm, so the compiler also
 refuses a standing agent profile that holds any action permission, with
-`access_profile.standing_agent.action_forbidden`. Action permissions are
+`breg.access-profile.standing-agent-action-forbidden`. Action permissions are
 authored only on project access profiles; a module contributes entity
 profiles, which cannot grant `invoke` at all. Give the lifecycle operations
 and immediate actions to a separate profile the citizen uses directly.

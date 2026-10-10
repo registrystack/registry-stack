@@ -1,0 +1,13 @@
+id: tag
+rules: [CFG-YAML-4]
+summary: An explicit tag is refused at the tag.
+mutation:
+  append: |
+    conformanceTag: !!str text
+expect:
+  exit: 1
+  diagnostics:
+    - code: yaml.tag
+      path: /conformanceTag
+      at: {line: 1, column: 17}
+      suggestedAction: Remove the tag; quote the value if it is text.

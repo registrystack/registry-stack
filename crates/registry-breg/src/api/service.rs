@@ -847,8 +847,8 @@ pub trait RecordReadService: Send + Sync {
 }
 
 /// Revision reads operate only on the canonical internal revision journal.
-/// The HTTP layer must select and authorize one non-anonymous compiled profile
-/// before invoking this boundary.
+/// The HTTP layer must select and authorize one compiled profile before
+/// invoking this boundary.
 pub trait RevisionReadService: Send + Sync {
     fn detail(
         &self,

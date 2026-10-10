@@ -88,7 +88,11 @@ esac
   exit 1
 }
 
-dependencies="$repository_root/target/debug/deps"
+cargo_target_dir="${CARGO_TARGET_DIR:-$repository_root/target}"
+if [[ "$cargo_target_dir" != /* ]]; then
+  cargo_target_dir="$repository_root/$cargo_target_dir"
+fi
+dependencies="$cargo_target_dir/debug/deps"
 client_library=''
 for candidate in "$dependencies"/libregistry_breg_client-*.rlib; do
   [[ -f "$candidate" ]] || continue
@@ -98,7 +102,7 @@ for candidate in "$dependencies"/libregistry_breg_client-*.rlib; do
 done
 
 if [[ -z "$client_library" ]]; then
-  printf 'No compiled registry-breg-client was found under target/debug/deps, so the probes cannot run.\n' >&2
+  printf 'No compiled registry-breg-client was found under the cargo target directory debug/deps, so the probes cannot run.\n' >&2
   exit 1
 fi
 
@@ -113,7 +117,7 @@ for candidate in "$dependencies"/libregistry_platform_httputil-*.rlib; do
 done
 
 if [[ -z "$platform_library" ]]; then
-  printf 'No compiled registry-platform-httputil was found under target/debug/deps, so the probes cannot run.\n' >&2
+  printf 'No compiled registry-platform-httputil was found under the cargo target directory debug/deps, so the probes cannot run.\n' >&2
   exit 1
 fi
 

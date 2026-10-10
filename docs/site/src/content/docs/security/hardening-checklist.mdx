@@ -21,15 +21,16 @@ Use this checklist after product configuration is valid and before exposing a de
 - Use the product's production check and keep the report with the deployment record.
 - Identify every secret owner, source owner, audit owner, and recovery owner.
 - Test recovery with non-production data.
-- Have `evidence check` runnable against the exact revision you intend to serve. Evidence Gateway
-  has no posture endpoint or admin surface. Startup, readiness, and offline checks expose invalid
-  deployment inputs.
+- Have `evidence check --require-runtime-dependencies` runnable on the target host against the exact
+  revision you intend to serve. Evidence Gateway has no posture endpoint or admin surface. Startup,
+  readiness, and offline checks expose invalid deployment inputs.
 
 ## Keys and custody
 
 - Configure one active ES256 P-256 Evidence Gateway public JWK with a derived RFC 7638 thumbprint
   `kid`, plus only the overlap keys needed to verify current assertions. `evidence check` refuses a
-  revoked, malformed, or mismatched active signer.
+  revoked or malformed active public JWK, and `evidence check --require-runtime-dependencies` on the
+  target host refuses a configured signer that does not match it.
 - Supply local-assurance private JWKs, HMAC keys, and source credentials through
   `secret:file/<name>` references below `secretProviders.file.root`. The file provider accepts only
   regular, non-symlink files owned by the service identity at mode `0400` or `0600`, and checks
@@ -72,11 +73,13 @@ Use this checklist after product configuration is valid and before exposing a de
   named CA bundle read-only and non-writable to the service process. Keep the secret root at mode
   `0700` or tighter. Keep every bound source extract non-writable too. Evidence Gateway refuses
   writable deployment inputs before serving.
-- Freeze the package and target before validating or serving them, then validate the frozen bytes:
+- Freeze the package and target before proving or serving them, then prove the frozen bytes on the
+  target host:
 
   ```sh
   chmod -R a-w "<installed-package>" && chmod 444 "<deployment-target>/runtime.yaml"
-  evidence check --runtime-config "<deployment-target>/runtime.yaml"
+  evidence check --runtime-config "<deployment-target>/runtime.yaml" \
+    --require-runtime-dependencies --require-audit-under "<audit-root>"
   evidence evaluate --runtime-config "<deployment-target>/runtime.yaml" \
     --fixture "fixtures/<cases>.yaml"
   ```

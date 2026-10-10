@@ -199,11 +199,18 @@ This first question uses the compact OpenAPI form, so you will add only a questi
 derivation. Evidence Gateway keeps the source-mock hints out of the narrowed authoring schema.
 Later institution integrations use the reusable source, selector, adapter, and schema directories.
 
+`evidencectl init` prints a next step, `evidencectl source suggest`, that drafts an editable source file
+in `sources/`. This tutorial does not use it: the compact form names the operation inside the
+question, so there is no source file to draft. Use `source suggest` when you build the reusable
+form for a later integration.
+
 ### `questions/adult-status.yaml`
 
 Open `questions/adult-status.yaml` in your editor and add the question definition:
 
 ```yaml title="questions/adult-status.yaml" test-file
+apiVersion: id.registrystack.org/formats/evidence/question/v1alpha1
+kind: EvidenceQuestion
 id: adult-status
 question: Is the person at least 18 years old?
 purpose: age-check
@@ -226,7 +233,7 @@ disclosure:
   allow: [is_adult]
 ```
 
-The definition closes four decisions:
+The definition closes five decisions:
 
 - `subject` says that `person_id` selects the person in `/people/{person_id}`.
 - `source` selects `getPerson` and allows only `date_of_birth` to reach the derivation. It does not
@@ -264,6 +271,12 @@ The derivation performs four operations:
 
 Evidence Gateway validates the returned name and boolean form before signing.
 
+If you run `evidencectl check .` now, it exits 0 with the status `incomplete` and two warnings:
+`evidence.question.governance-missing` and `evidence.answer.stable-id-missing`. Both are expected.
+The project is a local authoring project with no deployment assurance claim, and a question gains
+its governance and a stable concept `uri` for the answer only when you author it for a deployment.
+This tutorial does not deploy, so leave both warnings.
+
 ## Keep exact cases for the tutorial
 
 The ephemeral preview is the shortest route from OpenAPI to a running source. The remaining tutorials
@@ -278,7 +291,8 @@ mkdir -p mocks/cases
 Open `mocks/source.yaml` and add the three request cases:
 
 ```yaml title="mocks/source.yaml" test-file
-version: 1
+apiVersion: id.registrystack.org/formats/evidence/mock-plan/v1alpha1
+kind: EvidenceMockPlan
 openapi: ../source.openapi.yaml
 operations:
   - method: GET

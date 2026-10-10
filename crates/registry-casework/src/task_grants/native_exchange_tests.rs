@@ -1030,10 +1030,13 @@ async fn approved_casework_tasks_reach_evidence_breg_and_scheduling_through_stoc
     std::fs::set_permissions(&agent_key_file, std::fs::Permissions::from_mode(0o600)).unwrap();
     let connection_file = root.path().join("task-connection.yaml");
     std::fs::write(&connection_file, serde_json::to_vec(&json!({
-        "version":1,"caseworkUrl":format!("http://127.0.0.1:{casework_port}"),
+        "apiVersion":registry_thunderid_tooling::task_connection::API_VERSION,
+        "kind":registry_thunderid_tooling::task_connection::KIND,
+        "caseworkUrl":format!("http://127.0.0.1:{casework_port}"),
         "tokenEndpoint":format!("{}/oauth2/token",issuer.url()),
         "clientAssertionAudience":issuer.url(),"bootstrapResource":CASEWORK_RESOURCE,
-        "clients":{"task-agent":{"assertionKeyFile":agent_key_file,"resource":BREG_RESOURCE,"scopes":["records:get"]}}
+        "secretProviders":{"file":{"root":root.path()}},
+        "clients":{"task-agent":{"assertionKeyRef":"secret:file/agent-key.json","resource":BREG_RESOURCE,"scopes":["records:get"]}}
     })).unwrap()).unwrap();
     std::fs::set_permissions(&connection_file, std::fs::Permissions::from_mode(0o600)).unwrap();
     let private_output = root.path().join("product-private");

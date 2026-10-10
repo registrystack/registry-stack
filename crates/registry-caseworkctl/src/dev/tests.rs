@@ -7,7 +7,8 @@ use registry_casework::RuntimeConfig;
 
 fn session(project: &Path) -> State {
     State {
-        version: 2,
+        api_version: DEV_STATE_API_VERSION.to_owned(),
+        kind: DEV_STATE_KIND.to_owned(),
         project: project.to_path_buf(),
         owner: uuid::Uuid::new_v4().to_string(),
         status: Status::Stopped,
@@ -24,7 +25,7 @@ fn session(project: &Path) -> State {
         tls_files_copied: false,
         database_ready: false,
         migrated: false,
-        seeded: BTreeSet::new(),
+        seeded: Vec::new(),
         directory_revision: 0,
         directory_teams: 0,
         binaries: BTreeMap::new(),
@@ -78,12 +79,55 @@ fn announced_pid(path: &Path) -> Option<rustix::process::Pid> {
     Some(rustix::process::Pid::from_raw(pid).unwrap())
 }
 
+/// The envelope every clients file starts with.
+const CLIENTS_ENVELOPE: &str =
+    "apiVersion: id.registrystack.org/formats/casework/dev-clients/v1alpha1\nkind: CaseworkDevClients\n";
+
+/// A clients file the reader accepts.
+fn accepted(bytes: &[u8]) -> config::Clients {
+    config::read("dev-clients.yaml", bytes).unwrap().value
+}
+
+/// Each diagnostic's code and pointer, from a clients file the reader refuses.
+fn refused(bytes: &[u8]) -> Vec<(String, String)> {
+    config::read("dev-clients.yaml", bytes)
+        .unwrap_err()
+        .diagnostics()
+        .iter()
+        .map(|diagnostic| (diagnostic.code.clone(), diagnostic.path.clone()))
+        .collect()
+}
+
+/// Each finding's code and pointer, from clients the project does not bind.
+fn unbound(
+    clients: &config::Clients,
+    policy: &registry_casework_core::CaseworkProject,
+) -> Vec<(String, String)> {
+    config::bind(clients, policy)
+        .unwrap_err()
+        .iter()
+        .map(|finding| (finding.code.to_owned(), finding.pointer.clone()))
+        .collect()
+}
+
+fn expected(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
+    pairs
+        .iter()
+        .map(|(code, pointer)| ((*code).to_owned(), (*pointer).to_owned()))
+        .collect()
+}
+
+/// One client bound to the standalone staff profile, then `rest`.
+fn one_staff(rest: &str) -> String {
+    format!("{CLIENTS_ENVELOPE}clients:\n  - id: staff\n    accessProfile: staff\n    scopes: [casework:staff]\n{rest}")
+}
+
 #[test]
 fn init_clients_bind_the_standalone_template() {
     let root = crate::canonical_tempdir();
     let project = standalone(root.path());
     let policy = crate::project::load_and_check_policy(&project).unwrap();
-    let clients = config::clients(STANDALONE_DEV_CLIENTS.as_bytes()).unwrap();
+    let clients = accepted(STANDALONE_DEV_CLIENTS.as_bytes());
     let bound = config::bind(&clients, &policy).unwrap();
 
     let roles: BTreeMap<&str, CaseworkRole> = bound
@@ -105,47 +149,208 @@ fn init_clients_bind_the_standalone_template() {
 
 #[test]
 fn clients_file_refuses_unknown_keys_and_repeated_identity() {
-    let unknown = b"version: 1\nclients:\n  - id: staff\n    accessProfile: staff\n    scopes: [casework:staff]\n    principal: urn:someone\n";
-    assert!(config::clients(unknown).is_err());
+    let unknown = one_staff("").replace(
+        "scopes: [casework:staff]\n",
+        "scopes: [casework:staff]\n    principal: urn:someone\n",
+    );
+    assert_eq!(
+        refused(unknown.as_bytes()),
+        expected(&[("config.unknown-key", "/clients/0/principal")])
+    );
 
-    let version = b"version: 2\nclients:\n  - id: staff\n    accessProfile: staff\n    scopes: [casework:staff]\n";
-    assert!(config::clients(version).is_err());
-
-    let duplicate = b"version: 1\nclients:\n  - id: staff\n    accessProfile: staff\n    scopes: [casework:staff]\n  - id: staff\n    accessProfile: supervisor\n    scopes: [casework:supervisor]\n";
-    assert!(config::clients(duplicate).is_err());
+    let duplicate = one_staff(
+        "  - id: staff\n    accessProfile: supervisor\n    scopes: [casework:supervisor]\n",
+    );
+    assert_eq!(
+        refused(duplicate.as_bytes()),
+        expected(&[("casework.dev-clients.duplicate-id", "/clients/1/id")])
+    );
 
     // The local issuer owns this identity; a client may not take it.
-    let reserved = b"version: 1\nclients:\n  - id: issuer\n    accessProfile: staff\n    scopes: [casework:staff]\n";
-    assert!(config::clients(reserved).is_err());
+    let reserved = one_staff("").replace("id: staff", "id: issuer");
+    assert_eq!(
+        refused(reserved.as_bytes()),
+        expected(&[("casework.dev-clients.reserved-id", "/clients/0/id")])
+    );
 
-    let redefined = b"version: 1\nclients:\n  - id: staff\n    accessProfile: staff\n    scopes: [casework:staff]\n    claims:\n      scope: casework:admin\n";
-    assert!(config::clients(redefined).is_err());
+    let redefined = one_staff("    claims:\n      scope: casework:admin\n");
+    assert_eq!(
+        refused(redefined.as_bytes()),
+        expected(&[(
+            "casework.dev-clients.reserved-claim",
+            "/clients/0/claims/scope"
+        )])
+    );
 
-    let unknown_member = b"version: 1\nclients:\n  - id: staff\n    accessProfile: staff\n    scopes: [casework:staff]\ndirectory:\n  - team: decisions-team\n    queue: decisions\n    staff: [absent]\n";
-    let refusal = format!("{:#}", config::clients(unknown_member).unwrap_err());
-    assert!(refusal.contains("absent"), "{refusal}");
+    let unknown_member = one_staff(
+        "directory:\n  - team: decisions-team\n    queue: decisions\n    staff: [absent]\n",
+    );
+    assert_eq!(
+        refused(unknown_member.as_bytes()),
+        expected(&[(
+            "casework.dev-clients.unknown-client",
+            "/directory/0/staff/0"
+        )])
+    );
 }
 
 #[test]
-fn client_ids_keep_the_narrow_local_identifier_contract() {
-    for valid in ["staff-1".to_owned(), "x".repeat(64)] {
-        let text = format!(
-            "version: 1\nclients:\n  - id: '{valid}'\n    accessProfile: staff\n    scopes: [casework:staff]\n"
+fn clients_file_names_its_format_and_refuses_the_retired_version_key() {
+    let envelope = one_staff("");
+    assert_eq!(accepted(envelope.as_bytes()).kind, config::DEV_CLIENTS_KIND);
+
+    let retired = envelope.replace("clients:\n", "version: 1\nclients:\n");
+    assert_eq!(
+        refused(retired.as_bytes()),
+        expected(&[("config.removed-key", "/version")])
+    );
+
+    let without_envelope = envelope.replace(CLIENTS_ENVELOPE, "version: 1\n");
+    assert_eq!(
+        refused(without_envelope.as_bytes())[0].0,
+        "config.missing-envelope"
+    );
+
+    let other_kind = envelope.replace("kind: CaseworkDevClients", "kind: BregDevClients");
+    assert_eq!(refused(other_kind.as_bytes())[0].0, "config.wrong-kind");
+}
+
+#[test]
+fn clients_file_refuses_null_and_substitution() {
+    let null = one_staff("directory:\n");
+    assert_eq!(refused(null.as_bytes())[0].0, "config.null-value");
+
+    // The file is read as written; it holds no secret to substitute.
+    let substituted = one_staff("    claims:\n      registry_principal: ${PRINCIPAL}\n");
+    assert_eq!(
+        refused(substituted.as_bytes())[0].0,
+        "config.substitution-not-allowed"
+    );
+}
+
+#[test]
+fn clients_file_findings_name_no_value() {
+    let secretive = "Sup3r-Secret-Value";
+    let checked = one_staff(&format!(
+        "    claims:\n      aud: {secretive}\n  - id: second\n    accessProfile: staff\n    scopes: ['{secretive}', '{secretive}']\n"
+    ));
+    let decoded = one_staff("").replace("id: staff", &format!("id: '{secretive}'"));
+    for (text, at_least) in [(checked, 3), (decoded, 1)] {
+        let report = config::read("dev-clients.yaml", text.as_bytes()).unwrap_err();
+        assert!(
+            report.diagnostics().len() >= at_least,
+            "{:?}",
+            refused(text.as_bytes())
         );
-        config::clients(text.as_bytes()).unwrap();
+        for diagnostic in report.diagnostics() {
+            assert!(!diagnostic.message.contains(secretive), "{diagnostic:?}");
+            assert!(
+                !diagnostic.suggested_action.contains(secretive),
+                "{diagnostic:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn client_ids_are_local_identifiers() {
+    for valid in [
+        "staff-1".to_owned(),
+        "staff_review".to_owned(),
+        "x".repeat(64),
+    ] {
+        accepted(
+            one_staff("")
+                .replace("id: staff", &format!("id: '{valid}'"))
+                .as_bytes(),
+        );
     }
 
     for invalid in [
         String::new(),
         "x".repeat(65),
-        "staff_review".to_owned(),
+        "1staff".to_owned(),
+        "Staff".to_owned(),
         "staff.review".to_owned(),
         "staff:review".to_owned(),
     ] {
-        let text = format!(
-            "version: 1\nclients:\n  - id: '{invalid}'\n    accessProfile: staff\n    scopes: [casework:staff]\n"
+        let text = one_staff("").replace("id: staff", &format!("id: '{invalid}'"));
+        assert_eq!(
+            refused(text.as_bytes()),
+            expected(&[("config.invalid-value", "/clients/0/id")]),
+            "{invalid:?}"
         );
-        assert!(config::clients(text.as_bytes()).is_err(), "{invalid:?}");
+    }
+}
+
+#[test]
+fn integrations_read_identifiers_and_urls_through_shared_types() {
+    let integrations = |rest: &str| {
+        one_staff(&format!(
+            "integrations:\n  resource: urn:example:local-review\n{rest}"
+        ))
+    };
+    accepted(
+        integrations(
+            "  serviceClients:\n    - id: source_reader\n      scopes: [records:get]\n      claims:\n        tenant: north\n",
+        )
+        .as_bytes(),
+    );
+    for (rest, pointer) in [
+        (
+            "  serviceClients:\n    - id: 1reader\n      scopes: [records:get]\n",
+            "/integrations/serviceClients/0/id",
+        ),
+        (
+            // The reader places a refused key at the key.
+            "  secretFiles:\n    Source-Key: /absolute/key\n",
+            "/integrations/secretFiles/Source-Key",
+        ),
+        (
+            "  taskAuthority:\n    issuer: casework.local.example\n    jwksPort: 8094\n    statusClients: {}\n",
+            "/integrations/taskAuthority/issuer",
+        ),
+        (
+            "  taskAuthority:\n    issuer: https://casework.local.example\n    jwksPort: 0\n    statusClients: {}\n",
+            "/integrations/taskAuthority/jwksPort",
+        ),
+    ] {
+        let refusals = refused(integrations(rest).as_bytes());
+        assert_eq!(refusals.len(), 1, "{refusals:?}");
+        assert_eq!(refusals[0].1, pointer, "{refusals:?}");
+    }
+    // A service client's claim is text, as a teaching client's is.
+    let structured = refused(
+        integrations(
+            "  serviceClients:\n    - id: reader\n      scopes: [records:get]\n      claims:\n        tenant: [north]\n",
+        )
+        .as_bytes(),
+    );
+    assert_eq!(
+        structured[0].1,
+        "/integrations/serviceClients/0/claims/tenant"
+    );
+    // The session leaves a source's timeouts and reconciliation interval at
+    // the runtime's defaults; a retained key is a removed key, not an unknown
+    // one.
+    for key in [
+        "requestTimeoutMilliseconds",
+        "connectTimeoutMilliseconds",
+        "reconciliationIntervalMilliseconds",
+    ] {
+        let retained = refused(
+            integrations(&format!(
+                "  sources:\n    source:\n      baseUrl: http://127.0.0.1:8080\n      readerProfile: casework-reader\n      tokenEndpoint: http://127.0.0.1:8093/oauth2/token\n      clientIdRef: secret:file/service-reader-id\n      clientAssertionKeyRef: secret:file/service-reader-key\n      webhookSecretRef: secret:file/source-webhook\n      eventSource: urn:example:source\n      {key}: 5000\n"
+            ))
+            .as_bytes(),
+        );
+        assert_eq!(
+            retained,
+            expected(&[(
+                "config.removed-key",
+                &format!("/integrations/sources/source/{key}")
+            )])
+        );
     }
 }
 
@@ -158,10 +363,9 @@ fn access_profile_references_match_the_casework_profile_contract() {
         "staff.review:v1_2-3".to_owned(),
         "x".repeat(128),
     ] {
-        let text = format!(
-            "version: 1\nclients:\n  - id: staff\n    accessProfile: '{valid}'\n    scopes: [casework:staff]\n"
-        );
-        config::clients(text.as_bytes()).unwrap();
+        let text =
+            one_staff("").replace("accessProfile: staff", &format!("accessProfile: '{valid}'"));
+        accepted(text.as_bytes());
     }
 
     for invalid in [
@@ -171,25 +375,35 @@ fn access_profile_references_match_the_casework_profile_contract() {
         "staff review".to_owned(),
         "stáff".to_owned(),
     ] {
-        let text = format!(
-            "version: 1\nclients:\n  - id: staff\n    accessProfile: '{invalid}'\n    scopes: [casework:staff]\n"
+        let text = one_staff("").replace(
+            "accessProfile: staff",
+            &format!("accessProfile: '{invalid}'"),
         );
-        assert!(config::clients(text.as_bytes()).is_err(), "{invalid:?}");
+        assert_eq!(
+            refused(text.as_bytes()),
+            expected(&[(
+                "casework.dev-clients.invalid-access-profile",
+                "/clients/0/accessProfile"
+            )]),
+            "{invalid:?}"
+        );
     }
 }
 
 #[test]
 fn queue_references_match_the_directory_identifier_contract() {
+    let team = |queue: &str| {
+        one_staff(&format!(
+            "directory:\n  - team: review-team\n    queue: '{queue}'\n    staff: [staff]\n"
+        ))
+    };
     for valid in [
         "review_queue".to_owned(),
         "review.queue".to_owned(),
         "review.queue_1-2".to_owned(),
         "x".repeat(128),
     ] {
-        let text = format!(
-            "version: 1\nclients:\n  - id: staff\n    accessProfile: staff\n    scopes: [casework:staff]\ndirectory:\n  - team: review-team\n    queue: '{valid}'\n    staff: [staff]\n"
-        );
-        config::clients(text.as_bytes()).unwrap();
+        accepted(team(&valid).as_bytes());
     }
 
     for invalid in [
@@ -200,72 +414,103 @@ fn queue_references_match_the_directory_identifier_contract() {
         "review queue".to_owned(),
         "réview".to_owned(),
     ] {
-        let text = format!(
-            "version: 1\nclients:\n  - id: staff\n    accessProfile: staff\n    scopes: [casework:staff]\ndirectory:\n  - team: review-team\n    queue: '{invalid}'\n    staff: [staff]\n"
+        assert_eq!(
+            refused(team(&invalid).as_bytes()),
+            expected(&[("casework.dev-clients.invalid-queue", "/directory/0/queue")]),
+            "{invalid:?}"
         );
-        assert!(config::clients(text.as_bytes()).is_err(), "{invalid:?}");
     }
 }
 
 #[test]
 fn clients_file_refuses_duplicate_and_non_rfc6749_scopes() {
-    for scopes in [
-        "[casework:staff, casework:staff]",
-        "['casework:\"staff']",
-        r"['casework:\staff']",
-        "[casework:stáff]",
+    for (scopes, code, pointer) in [
+        (
+            "[casework:staff, casework:staff]",
+            "casework.dev-clients.duplicate-scope",
+            "/clients/2/scopes/1",
+        ),
+        (
+            "['casework:\"staff']",
+            "casework.dev-clients.invalid-scope",
+            "/clients/2/scopes/0",
+        ),
+        (
+            r"['casework:\staff']",
+            "casework.dev-clients.invalid-scope",
+            "/clients/2/scopes/0",
+        ),
+        (
+            "[casework:stáff]",
+            "casework.dev-clients.invalid-scope",
+            "/clients/2/scopes/0",
+        ),
     ] {
         let invalid = STANDALONE_DEV_CLIENTS
             .replace("scopes: [casework:staff]", &format!("scopes: {scopes}"));
         assert_ne!(invalid, STANDALONE_DEV_CLIENTS);
-
-        let refusal = format!("{:#}", config::clients(invalid.as_bytes()).unwrap_err());
-        assert!(refusal.contains("unique"), "{refusal}");
-        assert!(refusal.contains("RFC 6749 scope-tokens"), "{refusal}");
+        assert_eq!(
+            refused(invalid.as_bytes()),
+            expected(&[(code, pointer)]),
+            "{scopes}"
+        );
     }
 }
 
 #[test]
 fn clients_file_refuses_invalid_and_reserved_claim_names() {
-    let invalid_name = STANDALONE_DEV_CLIENTS.replace(
-        "registry_actor_kind: human",
-        r"'registry\actor_kind': human",
+    // The template's header comment names the claim too; replace the first
+    // client's entry only.
+    let invalid_name = STANDALONE_DEV_CLIENTS.replacen(
+        "\n      registry_actor_kind: human",
+        "\n      'registry\\actor_kind': human",
+        1,
     );
     assert_ne!(invalid_name, STANDALONE_DEV_CLIENTS);
-    let refusal = format!(
-        "{:#}",
-        config::clients(invalid_name.as_bytes()).unwrap_err()
+    assert_eq!(
+        refused(invalid_name.as_bytes()),
+        expected(&[(
+            "casework.dev-clients.invalid-claim-name",
+            "/clients/0/claims/registry\\actor_kind"
+        )])
     );
-    assert!(refusal.contains("claim names"), "{refusal}");
-    assert!(refusal.contains("RFC 6749 scope-tokens"), "{refusal}");
 
     // Registered claims belong to the issuer, not authored client claims.
-    let reserved = STANDALONE_DEV_CLIENTS.replace("registry_actor_kind: human", "aud: human");
+    let reserved = STANDALONE_DEV_CLIENTS.replacen(
+        "\n      registry_actor_kind: human",
+        "\n      aud: human",
+        1,
+    );
     assert_ne!(reserved, STANDALONE_DEV_CLIENTS);
-    let refusal = format!("{:#}", config::clients(reserved.as_bytes()).unwrap_err());
-    assert!(
-        refusal.contains("registered access-token claims"),
-        "{refusal}"
+    assert_eq!(
+        refused(reserved.as_bytes()),
+        expected(&[(
+            "casework.dev-clients.reserved-claim",
+            "/clients/0/claims/aud"
+        )])
     );
 }
 
 #[test]
 fn clients_file_refuses_repeated_members_within_each_team_role() {
-    for (members, repeated, expected) in [
-        ("staff: [staff]", "staff: [staff, staff]", "staff list"),
+    for (members, repeated, pointer) in [
+        (
+            "staff: [staff]",
+            "staff: [staff, staff]",
+            "/directory/0/staff/1",
+        ),
         (
             "supervisors: [supervisor]",
             "supervisors: [supervisor, supervisor]",
-            "supervisors list",
+            "/directory/0/supervisors/1",
         ),
     ] {
         let invalid = STANDALONE_DEV_CLIENTS.replace(members, repeated);
         assert_ne!(invalid, STANDALONE_DEV_CLIENTS);
-
-        let refusal = format!("{:#}", config::clients(invalid.as_bytes()).unwrap_err());
-        assert!(refusal.contains("decisions-team"), "{refusal}");
-        assert!(refusal.contains(expected), "{refusal}");
-        assert!(refusal.contains("at most once"), "{refusal}");
+        assert_eq!(
+            refused(invalid.as_bytes()),
+            expected(&[("casework.dev-clients.duplicate-member", pointer)])
+        );
     }
 }
 
@@ -276,13 +521,10 @@ fn clients_file_refuses_two_teams_assigned_to_one_queue() {
         "  - team: intake-team\n    queue: decisions\n    staff: [staff]\n    supervisors: [supervisor]\n  - team: decisions-team\n",
     );
     assert_ne!(duplicate_queue, STANDALONE_DEV_CLIENTS);
-
-    let refusal = format!(
-        "{:#}",
-        config::clients(duplicate_queue.as_bytes()).unwrap_err()
+    assert_eq!(
+        refused(duplicate_queue.as_bytes()),
+        expected(&[("casework.dev-clients.duplicate-queue", "/directory/1/queue")])
     );
-    assert!(refusal.contains("decisions"), "{refusal}");
-    assert!(refusal.contains("only one team"), "{refusal}");
 }
 
 #[test]
@@ -295,10 +537,14 @@ fn binding_refuses_a_requester_with_a_human_claim() {
         "  - id: requester\n    accessProfile: requester\n    scopes: [casework:request]\n    claims:\n      registry_actor_kind: human\n",
     );
     assert_ne!(text, STANDALONE_DEV_CLIENTS);
-    let clients = config::clients(text.as_bytes()).unwrap();
-    let refusal = format!("{:#}", config::bind(&clients, &policy).unwrap_err());
-    assert!(refusal.contains("registry_actor_kind"), "{refusal}");
-    assert!(refusal.contains("not a person"), "{refusal}");
+    let clients = accepted(text.as_bytes());
+    assert_eq!(
+        unbound(&clients, &policy),
+        expected(&[(
+            "casework.dev-clients.requester-human-claim",
+            "/clients/3/claims/registry_actor_kind"
+        )])
+    );
 }
 
 #[test]
@@ -318,7 +564,7 @@ fn binding_accepts_a_client_with_every_required_profile_scope() {
         "scopes: [casework:staff]",
         "scopes: [casework:staff, casework:read]",
     );
-    let clients = config::clients(text.as_bytes()).unwrap();
+    let clients = accepted(text.as_bytes());
 
     config::bind(&clients, &policy).unwrap();
 }
@@ -336,13 +582,14 @@ fn binding_refuses_a_client_missing_one_required_profile_scope() {
     )
     .unwrap();
     let policy = crate::project::load_and_check_policy(&project).unwrap();
-    let clients = config::clients(STANDALONE_DEV_CLIENTS.as_bytes()).unwrap();
+    let clients = accepted(STANDALONE_DEV_CLIENTS.as_bytes());
 
-    let refusal = format!("{:#}", config::bind(&clients, &policy).unwrap_err());
-    assert!(refusal.contains("staff"), "{refusal}");
-    assert!(
-        refusal.contains("all of that profile's required scopes"),
-        "{refusal}"
+    assert_eq!(
+        unbound(&clients, &policy),
+        expected(&[(
+            "casework.dev-clients.missing-required-scope",
+            "/clients/2/scopes"
+        )])
     );
 }
 
@@ -351,7 +598,7 @@ fn binding_accepts_directory_members_with_matching_roles() {
     let root = crate::canonical_tempdir();
     let project = standalone(root.path());
     let policy = crate::project::load_and_check_policy(&project).unwrap();
-    let clients = config::clients(STANDALONE_DEV_CLIENTS.as_bytes()).unwrap();
+    let clients = accepted(STANDALONE_DEV_CLIENTS.as_bytes());
 
     let bound = config::bind(&clients, &policy).unwrap();
     let roles: BTreeMap<&str, CaseworkRole> = bound
@@ -373,13 +620,18 @@ fn binding_refuses_repeated_resolved_principals_within_each_membership_kind() {
     let root = crate::canonical_tempdir();
     let project = standalone(root.path());
 
-    for (role, existing_id, second_id, membership_kind) in [
-        (CaseworkRole::Staff, "staff", "second-staff", "staff"),
+    for (role, existing_id, second_id, pointer) in [
+        (
+            CaseworkRole::Staff,
+            "staff",
+            "second-staff",
+            "/directory/0/staff/1",
+        ),
         (
             CaseworkRole::Supervisor,
             "supervisor",
             "second-supervisor",
-            "supervisor",
+            "/directory/0/supervisors/1",
         ),
     ] {
         let mut policy = crate::project::load_and_check_policy(&project).unwrap();
@@ -393,7 +645,7 @@ fn binding_refuses_repeated_resolved_principals_within_each_membership_kind() {
         second_profile.id = second_id.to_owned();
         policy.access_profiles.push(second_profile);
 
-        let mut clients = config::clients(STANDALONE_DEV_CLIENTS.as_bytes()).unwrap();
+        let mut clients = accepted(STANDALONE_DEV_CLIENTS.as_bytes());
         let client = clients
             .clients
             .iter_mut()
@@ -412,11 +664,10 @@ fn binding_refuses_repeated_resolved_principals_within_each_membership_kind() {
             _ => unreachable!(),
         }
 
-        let refusal = format!("{:#}", config::bind(&clients, &policy).unwrap_err());
-        assert!(refusal.contains("decisions-team"), "{refusal}");
-        assert!(refusal.contains(membership_kind), "{refusal}");
-        assert!(refusal.contains(second_id), "{refusal}");
-        assert!(refusal.contains("unique principals"), "{refusal}");
+        assert_eq!(
+            unbound(&clients, &policy),
+            expected(&[("casework.dev-clients.repeated-principal", pointer)])
+        );
     }
 }
 
@@ -430,7 +681,7 @@ fn binding_accepts_one_resolved_principal_in_each_membership_kind() {
             profile.principal_claim = "registry_principal".to_owned();
         }
     }
-    let mut clients = config::clients(STANDALONE_DEV_CLIENTS.as_bytes()).unwrap();
+    let mut clients = accepted(STANDALONE_DEV_CLIENTS.as_bytes());
     for client in &mut clients.clients {
         if client.id == "staff" || client.id == "supervisor" {
             client
@@ -448,20 +699,30 @@ fn binding_refuses_directory_members_with_mismatched_roles() {
     let project = standalone(root.path());
     let policy = crate::project::load_and_check_policy(&project).unwrap();
 
-    for (from, to, expected) in [
-        ("staff: [staff]", "staff: [supervisor]", "Staff profile"),
+    for (from, to, code, pointer) in [
+        (
+            "staff: [staff]",
+            "staff: [supervisor]",
+            "casework.dev-clients.member-role-mismatch",
+            "/directory/0/staff/0",
+        ),
         (
             "supervisors: [supervisor]",
             "supervisors: [staff]",
-            "Supervisor profile",
+            "casework.dev-clients.member-role-mismatch",
+            "/directory/0/supervisors/0",
         ),
-        ("staff: [staff]", "staff: [requester]", "Requester client"),
+        (
+            "staff: [staff]",
+            "staff: [requester]",
+            "casework.dev-clients.requester-member",
+            "/directory/0/staff/0",
+        ),
     ] {
         let text = STANDALONE_DEV_CLIENTS.replace(from, to);
         assert_ne!(text, STANDALONE_DEV_CLIENTS);
-        let clients = config::clients(text.as_bytes()).unwrap();
-        let refusal = format!("{:#}", config::bind(&clients, &policy).unwrap_err());
-        assert!(refusal.contains(expected), "{refusal}");
+        let clients = accepted(text.as_bytes());
+        assert_eq!(unbound(&clients, &policy), expected(&[(code, pointer)]));
     }
 }
 
@@ -476,19 +737,34 @@ fn binding_refuses_an_unserved_queue_and_a_missing_administrator() {
         .next()
         .unwrap()
         .to_owned();
-    let clients = config::clients(unserved.as_bytes()).unwrap();
-    let refusal = format!("{:#}", config::bind(&clients, &policy).unwrap_err());
-    assert!(refusal.contains("decisions"), "{refusal}");
+    let clients = accepted(unserved.as_bytes());
+    assert_eq!(
+        unbound(&clients, &policy),
+        expected(&[("casework.dev-clients.unserved-queue", "/directory")])
+    );
 
-    let without_administrator = b"version: 1\nclients:\n  - id: staff\n    accessProfile: staff\n    scopes: [casework:staff]\n    claims:\n      registry_actor_kind: human\ndirectory:\n  - team: decisions-team\n    queue: decisions\n    staff: [staff]\n";
-    let clients = config::clients(without_administrator).unwrap();
-    let refusal = format!("{:#}", config::bind(&clients, &policy).unwrap_err());
-    assert!(refusal.contains("Administrator"), "{refusal}");
+    let without_administrator = one_staff(
+        "    claims:\n      registry_actor_kind: human\ndirectory:\n  - team: decisions-team\n    queue: decisions\n    staff: [staff]\n",
+    );
+    let clients = accepted(without_administrator.as_bytes());
+    assert_eq!(
+        unbound(&clients, &policy),
+        expected(&[("casework.dev-clients.missing-administrator", "/clients")])
+    );
 
-    let unknown_queue = b"version: 1\nclients:\n  - id: administrator\n    accessProfile: administrator\n    scopes: [casework:admin]\n    claims:\n      registry_actor_kind: human\ndirectory:\n  - team: other-team\n    queue: corrections\n    staff: [administrator]\n";
-    let clients = config::clients(unknown_queue).unwrap();
-    let refusal = format!("{:#}", config::bind(&clients, &policy).unwrap_err());
-    assert!(refusal.contains("corrections"), "{refusal}");
+    let unknown_queue = format!("{CLIENTS_ENVELOPE}clients:\n  - id: administrator\n    accessProfile: administrator\n    scopes: [casework:admin]\n    claims:\n      registry_actor_kind: human\ndirectory:\n  - team: other-team\n    queue: corrections\n    staff: [administrator]\n");
+    let clients = accepted(unknown_queue.as_bytes());
+    assert_eq!(
+        unbound(&clients, &policy),
+        expected(&[
+            ("casework.dev-clients.unknown-queue", "/directory/0/queue"),
+            (
+                "casework.dev-clients.member-role-mismatch",
+                "/directory/0/staff/0"
+            ),
+            ("casework.dev-clients.unserved-queue", "/directory"),
+        ])
+    );
 }
 
 #[test]
@@ -693,7 +969,7 @@ fn a_retained_session_config_is_rewritten_with_every_key_the_runtime_reads() {
     config::write_yaml(&path, &retained).unwrap();
     assert!(RuntimeConfig::load(&path).is_err());
 
-    let clients: Clients = serde_norway::from_str(STANDALONE_DEV_CLIENTS).unwrap();
+    let clients = accepted(STANDALONE_DEV_CLIENTS.as_bytes());
     config::refresh_operator(&session_root, &state, &clients).unwrap();
 
     let config = RuntimeConfig::load(&path).expect("the rewritten config loads");
@@ -724,24 +1000,43 @@ fn borrowed_source_mode_is_explicit_pinned_and_refuses_session_qualified_subject
     fs::create_dir(&registry).unwrap();
     let clients = fs::read(project.join("dev-clients.yaml")).unwrap();
     let source = [registry.display().to_string()];
-    let first = capture_with_sources(&project, &clients, &source, &BTreeMap::new()).unwrap();
+    let first = capture_with_sources(
+        &project,
+        "dev-clients.yaml",
+        &clients,
+        &source,
+        &BTreeMap::new(),
+    )
+    .unwrap();
     let other = root.path().join("other-registry");
     fs::create_dir(&other).unwrap();
     let moved = [other.display().to_string()];
     assert_ne!(
         first.digest,
-        capture_with_sources(&project, &clients, &moved, &BTreeMap::new())
-            .unwrap()
-            .digest
+        capture_with_sources(
+            &project,
+            "dev-clients.yaml",
+            &clients,
+            &moved,
+            &BTreeMap::new()
+        )
+        .unwrap()
+        .digest
     );
     let policy_path = project.join("casework.yaml");
     let changed = fs::read_to_string(&policy_path)
         .unwrap()
         .replace("principalClaim: registry_principal", "principalClaim: sub");
     fs::write(policy_path, changed).unwrap();
-    let refusal = capture_with_sources(&project, &clients, &source, &BTreeMap::new())
-        .unwrap_err()
-        .to_string();
+    let refusal = capture_with_sources(
+        &project,
+        "dev-clients.yaml",
+        &clients,
+        &source,
+        &BTreeMap::new(),
+    )
+    .unwrap_err()
+    .to_string();
     assert!(refusal.contains("principalClaim sub"), "{refusal}");
 }
 
@@ -1021,7 +1316,7 @@ fn a_stopped_session_retains_an_explicit_equivalent_clients_file() {
     state.container_id = Some("a".repeat(64));
     state.database_ready = true;
     state.migrated = true;
-    state.seeded.insert("decisions-team".to_owned());
+    record_seeded(&mut state.seeded, "decisions-team");
     state.directory_revision = 7;
     state.directory_teams = 1;
     parent_directory(&project).unwrap();
@@ -2632,7 +2927,8 @@ fn seeding_administrator_token_is_issued_after_every_other_client() {
     let project = standalone(root.path());
     let mut state = session(&project);
     let clients = Clients {
-        version: 1,
+        api_version: config::DEV_CLIENTS_API_VERSION.to_owned(),
+        kind: config::DEV_CLIENTS_KIND.to_owned(),
         clients: (0..32)
             .map(|index| config::Client {
                 id: if index == 0 {
@@ -2690,7 +2986,8 @@ fn token_issuance_stops_between_clients_when_interrupted() {
     let project = standalone(root.path());
     let mut state = session(&project);
     let clients = Clients {
-        version: 1,
+        api_version: config::DEV_CLIENTS_API_VERSION.to_owned(),
+        kind: config::DEV_CLIENTS_KIND.to_owned(),
         clients: vec![
             config::Client {
                 id: "administrator".to_owned(),
@@ -2776,17 +3073,40 @@ fn retained_state_of_another_shape_is_invalid_without_mutation() {
     private::create(&state_file, &serde_json::to_vec(&current).unwrap()).unwrap();
     assert_eq!(read_state(&state.root()).unwrap().owner, state.owner);
 
-    let ownership = "retained dev state ownership is invalid; no resources were changed";
-    let invalid = "retained dev state is invalid; preserve it for inspection";
-    let mut earlier_version = current.clone();
-    earlier_version["version"] = json!(1);
-    let mut unknown_field = earlier_version.clone();
+    // A state an earlier caseworkctl wrote, before the envelope.
+    let mut earlier_release = current.clone();
+    let object = earlier_release.as_object_mut().unwrap();
+    object.remove("apiVersion").unwrap();
+    object.remove("kind").unwrap();
+    object.insert("version".to_owned(), json!(2));
+    let mut removed_version = current.clone();
+    removed_version["version"] = json!(2);
+    let mut later_version = current.clone();
+    later_version["apiVersion"] = json!("id.registrystack.org/formats/casework/dev-state/v1alpha2");
+    let mut unknown_field = current.clone();
     unknown_field["mintPort"] = json!(8081);
-    let mut cases = vec![(earlier_version, ownership), (unknown_field, invalid)];
+    let mut repeated_team = current.clone();
+    repeated_team["seeded"] = json!(["decisions-team", "decisions-team"]);
+    let mut null_failure = current.clone();
+    null_failure["failure"] = Value::Null;
+    let mut foreign_owner = current.clone();
+    foreign_owner["owner"] = json!("not-an-owner");
+    let mut shared_port = current.clone();
+    shared_port["databasePort"] = current["caseworkPort"].clone();
+    let mut cases = vec![
+        (earlier_release, INVALID_STATE),
+        (removed_version, INVALID_STATE),
+        (later_version, INVALID_STATE),
+        (unknown_field, INVALID_STATE),
+        (repeated_team, INVALID_STATE),
+        (null_failure, INVALID_STATE),
+        (foreign_owner, STATE_OWNERSHIP),
+        (shared_port, STATE_OWNERSHIP),
+    ];
     for field in ["binaries", "sources", "borrowedScopes"] {
         let mut missing = current.clone();
         missing.as_object_mut().unwrap().remove(field).unwrap();
-        cases.push((missing, invalid));
+        cases.push((missing, INVALID_STATE));
     }
     for (retained, refusal) in cases {
         let bytes = serde_json::to_vec(&retained).unwrap();
@@ -2798,6 +3118,60 @@ fn retained_state_of_another_shape_is_invalid_without_mutation() {
         );
         assert_eq!(fs::read(&state_file).unwrap(), bytes);
     }
+}
+
+/// `caseworkctl check` reads the session state a project retains through
+/// the shared reader and holds it to the rules that hold wherever the state
+/// is kept (CFG-CHECK-1, CFG-CHECK-2).
+#[test]
+fn check_reads_the_retained_session_state() {
+    let root = crate::canonical_tempdir();
+    let project = standalone(root.path());
+    let mut state = session(&project);
+    state.failure = Some("${NOT_SUBSTITUTED}".to_owned());
+    record_seeded(&mut state.seeded, "decisions-team");
+    private::directory(&project.join(".casework")).unwrap();
+    private::directory(&state.root()).unwrap();
+    let without_state = crate::project::check(&project, false, false).unwrap();
+    state.save().unwrap();
+    let state_file = state.root().join("state.json");
+    let written: Value = serde_json::from_slice(&fs::read(&state_file).unwrap()).unwrap();
+    assert_eq!(written["apiVersion"], DEV_STATE_API_VERSION);
+    assert_eq!(written["kind"], DEV_STATE_KIND);
+    assert!(written.get("issuerProject").is_none(), "{written}");
+
+    let checked = crate::project::check(&project, false, false).unwrap();
+    assert_eq!(
+        checked["filesChecked"],
+        without_state["filesChecked"].as_u64().unwrap() + 1
+    );
+    assert_eq!(checked["diagnostics"], json!([]));
+
+    let refusal = |document: &Value| {
+        private::replace(&state_file, &serde_json::to_vec_pretty(document).unwrap()).unwrap();
+        let error = crate::project::check(&project, false, false).unwrap_err();
+        crate::configuration_report(&error)
+            .expect("a positioned refusal")
+            .diagnostics()
+            .to_vec()
+    };
+    let mut unknown_field = written.clone();
+    unknown_field["mintPort"] = json!(8081);
+    let refused = refusal(&unknown_field);
+    assert_eq!(refused.len(), 1, "{refused:?}");
+    assert_eq!(refused[0].code, "config.unknown-key");
+    assert_eq!(refused[0].path, "/mintPort");
+    let source = refused[0].source.as_ref().unwrap();
+    assert_eq!(source.file, state_file.display().to_string());
+    assert!(source.line.is_some() && source.column.is_some());
+
+    let mut foreign_owner = written.clone();
+    foreign_owner["owner"] = json!("foreign-owner-marker");
+    let refused = refusal(&foreign_owner);
+    assert_eq!(refused.len(), 1, "{refused:?}");
+    assert_eq!(refused[0].code, "casework.dev-state.invalid-ownership");
+    assert_eq!(refused[0].path, "");
+    assert!(!format!("{refused:?}").contains("foreign-owner-marker"));
 }
 
 #[test]
@@ -2885,7 +3259,7 @@ fn dev_token_writes_a_profile_line_only_for_a_client_bound_to_an_access_profile(
     private::directory(&root.join("secrets")).unwrap();
     private::directory(&root.join("credentials")).unwrap();
     state.save().unwrap();
-    let mut clients = config::clients(STANDALONE_DEV_CLIENTS.as_bytes()).unwrap();
+    let mut clients = accepted(STANDALONE_DEV_CLIENTS.as_bytes());
     clients.integrations = Some(
         serde_json::from_value(json!({
             "resource":"urn:casework:source-group",
@@ -2998,6 +3372,13 @@ fn approved_grant_requires_explicit_connection_and_refuses_policy_fields() {
 }
 
 #[test]
+fn the_grant_report_carries_an_empty_diagnostics_list() {
+    let report = super::grant_report("/tmp/agent.header", "2026-10-09T00:00:00Z");
+    assert_eq!(report["diagnostics"], serde_json::json!([]));
+    assert_eq!(report["headerFile"], "/tmp/agent.header");
+}
+
+#[test]
 fn a_borrowed_session_admits_only_the_clients_its_project_declares() {
     // A borrowed session authenticates against the shared BReg owner's
     // issuer, which holds every other local project's clients as well. The
@@ -3009,7 +3390,7 @@ fn a_borrowed_session_admits_only_the_clients_its_project_declares() {
     let project = standalone(workspace.path());
     let mut policy = crate::project::load_and_check_policy(&project).unwrap();
     policy.sources.push(serde_json::from_value(json!({"id":"source","adapter":"breg","description":"source.json","requests":[{"entity":"correction","queue":"decisions"}]})).unwrap());
-    let mut clients = config::clients(STANDALONE_DEV_CLIENTS.as_bytes()).unwrap();
+    let mut clients = accepted(STANDALONE_DEV_CLIENTS.as_bytes());
     let integrations: integrations::Integrations = serde_json::from_value(json!({
         "resource":"urn:casework:source-group",
         "sources":{"source":{"baseUrl":"http://127.0.0.1:8800","readerProfile":"reader",
@@ -3046,7 +3427,7 @@ fn explicit_local_integrations_render_only_governed_authority_and_bind_the_sourc
     let project = standalone(workspace.path());
     let mut policy = crate::project::load_and_check_policy(&project).unwrap();
     policy.sources.push(serde_json::from_value(json!({"id":"source","adapter":"breg","description":"source.json","requests":[{"entity":"correction","queue":"decisions"}]})).unwrap());
-    let mut clients = config::clients(STANDALONE_DEV_CLIENTS.as_bytes()).unwrap();
+    let mut clients = accepted(STANDALONE_DEV_CLIENTS.as_bytes());
     let integrations: integrations::Integrations = serde_json::from_value(json!({
         "resource":"urn:casework:source-group",
         "sources":{"source":{"baseUrl":"http://127.0.0.1:8800","readerProfile":"reader",
@@ -3137,7 +3518,7 @@ fn explicit_local_integrations_render_only_governed_authority_and_bind_the_sourc
     let mut wrong = integrations.clone();
     wrong.service_clients[0]
         .claims
-        .insert("registry_actor_kind".into(), json!("human"));
+        .insert("registry_actor_kind".into(), "human".into());
     assert!(wrong.validate(&clients, &policy).is_err());
     let mut wrong = integrations.clone();
     wrong
@@ -3165,9 +3546,17 @@ fn explicit_local_integrations_render_only_governed_authority_and_bind_the_sourc
             "onApproved":{"mode":"manual"},"application":{}}
     })).unwrap()).unwrap();
     let client_bytes = serde_norway::to_string(&clients).unwrap();
-    assert!(capture_with_sources(&project, client_bytes.as_bytes(), &[], &BTreeMap::new()).is_ok());
     assert!(capture_with_sources(
         &project,
+        "dev-clients.yaml",
+        client_bytes.as_bytes(),
+        &[],
+        &BTreeMap::new()
+    )
+    .is_ok());
+    assert!(capture_with_sources(
+        &project,
+        "dev-clients.yaml",
         client_bytes.as_bytes(),
         &["source=/tmp/registry".into()],
         &BTreeMap::new()
@@ -3205,6 +3594,48 @@ fn explicit_local_integrations_render_only_governed_authority_and_bind_the_sourc
     assert!(wrong.validate(&clients, &policy).is_err());
 }
 
+/// The committed example `bregctl check` reads stands for the state a
+/// current `bregctl dev` retains; a borrowed issuer owner it describes is
+/// accepted, and the headerless state an earlier bregctl wrote is not.
+#[test]
+fn a_current_bregctl_dev_state_names_the_borrowed_issuer_owner() {
+    let project_temp = crate::canonical_tempdir();
+    let project = fs::canonicalize(project_temp.path()).unwrap();
+    let owner_temp = crate::canonical_tempdir();
+    let owner_project = fs::canonicalize(owner_temp.path()).unwrap();
+    fs::set_permissions(&owner_project, fs::Permissions::from_mode(0o700)).unwrap();
+    let owner_root = owner_project.join(".breg/dev");
+    private::directory(&owner_project.join(".breg")).unwrap();
+    private::directory(&owner_root).unwrap();
+    let mut owner: Value = serde_json::from_str(include_str!(
+        "../../../../products/breg/examples/formats/dev-session/.breg/dev/state.json"
+    ))
+    .unwrap();
+    owner["project"] = json!(owner_project);
+    let owner_id = owner["owner"].as_str().unwrap().to_owned();
+    let mut state = session(&project);
+    state.issuer_project = Some(owner_project.clone());
+    state.issuer_owner = Some(owner_id);
+    state.issuer_port = u16::try_from(owner["issuerPort"].as_u64().unwrap()).unwrap();
+    private::create(
+        &owner_root.join("state.json"),
+        &serde_json::to_vec(&owner).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(borrowed_issuer(&state).unwrap(), Some(owner_root.clone()));
+
+    let fields = owner.as_object_mut().unwrap();
+    fields.remove("apiVersion").unwrap();
+    fields.remove("kind").unwrap();
+    fields.insert("version".to_owned(), json!(2));
+    private::replace(
+        &owner_root.join("state.json"),
+        &serde_json::to_vec(&owner).unwrap(),
+    )
+    .unwrap();
+    assert!(borrowed_issuer(&state).is_err());
+}
+
 #[test]
 fn borrowed_casework_client_requires_exact_owner_claims_scopes_and_resource() {
     let project_temp = crate::canonical_tempdir();
@@ -3221,7 +3652,8 @@ fn borrowed_casework_client_requires_exact_owner_claims_scopes_and_resource() {
     private::create(
         &owner_root.join("state.json"),
         &serde_json::to_vec(&json!({
-            "version":2,"project":owner_project,"owner":owner_id,
+            "apiVersion":"id.registrystack.org/formats/breg/dev-state/v1alpha1",
+            "kind":"BRegDevState","project":owner_project,"owner":owner_id,
             "status":"ready","issuerPort":8093,"issuerProject":null
         }))
         .unwrap(),
@@ -3287,7 +3719,8 @@ fn a_borrowed_client_the_owner_registered_for_exchange_must_declare_it() {
     private::create(
         &owner_root.join("state.json"),
         &serde_json::to_vec(&json!({
-            "version":2,"project":owner_project,"owner":owner_id,
+            "apiVersion":"id.registrystack.org/formats/breg/dev-state/v1alpha1",
+            "kind":"BRegDevState","project":owner_project,"owner":owner_id,
             "status":"ready","issuerPort":8093,"issuerProject":null
         }))
         .unwrap(),
@@ -3363,7 +3796,7 @@ fn task_template_subject_follows_the_actual_local_issuer_owner() {
     for profile in &mut policy.access_profiles {
         profile.principal_claim = "registry_principal".to_owned();
     }
-    let clients = config::clients(STANDALONE_DEV_CLIENTS.as_bytes()).unwrap();
+    let clients = accepted(STANDALONE_DEV_CLIENTS.as_bytes());
     let integrations: integrations::Integrations = serde_json::from_value(json!({
         "resource":"urn:casework:source-group",
         "serviceClients":[{"id":client,"scopes":["casework:grants:assert"],"taskExchange":true}],
@@ -3386,7 +3819,8 @@ fn task_template_subject_follows_the_actual_local_issuer_owner() {
     private::create(
         &owner_root.join("state.json"),
         &serde_json::to_vec(&json!({
-            "version":2,"project":owner_project,"owner":owner_id,
+            "apiVersion":"id.registrystack.org/formats/breg/dev-state/v1alpha1",
+            "kind":"BRegDevState","project":owner_project,"owner":owner_id,
             "status":"ready","issuerPort":8093,"issuerProject":null,
             "instanceId":owner_instance
         }))
@@ -3460,7 +3894,8 @@ fn borrowed_browser_admission_requires_exact_owner_resource() {
     private::create(
         &owner_root.join("state.json"),
         &serde_json::to_vec(&json!({
-            "version":2,"project":owner_project,"owner":owner_id,
+            "apiVersion":"id.registrystack.org/formats/breg/dev-state/v1alpha1",
+            "kind":"BRegDevState","project":owner_project,"owner":owner_id,
             "status":"ready","issuerPort":8093,"issuerProject":null
         }))
         .unwrap(),
@@ -3482,7 +3917,7 @@ fn borrowed_browser_admission_requires_exact_owner_resource() {
     state.issuer_project = Some(owner_project);
     state.issuer_owner = Some(owner_id);
     state.resource = Some(resource.clone());
-    let clients = config::clients(STANDALONE_DEV_CLIENTS.as_bytes()).unwrap();
+    let clients = accepted(STANDALONE_DEV_CLIENTS.as_bytes());
     let integrations: integrations::Integrations = serde_json::from_value(json!({
         "resource":resource,"browserClients":["app-kit"]
     }))
@@ -3528,7 +3963,8 @@ fn a_borrowed_task_authority_connection_pairs_the_task_exchange_clients() {
     private::create(
         &owner_root.join("state.json"),
         &serde_json::to_vec(&json!({
-            "version":2,"project":owner_project,"owner":owner_id,
+            "apiVersion":"id.registrystack.org/formats/breg/dev-state/v1alpha1",
+            "kind":"BRegDevState","project":owner_project,"owner":owner_id,
             "status":"ready","issuerPort":8093,"issuerProject":null
         }))
         .unwrap(),
@@ -3539,7 +3975,7 @@ fn a_borrowed_task_authority_connection_pairs_the_task_exchange_clients() {
     state.issuer_project = Some(owner_project);
     state.issuer_owner = Some(owner_id);
     state.resource = Some(resource.clone());
-    let clients = config::clients(STANDALONE_DEV_CLIENTS.as_bytes()).unwrap();
+    let clients = accepted(STANDALONE_DEV_CLIENTS.as_bytes());
     let integrations: integrations::Integrations = serde_json::from_value(json!({
         "resource":resource,
         "serviceClients":[
@@ -3741,7 +4177,7 @@ fn binding_a_source_exports_the_reader_and_every_person_from_the_registry_sessio
     let registry = RegistrySession::new();
     let mut state = persisted_session(&project);
     let root = state.root();
-    let clients = config::clients(&fs::read(project.join("dev-clients.yaml")).unwrap()).unwrap();
+    let clients = accepted(&fs::read(project.join("dev-clients.yaml")).unwrap());
     for directory in ["credentials", "secrets"] {
         private::directory(&root.join(directory)).unwrap();
     }
@@ -3830,7 +4266,7 @@ fn incompatible_source_issuers_leave_retained_credentials_unchanged() {
     let other_registry = registry.add_project("other-registry");
     RegistrySession::set_audience(&other_registry, "urn:breg:dev:other");
     let mut state = persisted_session(&project);
-    let clients = config::clients(&fs::read(project.join("dev-clients.yaml")).unwrap()).unwrap();
+    let clients = accepted(&fs::read(project.join("dev-clients.yaml")).unwrap());
     state.sources.insert(
         "alpha".into(),
         SourceSession {
@@ -3878,7 +4314,7 @@ fn sources_need_the_same_shared_casework_client_credentials() {
     let other_registry = registry.add_project("other-registry");
     RegistrySession::set_credentials(&other_registry, "other-key");
     let mut state = persisted_session(&project);
-    let clients = config::clients(&fs::read(project.join("dev-clients.yaml")).unwrap()).unwrap();
+    let clients = accepted(&fs::read(project.join("dev-clients.yaml")).unwrap());
     state.sources.insert(
         "alpha".into(),
         SourceSession {
@@ -3928,7 +4364,7 @@ fn two_sources_can_share_one_registry_client_registration() {
     crate::project::init(&project, "professional-review").unwrap();
     let registry = RegistrySession::new();
     let mut state = persisted_session(&project);
-    let clients = config::clients(&fs::read(project.join("dev-clients.yaml")).unwrap()).unwrap();
+    let clients = accepted(&fs::read(project.join("dev-clients.yaml")).unwrap());
     for id in ["alpha", "beta"] {
         state.sources.insert(
             id.into(),
@@ -3981,7 +4417,7 @@ fn active_source_revalidation_refuses_rotated_credentials_without_replacement() 
     crate::project::init(&project, "professional-review").unwrap();
     let registry = RegistrySession::new();
     let mut state = persisted_session(&project);
-    let clients = config::clients(&fs::read(project.join("dev-clients.yaml")).unwrap()).unwrap();
+    let clients = accepted(&fs::read(project.join("dev-clients.yaml")).unwrap());
     state.sources.insert(
         "professional-licences".into(),
         SourceSession {

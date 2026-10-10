@@ -34,16 +34,16 @@ and the ceiling each is read under.
 
 | Path | Holds | Ceiling |
 |---|---|---|
-| `evidence-project.yaml` | The project marker | 4 KiB |
+| `evidence-project.yaml` | The project marker | 1 MiB |
 | `source.openapi.yaml` | OpenAPI description required by inline operations | 16 MiB |
-| `questions/` | Authored questions, one YAML document each | 64 KiB per document, 1 to 128 when compiled |
-| `sources/` | Source definitions a question may name instead of an inline operation | 1 MiB |
-| `selectors/` | Selector definitions | 1 MiB |
+| `questions/` | Authored questions, one YAML document each | 1 MiB per document, 1 to 128 when compiled |
+| `sources/` | Source definitions a question may name instead of an inline operation, each under the header `apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1` and `kind: EvidenceSource` | 1 MiB |
+| `selectors/` | Selector definitions, each under the header `apiVersion: id.registrystack.org/formats/evidence/selector/v1alpha1` and `kind: EvidenceSelector` | 1 MiB |
 | `derivations/` | Authored derivation programs, one Rhai file each | 64 KiB |
 | `schemas/` | Schemas a structured answer may name | 1 MiB |
 | `fixtures/` | Recorded request and response pairs a project is replayed against | 1 MiB |
 | `secrets/` | Key material a project needs to run locally | n/a |
-| `access/policies/` | Access policy documents | 64 KiB |
+| `access/policies/` | Access policy documents | 1 MiB |
 
 An inline operation requires `source.openapi.yaml`. A project whose questions
 all name a `source.ref` may omit it. When present, it declares
@@ -51,9 +51,11 @@ all name a `source.ref` may omit it. When present, it declares
 
 Run `evidencectl check <project>` to parse and compile these authored inputs
 offline. The command can succeed with `status: incomplete`; each gap remains a
-visible finding with `severity`, `code`, `artifact`, `path`, `message`, and
-`suggestedAction`. Add `--deny-findings` when any finding must refuse the
-command. `evidencectl explain <project>` applies the same authoring validation
+visible diagnostic with `severity: warning`, `code`, `artifact`, `path`,
+`message`, `suggestedAction`, and the `source` file, line, and column it names.
+Add `--deny-warnings` when any warning must refuse the command. The command
+exits 0 when it passes, 1 when it refuses the project, 2 for a usage error, and
+3 when it could not finish. `evidencectl explain <project>` applies the same authoring validation
 and reports its status, findings, revision, and complete inventory without
 reading secrets, contacting a dependency, or running a fixture.
 
@@ -140,22 +142,43 @@ and synthesizes `signer.privateKeyRef` as
 reference, not the private JWK, HMAC masters, or another secret value. The
 runtime validates the referenced owner-only files before serving.
 
+## Envelopes
+
+Every authored YAML document except a source and a selector opens with two
+keys that name its format: `apiVersion`, which carries the format version, and
+`kind`. A document without them is refused as `config.missing-envelope`, and a
+`version` or `formatVersion` key the format no longer takes is refused as
+`config.removed-key` with the line to delete.
+
+| File | `apiVersion` | `kind` |
+|---|---|---|
+| `evidence-project.yaml` | `id.registrystack.org/formats/evidence/authoring-project/v1alpha1` | `EvidenceAuthoringProject` |
+| `questions/<id>.yaml` | `id.registrystack.org/formats/evidence/question/v1alpha1` | `EvidenceQuestion` |
+| `access/policies/<id>.yaml` | `id.registrystack.org/formats/evidence/access-policy/v1alpha1` | `EvidenceAccessPolicy` |
+| `access/clients/<id>.yaml` | `id.registrystack.org/formats/evidence/access-client/v1alpha1` | `EvidenceAccessClient` |
+| a target's `governance.yaml` | `id.registrystack.org/formats/evidence/target-governance/v1alpha1` | `EvidenceTargetGovernance` |
+| the `settings.yaml` that `target new --settings` reads | `id.registrystack.org/formats/evidence/target-settings/v1alpha1` | `EvidenceTargetSettings` |
+| `mocks/source.yaml` | `id.registrystack.org/formats/evidence/mock-plan/v1alpha1` | `EvidenceMockPlan` |
+
+Every one of these documents is read by the shared configuration reader under
+the same rules: at most 1 MiB, one document, no anchors, aliases, tags, or
+duplicate keys, and no `${...}` expression, which is refused as
+`config.substitution-not-allowed` because nothing in an authoring project is
+substituted.
+
 ## The project marker
 
 `evidence-project.yaml` confirms that a directory holding authoring parts is
 the project a caller thinks it read. A directory without one is not an error.
+The marker is its envelope and nothing else.
 
-| Key | Required | Meaning |
-|---|---|---|
-| `version` | yes | Marker format version. `1` is the only value this crate parses. |
-| `project` | yes | The kind of project the marker names. `evidence-authoring` is the only kind today. |
-
-`evidencectl init` writes exactly two lines, held to that text by
+`evidencectl init` writes exactly these lines, held to that text by
 `crates/registry-evidence-authoring/src/marker.rs`:
 
 ```yaml
-version: 1
-project: evidence-authoring
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/evidence/authoring-project/authoring-project.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/evidence/authoring-project/v1alpha1
+kind: EvidenceAuthoringProject
 ```
 
 ## An authored question
@@ -165,6 +188,8 @@ which source, and which governed concepts the answer carries. This is a
 complete question, from the fixtures in `crates/registry-evidencectl/src/authoring.rs`:
 
 ```yaml
+apiVersion: id.registrystack.org/formats/evidence/question/v1alpha1
+kind: EvidenceQuestion
 id: adult-status
 question: Is the person at least 18 years old?
 purpose: age-check
@@ -411,7 +436,7 @@ both are named. A question whose facts visit no collection therefore writes
 | Key | Required | Meaning |
 |---|---|---|
 | `answers[].concept` | yes | The concept's local name. Lowercase local identifier, unique within the question. |
-| `answers[].id` | for production | The stable URI a relying party matches on. A local compile invents one; a production compile requires it and refuses a disposable `urn:registrystack:evidence:local:` value. Bounded as a URI by the bundle check, not by the form. |
+| `answers[].uri` | for production | The stable URI a relying party matches on, an identifier of 1 to 512 characters with no control characters. A local compile invents one; a production compile requires it and refuses a disposable `urn:registrystack:evidence:local:` value. The bundle check then requires it to parse as a URI. The key was `answers[].id`; a file that still writes `id` under an answer is refused with `config.removed-key`. |
 | `answers[].type` | yes | `boolean`, `controlled-category`, `bounded-identifier`, `bounded-integer`, or `reviewed-structured-value`. |
 | `answers[].values` | for `controlled-category` | 2 to 32 unique values, each non-empty, at most 64 bytes, no control characters, and each spelled as a codelist code. |
 | `answers[].prefix` | for `bounded-identifier` | Exact ASCII namespace prefix, 1 to 512 bytes, using letters, digits, `.`, `_`, `-`, `:`, `/`, or `#`, and ending in one of those six separators. |
@@ -445,12 +470,12 @@ constructing or signing Evidence.
 Four URIs an authoring project writes are bounded only after the form has
 accepted them. `validate_uri` in `crates/registry-evidence/src/config.rs` holds
 a URI to 1 through 512 bytes and then requires it to parse, and it is what
-reads an answer `id`, the `$id` of the file `answers[].schema` names,
+reads an answer `uri`, the `$id` of the file `answers[].schema` names,
 `governance.requirement`, and `governance.evidenceType`. The form reads none of
-the four: `validate_answer` never looks at `answer.id`, and `validate_question`
-never opens `governance` at all. A `controlled-category` answer's `id` is
+the four: `validate_answer` never looks at `answer.uri`, and `validate_question`
+never opens `governance` at all. A `controlled-category` answer's `uri` is
 measured twice over, because the compile derives that concept's category scheme
-as `{id}:categories` and holds the derived URI to the same 512 bytes.
+as `{uri}:categories` and holds the derived URI to the same 512 bytes.
 
 ### Disclosure
 
@@ -506,7 +531,7 @@ of a longer chain), must name a fact the question's source declares: a
 `source.facts[].name` for an inline operation, or a property of a referenced
 source's `factSchema` when that schema is a closed object
 (`additionalProperties: false`). A read of any other name is refused as
-`evidence.authoring.derivation-fact-undeclared` against the derivation file, by
+`evidence.derivation.fact-undeclared` against the derivation file, by
 `check`, fixture runs, `build`, `package`, and the structural check `source
 diff` and `source update` run. That is what turns a source rename, such as a
 regenerated export whose fact changed name, into an authoring refusal rather
@@ -553,14 +578,14 @@ becomes `requirements[].id`, and `governance.disclosureFamilies` becomes
 | `governance.fixtures` | with `governance` | Exactly one project-relative `fixtures/<name>.yaml` file, which must exist. Its content is a contract the compile never reads. |
 | `governance.disclosureFamilies` | with `governance` | The disclosure family URIs this question's concepts belong to. `DisclosureGuard::validate` bounds this list exactly as `RequirementConfig::validate` bounds `referenceFrameworks`. |
 
-A production compile also requires a stable `id` on every answer, and refuses a
+A production compile also requires a stable `uri` on every answer, and refuses a
 disposable local identifier anywhere in `requirement`, `referenceFrameworks`,
-`evidenceType`, `disclosureFamilies`, or an answer `id`.
+`evidenceType`, `disclosureFamilies`, or an answer `uri`.
 
 `governance.fixtures` is the widest deferral on this table.
 `validate_production_inputs` confirms the two path components, the `yaml`
 extension, and that the file is there, and never opens it.
-`validate_fixture_coverage` in `crates/registry-evidence/src/bundle.rs`, which
+`read_fixture` in `crates/registry-evidence/src/fixture.rs`, which
 `Bundle::load` reaches for every requirement naming a fixture, is what states
 the contract: the file declares `synthetic_only: true` and a `cases` sequence
 of 1 to 256 entries, each carrying a unique string `id` of 1 to 128 bytes, and
@@ -597,16 +622,17 @@ part of the production authoring form or copied into a production target.
 The document is closed and has exactly these keys:
 
 ```yaml
-version: 1
+apiVersion: id.registrystack.org/formats/evidence/access-policy/v1alpha1
+kind: EvidenceAccessPolicy
 id: age-checks
 questions: [adult-status, age-bracket]
 ```
 
-`version` must be `1`. `id` follows the lowercase local-identifier grammar and
+`id` follows the lowercase local-identifier grammar and
 must equal the filename stem. `questions` contains 1 through 128 existing
 question ids in strictly increasing lexical order, which also makes the list
 unique. The project may contain 1 through 128 policy files, and every entry in
-`access/policies/` must be an `<id>.yaml` regular file no larger than 64 KiB.
+`access/policies/` must be an `<id>.yaml` regular file no larger than 1 MiB.
 
 Use the command when adding a policy so it validates question ids and writes
 the sorted closed document without replacing an existing file:
@@ -667,26 +693,22 @@ it, so a fixture run is already held to the production rules
 
 ```text
 every production question requires governance
-every production answer requires one stable concept id
+every production answer requires one stable concept uri
 deployment governance must not use disposable local identifiers
 ```
 
-Give every question a `governance` block and every answer a stable `id`, and
+Give every question a `governance` block and every answer a stable `uri`, and
 replace the disposable `urn:registrystack:evidence:local:` identifiers a local
 generation issues. A project that only ever ran locally satisfies none of this.
 
-**A fixture identifier stays in the reserved namespace.** A fixture is approved
-when its own `fixture` identifier begins `registry.evidence.reference.` and ends
-`/v1`, or when the document declares `coequal_acceptance_definition: true`.
-Nothing else is approved, so renaming that identifier into an adopter's own
-namespace stops the evaluation:
+**A fixture declares the fixture envelope.** A fixture opens with
+`apiVersion: id.registrystack.org/formats/evidence/fixture/v1alpha1` and
+`kind: EvidenceFixture`. A document without them is refused with
+`config.missing-envelope` before any case runs, and one that still carries the
+retired `fixture` identifier key is refused with `config.removed-key`.
 
-```text
-fixture is not an approved synthetic acceptance definition
-```
-
-The identifier `evidencectl init` writes is already approved. Replace the example
-requirement, concepts, schema, and rows around it and leave that one key as
+The envelope `evidencectl init` writes is already correct. Replace the example
+requirement, concepts, schema, and rows around it and leave those two keys as
 generated. A document that does not declare `synthetic_only: true` is refused
 for that alone.
 
@@ -709,8 +731,8 @@ Every ceiling the authoring form applies, with the file that states it.
 | Limit | Value | Stated in |
 |---|---|---|
 | Questions per project | 128 | `layout.rs` |
-| Question document size | 64 KiB | `layout.rs` |
-| Project marker size | 4 KiB | `layout.rs` |
+| Question document size | 1 MiB | `layout.rs` |
+| Project marker size | 1 MiB | `layout.rs` |
 | OpenAPI description size | 16 MiB | `layout.rs` |
 | Derivation program size | 64 KiB | `layout.rs` |
 | Subjects per question | 1 to 8 | `validate.rs` |
@@ -730,7 +752,7 @@ Every ceiling the authoring form applies, with the file that states it.
 | Local public signing JWK | 64 KiB | `registry-platform-crypto` |
 | Access policies per project | 1 to 128 | `authoring.rs` |
 | Questions per access policy | 1 to 128 | `authoring.rs` |
-| Access policy document size | 64 KiB | `layout.rs` |
+| Access policy document size | 1 MiB | `layout.rs` |
 
 ## Complete key-path inventory
 
@@ -758,7 +780,6 @@ contract.
 answers
 answers[]
 answers[].concept
-answers[].id
 answers[].maximum
 answers[].maximumBytes
 answers[].maximumSerializedBytes
@@ -770,8 +791,10 @@ answers[].sdJwtVc
 answers[].sdJwtVc.claim
 answers[].sdJwtVc.disclosure
 answers[].type
+answers[].uri
 answers[].values
 answers[].values[]
+apiVersion
 derivation
 disclosure
 disclosure.allow
@@ -788,6 +811,7 @@ governance.referenceFrameworks[]
 governance.requirement
 governance.validitySeconds
 id
+kind
 purpose
 question
 responseFormats
@@ -826,7 +850,221 @@ subjects[].source
 
 <!-- evidence-authoring-project-marker-key-paths:start -->
 ```text
-project
-version
+apiVersion
+kind
 ```
 <!-- evidence-authoring-project-marker-key-paths:end -->
+
+### `access/clients/<id>.yaml`
+
+A local access client document names one caller of a development Evidence
+runtime. `apiVersion` and `kind` are the envelope in the table above.
+`clientId` is the lowercase client identifier, `status` is `active` or
+`revoked`, and `policies` lists the access policies the client is assigned.
+`principal` and `evidenceAudience` must both equal the local URI derived from
+`clientId`. `keys` holds exactly one public JWK for the client. `exchange` is
+optional local issuer wiring for a client whose authority comes from a task
+assertion; it grants no access. Its `kind` is `institutional-grant` or
+`first-party`, `bootstrapScope` is one bounded OAuth scope token,
+`bootstrapResource` is a bounded resource URI (when it is omitted, the issuer
+owner's default resource applies, not the Evidence resource), and
+`sourceIssuer` is the issuer URL, which a `first-party` exchange requires and
+an `institutional-grant` exchange refuses because that issuer comes from its
+governed task policy. A `first-party` exchange also requires
+`bootstrapResource`.
+
+<!-- evidence-authoring-access-client-key-paths:start -->
+```text
+apiVersion
+clientId
+evidenceAudience
+exchange
+exchange.bootstrapResource
+exchange.bootstrapScope
+exchange.kind
+exchange.sourceIssuer
+keys
+kind
+policies
+policies[]
+principal
+status
+```
+<!-- evidence-authoring-access-client-key-paths:end -->
+
+### `access/policies/<id>.yaml`
+
+The policy document is described in "Local access policies" above: `id` is the
+policy identifier and `questions` lists the question ids it covers.
+`taskGrant` is optional and names the trusted task-grant origin for every
+question in the policy. Its `kind` names the grant kind, `sourceIssuer` is the
+issuer URL, and `requesterClients` lists the client identifiers allowed to
+request under it. Each entry of `bindings` ties one authored selector field to
+a verified-token claim path: `question` is the question id, `selectorProfile`
+the selector profile, `role` the role within it, and `valueClaims` maps each
+local identifier of the selector's fields to the claim path that supplies it.
+
+<!-- evidence-authoring-access-policy-key-paths:start -->
+```text
+apiVersion
+id
+kind
+questions
+questions[]
+taskGrant
+taskGrant.bindings
+taskGrant.bindings[]
+taskGrant.bindings[].question
+taskGrant.bindings[].role
+taskGrant.bindings[].selectorProfile
+taskGrant.bindings[].valueClaims
+taskGrant.bindings[].valueClaims.*
+taskGrant.kind
+taskGrant.requesterClients
+taskGrant.requesterClients[]
+taskGrant.sourceIssuer
+```
+<!-- evidence-authoring-access-policy-key-paths:end -->
+
+### `mocks/source.yaml`
+
+The mock plan configures the source mock that `evidencectl` serves from an
+OpenAPI description. `openapi` names that description and `openapiDigest`
+optionally pins it as a `sha256:` digest. `generation` holds the settings that
+`generate --config` keeps to create missing response bodies: `contract` names
+the contract, `seed` is the generator seed, `asOf` is an ISO calendar date, and
+`datasets` maps local identifiers to the `sha256:` digest of each dataset.
+Each entry of `operations` is one configured GET operation, identified by
+`method` plus the templated `path`, with an optional `operationId`. Its
+`response` carries `status`, which is always 200, and `mediaType`. Each entry
+of its `cases` has a `name`, a `body`, and a `request` whose `pathParameters`
+bind each template parameter name to one string, boolean, or number.
+
+<!-- evidence-authoring-mock-plan-key-paths:start -->
+```text
+apiVersion
+generation
+generation.asOf
+generation.contract
+generation.datasets
+generation.datasets.*
+generation.seed
+kind
+openapi
+openapiDigest
+operations
+operations[]
+operations[].cases
+operations[].cases[]
+operations[].cases[].body
+operations[].cases[].name
+operations[].cases[].request
+operations[].cases[].request.pathParameters
+operations[].cases[].request.pathParameters.*
+operations[].method
+operations[].operationId
+operations[].path
+operations[].response
+operations[].response.mediaType
+operations[].response.status
+```
+<!-- evidence-authoring-mock-plan-key-paths:end -->
+
+### `selectors/<name>.yaml`
+
+A selector profile is a member of the Evidence bundle grammar. Only the
+envelope is checked when the file is read; `evidencectl check` validates every
+other key against `bundle.schema.yaml` after the compile, so the keys a profile
+may carry are those of that grammar and are not listed here.
+
+<!-- evidence-authoring-selector-key-paths:start -->
+```text
+apiVersion
+kind
+```
+<!-- evidence-authoring-selector-key-paths:end -->
+
+### `sources/<name>.yaml`
+
+A source definition is a member of the Evidence bundle grammar. Only the
+envelope is checked when the file is read; `evidencectl check` validates every
+other key against `bundle.schema.yaml` after the compile, so the keys a source
+may carry are those of that grammar and are not listed here.
+
+<!-- evidence-authoring-source-key-paths:start -->
+```text
+apiVersion
+kind
+```
+<!-- evidence-authoring-source-key-paths:end -->
+
+### Source import resolution file
+
+A resolution file records what to do with each artifact a source import could
+not decide. `artifacts` maps an artifact identifier, at most 256 of them, to
+one resolution. The `type` of a resolution is `keep` (keep the current file),
+`adopt` (take the upstream file), or `file` (use the file named by `path`, read relative to the resolution file).
+`path` is allowed and required only for `file`. The reader checks and strips
+`apiVersion` and `kind`.
+
+<!-- evidence-authoring-source-resolution-key-paths:start -->
+```text
+apiVersion
+artifacts
+artifacts.*
+artifacts.*.path
+artifacts.*.type
+kind
+```
+<!-- evidence-authoring-source-resolution-key-paths:end -->
+
+### A target's `governance.yaml`
+
+A target's governance document carries the governance members of the bundle
+grammar into the bundle as written. `assuranceProfile` is `local`,
+`production`, or `evidence-grade`. Every other member (`service`, `issuer`,
+`authentication`, `audit`, `subjectBinding`, `rateLimits`, `signing`,
+`authorityProfiles`, and the optional `publication`, `responseFormats`, and
+`sourceConnections`) is a passthrough node: the reader does not look inside
+it, and `evidencectl check` validates it against `bundle.schema.yaml` after the
+compile. Every member except the last three is required.
+
+<!-- evidence-authoring-target-governance-key-paths:start -->
+```text
+apiVersion
+assuranceProfile
+audit
+authentication
+authorityProfiles
+issuer
+kind
+publication
+rateLimits
+responseFormats
+service
+signing
+sourceConnections
+subjectBinding
+```
+<!-- evidence-authoring-target-governance-key-paths:end -->
+
+### `settings.yaml` for `target new`
+
+The settings file is what `target new --settings` writes a target from.
+`publicKeys` maps the name of each public key file the target carries to the path of the file that supplies it, read relative to the settings file. `governance` is a
+passthrough node holding the governance members of the bundle grammar;
+`evidencectl check` validates it against `bundle.schema.yaml` after the
+compile. `runtime` is a passthrough node holding the runtime document of the
+runtime grammar; `target new` validates it against `runtime.schema.yaml` before
+it writes the target.
+
+<!-- evidence-authoring-target-settings-key-paths:start -->
+```text
+apiVersion
+governance
+kind
+publicKeys
+publicKeys.*
+runtime
+```
+<!-- evidence-authoring-target-settings-key-paths:end -->

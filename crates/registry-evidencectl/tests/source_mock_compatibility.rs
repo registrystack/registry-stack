@@ -669,6 +669,86 @@ fn edited_materialized_bytes_are_authoritative_and_snapshotted_once() {
 }
 
 #[test]
+fn source_mock_check_reports_json_diagnostics() {
+    let temporary = tempfile::tempdir().expect("tempdir");
+    copy_fixture_tree(temporary.path());
+    assert!(run(
+        temporary.path(),
+        &[
+            "source",
+            "mock",
+            "generate",
+            "--openapi",
+            "awkward.openapi.yaml",
+            "--output",
+            "mocks/source.yaml",
+        ],
+    )
+    .status
+    .success());
+    let checked = run(
+        temporary.path(),
+        &["--format", "json", "source", "mock", "check"],
+    );
+    assert_eq!(checked.status.code(), Some(0));
+    let report: serde_json::Value = serde_json::from_slice(&checked.stdout).expect("json report");
+    assert_eq!(report["diagnostics"], serde_json::json!([]));
+    assert!(report.get("findings").is_none());
+    let denied = run(
+        temporary.path(),
+        &[
+            "--format",
+            "json",
+            "source",
+            "mock",
+            "check",
+            "--deny-warnings",
+        ],
+    );
+    assert_eq!(denied.status.code(), Some(0));
+
+    let plan = temporary.path().join("mocks/source.yaml");
+    let written = fs::read_to_string(&plan).expect("plan");
+    fs::write(&plan, format!("{written}version: 1\n")).expect("plan edit");
+    let refused = run(
+        temporary.path(),
+        &["--format", "json", "source", "mock", "check"],
+    );
+    assert_eq!(refused.status.code(), Some(1));
+    let report: serde_json::Value = serde_json::from_slice(&refused.stdout).expect("json report");
+    let diagnostics = report["diagnostics"].as_array().expect("diagnostics");
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic["code"] == "config.removed-key"
+                && diagnostic["path"] == "/version"
+                && diagnostic["source"]["file"] == "mocks/source.yaml"
+        }),
+        "{report}"
+    );
+}
+
+#[test]
+fn the_reference_authoring_example_mock_plan_checks() {
+    let example = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../products/evidence/reference/authoring-projects/example");
+    let checked = run(
+        &example,
+        &[
+            "--format",
+            "json",
+            "source",
+            "mock",
+            "check",
+            "--deny-warnings",
+        ],
+    );
+    assert_eq!(checked.status.code(), Some(0));
+    let report: serde_json::Value = serde_json::from_slice(&checked.stdout).expect("json report");
+    assert_eq!(report["diagnostics"], serde_json::json!([]));
+    assert_eq!(report["cases"], 1);
+}
+
+#[test]
 fn invalid_manual_edits_report_no_authored_value() {
     let temporary = tempfile::tempdir().expect("tempdir");
     copy_fixture_tree(temporary.path());
@@ -698,7 +778,11 @@ fn invalid_manual_edits_report_no_authored_value() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(!stderr.contains("planted-secret-value"), "{stderr}");
     assert!(!stderr.contains("must-not-leak"), "{stderr}");
-    assert!(stderr.contains("body `cases/"), "{stderr}");
+    // The configured body path and operation path are plan scalars: the
+    // refusal names the member that holds them instead.
+    assert!(!stderr.contains(".json"), "{stderr}");
+    assert!(!stderr.contains("/people/{person_id}"), "{stderr}");
+    assert!(stderr.contains("/operations/0/cases/0/body"), "{stderr}");
     assert!(
         stderr.contains("instance") && stderr.contains("schema"),
         "{stderr}"
@@ -791,7 +875,6 @@ fn explicit_source_origin_wires_bare_project_mock_serve_create_only() {
         &[
             "source",
             "suggest",
-            "--project",
             ".",
             "--operation",
             "GET /people/{person_id}",
@@ -817,7 +900,6 @@ fn explicit_source_origin_wires_bare_project_mock_serve_create_only() {
         &[
             "source",
             "suggest",
-            "--project",
             ".",
             "--operation",
             "GET /people/{person_id}",
@@ -832,10 +914,7 @@ fn explicit_source_origin_wires_bare_project_mock_serve_create_only() {
     assert!(!repeated.status.success());
     assert_eq!(fs::read(&source_path).unwrap(), source_before);
 
-    let mut server = start_server(
-        temporary.path(),
-        &["source", "mock", "serve", "--project", "."],
-    );
+    let mut server = start_server(temporary.path(), &["source", "mock", "serve", "."]);
     assert_eq!(
         request(address, "GET", "/v1/people/person-123", &[]).status,
         200
@@ -971,4 +1050,24 @@ fn snapshot_tree(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
     let mut snapshot = BTreeMap::new();
     visit(root, root, &mut snapshot);
     snapshot
+}
+
+#[test]
+fn the_retired_project_flag_is_refused_by_every_mock_command() {
+    let temporary = tempfile::tempdir().expect("tempdir");
+    for command in ["serve", "generate", "check"] {
+        let refused = run(
+            temporary.path(),
+            &["source", "mock", command, "--project", "."],
+        );
+        assert!(
+            !refused.status.success(),
+            "mock {command} accepted --project"
+        );
+        let stderr = String::from_utf8_lossy(&refused.stderr);
+        assert!(
+            stderr.contains("evidencectl.usage"),
+            "mock {command}: {stderr}"
+        );
+    }
 }

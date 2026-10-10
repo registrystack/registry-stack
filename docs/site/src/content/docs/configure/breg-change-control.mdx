@@ -86,7 +86,7 @@ entities:
 
 | Member | Effect |
 |---|---|
-| `changeControl.requiredFor` | The operations on the target that must go through a request. With `[patch]`, a direct patch of a placement is refused even for a profile that holds `patch`: the operation is absent from ordinary permissions, and only applying a request performs it. A profile that still holds an operation `requiredFor` names, or holds `batch` on an entity controlled for `create` or `patch`, is refused by `check` with `change_control.direct_write_grant`. `import` is not a direct write and stays allowed (see below). |
+| `changeControl.requiredFor` | The operations on the target that must go through a request. With `[patch]`, a direct patch of a placement is refused even for a profile that holds `patch`: the operation is absent from ordinary permissions, and only applying a request performs it. A profile that still holds an operation `requiredFor` names, or holds `batch` on an entity controlled for `create` or `patch`, is refused by `check` with `breg.change-control.direct-write-grant`. `import` is not a direct write and stays allowed (see below). |
 | `changeRequest.effects` | What applying the request writes. `target` names the record from a reference field, `operation` is `create` or `patch`, `set` maps target fields to request fields, and `clear` lists target fields to null. A request entity declares either `effects` or a `planner`, never both. |
 | `review` | The logical external review authority and policy frozen into the submitted proposal. Casework owns the policy, review stages, reviewer independence, and terminal result. A request that intentionally needs no external review declares `review: {mode: none}`. |
 | `onApproved` | What happens after BReg has reconciled an exact approved result. `manual` waits for a currently authorized caller to use `apply_request`. `automatic` requires a logical `executor`; runtime configuration binds that executor to a separate ordinary credential that uses the same source action and guards. |
@@ -183,7 +183,7 @@ accessProfiles:
     requiredPurposes: [asset-correction]
     permissions:
       - entity: placement-correction-request
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [create, get, patch, submit_request, revise_request, cancel_request]
         readableFields: [placement, proposed-site, reason]
         writableFields: [placement, proposed-site, reason]
@@ -194,7 +194,7 @@ accessProfiles:
     requiredPurposes: [asset-correction-review]
     permissions:
       - entity: placement-correction-request
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [get, list]
         readableFields: [placement, proposed-site, reason]
         readableRequestFields: [reason, review_state]
@@ -204,12 +204,12 @@ accessProfiles:
     requiredPurposes: [asset-correction-apply]
     permissions:
       - entity: placement-correction-request
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [get, apply_request]
         readableFields: [placement, proposed-site, reason]
         applyTargets:
           - entity: asset-placement
-            rowBoundaries: []
+            rowBoundaries: unrestricted
 ```
 
 The submitter is the default for shared request reads.
@@ -324,11 +324,11 @@ accessProfiles:
         readableFields: [record, licensed-activities]
         writableFields: [record, licensed-activities]
         requestVisibility: owner
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         submitterTargets: [professional-license]
 ```
 
-`submitterTargets` must name exactly the request's target entities: one entry for every entity its `effects` write, no more and no fewer. Each field the effects read a target from, `record` above, must be `required` on the request entity and readable through the permission, so admission can always read the target id it names, and writable through it wherever the profile holds `create` or `patch` on the request, so the submitter can supply the reference its own request needs. `onApproved.mode` must stay `manual`; an automatically applied request cannot declare submitter target grants. No target may itself be a change-request entity, since a request's own read authority is the thing being checked. The profile itself must be non-anonymous and cannot hold `batch` on the request entity. And the same profile id must carry a permission on the target entity with `get` in its `operations` and no `membershipBoundaries`; a `rowBoundaries` restriction is fine, and the holder's own row boundary on `person-reference` above is what actually limits which licences a holder may target. `check` refuses a permission that cannot honour all of this, with `change_request.submitter_targets.invalid`.
+`submitterTargets` must name exactly the request's target entities: one entry for every entity its `effects` write, no more and no fewer. Each field the effects read a target from, `record` above, must be `required` on the request entity and readable through the permission, so admission can always read the target id it names, and writable through it wherever the profile holds `create` or `patch` on the request, so the submitter can supply the reference its own request needs. `onApproved.mode` must stay `manual`; an automatically applied request cannot declare submitter target grants. No target may itself be a change-request entity, since a request's own read authority is the thing being checked. The profile itself cannot hold `batch` on the request entity. And the same profile id must carry a permission on the target entity with `get` in its `operations` and no `membershipBoundaries`; a `rowBoundaries` restriction is fine, and the holder's own row boundary on `person-reference` above is what actually limits which licences a holder may target. `check` refuses a permission that cannot honour all of this, with `breg.change-request.submitter-targets-invalid`.
 
 At runtime the engine reuses that same target permission's current `get` authority, never the request entity's own boundaries. Two checks carry it. The route itself refuses `create`, a draft `patch`, `submit_request`, and `revise_request` unless the caller's claims resolve to target authority under that permission: a claim that carries no matching value, or one a boundary cannot reduce to the single value it needs, leaves the route unauthorized and answers `404`, the same concealment an unrelated caller gets. Then `submit_request` and `revise_request` admit the named target rows inside the request transaction, under a share lock on each target table, and an exact idempotent replay admits them again before it replays: a target row the caller can no longer read through that permission answers `412` and `precondition.failed`. Reads are symmetric: once the request is retained, its target links appear only to a reader who currently holds that same `get` authority.
 
@@ -419,7 +419,7 @@ The server runs the script once, when the request is submitted, and freezes its 
 Review, retry, and apply never rerun it, so a later package with an edited script leaves an already frozen proposal untouched.
 The engine is closed: the script cannot import modules, evaluate strings, print, or reach a file, the database, or the network, and it runs within fixed bounds (64 KiB of source, 100,000 operations, and bounded call depth, strings, arrays, and maps).
 A script that fails, leaves the ceiling, or breaks a bound refuses the submit with `request.invalid`.
-`check` reports an invalid planner, review binding, or approved-application binding as `change_request.*` errors; it does not run the script.
+`check` reports an invalid planner, review binding, or approved-application binding as `breg.change-request.*` errors; it does not run the script.
 
 Evaluate the script offline, with no database and no credentials, from a JSON file of request field values keyed by their authored ids:
 
@@ -572,10 +572,10 @@ The report lists every compiled action with its inputs, effects, grants, contrac
 
 | Symptom | Cause and next move |
 |---|---|
-| `check` reports a `change_request.*` error. | `effects` and `planner` are exclusive; `review` must be either `{mode: none}` or an authority and policy id; manual application must omit an executor; automatic application must name one. `check` does not run the script; evaluate it with `project planner-test`. |
+| `check` reports a `breg.change-request.*` error. | `effects` and `planner` are exclusive; `review` must be either `{mode: none}` or an authority and policy id; manual application must omit an executor; automatic application must name one. `check` does not run the script; evaluate it with `project planner-test`. |
 | A direct patch of a controlled entity is refused although the profile holds `patch`. | The entity's `changeControl.requiredFor` includes `patch`, so the write must arrive as an applied request. Submit a request of one of the `eligibleRequestTypes` that `explain change-requests` lists. |
-| `check` reports `change_control.direct_write_grant`. | A profile still holds a controlled operation, or `batch` on an entity controlled for `create` or `patch`. Remove it; for bulk loads of new records, grant `import` in its place and load through an import authority. |
-| `check` reports `import.batch_bounds.required`, `import.principal.required`, or `import.batch.redundant`. | An `import` grant needs the entity's `batch` bounds, a non-anonymous profile, and no `batch` grant on the same entity in any profile. |
+| `check` reports `breg.change-control.direct-write-grant`. | A profile still holds a controlled operation, or `batch` on an entity controlled for `create` or `patch`. Remove it; for bulk loads of new records, grant `import` in its place and load through an import authority. |
+| `check` reports `breg.import.batch-bounds-required`, `breg.import.principal-required`, or `breg.import.batch-redundant`. | An `import` grant needs the entity's `batch` bounds, a profile with a `principalClaim`, and no `batch` grant on the same entity in any profile. |
 | `project planner-test` fails, or a submit is refused with `request.invalid`. | The script failed, returned an effect outside `writes`, attempted to return an obsolete disposition, or broke a bound. Read the message, fix the script or the ceiling, and rerun `project planner-test` with the same request file. |
 | `revise_request` answers `409 mutation.conflict`. | The settled review result rules the shape out: a rejected request can only be cancelled, and a send-back or an expired approval is answered by a revision, not a rebase. Read the request again and follow the action it offers. |
 | An invoke fails with `precondition.failed`. | A target changed between the target-conditions request and the invoke. Ask for target conditions again and invoke with the new ETags. |

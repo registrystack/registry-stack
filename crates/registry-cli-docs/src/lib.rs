@@ -143,6 +143,63 @@ mod tests {
         ] {
             assert!(!find_command(&catalog.binaries, invocation).usage.is_empty());
         }
+        let check = find_command(&catalog.binaries, "registry-render check");
+        let requirements = check
+            .constraints
+            .iter()
+            .filter(|constraint| constraint.kind == ConstraintKind::RequiresAll)
+            .map(|constraint| (constraint.when.as_deref(), constraint.arguments.as_slice()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            requirements,
+            [
+                (
+                    Some("--environment"),
+                    ["--runtime-config <FILE>".to_owned()].as_slice()
+                ),
+                (
+                    Some("--require-audit-under <ABSOLUTE_DIRECTORY>"),
+                    ["--runtime-config <FILE>".to_owned()].as_slice()
+                ),
+            ]
+        );
+    }
+
+    /// The requirement probe supplies a value each argument's parser
+    /// accepts, so a requirement on an absolute-path argument is published.
+    #[test]
+    fn a_requirement_on_an_absolute_path_argument_is_published() {
+        let reference = command_reference(
+            Command::new("tool")
+                .arg(
+                    Arg::new("root")
+                        .long("root")
+                        .value_name("ABSOLUTE_DIRECTORY")
+                        .help("Absolute root")
+                        .value_parser(|value: &str| {
+                            if std::path::Path::new(value).is_absolute() {
+                                Ok(value.to_owned())
+                            } else {
+                                Err("absolute paths only".to_owned())
+                            }
+                        })
+                        .requires("config"),
+                )
+                .arg(
+                    Arg::new("config")
+                        .long("config")
+                        .value_name("FILE")
+                        .help("Configuration file"),
+                ),
+            None,
+            None,
+        );
+
+        assert!(reference.constraints.iter().any(|constraint| {
+            constraint.kind == ConstraintKind::RequiresAll
+                && constraint.when.as_deref() == Some("--root <ABSOLUTE_DIRECTORY>")
+                && constraint.arguments == ["--config <FILE>"]
+        }));
     }
 
     #[test]

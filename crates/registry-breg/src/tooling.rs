@@ -661,10 +661,7 @@ fn access_direction(
             return if reverse { Widening } else { Narrowing };
         }
     }
-    if matches!(
-        field,
-        "anonymous" | "allowCount" | "revisionAccess" | "allowDataExport"
-    ) {
+    if matches!(field, "allowCount" | "revisionAccess" | "allowDataExport") {
         return if after == &serde_json::Value::Bool(true) {
             Widening
         } else {
@@ -1048,7 +1045,7 @@ mod tests {
         profile_extra: &str,
     ) -> CompiledRegistry {
         let module_bytes = format!(
-            r#"{{"id":"core","version":"1","entities":[{{"id":"membership","primaryDataset":"temporal-registry","route":"memberships","mutationMode":"mutable","fields":[{{"id":"subject","type":"string","maxLength":64,"required":true,"classification":"internal"}},{{"id":"valid-from","type":"date","required":true,"classification":"internal"}},{{"id":"valid-to","type":"date","classification":"internal"}}{extra_fields}],"temporal":{{"startField":"valid-from","endField":"valid-to"}},"constraints":[{{"id":"membership-window","kind":"temporal-non-overlap","scopeFields":["subject"],"startField":"valid-from","endField":"valid-to"}}],"accessProfiles":[{{"rowBoundaries": [], "id":"consumer","principalClaim":"principal","operations":[{operations}],{access_fields}{profile_extra}}}]}}]}}"#
+            r#"{{"id":"core","version":"1","entities":[{{"id":"membership","primaryDataset":"temporal-registry","route":"memberships","mutationMode":"mutable","fields":[{{"id":"subject","type":"string","maxLength":64,"required":true,"classification":"internal"}},{{"id":"valid-from","type":"date","required":true,"classification":"internal"}},{{"id":"valid-to","type":"date","classification":"internal"}}{extra_fields}],"temporal":{{"startField":"valid-from","endField":"valid-to"}},"constraints":[{{"id":"membership-window","kind":"temporal-non-overlap","scopeFields":["subject"],"startField":"valid-from","endField":"valid-to"}}],"accessProfiles":[{{"requiredScopes":"unrestricted","rowBoundaries":"unrestricted","id":"consumer","principalClaim":"principal","operations":[{operations}],{access_fields}{profile_extra}}}]}}]}}"#
         );
         let module = parse_module_json(module_bytes.as_bytes()).expect("module parses");
         let digest = module_digest(&module);
@@ -1067,7 +1064,7 @@ mod tests {
         principal_claim: &str,
     ) -> CompiledRegistry {
         let module_bytes = format!(
-            r#"{{"id":"core","version":"1","entities":[{{"id":"record","primaryDataset":"neutral-registry","route":"records","mutationMode":"create_only","fields":[{{"id":"code","type":"string","maxLength":16,"classification":"{classification}"}}{extra_fields}],"accessProfiles":[{{"rowBoundaries": [], "id":"reader","principalClaim":"{principal_claim}","operations":["get"],"readableFields":["code"]}}]{entity_members}}}]}}"#
+            r#"{{"id":"core","version":"1","entities":[{{"id":"record","primaryDataset":"neutral-registry","route":"records","mutationMode":"create_only","fields":[{{"id":"code","type":"string","maxLength":16,"classification":"{classification}"}}{extra_fields}],"accessProfiles":[{{"requiredScopes":"unrestricted","rowBoundaries":"unrestricted","id":"reader","principalClaim":"{principal_claim}","operations":["get"],"readableFields":["code"]}}]{entity_members}}}]}}"#
         );
         let module = parse_module_json(module_bytes.as_bytes()).expect("module parses");
         let digest = module_digest(&module);

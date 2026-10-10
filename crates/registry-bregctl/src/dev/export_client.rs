@@ -30,12 +30,7 @@ pub(super) fn run(args: ExportClientArgs) -> Result<Value> {
     private::check(&parent, true)?;
     let _lock = private::lock(&parent.join("dev.lock"))?;
     let state = read_state(&root)?;
-    let clients: Clients =
-        serde_json::from_slice(&private::read(&root.join("clients.json"), MAX_BYTES)?).map_err(
-            |_| {
-                anyhow::anyhow!("retained clients are invalid; preserve the session for inspection")
-            },
-        )?;
+    let clients = retained_clients(&root)?;
     let client = clients.clients.iter().find(|client| client.id == args.client)
         .context("selected client is absent from the retained session; select an existing local client label")?;
     if !config::identifier(&client.id) {

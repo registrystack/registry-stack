@@ -144,6 +144,10 @@ pub fn read_bundle(files: &[(&str, &str)]) -> Result<Model, ReadError> {
     let (root_label, _) = files.first().ok_or(ReadError::EmptyBundle)?;
     let mut schemas = Vec::with_capacity(files.len());
     for (label, yaml) in files {
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "breg/linkml-schema is registered as an external format: LinkML owns its grammar, and the embedded PublicSchema vocabulary is larger than the shared reader accepts (CFG-YAML-1)"
+        )]
         let schema: RawSchema = serde_norway::from_str(yaml).map_err(|source| ReadError::Yaml {
             file: (*label).to_owned(),
             source,
@@ -249,6 +253,10 @@ pub fn read_bundle(files: &[(&str, &str)]) -> Result<Model, ReadError> {
                         })
                     }
                 };
+                #[allow(
+                    clippy::disallowed_methods,
+                    reason = "breg/linkml-schema is registered as an external format: LinkML owns its grammar, and the embedded PublicSchema vocabulary is larger than the shared reader accepts (CFG-YAML-1)"
+                )]
                 let value: RawPermissibleValue =
                     serde_norway::from_value(value.clone()).map_err(|source| ReadError::Yaml {
                         file: file.clone(),

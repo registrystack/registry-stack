@@ -25,7 +25,7 @@ use crate::api::{
 };
 use crate::attachment_verification_worker::AttachmentVerificationWorker;
 use crate::audit::RegistryAudit;
-use crate::auth::RegistryAuthenticator;
+use crate::auth::{AuthenticationConfigError, RegistryAuthenticator};
 use crate::field_encryption::{FieldEncryptionProvider, FieldEncryptionService};
 use crate::metrics::{self, LastSuccess, Metrics, ProgressWorker};
 #[cfg(all(feature = "runtime", feature = "tooling"))]
@@ -126,6 +126,13 @@ pub enum StartupError {
     Oidc,
     #[error("the Registry authentication profile was refused")]
     Authentication,
+    /// The project names clients that `authentication.oidc.allowedClients`
+    /// does not list; `unrestricted` lists none.
+    #[error(
+        "the project names clients that authentication.oidc.allowedClients does not list; list \
+         each client named in requesterClients, trusted actors, or consent recipients there"
+    )]
+    AuthenticationClientsUnlisted,
     #[error("the Registry event destination bindings were refused")]
     EventDestinations,
     #[error(
@@ -349,6 +356,9 @@ pub enum OperationalEvent {
     PostgresBaselineAdvisory(BaselineAdvisory),
     /// The role mode the runtime file selects, logged once at startup.
     RoleMode(RoleMode),
+    /// The runtime file leaves `authentication.oidc.allowedClients`
+    /// unrestricted, logged once at startup. It names the member only.
+    ClientsUnrestricted,
     /// A supervised background task panicked, or returned before shutdown
     /// was requested. The code names the task and how it ended.
     BackgroundTaskStopped(BackgroundTask, BackgroundTaskStop),
@@ -402,6 +412,13 @@ impl OperationalEvent {
                     "Base Registry Engine serves with a separate runtime role (roleMode split)",
                 error: None,
                 code: Some("startup.role_mode.split"),
+            },
+            Self::ClientsUnrestricted => OperationalLogRecord {
+                level: OperationalLogLevel::Info,
+                target: "registry_breg::startup",
+                message: "authentication.oidc.allowedClients is unrestricted: a token from any client is accepted",
+                error: None,
+                code: Some("startup.authentication.clients_unrestricted"),
             },
             Self::WebhookWorkerIterationFailed => OperationalLogRecord {
                 level: OperationalLogLevel::Warn,
@@ -490,8 +507,8 @@ impl OperationalEvent {
             Self::StartupBegan | Self::Listening => {
                 tracing::info!(target: "registry_breg::startup", message = record.message);
             }
-            Self::RoleMode(_) => {
-                let code = record.code.expect("role mode records have a code");
+            Self::RoleMode(_) | Self::ClientsUnrestricted => {
+                let code = record.code.expect("startup notes have a code");
                 tracing::info!(target: "registry_breg::startup", code, message = record.message);
             }
             Self::Stopped => {
@@ -564,6 +581,9 @@ impl StartupError {
     const fn operational_message(&self) -> &'static str {
         match self {
             Self::RuntimeConfig(_) => "the Registry runtime configuration was refused",
+            Self::PackageRefused(PackageError::RetiredApiVersion) => {
+                "the Registry package carries the retired apiVersion registry.registrystack.org/package/v2; rebuild it with this release's `bregctl package`, naming the deployed package with --baseline-package, then run `bregctl plan --package DIR` and `bregctl apply --package DIR`"
+            }
             Self::PackageRefused(_) => "the Registry package was refused",
             Self::PackageEnvelopeRefused(_) => "the Registry package was refused",
             Self::DatabaseConnection => "the Registry database connection was refused",
@@ -600,6 +620,9 @@ impl StartupError {
             Self::Cursor => "the Registry cursor profile was refused",
             Self::Oidc => "the Registry OIDC key source was refused",
             Self::Authentication => "the Registry authentication profile was refused",
+            Self::AuthenticationClientsUnlisted => {
+                "the project names clients that authentication.oidc.allowedClients does not list; list each client named in requesterClients, trusted actors, or consent recipients there"
+            }
             Self::AttachmentStorage => {
                 "the Registry attachment storage or verification binding was refused"
             }
@@ -796,6 +819,13 @@ impl PreparedServer {
 /// database connection, OIDC discovery, audit profile, or listener bind.
 pub async fn prepare(config_path: &Path) -> Result<PreparedServer> {
     let config = load_runtime_config(config_path).map_err(map_runtime_config_error)?;
+    prepare_loaded(config).await
+}
+
+/// Production startup over a runtime configuration the caller has already
+/// loaded, so the caller can report a refused file in full before startup
+/// begins. Everything after the load is [`prepare`].
+pub async fn prepare_loaded(config: RuntimeConfig) -> Result<PreparedServer> {
     let shared = config
         .verify_package_envelope()
         .map_err(|error| StartupError::PackageEnvelopeRefused(error.to_string()))?;
@@ -1304,7 +1334,12 @@ async fn finish_prepared_server(
             Arc::clone(&key_source),
             config.authentication().authority_claim_config(),
         )
-        .map_err(|_| StartupError::Authentication)?,
+        .map_err(|error| match error {
+            AuthenticationConfigError::NamedClientNotListed => {
+                StartupError::AuthenticationClientsUnlisted
+            }
+            _ => StartupError::Authentication,
+        })?,
     );
     let expected = startup.expected_identity().clone();
     let expected_catalog = startup.expected_catalog().clone();
@@ -1696,7 +1731,9 @@ async fn verify_attachment_storage(
         .map_err(|_| StartupError::AttachmentStorage)
 }
 
-fn map_runtime_config_error(error: RuntimeConfigError) -> StartupError {
+/// The startup refusal class a runtime configuration refusal reports under in
+/// the operational log.
+pub fn map_runtime_config_error(error: RuntimeConfigError) -> StartupError {
     match error {
         RuntimeConfigError::InvalidDatabase | RuntimeConfigError::Secret => {
             StartupError::DatabaseConnection
@@ -1777,13 +1814,6 @@ async fn request_timeout(
     };
     let status = crate::correlation::status_class(response.status());
     let elapsed = started.elapsed();
-    // A refusal of a caller with no principal is counted here instead of
-    // being appended to the audit journal; the refusal site marks the
-    // response and this boundary already holds the matched route template.
-    let anonymous_refusal = response
-        .extensions()
-        .get::<metrics::AnonymousRefusal>()
-        .copied();
     let response = if owns_boundary {
         crate::correlation::finish_response(response, &correlation, method, started)
     } else {
@@ -1791,9 +1821,6 @@ async fn request_timeout(
     };
     if let Some(metrics) = &telemetry.metrics {
         metrics.record_http(&route, method, status, elapsed);
-        if let Some(refusal) = anonymous_refusal {
-            metrics.record_anonymous_refusal(&route, method, refusal.reason);
-        }
     }
     response
 }

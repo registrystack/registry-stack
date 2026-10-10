@@ -15,7 +15,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use serde::{Deserialize, Serialize};
+use registry_platform_yaml::{shape_union, ExternalId, Identified, Invalid, LocalId, UniqueList};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value};
 use thiserror::Error;
 
@@ -27,6 +28,7 @@ use crate::visibility::CallerIdentity;
 // Not `registry_platform_oidc::ActorKind`: that crate links reqwest and tokio,
 // which this I/O-free core and the client built on it must not carry.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "lowercase")]
 pub enum ActorKind {
     Human,
@@ -48,6 +50,7 @@ impl ActorKind {
 /// What a profile is for. A sender submits and reads its own messages; an
 /// operator reads and acts on every message but submits none.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "kebab-case")]
 pub enum AccessRole {
     Sender,
@@ -55,45 +58,220 @@ pub enum AccessRole {
 }
 
 /// One declared caller profile.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AccessProfile {
+    #[serde(deserialize_with = "crate::typed::local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
     /// `sub`, or the name of another string claim identifying the principal.
+    #[serde(deserialize_with = "crate::typed::external_id")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::ExternalId")
+    )]
     pub principal_claim: String,
-    #[serde(default)]
+    /// The scopes a token must carry: `unrestricted`, or a list of at least
+    /// one scope. Held as the listed scopes, so `unrestricted` is the empty
+    /// list.
+    #[serde(deserialize_with = "required_scopes")]
+    #[cfg_attr(feature = "schema", schemars(with = "RequiredScopes"))]
     pub required_scopes: Vec<String>,
-    /// The OAuth clients whose tokens resolve to this profile.
+    /// The OAuth clients whose tokens resolve to this profile, at least one.
+    #[serde(deserialize_with = "requester_clients")]
+    #[cfg_attr(feature = "schema", schemars(with = "ListedNames"))]
     pub requester_clients: Vec<String>,
     /// The actor kind the token must claim. Absent means any kind.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub actor_kind: Option<ActorKind>,
     pub role: AccessRole,
-    #[serde(default)]
+    /// The sender profiles a sender may select; an operator lists none.
+    #[serde(default, deserialize_with = "crate::typed::local_ids")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::UniqueList<registry_platform_yaml::LocalId>")
+    )]
     pub sender_profiles: Vec<String>,
-    #[serde(default)]
+    /// The templates a sender may use, by id, every declared version; an
+    /// operator lists none.
+    #[serde(default, deserialize_with = "crate::typed::local_ids")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::UniqueList<registry_platform_yaml::LocalId>")
+    )]
     pub templates: Vec<String>,
     #[serde(default)]
     pub allow_direct_content: bool,
+    #[serde(deserialize_with = "crate::typed::bounded_u32::<_, 1, MAXIMUM_REQUESTS_PER_MINUTE>")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(range(min = 1, max = MAXIMUM_REQUESTS_PER_MINUTE))
+    )]
     pub requests_per_minute: u32,
+    #[serde(deserialize_with = "crate::typed::bounded_u32::<_, 1, MAXIMUM_BURST>")]
+    #[cfg_attr(feature = "schema", schemars(range(min = 1, max = MAXIMUM_BURST)))]
     pub burst: u32,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub daily_limit: Option<u32>,
+    /// The most messages the profile may submit in any 24 hours. Absent
+    /// means no daily bound beyond the rate.
+    #[serde(
+        default,
+        deserialize_with = "crate::typed::optional_bounded_u32::<_, 1, MAXIMUM_MESSAGES_PER_DAY>"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(range(min = 1, max = MAXIMUM_MESSAGES_PER_DAY))
+    )]
+    pub maximum_messages_per_day: Option<u32>,
+}
+
+impl Identified for AccessProfile {
+    fn id(&self) -> &str {
+        &self.id
+    }
+}
+
+impl AccessProfile {
+    /// Whether a sender profile names no sender profile or no template, so
+    /// it could submit nothing.
+    #[must_use]
+    pub fn sends_nothing(&self) -> bool {
+        self.sender_profiles.is_empty() || self.templates.is_empty()
+    }
+
+    /// Whether the profile declares anything only a sender may hold.
+    #[must_use]
+    pub fn declares_sending_permissions(&self) -> bool {
+        !self.sender_profiles.is_empty() || !self.templates.is_empty() || self.allow_direct_content
+    }
+}
+
+/// The most requests per minute one profile may declare.
+pub const MAXIMUM_REQUESTS_PER_MINUTE: u32 = 60_000;
+
+/// The largest burst one profile may declare.
+pub const MAXIMUM_BURST: u32 = 10_000;
+
+/// The most messages per day one profile may declare.
+pub const MAXIMUM_MESSAGES_PER_DAY: u32 = 10_000_000;
+
+const SCOPES_EXPECTED: &str = "unrestricted, or a list of at least one scope";
+const SCOPES_ACTION: &str =
+    "List the scopes a token must carry, or write unrestricted to require none.";
+
+/// The keyword `unrestricted`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct UnrestrictedKeyword;
+
+impl<'de> Deserialize<'de> for UnrestrictedKeyword {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        if String::deserialize(deserializer)? == "unrestricted" {
+            Ok(Self)
+        } else {
+            Err(Invalid::expected(SCOPES_EXPECTED, SCOPES_ACTION).into_error())
+        }
+    }
+}
+
+#[cfg(feature = "schema")]
+impl schemars::JsonSchema for UnrestrictedKeyword {
+    fn inline_schema() -> bool {
+        true
+    }
+
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "UnrestrictedKeyword".into()
+    }
+
+    fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "description": "Require no scope.",
+            "type": "string",
+            "const": "unrestricted",
+        })
+    }
+}
+
+/// A list of at least one distinct name.
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ListedNames(Vec<String>);
+
+impl ListedNames {
+    fn read<'de, D: Deserializer<'de>>(
+        deserializer: D,
+        expected: &'static str,
+        action: &'static str,
+    ) -> Result<Self, D::Error> {
+        let items = UniqueList::<ExternalId>::deserialize(deserializer)?.into_vec();
+        if items.is_empty() {
+            return Err(Invalid::expected(expected, action).into_error());
+        }
+        Ok(Self(
+            items.into_iter().map(ExternalId::into_string).collect(),
+        ))
+    }
+}
+
+impl<'de> Deserialize<'de> for ListedNames {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Self::read(deserializer, SCOPES_EXPECTED, SCOPES_ACTION)
+    }
+}
+
+#[cfg(feature = "schema")]
+impl schemars::JsonSchema for ListedNames {
+    fn inline_schema() -> bool {
+        true
+    }
+
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "ListedNames".into()
+    }
+
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        let mut schema = generator.subschema_for::<UniqueList<ExternalId>>();
+        schema.insert("minItems".to_owned(), 1.into());
+        schema
+    }
+}
+
+/// The scopes a token must carry: the keyword `unrestricted`, or a list of
+/// at least one scope. An empty list is refused, because it reads as both
+/// "none" and "any" (CFG-EMPTY-2).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", schemars(untagged))]
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum RequiredScopes {
+    Unrestricted(UnrestrictedKeyword),
+    Listed(ListedNames),
+}
+
+shape_union!(RequiredScopes { scalar => Unrestricted, list => Listed });
+
+fn required_scopes<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<String>, D::Error> {
+    Ok(match RequiredScopes::deserialize(deserializer)? {
+        RequiredScopes::Unrestricted(_) => Vec::new(),
+        RequiredScopes::Listed(ListedNames(scopes)) => scopes,
+    })
+}
+
+fn requester_clients<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<String>, D::Error> {
+    ListedNames::read(
+        deserializer,
+        "a list of at least one OAuth client",
+        "List the OAuth clients whose tokens resolve to this profile.",
+    )
+    .map(|ListedNames(clients)| clients)
 }
 
 /// The longest profile identifier accepted.
 pub const MAXIMUM_PROFILE_IDENTIFIER_BYTES: usize = 64;
 
-/// Whether `value` is a lowercase kebab identifier of bounded length.
+/// Whether `value` is a local identifier: a lowercase letter, then up to 63
+/// lowercase letters, digits, underscores, or hyphens.
 #[must_use]
 pub fn valid_identifier(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= MAXIMUM_PROFILE_IDENTIFIER_BYTES
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
-        && !value.starts_with('-')
-        && !value.ends_with('-')
+    LocalId::new(value).is_ok()
 }
 
 /// Why a set of access profiles cannot be used. Profile identifiers and
@@ -102,7 +280,7 @@ pub fn valid_identifier(value: &str) -> bool {
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
 pub enum AccessProfileError {
     #[error(
-        "access profile identifier `{0}` is not a lowercase kebab identifier of at most 64 bytes"
+        "access profile identifier `{0}` is not a lowercase letter followed by at most 63 lowercase letters, digits, underscores, or hyphens"
     )]
     InvalidIdentifier(String),
     #[error("access profile `{0}` is declared more than once")]
@@ -252,21 +430,18 @@ fn check_profile(profile: &AccessProfile) -> Result<(), AccessProfileError> {
         return Err(AccessProfileError::EmptyEntry(id()));
     }
     match profile.role {
-        AccessRole::Sender => {
-            if profile.sender_profiles.is_empty() || profile.templates.is_empty() {
-                return Err(AccessProfileError::SenderWithoutTargets(id()));
-            }
+        AccessRole::Sender if profile.sends_nothing() => {
+            return Err(AccessProfileError::SenderWithoutTargets(id()));
         }
-        AccessRole::Operator => {
-            if !profile.sender_profiles.is_empty()
-                || !profile.templates.is_empty()
-                || profile.allow_direct_content
-            {
-                return Err(AccessProfileError::OperatorWithSendingPermissions(id()));
-            }
+        AccessRole::Operator if profile.declares_sending_permissions() => {
+            return Err(AccessProfileError::OperatorWithSendingPermissions(id()));
         }
+        _ => {}
     }
-    if profile.requests_per_minute == 0 || profile.burst == 0 || profile.daily_limit == Some(0) {
+    if profile.requests_per_minute == 0
+        || profile.burst == 0
+        || profile.maximum_messages_per_day == Some(0)
+    {
         return Err(AccessProfileError::ZeroLimit(id()));
     }
     Ok(())
@@ -425,7 +600,7 @@ mod tests {
             allow_direct_content: false,
             requests_per_minute: 60,
             burst: 10,
-            daily_limit: None,
+            maximum_messages_per_day: None,
         }
     }
 
@@ -673,7 +848,7 @@ mod tests {
             ),
             (
                 AccessProfile {
-                    daily_limit: Some(0),
+                    maximum_messages_per_day: Some(0),
                     ..sender("p", "c")
                 },
                 AccessProfileError::ZeroLimit("p".to_owned()),
@@ -688,31 +863,117 @@ mod tests {
         );
     }
 
-    #[test]
-    fn a_profile_document_refuses_unknown_keys() {
-        let error = serde_json::from_value::<AccessProfile>(json!({
+    const PROFILE_FORMAT: registry_platform_yaml::FormatSpec<'static> =
+        registry_platform_yaml::FormatSpec {
+            kind: "AccessProfile",
+            envelope: registry_platform_yaml::EnvelopeRule::Exempt { reason: "test" },
+            removed_keys: &[],
+        };
+
+    fn read(value: serde_json::Value) -> Result<AccessProfile, Vec<(String, String)>> {
+        let bytes = serde_json::to_vec(&value).unwrap();
+        let document = registry_platform_yaml::read_document(
+            "messaging.yaml",
+            &bytes,
+            &registry_platform_yaml::Expect::one(&PROFILE_FORMAT),
+        )
+        .unwrap();
+        document.decode::<AccessProfile>().map_err(|report| {
+            report
+                .diagnostics()
+                .iter()
+                .map(|diagnostic| (diagnostic.code.clone(), diagnostic.path.clone()))
+                .collect()
+        })
+    }
+
+    fn document(extra: serde_json::Value) -> serde_json::Value {
+        let mut value = json!({
             "id": "p",
             "principalClaim": "sub",
+            "requiredScopes": ["messaging:send"],
             "requesterClients": ["c"],
             "role": "sender",
-            "requestsPerMinute": 1,
-            "burst": 1,
-            "endpoint": "https://elsewhere.test"
-        }))
-        .unwrap_err();
-        assert!(error.to_string().contains("unknown field"), "{error}");
-        let parsed: AccessProfile = serde_json::from_value(json!({
-            "id": "p",
-            "principalClaim": "sub",
-            "requesterClients": ["c"],
-            "actorKind": "agent",
-            "role": "operator",
+            "senderProfiles": ["transactional"],
+            "templates": ["appointment-reminder"],
             "requestsPerMinute": 1,
             "burst": 1
-        }))
+        });
+        for (key, member) in extra.as_object().unwrap() {
+            if member.is_null() {
+                value.as_object_mut().unwrap().remove(key);
+            } else {
+                value[key] = member.clone();
+            }
+        }
+        value
+    }
+
+    #[test]
+    fn a_profile_document_refuses_unknown_keys() {
+        assert_eq!(
+            read(document(json!({"endpoint": "https://elsewhere.test"}))).unwrap_err(),
+            vec![("config.unknown-key".to_owned(), "/endpoint".to_owned())]
+        );
+        let parsed = read(document(json!({
+            "actorKind": "agent",
+            "role": "operator",
+            "senderProfiles": null,
+            "templates": null
+        })))
         .unwrap();
         assert_eq!(parsed.actor_kind, Some(ActorKind::Agent));
         assert_eq!(parsed.role, AccessRole::Operator);
+    }
+
+    /// An explicit `actorKind: null` is refused, not read as the omitted
+    /// member: omit the member to accept any actor kind.
+    #[test]
+    fn a_null_actor_kind_is_refused() {
+        let mut value = document(json!({}));
+        value["actorKind"] = json!(null);
+        assert_eq!(
+            read(value).unwrap_err(),
+            vec![("config.null-value".to_owned(), "/actorKind".to_owned())]
+        );
+    }
+
+    #[test]
+    fn required_scopes_are_unrestricted_or_listed_never_empty() {
+        let parsed = read(document(json!({"requiredScopes": "unrestricted"}))).unwrap();
+        assert!(parsed.required_scopes.is_empty());
+        let parsed = read(document(json!({"requiredScopes": ["a", "b"]}))).unwrap();
+        assert_eq!(parsed.required_scopes, ["a", "b"]);
+        for scopes in [json!([]), json!("any"), json!(null)] {
+            let refused = read(document(json!({"requiredScopes": scopes.clone()}))).unwrap_err();
+            assert_eq!(refused.len(), 1, "{scopes}");
+        }
+        let refused = read(document(json!({"requiredScopes": ["a", "a"]}))).unwrap_err();
+        assert_eq!(refused[0].0, "config.duplicate-item");
+        let refused = read(document(json!({"requesterClients": []}))).unwrap_err();
+        assert_eq!(refused[0].1, "/requesterClients");
+    }
+
+    #[test]
+    fn profile_members_are_typed_and_bounded() {
+        for (member, value) in [
+            ("id", json!("Upper")),
+            ("principalClaim", json!("")),
+            ("senderProfiles", json!(["Transactional"])),
+            ("requestsPerMinute", json!(0)),
+            ("requestsPerMinute", json!(MAXIMUM_REQUESTS_PER_MINUTE + 1)),
+            ("burst", json!(MAXIMUM_BURST + 1)),
+            ("maximumMessagesPerDay", json!(0)),
+            ("maximumMessagesPerDay", json!(MAXIMUM_MESSAGES_PER_DAY + 1)),
+        ] {
+            let refused = read(document(json!({member: value.clone()}))).unwrap_err();
+            assert!(
+                refused[0].1.starts_with(&format!("/{member}")),
+                "{member} {value}: {refused:?}"
+            );
+        }
+        let parsed = read(document(json!({"maximumMessagesPerDay": 100}))).unwrap();
+        assert_eq!(parsed.maximum_messages_per_day, Some(100));
     }
 
     fn caller(profile: AccessProfile) -> Caller {

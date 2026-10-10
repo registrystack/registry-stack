@@ -1,0 +1,13 @@
+id: integer-member-out-of-range
+rules: [CFG-VAL-1, CFG-QTY-4]
+summary: An integer past every member's bound is refused with config.out-of-range at the value.
+mutation:
+  member:
+    role: integer
+    value: "18446744073709551616"
+expect:
+  exit: 1
+  diagnostics:
+    - code: config.out-of-range
+      path: "{pointer}"
+      at: {line: 1, column: 1}

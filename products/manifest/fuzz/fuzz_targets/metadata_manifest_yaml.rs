@@ -1,42 +1,24 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use registry_manifest_cli::{reject_yaml_anchors_and_aliases, YAML_MAX_BYTES};
+use registry_manifest_cli::{manifest_digest, read_metadata};
 use registry_manifest_core::{
     canonicalize_json, compile_manifest, render_base_dcat, render_breg_dcat_ap, render_catalog,
     render_cpsv_ap, render_dataset_policy_document, render_dcat_profile,
     render_entity_schema_draft_2020_12, render_entity_shacl, render_evidence_offering,
     render_evidence_offerings, render_form_schema_draft_2020_12, render_ogc_records_item,
-    render_ogc_records_items, render_policy_collection, render_shacl, source_manifest_digest,
-    validate_manifest, CompiledMetadata, MetadataManifest,
+    render_ogc_records_items, render_policy_collection, render_shacl, CompiledMetadata,
 };
 use serde_json::Value;
 
 fuzz_target!(|data: &[u8]| {
-    if data.len() as u64 > YAML_MAX_BYTES {
-        return;
-    }
-
-    let Ok(input) = std::str::from_utf8(data) else {
+    let Ok(read) = read_metadata("fuzz.yaml", data) else {
         return;
     };
 
-    if reject_yaml_anchors_and_aliases(input).is_err() {
-        return;
-    }
+    let _ = manifest_digest(&read);
 
-    let _ = serde_yaml_ng::from_str::<serde_yaml_ng::Value>(input);
-
-    let Ok(manifest) = serde_yaml_ng::from_str::<MetadataManifest>(input) else {
-        return;
-    };
-
-    let _ = source_manifest_digest(&manifest);
-    if validate_manifest(&manifest).is_err() {
-        return;
-    }
-
-    let Ok(compiled) = compile_manifest(&manifest) else {
+    let Ok(compiled) = compile_manifest(&read.manifest) else {
         return;
     };
     exercise_renderers(&compiled);

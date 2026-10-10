@@ -610,7 +610,6 @@ impl SnapshotReadPlan {
             || route.query_kind != Some(CompiledQueryKind::Snapshot)
             || request.plan.kind != CompiledQueryKind::Snapshot
             || request.plan.route_id != route.id
-            || profile.anonymous
             || !profile.operations.contains(&Operation::Snapshot)
             || !route
                 .access_profiles

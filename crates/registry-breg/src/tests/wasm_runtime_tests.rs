@@ -152,7 +152,7 @@ fn wasm_person_action(module_bytes: &[u8]) -> CompiledAction {
         ],"handler":{"kind":"wasm","module":"handlers/guest.wasm","abi":"registry.action-handler/v1","refusals":[{"code":"blank-name","label":"A name is required."}],"writes":[
             {"id":"person","target":{"entity":"person"},"operation":"create","fields":["name","friend"]}
         ]}}],
-        "accessProfiles":[{"id":"registrar","default":true,"principalClaim":"principal","permissions":[{"action":"register-person","operations":["invoke"],"targets":[{"entity":"person","rowBoundaries":[]}],"results":["person"]}]}]
+        "accessProfiles":[{"id":"registrar","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{"action":"register-person","operations":["invoke"],"targets":[{"entity":"person","rowBoundaries":"unrestricted"}],"results":["person"]}]}]
     });
     let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
     compile_project_with_assets(
@@ -512,7 +512,7 @@ fn engine_setup_failure_is_an_execution_fault_on_every_path() {
     assert_eq!(invoked.kind, ActionHandlerError::Execution);
     assert_eq!(invoked.message, prepared.message);
     let (code, message) = crate::wasm_handler::admission_violation(setup);
-    assert_eq!(code, "action.handler.execution");
+    assert_eq!(code, "breg.action.handler-execution");
     assert!(
         message.starts_with("this build cannot validate WASM handler modules"),
         "the admission diagnostic stays a build-fault message: {message}"

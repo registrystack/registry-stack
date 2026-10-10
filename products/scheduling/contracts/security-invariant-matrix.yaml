@@ -379,16 +379,17 @@ invariants:
     threat: >-
       A deployment that names no clients admits every client the issuer
       verifies, so any application in the issuer's realm reaches the
-      scheduling edge with a token the issuer minted for something else.
+      scheduling edge with a token the issuer minted for something else, and
+      a development file copied toward production keeps doing so.
     enforcementPoint: >-
       Configuration validation at startup, which requires a named client list
-      for any listener that is not loopback.
+      in every mode, development loopback included.
     refusal: >-
       Refuse to start rather than serve a deployment that admits an unnamed
       client.
     negativeTest:
       path: crates/registry-scheduling/src/config.rs
-      name: a_production_deployment_must_name_the_clients_it_admits
+      name: every_deployment_must_name_the_clients_it_admits
   - id: SCHEDULING-SEC-22
     state: enforced
     threat: >-
@@ -766,7 +767,7 @@ deferred:
       (SCHEDULING-SEC-33); nothing else in the database is swept, so a hold
       or appointment keeps its owner's verified issuer and subject for as
       long as it exists (SCHEDULING-SEC-34). Rotated audit files are removed
-      after audit.retainDays.
+      after audit.retentionDays.
     compensatingControl: >-
       The configuration reference says so explicitly rather than implying a
       sweep that does not run.

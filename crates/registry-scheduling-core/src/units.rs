@@ -11,10 +11,12 @@
 use serde::{Deserialize, Serialize};
 
 use crate::diagnostics::{PolicyCheckReason, SchedulingDiagnostic};
+use crate::typed::MAXIMUM_UNITS;
 
 /// The closed input set a banded table may read. Tier 1 reads exactly one.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "kebab-case")]
 pub enum BandedInput {
     ServiceRecipientCount,
 }
@@ -22,41 +24,161 @@ pub enum BandedInput {
 /// One band of a banded units table: parties up to `up_to` recipients cost
 /// `units`.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UnitBand {
+    #[serde(deserialize_with = "crate::typed::bounded_u32::<_, 1, MAXIMUM_UNITS>")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::BoundedU32<1, MAXIMUM_UNITS>")
+    )]
     pub up_to: u32,
+    #[serde(deserialize_with = "crate::typed::bounded_u32::<_, 1, MAXIMUM_UNITS>")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::BoundedU32<1, MAXIMUM_UNITS>")
+    )]
     pub units: u32,
     pub because: String,
 }
 
-/// What a party above the highest band costs, or that it is refused.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(tag = "policy", rename_all = "camelCase", deny_unknown_fields)]
-pub enum AboveHighestBand {
-    Refuse,
-    Units { units: u32 },
-}
-
-/// How an offering converts a party into consumed recipient units.
-#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+/// What a party above the highest band costs, or that it is refused, chosen
+/// by its `type` member.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(
-    tag = "kind",
-    rename_all = "camelCase",
+    remote = "Self",
+    rename_all = "kebab-case",
     rename_all_fields = "camelCase",
     deny_unknown_fields
 )]
+#[cfg_attr(feature = "schema", schemars(!remote, tag = "type"))]
+pub enum AboveHighestBand {
+    Refuse {},
+    Units {
+        #[serde(deserialize_with = "crate::typed::bounded_u32::<_, 1, MAXIMUM_UNITS>")]
+        #[cfg_attr(
+            feature = "schema",
+            schemars(with = "registry_platform_yaml::BoundedU32<1, MAXIMUM_UNITS>")
+        )]
+        units: u32,
+    },
+}
+registry_platform_yaml::tagged_union!(AboveHighestBand);
+
+/// The serialized form of [`AboveHighestBand`].
+#[derive(Serialize)]
+#[serde(tag = "type", rename_all = "kebab-case")]
+enum AboveHighestBandWire {
+    Refuse {},
+    Units { units: u32 },
+}
+
+impl Serialize for AboveHighestBand {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match *self {
+            Self::Refuse {} => AboveHighestBandWire::Refuse {},
+            Self::Units { units } => AboveHighestBandWire::Units { units },
+        }
+        .serialize(serializer)
+    }
+}
+
+/// How an offering converts a party into consumed recipient units, chosen by
+/// its `type` member.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(
+    remote = "Self",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+#[cfg_attr(feature = "schema", schemars(!remote, tag = "type"))]
 pub enum RequiredUnitsPolicy {
     /// Every party costs the same fixed units.
-    Fixed { units: u32, because: String },
+    Fixed {
+        #[serde(deserialize_with = "crate::typed::bounded_u32::<_, 1, MAXIMUM_UNITS>")]
+        #[cfg_attr(
+            feature = "schema",
+            schemars(with = "registry_platform_yaml::BoundedU32<1, MAXIMUM_UNITS>")
+        )]
+        units: u32,
+        because: String,
+    },
     /// A party costs its recipient count times `per_recipient`.
-    PerRecipient { per_recipient: u32, because: String },
+    PerRecipient {
+        #[serde(deserialize_with = "crate::typed::bounded_u32::<_, 1, MAXIMUM_UNITS>")]
+        #[cfg_attr(
+            feature = "schema",
+            schemars(with = "registry_platform_yaml::BoundedU32<1, MAXIMUM_UNITS>")
+        )]
+        per_recipient: u32,
+        because: String,
+    },
     /// A party costs whatever band its recipient count falls in.
     BandedTable {
         input: BandedInput,
+        #[cfg_attr(feature = "schema", schemars(length(min = 1)))]
         bands: Vec<UnitBand>,
         above_highest_band: AboveHighestBand,
         because: String,
     },
+}
+registry_platform_yaml::tagged_union!(RequiredUnitsPolicy);
+
+/// The serialized form of [`RequiredUnitsPolicy`].
+#[derive(Serialize)]
+#[serde(
+    tag = "type",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase"
+)]
+enum RequiredUnitsPolicyWire<'a> {
+    Fixed {
+        units: u32,
+        because: &'a str,
+    },
+    PerRecipient {
+        per_recipient: u32,
+        because: &'a str,
+    },
+    BandedTable {
+        input: BandedInput,
+        bands: &'a [UnitBand],
+        above_highest_band: AboveHighestBand,
+        because: &'a str,
+    },
+}
+
+impl Serialize for RequiredUnitsPolicy {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Fixed { units, because } => RequiredUnitsPolicyWire::Fixed {
+                units: *units,
+                because,
+            },
+            Self::PerRecipient {
+                per_recipient,
+                because,
+            } => RequiredUnitsPolicyWire::PerRecipient {
+                per_recipient: *per_recipient,
+                because,
+            },
+            Self::BandedTable {
+                input,
+                bands,
+                above_highest_band,
+                because,
+            } => RequiredUnitsPolicyWire::BandedTable {
+                input: *input,
+                bands,
+                above_highest_band: *above_highest_band,
+                because,
+            },
+        }
+        .serialize(serializer)
+    }
 }
 
 /// A units table refused a party instead of guessing a cost.
@@ -88,7 +210,7 @@ impl RequiredUnitsPolicy {
                     (Some(band), _) => Ok(band.units),
                     // Above the highest band the table does what it declares:
                     // refuse, or cost the declared units. Never a guess.
-                    (None, AboveHighestBand::Refuse) => {
+                    (None, AboveHighestBand::Refuse {}) => {
                         Err(UnitsEvaluationError::RefusedAboveHighestBand)
                     }
                     (None, AboveHighestBand::Units { units }) => Ok(*units),
@@ -106,11 +228,11 @@ impl RequiredUnitsPolicy {
             Self::Fixed { units, because } => {
                 if *units == 0 {
                     findings.push(SchedulingDiagnostic::new(
-                        format!("{path}.units"),
+                        format!("{path}/units"),
                         PolicyCheckReason::InvalidBound,
                     ));
                 }
-                check_because(because, &format!("{path}.because"), &mut findings);
+                check_because(because, &format!("{path}/because"), &mut findings);
             }
             Self::PerRecipient {
                 per_recipient,
@@ -118,11 +240,11 @@ impl RequiredUnitsPolicy {
             } => {
                 if *per_recipient == 0 {
                     findings.push(SchedulingDiagnostic::new(
-                        format!("{path}.perRecipient"),
+                        format!("{path}/perRecipient"),
                         PolicyCheckReason::InvalidBound,
                     ));
                 }
-                check_because(because, &format!("{path}.because"), &mut findings);
+                check_because(because, &format!("{path}/because"), &mut findings);
             }
             Self::BandedTable {
                 input: _,
@@ -132,13 +254,13 @@ impl RequiredUnitsPolicy {
             } => {
                 if bands.is_empty() {
                     findings.push(SchedulingDiagnostic::new(
-                        format!("{path}.bands"),
+                        format!("{path}/bands"),
                         PolicyCheckReason::InvalidBands,
                     ));
                 }
                 let mut highest = 0;
                 for (index, band) in bands.iter().enumerate() {
-                    let band_path = format!("{path}.bands[{index}]");
+                    let band_path = format!("{path}/bands/{index}");
                     if band.up_to <= highest || band.units == 0 {
                         findings.push(SchedulingDiagnostic::new(
                             band_path.clone(),
@@ -148,19 +270,19 @@ impl RequiredUnitsPolicy {
                     highest = highest.max(band.up_to);
                     check_because(
                         &band.because,
-                        &format!("{band_path}.because"),
+                        &format!("{band_path}/because"),
                         &mut findings,
                     );
                 }
                 if let AboveHighestBand::Units { units } = above_highest_band {
                     if *units == 0 {
                         findings.push(SchedulingDiagnostic::new(
-                            format!("{path}.aboveHighestBand.units"),
+                            format!("{path}/aboveHighestBand/units"),
                             PolicyCheckReason::InvalidBound,
                         ));
                     }
                 }
-                check_because(because, &format!("{path}.because"), &mut findings);
+                check_because(because, &format!("{path}/because"), &mut findings);
             }
         }
         findings
@@ -200,7 +322,7 @@ mod tests {
                     because: "A household of up to four shares one officers' block.".to_owned(),
                 },
             ],
-            above_highest_band: AboveHighestBand::Refuse,
+            above_highest_band: AboveHighestBand::Refuse {},
             because: "Household sizing reviewed by the registry office in 2026.".to_owned(),
         }
     }
@@ -256,13 +378,13 @@ mod tests {
 
     #[test]
     fn well_formed_policies_carry_no_findings() {
-        assert!(banded().check("windows[0].unitsPolicy").is_empty());
+        assert!(banded().check("/windows/0/unitsPolicy").is_empty());
 
         let per_recipient = RequiredUnitsPolicy::PerRecipient {
             per_recipient: 1,
             because: "Each recipient consumes one serving slot.".to_owned(),
         };
-        assert!(per_recipient.check("windows[0].unitsPolicy").is_empty());
+        assert!(per_recipient.check("/windows/0/unitsPolicy").is_empty());
     }
 
     #[test]
@@ -284,17 +406,19 @@ mod tests {
             above_highest_band: AboveHighestBand::Units { units: 0 },
             because: String::new(),
         };
-        let findings = broken.check("windows[0].unitsPolicy");
+        let findings = broken.check("/windows/0/unitsPolicy");
         let rendered: Vec<String> = findings.iter().map(|finding| finding.to_string()).collect();
         // Band 0 declares four first, so band 1 fails both the non-rising and
         // the zero-units rule; its blank because is named separately.
         assert_eq!(
             rendered,
             vec![
-                "windows[0].unitsPolicy.bands[1]: invalid-bands".to_owned(),
-                "windows[0].unitsPolicy.bands[1].because: invalid-because".to_owned(),
-                "windows[0].unitsPolicy.aboveHighestBand.units: invalid-bound".to_owned(),
-                "windows[0].unitsPolicy.because: invalid-because".to_owned(),
+                "/windows/0/unitsPolicy/bands/1: scheduling.project.invalid-bands".to_owned(),
+                "/windows/0/unitsPolicy/bands/1/because: scheduling.project.invalid-because"
+                    .to_owned(),
+                "/windows/0/unitsPolicy/aboveHighestBand/units: scheduling.project.invalid-bound"
+                    .to_owned(),
+                "/windows/0/unitsPolicy/because: scheduling.project.invalid-because".to_owned(),
             ]
         );
     }
@@ -305,16 +429,16 @@ mod tests {
             units: 1,
             because: "x".repeat(MAXIMUM_BECAUSE_BYTES),
         };
-        assert!(at_bound.check("p").is_empty());
+        assert!(at_bound.check("/p").is_empty());
 
         let over_bound = RequiredUnitsPolicy::Fixed {
             units: 1,
             because: "x".repeat(MAXIMUM_BECAUSE_BYTES + 1),
         };
         assert_eq!(
-            over_bound.check("p"),
+            over_bound.check("/p"),
             vec![SchedulingDiagnostic::new(
-                "p.because",
+                "/p/because",
                 PolicyCheckReason::InvalidBecause
             )]
         );
@@ -322,29 +446,59 @@ mod tests {
 
     #[test]
     fn the_units_grammar_is_closed() {
-        // Tier 1 reads exactly one input, spelled one way.
-        assert!(serde_norway::from_str::<BandedInput>("serviceRecipientCount").is_ok());
-        assert!(serde_norway::from_str::<BandedInput>("partyCount").is_err());
+        use crate::typed::decode_fragment;
 
-        let yaml = "kind: fixed\nunits: 1\nbecause: One appointment per party.\n";
-        assert!(serde_norway::from_str::<RequiredUnitsPolicy>(yaml).is_ok());
-        assert!(serde_norway::from_str::<RequiredUnitsPolicy>(
-            "kind: fixed\nunits: 1\nbecause: One appointment per party.\nmystery: true\n"
+        // Tier 1 reads exactly one input, spelled one way.
+        assert!(decode_fragment::<BandedInput>("service-recipient-count").is_ok());
+        assert!(decode_fragment::<BandedInput>("serviceRecipientCount").is_err());
+
+        let yaml = "type: fixed\nunits: 1\nbecause: One appointment per party.\n";
+        assert!(decode_fragment::<RequiredUnitsPolicy>(yaml).is_ok());
+        assert_eq!(
+            decode_fragment::<RequiredUnitsPolicy>(&format!("{yaml}mystery: true\n")),
+            Err(vec!["/mystery config.unknown-key".to_owned()])
+        );
+        // The old discriminator is not a second spelling.
+        assert!(decode_fragment::<RequiredUnitsPolicy>(
+            "kind: fixed\nunits: 1\nbecause: One appointment per party.\n"
         )
         .is_err());
+        // A zero cost is refused where it is written.
+        assert_eq!(
+            decode_fragment::<RequiredUnitsPolicy>(
+                "type: per-recipient\nperRecipient: 0\nbecause: Each recipient.\n"
+            ),
+            Err(vec!["/perRecipient config.out-of-range".to_owned()])
+        );
 
         // Above the highest band is declared, never defaulted: dropping the
-        // field is a deserialization failure, not a silent choice.
-        let banded_yaml = "kind: bandedTable\ninput: serviceRecipientCount\n\
+        // member is a refusal, not a silent choice.
+        let banded_yaml = "type: banded-table\ninput: service-recipient-count\n\
                            bands:\n  - upTo: 2\n    units: 1\n    because: A pair shares one block.\n";
-        assert!(serde_norway::from_str::<RequiredUnitsPolicy>(banded_yaml).is_err());
-        assert!(serde_norway::from_str::<RequiredUnitsPolicy>(&format!(
-            "{banded_yaml}aboveHighestBand:\n  policy: refuse\nbecause: Sizing reviewed.\n"
+        assert!(decode_fragment::<RequiredUnitsPolicy>(banded_yaml).is_err());
+        assert!(decode_fragment::<RequiredUnitsPolicy>(&format!(
+            "{banded_yaml}aboveHighestBand:\n  type: refuse\nbecause: Sizing reviewed.\n"
         ))
         .is_ok());
-        assert!(serde_norway::from_str::<RequiredUnitsPolicy>(&format!(
-            "{banded_yaml}aboveHighestBand:\n  policy: units\n  units: 3\nbecause: Sizing reviewed.\n"
+        let capped: RequiredUnitsPolicy = decode_fragment(&format!(
+            "{banded_yaml}aboveHighestBand:\n  type: units\n  units: 3\nbecause: Sizing reviewed.\n"
         ))
-        .is_ok());
+        .expect("a capped table reads");
+        assert_eq!(capped.evaluate(9), Ok(3));
+    }
+
+    #[test]
+    fn the_stored_form_reads_back_as_written() {
+        let table = banded();
+        let stored = serde_json::to_value(&table).expect("a table serializes");
+        assert_eq!(stored["type"], "banded-table");
+        assert_eq!(stored["input"], "service-recipient-count");
+        assert_eq!(
+            stored["aboveHighestBand"],
+            serde_json::json!({"type": "refuse"})
+        );
+        let read: RequiredUnitsPolicy =
+            serde_json::from_value(stored).expect("the stored form reads back");
+        assert_eq!(read, table);
     }
 }

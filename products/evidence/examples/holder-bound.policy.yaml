@@ -1,0 +1,26 @@
+# A minimal holder-bound verification policy, read by
+# `evidence verify-presentation --policy` and checked by
+# `evidence check-policy --holder-bound-policy holder-bound.policy.yaml`.
+# Every value comes from the relying party's own retained state, including the
+# key-binding challenge it issued, never the presentation being verified.
+subjectBinding: holder-bound
+expectedAssuranceProfile: evidence-grade
+issuedBy: https://evidence.example.org
+providedBy: https://registry.example.org
+requirement: https://registry.example.org/requirements/example/v1
+evidenceType: https://registry.example.org/evidence-types/example/v1
+expectedIssuancePurpose: example.review
+configurationRevision: sha256:0000000000000000000000000000000000000000000000000000000000000000
+expectedSubjects:
+  - role: subject
+    binding: urn:evidence:subject:v1_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+expectedOutputs:
+  - handle: example
+    concept: https://registry.example.org/concepts/example
+    required: true
+    form: boolean
+maximumAssertionLifetimeSeconds: 86400
+revokedKeyIds: []
+keyBindingAudience: https://relying-party.example.org
+keyBindingNonce: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+maximumKeyBindingAgeSeconds: 300

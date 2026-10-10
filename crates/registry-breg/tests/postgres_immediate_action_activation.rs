@@ -5,6 +5,8 @@
 #[path = "support/postgres_harness.rs"]
 #[allow(dead_code)]
 mod postgres_harness;
+#[path = "support/source_bytes.rs"]
+mod source_bytes;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
@@ -57,7 +59,8 @@ const DATABASE_ID: &str = "immediate-action-activation-database";
 const ENVIRONMENT: &str = "production";
 const SOURCE_REVISION: &str = "immediate-action-activation-source";
 const HOUSEHOLD_ID: &str = "00000000-0000-4000-8000-000000000100";
-const FIXTURE_JOURNEYS: &[u8] = br#"apiVersion: registry.registrystack.org/breg-journeys/v1
+const FIXTURE_JOURNEYS: &[u8] = br#"apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
 journeys: []
 "#;
 const ACTION_RESULTS_PRIMARY_KEY: &str = "registry_immediate_action_results_pkey";
@@ -948,7 +951,6 @@ fn metadata_only_source(
         postgres_major: 16,
         row_assertions: Vec::new(),
         final_schema_fingerprint: final_schema_fingerprint.to_owned(),
-        proofs: None,
     };
     ReviewedMigrationSource {
         module_id: "core".to_owned(),
@@ -1325,11 +1327,11 @@ const NEW_RECIPIENT: &str = "ngo-gamma";
 /// The consent enforcement fixture bound to this test's package identity,
 /// optionally with one more recipient organization.
 fn consent_project_bytes(with_new_recipient: bool) -> Vec<u8> {
-    let mut project = serde_json::to_value(
-        registry_breg::contract::parse_project_yaml(CONSENT_PROJECT.as_bytes())
+    let mut project: serde_json::Value = serde_json::from_slice(&source_bytes::source_bytes(
+        &registry_breg::contract::parse_project_yaml(CONSENT_PROJECT.as_bytes())
             .expect("consent fixture parses"),
-    )
-    .expect("consent fixture serializes");
+    ))
+    .expect("consent fixture source is JSON");
     project["registry"]["id"] = json!(PACKAGE_ID);
     project["package"] = json!({
         "sourceRevision": SOURCE_REVISION,

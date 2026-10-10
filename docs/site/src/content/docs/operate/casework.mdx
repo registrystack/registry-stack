@@ -357,6 +357,28 @@ before they become the anchor for verification.
     a_reconciled_source_stays_fresh_for_twice_its_reconciliation_interval;
     products/casework/README.md. */}
 
+### Check the runtime file offline
+
+`caseworkctl check` reads the runtime file as `casework serve` reads it, against the authored
+project, without the package, the database, the issuer, a source, or a secret:
+
+```bash
+caseworkctl check ./casework --runtime-config /etc/registry-casework/runtime.yaml
+```
+
+It reports every problem in the project and the runtime file together, each at its line and
+column, in the form [Verify the package before it opens the listener](#verify-the-package-before-it-opens-the-listener)
+shows, and with `--format json` as the report's `diagnostics`. A `${NAME}` expression is left
+unchecked, together with every rule that reads its value, because the value is the serving host's.
+On that host, add `--environment` to fill the expressions from the current environment and check
+the values they produce. The command exits 1 when it refuses the project or the file, and 3 when
+it cannot read the file.
+
+{/* Evidence: crates/registry-caseworkctl/src/lib.rs, CheckArgs;
+    crates/registry-caseworkctl/src/project.rs, check_runtime_config();
+    crates/registry-casework/src/config.rs, check_runtime() and stand_in_for();
+    crates/registry-platform-config/src/offline.rs, check_offline(). */}
+
 ### Create the secret files
 
 Create each file as the user that runs `casework`, because the resolver refuses a file owned by
@@ -423,25 +445,41 @@ binds, and each exits non-zero:
 casework: the directory at /etc/registry-casework/package has no SHA256SUMS, so it is not a package; build one with `caseworkctl package`
 casework: the package at /etc/registry-casework/package does not match its SHA256SUMS; changed: casework.yaml; rebuild the package with `caseworkctl package` and deploy the whole directory
 casework: package.expectedDigest is sha256:4f0c… but the package at package.root is sha256:9b2e…; deploy the pinned package or update package.expectedDigest
-casework: the Casework runtime configuration is not valid YAML
-casework: the Casework runtime configuration is invalid
-casework: the Casework secret-provider configuration is invalid; secretProviders.file.root must be an absolute path
 ```
 
 The first line reports a production configuration with no `SHA256SUMS`. The second reports a
 package whose files do not match its `SHA256SUMS`, naming each changed, missing, or extra file. The
 third reports a verified package other than the one `package.expectedDigest` names, shown here with both digests
-shortened. The fourth and fifth report the runtime file itself: unparseable YAML, and a
-configuration the checks refuse, which covers an invalid listener boundary, an empty issuer or
-claim name, a human-identity claim equal to the scope claim, an access profile using the
+shortened.
+
+A refused runtime file is reported in one sentence, then every problem in the file in file order,
+each with its code, its line and column, the member that holds it, and the step that fixes it. The
+lines never repeat a value from the file. Here the example above binds `0.0.0.0:8100` under
+`private-address` and gives the file provider a relative `root`:
+
+```text
+casework: the Casework runtime configuration was refused
+error[casework.runtime.invalid-listener] /etc/registry-casework/runtime.yaml:13:9 /listener/bind
+  listener is not valid for its declared TLS termination and network exposure
+  next: Bind to a loopback address under development-loopback; under operator-controlled-upstream bind to a loopback or private address, or to the unspecified address only with networkExposure: container-private.
+error[casework.runtime.relative-path] /etc/registry-casework/runtime.yaml:21:11 /secretProviders/file/root
+  secretProviders.file.root must be an absolute path without . or .. components
+  next: Write the path as an absolute path without `.` or `..` segments.
+2 errors, 0 warnings in 1 file
+```
+
+The same lines report unparseable YAML, an unknown key, an invalid listener boundary, an empty
+issuer or claim name, a human-identity claim equal to the scope claim, an access profile using the
 human-identity claim as its principal claim, and a `sources` map that does not match the declared
-source ids exactly. The sixth reports a secret provider root the resolver cannot use.
+source ids exactly. `caseworkctl check` reports them before you deploy, as
+[Check the runtime file offline](#check-the-runtime-file-offline) describes.
 
 {/* Evidence: crates/registry-casework/src/config.rs, verify_casework_package(),
-    RuntimeConfig::check(), and RuntimeConfigError;
+    RuntimeConfig::check(), RuntimeConfigError, and startup_report();
     crates/registry-platform-config/src/package.rs, verify_package() and PackageError;
     crates/registry-casework/src/runtime.rs, serve_from_path() and RuntimeError;
-    crates/registry-casework/src/main.rs. */}
+    crates/registry-casework/src/main.rs;
+    crates/registry-casework/tests/startup_refusal.rs. */}
 
 ## Refuse a package that strands pinned work
 
@@ -1016,7 +1054,7 @@ bound to the actor and selected profile for 15 minutes; an expired preview retur
 | Symptom | Next move |
 | --- | --- |
 | `has no SHA256SUMS, so it is not a package`, or `does not match its SHA256SUMS` | The first names a configuration whose `package.root` is not a package, such as an authored project, the second a package directory whose files disagree with `SHA256SUMS`, naming each changed, missing, or extra file. Point `package.root` at the installed package, and reinstall it from the reviewed artifact rather than editing it. |
-| `the Casework runtime configuration is invalid` | Check the listener against `tlsTermination` and `networkExposure`, the non-empty issuer and claim names, the human-identity claim against `scopeClaim` and the package's profiles, and `sources` against the declared source ids. |
+| `the Casework runtime configuration was refused` | Each line after it names the code, the line and column, the member, and the step that fixes it. Run `caseworkctl check PROJECT --runtime-config FILE` to see the same lines before you deploy. |
 | `the Casework secret-provider configuration is invalid` | The file provider root is relative or unusable. Write an absolute `root`. |
 | A secret reference is refused | The named file must be a regular file owned by the running user, mode `0400` or `0600`, one link, no symbolic link, non-empty, and free of NUL bytes. |
 | Startup refuses the database or `doctor` stops at it | Check the resolved URL's user and database name, TLS on the server, and the trusted root reference when the server uses a private authority. |

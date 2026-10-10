@@ -42,7 +42,7 @@ fs.writeFileSync(
 );
 fs.writeFileSync(
   path.join(projectEvidence, 'evidence-project.yaml'),
-  'version: 1\nproject: evidence-authoring\n',
+  'apiVersion: id.registrystack.org/formats/evidence/authoring-project/v1alpha1\nkind: EvidenceAuthoringProject\n',
 );
 fs.writeFileSync(
   path.join(projectEvidence, 'source.openapi.yaml'),

@@ -1,7 +1,8 @@
 # The fixture set `evidencectl test` replays offline. It is the proof that the
 # source, statement, schemas, extraction, and derivation still agree with each
 # other, so it is edited with them rather than after them.
-fixture: registry.evidence.reference.breg-offline-record-active/v1
+apiVersion: id.registrystack.org/formats/evidence/fixture/v1alpha1
+kind: EvidenceFixture
 
 # Every value below is invented. `synthetic_only` says so, and the run refuses
 # to reach a real source.

@@ -70,4 +70,3 @@ fixtures:
     manifest: true
     expect: valid
     description: Minimal civil registration fixture with person and vital event metadata.
-generator_command: null

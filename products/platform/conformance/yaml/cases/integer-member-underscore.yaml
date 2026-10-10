@@ -1,0 +1,14 @@
+id: integer-member-underscore
+rules: [CFG-VAL-1, CFG-DIAG-6]
+summary: Digits grouped with underscores are text, refused in an integer member with the fix to write digits only.
+mutation:
+  member:
+    role: integer
+    value: "1_000"
+expect:
+  exit: 1
+  diagnostics:
+    - code: config.expected-integer
+      path: "{pointer}"
+      at: {line: 1, column: 1}
+      suggestedAction: Write digits only.

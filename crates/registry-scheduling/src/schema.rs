@@ -10,25 +10,26 @@
 //!   --output products/scheduling/generated/runtime
 //! ```
 //!
-//! The derived schema states the bounds `RuntimeConfig::check` enforces, so
-//! a document an operator's editor accepts is one the runtime starts on
-//! rather than one it refuses after the operator has already written it.
+//! The derived schema states the bounds the reader and `RuntimeConfig::check`
+//! enforce, so a document an operator's editor accepts is one the runtime
+//! starts on rather than one it refuses after the operator has already
+//! written it.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::Value;
 
+use registry_scheduling_core::schema::{refuse_null, set_const};
 use registry_scheduling_core::{
     RUNTIME_SCHEMA_FILE, SCHEDULING_RUNTIME_API_VERSION, SCHEDULING_RUNTIME_KIND,
     SCHEDULING_RUNTIME_SCHEMA_ID,
 };
 
-use registry_platform_config::blocks::SECRET_PROVIDER_PATTERN;
-
 use crate::config::RuntimeConfig;
 
 pub fn runtime_documents() -> Result<BTreeMap<&'static str, String>, serde_json::Error> {
     let mut derived = serde_json::to_value(schemars::schema_for!(RuntimeConfig))?;
+    refuse_null_outside_shared_blocks(&mut derived)?;
     set_const(&mut derived, "apiVersion", SCHEDULING_RUNTIME_API_VERSION);
     set_const(&mut derived, "kind", SCHEDULING_RUNTIME_KIND);
     install_runtime_constraints(&mut derived);
@@ -53,12 +54,41 @@ pub fn runtime_documents() -> Result<BTreeMap<&'static str, String>, serde_json:
     Ok([(RUNTIME_SCHEMA_FILE, rendered)].into())
 }
 
-/// State in the schema the bounds `RuntimeConfig::check` and
-/// `validate_secret_references` enforce at load beyond the shared blocks,
-/// which carry their own: the audit destination has the shape
-/// `AuditConfig::destination` requires and its file is absolute with no `..`
-/// segment, every Scheduling secret field is a secret reference, and a static
-/// JWKS document names an enabled provider.
+/// The reader refuses `null` in every member (CFG-EMPTY-1), so drop the
+/// `null` schemars adds to each optional Scheduling member. The shared blocks
+/// are embedded exactly as the platform publishes them.
+fn refuse_null_outside_shared_blocks(schema: &mut Value) -> Result<(), serde_json::Error> {
+    let shared: Value =
+        serde_json::from_str(&registry_platform_config::schema::shared_blocks_document()?)?;
+    let shared = shared
+        .get("$defs")
+        .and_then(Value::as_object)
+        .map(|definitions| definitions.keys().cloned().collect::<BTreeSet<_>>())
+        .unwrap_or_default();
+    let Some(object) = schema.as_object_mut() else {
+        return Ok(());
+    };
+    for (key, member) in object.iter_mut() {
+        if key != "$defs" {
+            refuse_null(member);
+            continue;
+        }
+        if let Some(definitions) = member.as_object_mut() {
+            for (name, definition) in definitions.iter_mut() {
+                if !shared.contains(name) {
+                    refuse_null(definition);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// State in the schema the bounds `RuntimeConfig::check` enforces at load
+/// beyond the reader types and the shared blocks, which carry their own: the
+/// audit destination has the shape `AuditConfig::destination` requires and
+/// its file is absolute with no `..` segment, and a static JWKS document
+/// names an enabled provider.
 fn install_runtime_constraints(schema: &mut Value) {
     set_definition_property(
         schema,
@@ -67,19 +97,8 @@ fn install_runtime_constraints(schema: &mut Value) {
         "pattern",
         Value::String(registry_platform_audit::ABSOLUTE_AUDIT_PATH_PATTERN.to_owned()),
     );
-    for (definition, property) in [
-        ("ReminderDestinationConfig", "bearerTokenRef"),
-        ("HookDestinationConfig", "hmacSha256KeyRef"),
-    ] {
-        set_definition_property(
-            schema,
-            definition,
-            property,
-            "pattern",
-            Value::String(SECRET_PROVIDER_PATTERN.to_owned()),
-        );
-    }
     set_audit_destination_constraints(schema);
+    set_allowed_clients_constraints(schema);
     if let Some(root) = schema.as_object_mut() {
         root.insert(
             "allOf".to_owned(),
@@ -88,40 +107,40 @@ fn install_runtime_constraints(schema: &mut Value) {
     }
 }
 
+/// State that `authentication.oidc.allowedClients` is decided in every file:
+/// the member is required and lists at least one client. The shared block
+/// defaults it to an empty list, which the runtime refuses.
+fn set_allowed_clients_constraints(schema: &mut Value) {
+    let Some(oidc) = schema
+        .pointer_mut("/$defs/OidcConfig")
+        .and_then(Value::as_object_mut)
+    else {
+        return;
+    };
+    if let Some(required) = oidc.get_mut("required").and_then(Value::as_array_mut) {
+        required.push(Value::String("allowedClients".to_owned()));
+    }
+    if let Some(clients) = oidc
+        .get_mut("properties")
+        .and_then(|properties| properties.get_mut("allowedClients"))
+        .and_then(Value::as_object_mut)
+    {
+        clients.remove("default");
+        clients.insert("minItems".to_owned(), Value::from(1));
+        clients.insert(
+            "description".to_owned(),
+            Value::String(
+                "Client identifiers whose access tokens are admitted. Required in every\nfile; an omitted or empty list is refused."
+                    .to_owned(),
+            ),
+        );
+    }
+}
+
 /// State the shape `AuditConfig::destination` requires: a `file`
 /// destination, the default, names an absolute `path`, and `stdout` takes
-/// none of the file-only settings. An explicit null reads as absent, as
-/// serde reads it at load. The rotation and retention bounds are the
-/// platform writer's.
+/// none of the file-only settings.
 fn set_audit_destination_constraints(schema: &mut Value) {
-    set_definition_property(
-        schema,
-        "AuditConfig",
-        "rotateBytes",
-        "minimum",
-        Value::from(registry_platform_audit::MIN_AUDIT_ROTATE_BYTES),
-    );
-    set_definition_property(
-        schema,
-        "AuditConfig",
-        "rotateBytes",
-        "maximum",
-        Value::from(u32::MAX),
-    );
-    set_definition_property(
-        schema,
-        "AuditConfig",
-        "retainDays",
-        "minimum",
-        Value::from(1),
-    );
-    set_definition_property(
-        schema,
-        "AuditConfig",
-        "retainDays",
-        "maximum",
-        Value::from(registry_platform_audit::MAX_AUDIT_RETAIN_DAYS),
-    );
     if let Some(audit) = schema
         .pointer_mut("/$defs/AuditConfig")
         .and_then(Value::as_object_mut)
@@ -137,19 +156,13 @@ fn set_audit_destination_constraints(schema: &mut Value) {
             "then".to_owned(),
             serde_json::json!({
                 "not": {"anyOf": [
-                    {"required": ["path"], "properties": {"path": {"not": {"type": "null"}}}},
-                    {"required": ["rotateBytes"], "properties": {"rotateBytes": {"not": {"type": "null"}}}},
-                    {"required": ["retainDays"], "properties": {"retainDays": {"not": {"type": "null"}}}}
+                    {"required": ["path"]},
+                    {"required": ["rotateBytes"]},
+                    {"required": ["retentionDays"]}
                 ]}
             }),
         );
-        audit.insert(
-            "else".to_owned(),
-            serde_json::json!({
-                "required": ["path"],
-                "properties": {"path": {"type": "string"}}
-            }),
-        );
+        audit.insert("else".to_owned(), serde_json::json!({"required": ["path"]}));
     }
 }
 
@@ -171,21 +184,13 @@ fn set_definition_property(
     }
 }
 
-fn set_const(schema: &mut Value, property: &str, expected: &str) {
-    if let Some(member) = schema
-        .get_mut("properties")
-        .and_then(|properties| properties.get_mut(property))
-        .and_then(Value::as_object_mut)
-    {
-        member.insert("const".to_owned(), Value::String(expected.to_owned()));
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{DestinationsConfig, RetentionConfig, MAX_HOOK_DESTINATIONS};
-    use registry_platform_config::blocks::SECRET_REFERENCE_PATTERN;
+    use crate::config::{
+        reads_block, DestinationsConfig, RetentionConfig, MAX_ATTEMPT_RECEIPT_RETENTION_DAYS,
+        MAX_HOOK_DESTINATIONS,
+    };
 
     #[test]
     fn runtime_schema_is_deterministic_and_versioned() {
@@ -210,6 +215,12 @@ mod tests {
             document["properties"]["kind"]["const"],
             SCHEDULING_RUNTIME_KIND
         );
+        // A missing identity block is refused at load, so the document
+        // requires it.
+        assert!(document["required"]
+            .as_array()
+            .unwrap()
+            .contains(&Value::from("identity")));
     }
 
     #[test]
@@ -230,16 +241,24 @@ mod tests {
             registry_platform_audit::ABSOLUTE_AUDIT_PATH_PATTERN,
             "the audit path must be absolute with no `..` segment"
         );
+        for property in [
+            "runtimeUrlRef",
+            "migrationUrlRef",
+            "trustedRootCertificateRef",
+        ] {
+            assert_eq!(
+                document["$defs"]["DatabaseConfig"]["properties"][property]["$ref"],
+                "#/$defs/SecretReference",
+                "DatabaseConfig.{property} must be a secret reference"
+            );
+        }
         for (definition, property) in [
-            ("DatabaseConfig", "runtimeUrlRef"),
-            ("DatabaseConfig", "migrationUrlRef"),
-            ("DatabaseConfig", "trustedRootCertificateRef"),
             ("ReminderDestinationConfig", "bearerTokenRef"),
             ("HookDestinationConfig", "hmacSha256KeyRef"),
         ] {
             assert_eq!(
-                document["$defs"][definition]["properties"][property]["pattern"],
-                "^secret:(?:env|file)/",
+                document["$defs"][definition]["properties"][property]["$ref"],
+                "#/$defs/SecretReference",
                 "{definition}.{property} must be a secret reference"
             );
         }
@@ -252,14 +271,23 @@ mod tests {
             "at least one secret provider must be configured"
         );
         assert_eq!(
-            document["$defs"]["JwksSource"]["oneOf"][2]["properties"]["documentRef"]["pattern"],
-            SECRET_REFERENCE_PATTERN
+            document["$defs"]["JwksSource"]["oneOf"][2]["properties"]["documentRef"]["$ref"],
+            "#/$defs/SecretReference"
         );
         // The shared blocks carry their own bounds into this schema.
         assert_eq!(
             document["$defs"]["AuditConfig"]["properties"]["hashKeyRef"]["$ref"],
             "#/$defs/SecretReference"
         );
+        // `allowedClients` is decided in every file (CFG-EMPTY-2).
+        let oidc = &document["$defs"]["OidcConfig"];
+        assert!(oidc["required"]
+            .as_array()
+            .is_some_and(|required| required.contains(&Value::String("allowedClients".into()))));
+        assert!(oidc["properties"]["allowedClients"]
+            .get("default")
+            .is_none());
+        assert_eq!(oidc["properties"]["allowedClients"]["minItems"], 1);
         let assertion_issuers = &document["$defs"]["OidcConfig"]["properties"]["assertionIssuers"];
         assert_eq!(assertion_issuers["maxProperties"], 64);
         assert_eq!(assertion_issuers["propertyNames"]["maxLength"], 128);
@@ -269,8 +297,8 @@ mod tests {
             512
         );
         assert_eq!(
-            document["$defs"]["OidcConfig"]["properties"]["issuer"]["pattern"],
-            "^https?://"
+            document["$defs"]["OidcConfig"]["properties"]["issuer"]["$ref"],
+            "#/$defs/Url"
         );
         let audit = &document["$defs"]["AuditConfig"];
         assert_eq!(
@@ -278,9 +306,10 @@ mod tests {
             registry_platform_audit::MIN_AUDIT_ROTATE_BYTES
         );
         assert_eq!(
-            audit["properties"]["retainDays"]["maximum"],
+            audit["properties"]["retentionDays"]["maximum"],
             registry_platform_audit::MAX_AUDIT_RETAIN_DAYS
         );
+        assert!(audit["properties"].get("retainDays").is_none());
         assert_eq!(audit["if"]["properties"]["destination"]["const"], "stdout");
         assert_eq!(audit["else"]["required"], serde_json::json!(["path"]));
     }
@@ -298,22 +327,26 @@ mod tests {
         for accepted in [
             serde_json::json!({"hashKeyRef": key, "path": "/var/lib/scheduling/audit.jsonl"}),
             serde_json::json!({"hashKeyRef": key, "destination": "file", "path": "/audit.jsonl",
-                "rotateBytes": 1_048_576, "retainDays": 1}),
+                "rotateBytes": 1_048_576, "retentionDays": 1}),
             serde_json::json!({"hashKeyRef": key, "destination": "stdout"}),
-            // An explicit null reads as absent, as it does at load.
-            serde_json::json!({"hashKeyRef": key, "destination": "stdout", "path": null}),
-            serde_json::json!({"hashKeyRef": key, "destination": "stdout",
-                "path": null, "rotateBytes": null, "retainDays": null}),
         ] {
             assert!(validator.is_valid(&accepted), "{accepted}");
+            assert!(
+                reads_block::<crate::config::AuditConfig>(&accepted),
+                "{accepted}"
+            );
         }
         for refused in [
             serde_json::json!({"hashKeyRef": key}),
+            // The reader refuses an explicit null (CFG-EMPTY-1).
             serde_json::json!({"hashKeyRef": key, "path": null}),
+            serde_json::json!({"hashKeyRef": key, "destination": "stdout", "path": null}),
             serde_json::json!({"hashKeyRef": key, "path": "audit.jsonl"}),
+            serde_json::json!({"hashKeyRef": key, "path": "/audit.jsonl", "retentionDays": 0}),
+            serde_json::json!({"hashKeyRef": key, "path": "/audit.jsonl", "retainDays": 1}),
             serde_json::json!({"hashKeyRef": key, "destination": "stdout", "path": "/audit.jsonl"}),
             serde_json::json!({"hashKeyRef": key, "destination": "stdout", "rotateBytes": 1_048_576}),
-            serde_json::json!({"hashKeyRef": key, "destination": "stdout", "retainDays": 1}),
+            serde_json::json!({"hashKeyRef": key, "destination": "stdout", "retentionDays": 1}),
         ] {
             assert!(!validator.is_valid(&refused), "{refused}");
         }
@@ -357,20 +390,25 @@ mod tests {
             "$ref": "#/$defs/RetentionConfig"
         });
         let validator = jsonschema::JSONSchema::compile(&retention).unwrap();
-        let periods = [0, 1, 7, 30, 31, 365, u16::MAX];
+        let periods = [
+            0,
+            1,
+            7,
+            30,
+            31,
+            365,
+            u64::from(MAX_ATTEMPT_RECEIPT_RETENTION_DAYS),
+            u64::from(MAX_ATTEMPT_RECEIPT_RETENTION_DAYS) + 1,
+        ];
         for attempt_receipt_days in periods {
             for hook_payload_days in periods {
-                let config = RetentionConfig {
-                    attempt_receipt_days,
-                    hook_payload_days,
-                };
                 let document = serde_json::json!({
-                    "attemptReceiptDays": attempt_receipt_days,
-                    "hookPayloadDays": hook_payload_days,
+                    "attemptReceiptRetentionDays": attempt_receipt_days,
+                    "hookPayloadRetentionDays": hook_payload_days,
                 });
                 assert_eq!(
                     validator.is_valid(&document),
-                    config.check().is_ok(),
+                    reads_block::<RetentionConfig>(&document),
                     "the schema and the runtime disagree on {document}"
                 );
             }
@@ -455,9 +493,8 @@ mod tests {
         }
         for (hooks, accepted) in cases {
             let document = serde_json::json!({"hooks": hooks});
-            let config: DestinationsConfig = serde_json::from_value(document.clone()).unwrap();
             assert_eq!(
-                config.check().is_ok(),
+                reads_block::<DestinationsConfig>(&document),
                 accepted,
                 "the runtime decides {document} against its stated bounds"
             );

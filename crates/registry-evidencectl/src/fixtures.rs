@@ -11,7 +11,10 @@ use anyhow::{anyhow, bail, Context, Result};
 use clap::{Args, Subcommand};
 use serde::Serialize;
 use serde_json::Value as JsonValue;
-use serde_norway::Value as YamlValue;
+
+use registry_platform_yaml::{
+    ApiVersion, EnvelopeRule, Expect, FormatSpec, Reader, RemovedKey, Report, Severity,
+};
 
 use crate::authoring::{
     compile_fixture_project, compile_fixture_project_with_connections, CompiledFixtureProject,
@@ -33,14 +36,6 @@ pub struct RunArgs {
     /// beside bundle/.
     #[arg(value_name = "PROJECT", default_value = ".")]
     pub project: PathBuf,
-    /// Retired spelling of the project directory argument, still accepted.
-    #[arg(
-        long = "project",
-        value_name = "PROJECT",
-        hide = true,
-        conflicts_with = "project"
-    )]
-    pub legacy_project: Option<PathBuf>,
 
     /// Path to the evidence binary; defaults to `evidence` on PATH.
     #[arg(long)]
@@ -79,7 +74,26 @@ pub struct RunArgs {
     /// relay it without interpreting Evidence semantics.
     #[arg(long)]
     pub explain: bool,
+
+    /// Refuse a run whose fixture files carry any reader warning.
+    #[arg(long)]
+    pub deny_warnings: bool,
 }
+
+/// The Evidence fixture format, as the `evidence` runtime reads it.
+const FIXTURE_FORMAT: FormatSpec<'static> = FormatSpec {
+    kind: "EvidenceFixture",
+    envelope: EnvelopeRule::ApiVersionKind {
+        api_versions: &[ApiVersion::current(
+            "id.registrystack.org/formats/evidence/fixture/v1alpha1",
+        )],
+        retired_api_versions: &[],
+    },
+    removed_keys: &[RemovedKey {
+        pointer: "/fixture",
+        replacement: "The fixture identifier is replaced by the envelope: remove `fixture` and declare `apiVersion: id.registrystack.org/formats/evidence/fixture/v1alpha1` and `kind: EvidenceFixture`.",
+    }],
+};
 
 /// The result of one `evidence` invocation: whether it exited zero, when it
 /// failed its captured stderr for the operator to read, and, for a fixture run,
@@ -155,8 +169,8 @@ pub(crate) struct RunReport {
     /// coverage: a project with four fixture files reports the same `5 passed`
     /// whether those files hold four cases or forty.
     pub(crate) evaluated_cases: usize,
-    /// Why a run whose every step passed still failed, with the next step.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    /// Why a run whose every step passed still failed, with the next step;
+    /// empty when the run passed.
     diagnostics: Vec<JsonValue>,
 }
 
@@ -170,6 +184,22 @@ fn no_case_diagnostic() -> JsonValue {
         "message": "No case was evaluated, so this run proves nothing.",
         "suggestedAction": "Declare at least one case in every fixture the project references, then rerun evidencectl fixtures run <project>.",
     })
+}
+
+/// The refusal for an editable project that holds no fixture file, naming
+/// the directory where one goes.
+fn no_fixture_report() -> Report {
+    let mut report = Report::new(vec![crate::authored::file_diagnostic(
+        Severity::Error,
+        "evidencectl.fixtures.no-fixture",
+        Some("EvidenceFixture"),
+        "fixtures",
+        "",
+        "No fixture file was found in the project's fixtures directory.",
+        "Add fixtures/<question-id>.yaml with `apiVersion: id.registrystack.org/formats/evidence/fixture/v1alpha1`, `kind: EvidenceFixture`, `synthetic_only: true`, and at least one case, name it in the question's `governance.fixtures`, then rerun evidencectl test <project>.",
+    )]);
+    report.set_files_checked(0);
+    report
 }
 
 /// The refusal for a run whose check or fixture steps failed; each failed
@@ -189,12 +219,7 @@ fn failed_run_diagnostic(command: &str) -> JsonValue {
 
 pub fn run(command: FixturesCommand) -> Result<ExitCode> {
     match command {
-        FixturesCommand::Run(mut args) => {
-            if let Some(project) = args.legacy_project.take() {
-                args.project = project;
-            }
-            run_fixtures(args)
-        }
+        FixturesCommand::Run(args) => run_fixtures(args),
     }
 }
 
@@ -205,15 +230,24 @@ fn run_fixtures(args: RunArgs) -> Result<ExitCode> {
     let runtime_path = args.project.join("runtime.yaml");
     let evidence_bin = evidence_binary::resolve_matching(args.evidence_bin.as_deref())?;
     let mut editable_lock = None;
+    // What the shared reader found in the fixture files, warnings only.
+    let reader_warnings;
     let target = if runtime_path.is_file() {
         if args.target.is_some() {
             bail!("--target is only used with editable projects, not deployment projects");
         }
         let bundle_directory = resolve_bundle_directory(&runtime_path, &args.project)?;
         let bundle_config_path = bundle_directory.join("evidence.yaml");
+        let fixture_paths = discover_fixtures(&bundle_config_path)?;
+        reader_warnings = read_fixture_files(
+            &bundle_directory,
+            &args.project,
+            &fixture_paths,
+            args.deny_warnings,
+        )?;
         FixtureTarget::Deployment {
             runtime_path,
-            fixture_paths: discover_fixtures(&bundle_config_path)?,
+            fixture_paths,
         }
     } else {
         if !args.project.join("questions").is_dir() || !args.project.join("sources").is_dir() {
@@ -222,6 +256,19 @@ fn run_fixtures(args: RunArgs) -> Result<ExitCode> {
                 args.project.display()
             );
         }
+        // The shared reader decides what a fixture file is before the project
+        // is compiled or any step is delegated, so a file it refuses is
+        // reported with its own diagnostics and nothing runs against it.
+        let fixture_paths = project_fixture_paths(&args.project)?;
+        if fixture_paths.is_empty() {
+            return Err(no_fixture_report().into());
+        }
+        reader_warnings = read_fixture_files(
+            &args.project,
+            &args.project,
+            &fixture_paths,
+            args.deny_warnings,
+        )?;
         editable_lock = Some(
             ProjectLock::acquire(&args.project)
                 .with_context(|| format!("locking editable project {}", args.project.display()))?,
@@ -314,7 +361,10 @@ fn run_fixtures(args: RunArgs) -> Result<ExitCode> {
             vec![failed_run_diagnostic(args.command)]
         } else {
             Vec::new()
-        },
+        }
+        .into_iter()
+        .chain(reader_warnings)
+        .collect(),
     };
 
     if args.json {
@@ -336,6 +386,81 @@ fn run_fixtures(args: RunArgs) -> Result<ExitCode> {
     } else {
         ExitCode::from(crate::report::DOMAIN_REFUSAL_EXIT)
     })
+}
+
+/// The fixture files an editable project holds, as project-relative paths in
+/// name order.
+fn project_fixture_paths(project: &Path) -> Result<Vec<String>> {
+    let directory = project.join("fixtures");
+    let entries = match fs::read_dir(&directory) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("listing fixtures in {}", directory.display()))
+        }
+    };
+    let mut paths = Vec::new();
+    for entry in entries {
+        let name = entry
+            .with_context(|| format!("listing fixtures in {}", directory.display()))?
+            .file_name();
+        if let Some(name) = name.to_str().filter(|name| name.ends_with(".yaml")) {
+            paths.push(format!("fixtures/{name}"));
+        }
+    }
+    paths.sort();
+    Ok(paths)
+}
+
+/// Read every fixture file the project references through the shared
+/// reader, gathering what it finds in all of them.
+///
+/// `root` is the directory the fixture paths are relative to, and `project`
+/// the project as the command was given it, which names each file in a
+/// diagnostic. A refused file, or a warning under `--deny-warnings`, stops
+/// the run with the reader's report; any other warning is returned for the
+/// run's report. A file that is absent is left to the delegated check, which
+/// names it. The reader's diagnostics carry no value from the file.
+fn read_fixture_files(
+    root: &Path,
+    project: &Path,
+    fixture_paths: &[String],
+    deny_warnings: bool,
+) -> Result<Vec<JsonValue>> {
+    let shown_root = root.strip_prefix(project).unwrap_or(root);
+    let mut gathered = crate::authored::Gathered::default();
+    for fixture_path in fixture_paths {
+        let bytes = match crate::authored::read_authored_file(&root.join(fixture_path), "fixture") {
+            Ok(bytes) => bytes,
+            Err(error)
+                if error
+                    .downcast_ref::<std::io::Error>()
+                    .is_some_and(|error| error.kind() == std::io::ErrorKind::NotFound) =>
+            {
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
+        gathered.read_one();
+        let name = shown_root.join(fixture_path).to_string_lossy().into_owned();
+        match Reader::new(&name).read(&bytes, &Expect::one(&FIXTURE_FORMAT)) {
+            Ok(document) => gathered.extend(document.warnings()),
+            Err(report) => gathered.extend(report),
+        }
+    }
+    let report: Report = gathered.report();
+    if report.has_errors() || (deny_warnings && report.warning_count() > 0) {
+        return Err(report.into());
+    }
+    Ok(report
+        .into_diagnostics()
+        .iter()
+        .map(|diagnostic| {
+            serde_json::to_value(diagnostic)
+                .expect("a diagnostic has only string and integer members")
+        })
+        .collect())
 }
 
 /// Preserve the bundle's declared order for a full run, or select one exact
@@ -480,12 +605,7 @@ fn resolve_bundle_directory(runtime_path: &Path, project: &Path) -> Result<PathB
             runtime_path.display()
         )
     })?;
-    let document: YamlValue = serde_norway::from_slice(&bytes).with_context(|| {
-        format!(
-            "failed to parse runtime configuration at {}",
-            runtime_path.display()
-        )
-    })?;
+    let document = crate::authored::runtime_document(&runtime_path.to_string_lossy(), &bytes)?;
     match document
         .get("package")
         .and_then(|package| package.get("root"))
@@ -517,15 +637,11 @@ fn discover_fixtures(bundle_config_path: &Path) -> Result<Vec<String>> {
             bundle_config_path.display()
         )
     })?;
-    let document: YamlValue = serde_norway::from_slice(&bytes).with_context(|| {
-        format!(
-            "failed to parse bundle configuration at {}",
-            bundle_config_path.display()
-        )
-    })?;
+    let document =
+        crate::authored::runtime_document(&bundle_config_path.to_string_lossy(), &bytes)?;
     let requirements = document
         .get("requirements")
-        .and_then(YamlValue::as_sequence)
+        .and_then(serde_json::Value::as_array)
         .ok_or_else(|| {
             anyhow!(
                 "bundle configuration at {} has no requirements list",
@@ -537,7 +653,7 @@ fn discover_fixtures(bundle_config_path: &Path) -> Result<Vec<String>> {
     for requirement in requirements {
         let fixture_path = requirement
             .get("fixtures")
-            .and_then(YamlValue::as_str)
+            .and_then(serde_json::Value::as_str)
             .ok_or_else(|| {
                 anyhow!(
                     "a requirement in {} has no fixtures path",

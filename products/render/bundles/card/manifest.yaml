@@ -1,11 +1,11 @@
-apiVersion: render.registrystack.org/v1alpha1
+apiVersion: id.registrystack.org/formats/render/bundle/v1alpha1
 kind: RenderBundle
 bundleVersion: 1
 documents:
 - id: beneficiary-card
   version: 1
-  entry: templates/card.typ
-  schema: schemas/card.schema.json
+  entryFile: templates/card.typ
+  schemaFile: schemas/card.schema.json
   labels:
   - ar
   - fr

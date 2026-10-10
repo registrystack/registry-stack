@@ -1,8 +1,22 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://registrystack.org/caseworkctl/v1alpha3/SourceAddReport.schema.json",
+  "$id": "https://id.registrystack.org/schemas/casework/source-add-report/source-add-report.v1alpha3.schema.json",
   "title": "SourceAddReport",
   "description": "Versioned JSON report emitted by caseworkctl for source add.",
+  "type": "object",
+  "required": [
+    "apiVersion",
+    "kind"
+  ],
+  "properties": {
+    "apiVersion": {
+      "const": "registry.registrystack.org/caseworkctl/v1alpha3"
+    },
+    "kind": {
+      "const": "SourceAddReport"
+    }
+  },
+  "unevaluatedProperties": false,
   "oneOf": [
     {
       "type": "object",
@@ -21,7 +35,7 @@
         "connection",
         "bregAuthoringChanges",
         "bregAuthoringPatch",
-        "findings",
+        "diagnostics",
         "activation",
         "next"
       ],
@@ -60,19 +74,132 @@
           "type": "string"
         },
         "connection": {
-          "type": "object"
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "policy": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "authority",
+                "kind"
+              ],
+              "properties": {
+                "authority": {
+                  "type": "string"
+                },
+                "kind": {
+                  "type": "string"
+                }
+              }
+            },
+            "producerAdmission": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "producerId",
+                "profile",
+                "recoveryDays",
+                "completion"
+              ],
+              "properties": {
+                "producerId": {
+                  "type": "string"
+                },
+                "profile": {
+                  "type": "string"
+                },
+                "recoveryDays": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "completion": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "destinationId",
+                        "recipientBinding"
+                      ],
+                      "properties": {
+                        "destinationId": {
+                          "type": "string"
+                        },
+                        "recipientBinding": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            },
+            "application": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "mode"
+              ],
+              "properties": {
+                "mode": {
+                  "enum": [
+                    "manual",
+                    "automatic"
+                  ]
+                },
+                "executor": {
+                  "type": "string"
+                },
+                "accessProfile": {
+                  "type": "string"
+                }
+              }
+            },
+            "requests": {
+              "type": "array",
+              "minItems": 2,
+              "items": {
+                "$ref": "#/$defs/requestConnection"
+              }
+            }
+          }
         },
         "bregAuthoringChanges": {
           "type": "array"
         },
         "bregAuthoringPatch": {
-          "type": "object"
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "event": {
+              "type": "object",
+              "x-registry-passthrough": "the hook fragment is part of the Base Registry Engine authoring project, in its grammar"
+            },
+            "events": {
+              "type": "array",
+              "x-registry-passthrough": "the hook fragments are part of the Base Registry Engine authoring project, in its grammar"
+            },
+            "accessProfile": {
+              "type": "object",
+              "x-registry-passthrough": "the access profile fragment is part of the Base Registry Engine authoring project, in its grammar"
+            },
+            "devClients": {
+              "type": "object",
+              "x-registry-passthrough": "the dev clients fragment is part of the Base Registry Engine authoring project, in its grammar"
+            }
+          }
         },
         "candidateRuntimeBinding": {
-          "type": "object"
+          "type": "object",
+          "x-registry-passthrough": "the candidate binding is a Base Registry Engine runtime binding, in its grammar"
         },
-        "findings": {
-          "$ref": "#/$defs/findings"
+        "diagnostics": {
+          "$ref": "#/$defs/warnings"
         },
         "activation": {
           "const": "not_performed"
@@ -135,7 +262,6 @@
       "required": [
         "severity",
         "code",
-        "artifact",
         "path",
         "message",
         "suggestedAction"
@@ -158,13 +284,178 @@
         },
         "suggestedAction": {
           "type": "string"
+        },
+        "source": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "file"
+          ],
+          "properties": {
+            "file": {
+              "type": "string"
+            },
+            "line": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1048577
+            },
+            "column": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1048577
+            }
+          }
+        },
+        "related": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "file",
+              "path",
+              "message"
+            ],
+            "properties": {
+              "file": {
+                "type": "string"
+              },
+              "line": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 1048577
+              },
+              "column": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 1048577
+              },
+              "path": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              }
+            }
+          }
         }
       }
     },
-    "findings": {
+    "warnings": {
       "type": "array",
       "items": {
-        "$ref": "#/$defs/diagnostic"
+        "allOf": [
+          {
+            "$ref": "#/$defs/diagnostic"
+          },
+          {
+            "properties": {
+              "severity": {
+                "const": "warning"
+              }
+            }
+          }
+        ],
+        "unevaluatedProperties": false
+      }
+    },
+    "requestConnection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "entity",
+        "policy",
+        "producerAdmission",
+        "application"
+      ],
+      "properties": {
+        "entity": {
+          "type": "string"
+        },
+        "policy": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "authority",
+            "kind"
+          ],
+          "properties": {
+            "authority": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string"
+            }
+          }
+        },
+        "producerAdmission": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "producerId",
+            "profile",
+            "recoveryDays",
+            "completion"
+          ],
+          "properties": {
+            "producerId": {
+              "type": "string"
+            },
+            "profile": {
+              "type": "string"
+            },
+            "recoveryDays": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "completion": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "destinationId",
+                    "recipientBinding"
+                  ],
+                  "properties": {
+                    "destinationId": {
+                      "type": "string"
+                    },
+                    "recipientBinding": {
+                      "type": "string"
+                    }
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        },
+        "application": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "mode"
+          ],
+          "properties": {
+            "mode": {
+              "enum": [
+                "manual",
+                "automatic"
+              ]
+            },
+            "executor": {
+              "type": "string"
+            },
+            "accessProfile": {
+              "type": "string"
+            }
+          }
+        }
       }
     }
   }

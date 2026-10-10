@@ -1,0 +1,95 @@
+---
+title: Registry Scheduling configuration reference
+description: Generated fields, accepted values, defaults, and constraints for Registry Scheduling projects, records, fixtures, and runtime configuration.
+status: draft
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: unreviewed
+doc_type: reference
+locale: en
+standards_referenced:
+  - json-schema
+wide: true
+---
+
+import ConfigurationFormatChecks from '../../../components/ConfigurationFormatChecks.astro';
+import ConfigurationReference from '../../../components/ConfigurationReference.astro';
+import reference from '../../../data/generated/scheduling-configuration.json';
+
+Look up configuration keys for `scheduling.yaml`, `records.yaml`, the files under `fixtures/`, and
+the operator's `runtime.yaml`.
+The tables are generated from Registry Scheduling's Rust-derived JSON Schemas.
+
+## Scope
+
+This reference describes the current configuration grammar, not a frozen contract.
+Types, required fields, accepted values, defaults, and constraints come from the schemas.
+Descriptions appear where the Rust definition supplies them.
+
+`scheduling.yaml` is the authored policy: services, locations, offerings, and hooks.
+`records.yaml` holds the runtime records the policy names by identifier, such as resource pools and
+published windows. Files under `fixtures/` drive local checks. `runtime.yaml` is the operator's
+deployment file: listener, database, package, identity, audit, retention, and hook destinations.
+
+A schema-valid document still needs the checks `schedulingctl` runs, because cross-field rules and
+references between files cannot all be expressed by these tables.
+[Configuration files](../configuration-files/) describes the YAML rules and environment
+substitution that apply when the runtime reads `runtime.yaml`.
+
+{/* Evidence: crates/registry-scheduling/src/config.rs, SchedulingRuntimeConfig;
+    crates/registry-schedulingctl/src/project.rs, check() and check_runtime_config();
+    docs/site/scripts/generate-scheduling-configuration.mjs. */}
+
+## Read the tables
+
+`fields[]` means an array item; `destinations.hooks.*` means a map entry whose name you choose.
+Required fields inside an optional object apply when that object is present.
+Conditional fields depend on the selected variant or another configuration value.
+Accepted values list the union across variants; constraints separated by `or` are alternatives.
+A schema default applies only where that variant declares it. `Not specified` does not mean
+that every value is accepted.
+
+<ConfigurationReference contracts={reference.contracts} prefix="scheduling" />
+
+## Regeneration
+
+The source schemas live under `products/scheduling/generated/`.
+Run `npm run generate` in `docs/site` to rebuild these tables from them.
+`products/scheduling/RUNTIME-CONFIG.md` describes the runtime file in prose, including the closed
+envelope, the package digest, and the activation ledger.
+
+{/* Generated from src/data/generated/scheduling-configuration.json by
+    docs/site/scripts/generate-scheduling-configuration.mjs. Run npm run generate from docs/site. */}
+
+## Start a project
+
+No tutorial covers Registry Scheduling yet. To start a project and prove it offline, with no database
+and no network, write the `standalone-exact-time` starter, check it, and replay its synthetic
+fixtures:
+
+```sh
+schedulingctl init ./scheduling --template standalone-exact-time
+schedulingctl check ./scheduling
+schedulingctl test ./scheduling
+```
+
+`init` writes `scheduling.yaml`, `runtime.example.yaml`, `records.yaml`, and two fixture files, and `check` reads all five, the runtime example as the runtime reads a runtime file. A
+passing `check` ends with `0 errors, 0 warnings in 5 files`, and a passing `test` reports
+`Offline synthetic fixtures passed.` with `productionClosure: false`: the replay proves the policy
+against its fixtures, not source reachability or deployment readiness. Copy `scheduling/runtime.example.yaml`
+to `scheduling/runtime.yaml` and set its absolute paths and secret references before you check it
+with `schedulingctl check ./scheduling --runtime-config ./scheduling/runtime.yaml`.
+
+## Check commands
+
+Every file Registry Scheduling reads has a command that checks it offline, with no service running. Each prints
+the diagnostics, JSON output, and exit codes that
+[Check a file before you deploy it](../configuration-files/#check-a-file-before-you-deploy-it) describes.
+
+<ConfigurationFormatChecks product="scheduling" />
+
+## Next
+
+- [Registry Scheduling API contract](../apis/registry-scheduling/) for routes, task grants, and problem codes.
+- [Audit upgrades and retention](../../operate/retention-and-persistent-state/) for the audit and retention keys.

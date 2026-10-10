@@ -1,2 +1,2 @@
-version: 1
-project: evidence-authoring
+apiVersion: id.registrystack.org/formats/evidence/authoring-project/v1alpha1
+kind: EvidenceAuthoringProject

@@ -13,7 +13,7 @@ use registry_discovery::{
     canonical_index_bytes, catalog_revision, mapping_revision, package_limits, prepare, router,
     CompiledEvidenceMapping, Directory, DiscoveryIndex, DiscoveryService, EvidenceTypeAlternative,
     EvidenceTypeResolveResponse, OriginSummary, ServiceKind, ServiceRecord, ServiceSearchResponse,
-    INDEX_FILE, INDEX_SCHEMA, PACKAGE_COMMAND,
+    INDEX_API_VERSION, INDEX_FILE, INDEX_KIND, PACKAGE_COMMAND,
 };
 use registry_platform_config::write_package;
 use tower::ServiceExt as _;
@@ -59,7 +59,8 @@ fn index() -> DiscoveryIndex {
         }],
     }];
     DiscoveryIndex {
-        schema_version: INDEX_SCHEMA.into(),
+        api_version: INDEX_API_VERSION.into(),
+        kind: INDEX_KIND.into(),
         catalog_revision: catalog_revision(&services).unwrap(),
         mapping_revision: mapping_revision(&mappings).unwrap(),
         built_at: "2026-08-14T00:00:01Z".into(),

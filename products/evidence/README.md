@@ -103,8 +103,8 @@ deployable bundle. `evidencectl dev start` additionally creates session-scoped P
 caller and holder keys and starts the pinned local issuer so the local happy path needs no key ceremony.
 For a composed local issuer, first author explicit Evidence access policies and
 active access clients, then register those exact clients in a Base Registry Engine (BReg) dev issuer
-owner with `assertionKeyInputFile` pointing to each Evidence client's private
-key. Map each client to `urn:registrystack:evidence:local:gateway` with
+owner with `assertionKeyRef`, a secret reference to each Evidence client's
+private key. Map each client to `urn:registrystack:evidence:local:gateway` with
 `evidence:invoke` and the exact `registry_actor_kind`, `evidence_tags`, and
 `evidence_audience` claims. Start the BReg owner, then run
 `evidencectl dev start ./evidence --issuer-project ./issuer-owner`. Evidence
@@ -171,8 +171,8 @@ inputs, not overlays. Secret values and absolute secret paths do not belong in
 authored governance input.
 
 `evidencectl check <editable-project>` validates authoring offline and reports
-incomplete work as field-addressed findings. `--deny-findings` refuses any
-finding. Add `--target <environment-target>` to validate that explicit target's
+incomplete work as field-addressed warnings. `--deny-warnings` refuses any
+warning. Add `--target <environment-target>` to validate that explicit target's
 governance, runtime structure, public keys, source connections, and governed
 bundle. Adding `--production` requires the target itself to declare
 `production` or `evidence-grade` assurance. The check does not resolve secrets,
@@ -180,6 +180,13 @@ contact dependencies, or run fixtures. `evidencectl explain <editable-project>`
 applies the same authoring validation and reports its status, findings, and
 revision with the authored inventory. Add `--target <environment-target>` to
 include that target's governance.
+
+`evidencectl check --file <file>` checks one tooling file on its own, offline:
+a client profile, reviewed contracts, development state, a source-import
+baseline or journal, a source resolution file, or a source export manifest. The
+file's `kind` (or, for a client profile and reviewed contracts, its `schema`)
+names the format. It exits 0 when the file passes, 1 when it is refused, and 3
+when it cannot be read; it cannot be combined with a project or `--target`.
 
 `evidencectl package <editable-project> --target <environment-target> --output <new-package-directory>`
 is create-only. It reads regular files

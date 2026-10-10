@@ -1,0 +1,13 @@
+id: planted-marker
+rules: [CFG-SEC-3, CFG-DIAG-1, CFG-SCHEMA-8]
+summary: Text planted in the format's integer member is refused at the value, and no output repeats it.
+mutation:
+  member:
+    role: integer
+    value: "{marker}"
+expect:
+  exit: 1
+  diagnostics:
+    - code: config.expected-integer
+      path: "{pointer}"
+      at: {line: 1, column: 1}

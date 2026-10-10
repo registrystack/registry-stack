@@ -1,0 +1,13 @@
+{
+  "ok": true,
+  "command": "check",
+  "status": "complete",
+  "apiVersion": "id.registrystack.org/formats/discovery/ctl-report/v1alpha1",
+  "diagnostics": [],
+  "errors": 0,
+  "filesChecked": 3,
+  "kind": "DiscoveryCtlReport",
+  "mappings": 1,
+  "origins": 1,
+  "warnings": 0
+}

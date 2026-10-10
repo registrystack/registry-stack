@@ -10,15 +10,18 @@ use registry_breg::contract::parse_module_json;
 use registry_breg::fixtures::validate_fixture_journeys;
 use registry_breg::package::{
     prepare_package, PackageBuildRequest, PackageMigrationPlanInput, PackageModuleSource,
-    PackageSourceFile,
+    PackageSourceFile, RETIRED_PACKAGE_API_VERSION,
 };
+use registry_platform_canonical_json::canonicalize_json;
+use registry_platform_config::package::{write_sum_file, PackageLimits, SUM_FILE};
 use serde_json::Value;
 
 const INSTANCE: &str = "instance-under-test";
 const DATABASE: &str = "database-under-test";
 const SOURCE_REVISION: &str = "compiler-source-revision";
 const VALUE_CANARY: &str = "diff-source-path-record-sql-canary";
-const FIXTURE_JOURNEYS: &[u8] = br#"apiVersion: registry.registrystack.org/breg-journeys/v1
+const FIXTURE_JOURNEYS: &[u8] = br#"apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
 journeys:
   - id: diff-record-list
     steps:
@@ -26,7 +29,7 @@ journeys:
         entity: record
         accessProfile: reader
         claims: {principal: diff-reader}
-        request: {operation: list}
+        request: {type: list}
         expect: {outcome: success, status: 200, count: 0}
 "#;
 static TEMPORARY_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -317,6 +320,63 @@ fn package_closure_and_path_disclosure_threats_are_enforced_by_value_free_negati
 }
 
 #[test]
+fn a_package_under_the_retired_api_version_is_read_only_as_the_deployed_predecessor() {
+    let directory = TestDirectory::create();
+    let deployed = publish_package(&directory.path, "deployed", "internal");
+    let deployed = retire_package_api_version(deployed);
+    let candidate = write_project(&directory.path, "candidate", "public");
+
+    let checked = run(&[
+        "--format",
+        "json",
+        "check",
+        "--package",
+        path(&deployed.package),
+    ]);
+    assert_eq!(checked.status.code(), Some(1), "{checked:?}");
+    let diagnostic = &json_stdout(&checked)["diagnostics"][0];
+    assert_eq!(diagnostic["code"], "config.retired-api-version");
+    assert!(diagnostic["suggestedAction"]
+        .as_str()
+        .is_some_and(|action| action.contains("--baseline-package DEPLOYED")));
+
+    let integrity_only = run(&[
+        "--format",
+        "json",
+        "diff",
+        path(&candidate),
+        "--package",
+        path(&deployed.package),
+    ]);
+    assert_eq!(integrity_only.status.code(), Some(1), "{integrity_only:?}");
+    assert_tool_diagnostic(
+        &json_stdout(&integrity_only)["diagnostics"][0],
+        "baseline_package",
+        "correct_package_build",
+    );
+    assert_eq!(
+        json_stdout(&integrity_only)["diagnostics"][0]["code"],
+        "diff.baseline.retired_api_version"
+    );
+
+    // The runtime file names the deployed package, which this release reads
+    // as the predecessor of an upgrade.
+    let runtime = write_runtime_config(&directory.path, &deployed);
+    let runtime_bound = run(&[
+        "--format",
+        "json",
+        "diff",
+        path(&candidate),
+        "--runtime-config",
+        path(&runtime),
+    ]);
+    assert!(runtime_bound.status.success(), "{runtime_bound:?}");
+    let report = json_stdout(&runtime_bound);
+    assert_eq!(report["baselineAssurance"], "runtime_bound");
+    assert_eq!(report["baselinePackageRevision"], deployed.digest);
+}
+
+#[test]
 fn a_runtime_bound_baseline_is_verified_without_opening_runtime_dependencies() {
     let directory = TestDirectory::create();
     let baseline = publish_package(&directory.path, "production-baseline", "internal");
@@ -461,16 +521,19 @@ fn diff_help_and_selector_usage_preserve_the_closed_command_inventory_and_exit_c
     assert!(!rendered.contains(VALUE_CANARY));
     assert!(!rendered.contains(path(&malformed_runtime)));
     let report = json_stdout(&refused_runtime);
-    assert_eq!(
-        report["diagnostics"][0]["code"],
-        "diff.runtime_config.document"
-    );
-    assert_eq!(report["diagnostics"][0]["path"], "/");
-    assert_tool_diagnostic(
-        &report["diagnostics"][0],
-        "runtime_configuration",
-        "correct_runtime_configuration",
-    );
+    let diagnostics = report["diagnostics"]
+        .as_array()
+        .expect("diagnostics are a list");
+    assert!(diagnostics.iter().any(|diagnostic| {
+        diagnostic["code"] == "config.unknown-key" && diagnostic["path"] == "/unexpectedSetting"
+    }));
+    for diagnostic in diagnostics {
+        assert_tool_diagnostic(
+            diagnostic,
+            "runtime_configuration",
+            "correct_runtime_configuration",
+        );
+    }
 }
 
 struct PublishedPackage {
@@ -527,7 +590,7 @@ fn check_reports_the_registry_revision_of_a_project_and_of_a_verified_package() 
     assert_ne!(other["registryRevision"], registry_revision, "{other}");
 
     // A package whose bytes no longer match its sums is refused, naming no
-    // packaged value or path.
+    // packaged value; the source is the package path as it was given.
     fs::write(
         package.package.join("source/modules/core/module.yaml"),
         VALUE_CANARY,
@@ -544,18 +607,18 @@ fn check_reports_the_registry_revision_of_a_project_and_of_a_verified_package() 
     assert!(tampered.stderr.is_empty());
     let rendered = String::from_utf8_lossy(&tampered.stdout);
     assert!(!rendered.contains(VALUE_CANARY));
-    assert!(!rendered.contains(path(&package.package)));
+    assert!(!rendered.contains("source/modules/core/module.yaml"));
     let refused = json_stdout(&tampered);
     assert_eq!(refused["command"], "check");
-    assert_eq!(
-        refused["diagnostics"][0]["code"],
-        "check.package.integrity_refused"
-    );
-    assert_tool_diagnostic(
-        &refused["diagnostics"][0],
-        "verified_package",
-        "verify_package_integrity",
-    );
+    let diagnostic = &refused["diagnostics"][0];
+    assert_eq!(diagnostic["code"], "breg.package.integrity-refused");
+    assert_eq!(diagnostic["severity"], "error");
+    assert_eq!(diagnostic["path"], "");
+    assert!(diagnostic.get("artifact").is_none(), "{diagnostic}");
+    assert_eq!(diagnostic["source"]["file"], path(&package.package));
+    assert!(diagnostic["suggestedAction"]
+        .as_str()
+        .is_some_and(|action| action.starts_with("Rebuild the package with bregctl package")));
 
     // A project and a package together, or neither, is a usage error.
     let both = run(&["check", path(&project), "--package", path(&changed.package)]);
@@ -602,6 +665,44 @@ fn publish_package(parent: &Path, name: &str, classification: &str) -> Published
     PublishedPackage { package, digest }
 }
 
+/// Rewrite a published package's header to the retired package apiVersion an
+/// earlier `bregctl package` wrote, and close it again under new sums.
+fn retire_package_api_version(package: PublishedPackage) -> PublishedPackage {
+    let manifest_path = package.package.join("package.json");
+    let mut envelope: Value =
+        serde_json::from_slice(&fs::read(&manifest_path).expect("the package manifest reads"))
+            .expect("the package manifest parses");
+    let header = envelope.as_object_mut().expect("the envelope is an object");
+    header.insert(
+        "apiVersion".to_owned(),
+        Value::from(RETIRED_PACKAGE_API_VERSION),
+    );
+    header.remove("kind");
+    fs::write(
+        &manifest_path,
+        canonicalize_json(&envelope).expect("the retired envelope canonicalizes"),
+    )
+    .expect("the retired manifest is written");
+    fs::remove_file(package.package.join(SUM_FILE)).expect("the stale sum file is removed");
+    let closed = write_sum_file(
+        &package.package,
+        None,
+        &PackageLimits {
+            max_files: 1_026,
+            max_file_bytes: 16 * 1024 * 1024,
+            max_total_bytes: 64 * 1024 * 1024,
+            max_depth: 16,
+            max_path_bytes: 512,
+        },
+        "test package",
+    )
+    .expect("the retired package closes");
+    PublishedPackage {
+        digest: closed.digest().to_owned(),
+        package: package.package,
+    }
+}
+
 fn write_project(parent: &Path, name: &str, classification: &str) -> PathBuf {
     write_project_with_module(parent, name, module_bytes(classification))
 }
@@ -628,7 +729,7 @@ fn project_bytes(module_digest: &str) -> Vec<u8> {
 
 fn module_bytes(classification: &str) -> Vec<u8> {
     format!(
-        r#"{{"id":"core","version":"1","entities":[{{"id":"record","primaryDataset":"neutral-registry","route":"records","mutationMode":"create_only","fields":[{{"id":"code","type":"string","maxLength":16,"classification":"{classification}"}}],"accessProfiles":[{{"rowBoundaries": [], "id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["code"]}}]}}]}}"#
+        r#"{{"id":"core","version":"1","entities":[{{"id":"record","primaryDataset":"neutral-registry","route":"records","mutationMode":"create_only","fields":[{{"id":"code","type":"string","maxLength":16,"classification":"{classification}"}}],"accessProfiles":[{{"requiredScopes":"unrestricted","rowBoundaries":"unrestricted", "id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["code"]}}]}}]}}"#
     )
     .into_bytes()
 }

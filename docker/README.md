@@ -106,7 +106,7 @@ docker run --rm \
 with `listener.bind: 0.0.0.0:8080` and
 `listener.networkExposure: container-private` in `runtime.yaml`. TLS and
 public exposure are upstream concerns by design; front this listener with your
-operator-network proxy. `evidence check` validates the bundle without serving.
+operator-network proxy. `evidence check` validates the bundle offline, without serving.
 Add `--require-runtime-dependencies` in the target container to prove audit
 writability, signer readiness, source credentials, and JWKS reachability:
 
@@ -184,4 +184,4 @@ and the distroless images have no shell to run it with.
 
 For an approved Evidence release or candidate, use the operator-owned
 [Compose adapter](compose/README.md), pin the reviewed image digest, and run
-`evidence check` inside the target container context.
+`evidence check --require-runtime-dependencies` inside the target container context.

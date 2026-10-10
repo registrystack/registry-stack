@@ -487,8 +487,8 @@ steps = {
     "read-record-within-the-claim": "reader", "retire-record": "operator",
     "read-record-outside-the-claim": "reader", "list-records": "operator",
 }
-lines = ["apiVersion: registry.registrystack.org/breg-schema-test-credentials/v1",
-         "kind: SchemaTestCredentials", "bindings:"]
+lines = ["apiVersion: id.registrystack.org/formats/breg/schema-test-credentials/v1",
+         "kind: BRegSchemaTestCredentials", "bindings:"]
 for step, token in steps.items():
     lines.append(f"  - {{journeyId: record-lifecycle, stepId: {step}, "
                  f"credential: {{type: bearer, tokenRef: secret:file/{token}-token}}}}")
@@ -671,23 +671,28 @@ step_sql = f"ALTER TABLE registry_data.{table} DROP COLUMN {column}".encode("asc
 assertion_sql = f"SELECT pg_catalog.count(*) >= 0 FROM registry_data.{table}".encode("ascii")
 fixture = b'{"fixture":"representative"}\n'
 descriptor = {
+    "apiVersion": "id.registrystack.org/formats/breg/migration-descriptor/v1alpha1",
+    "kind": "BRegMigrationDescriptor",
     "id": "remove-legacy-note", "changeClass": "destructive_or_irreversible", "covers": covers,
-    "recovery": "exact_target_resume", "lockTimeoutMs": 1000, "statementTimeoutMs": 60000,
-    "steps": [{"kind": "transactional_sql", "id": "drop", "sql_path": f"{base}/steps/drop.sql",
-               "objects": [{"schema": "registry_data", "table": table, "entityId": "record",
-                            "kind": "field", "memberId": "legacy-note", "physicalName": column}]}],
+    "recovery": "exact_target_resume", "lockTimeoutMilliseconds": 1000,
+    "statementTimeoutMilliseconds": 60000,
+    "steps": [{"type": "transactional-sql", "id": "drop", "sqlPath": f"{base}/steps/drop.sql",
+               "objects": [{"schema": "registry_data", "table": table, "entity": "record",
+                            "kind": "field", "member": "legacy-note", "physicalName": column}]}],
     "preAssertions": [{"id": "pre", "sqlPath": f"{base}/assertions/pre.sql"}],
     "postAssertions": [{"id": "post", "sqlPath": f"{base}/assertions/post.sql"}],
     "rehearsalReceiptPath": f"{base}/rehearsal.json", "backupBindingPath": f"{base}/backup.json",
 }
 receipt = {
+    "apiVersion": "id.registrystack.org/formats/breg/migration-rehearsal-receipt/v1alpha1",
+    "kind": "BRegMigrationRehearsalReceipt",
     "priorPackageDigest": prior_digest, "priorSchemaFingerprint": prior_fingerprint,
-    "planSha256": digest(canonical(descriptor)),
-    "sqlSha256": [{"path": f"{base}/steps/drop.sql", "sha256": digest(step_sql)}],
-    "assertionSha256": [{"path": f"{base}/assertions/pre.sql", "sha256": digest(assertion_sql)},
-                        {"path": f"{base}/assertions/post.sql", "sha256": digest(assertion_sql)}],
+    "planDigest": digest(canonical(descriptor)),
+    "sqlDigests": [{"path": f"{base}/steps/drop.sql", "digest": digest(step_sql)}],
+    "assertionDigests": [{"path": f"{base}/assertions/pre.sql", "digest": digest(assertion_sql)},
+                         {"path": f"{base}/assertions/post.sql", "digest": digest(assertion_sql)}],
     "fixtureInventory": [{"id": "representative", "path": f"{base}/fixtures/representative.jsonl",
-                          "sha256": digest(fixture), "rowCount": 1}],
+                          "digest": digest(fixture), "rowCount": 1}],
     "postgresMajor": int(postgres_major), "rowAssertions": [], "finalSchemaFingerprint": final_fingerprint,
 }
 directory = root / "review-2" / base
@@ -736,11 +741,13 @@ from pathlib import Path
 backup, database_id, prior_digest, prior_fingerprint, output = sys.argv[1:]
 data = Path(backup).read_bytes()
 binding = {
-    "databaseId": database_id, "priorPackageDigest": prior_digest,
+    "apiVersion": "id.registrystack.org/formats/breg/backup-binding/v1alpha1",
+    "kind": "BRegBackupBinding",
+    "database": database_id, "priorPackageDigest": prior_digest,
     "priorSchemaFingerprint": prior_fingerprint, "backupFile": backup,
-    "sha256": "sha256:" + hashlib.sha256(data).hexdigest(), "byteLength": len(data),
+    "digest": "sha256:" + hashlib.sha256(data).hexdigest(), "sizeBytes": len(data),
     "createdAt": datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
-    "maxAgeSeconds": 3600,
+    "maximumAgeSeconds": 3600,
 }
 Path(output).write_text(json.dumps(binding, sort_keys=True), encoding="utf-8")
 PY
@@ -795,7 +802,7 @@ import json
 import sys
 initial, successor = (json.loads(line) for line in open(sys.argv[1], encoding="utf-8").read().splitlines())
 binding = json.load(open(sys.argv[3], encoding="utf-8"))
-if initial != [] or [(reference["bindingPath"], reference["sha256"]) for reference in successor] != [(sys.argv[2], binding["sha256"])]:
+if initial != [] or [(reference["bindingPath"], reference["sha256"]) for reference in successor] != [(sys.argv[2], binding["digest"])]:
     raise SystemExit("the ledger does not record the successor's backup binding")
 PY
   url="http://${listener_of[$environment]}/"

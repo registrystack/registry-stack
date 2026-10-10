@@ -1,9 +1,11 @@
+apiVersion: id.registrystack.org/formats/casework/simulation/v1alpha1
+kind: CaseworkSimulation
 id: friday-review
 source: regional-register
 holidayRevisions: {office-holidays: 7}
 subject:
   entity: regional-correction
-  id: request-0042
+  recordId: request-0042
   version: "1"
   activity: review
   stage: technical
@@ -12,8 +14,8 @@ subject:
 now: "2026-09-11T17:00:00+07:00"
 expect:
   queue: northern-review
-  ruleId: northern-requests
+  rule: northern-requests
   dueAt: "2026-09-14T17:00:00+07:00"
-  dueState: atRisk
+  dueState: at-risk
   eligibleReminders: [due-soon]
   eligibleSteps: []

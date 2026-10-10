@@ -1,0 +1,16 @@
+id: substitution-in-kind
+rules: [CFG-SEC-2, CFG-ENV-1, CFG-SEC-3]
+summary: A substitution expression in kind is refused once, and the kind is not then matched against the formats the command reads.
+appliesTo:
+  audiences: [operator]
+  envelope: true
+mutation:
+  envelope:
+    kind: "${REGISTRY_CONFORMANCE_VALUE}"
+expect:
+  exit: 1
+  diagnostics:
+    - code: config.substitution-not-allowed
+      path: /kind
+      from: kind
+      at: {line: 1, column: 1}

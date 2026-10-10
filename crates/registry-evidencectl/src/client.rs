@@ -19,7 +19,7 @@ use registry_evidence_client::private_key_jwt::{
 };
 use registry_evidence_client::{EvidenceClient, EvidenceClientProfile};
 use registry_platform_crypto::canonicalize_json;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use url::Url;
 
 pub(crate) const CLIENT_PROFILE_SCHEMA_V1: &str = "registry.evidence-client-profile/v1";
@@ -121,7 +121,7 @@ pub struct ProfileCreateArgs {
     scopes: Vec<String>,
 
     /// New owner-only profile file.
-    #[arg(long, alias = "out")]
+    #[arg(long)]
     output: PathBuf,
 }
 
@@ -132,11 +132,13 @@ pub struct ContractsFetchArgs {
     pub(crate) profile: PathBuf,
 
     /// New owner-only contract-candidate file.
-    #[arg(long, alias = "out")]
+    #[arg(long)]
     pub(crate) output: PathBuf,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+/// The client profile `client profile create` writes. These types only
+/// serialize; the profile is read back by `EvidenceClientProfile`.
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct ClientProfile {
     pub(crate) schema: String,
@@ -156,7 +158,7 @@ pub(crate) struct ClientProfile {
 /// members are independent: a deployment may state only the assertion
 /// audience, or only the resource, and unstated members keep their
 /// discovery-driven defaults.
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct ClientOauthProfile {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -167,14 +169,14 @@ pub(crate) struct ClientOauthProfile {
     pub(crate) scopes: Option<Vec<String>>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(tag = "source", rename_all = "kebab-case", deny_unknown_fields)]
 pub(crate) enum PrivateKeyReference {
     File { path: PathBuf },
     Environment { variable: String },
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "kebab-case", deny_unknown_fields)]
 pub(crate) enum TrustProfile {
     HttpsDiscovery,
@@ -182,21 +184,21 @@ pub(crate) enum TrustProfile {
     PinnedJwks { file: PathBuf },
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "kebab-case", deny_unknown_fields)]
 pub(crate) enum ContractsProfile {
     Published,
     Reviewed { file: PathBuf },
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct VerificationProfile {
     pub(crate) maximum_assertion_lifetime_seconds: u64,
     pub(crate) clock_skew_seconds: u64,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct ExpectedProfile {
     #[serde(skip_serializing_if = "Option::is_none")]

@@ -27,6 +27,7 @@ use std::path::Path;
 use registry_breg::compiler::module_digest_with_assets;
 use registry_breg::contract::{FieldTypeSource, ModuleLockSource};
 use registry_breg::{parse_module_yaml, parse_project_yaml, Diagnostic};
+use registry_platform_yaml::Reader;
 use serde_json::{json, Value};
 
 use crate::safe_path::{SafeDir, SafePathError};
@@ -83,8 +84,8 @@ const SCOPE_PROBE: &str = "bregctl-module-add-probe";
 /// each.
 const CONSENT_DATASET_ID: &str = "consent";
 
-/// Principal claim used when the project has no non-anonymous profile to take
-/// it from.
+/// Principal claim used when the project has no access profile to take it
+/// from.
 const FALLBACK_PRINCIPAL_CLAIM: &str = "principal";
 
 const MODULE_FILE: &str = "module.yaml";
@@ -334,8 +335,8 @@ fn consent_dataset_plan(source: &CapturedProjectSource, subject: &str) -> Consen
 /// as the compiler reported it.
 fn dataset_conflict(index: usize, failure: FailureReport) -> FailureReport {
     const CONFLICT_CODES: [&str; 2] = [
-        "manifest_projection.dataset.access_profile_unknown",
-        "manifest_projection.dataset.access_profile_ambiguous",
+        "breg.manifest-projection.dataset-access-profile-unknown",
+        "breg.manifest-projection.dataset-access-profile-ambiguous",
     ];
     let prefix = format!("project.manifestProjection.datasets[{index}]");
     if failure.diagnostics.iter().any(|diagnostic| {
@@ -375,14 +376,13 @@ fn subject_owner(source: &CapturedProjectSource, subject: &str) -> Option<Option
 }
 
 /// The claim the generated profiles bind principals with: the default
-/// profile's, else the first authenticated profile's.
+/// profile's, else the first profile's.
 fn principal_claim(source: &CapturedProjectSource) -> String {
     let profiles = &source.project.access_profiles;
     profiles
         .iter()
         .filter(|profile| profile.default)
         .chain(profiles.iter())
-        .filter(|profile| !profile.anonymous)
         .find_map(|profile| profile.principal_claim.clone())
         .filter(|claim| !claim.is_empty())
         .unwrap_or_else(|| FALLBACK_PRINCIPAL_CLAIM.to_owned())
@@ -473,6 +473,16 @@ fn render_registry(source: &CapturedProjectSource, plan: &Plan) -> Result<Vec<u8
     Ok(rendered)
 }
 
+/// A YAML document read through the shared reader, as JSON, or `None` when it
+/// is empty or the reader refuses it.
+fn yaml_value(file: &str, bytes: &[u8]) -> Option<Value> {
+    Reader::new(file)
+        .scan(bytes)
+        .ok()
+        .flatten()
+        .map(|node| node.to_json_value())
+}
+
 /// Whether `rendered` parses to the authored document with the planned items
 /// appended and the module locks replaced, and to nothing else.
 fn renders_exactly(
@@ -481,9 +491,9 @@ fn renders_exactly(
     plan: &Plan,
     locks: &[ModuleLockSource],
 ) -> bool {
-    let (Ok(mut expected), Ok(actual)) = (
-        serde_norway::from_slice::<Value>(original),
-        serde_norway::from_slice::<Value>(rendered),
+    let (Some(mut expected), Some(actual)) = (
+        yaml_value("registry.yaml", original),
+        yaml_value("rendered registry.yaml", rendered),
     ) else {
         return false;
     };
@@ -497,7 +507,7 @@ fn renders_exactly(
         if items.is_empty() {
             continue;
         }
-        let Ok(Value::Array(items)) = serde_norway::from_str::<Value>(items) else {
+        let Some(Value::Array(items)) = yaml_value("planned items", items.as_bytes()) else {
             return false;
         };
         let slot = document
@@ -512,7 +522,7 @@ fn renders_exactly(
         list.extend(items);
     }
     if let Some(items) = &plan.dataset_addition {
-        let Ok(Value::Array(items)) = serde_norway::from_str::<Value>(items) else {
+        let Some(Value::Array(items)) = yaml_value("planned items", items.as_bytes()) else {
             return false;
         };
         let Some(projection) = document

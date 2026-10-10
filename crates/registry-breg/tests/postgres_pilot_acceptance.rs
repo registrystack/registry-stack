@@ -376,7 +376,7 @@ async fn inspection_journey(harness: &PilotHarness) {
             ["observationSchemaMetadata"]["additionalProperties"],
         false
     );
-    let concealed_schema = harness
+    let unauthenticated_schema = harness
         .send(
             Method::GET,
             "/openapi.json?accessProfile=inspection-inspector",
@@ -385,7 +385,7 @@ async fn inspection_journey(harness: &PilotHarness) {
             Vec::new(),
         )
         .await;
-    assert_eq!(concealed_schema.status(), StatusCode::NOT_FOUND);
+    assert_eq!(unauthenticated_schema.status(), StatusCode::UNAUTHORIZED);
 
     let authority = create_record(
         harness,
@@ -529,7 +529,7 @@ async fn inspection_journey(harness: &PilotHarness) {
     )
     .await;
 
-    let anonymous = harness
+    let unauthenticated = harness
         .send(
             Method::GET,
             &format!("/v1/records/permits/{}", correction.id),
@@ -538,8 +538,11 @@ async fn inspection_journey(harness: &PilotHarness) {
             Vec::new(),
         )
         .await;
-    assert_eq!(anonymous.status(), StatusCode::NOT_FOUND);
-    assert_eq!(response_json(anonymous).await["code"], "resource.not_found");
+    assert_eq!(unauthenticated.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        response_json(unauthenticated).await["code"],
+        "authentication.refused"
+    );
 }
 
 async fn facility_journey(harness: &PilotHarness) {
@@ -819,12 +822,13 @@ async fn business_journey(harness: &PilotHarness) {
         }),
     )
     .await;
+    let public_token = harness.token_with_scopes("public-register", &[], &["business:public.read"]);
     let public = response_json(
         harness
             .send(
                 Method::GET,
                 &format!("/v1/records/legal-entities/{}", legal_entity.id),
-                None,
+                Some(&public_token),
                 &[],
                 Vec::new(),
             )
@@ -912,21 +916,21 @@ async fn business_journey(harness: &PilotHarness) {
     assert_list_ids(
         harness,
         "/v1/records/officer-appointments:as-of?asOf=2021-12-31T23:59:59Z",
-        None,
+        Some(&public_token),
         &[&historical.id],
     )
     .await;
     assert_list_ids(
         harness,
         "/v1/records/officer-appointments:as-of?asOf=2022-01-01T00:00:00Z",
-        None,
+        Some(&public_token),
         &[&current.id],
     )
     .await;
     assert_list_ids(
         harness,
         "/v1/records/officer-appointments:current",
-        None,
+        Some(&public_token),
         &[&current.id],
     )
     .await;

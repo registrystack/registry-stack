@@ -16,6 +16,7 @@ use std::{
     path::{Component, Path},
 };
 
+use registry_platform_yaml::BoundedU64;
 use serde_json::Value;
 
 use crate::{
@@ -34,13 +35,6 @@ fn one(field: FieldPath, code: &'static str, message: impl Into<String>) -> Vec<
 /// Check one authored access policy before any project-level name resolution.
 #[must_use]
 pub fn validate_access_policy(policy: &AccessPolicy) -> Vec<Finding> {
-    if policy.version != 1 {
-        return one(
-            FieldPath::root().key("version"),
-            "access-policy-version",
-            "access policy version must be 1",
-        );
-    }
     if !valid_local_identifier(&policy.id) {
         return one(
             FieldPath::root().key("id"),
@@ -359,36 +353,25 @@ pub fn validate_question(question: &Question) -> Vec<Finding> {
                         return one(
                             field.key("combine"),
                             "fact-combination",
-                            format!(
-                                "source fact `{}` uses `collect` but its path visits no collection",
-                                fact.name
-                            ),
+                            "this source fact uses `collect` but its path visits no collection",
                         )
                     }
                     (true, FactCombination::ExactlyOne) => {
                         return one(
                             field.key("combine"),
                             "fact-combination",
-                            format!(
-                                "source fact `{}` visits a collection and must explicitly use `combine: collect`",
-                                fact.name
-                            ),
+                            "this source fact visits a collection and must explicitly use `combine: collect`",
                         )
                     }
                 }
             }
             if question.source.collection_bounds.len() > 16
-                || question
-                    .source
-                    .collection_bounds
-                    .iter()
-                    .any(|(pointer, maximum)| {
-                        pointer.is_empty()
-                            || pointer.len() > 256
-                            || !pointer.starts_with('/')
-                            || pointer.chars().any(char::is_control)
-                            || !(1..=256).contains(maximum)
-                    })
+                || question.source.collection_bounds.keys().any(|pointer| {
+                    pointer.is_empty()
+                        || pointer.len() > 256
+                        || !pointer.starts_with('/')
+                        || pointer.chars().any(char::is_control)
+                })
             {
                 return one(
                     source.key("collectionBounds"),
@@ -566,19 +549,17 @@ pub fn validate_answer(answer: &QuestionAnswer) -> Vec<Finding> {
                     "a bounded identifier requires an ASCII prefix ending in a separator",
                 );
             }
-            let (Some(minimum), Some(maximum)) = (answer.minimum_bytes, answer.maximum_bytes)
-            else {
+            let (Some(minimum), Some(maximum)) = (
+                answer.minimum_bytes.map(BoundedU64::get),
+                answer.maximum_bytes.map(BoundedU64::get),
+            ) else {
                 return one(
                     FieldPath::root(),
                     "bounded-identifier-bounds",
                     "a bounded identifier requires minimumBytes and maximumBytes in 1..=1024",
                 );
             };
-            if minimum == 0
-                || minimum > maximum
-                || maximum > 1_024
-                || maximum <= prefix.len() as u64
-            {
+            if minimum > maximum || maximum <= prefix.len() as u64 {
                 return one(FieldPath::root(), "bounded-identifier-bounds", "a bounded identifier requires consistent byte bounds in 1..=1024 and room after its prefix");
             }
         }
@@ -632,7 +613,7 @@ pub fn validate_answer(answer: &QuestionAnswer) -> Vec<Finding> {
             if !findings.is_empty() {
                 return findings;
             }
-            if !matches!(answer.maximum_serialized_bytes, Some(1..=65_536)) {
+            if answer.maximum_serialized_bytes.is_none() {
                 return one(
                     FieldPath::root().key("maximumSerializedBytes"),
                     "structured-answer-size",

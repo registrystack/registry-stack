@@ -5,7 +5,7 @@ status: draft
 owner: registry-docs
 source_repos:
   - registry-manifest
-last_reviewed: "2026-10-03"
+last_reviewed: "2026-10-08"
 doc_type: specification
 doc_id: RS-DM-MANIFEST
 category: normative
@@ -48,6 +48,7 @@ The key words in this document are interpreted per [RS-DOC](../rs-doc/) Section 
 | 0.5.0 | 2026-08-09 | draft | Revised REQ-DM-MANIFEST-013 to permit a pre-1.0 stack minor release to retain `registry-manifest/v1` for a breaking change only when the Registry Manifest changelog marks it `BREAKING:`, provides concrete migration steps, and this history records the specification change. Stable releases still require a new schema version. |
 | 0.6.0 | 2026-08-11 | draft | Removed the retired Relay policy-decision-point coupling. The Relay runtime that read a manifest and enforced its governed evidence policy is retired, and the current Relay compiles and seals its own governed contract with no manifest dependency. Section 6 and REQ-DM-MANIFEST-007 through REQ-DM-MANIFEST-009 now state governed evidence pack metadata as validated published surface with no maintained runtime behind it, and the `registry-evidence-gateway-pdp/v1` identifier is recorded as a retained legacy name. Cross-references to the retired REQ-PR-RELAY-011 and REQ-ARC-G-006 and REQ-ARC-G-009 are replaced. No validator behavior changed. |
 | 0.7.0 | 2026-10-03 | draft | Removed references to the maintained Relay runtime after its retirement, retaining the metadata model and all Manifest requirements under their existing identifiers. |
+| 0.8.0 | 2026-10-08 | draft | Recorded the breaking pre-1.0 reading change the Registry Manifest changelog marks `BREAKING:` while retaining `registry-manifest/v1`: the command line now reads a manifest through the shared Registry Stack YAML reader, refuses an explicit `null` and `${...}` in text, accepts up to 1 MiB, and names a refused key by its JSON Pointer, line, and column. REQ-DM-MANIFEST-013 now requires the field path rather than a dotted field path, and the Section 11 limitation on line and column is narrowed to library callers. |
 
 ## 1. Scope and references
 
@@ -163,13 +164,13 @@ The digest inventory describes the bundle that was published, not the history of
 
 The manifest and its generated formats carry a versioned compatibility promise: a schema version names the exact field set a reader accepts, and the schema evolves through Registry Manifest releases, not through keys an individual producer adds on its own.
 
-REQ-DM-MANIFEST-013: The `registry-manifest/v1` manifest and its generated `*/v1` formats MUST reject a key that is not modeled at its nesting depth, at parse time, and MUST name the offending key by its dotted field path in the resulting error. A reader MUST NOT silently drop or ignore a field it does not recognize. Extending the schema, including adding an optional field to an existing object, requires a Registry Manifest code change; a producer MUST NOT rely on an unmodeled key being tolerated. Fields modeled to carry arbitrary JSON, such as the governed evidence pack's `source_basis`, `semantic_profile`, and `evidence_envelope`, or an ecosystem binding's `vocabulary` and related envelope fields, remain the modeled surface for producer-specific content. Before Registry Stack v1.0.0, a breaking change MAY retain `registry-manifest/v1` only in a stack minor release whose Registry Manifest changelog marks the change `BREAKING:`, supplies concrete migration steps, and whose specification version history records the change. From Registry Stack v1.0.0, a breaking change, including removing or renaming a required field or changing the meaning or type of an existing field, MUST carry a new schema version.
+REQ-DM-MANIFEST-013: The `registry-manifest/v1` manifest and its generated `*/v1` formats MUST reject a key that is not modeled at its nesting depth, at parse time, and MUST name the offending key by its field path in the resulting error. A reader MUST NOT silently drop or ignore a field it does not recognize. Extending the schema, including adding an optional field to an existing object, requires a Registry Manifest code change; a producer MUST NOT rely on an unmodeled key being tolerated. Fields modeled to carry arbitrary JSON, such as the governed evidence pack's `source_basis`, `semantic_profile`, and `evidence_envelope`, or an ecosystem binding's `vocabulary` and related envelope fields, remain the modeled surface for producer-specific content. Before Registry Stack v1.0.0, a breaking change MAY retain `registry-manifest/v1` only in a stack minor release whose Registry Manifest changelog marks the change `BREAKING:`, supplies concrete migration steps, and whose specification version history records the change. From Registry Stack v1.0.0, a breaking change, including removing or renaming a required field or changing the meaning or type of an existing field, MUST carry a new schema version.
 
 ## 11. Limitations
 
 These constraints are stated so a reader does not infer an invariant the reviewed implementation does not enforce.
 
-- **Runtime-binding exclusion is an enumerated list.** Registry Manifest rejects the runtime-only keys it enumerates, not every conceivable runtime key. This check and the general unknown-key rejection REQ-DM-MANIFEST-013 requires both operate over an intermediate JSON value, so a rejection error carries the offending key's dotted field path but not its YAML line or column (REQ-DM-MANIFEST-002).
+- **Runtime-binding exclusion is an enumerated list.** Registry Manifest rejects the runtime-only keys it enumerates, not every conceivable runtime key. The command line places this refusal, and the general unknown-key rejection REQ-DM-MANIFEST-013 requires, at the offending key's JSON Pointer, line, and column; a library caller that deserializes a manifest directly receives the dotted field path without a line or column (REQ-DM-MANIFEST-002).
 - **Standards conformance is not validated.** The renderers emit standards-shaped artifacts but do not validate them against the external standard bodies. A rendered CPSV-AP, DCAT, or SHACL document is well-formed by construction, not certified against the standard (REQ-DM-MANIFEST-011).
 - **URI checks are shallow.** A field required to be a URI is checked for an HTTP or HTTPS scheme or for the identifier pattern, not for full RFC 3987 IRI validity (REQ-DM-MANIFEST-004, REQ-DM-MANIFEST-005).
 - **Access discovery metadata is not a trust anchor.** Registry Manifest validates required access fields and selected URL shapes, but a published manifest does not bind an external consumer to trust an endpoint, a discovery document, or an issuer identity. Host pinning and trust bootstrap belong to the consumer's local policy (REQ-DM-MANIFEST-010).
@@ -193,7 +194,7 @@ A metadata manifest, and the Registry Manifest tooling that validates and render
 - advertises evidence-offering access metadata as discovery only, with the required response profile, HTTPS endpoint and discovery URLs, and ruleset binding for `registry-evidence` access, and never as an access grant (REQ-DM-MANIFEST-010);
 - renders its artifacts as a pure, deterministic, standards-shaped set without asserting external-standard conformance (REQ-DM-MANIFEST-011);
 - publishes a self-describing bundle digested for pinning and comparison without a runtime service (REQ-DM-MANIFEST-012);
-- rejects an unmodeled key at parse time, naming its dotted field path, without relaxing other validation, and applies the pre-1.0 or stable-version rule to every breaking change (REQ-DM-MANIFEST-013).
+- rejects an unmodeled key at parse time, naming its field path, without relaxing other validation, and applies the pre-1.0 or stable-version rule to every breaking change (REQ-DM-MANIFEST-013).
 
 Conformance to this specification does not imply conformance to any external standard cited in the `standards_referenced` frontmatter field. Each standard's adoption mode and scope are documented in the [standards register](../../reference/standards/).
 

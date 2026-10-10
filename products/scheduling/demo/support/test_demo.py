@@ -116,9 +116,9 @@ class AdmissionBodyTest(unittest.TestCase):
 
 class HoldTtlTest(unittest.TestCase):
     def test_the_demo_policy_ttl_is_shortened_exactly_once(self):
-        policy = "holdPolicy:\n  ttlMinutes: 5\n  maxPerCaller: 3\n"
+        policy = "holdPolicy:\n  ttlMinutes: 5\n  maximumPerCaller: 3\n"
         self.assertEqual(demo.shorten_hold_ttl(policy),
-                         "holdPolicy:\n  ttlMinutes: 1\n  maxPerCaller: 3\n")
+                         "holdPolicy:\n  ttlMinutes: 1\n  maximumPerCaller: 3\n")
 
     def test_an_unexpected_template_is_refused_rather_than_silently_kept(self):
         with self.assertRaises(ValueError):
@@ -141,7 +141,7 @@ class RuntimeConfigTest(unittest.TestCase):
             Path("/run/package"), Path("/run/secrets"), Path("/run/audit"), 8105, None
         )
         for required in (
-            "apiVersion: registry.registrystack.org/scheduling-runtime/v1alpha1",
+            "apiVersion: id.registrystack.org/formats/scheduling/runtime/v1alpha1",
             "kind: SchedulingRuntimeConfig",
             "root: /run/package",
             "databaseId: scheduling-demo",

@@ -124,7 +124,7 @@ fn no_command_keeps_the_existing_usage_error() {
         .output()
         .expect("run cli without a command");
 
-    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(2));
     assert!(output.stdout.is_empty());
     assert!(String::from_utf8(output.stderr)
         .expect("stderr utf8")
@@ -211,9 +211,10 @@ datasets: []
         .args(["validate", unsupported.to_str().unwrap()])
         .output()
         .expect("run cli");
-    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
-    assert!(stderr.contains("metadata.manifest.version_unsupported"));
+    assert!(stderr.contains("error[manifest.metadata.unsupported-version]"));
+    assert!(stderr.contains("unsupported.yaml:2:17 /schema_version"));
 
     let invalid = dir.join("invalid.yaml");
     fs::write(
@@ -234,10 +235,14 @@ datasets: []
         .args(["validate", invalid.to_str().unwrap()])
         .output()
         .expect("run cli");
-    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
-    assert!(stderr.contains("metadata.manifest.validation_failed"));
-    assert!(stderr.contains("catalog.base_url"));
+    assert!(stderr.contains("error[manifest.metadata.invalid-url]"));
+    assert!(stderr.contains("invalid.yaml:5:13 /catalog/base_url"));
+    assert!(
+        !stderr.contains("metadata.example.test"),
+        "a diagnostic must not repeat the refused value: {stderr}"
+    );
 }
 
 #[test]
@@ -298,9 +303,10 @@ datasets:
         .arg(&invalid)
         .output()
         .expect("run cli");
-    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
-    assert!(stderr.contains("runtime_key_present: source"));
+    assert!(stderr.contains("error[manifest.metadata.runtime-only-key]"));
+    assert!(stderr.contains("/datasets/0/entities/0/source"));
 }
 
 #[test]
@@ -1055,9 +1061,13 @@ datasets: []
         ])
         .output()
         .expect("run cli");
-    assert!(!output.status.success(), "publish must exit non-zero");
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "publish must refuse the manifest"
+    );
     let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
-    assert!(stderr.contains("metadata.manifest.validation_failed"));
+    assert!(stderr.contains("error[manifest.metadata.invalid-url]"));
 }
 
 #[test]
@@ -1255,9 +1265,9 @@ fn validate_reports_missing_manifest_file() {
         .args(["validate", "/this/path/does/not/exist.yaml"])
         .output()
         .expect("run cli");
-    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(3));
     let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
-    assert!(stderr.contains("metadata.manifest.file_not_found"));
+    assert!(stderr.contains("error[manifest.metadata.missing-file]"));
 }
 
 #[test]
@@ -1269,36 +1279,40 @@ fn validate_reports_yaml_parse_failure() {
         .args(["validate", manifest.to_str().unwrap()])
         .output()
         .expect("run cli");
-    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
-    assert!(stderr.contains("metadata.manifest.parse_failed"));
+    assert!(stderr.contains("error[yaml.syntax]"));
 }
 
 #[test]
-fn validate_rejects_yaml_larger_than_64_kib_before_parse() {
+fn validate_rejects_yaml_larger_than_one_mib_before_parse() {
     let dir = temp_dir("validate-yaml-too-large");
     let manifest = dir.join("oversize.yaml");
-    fs::write(&manifest, "[".repeat(64 * 1024 + 1)).expect("write oversized yaml");
+    fs::write(&manifest, "[".repeat(1024 * 1024 + 1)).expect("write oversized yaml");
 
     let output = Command::new(bin())
         .args(["validate", manifest.to_str().unwrap()])
         .output()
         .expect("run cli");
 
-    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
-    assert!(stderr.contains("metadata.manifest.too_large"));
+    assert!(stderr.contains("error[yaml.too-large]"));
     assert!(
-        !stderr.contains("metadata.manifest.parse_failed"),
+        !stderr.contains("yaml.syntax"),
         "oversized input must fail before YAML parse: {stderr}"
     );
 }
 
 #[test]
-fn validate_rejects_nested_flow_yaml_larger_than_64_kib_before_parse() {
+fn validate_rejects_nested_flow_yaml_larger_than_one_mib_before_parse() {
     let dir = temp_dir("validate-nested-flow-too-large");
     let manifest = dir.join("nested-flow-oversize.yaml");
-    let raw = format!("{}{}", "[".repeat(64 * 1024 + 1), "]".repeat(64 * 1024 + 1));
+    let raw = format!(
+        "{}{}",
+        "[".repeat(512 * 1024 + 1),
+        "]".repeat(512 * 1024 + 1)
+    );
     fs::write(&manifest, raw).expect("write oversized nested flow yaml");
 
     let output = Command::new(bin())
@@ -1306,11 +1320,11 @@ fn validate_rejects_nested_flow_yaml_larger_than_64_kib_before_parse() {
         .output()
         .expect("run cli");
 
-    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
-    assert!(stderr.contains("metadata.manifest.too_large"));
+    assert!(stderr.contains("error[yaml.too-large]"));
     assert!(
-        !stderr.contains("metadata.manifest.parse_failed"),
+        !stderr.contains("yaml.syntax"),
         "oversized nested-flow input must fail before YAML parse: {stderr}"
     );
 }
@@ -1381,11 +1395,11 @@ datasets: [&dataset {id: demo, title: Demo, entities: []}, *dataset]
             .output()
             .expect("run cli");
 
-        assert!(!output.status.success(), "{name} must fail closed");
+        assert_eq!(output.status.code(), Some(1), "{name} must fail closed");
         let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
         assert!(
-            stderr.contains("metadata.manifest.aliases_unsupported"),
-            "{name} stderr missing alias error: {stderr}"
+            stderr.contains("error[yaml.anchor]"),
+            "{name} stderr missing anchor error: {stderr}"
         );
     }
 }
@@ -1427,11 +1441,11 @@ codelists: []
         Duration::from_secs(5),
     );
 
-    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
     assert!(
-        stderr.contains("metadata.manifest.aliases_unsupported"),
-        "stderr missing alias error: {stderr}"
+        stderr.contains("error[yaml.anchor]") && stderr.contains("error[yaml.alias]"),
+        "stderr missing anchor or alias error: {stderr}"
     );
 }
 
@@ -1507,7 +1521,7 @@ fn unknown_subcommand_returns_usage() {
         .arg("teleport")
         .output()
         .expect("run cli");
-    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(2));
     let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
     assert!(stderr.contains("usage:"));
 }
@@ -1518,18 +1532,18 @@ fn validate_profiles_reports_missing_directory_and_empty_root() {
         .args(["validate-profiles", "/no/such/profiles/dir"])
         .output()
         .expect("run cli");
-    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(3));
     let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
-    assert!(stderr.contains("metadata.profile.directory_read_failed"));
+    assert!(stderr.contains("error[manifest.profile.missing-directory]"));
 
     let empty_root = temp_dir("empty-profile-root");
     let output = Command::new(bin())
         .args(["validate-profiles", empty_root.to_str().unwrap()])
         .output()
         .expect("run cli");
-    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
-    assert!(stderr.contains("metadata.profile.descriptor_missing"));
+    assert!(stderr.contains("error[manifest.profile.no-descriptors]"));
 }
 
 #[test]
@@ -1558,9 +1572,10 @@ fixtures: []
         .output()
         .expect("run cli");
 
-    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
-    assert!(stderr.contains("metadata.profile.aliases_unsupported"));
+    assert!(stderr.contains("error[yaml.anchor]"));
+    assert!(stderr.contains("profile.yaml:3:10 /profile"));
 }
 
 #[test]
@@ -1608,9 +1623,11 @@ datasets: []
         .output()
         .expect("run cli");
 
-    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
-    assert!(stderr.contains("metadata.manifest.aliases_unsupported"));
+    assert!(stderr.contains("error[yaml.anchor]"));
+    assert!(stderr.contains("error[yaml.alias]"));
+    assert!(stderr.contains("fixtures/metadata.yaml:6:10"));
 }
 
 #[test]
@@ -1684,11 +1701,12 @@ datasets:
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
+    assert_eq!(output.status.code(), Some(1));
     for code in [
-        "metadata.profile.required_concept_missing",
-        "metadata.profile.identifier_missing",
-        "metadata.profile.cardinality_mismatch",
-        "metadata.profile.codelist_mismatch",
+        "manifest.profile.required-concept-missing",
+        "manifest.profile.identifier-missing",
+        "manifest.profile.cardinality-mismatch",
+        "manifest.profile.codelist-mismatch",
     ] {
         assert!(
             combined.contains(code),
@@ -1720,13 +1738,26 @@ fixtures: []
         .args(["validate-profiles", root.to_str().unwrap()])
         .output()
         .expect("run cli");
-    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
-    assert!(stderr.contains("metadata.profile.id_mismatch"));
-    assert!(stderr.contains("metadata.profile.version_missing"));
-    assert!(stderr.contains("metadata.profile.supported_input_artifacts_missing"));
-    assert!(stderr.contains("metadata.profile.conformance_checks_missing"));
-    assert!(stderr.contains("metadata.profile.fixtures_missing"));
+    assert!(stderr.contains("error[manifest.profile.id-mismatch]"));
+    assert!(stderr.contains("/profile/id"));
+    assert!(stderr.contains("error[manifest.profile.empty-value]"));
+    assert!(stderr.contains("/profile/version"));
+    for list in [
+        "/supported_input_artifacts",
+        "/conformance_checks",
+        "/fixtures",
+    ] {
+        assert!(
+            stderr.contains(&format!("{list}\n")),
+            "expected an empty-list finding at {list}: {stderr}"
+        );
+    }
+    assert_eq!(
+        stderr.matches("error[manifest.profile.empty-list]").count(),
+        3
+    );
 }
 
 #[test]
@@ -1755,9 +1786,10 @@ fixtures:
         .args(["validate-profiles", root.to_str().unwrap()])
         .output()
         .expect("run cli");
-    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
-    assert!(stderr.contains("metadata.profile.fixture_missing"));
+    assert!(stderr.contains("error[manifest.profile.missing-fixture]"));
+    assert!(stderr.contains("/fixtures/0/path"));
 }
 
 #[test]
@@ -1787,9 +1819,10 @@ fixtures:
         .args(["validate-profiles", root.to_str().unwrap()])
         .output()
         .expect("run cli");
-    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
-    assert!(stderr.contains("metadata.manifest.parse_failed"));
+    assert!(stderr.contains("error[yaml."));
+    assert!(stderr.contains("fixtures/metadata.yaml:1:"));
 }
 
 #[test]
@@ -1833,9 +1866,10 @@ datasets: []
         .args(["validate-profiles", root.to_str().unwrap()])
         .output()
         .expect("run cli");
-    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
-    assert!(stderr.contains("metadata.profile.claim_missing"));
+    assert!(stderr.contains("error[manifest.profile.claim-missing]"));
+    assert!(stderr.contains("  note: ") && stderr.contains("fixtures/metadata.yaml the fixture"));
 }
 
 #[test]
@@ -1925,4 +1959,285 @@ fn validate_and_render_multi_vocabulary_field_concepts() {
         "https://person-register.example.gov/metadata/datasets/person-register/entities/person/fields/person_id",
         "a field with no concept must fall back to its deterministic manifest URI"
     );
+}
+
+fn json_report(output: &Output) -> serde_json::Value {
+    assert!(
+        output.stderr.is_empty(),
+        "--format json writes only the report: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    serde_json::from_slice(&output.stdout).expect("a JSON report on stdout")
+}
+
+fn write_profile(root: &Path, name: &str, extra: &str, fixtures: &str) -> PathBuf {
+    let profile_dir = root.join(name);
+    fs::create_dir_all(profile_dir.join("fixtures")).expect("profile dir");
+    fs::write(
+        profile_dir.join("profile.yaml"),
+        format!(
+            "schema_version: registry-manifest-profile/v1\nprofile:\n  id: {name}\n  \
+             version: \"1\"\nsupported_input_artifacts:\n  - kind: metadata_manifest\n\
+             conformance_checks:\n  - id: {name}.check\nfixtures:\n{fixtures}{extra}"
+        ),
+    )
+    .expect("write profile");
+    profile_dir
+}
+
+#[test]
+fn validate_reports_json_with_the_shared_envelope_and_exit_codes() {
+    let dir = temp_dir("validate-json");
+    let valid = dir.join("valid.yaml");
+    write_minimal_manifest(&valid, "datasets: []\n");
+    let output = Command::new(bin())
+        .args(["validate", "--format", "json"])
+        .arg(&valid)
+        .output()
+        .expect("run cli");
+    assert_eq!(output.status.code(), Some(0));
+    let report = json_report(&output);
+    assert_eq!(report["ok"], true);
+    assert_eq!(report["command"], "validate");
+    assert_eq!(report["status"], "complete");
+    assert_eq!(
+        report["apiVersion"],
+        "id.registrystack.org/formats/manifest/ctl-report/v1alpha1"
+    );
+    assert_eq!(report["kind"], "ManifestCtlReport");
+    assert_eq!(report["filesChecked"], 1);
+    assert_eq!(report["errors"], 0);
+    assert!(report["sourceManifestDigest"]
+        .as_str()
+        .expect("a digest")
+        .starts_with("sha256:"));
+
+    let refused = dir.join("refused.yaml");
+    write_minimal_manifest(&refused, "datasets: []\nunexpected: true\n");
+    let output = Command::new(bin())
+        .args(["validate", "--format=json"])
+        .arg(&refused)
+        .output()
+        .expect("run cli");
+    assert_eq!(output.status.code(), Some(1));
+    let report = json_report(&output);
+    assert_eq!(report["ok"], false);
+    assert_eq!(report["status"], "domain-refusal");
+    let diagnostic = &report["diagnostics"][0];
+    assert_eq!(diagnostic["code"], "config.unknown-key");
+    assert_eq!(diagnostic["path"], "/unexpected");
+    assert_eq!(diagnostic["source"]["line"], 10);
+
+    let output = Command::new(bin())
+        .args(["validate", "--format", "json"])
+        .arg(dir.join("absent.yaml"))
+        .output()
+        .expect("run cli");
+    assert_eq!(output.status.code(), Some(3));
+    let report = json_report(&output);
+    assert_eq!(report["status"], "operational-failure");
+    assert_eq!(
+        report["diagnostics"][0]["code"],
+        "manifest.metadata.missing-file"
+    );
+
+    let output = Command::new(bin())
+        .args(["validate", "--format", "json"])
+        .output()
+        .expect("run cli");
+    assert_eq!(output.status.code(), Some(2));
+    let report = json_report(&output);
+    assert_eq!(report["status"], "usage-error");
+    assert_eq!(
+        report["diagnostics"][0]["code"],
+        "manifest.usage.invalid-arguments"
+    );
+}
+
+/// The registered example of the report format (CFG-SCHEMA-1) is this
+/// command's own output.
+#[test]
+fn the_report_example_is_the_validate_output() {
+    let example = manifest_product_root().join("examples/ctl-report/validate.json");
+    let output = Command::new(bin())
+        .current_dir(manifest_product_root())
+        .args([
+            "validate",
+            "--format",
+            "json",
+            "profiles/example-benefits-sync/fixtures/metadata.yaml",
+        ])
+        .output()
+        .expect("run cli");
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(
+        fs::read_to_string(example).expect("the report example"),
+        String::from_utf8(output.stdout).expect("stdout utf8"),
+        "regenerate it with `registry-manifest validate --format json \
+         profiles/example-benefits-sync/fixtures/metadata.yaml` from products/manifest"
+    );
+}
+
+#[test]
+fn validate_refuses_null_and_substitution_without_repeating_values() {
+    let dir = temp_dir("validate-null-substitution");
+    let null = dir.join("null.yaml");
+    write_minimal_manifest(
+        &null,
+        "datasets:\n  - id: people\n    title: People\n    description: null\n",
+    );
+    let output = Command::new(bin())
+        .arg("validate")
+        .arg(&null)
+        .output()
+        .expect("run cli");
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
+    assert!(stderr.contains("error[config.null-value]"), "{stderr}");
+    assert!(
+        stderr.contains("null.yaml:12:18 /datasets/0/description"),
+        "{stderr}"
+    );
+
+    let substituted = dir.join("substituted.yaml");
+    write_minimal_manifest(
+        &substituted,
+        "datasets:\n  - id: people\n    title: ${DATASET_TITLE}\n",
+    );
+    let output = Command::new(bin())
+        .arg("validate")
+        .arg(&substituted)
+        .output()
+        .expect("run cli");
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
+    assert!(
+        stderr.contains("error[config.substitution-not-allowed]"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("/datasets/0/title"), "{stderr}");
+    assert!(!stderr.contains("DATASET_TITLE"), "{stderr}");
+}
+
+#[test]
+fn validate_profiles_refuses_the_retired_generator_command_key() {
+    let root = temp_dir("profile-generator-command");
+    write_profile(
+        &root,
+        "retired",
+        "generator_command: null\n",
+        "  - path: fixtures/metadata.yaml\n",
+    );
+    let output = Command::new(bin())
+        .args(["validate-profiles", "--format", "json"])
+        .arg(&root)
+        .output()
+        .expect("run cli");
+    assert_eq!(output.status.code(), Some(1));
+    let report = json_report(&output);
+    let diagnostics = report["diagnostics"].as_array().expect("diagnostics");
+    assert_eq!(diagnostics.len(), 1, "{report:#}");
+    assert_eq!(diagnostics[0]["code"], "config.unknown-key");
+    assert_eq!(diagnostics[0]["path"], "/generator_command");
+}
+
+#[test]
+fn validate_profiles_refuses_a_fixture_path_outside_its_profile() {
+    let root = temp_dir("profile-fixture-escape");
+    write_profile(&root, "escape", "", "  - path: ../outside.yaml\n");
+    let output = Command::new(bin())
+        .args(["validate-profiles"])
+        .arg(&root)
+        .output()
+        .expect("run cli");
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
+    assert!(
+        stderr.contains("error[manifest.profile.fixture-path-escapes]"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("/fixtures/0/path"), "{stderr}");
+    assert!(!stderr.contains("outside.yaml"), "{stderr}");
+}
+
+#[test]
+fn validate_profiles_refuses_a_fixture_link_that_resolves_outside_its_profile() {
+    use std::os::unix::fs::symlink;
+
+    let root = temp_dir("profile-fixture-link");
+    let profile_dir = write_profile(&root, "linked", "", "  - path: fixtures/metadata.yaml\n");
+    let outside = temp_dir("profile-fixture-link-outside").join("metadata.yaml");
+    write_minimal_manifest(
+        &outside,
+        "profiles:\n  - id: linked\n    version: \"1\"\ndatasets: []\n",
+    );
+    symlink(&outside, profile_dir.join("fixtures/metadata.yaml")).expect("fixture symlink");
+
+    let output = Command::new(bin())
+        .args(["validate-profiles", "--format", "json"])
+        .arg(&root)
+        .output()
+        .expect("run cli");
+    assert_eq!(output.status.code(), Some(1));
+    let report = json_report(&output);
+    let found = report["diagnostics"]
+        .as_array()
+        .expect("diagnostics")
+        .iter()
+        .map(|diagnostic| {
+            (
+                diagnostic["code"].as_str().expect("code"),
+                diagnostic["path"].as_str().expect("path"),
+                diagnostic["source"]["line"].as_u64(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        found,
+        [(
+            "manifest.profile.fixture-path-escapes",
+            "/fixtures/0/path",
+            Some(10)
+        )]
+    );
+    let text = String::from_utf8(output.stdout).expect("stdout utf8");
+    assert!(!text.contains("profile-fixture-link-outside"), "{text}");
+}
+
+#[test]
+fn validate_profiles_warns_on_an_unlisted_file_and_deny_warnings_refuses_it() {
+    let root = temp_dir("profile-unlisted");
+    let profile_dir = write_profile(&root, "unlisted", "", "  - path: fixtures/metadata.yaml\n");
+    write_minimal_manifest(
+        &profile_dir.join("fixtures/metadata.yaml"),
+        "profiles:\n  - id: unlisted\n    version: \"1\"\ndatasets: []\n",
+    );
+    write_minimal_manifest(&profile_dir.join("fixtures/stray.yaml"), "datasets: []\n");
+
+    let output = Command::new(bin())
+        .arg("validate-profiles")
+        .arg(&root)
+        .output()
+        .expect("run cli");
+    assert_eq!(output.status.code(), Some(0));
+    let stdout = String::from_utf8(output.stdout).expect("stdout utf8");
+    assert!(
+        stdout.contains("warning[manifest.profile.unlisted-file]"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("0 errors, 1 warning in 2 files"),
+        "{stdout}"
+    );
+
+    let output = Command::new(bin())
+        .args(["validate-profiles", "--deny-warnings", "--format", "json"])
+        .arg(&root)
+        .output()
+        .expect("run cli");
+    assert_eq!(output.status.code(), Some(1));
+    let report = json_report(&output);
+    assert_eq!(report["ok"], false);
+    assert_eq!(report["warnings"], 1);
+    assert_eq!(report["profiles"], 1);
 }

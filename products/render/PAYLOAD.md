@@ -31,9 +31,10 @@ is the `dataSha256` the caller should store on the record.
 
 Rules worth internalizing:
 
-- **`labels` is bundle-owned content** — flat YAML string maps under
-  `labels/<locale>.yaml`, listed in the manifest's `labels: [...]`. The
-  template receives every declared table, so a bilingual document consumes
+- **`labels` is bundle-owned content** — one label table per
+  `labels/<locale>.yaml` (`kind: RenderLabels`), whose `labels` map of key
+  to text the template receives flat; the manifest lists the locales in
+  `labels: [...]`. The template receives every declared table, so a bilingual document consumes
   both. A key present in one locale and missing from another is a `registry-render
   check` error, not a runtime surprise; a key no locale declares is a
   template error at compile time.

@@ -130,7 +130,10 @@ pub(crate) fn run(args: DoctorArgs, format: OutputFormat) -> Result<ExitCode> {
     })?;
     let base = invoke_check(&evidence, &runtime_config, false, None, false)?;
     if !base.status.success() {
-        let dependency_failure = runtime_diagnostic_is_dependency_failure(&base.stderr);
+        // `evidence check` exits 3 when an input it depends on could not be
+        // read, such as an unreadable runtime file or package.
+        let dependency_failure =
+            base.status.code() == Some(3) || runtime_diagnostic_is_dependency_failure(&base.stderr);
         return render_refusal(
             &runtime_config,
             format,

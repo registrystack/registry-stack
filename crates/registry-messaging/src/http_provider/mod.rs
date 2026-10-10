@@ -5,7 +5,8 @@
 //! substrate.
 //!
 //! An attempt runs in this order, under one deadline of the configured
-//! `timeoutMilliseconds`, or of the dispatch budget when that is shorter:
+//! `attemptTimeoutMilliseconds`, or of the dispatch budget when that is
+//! shorter:
 //!
 //! 1. The prepare script turns the rendered message and the sender profile
 //!    into a request target relative to `baseUrl`, a set of declared
@@ -42,6 +43,7 @@
 
 #[cfg(test)]
 mod aws_tests;
+mod callback_verifier;
 mod script;
 mod settings;
 #[cfg(test)]
@@ -52,7 +54,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use registry_messaging_core::{
-    CallbackRequest, CallbackVerifierConfig, Channel, Receipt, RenderedParts, SenderProfile,
+    CallbackRequest, Channel, MessagingFinding, Receipt, RenderedParts, SenderProfile,
 };
 use registry_platform_config::SecretResolver;
 use registry_platform_dispatch::{FailureCode, ReceiverReference, SendOutcome, Sent};
@@ -69,12 +71,14 @@ use registry_platform_httputil::destination::{
     SideEffectingSendMethod, MAX_DESTINATION_REQUEST_BODY_BYTES,
     MAX_DESTINATION_REQUEST_HEADER_BYTES, MAX_DESTINATION_TARGET_BYTES,
 };
+use registry_platform_yaml::LocalId;
 use rhai::AST;
 use serde_json::{json, Map, Value};
 use tokio::sync::{Mutex, Semaphore};
 use tokio::time::Instant;
 use zeroize::Zeroizing;
 
+pub use callback_verifier::CallbackVerifierConfig;
 pub use script::{
     ScriptFailure, MAXIMUM_PREPARE_OUTPUT_BYTES, MAXIMUM_SCRIPT_OPERATIONS,
     MAXIMUM_SCRIPT_OUTPUT_BYTES, MAXIMUM_SCRIPT_SOURCE_BYTES,
@@ -82,9 +86,10 @@ pub use script::{
 pub use settings::{
     CredentialPlacement, HttpProviderAuthentication, HttpProviderCapabilities, HttpProviderError,
     HttpProviderPackage, HttpProviderRequest, HttpProviderSettings, HttpSendMethod,
-    ReceiptCapability, RedirectPolicy, MAXIMUM_CONCURRENCY_LIMIT, MAXIMUM_RATE_PER_SECOND,
-    MAXIMUM_RESPONSE_BYTES, MAXIMUM_SCRIPT_HEADERS, MAXIMUM_SCRIPT_PATH_BYTES,
-    MAXIMUM_TOKEN_CACHE_SECONDS, MINIMUM_TOKEN_CACHE_SECONDS,
+    ReceiptCapability, RedirectPolicy, MAXIMUM_ATTEMPT_TIMEOUT_MILLISECONDS,
+    MAXIMUM_CONCURRENT_REQUESTS, MAXIMUM_RATE_PER_SECOND, MAXIMUM_RESPONSE_BYTES,
+    MAXIMUM_SCRIPT_HEADERS, MAXIMUM_SCRIPT_PATH_BYTES, MAXIMUM_TOKEN_CACHE_SECONDS,
+    MESSAGING_PROVIDER_FORMAT, MINIMUM_TOKEN_CACHE_SECONDS,
 };
 
 use script::{
@@ -165,7 +170,7 @@ impl fmt::Debug for HttpProviderMessage<'_> {
 /// Where an attempt ended.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum HttpStage {
-    /// Waiting for a free send slot under `concurrencyLimit`.
+    /// Waiting for a free send slot under `maximumConcurrentRequests`.
     Queue,
     /// Running the prepare script and rendering the request.
     Prepare,
@@ -511,8 +516,10 @@ impl HttpProviderSettings {
             authenticated: AuthenticatedParts::of(self.callback_verifier.as_ref()),
             timeout: connection.timeout,
             maximum_response_bytes: connection.maximum_response_bytes,
-            slots: Arc::new(Semaphore::new(usize::from(self.concurrency_limit))),
-            concurrency_limit: self.concurrency_limit,
+            slots: Arc::new(Semaphore::new(usize::from(
+                self.maximum_concurrent_requests,
+            ))),
+            concurrency_limit: self.maximum_concurrent_requests,
             capabilities: package.capabilities.clone(),
         })
     }
@@ -559,20 +566,57 @@ pub(crate) fn compile_scripts(
     Ok((prepare, interpret, receipt))
 }
 
+/// What compiling the scripts a package names finds: each finding names the
+/// script's path, relative to the provider directory, and the line of a
+/// parse failure.
+pub(crate) fn script_findings(
+    package: &HttpProviderPackage,
+    scripts: HttpProviderScripts<'_>,
+) -> Vec<MessagingFinding> {
+    [
+        (
+            Some(&package.prepare_script),
+            Some(scripts.prepare),
+            PREPARE_ENTRYPOINT,
+            2,
+        ),
+        (
+            package.interpret_script.as_ref(),
+            scripts.interpret,
+            INTERPRET_ENTRYPOINT,
+            1,
+        ),
+        (
+            package.receipt_script.as_ref(),
+            scripts.receipt,
+            RECEIPT_ENTRYPOINT,
+            1,
+        ),
+    ]
+    .into_iter()
+    .filter_map(|(path, source, entrypoint, arity)| {
+        let (path, source) = path.zip(source)?;
+        let (reason, line) = script::compile_finding(source, entrypoint, arity)?;
+        Some(MessagingFinding::in_file(reason, path.clone(), line))
+    })
+    .collect()
+}
+
 fn destination_origin_id(provider_id: &str) -> Result<String, HttpProviderError> {
-    let valid = !provider_id.is_empty()
-        && provider_id.len() <= 64
+    // A destination origin id ends in a letter or digit; a local identifier
+    // may also end in `-` or `_`.
+    let valid = LocalId::new(provider_id).is_ok()
         && provider_id
             .bytes()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
-        && !provider_id.starts_with('-')
-        && !provider_id.ends_with('-');
+            .last()
+            .is_some_and(|byte| byte.is_ascii_alphanumeric());
     if valid {
         Ok(format!("messaging-provider:{provider_id}"))
     } else {
         Err(invalid(
             "id",
-            "the provider id must be 1 to 64 lowercase letters, digits, or inner hyphens",
+            "the provider id must start with a lowercase letter, end with a letter or digit, and \
+             hold at most 64 lowercase letters, digits, hyphens, or underscores",
         ))
     }
 }

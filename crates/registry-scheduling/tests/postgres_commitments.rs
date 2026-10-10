@@ -38,10 +38,10 @@ use registry_scheduling::store::{
     Commitment, PostgresStore, RoleMode, StoreError, SupplyContext,
 };
 use registry_scheduling_core::{
-    location_closure_intervals, location_open_intervals, parse_policy_yaml, AdmissionRefusal,
-    AdmissionRequest, CalendarExceptionRecord, Channel, ExceptionRecordKind, LocationRecord,
-    OfferingPolicy, PartyCounts, PoolMember, PublishedWindow, RequiredUnitsPolicy, ResourcePool,
-    SchedulingFacts, SchedulingPolicy, WindowStaffing, WindowSubquota,
+    location_closure_intervals, location_open_intervals, AdmissionRefusal, AdmissionRequest,
+    CalendarExceptionRecord, Channel, ExceptionRecordKind, LocationRecord, OfferingPolicy,
+    PartyCounts, PoolMember, PublishedWindow, RequiredUnitsPolicy, ResourcePool, SchedulingFacts,
+    SchedulingPolicy, WindowStaffing, WindowSubquota, AUTHORED_POLICY_FILE,
 };
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -53,6 +53,11 @@ use wiremock::matchers::{body_string_contains, header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 const ISSUER: &str = "https://task-token.test";
+
+/// Read an authored project the way the runtime and `schedulingctl` do.
+fn read_policy(text: &str) -> Result<SchedulingPolicy, registry_platform_yaml::Report> {
+    SchedulingPolicy::read(AUTHORED_POLICY_FILE, text.as_bytes()).map(|decoded| decoded.value)
+}
 const AUDIENCE: &str = "urn:registry-scheduling:test";
 const CLIENT: &str = "task-agent";
 const SECRET: &[u8] = b"01234567890123456789012345678901";
@@ -66,7 +71,7 @@ const OVERLAPPING_OFFERING: &str = "registry-update-60";
 
 fn observer_policy() -> String {
     format!(
-        "{POLICY}hooks:\n  - id: confirmed-observer\n    phase: after\n    trigger: appointment.confirmed\n    projection: [appointmentId, offering, start, end, revision, policyRevision, state]\n    handler: {{kind: url, destinationId: appointment-events}}\n  - id: rescheduled-observer\n    phase: after\n    trigger: appointment.rescheduled\n    projection: [appointmentId, offering, start, end, revision, policyRevision, state]\n    handler: {{kind: url, destinationId: appointment-events}}\n  - id: cancelled-observer\n    phase: after\n    trigger: appointment.cancelled\n    projection: [appointmentId, revision, state]\n    handler: {{kind: url, destinationId: appointment-events}}\n"
+        "{POLICY}hooks:\n  - id: confirmed-observer\n    phase: after\n    trigger: appointment.confirmed\n    projection: [appointmentId, offering, start, end, revision, policyRevision, state]\n    handler: {{type: url, destinationId: appointment-events}}\n  - id: rescheduled-observer\n    phase: after\n    trigger: appointment.rescheduled\n    projection: [appointmentId, offering, start, end, revision, policyRevision, state]\n    handler: {{type: url, destinationId: appointment-events}}\n  - id: cancelled-observer\n    phase: after\n    trigger: appointment.cancelled\n    projection: [appointmentId, revision, state]\n    handler: {{type: url, destinationId: appointment-events}}\n"
     )
 }
 
@@ -80,13 +85,14 @@ fn observer_policy() -> String {
 /// half-hour increment, so its published starts overlap one another. The last
 /// offering sells a second pool so one fixture can also pin a commitment
 /// against a pool the publication never anchored.
-const POLICY: &str = r#"apiVersion: registry.registrystack.org/scheduling-policy-package/v1alpha1
-kind: SchedulingPolicyPackage
-scheduling: {id: commitments-test, version: 1}
+const POLICY: &str = r#"apiVersion: id.registrystack.org/formats/scheduling/project/v1alpha1
+kind: SchedulingProject
+project: {id: commitments-test, version: "1"}
 services:
   - {id: registry-update, label: Registry record update}
   - {id: registry-review, label: Registry record review}
-holidaySets: [{id: none, revision: 1, because: test, dates: []}]
+channels: [public, assisted, urgent, walk-in]
+holidaySets: [{id: none, revision: 1, because: test}]
 openings:
   - id: all-day
     location: north-counter
@@ -113,10 +119,8 @@ offerings:
       horizonDays: 60
       pool: north-counter
       startIncrementMinutes: 30
-      maxRecipients: 1
-    reminders: [{minutesBefore: 60, because: test}]
-    requiresCapabilities: []
-    prerequisites: []
+      maximumRecipients: 1
+    reminders: [{offsetMinutes: 60, because: test}]
   - id: registry-update-60
     service: registry-update
     label: 60-minute counter update
@@ -132,9 +136,7 @@ offerings:
       horizonDays: 60
       pool: north-counter
       startIncrementMinutes: 30
-      maxRecipients: 1
-    requiresCapabilities: []
-    prerequisites: []
+      maximumRecipients: 1
   - id: registry-review-45
     service: registry-review
     label: 45-minute record review
@@ -150,10 +152,8 @@ offerings:
       horizonDays: 60
       pool: two-counter
       startIncrementMinutes: 30
-      maxRecipients: 1
-    requiresCapabilities: []
-    prerequisites: []
-holdPolicy: {ttlMinutes: 10, maxPerCaller: 2, because: test}
+      maximumRecipients: 1
+holdPolicy: {ttlMinutes: 10, maximumPerCaller: 2, because: test}
 "#;
 
 struct Fixture {
@@ -252,7 +252,7 @@ impl Fixture {
 /// with every pool the policy names, and serving through the same router the
 /// runtime serves.
 async fn fixture() -> Fixture {
-    let policy = parse_policy_yaml(POLICY).expect("the scheduling test policy");
+    let policy = read_policy(POLICY).expect("the scheduling test policy");
     let mut pool_ids: Vec<String> = policy
         .offerings
         .iter()
@@ -272,12 +272,18 @@ async fn fixture_anchoring(pool_ids: &[String]) -> Fixture {
 /// A fresh deployment publishing `policy_yaml` and anchoring exactly
 /// `pool_ids`. Window anchors are owned by the records replacement path.
 async fn fixture_publishing(policy_yaml: &str, pool_ids: &[String]) -> Fixture {
-    fixture_publishing_with_hook_url(policy_yaml, pool_ids, "http://127.0.0.1:9/scheduling-hooks")
-        .await
+    let policy = read_policy(policy_yaml).expect("the scheduling test policy");
+    fixture_publishing_policy(policy, pool_ids).await
+}
+
+/// A fresh deployment publishing `policy` as given. A test that pins a store
+/// refusal the authoring check would raise first builds the policy here.
+async fn fixture_publishing_policy(policy: SchedulingPolicy, pool_ids: &[String]) -> Fixture {
+    fixture_publishing_with_hook_url(policy, pool_ids, "http://127.0.0.1:9/scheduling-hooks").await
 }
 
 async fn fixture_publishing_with_hook_url(
-    policy_yaml: &str,
+    policy: SchedulingPolicy,
     pool_ids: &[String],
     hook_url: &str,
 ) -> Fixture {
@@ -352,15 +358,15 @@ async fn fixture_publishing_with_hook_url(
         .await
         .expect("adopt the scheduling deployment");
 
-    let policy = parse_policy_yaml(policy_yaml).expect("the scheduling test policy");
     let digest = policy.policy_digest();
     let revision = store
         .apply_policy(SCHEDULING_ID, &digest, pool_ids, &policy)
         .await
         .expect("publish the scheduling policy");
     let keying = AuditHashSecret::new(vec![0x42; 32]).expect("the test audit hash secret");
+    let declarations = policy.hook_declarations();
     let mut hook_destinations = BTreeMap::new();
-    for destination_id in policy.hooks.iter().filter_map(|hook| match &hook.handler {
+    for destination_id in declarations.iter().filter_map(|hook| match &hook.handler {
         HookHandlerSource::Url { destination_id } => Some(destination_id),
         HookHandlerSource::Rhai { .. } | HookHandlerSource::Wasm { .. } => None,
     }) {
@@ -375,7 +381,7 @@ async fn fixture_publishing_with_hook_url(
         );
     }
     let hooks = ActivatedHooks::activate(
-        &policy.hooks,
+        &declarations,
         &hook_destinations,
         &secrets,
         HookRuntimeIdentity {
@@ -1182,7 +1188,7 @@ async fn rotating_the_audit_key_keeps_existing_claims_with_their_owner() {
 
     // The same store, policy, revision, and audit destination, served under
     // another audit hash key: an operator's `audit.hashKeyRef` rotation.
-    let policy = parse_policy_yaml(POLICY).expect("the scheduling test policy");
+    let policy = read_policy(POLICY).expect("the scheduling test policy");
     let digest = policy.policy_digest();
     let rotated_key = AuditHashSecret::new(vec![0x24; 32]).expect("the rotated audit hash secret");
     let rotated = router(HttpState {
@@ -1389,9 +1395,9 @@ async fn hook_fixture() -> Fixture {
 }
 
 async fn hook_fixture_at(hook_url: &str) -> Fixture {
-    let policy = observer_policy();
+    let policy = read_policy(&observer_policy()).expect("the scheduling hook policy");
     fixture_publishing_with_hook_url(
-        &policy,
+        policy,
         &["north-counter".to_owned(), "two-counter".to_owned()],
         hook_url,
     )
@@ -1835,7 +1841,7 @@ async fn hook_delivery_audit_failure_prevents_egress() {
 async fn changed_retained_hook_destination_binding_is_refused() {
     let fx = hook_fixture().await;
     let _ = booked(&fx, 300, 440, "hook-binding-change").await;
-    let policy = parse_policy_yaml(&observer_policy()).expect("the scheduling hook policy");
+    let policy = read_policy(&observer_policy()).expect("the scheduling hook policy");
     let secrets = SecretResolver::new([SecretProvider::Environment], "/private/tmp")
         .expect("the scheduling hook secret resolver");
     let destinations = BTreeMap::from([(
@@ -1848,7 +1854,7 @@ async fn changed_retained_hook_destination_binding_is_refused() {
         },
     )]);
     let changed = ActivatedHooks::activate(
-        &policy.hooks,
+        &policy.hook_declarations(),
         &destinations,
         &secrets,
         HookRuntimeIdentity {
@@ -2035,8 +2041,8 @@ async fn exact_time_commitments_include_buffers_outside_the_opening_range() {
 #[tokio::test]
 async fn duplicate_active_keys_are_scoped_to_the_offering() {
     let keyed = POLICY.replacen(
-        "    requiresCapabilities: []",
-        "    duplicateActiveKey: subject\n    requiresCapabilities: []",
+        "    cancellationCutoffMinutes: 240",
+        "    duplicateActiveKey: subject\n    cancellationCutoffMinutes: 240",
         2,
     );
     let fx = fixture_publishing(
@@ -2079,8 +2085,8 @@ async fn duplicate_active_keys_are_scoped_to_the_offering() {
 #[tokio::test]
 async fn an_elapsed_booking_no_longer_holds_the_partys_duplicate_key() {
     let keyed = POLICY.replacen(
-        "    requiresCapabilities: []",
-        "    duplicateActiveKey: subject\n    requiresCapabilities: []",
+        "    cancellationCutoffMinutes: 240",
+        "    duplicateActiveKey: subject\n    cancellationCutoffMinutes: 240",
         2,
     );
     let fx = fixture_publishing(
@@ -2195,8 +2201,8 @@ async fn the_duplicate_guard_is_indexed_on_the_whole_predicate_it_filters() {
 #[tokio::test]
 async fn a_duplicate_active_key_survives_an_opening_shift_on_the_same_pool() {
     let keyed = POLICY.replacen(
-        "    requiresCapabilities: []",
-        "    duplicateActiveKey: subject\n    requiresCapabilities: []",
+        "    cancellationCutoffMinutes: 240",
+        "    duplicateActiveKey: subject\n    cancellationCutoffMinutes: 240",
         1,
     );
     let mut fx = fixture_publishing(
@@ -2221,8 +2227,8 @@ async fn a_duplicate_active_key_survives_an_opening_shift_on_the_same_pool() {
         .date_naive()
         .succ_opt()
         .expect("the next opening date is representable");
-    let mut replacement = parse_policy_yaml(&keyed).expect("the replacement policy");
-    replacement.scheduling.version += 1;
+    let mut replacement = read_policy(&keyed).expect("the replacement policy");
+    replacement.project.version = "2".to_owned();
     replacement.openings[0].effective_from = next_date.format("%Y-%m-%d").to_string();
     let replacement_digest = replacement.policy_digest();
     let revision = fx
@@ -2972,7 +2978,7 @@ async fn a_delayed_confirmation_cannot_transfer_rebooked_capacity_after_expiry()
     let (started_tx, started_rx) = tokio::sync::oneshot::channel();
     let (resume_tx, resume_rx) = tokio::sync::oneshot::channel();
     let delayed = tokio::spawn(async move {
-        let policy = parse_policy_yaml(POLICY).expect("the scheduling test policy");
+        let policy = read_policy(POLICY).expect("the scheduling test policy");
         let offering = policy.offering(OFFERING).expect("the test offering");
         let (facts, facts_revision) = delayed_store
             .facts()
@@ -3015,7 +3021,7 @@ async fn a_delayed_confirmation_cannot_transfer_rebooked_capacity_after_expiry()
 
     // A later request sees the hold as expired and legitimately books the
     // released capacity before the older confirmation reaches its anchor.
-    let policy = parse_policy_yaml(POLICY).expect("the scheduling test policy");
+    let policy = read_policy(POLICY).expect("the scheduling test policy");
     let offering = policy.offering(OFFERING).expect("the test offering");
     let (facts, facts_revision) = fx.store.facts().await.expect("resolve current supply");
     let (members, open, closures) = exact_supply_parts(&policy, &facts, offering);
@@ -3251,11 +3257,11 @@ async fn the_edge_refuses_unauthenticated_callers_and_unauthorized_mutations() {
 #[tokio::test]
 async fn explain_assumes_the_offerings_declared_inputs_are_present() {
     let authored = POLICY.replacen(
-        "    prerequisites: []",
-        "    prerequisites: [registry-update-permit]",
+        "    cancellationCutoffMinutes: 240",
+        "    prerequisites: [registry-update-permit]\n    cancellationCutoffMinutes: 240",
         1,
     );
-    let policy = parse_policy_yaml(&authored).expect("the policy with a required input");
+    let policy = read_policy(&authored).expect("the policy with a required input");
     let mut pool_ids: Vec<String> = policy
         .offerings
         .iter()
@@ -3858,8 +3864,8 @@ async fn a_policy_applied_under_a_running_process_refuses_the_older_revision() {
 
     // Operator tooling publishes a different policy against the same
     // deployment, exactly as `schedulingctl` does beside a running runtime.
-    let mut replacement = parse_policy_yaml(POLICY).expect("the replacement policy");
-    replacement.scheduling.version += 1;
+    let mut replacement = read_policy(POLICY).expect("the replacement policy");
+    replacement.project.version = "2".to_owned();
     let replacement_digest = replacement.policy_digest();
     let moved = fx
         .store
@@ -4143,7 +4149,7 @@ async fn a_records_swap_whose_acknowledgment_was_lost_is_read_back() {
 #[tokio::test]
 async fn an_activation_whose_acknowledgment_was_lost_is_read_back() {
     let fx = fixture().await;
-    let policy = parse_policy_yaml(POLICY).expect("the scheduling test policy");
+    let policy = read_policy(POLICY).expect("the scheduling test policy");
     let runtime_role: String = fx
         .admin
         .query_one("SELECT current_user::text", &[])
@@ -4204,7 +4210,7 @@ async fn an_activation_whose_acknowledgment_was_lost_is_read_back() {
 #[tokio::test]
 async fn a_records_swap_checks_the_active_package_under_its_locks() {
     let fx = fixture().await;
-    let policy = parse_policy_yaml(POLICY).expect("the scheduling test policy");
+    let policy = read_policy(POLICY).expect("the scheduling test policy");
     let runtime_role: String = fx
         .admin
         .query_one("SELECT current_user::text", &[])
@@ -4454,7 +4460,7 @@ fn sealed_deployment(
         }},
         "audit": {"path": root.join("audit.ndjson"), "hashKeyRef": "secret:env/UNUSED"},
         "destinations": {},
-        "retention": {"attemptReceiptDays": 7},
+        "retention": {"attemptReceiptRetentionDays": 7},
     });
     let operator = root.join("runtime.yaml");
     std::fs::write(
@@ -4516,9 +4522,9 @@ async fn a_divergent_startup_leaves_the_published_policy_untouched() {
         .load_policy()
         .expect("the divergent package verifies")
         .package_digest;
-    let published = parse_policy_yaml(POLICY).expect("the published policy");
+    let published = read_policy(POLICY).expect("the published policy");
     assert_ne!(
-        parse_policy_yaml(&divergent)
+        read_policy(&divergent)
             .expect("the divergent policy")
             .policy_digest(),
         published.policy_digest(),
@@ -5807,10 +5813,8 @@ fn policy_with_window() -> String {
              \x20   cancellationCutoffMinutes: 240\n\
              \x20   arrival:\n\
              \x20     window: {WINDOW_ID}\n\
-             \x20     leadTimeMinutes: 0\n\
+             \x20     leadTimeMinutes: 1\n\
              \x20     horizonDays: 60\n\
-             \x20   requiresCapabilities: []\n\
-             \x20   prerequisites: []\n\
              holdPolicy:",
         ),
     )
@@ -5833,8 +5837,6 @@ fn policy_with_shared_window() -> String {
              \x20     window: {WINDOW_ID}\n\
              \x20     leadTimeMinutes: 60\n\
              \x20     horizonDays: 60\n\
-             \x20   requiresCapabilities: []\n\
-             \x20   prerequisites: []\n\
              holdPolicy:"
         ),
     )
@@ -6032,7 +6034,7 @@ async fn records_replacement_refuses_a_window_staffed_by_an_exact_time_pool() {
     assert!(
         refusal
             .to_string()
-            .contains("windows[0].staffing.pool: shared-supply-unpartitioned"),
+            .contains("/windows/0/staffing/pool: scheduling.records.shared-supply-unpartitioned"),
         "{refusal}"
     );
 
@@ -6054,13 +6056,28 @@ async fn records_replacement_refuses_a_window_staffed_by_an_exact_time_pool() {
 /// key, and the policy write used to skip the anchor silently, leaving the
 /// pool serializing against a window row that the next records swap deletes.
 /// Both directions are refused by name instead.
+/// The window policy with its arrival window renamed to the id the
+/// `north-counter` pool anchors.
+fn window_on_north_counter() -> SchedulingPolicy {
+    let mut policy = read_policy(&policy_with_window()).expect("the window policy");
+    policy
+        .offerings
+        .iter_mut()
+        .find_map(|offering| offering.arrival.as_mut())
+        .expect("the arrival offering")
+        .window = "north-counter".to_owned();
+    policy
+}
+
 #[tokio::test]
 async fn a_supply_identifier_may_not_anchor_both_a_pool_and_a_window() {
     let start = (pinned_now() + TimeDelta::days(2))
         .with_nanosecond(0)
         .expect("second precision");
-    let fx = fixture_publishing(
-        &policy_with_window().replace(WINDOW_ID, "north-counter"),
+    // The authoring check refuses a window that shares a pool's id, so the
+    // policy is renamed after it is read: the store is the check under test.
+    let fx = fixture_publishing_policy(
+        window_on_north_counter(),
         &["north-counter".to_owned(), "two-counter".to_owned()],
     )
     .await;
@@ -6076,7 +6093,7 @@ async fn a_supply_identifier_may_not_anchor_both_a_pool_and_a_window() {
     assert!(
         refusal
             .to_string()
-            .contains("windows[0].id: supply-identifier-collision"),
+            .contains("/windows/0/id: scheduling.records.supply-identifier-collision"),
         "{refusal}"
     );
 
@@ -6096,10 +6113,8 @@ async fn a_supply_identifier_may_not_anchor_both_a_pool_and_a_window() {
         .scheduling_meta()
         .await
         .expect("the deployment metadata before the refusal");
-    let mut replacement =
-        parse_policy_yaml(&policy_with_window().replace(WINDOW_ID, "north-counter"))
-            .expect("the deployed policy");
-    replacement.scheduling.version += 1;
+    let mut replacement = window_on_north_counter();
+    replacement.project.version = "2".to_owned();
     replacement
         .offerings
         .iter_mut()
@@ -6186,10 +6201,9 @@ async fn policy_publication_refuses_an_exact_time_offering_on_a_deployed_windows
         .await
         .expect("the deployment metadata before the refusal");
 
-    let conflicting = parse_policy_yaml(
-        &policy_with_window().replace("pool: two-counter", "pool: south-counter"),
-    )
-    .expect("a policy moving an idle offering onto the window's staffing");
+    let conflicting =
+        read_policy(&policy_with_window().replace("pool: two-counter", "pool: south-counter"))
+            .expect("a policy moving an idle offering onto the window's staffing");
     let digest = conflicting.policy_digest();
     let refusal = fx
         .store
@@ -6199,7 +6213,7 @@ async fn policy_publication_refuses_an_exact_time_offering_on_a_deployed_windows
     assert!(
         refusal
             .to_string()
-            .contains("windows[0].staffing.pool: shared-supply-unpartitioned"),
+            .contains("/windows/0/staffing/pool: scheduling.records.shared-supply-unpartitioned"),
         "{refusal}"
     );
 
@@ -6422,9 +6436,9 @@ async fn a_location_closure_hides_and_refuses_an_arrival_window() {
 async fn policy_publication_refuses_to_remove_an_offering_with_a_live_appointment() {
     let fx = fixture().await;
     let (appointment_id, revision) = booked(&fx, 300, 440, "retained-offering-create").await;
-    let current = parse_policy_yaml(POLICY).expect("the current policy");
+    let current = read_policy(POLICY).expect("the current policy");
     let mut replacement = current.clone();
-    replacement.scheduling.version += 1;
+    replacement.project.version = "2".to_owned();
     replacement
         .offerings
         .retain(|offering| offering.id != OFFERING);
@@ -6521,8 +6535,8 @@ async fn a_retry_replays_its_receipt_after_its_offering_leaves_the_policy() {
         .await;
     assert_eq!(status, StatusCode::OK, "{cancelled}");
 
-    let mut replacement = parse_policy_yaml(POLICY).expect("the current policy");
-    replacement.scheduling.version += 1;
+    let mut replacement = read_policy(POLICY).expect("the current policy");
+    replacement.project.version = "2".to_owned();
     replacement
         .offerings
         .retain(|offering| offering.id != OFFERING);
@@ -6608,8 +6622,8 @@ async fn a_retry_replays_its_receipt_after_its_offering_changes_service() {
     // appointment.create alone over registry-review, so an offering that
     // changes service leaves the grant which committed both of these claims
     // unable to close either one again.
-    let mut replacement = parse_policy_yaml(POLICY).expect("the current policy");
-    replacement.scheduling.version += 1;
+    let mut replacement = read_policy(POLICY).expect("the current policy");
+    replacement.project.version = "2".to_owned();
     replacement
         .offerings
         .iter_mut()
@@ -6660,8 +6674,8 @@ async fn a_retry_replays_its_receipt_after_its_offering_changes_service() {
 async fn policy_publication_refuses_to_move_an_active_offering_between_pools() {
     let fx = fixture().await;
     booked(&fx, 300, 440, "retained-offering-pool-create").await;
-    let mut replacement = parse_policy_yaml(POLICY).expect("the current policy");
-    replacement.scheduling.version += 1;
+    let mut replacement = read_policy(POLICY).expect("the current policy");
+    replacement.project.version = "2".to_owned();
     replacement
         .offerings
         .iter_mut()
@@ -7238,8 +7252,8 @@ async fn every_mutation_rechecks_expiry_after_its_writes() {
 #[tokio::test]
 async fn a_stale_process_refuses_even_a_request_under_the_current_revision() {
     let fx = fixture().await;
-    let mut replacement = parse_policy_yaml(POLICY).expect("the replacement policy");
-    replacement.scheduling.version += 1;
+    let mut replacement = read_policy(POLICY).expect("the replacement policy");
+    replacement.project.version = "2".to_owned();
     let replacement_digest = replacement.policy_digest();
     let moved = fx
         .store
@@ -7270,8 +7284,8 @@ async fn a_stale_process_refuses_even_a_request_under_the_current_revision() {
 async fn a_stale_process_can_still_release_an_appointment() {
     let fx = fixture().await;
     let (id, revision) = booked(&fx, 480, 620, "before-policy-change").await;
-    let mut replacement = parse_policy_yaml(POLICY).expect("the replacement policy");
-    replacement.scheduling.version += 1;
+    let mut replacement = read_policy(POLICY).expect("the replacement policy");
+    replacement.project.version = "2".to_owned();
     replacement.offerings[0].cancellation_cutoff_minutes += 1;
     let replacement_digest = replacement.policy_digest();
     fx.store
@@ -7311,7 +7325,7 @@ async fn a_stale_process_can_still_release_an_appointment() {
 #[tokio::test]
 async fn a_records_swap_refuses_a_commitment_resolving_the_old_facts() {
     let fx = fixture().await;
-    let policy = parse_policy_yaml(POLICY).expect("the scheduling test policy");
+    let policy = read_policy(POLICY).expect("the scheduling test policy");
     let offering = policy.offering(OFFERING).expect("the test offering");
     // The slot resolves while the station still stands: the swap retires it.
     let slot = first_slot(&fx, OFFERING, 90, 200).await;
@@ -8266,4 +8280,66 @@ async fn a_permission_refusal_the_destination_refuses_answers_service_unavailabl
         .await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{problem}");
     assert_eq!(problem["code"], "service.unavailable");
+}
+
+/// Rewrite the retained current policy document into the shape the previous
+/// release stored: the identity under a top-level `scheduling` member where
+/// this release stores `project`.
+async fn retain_predecessor_policy_document(fx: &Fixture) {
+    let mut document = serde_json::to_value(read_policy(POLICY).expect("the current policy"))
+        .expect("the policy serializes");
+    let object = document.as_object_mut().expect("a policy object");
+    let project = object.remove("project").expect("the project block");
+    object.insert("scheduling".to_owned(), project);
+    let updated = fx
+        .admin
+        .execute(
+            "UPDATE scheduling_policy_revisions SET policy_document=$1",
+            &[&document],
+        )
+        .await
+        .expect("retain the predecessor's document shape");
+    assert!(updated > 0, "a retained document was rewritten");
+}
+
+/// A database the previous release wrote retains its policy under a top-level
+/// `scheduling` member. Publication and the records swap name that cause and
+/// the way out, never a corrupt database, and repeat nothing the document
+/// holds.
+#[tokio::test]
+async fn a_database_an_earlier_release_wrote_is_refused_by_name() {
+    let fx = fixture().await;
+    retain_predecessor_policy_document(&fx).await;
+
+    let mut replacement = read_policy(POLICY).expect("the current policy");
+    replacement.project.version = "2".to_owned();
+    let digest = replacement.policy_digest();
+    let mut pool_ids: Vec<String> = replacement
+        .offerings
+        .iter()
+        .filter_map(|offering| offering.exact_time.as_ref().map(|exact| exact.pool.clone()))
+        .collect();
+    pool_ids.sort();
+    pool_ids.dedup();
+
+    let publication = fx
+        .store
+        .apply_policy(SCHEDULING_ID, &digest, &pool_ids, &replacement)
+        .await
+        .expect_err("the predecessor's retained document is not read");
+    let records = fx
+        .store
+        .replace_facts(SCHEDULING_ID, &records_without(&[]))
+        .await
+        .expect_err("the records swap does not read it either");
+    for refusal in [publication, records] {
+        assert!(
+            matches!(refusal, StoreError::EarlierRelease),
+            "{refusal:?} is not the earlier-release refusal"
+        );
+        let text = refusal.to_string();
+        assert!(text.contains("earlier release"), "{text}");
+        assert!(text.contains("new database"), "{text}");
+        assert!(!text.contains("registry-updates"), "{text}");
+    }
 }

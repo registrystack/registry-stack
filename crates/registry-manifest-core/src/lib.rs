@@ -5,6 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use oxiri::Iri;
+use registry_platform_yaml::{Identified, UniqueIdList};
 use serde::{de, Deserialize, Deserializer, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -160,7 +161,10 @@ pub fn is_runtime_only_key(key: &str) -> bool {
     RUNTIME_ONLY_KEYS.contains(&key)
 }
 
-fn is_secret_bearing_key(key: &str) -> bool {
+/// Whether a key names a credential or secret, which a portable metadata
+/// manifest never carries.
+#[must_use]
+pub fn is_secret_bearing_key(key: &str) -> bool {
     let normalized = normalize_manifest_key(key);
     let segments = normalized
         .split('_')
@@ -421,37 +425,45 @@ impl<'de> Deserialize<'de> for MetadataManifest {
     }
 }
 
+/// A metadata manifest as written, decoded member by member. A reader that
+/// keeps source positions decodes this type, refuses runtime-only and
+/// secret-bearing keys itself, and converts it with `MetadataManifest::from`;
+/// deserializing `MetadataManifest` directly applies the same key refusals
+/// without positions.
+// Each top-level list of named items refuses a repeated id while it is
+// decoded (CFG-ID-5).
 #[derive(Debug, Clone, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
-struct MetadataManifestFields {
+pub struct MetadataManifestFields {
     schema_version: String,
     catalog: CatalogManifest,
     #[serde(default)]
     vocabularies: BTreeMap<String, String>,
     #[serde(default)]
-    profiles: Vec<ProfileClaim>,
+    profiles: UniqueIdList<ProfileClaim>,
     #[serde(default)]
-    evaluation_profiles: Vec<EvaluationProfileManifest>,
+    evaluation_profiles: UniqueIdList<EvaluationProfileManifest>,
     #[serde(default)]
     ecosystem_bindings: Vec<EcosystemBindingManifest>,
     #[serde(default)]
-    requirements: Vec<RequirementManifest>,
+    requirements: UniqueIdList<RequirementManifest>,
     #[serde(default)]
-    evidence_types: Vec<EvidenceTypeManifest>,
+    evidence_types: UniqueIdList<EvidenceTypeManifest>,
     #[serde(default)]
-    authorities: Vec<AuthorityManifest>,
+    authorities: UniqueIdList<AuthorityManifest>,
     #[serde(default)]
-    public_services: Vec<ServiceManifest>,
+    public_services: UniqueIdList<ServiceManifest>,
     #[serde(default)]
-    data_services: Vec<DataServiceManifest>,
+    data_services: UniqueIdList<DataServiceManifest>,
     #[serde(default)]
-    distributions: Vec<DistributionManifest>,
+    distributions: UniqueIdList<DistributionManifest>,
     #[serde(default)]
-    forms: Vec<FormManifest>,
+    forms: UniqueIdList<FormManifest>,
     #[serde(default)]
-    datasets: Vec<DatasetManifest>,
+    datasets: UniqueIdList<DatasetManifest>,
     #[serde(default)]
-    codelists: Vec<CodelistManifest>,
+    codelists: UniqueIdList<CodelistManifest>,
 }
 
 impl From<MetadataManifestFields> for MetadataManifest {
@@ -460,19 +472,85 @@ impl From<MetadataManifestFields> for MetadataManifest {
             schema_version: fields.schema_version,
             catalog: fields.catalog,
             vocabularies: fields.vocabularies,
-            profiles: fields.profiles,
-            evaluation_profiles: fields.evaluation_profiles,
+            profiles: fields.profiles.into_vec(),
+            evaluation_profiles: fields.evaluation_profiles.into_vec(),
             ecosystem_bindings: fields.ecosystem_bindings,
-            requirements: fields.requirements,
-            evidence_types: fields.evidence_types,
-            authorities: fields.authorities,
-            public_services: fields.public_services,
-            data_services: fields.data_services,
-            distributions: fields.distributions,
-            forms: fields.forms,
-            datasets: fields.datasets,
-            codelists: fields.codelists,
+            requirements: fields.requirements.into_vec(),
+            evidence_types: fields.evidence_types.into_vec(),
+            authorities: fields.authorities.into_vec(),
+            public_services: fields.public_services.into_vec(),
+            data_services: fields.data_services.into_vec(),
+            distributions: fields.distributions.into_vec(),
+            forms: fields.forms.into_vec(),
+            datasets: fields.datasets.into_vec(),
+            codelists: fields.codelists.into_vec(),
         }
+    }
+}
+
+impl Identified for ProfileClaim {
+    fn id(&self) -> &str {
+        &self.id
+    }
+}
+
+impl Identified for EvaluationProfileManifest {
+    fn id(&self) -> &str {
+        &self.id
+    }
+}
+
+impl Identified for RequirementManifest {
+    fn id(&self) -> &str {
+        &self.id
+    }
+}
+
+impl Identified for EvidenceTypeManifest {
+    fn id(&self) -> &str {
+        &self.id
+    }
+}
+
+impl Identified for AuthorityManifest {
+    fn id(&self) -> &str {
+        &self.id
+    }
+}
+
+impl Identified for ServiceManifest {
+    fn id(&self) -> &str {
+        &self.id
+    }
+}
+
+impl Identified for DataServiceManifest {
+    fn id(&self) -> &str {
+        &self.id
+    }
+}
+
+impl Identified for DistributionManifest {
+    fn id(&self) -> &str {
+        &self.id
+    }
+}
+
+impl Identified for FormManifest {
+    fn id(&self) -> &str {
+        &self.id
+    }
+}
+
+impl Identified for DatasetManifest {
+    fn id(&self) -> &str {
+        &self.id
+    }
+}
+
+impl Identified for CodelistManifest {
+    fn id(&self) -> &str {
+        &self.id
     }
 }
 
@@ -503,6 +581,7 @@ fn collect_disallowed_json_keys(
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct CatalogManifest {
     pub id: String,
@@ -522,6 +601,7 @@ pub struct CatalogManifest {
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct StandardsManifest {
     #[serde(default)]
@@ -533,6 +613,7 @@ pub struct StandardsManifest {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct ApplicationProfile {
     pub id: String,
@@ -540,6 +621,7 @@ pub struct ApplicationProfile {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct ProfileClaim {
     pub id: String,
@@ -547,6 +629,7 @@ pub struct ProfileClaim {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct EvaluationProfileManifest {
     pub id: String,
@@ -560,6 +643,7 @@ pub struct EvaluationProfileManifest {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct EvidencePackMetadata {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -597,6 +681,7 @@ pub struct EvidencePackMetadata {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct OdrlEnforcementProfile {
     pub profile: String,
@@ -605,6 +690,7 @@ pub struct OdrlEnforcementProfile {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct EcosystemBindingManifest {
     pub id: String,
@@ -638,11 +724,28 @@ pub struct EcosystemBindingManifest {
     pub profiles: Vec<ProfileClaim>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(untagged)]
+/// Text written either as one string or as a mapping from language tag to
+/// text. The node kind chooses the variant, so a decoding error inside either
+/// form keeps its position. Each variant serializes as the form it was
+/// written in.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema), schemars(untagged))]
 pub enum LocalizedText {
     Plain(String),
     Localized(BTreeMap<String, String>),
+}
+registry_platform_yaml::shape_union!(LocalizedText { scalar => Plain, mapping => Localized });
+
+impl Serialize for LocalizedText {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self {
+            Self::Plain(text) => text.serialize(serializer),
+            Self::Localized(texts) => texts.serialize(serializer),
+        }
+    }
 }
 
 impl LocalizedText {
@@ -659,6 +762,7 @@ impl LocalizedText {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct PublisherManifest {
     pub name: String,
@@ -669,6 +773,7 @@ pub struct PublisherManifest {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct AuthorityManifest {
     pub id: String,
@@ -682,6 +787,7 @@ pub struct AuthorityManifest {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct ServiceManifest {
     pub id: String,
@@ -707,6 +813,7 @@ pub struct ServiceManifest {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct ChannelManifest {
     pub id: String,
@@ -723,6 +830,7 @@ pub struct ChannelManifest {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct DataServiceManifest {
     pub id: String,
@@ -742,6 +850,7 @@ pub struct DataServiceManifest {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct DistributionManifest {
     pub id: String,
@@ -765,6 +874,7 @@ pub struct DistributionManifest {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct FormManifest {
     pub id: String,
@@ -785,6 +895,7 @@ pub struct FormManifest {
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct FormValidationManifest {
     #[serde(default)]
@@ -794,6 +905,7 @@ pub struct FormValidationManifest {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct FormSectionManifest {
     pub id: String,
@@ -812,6 +924,7 @@ pub struct FormSectionManifest {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct FormFieldManifest {
     pub id: String,
@@ -839,6 +952,7 @@ pub struct FormFieldManifest {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct FormVisibilityManifest {
     pub field: String,
@@ -846,6 +960,7 @@ pub struct FormVisibilityManifest {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct FormFulfillmentManifest {
     #[serde(default)]
@@ -855,6 +970,7 @@ pub struct FormFulfillmentManifest {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct DatasetManifest {
     pub id: String,
@@ -899,6 +1015,7 @@ pub struct DatasetManifest {
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct DatasetPolicyManifest {
     #[serde(default)]
@@ -916,6 +1033,7 @@ pub struct DatasetPolicyManifest {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct PolicyRuleManifest {
     pub action: String,
@@ -930,6 +1048,7 @@ pub struct PolicyRuleManifest {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct PolicyDutyManifest {
     pub action: String,
@@ -942,6 +1061,7 @@ pub struct PolicyDutyManifest {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct PolicyConstraintManifest {
     pub left_operand: String,
@@ -954,6 +1074,7 @@ pub struct PolicyConstraintManifest {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct PolicyOperandValue {
     #[serde(default)]
@@ -963,6 +1084,7 @@ pub struct PolicyOperandValue {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct PublicServiceManifest {
     #[serde(default)]
@@ -973,6 +1095,7 @@ pub struct PublicServiceManifest {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct RequirementManifest {
     pub id: String,
@@ -992,6 +1115,7 @@ pub struct RequirementManifest {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct EvidenceTypeListManifest {
     #[serde(default)]
@@ -1005,6 +1129,7 @@ pub struct EvidenceTypeListManifest {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct ReferenceFrameworkManifest {
     pub iri: String,
@@ -1012,6 +1137,7 @@ pub struct ReferenceFrameworkManifest {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct EvidenceTypeManifest {
     pub id: String,
@@ -1027,6 +1153,7 @@ pub struct EvidenceTypeManifest {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct EvidenceOfferingManifest {
     pub id: String,
@@ -1054,6 +1181,7 @@ pub struct EvidenceOfferingManifest {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct IssuingAuthorityManifest {
     pub id: String,
@@ -1065,6 +1193,7 @@ pub struct IssuingAuthorityManifest {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct JurisdictionManifest {
     #[serde(default)]
@@ -1074,6 +1203,7 @@ pub struct JurisdictionManifest {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct EvidenceOfferingAccessManifest {
     pub kind: String,
@@ -1087,6 +1217,7 @@ pub struct EvidenceOfferingAccessManifest {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct EvidenceOfferingPolicyManifest {
     #[serde(default)]
@@ -1094,6 +1225,7 @@ pub struct EvidenceOfferingPolicyManifest {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct EntityManifest {
     pub name: String,
@@ -1112,6 +1244,7 @@ pub struct EntityManifest {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct IdentifierManifest {
     pub name: String,
@@ -1119,6 +1252,7 @@ pub struct IdentifierManifest {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct FieldManifest {
     pub name: String,
@@ -1139,6 +1273,7 @@ pub struct FieldManifest {
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct FieldConstraints {
     #[serde(default)]
@@ -1152,6 +1287,7 @@ pub struct FieldConstraints {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct RelationshipManifest {
     pub name: String,
@@ -1174,6 +1310,7 @@ impl RelationshipManifest {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct CodelistManifest {
     pub id: String,
@@ -1191,6 +1328,7 @@ pub struct CodelistManifest {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct CodelistConcept {
     pub code: String,
@@ -1201,6 +1339,7 @@ pub struct CodelistConcept {
 }
 
 #[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum Sensitivity {
     #[default]
@@ -1212,6 +1351,7 @@ pub enum Sensitivity {
 }
 
 #[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum AccessRights {
     Public,
@@ -1221,6 +1361,7 @@ pub enum AccessRights {
 }
 
 #[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum UpdateFrequency {
     Continuous,
@@ -1237,6 +1378,7 @@ pub enum UpdateFrequency {
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum AdmsStatus {
     UnderDevelopment,
@@ -1247,6 +1389,7 @@ pub enum AdmsStatus {
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum FieldType {
     String,
@@ -1884,17 +2027,131 @@ pub enum MetadataError {
     Validation { errors: Vec<ValidationError> },
 }
 
+/// One rule a manifest broke. `path` names the member in dotted form with
+/// list indexes (`datasets[0].entities[1].name`), and `message` states the
+/// rule without repeating the value as written.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ValidationError {
+    pub condition: ValidationCondition,
     pub path: String,
     pub message: String,
 }
 
 impl ValidationError {
-    fn new(path: impl Into<String>, message: impl Into<String>) -> Self {
+    fn new(
+        condition: ValidationCondition,
+        path: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Self {
         Self {
+            condition,
             path: path.into(),
             message: message.into(),
+        }
+    }
+}
+
+/// The kind of rule a [`ValidationError`] reports. Each condition has its own
+/// diagnostic code and its own fix.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ValidationCondition {
+    /// A value, name, or code repeats one listed earlier.
+    DuplicateValue,
+    /// An id, or an entity or field name, repeats one listed earlier.
+    DuplicateId,
+    /// A reference names nothing the manifest declares.
+    UnknownReference,
+    /// A required member or entry is absent.
+    MissingMember,
+    /// A text value is empty or only whitespace.
+    EmptyValue,
+    /// An id does not follow the id grammar.
+    InvalidId,
+    /// A URL or namespace is not an absolute URL of the required scheme.
+    InvalidUrl,
+    /// An IRI is neither absolute nor a compact IRI with a known prefix.
+    InvalidIri,
+    /// A vocabulary prefix is malformed or redefines a built-in prefix.
+    InvalidVocabularyPrefix,
+    /// A digest is not `sha256:` and 64 lower-case hexadecimal digits.
+    InvalidDigest,
+    /// A declared policy hash does not match the inline policy.
+    PolicyHashMismatch,
+    /// The inline policy holds a value canonical JSON cannot represent, so its
+    /// declared hash cannot be verified.
+    PolicyNotCanonicalizable,
+    /// A collection holds more entries than its bound.
+    TooManyItems,
+    /// A member, value, or profile is not supported by this version.
+    Unsupported,
+    /// A value is outside the values or shape the member accepts.
+    InvalidValue,
+}
+
+impl ValidationCondition {
+    /// The condition segment of the diagnostic code, in kebab-case.
+    #[must_use]
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::DuplicateValue => "duplicate-value",
+            Self::DuplicateId => "duplicate-id",
+            Self::UnknownReference => "unknown-reference",
+            Self::MissingMember => "missing-member",
+            Self::EmptyValue => "empty-value",
+            Self::InvalidId => "invalid-id",
+            Self::InvalidUrl => "invalid-url",
+            Self::InvalidIri => "invalid-iri",
+            Self::InvalidVocabularyPrefix => "invalid-vocabulary-prefix",
+            Self::InvalidDigest => "invalid-digest",
+            Self::PolicyHashMismatch => "policy-hash-mismatch",
+            Self::PolicyNotCanonicalizable => "policy-not-canonicalizable",
+            Self::TooManyItems => "too-many-items",
+            Self::Unsupported => "unsupported",
+            Self::InvalidValue => "invalid-value",
+        }
+    }
+
+    /// The fix, as a sentence an author can act on beside the message.
+    #[must_use]
+    pub fn suggested_action(self) -> &'static str {
+        match self {
+            Self::DuplicateValue => {
+                "Remove the repeated entry, or give it a value no other entry in the collection uses."
+            }
+            Self::DuplicateId => {
+                "Give the entry an id no other entry in the list uses, or remove the repeated entry."
+            }
+            Self::UnknownReference => {
+                "Reference an entry this manifest declares, or declare the entry you meant."
+            }
+            Self::MissingMember => "Add the member or entry the message names.",
+            Self::EmptyValue => "Write a non-empty value, or remove the member.",
+            Self::InvalidId => "Rewrite the id in the form the message names.",
+            Self::InvalidUrl => {
+                "Write an absolute URL with the scheme the message names and a host."
+            }
+            Self::InvalidIri => {
+                "Write an absolute IRI, or a compact IRI whose prefix the manifest's vocabularies or the built-in prefixes declare."
+            }
+            Self::InvalidVocabularyPrefix => {
+                "Use lower-case ASCII letters, digits, hyphen, or underscore, starting with a letter, and do not reuse a built-in prefix."
+            }
+            Self::InvalidDigest => {
+                "Write the digest as sha256: followed by 64 lower-case hexadecimal digits."
+            }
+            Self::PolicyHashMismatch => {
+                "Recompute policy_hash over the canonical JSON of the inline evidence_pack policy."
+            }
+            Self::PolicyNotCanonicalizable => {
+                "Write every number in the inline evidence_pack policy as a finite value that IEEE 754 binary64 represents exactly."
+            }
+            Self::TooManyItems => {
+                "Remove entries until the collection is within the bound the message names."
+            }
+            Self::Unsupported => {
+                "Remove the member or value, or use one the message names as supported."
+            }
+            Self::InvalidValue => "Change the value to one the message describes.",
         }
     }
 }
@@ -1910,6 +2167,7 @@ fn validate_evaluation_profiles<'a>(
         validate_id(&profile.id, format!("{path}.id"), errors);
         if !ids.insert(profile.id.as_str()) {
             errors.push(ValidationError::new(
+                ValidationCondition::DuplicateId,
                 format!("{path}.id"),
                 "evaluation profile id must be unique",
             ));
@@ -1917,6 +2175,7 @@ fn validate_evaluation_profiles<'a>(
         validate_non_empty(&profile.ruleset, format!("{path}.ruleset"), errors);
         if !profile.ruleset.trim().is_empty() && !rulesets.insert(profile.ruleset.as_str()) {
             errors.push(ValidationError::new(
+                ValidationCondition::DuplicateValue,
                 format!("{path}.ruleset"),
                 "evaluation profile ruleset must be unique",
             ));
@@ -1947,6 +2206,7 @@ fn validate_ecosystem_bindings(manifest: &MetadataManifest, errors: &mut Vec<Val
             && !ids.insert((binding.id.as_str(), binding.version.as_str()))
         {
             errors.push(ValidationError::new(
+                ValidationCondition::DuplicateId,
                 format!("{path}.id"),
                 "ecosystem binding id and version must be unique",
             ));
@@ -1956,6 +2216,7 @@ fn validate_ecosystem_bindings(manifest: &MetadataManifest, errors: &mut Vec<Val
         let is_governed_evidence = binding.binding_type == ECOSYSTEM_BINDING_TYPE_GOVERNED_EVIDENCE;
         if !binding.binding_type.trim().is_empty() && !is_governed_evidence {
             errors.push(ValidationError::new(
+                ValidationCondition::Unsupported,
                 format!("{path}.type"),
                 format!(
                     "ecosystem binding type must be {ECOSYSTEM_BINDING_TYPE_GOVERNED_EVIDENCE}"
@@ -1983,6 +2244,7 @@ fn validate_ecosystem_bindings(manifest: &MetadataManifest, errors: &mut Vec<Val
             validate_non_empty(&profile.version, format!("{profile_path}.version"), errors);
             if !profile_ids.insert(profile.id.as_str()) {
                 errors.push(ValidationError::new(
+                    ValidationCondition::DuplicateId,
                     format!("{profile_path}.id"),
                     "profile id must be unique within an ecosystem binding",
                 ));
@@ -1998,6 +2260,7 @@ fn validate_governed_evidence_pack(
 ) {
     let Some(evidence_pack) = evidence_pack else {
         errors.push(ValidationError::new(
+            ValidationCondition::MissingMember,
             format!("{path}.evidence_pack"),
             "governed-evidence bindings must declare evidence_pack metadata",
         ));
@@ -2005,30 +2268,35 @@ fn validate_governed_evidence_pack(
     };
     if evidence_pack.pack_id.is_none() {
         errors.push(ValidationError::new(
+            ValidationCondition::MissingMember,
             format!("{path}.evidence_pack.pack_id"),
             "governed-evidence bindings must declare evidence_pack pack_id",
         ));
     }
     if evidence_pack.pack_version.is_none() {
         errors.push(ValidationError::new(
+            ValidationCondition::MissingMember,
             format!("{path}.evidence_pack.pack_version"),
             "governed-evidence bindings must declare evidence_pack pack_version",
         ));
     }
     if evidence_pack.source_basis.is_none() {
         errors.push(ValidationError::new(
+            ValidationCondition::MissingMember,
             format!("{path}.evidence_pack.source_basis"),
             "governed-evidence bindings must declare evidence_pack source_basis",
         ));
     }
     if evidence_pack.semantic_profile.is_none() {
         errors.push(ValidationError::new(
+            ValidationCondition::MissingMember,
             format!("{path}.evidence_pack.semantic_profile"),
             "governed-evidence bindings must declare evidence_pack semantic_profile",
         ));
     }
     if evidence_pack.evidence_envelope.is_none() {
         errors.push(ValidationError::new(
+            ValidationCondition::MissingMember,
             format!("{path}.evidence_pack.evidence_envelope"),
             "governed-evidence bindings must declare evidence_pack evidence_envelope",
         ));
@@ -2037,18 +2305,21 @@ fn validate_governed_evidence_pack(
     validate_required_evidence_pack_outputs(evidence_pack, path, errors);
     if evidence_pack.policy_id.is_none() {
         errors.push(ValidationError::new(
+            ValidationCondition::MissingMember,
             format!("{path}.evidence_pack.policy_id"),
             "governed-evidence bindings must declare evidence_pack policy_id",
         ));
     }
     if evidence_pack.policy_hash.is_none() {
         errors.push(ValidationError::new(
+            ValidationCondition::MissingMember,
             format!("{path}.evidence_pack.policy_hash"),
             "governed-evidence bindings must declare evidence_pack policy_hash",
         ));
     }
     if evidence_pack.odrl_enforcement.is_none() {
         errors.push(ValidationError::new(
+            ValidationCondition::MissingMember,
             format!("{path}.evidence_pack.odrl_enforcement"),
             "governed-evidence bindings must declare an ODRL enforcement profile",
         ));
@@ -2063,6 +2334,7 @@ fn validate_required_evidence_pack_gates(
     let field_path = format!("{path}.evidence_pack.required_gates");
     if evidence_pack.required_gates.is_empty() {
         errors.push(ValidationError::new(
+            ValidationCondition::MissingMember,
             field_path.clone(),
             "governed-evidence bindings must declare evidence_pack required_gates",
         ));
@@ -2075,6 +2347,7 @@ fn validate_required_evidence_pack_gates(
             .any(|gate| gate.as_str() == *required)
         {
             errors.push(ValidationError::new(
+                ValidationCondition::MissingMember,
                 field_path.clone(),
                 format!("required_gates must include {required}"),
             ));
@@ -2090,6 +2363,7 @@ fn validate_required_evidence_pack_outputs(
     let field_path = format!("{path}.evidence_pack.allowed_outputs");
     if evidence_pack.allowed_outputs.is_empty() {
         errors.push(ValidationError::new(
+            ValidationCondition::MissingMember,
             field_path.clone(),
             "governed-evidence bindings must declare evidence_pack allowed_outputs",
         ));
@@ -2101,6 +2375,7 @@ fn validate_required_evidence_pack_outputs(
         .any(|output| output == "minimized_json")
     {
         errors.push(ValidationError::new(
+            ValidationCondition::MissingMember,
             field_path,
             "allowed_outputs must include minimized_json",
         ));
@@ -2174,13 +2449,15 @@ fn validate_optional_evidence_pack_metadata(
     }
     match verify_evidence_pack_policy_hash(evidence_pack) {
         Ok(Some(false)) => errors.push(ValidationError::new(
+            ValidationCondition::PolicyHashMismatch,
             format!("{path}.policy_hash"),
             "policy_hash does not match the canonical inline evidence_pack policy",
         )),
         Ok(Some(true) | None) => {}
-        Err(error) => errors.push(ValidationError::new(
+        Err(_) => errors.push(ValidationError::new(
+            ValidationCondition::PolicyNotCanonicalizable,
             format!("{path}.policy_hash"),
-            format!("policy_hash could not be verified: {error}"),
+            "policy_hash could not be verified because the inline evidence_pack policy could not be canonicalized",
         )),
     }
     validate_optional_non_empty(
@@ -2207,7 +2484,11 @@ fn validate_optional_object(
         return;
     };
     if !value.is_object() {
-        errors.push(ValidationError::new(path, "field must be an object"));
+        errors.push(ValidationError::new(
+            ValidationCondition::InvalidValue,
+            path,
+            "field must be an object",
+        ));
     }
 }
 
@@ -2223,10 +2504,18 @@ fn validate_string_list(
         let item_path = format!("{path}[{index}]");
         validate_non_empty(value, item_path.clone(), errors);
         if !value.trim().is_empty() && !supported.contains(&value.as_str()) {
-            errors.push(ValidationError::new(item_path.clone(), unsupported_message));
+            errors.push(ValidationError::new(
+                ValidationCondition::Unsupported,
+                item_path.clone(),
+                unsupported_message,
+            ));
         }
         if !seen.insert(value.as_str()) {
-            errors.push(ValidationError::new(item_path, "values must be unique"));
+            errors.push(ValidationError::new(
+                ValidationCondition::DuplicateValue,
+                item_path,
+                "values must be unique",
+            ));
         }
     }
 }
@@ -2242,12 +2531,14 @@ fn validate_odrl_enforcement_profile(
     validate_non_empty(&enforcement.profile, format!("{path}.profile"), errors);
     if !enforcement.profile.trim().is_empty() && enforcement.profile != ODRL_ENFORCEMENT_PROFILE {
         errors.push(ValidationError::new(
+            ValidationCondition::Unsupported,
             format!("{path}.profile"),
             format!("ODRL enforcement profile must be {ODRL_ENFORCEMENT_PROFILE}"),
         ));
     }
     if enforcement.constraint_terms.is_empty() {
         errors.push(ValidationError::new(
+            ValidationCondition::MissingMember,
             format!("{path}.constraint_terms"),
             "ODRL enforcement profile must list at least one constraint term",
         ));
@@ -2258,12 +2549,14 @@ fn validate_odrl_enforcement_profile(
         validate_non_empty(term, term_path.clone(), errors);
         if !term.trim().is_empty() && !SUPPORTED_ODRL_ENFORCEMENT_TERMS.contains(&term.as_str()) {
             errors.push(ValidationError::new(
+                ValidationCondition::Unsupported,
                 term_path.clone(),
                 "unsupported ODRL enforcement term",
             ));
         }
         if !terms.insert(term.as_str()) {
             errors.push(ValidationError::new(
+                ValidationCondition::DuplicateValue,
                 term_path,
                 "ODRL enforcement terms must be unique",
             ));
@@ -2282,6 +2575,7 @@ fn validate_sha256_digest(value: &str, path: impl Into<String>, errors: &mut Vec
     });
     if !is_valid {
         errors.push(ValidationError::new(
+            ValidationCondition::InvalidDigest,
             path,
             "digest must use sha256:<64 lowercase hex>",
         ));
@@ -2472,6 +2766,7 @@ fn validate_count_limit(
 ) {
     if count > max {
         errors.push(ValidationError::new(
+            ValidationCondition::TooManyItems,
             path,
             format!("collection must contain at most {max} items"),
         ));
@@ -2527,6 +2822,7 @@ pub fn validate_manifest(manifest: &MetadataManifest) -> Result<(), MetadataErro
         );
         if !is_supported_application_profile(&profile.id) {
             errors.push(ValidationError::new(
+                ValidationCondition::Unsupported,
                 format!("catalog.application_profiles[{index}].id"),
                 "application profile is not supported by the current renderer",
             ));
@@ -2540,6 +2836,7 @@ pub fn validate_manifest(manifest: &MetadataManifest) -> Result<(), MetadataErro
         validate_non_empty(&profile.version, format!("{path}.version"), &mut errors);
         if !profile_ids.insert(profile.id.as_str()) {
             errors.push(ValidationError::new(
+                ValidationCondition::DuplicateId,
                 format!("{path}.id"),
                 "profile id must be unique",
             ));
@@ -2559,6 +2856,7 @@ pub fn validate_manifest(manifest: &MetadataManifest) -> Result<(), MetadataErro
         validate_id(&codelist.id, format!("{path}.id"), &mut errors);
         if !codelist_ids.insert(codelist.id.as_str()) {
             errors.push(ValidationError::new(
+                ValidationCondition::DuplicateId,
                 format!("{path}.id"),
                 "codelist id must be unique",
             ));
@@ -2595,6 +2893,7 @@ pub fn validate_manifest(manifest: &MetadataManifest) -> Result<(), MetadataErro
         validate_id(&dataset.id, format!("{path}.id"), &mut errors);
         if !dataset_ids.insert(dataset.id.as_str()) {
             errors.push(ValidationError::new(
+                ValidationCondition::DuplicateId,
                 format!("{path}.id"),
                 "dataset id must be unique",
             ));
@@ -2645,6 +2944,7 @@ pub fn validate_manifest(manifest: &MetadataManifest) -> Result<(), MetadataErro
                 );
                 if !dataset_public_service_ids.insert(service_id) {
                     errors.push(ValidationError::new(
+                        ValidationCondition::DuplicateId,
                         format!("{service_path}.id"),
                         "dataset public service id must be unique within a dataset",
                     ));
@@ -3482,6 +3782,7 @@ fn validate_requirements<'a>(
         validate_id(&requirement.id, format!("{path}.id"), errors);
         if !ids.insert(requirement.id.as_str()) {
             errors.push(ValidationError::new(
+                ValidationCondition::DuplicateId,
                 format!("{path}.id"),
                 "requirement id must be unique",
             ));
@@ -3534,6 +3835,7 @@ fn validate_evidence_types<'a>(
         validate_id(&evidence_type.id, format!("{path}.id"), errors);
         if !ids.insert(evidence_type.id.as_str()) {
             errors.push(ValidationError::new(
+                ValidationCondition::DuplicateId,
                 format!("{path}.id"),
                 "evidence type id must be unique",
             ));
@@ -3547,6 +3849,7 @@ fn validate_evidence_types<'a>(
         validate_non_empty(&evidence_type.title.text(), format!("{path}.title"), errors);
         if evidence_type.proves.is_empty() {
             errors.push(ValidationError::new(
+                ValidationCondition::MissingMember,
                 format!("{path}.proves"),
                 "evidence type must prove at least one requirement",
             ));
@@ -3559,6 +3862,7 @@ fn validate_evidence_types<'a>(
             );
             if !requirement_ids.contains(requirement_id.as_str()) {
                 errors.push(ValidationError::new(
+                    ValidationCondition::UnknownReference,
                     format!("{path}.proves[{proves_index}]"),
                     "evidence type must prove a known requirement",
                 ));
@@ -3604,6 +3908,7 @@ fn validate_requirement_evidence_type_lists(
             validate_id(&list_id, format!("{path}.id"), errors);
             if !list_ids.insert(list_id) {
                 errors.push(ValidationError::new(
+                    ValidationCondition::DuplicateId,
                     format!("{path}.id"),
                     "evidence type list id must be unique per requirement",
                 ));
@@ -3613,6 +3918,7 @@ fn validate_requirement_evidence_type_lists(
             }
             if list.evidence_types.is_empty() {
                 errors.push(ValidationError::new(
+                    ValidationCondition::MissingMember,
                     format!("{path}.evidence_types"),
                     "evidence type list must include at least one evidence type",
                 ));
@@ -3624,12 +3930,14 @@ fn validate_requirement_evidence_type_lists(
                 validate_id(evidence_type_id, &evidence_type_path, errors);
                 if !listed_evidence_types.insert(evidence_type_id.as_str()) {
                     errors.push(ValidationError::new(
+                        ValidationCondition::DuplicateId,
                         &evidence_type_path,
                         "evidence type id must be unique within an evidence type list",
                     ));
                 }
                 if !evidence_type_ids.contains(evidence_type_id.as_str()) {
                     errors.push(ValidationError::new(
+                        ValidationCondition::UnknownReference,
                         &evidence_type_path,
                         "evidence type list must reference a known evidence type",
                     ));
@@ -3640,6 +3948,7 @@ fn validate_requirement_evidence_type_lists(
                     .is_some_and(|proves| proves.contains(requirement.id.as_str()))
                 {
                     errors.push(ValidationError::new(
+                        ValidationCondition::UnknownReference,
                         &evidence_type_path,
                         "listed evidence type must prove the owning requirement",
                     ));
@@ -3667,6 +3976,7 @@ fn validate_service_catalog<'a>(
         validate_id(&authority.id, format!("{path}.id"), errors);
         if !authority_ids.insert(authority.id.as_str()) {
             errors.push(ValidationError::new(
+                ValidationCondition::DuplicateId,
                 format!("{path}.id"),
                 "authority id must be unique",
             ));
@@ -3699,6 +4009,7 @@ fn validate_service_catalog<'a>(
         validate_id(&service.id, format!("{path}.id"), errors);
         if !service_ids.insert(service.id.as_str()) {
             errors.push(ValidationError::new(
+                ValidationCondition::DuplicateId,
                 format!("{path}.id"),
                 "public service id must be unique",
             ));
@@ -3715,6 +4026,7 @@ fn validate_service_catalog<'a>(
                 validate_non_empty(&description.text(), format!("{path}.description"), errors);
             }
             None => errors.push(ValidationError::new(
+                ValidationCondition::MissingMember,
                 format!("{path}.description"),
                 "public service description is required",
             )),
@@ -3723,6 +4035,7 @@ fn validate_service_catalog<'a>(
             validate_id(authority_id, format!("{path}.competent_authority"), errors);
             if !authority_ids.contains(authority_id) {
                 errors.push(ValidationError::new(
+                    ValidationCondition::UnknownReference,
                     format!("{path}.competent_authority"),
                     "public service competent_authority must reference a known authority",
                 ));
@@ -3742,6 +4055,7 @@ fn validate_service_catalog<'a>(
             );
             if !requirement_ids.contains(requirement_id.as_str()) {
                 errors.push(ValidationError::new(
+                    ValidationCondition::UnknownReference,
                     format!("{path}.holds_requirements[{requirement_index}]"),
                     "public service holds_requirements must reference a known requirement",
                 ));
@@ -3753,6 +4067,7 @@ fn validate_service_catalog<'a>(
             let channel_key = format!("{}:{}", service.id, channel.id);
             if !channel_ids.insert(channel_key) {
                 errors.push(ValidationError::new(
+                    ValidationCondition::DuplicateId,
                     format!("{channel_path}.id"),
                     "channel id must be unique within a public service",
                 ));
@@ -3791,6 +4106,7 @@ fn validate_service_catalog<'a>(
         validate_id(&data_service.id, format!("{path}.id"), errors);
         if !data_service_ids.insert(data_service.id.as_str()) {
             errors.push(ValidationError::new(
+                ValidationCondition::DuplicateId,
                 format!("{path}.id"),
                 "data service id must be unique",
             ));
@@ -3823,6 +4139,7 @@ fn validate_service_catalog<'a>(
         for (index, data_service_id) in service.data_services.iter().enumerate() {
             if !data_service_ids.contains(data_service_id.as_str()) {
                 errors.push(ValidationError::new(
+                    ValidationCondition::UnknownReference,
                     format!("public_services[{service_index}].data_services[{index}]"),
                     "public service data_services must reference a known data service",
                 ));
@@ -3837,6 +4154,7 @@ fn validate_service_catalog<'a>(
         validate_id(&form.id, format!("{path}.id"), errors);
         if !form_ids.insert(form.id.as_str()) {
             errors.push(ValidationError::new(
+                ValidationCondition::DuplicateId,
                 format!("{path}.id"),
                 "form id must be unique",
             ));
@@ -3852,6 +4170,7 @@ fn validate_service_catalog<'a>(
         validate_id(&form.service, format!("{path}.service"), errors);
         if !service_ids.contains(form.service.as_str()) {
             errors.push(ValidationError::new(
+                ValidationCondition::UnknownReference,
                 format!("{path}.service"),
                 "form service must reference a known public service",
             ));
@@ -3874,6 +4193,7 @@ fn validate_service_catalog<'a>(
             validate_id(channel_id, format!("{path}.channel"), errors);
             if !channel_ids.contains(&format!("{}:{channel_id}", form.service)) {
                 errors.push(ValidationError::new(
+                    ValidationCondition::UnknownReference,
                     format!("{path}.channel"),
                     "form channel must reference a channel on the form service",
                 ));
@@ -3897,6 +4217,7 @@ fn validate_service_catalog<'a>(
             validate_id(&section.id, format!("{section_path}.id"), errors);
             if !section_ids.insert(section.id.as_str()) {
                 errors.push(ValidationError::new(
+                    ValidationCondition::DuplicateId,
                     format!("{section_path}.id"),
                     "form section id must be unique within a form",
                 ));
@@ -3930,11 +4251,13 @@ fn validate_service_catalog<'a>(
         for (index, form_id) in service.forms.iter().enumerate() {
             if !form_ids.contains(form_id.as_str()) {
                 errors.push(ValidationError::new(
+                    ValidationCondition::UnknownReference,
                     format!("public_services[{service_index}].forms[{index}]"),
                     "public service forms must reference a known form",
                 ));
             } else if form_service_by_id.get(form_id.as_str()) != Some(&service.id.as_str()) {
                 errors.push(ValidationError::new(
+                    ValidationCondition::UnknownReference,
                     format!("public_services[{service_index}].forms[{index}]"),
                     "public service forms must reference forms owned by the same public service",
                 ));
@@ -3961,6 +4284,7 @@ fn validate_form_field<'a>(
     validate_id(&field.id, format!("{path}.id"), errors);
     if !field_ids.insert(field.id.as_str()) {
         errors.push(ValidationError::new(
+            ValidationCondition::DuplicateId,
             format!("{path}.id"),
             "form field id must be unique within a form",
         ));
@@ -3989,6 +4313,7 @@ fn validate_form_field<'a>(
         );
         if !requirement_ids.contains(requirement_id) {
             errors.push(ValidationError::new(
+                ValidationCondition::UnknownReference,
                 format!("{path}.supports_requirement"),
                 "form field supports_requirement must reference a known requirement",
             ));
@@ -4017,6 +4342,7 @@ fn validate_form_field<'a>(
                 && !fulfillment.modes.iter().any(|mode| mode == preferred_mode)
             {
                 errors.push(ValidationError::new(
+                    ValidationCondition::InvalidValue,
                     format!("{path}.fulfillment.preferred_mode"),
                     "preferred fulfillment mode must be listed in modes",
                 ));
@@ -4034,6 +4360,7 @@ fn validate_occurs(
     if let (Some(min), Some(max)) = (min_occurs, max_occurs) {
         if max < min {
             errors.push(ValidationError::new(
+                ValidationCondition::InvalidValue,
                 path,
                 "max_occurs must be greater than or equal to min_occurs",
             ));
@@ -4066,6 +4393,7 @@ fn validate_fulfillment_mode(
             | "known_from_context"
     ) {
         errors.push(ValidationError::new(
+            ValidationCondition::InvalidValue,
             path,
             "fulfillment mode must be manual_input, file_upload, registry_lookup, oots_evidence_exchange, self_declaration, or known_from_context",
         ));
@@ -4087,6 +4415,7 @@ fn validate_service_catalog_dataset_refs(
             );
             if !dataset_ids.contains(dataset_id.as_str()) {
                 errors.push(ValidationError::new(
+                    ValidationCondition::UnknownReference,
                     format!("public_services[{service_index}].produces[{index}]"),
                     "public service produces must reference a known dataset",
                 ));
@@ -4096,6 +4425,7 @@ fn validate_service_catalog_dataset_refs(
     for (index, data_service) in manifest.data_services.iter().enumerate() {
         if data_service.serves_datasets.is_empty() {
             errors.push(ValidationError::new(
+                ValidationCondition::MissingMember,
                 format!("data_services[{index}].serves_datasets"),
                 "data service serves_datasets must contain at least one dataset",
             ));
@@ -4109,12 +4439,14 @@ fn validate_service_catalog_dataset_refs(
             );
             if !dataset_ids.contains(dataset_id.as_str()) {
                 errors.push(ValidationError::new(
+                    ValidationCondition::UnknownReference,
                     format!("data_services[{index}].serves_datasets[{dataset_index}]"),
                     "data service serves_datasets must reference a known dataset",
                 ));
             }
             if !served_dataset_ids.insert(dataset_id.as_str()) {
                 errors.push(ValidationError::new(
+                    ValidationCondition::DuplicateValue,
                     format!("data_services[{index}].serves_datasets[{dataset_index}]"),
                     "data service serves_datasets must not contain duplicates",
                 ));
@@ -4147,6 +4479,7 @@ fn validate_distributions(
         validate_id(&distribution.id, format!("{path}.id"), errors);
         if !distribution_ids.insert(distribution.id.as_str()) {
             errors.push(ValidationError::new(
+                ValidationCondition::DuplicateId,
                 format!("{path}.id"),
                 "distribution id must be unique",
             ));
@@ -4154,6 +4487,7 @@ fn validate_distributions(
         validate_id(&distribution.dataset, format!("{path}.dataset"), errors);
         if !dataset_ids.contains(distribution.dataset.as_str()) {
             errors.push(ValidationError::new(
+                ValidationCondition::UnknownReference,
                 format!("{path}.dataset"),
                 "distribution dataset must reference a known dataset",
             ));
@@ -4168,6 +4502,7 @@ fn validate_distributions(
             validate_id(access_service_id, format!("{path}.access_service"), errors);
             if !service_refs.data_service_ids.contains(access_service_id) {
                 errors.push(ValidationError::new(
+                    ValidationCondition::UnknownReference,
                     format!("{path}.access_service"),
                     "distribution access_service must reference a known data service",
                 ));
@@ -4178,6 +4513,7 @@ fn validate_distributions(
                     .any(|dataset| dataset == &distribution.dataset)
             }) {
                 errors.push(ValidationError::new(
+                    ValidationCondition::UnknownReference,
                     format!("{path}.access_service"),
                     "distribution access_service must serve the distribution dataset",
                 ));
@@ -4188,6 +4524,7 @@ fn validate_distributions(
             && distribution.download_url.is_none()
         {
             errors.push(ValidationError::new(
+                ValidationCondition::MissingMember,
                 path.clone(),
                 "distribution must declare access_service, access_url, or download_url",
             ));
@@ -4238,6 +4575,7 @@ fn validate_entities(
         validate_id(&entity.name, format!("{entity_path}.name"), errors);
         if !seen_entity_names.insert(entity.name.as_str()) {
             errors.push(ValidationError::new(
+                ValidationCondition::DuplicateId,
                 format!("{entity_path}.name"),
                 "entity name must be unique within a dataset",
             ));
@@ -4254,6 +4592,7 @@ fn validate_entities(
             validate_id(&field.name, format!("{field_path}.name"), errors);
             if !field_names.insert(field.name.as_str()) {
                 errors.push(ValidationError::new(
+                    ValidationCondition::DuplicateId,
                     format!("{field_path}.name"),
                     "field name must be unique within an entity",
                 ));
@@ -4265,20 +4604,31 @@ fn validate_entities(
                 validate_id(codelist, format!("{field_path}.codelist"), errors);
                 if !codelist_ids.contains(codelist) {
                     errors.push(ValidationError::new(
+                        ValidationCondition::UnknownReference,
                         format!("{field_path}.codelist"),
                         "field codelist must reference a known codelist",
                     ));
                 }
             }
         }
-        for identifier in &entity.identifiers {
+        let mut identifier_names = BTreeSet::new();
+        for (identifier_index, identifier) in entity.identifiers.iter().enumerate() {
+            if !identifier_names.insert(identifier.name.as_str()) {
+                errors.push(ValidationError::new(
+                    ValidationCondition::DuplicateId,
+                    format!("{entity_path}.identifiers[{identifier_index}].name"),
+                    "identifier must be listed once within an entity",
+                ));
+            }
             if !field_names.contains(identifier.name.as_str()) {
                 errors.push(ValidationError::new(
+                    ValidationCondition::UnknownReference,
                     format!("{entity_path}.identifiers"),
                     "identifier must reference a field on the entity",
                 ));
             }
         }
+        let mut relationship_names = BTreeSet::new();
         for (relationship_index, relationship) in entity.relationships.iter().enumerate() {
             let relationship_path = format!("{entity_path}.relationships[{relationship_index}]");
             validate_id(
@@ -4286,8 +4636,16 @@ fn validate_entities(
                 format!("{relationship_path}.name"),
                 errors,
             );
+            if !relationship_names.insert(relationship.name.as_str()) {
+                errors.push(ValidationError::new(
+                    ValidationCondition::DuplicateId,
+                    format!("{relationship_path}.name"),
+                    "relationship name must be unique within an entity",
+                ));
+            }
             let Some(target) = relationship.target_name() else {
                 errors.push(ValidationError::new(
+                    ValidationCondition::MissingMember,
                     format!("{relationship_path}.target_entity"),
                     "relationship target_entity is required",
                 ));
@@ -4295,6 +4653,7 @@ fn validate_entities(
             };
             if !entity_names.contains(target) {
                 errors.push(ValidationError::new(
+                    ValidationCondition::UnknownReference,
                     format!("{relationship_path}.target_entity"),
                     "relationship target must name an entity in the same dataset",
                 ));
@@ -4349,6 +4708,7 @@ fn validate_evidence_offerings(
         validate_id(&offering.id, format!("{offering_path}.id"), errors);
         if !offering_ids.insert(offering.id.clone()) {
             errors.push(ValidationError::new(
+                ValidationCondition::DuplicateId,
                 format!("{offering_path}.id"),
                 "evidence offering id must be unique globally",
             ));
@@ -4371,6 +4731,7 @@ fn validate_evidence_offerings(
         );
         if !evidence_type_ids.contains(offering.evidence_type.as_str()) {
             errors.push(ValidationError::new(
+                ValidationCondition::UnknownReference,
                 format!("{offering_path}.evidence_type"),
                 "evidence offering must reference a known evidence type",
             ));
@@ -4398,6 +4759,7 @@ fn validate_evidence_offerings(
             .is_some_and(|country| country.trim().is_empty())
         {
             errors.push(ValidationError::new(
+                ValidationCondition::EmptyValue,
                 format!("{offering_path}.issuing_authority.country"),
                 "issuing authority country must not be empty when present",
             ));
@@ -4406,6 +4768,7 @@ fn validate_evidence_offerings(
             jurisdiction.country.is_none() && jurisdiction.region.is_none()
         }) {
             errors.push(ValidationError::new(
+                ValidationCondition::MissingMember,
                 format!("{offering_path}.jurisdiction"),
                 "jurisdiction must declare country or region",
             ));
@@ -4413,6 +4776,7 @@ fn validate_evidence_offerings(
         validate_id(&offering.entity, format!("{offering_path}.entity"), errors);
         let Some(fields) = entity_fields.get(offering.entity.as_str()) else {
             errors.push(ValidationError::new(
+                ValidationCondition::UnknownReference,
                 format!("{offering_path}.entity"),
                 "evidence offering entity must name an entity in the same dataset",
             ));
@@ -4420,6 +4784,7 @@ fn validate_evidence_offerings(
         };
         if offering.lookup_keys.is_empty() {
             errors.push(ValidationError::new(
+                ValidationCondition::MissingMember,
                 format!("{offering_path}.lookup_keys"),
                 "evidence offering must declare at least one lookup key",
             ));
@@ -4432,6 +4797,7 @@ fn validate_evidence_offerings(
             );
             if !fields.contains(key.as_str()) {
                 errors.push(ValidationError::new(
+                    ValidationCondition::UnknownReference,
                     format!("{offering_path}.lookup_keys[{key_index}]"),
                     "lookup key must reference a field on the offering entity",
                 ));
@@ -4445,6 +4811,7 @@ fn validate_evidence_offerings(
         );
         if offering.access.kind.trim().is_empty() {
             errors.push(ValidationError::new(
+                ValidationCondition::EmptyValue,
                 format!("{offering_path}.access.kind"),
                 "access kind must not be empty",
             ));
@@ -4512,6 +4879,7 @@ fn validate_registry_evidence_access(
     match offering.access.conforms_to.as_deref() {
         Some(conforms_to) if !conforms_to.trim().is_empty() => {}
         _ => errors.push(ValidationError::new(
+            ValidationCondition::MissingMember,
             format!("{offering_path}.access.conforms_to"),
             "registry-evidence access must declare the response profile it conforms to",
         )),
@@ -4523,6 +4891,7 @@ fn validate_registry_evidence_access(
             errors,
         ),
         None => errors.push(ValidationError::new(
+            ValidationCondition::MissingMember,
             format!("{offering_path}.access.endpoint_url"),
             "registry-evidence access must declare an HTTPS endpoint URL",
         )),
@@ -4534,6 +4903,7 @@ fn validate_registry_evidence_access(
             errors,
         ),
         None => errors.push(ValidationError::new(
+            ValidationCondition::MissingMember,
             format!("{offering_path}.access.discovery_url"),
             "registry-evidence access must declare an HTTPS discovery URL",
         )),
@@ -4542,6 +4912,7 @@ fn validate_registry_evidence_access(
         && !evaluation_profile_rulesets.contains(offering.access.ruleset.as_str())
     {
         errors.push(ValidationError::new(
+            ValidationCondition::UnknownReference,
             format!("{offering_path}.access.ruleset"),
             "registry-evidence access.ruleset must reference a known evaluation profile ruleset",
         ));
@@ -4578,12 +4949,14 @@ fn validate_dataset_policy(
     );
     if policy.permissions.is_empty() && policy.prohibitions.is_empty() {
         errors.push(ValidationError::new(
+            ValidationCondition::MissingMember,
             policy_path.clone(),
             "policy must declare at least one permission or prohibition",
         ));
     }
     if !policy.obligations.is_empty() {
         errors.push(ValidationError::new(
+            ValidationCondition::Unsupported,
             format!("{policy_path}.obligations"),
             "top-level ODRL obligations are not supported in v0.1",
         ));
@@ -4605,6 +4978,7 @@ fn validate_dataset_policy(
         );
         if !rule.duties.is_empty() {
             errors.push(ValidationError::new(
+                ValidationCondition::Unsupported,
                 format!("{policy_path}.prohibitions[{index}].duties"),
                 "prohibition duties are not supported in v0.1",
             ));
@@ -4711,12 +5085,14 @@ fn validate_policy_constraint(
                 .is_some_and(policy_left_operand_requires_iri)
             {
                 errors.push(ValidationError::new(
+                    ValidationCondition::InvalidIri,
                     format!("{path}.right_operand"),
                     "right operand must be an IRI for this left operand",
                 ));
             }
         }
         _ => errors.push(ValidationError::new(
+            ValidationCondition::InvalidValue,
             format!("{path}.right_operand"),
             "right operand must contain exactly one of iri or value",
         )),
@@ -4743,6 +5119,7 @@ fn validate_policy_iri(
 ) {
     if expand_policy_uri(value, vocabularies).is_none() {
         errors.push(ValidationError::new(
+            ValidationCondition::InvalidIri,
             path,
             "policy IRI must be absolute or use a configured or built-in vocabulary prefix",
         ));
@@ -6846,7 +7223,11 @@ fn records_collection_json() -> Value {
 
 fn validate_non_empty(value: &str, path: impl Into<String>, errors: &mut Vec<ValidationError>) {
     if value.trim().is_empty() {
-        errors.push(ValidationError::new(path, "value must not be empty"));
+        errors.push(ValidationError::new(
+            ValidationCondition::EmptyValue,
+            path,
+            "value must not be empty",
+        ));
     }
 }
 
@@ -6856,7 +7237,11 @@ fn validate_optional_non_empty(
     errors: &mut Vec<ValidationError>,
 ) {
     if value.is_some_and(|value| value.trim().is_empty()) {
-        errors.push(ValidationError::new(path, "value must not be empty"));
+        errors.push(ValidationError::new(
+            ValidationCondition::EmptyValue,
+            path,
+            "value must not be empty",
+        ));
     }
 }
 
@@ -6872,6 +7257,7 @@ fn is_valid_id(value: &str) -> bool {
 fn validate_id(value: &str, path: impl Into<String>, errors: &mut Vec<ValidationError>) {
     if !is_valid_id(value) {
         errors.push(ValidationError::new(
+            ValidationCondition::InvalidId,
             path,
             "id must use lower-case letters, digits, hyphen, or underscore and start with a letter",
         ));
@@ -6887,6 +7273,7 @@ fn validate_vocabularies(
         if let Some(builtin) = builtin_namespace(prefix) {
             if namespace != builtin {
                 errors.push(ValidationError::new(
+                    ValidationCondition::InvalidVocabularyPrefix,
                     path,
                     "built-in vocabulary prefix must not be redefined",
                 ));
@@ -6895,12 +7282,14 @@ fn validate_vocabularies(
         }
         if !is_valid_custom_vocabulary_prefix(prefix) {
             errors.push(ValidationError::new(
+            ValidationCondition::InvalidVocabularyPrefix,
                 path.clone(),
                 "vocabulary prefix must use lower-case ASCII letters, digits, hyphen, or underscore and start with a letter",
             ));
         }
         if !is_well_formed_http_https_iri(namespace) {
             errors.push(ValidationError::new(
+                ValidationCondition::InvalidUrl,
                 path,
                 "vocabulary namespace must be an absolute http:// or https:// IRI",
             ));
@@ -6926,6 +7315,7 @@ fn builtin_namespace(prefix: &str) -> Option<&'static str> {
 fn validate_cardinality(value: &str, path: impl Into<String>, errors: &mut Vec<ValidationError>) {
     if !matches!(value, "one" | "zero_or_one" | "many" | "zero_or_more") {
         errors.push(ValidationError::new(
+            ValidationCondition::InvalidValue,
             path,
             "cardinality must be one, zero_or_one, many, or zero_or_more",
         ));
@@ -6939,6 +7329,7 @@ fn is_supported_application_profile(id: &str) -> bool {
 fn validate_http_url(value: &str, path: impl Into<String>, errors: &mut Vec<ValidationError>) {
     if !(value.starts_with("http://") || value.starts_with("https://")) {
         errors.push(ValidationError::new(
+            ValidationCondition::InvalidUrl,
             path,
             "URL must start with http:// or https://",
         ));
@@ -6952,6 +7343,7 @@ fn validate_optional_distribution_url(
 ) {
     if value.is_some_and(|value| !is_well_formed_http_https_iri(value)) {
         errors.push(ValidationError::new(
+            ValidationCondition::InvalidUrl,
             path,
             "URL must be an absolute http:// or https:// IRI with a host",
         ));
@@ -6987,6 +7379,7 @@ fn validate_media_type(value: &str, path: impl Into<String>, errors: &mut Vec<Va
         .is_some_and(|(kind, subtype)| valid_token(kind) && valid_token(subtype));
     if !valid {
         errors.push(ValidationError::new(
+            ValidationCondition::InvalidValue,
             path,
             "media type must use the type/subtype syntax without parameters",
         ));
@@ -6996,6 +7389,7 @@ fn validate_media_type(value: &str, path: impl Into<String>, errors: &mut Vec<Va
 fn validate_https_url(value: &str, path: impl Into<String>, errors: &mut Vec<ValidationError>) {
     if !value.starts_with("https://") || https_url_host(value).is_none() {
         errors.push(ValidationError::new(
+            ValidationCondition::InvalidUrl,
             path,
             "URL must start with https:// and include a host",
         ));
@@ -7030,6 +7424,7 @@ fn validate_dataset_public_service_id(
         return;
     }
     errors.push(ValidationError::new(
+        ValidationCondition::InvalidId,
         path,
         "dataset public service id must be a local id or absolute http:// or https:// IRI",
     ));
@@ -7043,18 +7438,21 @@ fn validate_codelist_concept(
 ) {
     if concept.code.trim().is_empty() {
         errors.push(ValidationError::new(
+            ValidationCondition::EmptyValue,
             format!("{path}.code"),
             "codelist concept code must not be empty",
         ));
     }
     if concept.code.chars().any(char::is_control) {
         errors.push(ValidationError::new(
+            ValidationCondition::InvalidValue,
             format!("{path}.code"),
             "codelist concept code must not contain control characters",
         ));
     }
     if !concept_codes.insert(concept.code.clone()) {
         errors.push(ValidationError::new(
+            ValidationCondition::DuplicateValue,
             format!("{path}.code"),
             "codelist concept code must be unique within a codelist",
         ));
@@ -7102,9 +7500,10 @@ fn validate_unique_concepts(
         let key = iri_term_key(&expanded);
         if let Some(first) = first_position.get(&key) {
             errors.push(ValidationError::new(
+            ValidationCondition::DuplicateValue,
                 format!("{path}[{index}]"),
                 format!(
-                    "concept must be unique within a field; {expanded} is already listed at {path}[{first}]"
+                    "concept must be unique within a field; the same concept is already listed at {path}[{first}]"
                 ),
             ));
         } else {
@@ -7160,6 +7559,7 @@ fn validate_uri_or_code_list(
             && (value.trim().is_empty() || value.contains(':'))
         {
             errors.push(ValidationError::new(
+                ValidationCondition::InvalidIri,
                 format!("{path}[{index}]"),
                 "value must be an IRI, compact IRI, or non-empty procedure code",
             ));
@@ -7178,6 +7578,7 @@ fn validate_optional_uri(
     };
     if expand_uri(value, vocabularies).is_none() {
         errors.push(ValidationError::new(
+            ValidationCondition::InvalidIri,
             path,
             "URI must be absolute or use a configured vocabulary prefix",
         ));
@@ -7588,8 +7989,24 @@ fn jsonld_context_with_service_catalogue_terms() -> Value {
 mod digest_tests {
     use super::*;
 
+    const FORMAT: registry_platform_yaml::FormatSpec<'static> =
+        registry_platform_yaml::FormatSpec {
+            kind: "ManifestMetadata",
+            envelope: registry_platform_yaml::EnvelopeRule::Exempt {
+                reason: "a metadata manifest names its version in schema_version",
+            },
+            removed_keys: &[],
+        };
+
     fn manifest(raw: &str) -> MetadataManifest {
-        serde_yaml_ng::from_str(raw).expect("manifest parses")
+        let value = registry_platform_yaml::Reader::new("metadata.yaml")
+            .decode::<Value>(
+                raw.as_bytes(),
+                &registry_platform_yaml::Expect::one(&FORMAT),
+            )
+            .expect("the shared reader reads the manifest")
+            .value;
+        serde_json::from_value(value).expect("manifest parses")
     }
 
     #[test]

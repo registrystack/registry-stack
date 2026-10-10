@@ -74,10 +74,10 @@ fn project_with_handler(handler: Value) -> Value {
             "handler": handler
         }],
         "accessProfiles": [{
-            "id": "registrar", "default": true, "principalClaim": "registry_principal",
+            "id": "registrar", "default": true, "principalClaim": "registry_principal", "requiredScopes": "unrestricted",
             "permissions": [{
                 "action": "register-person", "operations": ["invoke"],
-                "targets": [{"entity": "person", "rowBoundaries": []}],
+                "targets": [{"entity": "person", "rowBoundaries": "unrestricted"}],
                 "results": ["person"]
             }]
         }]
@@ -103,7 +103,7 @@ fn parse_refusal(handler: Value) -> Diagnostic {
         .first()
         .expect("a refusal carries a diagnostic")
         .clone();
-    assert_eq!("source.shape.invalid", diagnostic.code);
+    assert_eq!("breg.source.shape-invalid", diagnostic.code);
     diagnostic
 }
 
@@ -246,7 +246,7 @@ fn a_remote_action_handler_kind_is_refused() {
     let diagnostic = failure
         .diagnostics()
         .iter()
-        .find(|diagnostic| diagnostic.code == "action.handler.kind.unsupported")
+        .find(|diagnostic| diagnostic.code == "breg.action.handler-kind-unsupported")
         .unwrap_or_else(|| panic!("missing refusal: {:?}", failure.diagnostics()));
     assert_eq!(
         "actions[register-person].handler.kind", diagnostic.path,

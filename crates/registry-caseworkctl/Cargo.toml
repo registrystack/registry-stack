@@ -15,6 +15,12 @@ path = "src/main.rs"
 [features]
 default = []
 postgres-test = ["registry-casework/postgres-test"]
+schema = [
+    "dep:schemars",
+    "registry-casework-breg/schema",
+    "registry-casework-core/schema",
+    "registry-platform-yaml/schema",
+]
 
 [lints]
 workspace = true
@@ -33,12 +39,14 @@ registry-platform-buildinfo.workspace = true
 registry-platform-config.workspace = true
 registry-platform-crypto.workspace = true
 registry-platform-httputil.workspace = true
+registry-platform-yaml.workspace = true
 registry-thunderid-tooling.workspace = true
 registry-casework-breg.workspace = true
 registry-casework-core.workspace = true
 registry-casework.workspace = true
 reqwest.workspace = true
 rustix.workspace = true
+schemars = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
 serde_norway.workspace = true

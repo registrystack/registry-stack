@@ -22,6 +22,15 @@ use registry_platform_crypto::{canonicalize_json, domain_separated_sha256};
 use serde_json::{json, Map, Value};
 use url::{Host, Url};
 
+use registry_evidence_authoring::formats::{
+    check_access_policy, check_question, diagnostic_near, read_envelope_body, scan_authored,
+    SELECTOR, SOURCE,
+};
+use registry_platform_yaml::{
+    Document, ExternalId, FormatSpec, LocalId, Node, NodeValue, Severity,
+};
+
+use crate::authored::{self, Gathered};
 use crate::evidence_binary::{EVIDENCE_RUNTIME_API_VERSION, EVIDENCE_RUNTIME_KIND};
 use crate::suggest::{
     narrow,
@@ -36,10 +45,9 @@ use crate::suggest::{
 pub(crate) use registry_evidence_authoring::{
     layout::{
         ACCESS_DIRECTORY, ACCESS_POLICIES_DIRECTORY, DERIVATIONS_DIRECTORY, FIXTURES_DIRECTORY,
-        MAX_ACCESS_POLICY_BYTES, MAX_DERIVATION_BYTES, MAX_OPENAPI_BYTES, MAX_PROJECT_MARKER_BYTES,
-        MAX_QUESTIONS, MAX_QUESTION_BYTES, MAX_SOURCE_ARTIFACT_BYTES, OPENAPI_FILE,
-        QUESTIONS_DIRECTORY, SCHEMAS_DIRECTORY, SECRETS_DIRECTORY, SELECTORS_DIRECTORY,
-        SOURCES_DIRECTORY,
+        MAX_DERIVATION_BYTES, MAX_OPENAPI_BYTES, MAX_QUESTIONS, MAX_SOURCE_ARTIFACT_BYTES,
+        OPENAPI_FILE, QUESTIONS_DIRECTORY, SCHEMAS_DIRECTORY, SECRETS_DIRECTORY,
+        SELECTORS_DIRECTORY, SOURCES_DIRECTORY,
     },
     model::{
         AccessPolicy, AccessTaskGrant, AnswerType, FactCombination, Question, QuestionAnswer,
@@ -47,9 +55,9 @@ pub(crate) use registry_evidence_authoring::{
     },
     validate::{
         collection_pointers, question_subjects, valid_local_identifier, validate_access_policy,
-        validate_answer_schema_document, validate_question,
+        validate_answer_schema_document,
     },
-    validate_answer_fact_reads, validate_authored_answer, Finding,
+    validate_answer_fact_reads, validate_authored_answer,
 };
 
 const LOCAL_URI_PREFIX: &str = "urn:registrystack:evidence:local:";
@@ -483,9 +491,13 @@ pub(crate) fn compile_target_project_with_revision(
         let question_ids = inputs
             .questions
             .iter()
-            .map(|authored| authored.question.id.clone())
+            .map(|authored| authored.question.id.to_string())
             .collect::<BTreeSet<_>>();
-        let local_access = read_local_access(&project_root, &question_ids)?;
+        let mut gathered = Gathered::default();
+        let access_policies =
+            read_access_policies(&project_root, Some(&question_ids), &mut gathered)?;
+        gathered.checkpoint()?;
+        let local_access = read_local_access(&project_root, access_policies)?;
         inputs.access_policies = local_access.access_policies;
         inputs.active_client_policies = local_access.active_client_policies;
     }
@@ -617,9 +629,7 @@ fn check_target_signing_validity(plan: &CompilePlan) -> Result<()> {
                     "questions/{}.yaml:/governance/validitySeconds",
                     question.question_id
                 ),
-                message: format!(
-                    "requirement validity of {validity} seconds exceeds the deployment target's {maximum} second signing maximum at governance.yaml:/signing/maximumAssertionValiditySeconds"
-                ),
+                message: "the requirement validity exceeds the deployment target's signing maximum at governance.yaml /signing/maximumAssertionValiditySeconds".to_owned(),
             }
             .into());
         }
@@ -667,8 +677,7 @@ pub(crate) fn compile_fixture_project_with_connections(
 }
 
 fn validate_compiled_bundle_shape(bundle: &Value) -> Result<()> {
-    let schema: Value = serde_norway::from_str(BUNDLE_SCHEMA)
-        .context("the embedded Evidence bundle schema is invalid")?;
+    let schema = authored::embedded_document("Evidence bundle schema", BUNDLE_SCHEMA)?;
     if let Some(sources) = bundle.get("sources").and_then(Value::as_object) {
         for (source_id, source) in sources {
             let Some(transport) = source.get("transport") else {
@@ -744,7 +753,7 @@ fn validate_compiled_bundle_shape(bundle: &Value) -> Result<()> {
             code: (if additional_member.is_some() && instance_path.starts_with("/sources/") {
                 "evidence.source.member-unknown"
             } else {
-                "evidence.authoring.bundle-shape"
+                "evidence.bundle.shape"
             })
             .to_owned(),
             path: compiled_bundle_authoring_path(&instance_path),
@@ -785,41 +794,17 @@ pub(crate) fn validate_offline_local_access(
 ) -> Result<Vec<CompiledAccessPolicy>> {
     validate_plain_path_components(project_root, "authoring project")?;
     let project_root = validate_project_root(project_root)?;
-    let mut question_ids = BTreeSet::new();
-    for path in question_paths(&project_root)? {
-        let bytes = read_regular_file(&path, MAX_QUESTION_BYTES, "question")?;
-        let deserializer = serde_norway::Deserializer::from_slice(&bytes);
-        let question: Question =
-            serde_path_to_error::deserialize(deserializer).map_err(|error| AuthoredDiagnostic {
-                code: "evidence.question.parse".to_owned(),
-                path: authored_member_path(
-                    &project_relative_path(&project_root, &path),
-                    &error.path().to_string(),
-                ),
-                message: "question does not match the closed authored question shape".to_owned(),
-            })?;
-        first_finding(
-            validate_question(&question),
-            &project_relative_path(&project_root, &path),
-        )?;
-        if path.file_stem().and_then(|value| value.to_str()) != Some(&question.id) {
-            return Err(AuthoredDiagnostic {
-                code: "evidence.question.id-filename-mismatch".to_owned(),
-                path: authored_member_path(&project_relative_path(&project_root, &path), "id"),
-                message: "question id must match its questions/<id>.yaml filename".to_owned(),
-            }
-            .into());
-        }
-        if !question_ids.insert(question.id) {
-            return Err(AuthoredDiagnostic {
-                code: "evidence.question.id-duplicate".to_owned(),
-                path: authored_member_path(&project_relative_path(&project_root, &path), "id"),
-                message: "question ids must be unique".to_owned(),
-            }
-            .into());
-        }
-    }
-    Ok(read_access_policies(&project_root, &question_ids)?
+    let mut gathered = Gathered::default();
+    let questions = read_questions(&project_root, &mut gathered)?;
+    let question_ids = (!gathered.has_errors()).then(|| {
+        questions
+            .iter()
+            .map(|read| read.question.id.to_string())
+            .collect::<BTreeSet<_>>()
+    });
+    let policies = read_access_policies(&project_root, question_ids.as_ref(), &mut gathered)?;
+    gathered.checkpoint()?;
+    Ok(policies
         .into_iter()
         .map(|policy| CompiledAccessPolicy {
             id: policy.id,
@@ -961,10 +946,11 @@ fn validate_project_root(project_root: &Path) -> Result<PathBuf> {
             );
         }
         Ok(_) => {
-            let bytes =
-                read_regular_file(&marker_path, MAX_PROJECT_MARKER_BYTES, "project marker")?;
-            registry_evidence_authoring::parse_project_marker(&bytes)
-                .map_err(|finding| anyhow!("{}", finding.message))?;
+            let bytes = authored::read_authored_file(&marker_path, "project marker")?;
+            registry_evidence_authoring::parse_project_marker(
+                registry_evidence_authoring::PROJECT_MARKER_FILE,
+                &bytes,
+            )?;
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => {
@@ -1047,6 +1033,11 @@ fn read_inputs(project_root: &Path, require_local_secrets: bool) -> Result<Input
                 MAX_OPENAPI_BYTES,
                 "retained OpenAPI document",
             )?;
+            #[allow(
+                clippy::disallowed_methods,
+                reason = "evidence/source-openapi is registered as an external format: an OpenAPI description is a grammar Registry Stack does not own; \
+                          it may use anchors, aliases, and tags the shared configuration reader refuses"
+            )]
             let openapi: Value = serde_norway::from_slice(&openapi_text)
                 .context("parsing retained OpenAPI document as YAML or JSON")?;
             validate_openapi_version(&openapi)?;
@@ -1063,28 +1054,37 @@ fn read_inputs(project_root: &Path, require_local_secrets: bool) -> Result<Input
         }
     };
 
-    let selectors = read_named_objects(project_root, SELECTORS_DIRECTORY, "selector profile")?;
-    let sources = read_named_objects(project_root, SOURCES_DIRECTORY, "source")?;
-    let schemas = read_named_objects(project_root, SCHEMAS_DIRECTORY, "schema")?;
+    let mut gathered = Gathered::default();
+    let selectors = named_values(read_named_documents(
+        project_root,
+        SELECTORS_DIRECTORY,
+        "selector profile",
+        Some(&SELECTOR),
+        &mut gathered,
+    )?);
+    let sources = named_values(read_named_documents(
+        project_root,
+        SOURCES_DIRECTORY,
+        "source",
+        Some(&SOURCE),
+        &mut gathered,
+    )?);
+    let schema_documents = read_named_documents(
+        project_root,
+        SCHEMAS_DIRECTORY,
+        "schema",
+        None,
+        &mut gathered,
+    )?;
+    let schemas = schema_documents
+        .iter()
+        .map(|(id, named)| (id.clone(), named.value.clone()))
+        .collect::<BTreeMap<_, _>>();
     let mut questions = Vec::new();
     let mut question_ids = BTreeSet::new();
     let mut derivation_paths = BTreeSet::new();
-    for question_path in question_paths(project_root)? {
-        let question_bytes = read_regular_file(&question_path, MAX_QUESTION_BYTES, "question")?;
-        let deserializer = serde_norway::Deserializer::from_slice(&question_bytes);
-        let question: Question =
-            serde_path_to_error::deserialize(deserializer).map_err(|error| AuthoredDiagnostic {
-                code: "evidence.question.parse".to_owned(),
-                path: authored_member_path(
-                    &project_relative_path(project_root, &question_path),
-                    &error.path().to_string(),
-                ),
-                message: "question does not match the closed authored question shape".to_owned(),
-            })?;
-        first_finding(
-            validate_question(&question),
-            &project_relative_path(project_root, &question_path),
-        )?;
+    let mut checked_schemas = BTreeSet::new();
+    for ReadQuestion { document, question } in read_questions(project_root, &mut gathered)? {
         // The answer schema document is checked beside its own file rather than
         // beside the question that named it: the departure is in the schema,
         // and the finding already carries the field inside it.
@@ -1099,48 +1099,74 @@ fn read_inputs(project_root: &Path, require_local_secrets: bool) -> Result<Input
             let schema_key = Path::new(schema_path)
                 .file_stem()
                 .and_then(|stem| stem.to_str());
-            if let Some(document) = schema_key.and_then(|key| schemas.get(key)) {
-                first_finding(validate_answer_schema_document(document), schema_path)?;
+            if let Some(named) = schema_key
+                .filter(|key| checked_schemas.insert((*key).to_owned()))
+                .and_then(|key| schema_documents.get(key))
+            {
+                gathered.extend(authored::node_findings_report(
+                    &named.file,
+                    "answer-schema",
+                    &named.node,
+                    validate_answer_schema_document(&named.value),
+                ));
             }
         }
-        if question_path.file_stem().and_then(|value| value.to_str()) != Some(&question.id) {
-            bail!("question id must match its questions/<id>.yaml filename");
-        }
-        if !question_ids.insert(question.id.clone()) {
-            bail!("question ids must be unique");
-        }
+        question_ids.insert(question.id.to_string());
         if !derivation_paths.insert(question.derivation.clone()) {
-            bail!("each question must name its own derivation file");
+            gathered.push(diagnostic_near(
+                &document,
+                "evidence.question.derivation-shared",
+                "/derivation",
+                "the question names a derivation file another question already names",
+                "Give each question its own derivations/<question id>.rhai file.",
+            ));
+            continue;
         }
 
         let derivation_path = project_relative_derivation(project_root, &question.derivation)?;
+        let derivation_file = project_relative_path(project_root, &derivation_path);
         let derivation_bytes = read_regular_file(
             &derivation_path,
             MAX_DERIVATION_BYTES,
             "authored derivation",
         )?;
-        let derivation =
-            String::from_utf8(derivation_bytes).context("authored derivation must be UTF-8")?;
-        first_finding(
-            validate_authored_answer(&derivation),
-            &project_relative_path(project_root, &derivation_path),
-        )?;
-        if let Some(declared) = declared_fact_names(&question, &sources, &schemas) {
-            first_finding(
-                validate_answer_fact_reads(&derivation, &declared),
-                &project_relative_path(project_root, &derivation_path),
-            )?;
+        gathered.read_one();
+        let Ok(derivation) = String::from_utf8(derivation_bytes) else {
+            gathered.push(authored::file_diagnostic(
+                Severity::Error,
+                "evidence.derivation.encoding",
+                None,
+                &derivation_file,
+                "",
+                "the derivation is not UTF-8 text",
+                "Save the derivation as UTF-8 text.",
+            ));
+            continue;
+        };
+        let mut findings = validate_authored_answer(&derivation);
+        if findings.is_empty() {
+            if let Some(declared) = declared_fact_names(&question, &sources, &schemas) {
+                findings = validate_answer_fact_reads(&derivation, &declared);
+            }
         }
+        gathered.extend(authored::file_findings_report(
+            &derivation_file,
+            "derivation",
+            findings,
+        ));
         questions.push(AuthoredQuestion {
             question,
             derivation,
         });
     }
-    let local_access = if require_local_secrets {
-        read_local_access(project_root, &question_ids)?
+    let access_policies = if require_local_secrets {
+        let known = (!gathered.has_errors()).then_some(&question_ids);
+        read_access_policies(project_root, known, &mut gathered)?
     } else {
-        LocalAccess::default()
+        Vec::new()
     };
+    gathered.checkpoint()?;
+    let local_access = read_local_access(project_root, access_policies)?;
 
     if require_local_secrets {
         let secrets = project_root.join(SECRETS_DIRECTORY);
@@ -1271,8 +1297,8 @@ fn validate_deployment_inputs(
             .governance
             .as_ref()
             .ok_or_else(|| anyhow!("every production question requires governance"))?;
-        if question.answers.iter().any(|answer| answer.id.is_none()) {
-            bail!("every production answer requires one stable concept id");
+        if question.answers.iter().any(|answer| answer.uri.is_none()) {
+            bail!("every production answer requires one stable concept uri");
         }
         for uri in std::iter::once(governance.requirement.as_str())
             .chain(governance.reference_frameworks.iter().map(String::as_str))
@@ -1282,7 +1308,7 @@ fn validate_deployment_inputs(
                 question
                     .answers
                     .iter()
-                    .filter_map(|answer| answer.id.as_deref()),
+                    .filter_map(|answer| answer.uri.as_ref().map(ExternalId::as_str)),
             )
         {
             if production && uri.starts_with(LOCAL_URI_PREFIX) {
@@ -1405,8 +1431,10 @@ fn validate_production_sources(bundle: &Value) -> Result<()> {
 ///
 /// A project that authored no policy has neither, and the compile falls back
 /// to the implicit caller profile over every question.
-fn read_local_access(project_root: &Path, question_ids: &BTreeSet<String>) -> Result<LocalAccess> {
-    let access_policies = read_access_policies(project_root, question_ids)?;
+fn read_local_access(
+    project_root: &Path,
+    access_policies: Vec<AuthoredAccessPolicy>,
+) -> Result<LocalAccess> {
     let active_client_policies = if access_policies
         .iter()
         .any(|policy| policy.task_grant.is_some())
@@ -1421,9 +1449,14 @@ fn read_local_access(project_root: &Path, question_ids: &BTreeSet<String>) -> Re
     })
 }
 
+/// Read every authored access policy, gathering what each one departs from.
+/// `question_ids` is the project's question set when every question read
+/// cleanly; a policy is held to it only then, so a question that failed to
+/// read is not reported a second time as missing.
 fn read_access_policies(
     project_root: &Path,
-    question_ids: &BTreeSet<String>,
+    question_ids: Option<&BTreeSet<String>>,
+    gathered: &mut Gathered,
 ) -> Result<Vec<AuthoredAccessPolicy>> {
     let access_root = project_root.join(ACCESS_DIRECTORY);
     let access_metadata = match fs::symlink_metadata(&access_root) {
@@ -1464,53 +1497,59 @@ fn read_access_policies(
         bail!("explicit access configuration requires 1..={MAX_QUESTIONS} access policies");
     }
 
-    let mut ids = BTreeSet::new();
     let mut policies = Vec::with_capacity(paths.len());
     for path in paths {
         if path.extension().and_then(|extension| extension.to_str()) != Some("yaml") {
             bail!("access-policies may contain only <id>.yaml files");
         }
-        let bytes = read_regular_file(&path, MAX_ACCESS_POLICY_BYTES, "access policy")?;
-        let deserializer = serde_norway::Deserializer::from_slice(&bytes);
-        let policy: AccessPolicy =
-            serde_path_to_error::deserialize(deserializer).map_err(|error| AuthoredDiagnostic {
-                code: "evidence.access-policy.parse".to_owned(),
-                path: authored_member_path(
-                    &project_relative_path(project_root, &path),
-                    &error.path().to_string(),
-                ),
-                message: "access policy does not match the closed authored access policy shape"
-                    .to_owned(),
-            })?;
-        first_finding(
-            validate_access_policy(&policy),
-            &project_relative_path(project_root, &path),
-        )?;
-        if path.file_stem().and_then(|value| value.to_str()) != Some(&policy.id) {
-            bail!("access policy id must match its access/policies/<id>.yaml filename");
-        }
-        if !ids.insert(policy.id.clone()) {
-            bail!("access policy ids must be unique");
-        }
-        if policy
-            .questions
-            .iter()
-            .any(|question| !question_ids.contains(question))
-        {
-            return Err(AuthoredDiagnostic {
-                code: "evidence.access-policy.question-missing".to_owned(),
-                path: authored_member_path(
-                    &project_relative_path(project_root, &path),
-                    "questions",
-                ),
-                message: "access policy names a question that does not exist in this project"
-                    .to_owned(),
+        let file = project_relative_path(project_root, &path);
+        let bytes = authored::read_authored_file(&path, "access policy")?;
+        gathered.read_one();
+        let decoded = match check_access_policy(&file, &bytes) {
+            Ok(decoded) => decoded,
+            Err(report) => {
+                gathered.extend(report);
+                continue;
             }
-            .into());
+        };
+        gathered.extend(decoded.document.warnings());
+        let policy = decoded.value;
+        if path.file_stem().and_then(|value| value.to_str()) != Some(policy.id.as_str()) {
+            gathered.push(diagnostic_near(
+                &decoded.document,
+                "evidence.access-policy.id-filename-mismatch",
+                "/id",
+                "the access policy id is not its file name",
+                "Rename the file to access/policies/<id>.yaml, or change `id` to match the file name.",
+            ));
+            continue;
+        }
+        if let Some(question_ids) = question_ids {
+            let missing = policy
+                .questions
+                .iter()
+                .enumerate()
+                .filter(|(_, question)| !question_ids.contains(*question))
+                .map(|(index, _)| {
+                    diagnostic_near(
+                        &decoded.document,
+                        "evidence.access-policy.question-missing",
+                        &format!("/questions/{index}"),
+                        "the access policy names a question this project does not hold",
+                        "Name a question under questions/, or remove it from the policy.",
+                    )
+                })
+                .collect::<Vec<_>>();
+            if !missing.is_empty() {
+                missing
+                    .into_iter()
+                    .for_each(|diagnostic| gathered.push(diagnostic));
+                continue;
+            }
         }
         let requester_tag = access_policy_requester_tag_for(&policy)?;
         policies.push(AuthoredAccessPolicy {
-            id: policy.id,
+            id: policy.id.as_str().to_owned(),
             requester_tag,
             questions: policy.questions,
             task_grant: policy.task_grant,
@@ -1552,17 +1591,66 @@ pub(crate) fn access_policy_requester_tag_for(policy: &AccessPolicy) -> Result<S
     if !validate_access_policy(policy).is_empty() {
         bail!("task grant policy is outside the closed authored profile");
     }
-    let canonical = canonicalize_json(&serde_json::to_value(policy)?)
-        .context("canonicalizing task grant policy")?;
+    // The tag hashes the policy as its first format wrote it, with the
+    // `version: 1` member `apiVersion` has since replaced, so a policy keeps
+    // the requester tag it was granted under.
+    let mut hashed = serde_json::to_value(policy)?;
+    hashed
+        .as_object_mut()
+        .context("an access policy serializes as an object")?
+        .insert("version".to_owned(), json!(1));
+    let canonical = canonicalize_json(&hashed).context("canonicalizing task grant policy")?;
     let digest = domain_separated_sha256(b"registry-evidencectl-access-policy-v2\0", &canonical);
     Ok(format!("policy-v2-{}", hex::encode(digest)))
 }
 
+/// One authored selector, source, or schema: the file it was read from, its
+/// tree with positions, and the same tree as a JSON value.
+struct NamedDocument {
+    file: String,
+    node: Node,
+    value: Value,
+}
+
+/// Read every `<id>.yaml` under `directory_name`, stopping with every problem
+/// found in any of them.
 fn read_named_objects(
     project_root: &Path,
     directory_name: &str,
     description: &str,
+    format: &FormatSpec<'_>,
 ) -> Result<BTreeMap<String, Value>> {
+    let mut gathered = Gathered::default();
+    let documents = read_named_documents(
+        project_root,
+        directory_name,
+        description,
+        Some(format),
+        &mut gathered,
+    )?;
+    gathered.checkpoint()?;
+    Ok(named_values(documents))
+}
+
+fn named_values(documents: BTreeMap<String, NamedDocument>) -> BTreeMap<String, Value> {
+    documents
+        .into_iter()
+        .map(|(id, named)| (id, named.value))
+        .collect()
+}
+
+/// Read every `<id>.yaml` under `directory_name` through the shared reader,
+/// gathering what each one departs from. A selector or source is read by its
+/// envelope `format` and returned without the header; a schema is a foreign
+/// JSON Schema file with no envelope, so `format` is `None` and it must only be
+/// a YAML mapping.
+fn read_named_documents(
+    project_root: &Path,
+    directory_name: &str,
+    description: &str,
+    format: Option<&FormatSpec<'_>>,
+    gathered: &mut Gathered,
+) -> Result<BTreeMap<String, NamedDocument>> {
     let directory = project_root.join(directory_name);
     let metadata = match fs::symlink_metadata(&directory) {
         Ok(metadata) => metadata,
@@ -1587,12 +1675,6 @@ fn read_named_objects(
         if path.extension().and_then(|extension| extension.to_str()) != Some("yaml") {
             bail!("{directory_name} may contain only <id>.yaml files");
         }
-        let bytes = read_regular_file(&path, MAX_SOURCE_ARTIFACT_BYTES, description)?;
-        let value: Value = serde_norway::from_slice(&bytes)
-            .with_context(|| format!("parsing {description} {}", path.display()))?;
-        if !value.is_object() {
-            bail!("{description} must be a YAML object");
-        }
         let id = path
             .file_stem()
             .and_then(|stem| stem.to_str())
@@ -1600,48 +1682,85 @@ fn read_named_objects(
         if !valid_local_identifier(id) {
             bail!("{description} file name must be a lowercase local identifier");
         }
-        objects.insert(id.to_owned(), value);
+        let file = project_relative_path(project_root, &path);
+        let bytes = authored::read_authored_file(&path, description)?;
+        gathered.read_one();
+        let node = match scan_authored(&file, &bytes) {
+            Ok(Some(node)) if matches!(node.value, NodeValue::Mapping(_)) => node,
+            Ok(_) => {
+                gathered.push(authored::file_diagnostic(
+                    Severity::Error,
+                    "config.wrong-type",
+                    None,
+                    &file,
+                    "",
+                    &format!("the {description} is not a YAML mapping"),
+                    &format!("Write the {description} as a mapping of its members."),
+                ));
+                continue;
+            }
+            Err(report) => {
+                gathered.extend(report);
+                continue;
+            }
+        };
+        let value = match format {
+            Some(format) => match read_envelope_body(&file, &bytes, format) {
+                Ok(decoded) => {
+                    gathered.extend(decoded.document.warnings());
+                    decoded.value
+                }
+                Err(report) => {
+                    gathered.extend(report);
+                    continue;
+                }
+            },
+            None => node.to_json_value(),
+        };
+        objects.insert(id.to_owned(), NamedDocument { file, node, value });
     }
     Ok(objects)
 }
 
-/// Raise the first way an authored document departs from the authoring form.
-///
-/// The checks report departures as values, so that a caller with a place to
-/// show them can show all of them. A compiler has no such place: it stops at
-/// the first one, with the sentence adopters have always read.
-fn first_finding(findings: Vec<Finding>, artifact: &str) -> Result<()> {
-    if let Some(finding) = findings.into_iter().next() {
-        return Err(AuthoredDiagnostic {
-            code: dotted_code(finding.code),
-            path: authored_finding_path(artifact, &finding.field),
-            message: finding.message,
+/// One authored question read through the shared reader and checked, with
+/// the document it was read from.
+struct ReadQuestion {
+    document: Document,
+    question: Question,
+}
+
+/// Read and check every authored question, gathering what each one departs
+/// from: its own shape and findings, and an id that is not its file name.
+fn read_questions(project_root: &Path, gathered: &mut Gathered) -> Result<Vec<ReadQuestion>> {
+    let mut questions = Vec::new();
+    for path in question_paths(project_root)? {
+        let file = project_relative_path(project_root, &path);
+        let bytes = authored::read_authored_file(&path, "question")?;
+        gathered.read_one();
+        let decoded = match check_question(&file, &bytes) {
+            Ok(decoded) => decoded,
+            Err(report) => {
+                gathered.extend(report);
+                continue;
+            }
+        };
+        gathered.extend(decoded.document.warnings());
+        if path.file_stem().and_then(|value| value.to_str()) != Some(decoded.value.id.as_str()) {
+            gathered.push(diagnostic_near(
+                &decoded.document,
+                "evidence.question.id-filename-mismatch",
+                "/id",
+                "the question id is not its file name",
+                "Rename the file to questions/<id>.yaml, or change `id` to match the file name.",
+            ));
+            continue;
         }
-        .into());
+        questions.push(ReadQuestion {
+            document: decoded.document,
+            question: decoded.value,
+        });
     }
-    Ok(())
-}
-
-/// One grammar for refusal codes across the CLI: dotted, namespaced names.
-/// The authoring crate's finding codes are its own closed vocabulary, so a
-/// bare code surfaces under the authoring namespace instead of bare.
-pub(crate) fn dotted_code(code: &str) -> String {
-    if code.contains('.') {
-        code.to_owned()
-    } else {
-        format!("evidence.authoring.{code}")
-    }
-}
-
-/// Cite an authored finding's field as the JSON-pointer path every other
-/// diagnostic grammar uses; the document itself is named by its artifact
-/// alone.
-fn authored_finding_path(artifact: &str, field: &registry_evidence_authoring::FieldPath) -> String {
-    if field.is_root() {
-        artifact.to_owned()
-    } else {
-        format!("{artifact}:{}", field.to_json_pointer())
-    }
+    Ok(questions)
 }
 
 fn project_relative_path(project_root: &Path, path: &Path) -> String {
@@ -1649,14 +1768,6 @@ fn project_relative_path(project_root: &Path, path: &Path) -> String {
         .unwrap_or(path)
         .to_string_lossy()
         .into_owned()
-}
-
-fn authored_member_path(artifact: &str, member: &str) -> String {
-    if member.is_empty() {
-        artifact.to_owned()
-    } else {
-        format!("{artifact}:/{member}")
-    }
 }
 
 fn read_regular_file(path: &Path, maximum_bytes: u64, description: &str) -> Result<Vec<u8>> {
@@ -1967,7 +2078,7 @@ pub(crate) fn source_connection_users(
     connection: &str,
 ) -> Result<Vec<String>> {
     Ok(
-        read_named_objects(project_root, SOURCES_DIRECTORY, "source")?
+        read_named_objects(project_root, SOURCES_DIRECTORY, "source", &SOURCE)?
             .into_iter()
             .filter_map(|(id, source)| {
                 (source.get("connection").and_then(Value::as_str) == Some(connection)).then_some(id)
@@ -1997,8 +2108,13 @@ pub(crate) fn target_bound_sources(project_root: &Path) -> Result<Vec<TargetBoun
 fn validate_source_artifact_graph_with_target_bindings(
     project_root: &Path,
 ) -> Result<Vec<TargetBoundSource>> {
-    let selectors = read_named_objects(project_root, SELECTORS_DIRECTORY, "selector profile")?;
-    let sources = read_named_objects(project_root, SOURCES_DIRECTORY, "source")?;
+    let selectors = read_named_objects(
+        project_root,
+        SELECTORS_DIRECTORY,
+        "selector profile",
+        &SELECTOR,
+    )?;
+    let sources = read_named_objects(project_root, SOURCES_DIRECTORY, "source", &SOURCE)?;
     let mut target_bound_sources = Vec::new();
     for (source_id, source) in &sources {
         if source.get("connection").is_none() {
@@ -2063,8 +2179,8 @@ fn validate_source_artifact_graph_with_target_bindings(
                 "imported source artifact",
             )?;
             if artifact.starts_with("schemas/") {
-                let schema: Value = serde_norway::from_slice(&bytes)
-                    .context("source schema must be YAML or JSON")?;
+                let schema = registry_evidence_authoring::formats::scan_authored(&artifact, &bytes)
+                    .map(authored::node_value)?;
                 if !schema.is_object() {
                     bail!("source schema must be a mapping");
                 }
@@ -2308,15 +2424,15 @@ fn compile_question_plan(
         &subjects,
         &source_id,
         &BundleRequirement {
-            handle: question.id.clone(),
+            handle: question.id.to_string(),
             requirement_uri: requirement_uri.clone(),
             kind: requirement_kind,
             concepts: &concepts,
         },
     );
     Ok(QuestionPlan {
-        question_id: question.id.clone(),
-        source_artifact_id: question.id.clone(),
+        question_id: question.id.to_string(),
+        source_artifact_id: question.id.to_string(),
         authored_source_artifacts: None,
         derivation_artifact: question.derivation.clone(),
         fixture_artifact: question
@@ -2325,7 +2441,7 @@ fn compile_question_plan(
             .map(|governance| governance.fixtures.clone()),
         purpose: question.purpose.clone(),
         requirement_uri,
-        response_formats: question.response_formats.clone(),
+        response_formats: question.response_formats.to_vec(),
         concepts,
         subjects,
         source_id,
@@ -2358,7 +2474,7 @@ fn compile_referenced_question(
         .ok_or_else(|| AuthoredDiagnostic {
             code: "evidence.question.source-missing".to_owned(),
             path: format!("questions/{}.yaml:/source/ref", question.id),
-            message: format!("question source ref `{source_id}` has no sources/{source_id}.yaml"),
+            message: "the source this ref names has no file under sources/".to_owned(),
         })?
         .clone();
     validate_referenced_source_authentication(&question.id, source_id, &source_value)?;
@@ -2390,7 +2506,7 @@ fn compile_referenced_question(
         &subjects,
         source_id,
         &BundleRequirement {
-            handle: question.id.clone(),
+            handle: question.id.to_string(),
             requirement_uri: requirement_uri.clone(),
             kind: requirement_kind,
             concepts: &concepts,
@@ -2399,7 +2515,7 @@ fn compile_referenced_question(
     let derivation_script = render_derivation(&authored.derivation, &concepts);
 
     Ok(QuestionPlan {
-        question_id: question.id.clone(),
+        question_id: question.id.to_string(),
         source_artifact_id: source_id.to_owned(),
         authored_source_artifacts: Some(referenced_source_artifacts(&source_value)?),
         derivation_artifact: question.derivation.clone(),
@@ -2409,7 +2525,7 @@ fn compile_referenced_question(
             .map(|governance| governance.fixtures.clone()),
         purpose: question.purpose.clone(),
         requirement_uri,
-        response_formats: question.response_formats.clone(),
+        response_formats: question.response_formats.to_vec(),
         concepts,
         subjects,
         source_id: source_id.to_owned(),
@@ -2459,9 +2575,8 @@ fn compile_referenced_subjects(
                         "questions/{}.yaml:/subjectProfiles/{subject_index}",
                         question.id
                     ),
-                    message: format!(
-                        "referenced source question uses missing selectors/{profile}.yaml"
-                    ),
+                    message: "the selector profile this member names has no file under selectors/"
+                        .to_owned(),
                 })?
                 .clone();
             let declared_fields = value
@@ -2756,8 +2871,9 @@ fn compile_concept(
     schemas: &BTreeMap<String, Value>,
 ) -> Result<ConceptPlan> {
     let concept_uri = answer
-        .id
-        .clone()
+        .uri
+        .as_ref()
+        .map(|uri| uri.as_str().to_owned())
         .unwrap_or_else(|| local_uri(&format!("concept:{question_id}:{}", answer.concept)));
     Ok(match answer.answer_type {
         AnswerType::Boolean => ConceptPlan {
@@ -2770,7 +2886,7 @@ fn compile_concept(
             sd_jwt_vc: None,
         },
         AnswerType::ControlledCategory => {
-            let scheme = answer.id.as_ref().map_or_else(
+            let scheme = answer.uri.as_ref().map(ExternalId::as_str).map_or_else(
                 || local_uri(&format!("category-scheme:{question_id}:{}", answer.concept)),
                 // Version 1 requires a distinct category-scheme identifier,
                 // while the compact production question contract authors
@@ -3059,9 +3175,8 @@ fn compile_facts(
     for fact in &source.facts {
         if !offered.contains(fact.path.as_str()) {
             bail!(
-                "source fact `{}` path `{}` is not a selectable scalar leaf in the 200 application/json response",
-                fact.name,
-                fact.path
+                "source fact `{}` path is not a selectable scalar leaf in the 200 application/json response",
+                fact.name
             );
         }
     }
@@ -3079,7 +3194,7 @@ fn compile_facts(
     let declared_collections = source
         .collection_bounds
         .keys()
-        .cloned()
+        .map(|pointer| pointer.as_str().to_owned())
         .collect::<BTreeSet<_>>();
     if used_collections != declared_collections {
         let missing = used_collections
@@ -3097,6 +3212,12 @@ fn compile_facts(
         );
     }
 
+    let collection_bounds = source
+        .collection_bounds
+        .iter()
+        .map(|(pointer, bound)| (pointer.as_str().to_owned(), bound.get()))
+        .collect::<BTreeMap<_, _>>();
+
     let plan = narrow::plan_advisories(
         &resolved.schema,
         &projection,
@@ -3112,7 +3233,7 @@ fn compile_facts(
     for need in &plan.needs {
         match need.kind {
             BoundKind::ArrayMaxItems => {
-                let maximum = source.collection_bounds.get(&need.pointer).ok_or_else(|| {
+                let maximum = collection_bounds.get(&need.pointer).ok_or_else(|| {
                     anyhow!(
                         "selected collection `{}` is unbounded; declare it in source.collectionBounds",
                         need.pointer
@@ -3130,7 +3251,7 @@ fn compile_facts(
         }
     }
     let mut response_schema = narrow::apply(&resolved.schema, &projection, &resolutions)?.schema;
-    close_selected_response(&mut response_schema, &projection, &source.collection_bounds)?;
+    close_selected_response(&mut response_schema, &projection, &collection_bounds)?;
 
     let mut fact_properties = Map::new();
     for fact in &source.facts {
@@ -3141,7 +3262,7 @@ fn compile_facts(
                 let maximum = collection_pointers(&fact.path)
                     .iter()
                     .try_fold(1_u64, |product, pointer| {
-                        product.checked_mul(source.collection_bounds[pointer])
+                        product.checked_mul(collection_bounds[pointer])
                     })
                     .ok_or_else(|| {
                         anyhow!("source fact `{}` collection bound overflows", fact.name)
@@ -3602,7 +3723,7 @@ fn render_governance_parts(
                 governance.reference_frameworks.clone(),
                 governance.evidence_type.clone(),
                 governance.observation_timezone.clone(),
-                governance.validity_seconds,
+                governance.validity_seconds.get(),
                 governance.disclosure_families.clone(),
             ),
             None => (
@@ -3745,7 +3866,9 @@ pub(crate) fn local_target_governance(active_public_jwk_file: &str) -> Result<Va
     let object = governance
         .as_object_mut()
         .expect("local bundle is a mapping");
-    for name in ["selectorProfiles", "sources", "requirements"] {
+    // The bundle's grammar version is not a governance member: the
+    // governance format version is its `apiVersion`.
+    for name in ["version", "selectorProfiles", "sources", "requirements"] {
         object.remove(name);
     }
     Ok(governance)
@@ -3938,7 +4061,11 @@ fn render_policy_authority_profile<'a>(
                         subject.role.as_str(),
                         selector.profile.as_str(),
                     ),
-                    selector.fields.iter().collect::<BTreeSet<_>>(),
+                    selector
+                        .fields
+                        .iter()
+                        .map(String::as_str)
+                        .collect::<BTreeSet<_>>(),
                 );
             }
         }
@@ -3953,7 +4080,11 @@ fn render_policy_authority_profile<'a>(
                     binding.role.as_str(),
                     binding.selector_profile.as_str(),
                 ),
-                binding.value_claims.keys().collect::<BTreeSet<_>>(),
+                binding
+                    .value_claims
+                    .keys()
+                    .map(LocalId::as_str)
+                    .collect::<BTreeSet<_>>(),
             )
         })
         .collect::<BTreeMap<_, _>>();
@@ -3995,7 +4126,7 @@ fn render_policy_authority_profile<'a>(
         "kind": task.kind,
         "requesterTags": [policy.requester_tag],
         "requesterClients": task.requester_clients,
-        "grantSourceIssuer": task.source_issuer,
+        "grantSourceIssuer": task.source_issuer.as_str(),
         "grants": grants,
     }))
 }
@@ -4382,7 +4513,12 @@ fn write_bundle(
                 },
             )
             .map_err(|error| {
-                governed_public_key_fault(&path, active_public_jwk_file.as_deref(), error)
+                governed_public_key_fault(
+                    &path,
+                    active_public_jwk_file.as_deref(),
+                    &plan.bundle["signing"]["publishedPublicJwkFiles"],
+                    error,
+                )
             })?;
             ensure_generated_parent(&bundle, &path)?;
             write_private_file(&bundle.join(path), &bytes)?;
@@ -4418,6 +4554,7 @@ pub(crate) fn package_limits() -> registry_platform_config::PackageLimits {
 fn governed_public_key_fault(
     path: &str,
     active: Option<&str>,
+    published: &Value,
     error: anyhow::Error,
 ) -> anyhow::Error {
     let missing = error.chain().any(|cause| {
@@ -4433,11 +4570,16 @@ fn governed_public_key_fault(
         path: if Some(path) == active {
             "governance.yaml:/signing/activePublicJwkFile".to_owned()
         } else {
-            "governance.yaml:/signing/publishedPublicJwkFiles".to_owned()
+            let index = published
+                .as_array()
+                .and_then(|files| files.iter().position(|file| file.as_str() == Some(path)));
+            match index {
+                Some(index) => format!("governance.yaml:/signing/publishedPublicJwkFiles/{index}"),
+                None => "governance.yaml:/signing/publishedPublicJwkFiles".to_owned(),
+            }
         },
-        message: format!(
-            "the deployment target does not provide the governed public key file {path}"
-        ),
+        message: "the deployment target does not provide the public key file this member names"
+            .to_owned(),
     }
     .into()
 }
@@ -4881,7 +5023,7 @@ fn consume_string_sequence(characters: &mut Peekable<Chars<'_>>) -> bool {
 }
 
 fn yaml_bytes(value: &Value) -> Result<Vec<u8>> {
-    let mut text = serde_norway::to_string(value).context("serializing generated YAML")?;
+    let mut text = crate::authored::to_indented_yaml(value)?;
     if !text.ends_with('\n') {
         text.push('\n');
     }
@@ -4922,7 +5064,63 @@ fn escape_pointer_segment(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #![allow(
+        clippy::disallowed_methods,
+        reason = "tests read back the YAML the code under test wrote, or a published contract or fixture, to assert on it; they read no operator configuration"
+    )]
     use super::*;
+
+    /// Every member the bundle schema gives a source or a selector profile is
+    /// one an authored file may write, so the reader's closed member sets
+    /// never refuse a shape the compiler accepts.
+    #[test]
+    fn the_readers_member_sets_cover_the_bundle_schema() {
+        let schema = authored::embedded_document("Evidence bundle schema", BUNDLE_SCHEMA).unwrap();
+        let mut cases = Vec::new();
+        let transports = schema
+            .pointer("/$defs/source/oneOf")
+            .and_then(Value::as_array)
+            .unwrap();
+        for branch in transports {
+            let name = branch["$ref"].as_str().unwrap().trim_start_matches('#');
+            cases.push((&SOURCE, schema.pointer(name).unwrap().clone()));
+        }
+        cases.push((
+            &SELECTOR,
+            schema.pointer("/$defs/selector-profile").unwrap().clone(),
+        ));
+        for (format, shape) in cases {
+            for member in shape["properties"].as_object().unwrap().keys() {
+                let text = format!(
+                    "apiVersion: {}\nkind: {}\n{member}: x\n",
+                    if format.kind == SOURCE.kind {
+                        registry_evidence_authoring::formats::SOURCE_API_VERSION
+                    } else {
+                        registry_evidence_authoring::formats::SELECTOR_API_VERSION
+                    },
+                    format.kind,
+                );
+                let refused = read_envelope_body("f.yaml", text.as_bytes(), format)
+                    .err()
+                    .map(|report| {
+                        report
+                            .diagnostics()
+                            .iter()
+                            .any(|diagnostic| diagnostic.code == "config.unknown-key")
+                    });
+                assert_ne!(refused, Some(true), "`{member}` is refused as unknown");
+            }
+        }
+    }
+
+    #[test]
+    fn generated_yaml_indents_sequences_beneath_their_keys() {
+        let bytes = yaml_bytes(&json!({"required": ["a", "b"]})).unwrap();
+        assert_eq!(
+            String::from_utf8(bytes).unwrap(),
+            "required:\n  - a\n  - b\n"
+        );
+    }
     use crate::evidence_binary::retry_busy_stub;
     use std::{
         io::Write as _,
@@ -4955,7 +5153,9 @@ paths:
                   date_of_birth: {type: string, format: date}
 "#;
 
-    const QUESTION: &str = r#"id: adult-status
+    const QUESTION: &str = r#"apiVersion: id.registrystack.org/formats/evidence/question/v1alpha1
+kind: EvidenceQuestion
+id: adult-status
 question: Is the person at least 18 years old?
 purpose: age-check
 subject:
@@ -5004,7 +5204,9 @@ paths:
                   relationship_confirmed: {type: boolean}
 "#;
 
-    const RELATIONSHIP_QUESTION: &str = r#"id: parent-relationship
+    const RELATIONSHIP_QUESTION: &str = r#"apiVersion: id.registrystack.org/formats/evidence/question/v1alpha1
+kind: EvidenceQuestion
+id: parent-relationship
 question: Is the candidate registered as a parent of the child?
 purpose: relationship-check
 subjects:
@@ -5039,7 +5241,9 @@ disclosure:
 }
 "#;
 
-    const AGE_BRACKET_QUESTION: &str = r#"id: age-bracket
+    const AGE_BRACKET_QUESTION: &str = r#"apiVersion: id.registrystack.org/formats/evidence/question/v1alpha1
+kind: EvidenceQuestion
+id: age-bracket
 question: Which age bracket does this person belong to?
 purpose: service-path-selection
 subject:
@@ -5075,7 +5279,9 @@ disclosure:
 }
 "#;
 
-    const IMMUNIZATION_QUESTION: &str = r#"id: immunization-summary
+    const IMMUNIZATION_QUESTION: &str = r#"apiVersion: id.registrystack.org/formats/evidence/question/v1alpha1
+kind: EvidenceQuestion
+id: immunization-summary
 question: Is the immunization schedule complete, and how many doses are recorded?
 purpose: care-coordination
 subject:
@@ -5144,7 +5350,9 @@ components:
         occurredAt: {type: string, format: date-time}
 "#;
 
-    const MULTI_EVENT_QUESTION: &str = r#"id: event-history
+    const MULTI_EVENT_QUESTION: &str = r#"apiVersion: id.registrystack.org/formats/evidence/question/v1alpha1
+kind: EvidenceQuestion
+id: event-history
 question: Did the bounded event history satisfy the reviewed rule?
 purpose: history-review
 subject:
@@ -5181,7 +5389,9 @@ disclosure:
   ]
 }"#;
 
-    const BIRTH_CERTIFICATE_QUESTION: &str = r#"id: birth-certificate
+    const BIRTH_CERTIFICATE_QUESTION: &str = r#"apiVersion: id.registrystack.org/formats/evidence/question/v1alpha1
+kind: EvidenceQuestion
+id: birth-certificate
 question: What birth details are recorded for this person?
 purpose: birth-record-review
 subject:
@@ -5553,7 +5763,11 @@ properties:
             "derivation: derivations/adult-status.rhai",
             "responseFormats: [signed-jws, unsigned-json]\nderivation: derivations/adult-status.rhai",
         );
-        assert!(serde_norway::from_str::<Question>(&unknown).is_err());
+        assert!(registry_evidence_authoring::formats::check_question(
+            "questions/adult-status.yaml",
+            unknown.as_bytes()
+        )
+        .is_err());
     }
 
     #[test]
@@ -5631,52 +5845,50 @@ properties:
     fn surfaced_authoring_findings_use_one_code_and_path_grammar() {
         use registry_evidence_authoring::{FieldPath, Finding};
 
-        let bare = first_finding(
-            vec![Finding::new(
-                FieldPath::root().key("disclosure").key("allow"),
-                "disclosure-allow",
-                "sentence",
-            )],
-            "questions/x.yaml",
-        )
-        .expect_err("first finding");
-        let diagnostic = bare
-            .downcast_ref::<AuthoredDiagnostic>()
-            .expect("authored diagnostic");
-        assert_eq!(diagnostic.code, "evidence.authoring.disclosure-allow");
-        assert_eq!(diagnostic.path, "questions/x.yaml:/disclosure/allow");
-
-        let rooted = first_finding(
-            vec![Finding::new(
-                FieldPath::root(),
-                "question-identifier",
-                "sentence",
-            )],
-            "questions/x.yaml",
-        )
-        .expect_err("root finding");
-        assert_eq!(
-            rooted
-                .downcast_ref::<AuthoredDiagnostic>()
-                .expect("authored diagnostic")
-                .path,
-            "questions/x.yaml"
+        let report = authored::file_findings_report(
+            "derivations/x.rhai",
+            "derivation",
+            vec![
+                Finding::new(
+                    FieldPath::root().key("disclosure").key("allow"),
+                    "disclosure-allow",
+                    "sentence",
+                ),
+                Finding::new(FieldPath::root(), "derivation-encoding", "sentence"),
+                Finding::new(
+                    FieldPath::root().index(1),
+                    "evidence.answer-schema.open-object",
+                    "sentence",
+                ),
+            ],
         );
-
-        let dotted = first_finding(
-            vec![Finding::new(
-                FieldPath::root().index(1),
-                "evidence.answer-schema.open-object",
-                "sentence",
-            )],
-            "schemas/x.yaml",
-        )
-        .expect_err("dotted finding");
-        let diagnostic = dotted
-            .downcast_ref::<AuthoredDiagnostic>()
-            .expect("authored diagnostic");
-        assert_eq!(diagnostic.code, "evidence.answer-schema.open-object");
-        assert_eq!(diagnostic.path, "schemas/x.yaml:/1");
+        let found = report
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| {
+                (
+                    diagnostic.code.as_str(),
+                    diagnostic.path.as_str(),
+                    diagnostic.source.as_ref().unwrap().file.as_str(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            found,
+            [
+                (
+                    "evidence.derivation.disclosure-allow",
+                    "/disclosure/allow",
+                    "derivations/x.rhai"
+                ),
+                ("evidence.derivation.encoding", "", "derivations/x.rhai"),
+                (
+                    "evidence.answer-schema.open-object",
+                    "/1",
+                    "derivations/x.rhai"
+                ),
+            ]
+        );
 
         // Pointer tokens escape the characters RFC 6901 reserves.
         assert_eq!(
@@ -5688,12 +5900,30 @@ properties:
         );
     }
 
-    fn undeclared_fact(error: &anyhow::Error) -> (&str, &str, &str) {
-        let diagnostic = error
-            .chain()
-            .find_map(|cause| cause.downcast_ref::<AuthoredDiagnostic>())
-            .expect("authored diagnostic");
-        (&diagnostic.code, &diagnostic.path, &diagnostic.message)
+    /// A question decoded the way the compiler reads one, envelope and all.
+    fn parsed_question(text: &str) -> Question {
+        registry_evidence_authoring::formats::decode_authored::<Question>(
+            "questions/question.yaml",
+            text.as_bytes(),
+            &registry_evidence_authoring::formats::QUESTION,
+        )
+        .expect("question decodes")
+        .value
+    }
+
+    /// The one diagnostic a refusal reports: its code, file, path, and
+    /// message.
+    fn only_diagnostic(error: &anyhow::Error) -> (&str, &str, &str, &str) {
+        let report = crate::authored::report_in(error).expect("the refusal is a report");
+        let [diagnostic] = report.diagnostics() else {
+            panic!("one diagnostic: {error:#}");
+        };
+        (
+            &diagnostic.code,
+            diagnostic.source.as_ref().map_or("", |source| &source.file),
+            &diagnostic.path,
+            &diagnostic.message,
+        )
     }
 
     #[test]
@@ -5705,19 +5935,20 @@ properties:
             .map(drop)
             .expect_err("undeclared fact");
         assert_eq!(
-            undeclared_fact(&error),
+            only_diagnostic(&error),
             (
-                "evidence.authoring.derivation-fact-undeclared",
+                "evidence.derivation.fact-undeclared",
                 "derivations/adult-status.rhai",
-                "authored derivation reads fact \"birth_date\", which the question's source does not declare",
+                "",
+                "authored derivation reads fact `birth_date`, which the question's source does not declare",
             )
         );
         // The structural check `source diff` and `source update` run is the
         // same one, so a source change that drops a fact is refused there too.
         let error = validate_source_artifact_graph(&fixture.project).expect_err("structural");
         assert_eq!(
-            undeclared_fact(&error).0,
-            "evidence.authoring.derivation-fact-undeclared"
+            only_diagnostic(&error).0,
+            "evidence.derivation.fact-undeclared"
         );
 
         fs::write(
@@ -5740,7 +5971,7 @@ properties:
         }
         fs::write(
             fixture.project.join("sources/people.yaml"),
-            "transport: http-json\nfactSchema: schemas/people-facts.yaml\n",
+            "apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1\nkind: EvidenceSource\ntransport: http-json\nfactSchema: schemas/people-facts.yaml\n",
         )
         .expect("source");
         let facts = |closed: bool, name: &str| {
@@ -5756,11 +5987,12 @@ properties:
             .map(drop)
             .expect_err("renamed fact");
         assert_eq!(
-            undeclared_fact(&error),
+            only_diagnostic(&error),
             (
-                "evidence.authoring.derivation-fact-undeclared",
+                "evidence.derivation.fact-undeclared",
                 "derivations/adult-status.rhai",
-                "authored derivation reads fact \"date_of_birth\", which the question's source does not declare",
+                "",
+                "authored derivation reads fact `date_of_birth`, which the question's source does not declare",
             )
         );
 
@@ -5790,18 +6022,15 @@ properties:
         let error = compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
             .expect_err("an open object answer schema must not compile");
 
-        let diagnostic = error
-            .chain()
-            .find_map(|cause| cause.downcast_ref::<AuthoredDiagnostic>())
-            .expect("the refusal is an authored diagnostic");
-        assert_eq!(diagnostic.code, "evidence.answer-schema.open-object");
         assert_eq!(
-            diagnostic.path, "schemas/birth-certificate.yaml:/additionalProperties",
+            only_diagnostic(&error),
+            (
+                "evidence.answer-schema.open-object",
+                "schemas/birth-certificate.yaml",
+                "/additionalProperties",
+                "an object answer schema must set additionalProperties: false",
+            ),
             "the refusal must name the schema document and its field"
-        );
-        assert_eq!(
-            diagnostic.message,
-            "an object answer schema must set additionalProperties: false"
         );
     }
 
@@ -5826,16 +6055,14 @@ properties:
         let error = compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
             .expect_err("a propertyless object answer schema must not compile");
 
-        let diagnostic = error
-            .chain()
-            .find_map(|cause| cause.downcast_ref::<AuthoredDiagnostic>())
-            .expect("the refusal is an authored diagnostic");
+        let (code, file, path, _) = only_diagnostic(&error);
         assert_eq!(
-            diagnostic.code,
-            "evidence.answer-schema.declared-properties"
-        );
-        assert_eq!(
-            diagnostic.path, "schemas/birth-certificate.yaml:/properties",
+            (code, file, path),
+            (
+                "evidence.answer-schema.declared-properties",
+                "schemas/birth-certificate.yaml",
+                "/properties",
+            ),
             "the refusal must name the schema document and its field"
         );
     }
@@ -6073,7 +6300,7 @@ properties:
     fn production_controlled_category_keeps_the_stable_concept_and_distinct_scheme_ids() {
         let answer: QuestionAnswer = serde_norway::from_str(
             r#"concept: age_bracket
-id: urn:authority:concept:age-bracket:v1
+uri: urn:authority:concept:age-bracket:v1
 type: controlled-category
 values: [under-18, adult]
 "#,
@@ -6101,7 +6328,7 @@ values: [under-18, adult]
 
     #[test]
     fn bounded_identifier_compiles_to_governed_string_constraints_without_a_codelist() {
-        let answer: QuestionAnswer = serde_norway::from_str("concept: report\nid: urn:example:concept:report\ntype: bounded-identifier\nprefix: 'urn:example:report:'\nminimumBytes: 20\nmaximumBytes: 64\n").expect("identifier answer parses");
+        let answer: QuestionAnswer = serde_norway::from_str("concept: report\nuri: urn:example:concept:report\ntype: bounded-identifier\nprefix: 'urn:example:report:'\nminimumBytes: 20\nmaximumBytes: 64\n").expect("identifier answer parses");
         assert!(registry_evidence_authoring::validate_answer(&answer).is_empty());
         let concept = compile_concept("report-question", &answer, &BTreeMap::new())
             .expect("identifier compiles");
@@ -6161,7 +6388,7 @@ values: [under-18, adult]
             for (alias, identifier) in answers {
                 question = question.replace(
                     &format!("  - concept: {alias}\n"),
-                    &format!("  - concept: {alias}\n    id: {identifier}\n"),
+                    &format!("  - concept: {alias}\n    uri: {identifier}\n"),
                 );
             }
             question.push_str(&format!(
@@ -6192,14 +6419,18 @@ values: [under-18, adult]
             fs::write(
                 fixture.project.join(format!("selectors/{profile}.yaml")),
                 format!(
-                    "maximumAggregateBytes: 64\nfields:\n  {field}:\n    type: string\n    minimumBytes: 1\n    maximumBytes: 64\n"
+                    "apiVersion: id.registrystack.org/formats/evidence/selector/v1alpha1
+kind: EvidenceSelector
+maximumAggregateBytes: 64\nfields:\n  {field}:\n    type: string\n    minimumBytes: 1\n    maximumBytes: 64\n"
                 ),
             )
             .expect("selector profile");
         }
         fs::write(
             fixture.project.join("sources/people.yaml"),
-            r#"transport: http-json
+            r#"apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1
+kind: EvidenceSource
+transport: http-json
 baseUrl: https://records.example.test
 posture: field-projected
 authentication: {kind: static-authorization, tokenRef: 'secret:file/records-token'}
@@ -6230,7 +6461,9 @@ factSchema: schemas/source-facts.schema.yaml
         .expect("people source");
         fs::write(
             fixture.project.join("sources/relationships.yaml"),
-            r#"transport: http-json
+            r#"apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1
+kind: EvidenceSource
+transport: http-json
 baseUrl: https://relationships.example.test
 posture: field-projected
 authentication: {kind: static-authorization, tokenRef: 'secret:file/relationships-token'}
@@ -6333,9 +6566,12 @@ factSchema: schemas/source-facts.schema.yaml
         ];
         for (question, derivation) in questions {
             fixture.add_question(&question, derivation);
-            let parsed: Question = serde_norway::from_str(&question).expect("governed question");
+            let parsed: Value = serde_norway::from_str(&question).expect("governed question");
             fs::write(
-                fixture.project.join(format!("fixtures/{}.yaml", parsed.id)),
+                fixture.project.join(format!(
+                    "fixtures/{}.yaml",
+                    parsed["id"].as_str().expect("question id")
+                )),
                 "version: 1\ncases: []\n",
             )
             .expect("governed fixture");
@@ -6519,7 +6755,7 @@ factSchema: schemas/source-facts.schema.yaml
     fn local_compiler_uses_exact_optional_governance_but_keeps_local_assurance() {
         let question = QUESTION.replace(
             "  - concept: is_adult\n",
-            "  - concept: is_adult\n    id: urn:authority:concept:is-adult:v1\n",
+            "  - concept: is_adult\n    uri: urn:authority:concept:is-adult:v1\n",
         ) + r#"governance:
   requirement: urn:authority:requirement:adult-status:v1
   kind: criterion
@@ -6577,7 +6813,7 @@ factSchema: schemas/source-facts.schema.yaml
         let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
         let question = write_referenced_people_project(&fixture, "authentication: {kind: none}\n");
         let mut question: Value = serde_norway::from_str(&question).unwrap();
-        question["answers"][0]["id"] = json!("urn:authority:concept:is-adult:v1");
+        question["answers"][0]["uri"] = json!("urn:authority:concept:is-adult:v1");
         question["governance"] = json!({
             "requirement": "urn:authority:requirement:adult-status:v1", "kind":"criterion",
             "referenceFrameworks":["urn:authority:framework:adult-status:v1"],
@@ -6781,7 +7017,7 @@ factSchema: schemas/source-facts.schema.yaml
     fn write_governed_referenced_people_project(fixture: &Fixture, authentication: &str) {
         let question = write_referenced_people_project(fixture, authentication);
         let mut question: Value = serde_norway::from_str(&question).unwrap();
-        question["answers"][0]["id"] = json!("urn:authority:concept:is-adult:v1");
+        question["answers"][0]["uri"] = json!("urn:authority:concept:is-adult:v1");
         question["governance"] = json!({
             "requirement": "urn:authority:requirement:adult-status:v1", "kind":"criterion",
             "referenceFrameworks":["urn:authority:framework:adult-status:v1"],
@@ -6807,7 +7043,7 @@ factSchema: schemas/source-facts.schema.yaml
     /// name one of.
     fn add_governed_age_bracket_question(fixture: &Fixture) {
         let mut question: Value = serde_norway::from_str(AGE_BRACKET_QUESTION).unwrap();
-        question["answers"][0]["id"] = json!("urn:authority:concept:age-bracket:v1");
+        question["answers"][0]["uri"] = json!("urn:authority:concept:age-bracket:v1");
         question["governance"] = json!({
             "requirement": "urn:authority:requirement:age-bracket:v1",
             "kind": "information-requirement",
@@ -6838,7 +7074,7 @@ factSchema: schemas/source-facts.schema.yaml
   collectionBounds: {}
 "#;
         let referenced = QUESTION.replace(inline, "source:\n  ref: people\n");
-        let question: Question = serde_norway::from_str(&referenced).unwrap();
+        let question = parsed_question(&referenced);
         let authored = AuthoredQuestion {
             question,
             derivation: ANSWER.to_owned(),
@@ -6857,12 +7093,9 @@ factSchema: schemas/source-facts.schema.yaml
             .expect("the refusal is field-addressed");
         assert_eq!(diagnostic.code, "evidence.question.source-missing");
         assert_eq!(diagnostic.path, "questions/adult-status.yaml:/source/ref");
-        assert!(
-            diagnostic
-                .message
-                .contains("question source ref `people` has no sources/people.yaml"),
-            "{}",
-            diagnostic.message
+        assert_eq!(
+            diagnostic.message,
+            "the source this ref names has no file under sources/"
         );
     }
 
@@ -6877,9 +7110,9 @@ factSchema: schemas/source-facts.schema.yaml
   collectionBounds: {}
 "#;
         let referenced = QUESTION.replace(inline, "source:\n  ref: people\n");
-        let question: Question = serde_norway::from_str(&referenced).unwrap();
+        let question = parsed_question(&referenced);
         let source: Value = serde_norway::from_str(&format!(
-            "transport: http-json\nbaseUrl: https://records.example.test\nposture: field-projected\nauthentication: {{kind: none}}\n{REFERENCED_SOURCE_TAIL}"
+            "apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1\nkind: EvidenceSource\ntransport: http-json\nbaseUrl: https://records.example.test\nposture: field-projected\nauthentication: {{kind: none}}\n{REFERENCED_SOURCE_TAIL}"
         ))
         .unwrap();
         let sources = BTreeMap::from([("people".to_owned(), source)]);
@@ -6907,7 +7140,7 @@ factSchema: schemas/source-facts.schema.yaml
         assert!(
             diagnostic
                 .message
-                .contains("missing selectors/person-reference-v1.yaml"),
+                .contains("the selector profile this member names has no file under selectors/"),
             "{}",
             diagnostic.message
         );
@@ -6918,7 +7151,7 @@ factSchema: schemas/source-facts.schema.yaml
         let not_found: anyhow::Error = std::io::Error::from(std::io::ErrorKind::NotFound).into();
         let wrapped = not_found.context("opening governed deployment public key");
         let active = "public-keys/_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo.jwk.json";
-        let error = governed_public_key_fault(active, Some(active), wrapped);
+        let error = governed_public_key_fault(active, Some(active), &json!([]), wrapped);
         let diagnostic = error
             .downcast_ref::<AuthoredDiagnostic>()
             .expect("a missing key names its governance field");
@@ -6928,8 +7161,8 @@ factSchema: schemas/source-facts.schema.yaml
             "governance.yaml:/signing/activePublicJwkFile"
         );
         assert!(
-            diagnostic.message.contains(active),
-            "{}",
+            !diagnostic.message.contains(active),
+            "the refusal names the member, not its value: {}",
             diagnostic.message
         );
 
@@ -6937,17 +7170,18 @@ factSchema: schemas/source-facts.schema.yaml
         let error = governed_public_key_fault(
             published,
             Some(active),
+            &json!(["public-keys/current.jwk.json", published]),
             std::io::Error::from(std::io::ErrorKind::NotFound).into(),
         );
         assert_eq!(
             error.downcast_ref::<AuthoredDiagnostic>().unwrap().path,
-            "governance.yaml:/signing/publishedPublicJwkFiles"
+            "governance.yaml:/signing/publishedPublicJwkFiles/1"
         );
 
         // A read failure that is not an absent file stays operational.
         let denied: anyhow::Error =
             std::io::Error::from(std::io::ErrorKind::PermissionDenied).into();
-        let error = governed_public_key_fault(active, Some(active), denied);
+        let error = governed_public_key_fault(active, Some(active), &json!([]), denied);
         assert!(error.downcast_ref::<AuthoredDiagnostic>().is_none());
     }
 
@@ -6963,7 +7197,7 @@ factSchema: schemas/source-facts.schema.yaml
         let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
         let question = write_referenced_people_project(&fixture, source_authentication);
         let mut question: Value = serde_norway::from_str(&question).unwrap();
-        question["answers"][0]["id"] = json!("urn:authority:concept:is-adult:v1");
+        question["answers"][0]["uri"] = json!("urn:authority:concept:is-adult:v1");
         question["governance"] = json!({
             "requirement": "urn:authority:requirement:adult-status:v1", "kind":"criterion",
             "referenceFrameworks":["urn:authority:framework:adult-status:v1"],
@@ -7055,25 +7289,42 @@ factSchema: schemas/source-facts.schema.yaml
     #[test]
     fn a_corrupt_project_marker_is_rejected() {
         let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
-        fixture.write_marker("version: 1\nproject: [\n");
+        fixture.write_marker(&format!(
+            "{}project: [\n",
+            registry_evidence_authoring::default_project_marker_document()
+        ));
 
         let error = compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
             .expect_err("a project root with a corrupt marker must not compile");
-        assert!(
-            error.to_string().contains("does not parse"),
-            "unexpected error: {error}"
-        );
+        let codes = crate::authored::report_in(&error)
+            .expect("the marker refusal is the reader's report")
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| diagnostic.code.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(codes, ["yaml.unexpected-end"], "unexpected error: {error}");
     }
 
     #[test]
-    fn a_project_marker_with_an_unsupported_version_is_rejected() {
+    fn a_project_marker_without_its_envelope_is_rejected() {
         let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
         fixture.write_marker("version: 2\nproject: evidence-authoring\n");
 
         let error = compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
-            .expect_err("a project root with an unsupported marker version must not compile");
-        assert!(
-            error.to_string().contains("version must be 1"),
+            .expect_err("a project root with a marker that has no envelope must not compile");
+        let codes = crate::authored::report_in(&error)
+            .expect("the marker refusal is the reader's report")
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| diagnostic.code.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            codes,
+            [
+                "config.missing-envelope",
+                "config.removed-key",
+                "config.removed-key"
+            ],
             "unexpected error: {error}"
         );
     }
@@ -7257,7 +7508,8 @@ factSchema: schemas/source-facts.schema.yaml
             let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
             fixture.add_access_policy("casework-task", &["adult-status"]);
             let policy = json!({
-                "version": 1,
+                "apiVersion": registry_evidence_authoring::formats::ACCESS_POLICY_API_VERSION,
+                "kind": registry_evidence_authoring::formats::ACCESS_POLICY_KIND,
                 "id": "casework-task",
                 "questions": ["adult-status"],
                 "taskGrant": {
@@ -7280,7 +7532,9 @@ factSchema: schemas/source-facts.schema.yaml
             fs::create_dir_all(fixture.project.join("access/clients")).unwrap();
             let key: Value = serde_json::from_str(OFFLINE_CHECK_PUBLIC_JWK).unwrap();
             let client = json!({
-                "version": 1, "clientId": "task-agent", "status": status,
+                "apiVersion": registry_evidence_authoring::formats::ACCESS_CLIENT_API_VERSION,
+                "kind": registry_evidence_authoring::formats::ACCESS_CLIENT_KIND,
+                "clientId": "task-agent", "status": status,
                 "policies": ["casework-task"],
                 "principal": "urn:registrystack:evidence:local:client:task-agent",
                 "evidenceAudience": "urn:registrystack:evidence:local:client:task-agent",
@@ -7446,7 +7700,9 @@ fn prepare(selectors, context) {
             serde_norway::to_string(&question).unwrap(),
         )
         .unwrap();
-        fs::write(fixture.project.join("selectors/person-composite-v1.yaml"), "maximumAggregateBytes: 220\nfields:\n  person_id: {type: string, minimumBytes: 1, maximumBytes: 200}\n  region: {type: integer, minimum: 1, maximum: 99}\n").unwrap();
+        fs::write(fixture.project.join("selectors/person-composite-v1.yaml"), "apiVersion: id.registrystack.org/formats/evidence/selector/v1alpha1
+kind: EvidenceSelector
+maximumAggregateBytes: 220\nfields:\n  person_id: {type: string, minimumBytes: 1, maximumBytes: 200}\n  region: {type: integer, minimum: 1, maximum: 99}\n").unwrap();
         let source_path = fixture.project.join("sources/people.yaml");
         let mut source: Value = serde_norway::from_slice(&fs::read(&source_path).unwrap()).unwrap();
         source["baseUrl"] = json!("http://127.0.0.1:8082");
@@ -7525,7 +7781,7 @@ fn prepare(selectors, context) {
 
     #[test]
     fn question_alternatives_refuse_missing_profiles_and_incomplete_composites() {
-        let mut question: Question = serde_norway::from_str(QUESTION).unwrap();
+        let mut question = parsed_question(QUESTION);
         question.source.source_ref = Some("records".to_owned());
         question.source.operation = None;
         let subject = question.subject.as_mut().unwrap();
@@ -7539,7 +7795,7 @@ fn prepare(selectors, context) {
         assert!(compile_referenced_subjects(&question, &source, &profiles)
             .unwrap_err()
             .to_string()
-            .contains("missing selectors"));
+            .contains("has no file under selectors/"));
         profiles.insert(
             "by-composite".to_owned(),
             json!({"fields":{"key":{"type":"string"},"region":{"type":"integer"}}}),
@@ -7662,7 +7918,15 @@ fn prepare(selectors, context) {
         let error = compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
             .expect_err("unknown question must fail");
 
-        assert!(error.to_string().contains("does not exist"));
+        let (code, file, path, _) = only_diagnostic(&error);
+        assert_eq!(
+            (code, file, path),
+            (
+                "evidence.access-policy.question-missing",
+                "access/policies/unknown-access.yaml",
+                "/questions/0"
+            )
+        );
         assert!(fixture.staging_is_empty());
     }
 
@@ -7716,13 +7980,15 @@ factSchema: schemas/people-facts.schema.yaml
         }
         fs::write(
             fixture.project.join("selectors/person-reference-v1.yaml"),
-            "maximumAggregateBytes: 200\nfields:\n  person_id:\n    type: string\n    minimumBytes: 1\n    maximumBytes: 200\n",
+            "apiVersion: id.registrystack.org/formats/evidence/selector/v1alpha1
+kind: EvidenceSelector
+maximumAggregateBytes: 200\nfields:\n  person_id:\n    type: string\n    minimumBytes: 1\n    maximumBytes: 200\n",
         )
         .expect("selector");
         fs::write(
             fixture.project.join("sources/people.yaml"),
             format!(
-                "transport: http-json\nbaseUrl: https://records.example.test\nposture: field-projected\n{authentication}{REFERENCED_SOURCE_TAIL}"
+                "apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1\nkind: EvidenceSource\ntransport: http-json\nbaseUrl: https://records.example.test\nposture: field-projected\n{authentication}{REFERENCED_SOURCE_TAIL}"
             ),
         )
         .expect("source");
@@ -7809,21 +8075,36 @@ factSchema: schemas/people-facts.schema.yaml
 
     #[test]
     fn referenced_http_source_without_an_authentication_declaration_is_refused() {
-        for authentication in ["", "authentication:\n"] {
+        let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
+        write_referenced_people_project(&fixture, "");
+
+        let error = compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
+            .expect_err("an undeclared credential posture must not compile")
+            .to_string();
+
+        assert_eq!(
+            error,
+            "the referenced source sends no credential, and an absent field does not decide \
+that: question `adult-status` must declare the posture itself by adding an `authentication:` \
+mapping naming the `kind:` its channel uses, in sources/people.yaml"
+        );
+        assert!(fixture.staging_is_empty());
+    }
+
+    #[test]
+    fn a_null_authentication_in_a_source_is_refused_by_the_shared_reader() {
+        for authentication in ["authentication:\n", "authentication: {kind: null}\n"] {
             let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
             write_referenced_people_project(&fixture, authentication);
 
             let error =
                 compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
-                    .expect_err("an undeclared credential posture must not compile")
+                    .expect_err("a null is never a value")
                     .to_string();
 
-            assert_eq!(
-                error,
-                "the referenced source sends no credential, and an absent field does not decide \
-that: question `adult-status` must declare the posture itself by adding an `authentication:` \
-mapping naming the `kind:` its channel uses, in sources/people.yaml",
-                "{authentication:?} was not refused as an absent posture"
+            assert!(
+                error.starts_with("error[config.null-value] sources/people.yaml:"),
+                "{authentication:?}: {error}"
             );
             assert!(fixture.staging_is_empty());
         }
@@ -7833,7 +8114,6 @@ mapping naming the `kind:` its channel uses, in sources/people.yaml",
     fn referenced_http_source_with_an_unnamed_authentication_kind_is_refused() {
         for authentication in [
             "authentication: {}\n",
-            "authentication: {kind: null}\n",
             "authentication: {kind: 3}\n",
             "authentication: {kind: ' '}\n",
             "authentication: basic\n",
@@ -7899,16 +8179,24 @@ uses under `authentication:` in sources/people.yaml",
         let error = compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
             .expect_err("a referenced source cannot use the inline source marker");
 
+        let (code, file, path, message) = only_diagnostic(&error);
         assert_eq!(
-            error.to_string(),
-            "subject.source is available only to an inline OpenAPI operation"
+            (code, file, path, message),
+            (
+                "evidence.question.subject-source-context",
+                "questions/adult-status.yaml",
+                "/subject/source",
+                "subject.source is available only to an inline OpenAPI operation"
+            )
         );
         assert!(fixture.staging_is_empty());
     }
 
     #[test]
     fn referenced_question_compiles_multiple_role_bound_subjects() {
-        let question = r#"id: relationship-check
+        let question = r#"apiVersion: id.registrystack.org/formats/evidence/question/v1alpha1
+kind: EvidenceQuestion
+id: relationship-check
 question: Does the governed relationship hold?
 purpose: relationship-review
 subjects:
@@ -7946,14 +8234,18 @@ disclosure:
             fs::write(
                 fixture.project.join(format!("selectors/{name}.yaml")),
                 format!(
-                    "maximumAggregateBytes: 200\nfields:\n  {field}:\n    type: string\n    minimumBytes: 1\n    maximumBytes: 200\n"
+                    "apiVersion: id.registrystack.org/formats/evidence/selector/v1alpha1
+kind: EvidenceSelector
+maximumAggregateBytes: 200\nfields:\n  {field}:\n    type: string\n    minimumBytes: 1\n    maximumBytes: 200\n"
                 ),
             )
             .expect("selector");
         }
         fs::write(
             fixture.project.join("sources/family-record.yaml"),
-            r#"transport: http-json
+            r#"apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1
+kind: EvidenceSource
+transport: http-json
 baseUrl: https://records.example.test
 posture: field-projected
 authentication: {kind: static-authorization, tokenRef: 'secret:file/records-token'}
@@ -8462,7 +8754,9 @@ factSchema: schemas/family-facts.schema.yaml
                     let profile = format!("{role}-alt-{index:02}-v1");
                     fs::write(
                         fixture.project.join(format!("selectors/{profile}.yaml")),
-                        format!("maximumAggregateBytes: 200\nfields:\n  {field}:\n    type: string\n    minimumBytes: 1\n    maximumBytes: 200\n"),
+                        format!("apiVersion: id.registrystack.org/formats/evidence/selector/v1alpha1
+kind: EvidenceSelector
+maximumAggregateBytes: 200\nfields:\n  {field}:\n    type: string\n    minimumBytes: 1\n    maximumBytes: 200\n"),
                     )
                     .expect("selector profile");
                     profile
@@ -8643,20 +8937,25 @@ factSchema: schemas/family-facts.schema.yaml
         }
 
         fn add_question(&self, question: &str, derivation: &str) {
-            let parsed: Question = serde_norway::from_str(question).expect("question parses");
+            let parsed: Value = serde_norway::from_str(question).expect("question parses");
+            let id = parsed["id"].as_str().expect("question id");
+            let derivation_file = parsed["derivation"].as_str().expect("question derivation");
             fs::write(
-                self.project
-                    .join("questions")
-                    .join(format!("{}.yaml", parsed.id)),
+                self.project.join("questions").join(format!("{id}.yaml")),
                 question,
             )
             .expect("question");
-            fs::write(self.project.join(&parsed.derivation), derivation).expect("derivation");
+            fs::write(self.project.join(derivation_file), derivation).expect("derivation");
         }
 
         fn add_access_policy(&self, id: &str, questions: &[&str]) {
             fs::create_dir_all(self.project.join("access/policies")).expect("policy directory");
-            let policy = json!({"version": 1, "id": id, "questions": questions});
+            let policy = json!({
+                "apiVersion": registry_evidence_authoring::formats::ACCESS_POLICY_API_VERSION,
+                "kind": registry_evidence_authoring::formats::ACCESS_POLICY_KIND,
+                "id": id,
+                "questions": questions
+            });
             fs::write(
                 self.project
                     .join("access/policies")
@@ -9069,8 +9368,9 @@ factSchema: schemas/family-facts.schema.yaml
         );
         assert_eq!(
             diagnostic.message,
-            "requirement validity of 900 seconds exceeds the deployment target's 300 second signing maximum at governance.yaml:/signing/maximumAssertionValiditySeconds"
+            "the requirement validity exceeds the deployment target's signing maximum at governance.yaml /signing/maximumAssertionValiditySeconds"
         );
+        assert!(!diagnostic.message.contains("900") && !diagnostic.message.contains("300"));
     }
 
     #[test]

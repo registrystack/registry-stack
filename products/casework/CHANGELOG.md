@@ -2,6 +2,132 @@
 
 ## Unreleased
 
+- `caseworkctl simulate --format json` carries `diagnostics`, the warnings the
+  readers reported for `casework.yaml`, the simulation, and its holiday sets.
+- `caseworkctl dev grant --format json` carries `diagnostics`, an empty list,
+  like every other Casework report.
+- BREAKING: `authentication.oidc.assertionIssuers: {}` is refused: delete the
+  member to apply no assertion-issuer rule. The generated runtime schema types
+  the client keys as `ExternalId` and requires at least one client.
+- BREAKING: `caseworkctl` and the `casework` runtime read `casework.yaml`
+  through the shared configuration reader. Every problem is reported at its
+  line and column with its own code, `casework.project.invalid` is retired,
+  and `null`, anchors, aliases, tags, and numbers or booleans written where
+  text is expected are refused. Migration steps and the code table are in
+  `release/notes/config-conventions/casework.md`.
+- BREAKING: `casework.yaml` has a published JSON Schema, which
+  `caseworkctl init` copies into the project and names in a modeline. The
+  reader refuses an out-of-range number, a repeated item in a set, and an
+  issuer that is not an `http` or `https` URL at its position, with
+  `config.out-of-range`, `config.duplicate-item`, and `config.invalid-value`.
+  Migration steps and the code table are in
+  `release/notes/config-conventions/casework.md`.
+- BREAKING: the `casework` runtime and `caseworkctl` refuse a `runtime.yaml`
+  member written as `null`, `~`, or an empty value, where it read as absent;
+  omit the key instead. A malformed secret reference, URL, or digest is
+  refused by the reader at its position with `config.invalid-value`, and an
+  out-of-range BReg binding timeout or reconciliation interval or audit
+  rotation bound with `config.out-of-range`. `taskAuthority.issuer` must be an
+  absolute `http` or `https` URL. Migration steps are in
+  `release/notes/config-conventions/casework.md`.
+- BREAKING: a refused `runtime.yaml` is reported in full: `casework serve`
+  prints every problem in the file at its line and column after one
+  sentence, and `caseworkctl plan`, `apply`, `status`, `doctor`, and `dev`
+  report one positioned diagnostic per problem, each with its own code,
+  where they reported `casework.runtime-configuration.invalid` for the first
+  problem alone. A runtime file that cannot be read is
+  `platform.runtime-config.unavailable`, where it was
+  `caseworkctl.io-failure`. `caseworkctl check PROJECT --runtime-config FILE`
+  checks a runtime file offline against the project, and `--environment`
+  checks the values its `${NAME}` expressions take from the current
+  environment. Migration steps and the code table are in
+  `release/notes/config-conventions/casework.md`.
+- BREAKING: `caseworkctl check` and `caseworkctl test` report a
+  `diagnostics` list in the shared diagnostic shape, where they reported
+  `findings`, and count the files they read in `filesChecked`. A missing
+  imported source description is a `warning` at its line and column, with
+  the JSON pointer `/sources/N/description`, and an `error` under
+  `--production`. `--deny-warnings` replaces `--deny-findings`. Migration
+  steps and the old-to-new table are in
+  `release/notes/config-conventions/casework.md`.
+- BREAKING: every refusal `caseworkctl check`, `explain`, `simulate`, and
+  `package` make of a project against its imported source descriptions is
+  its own diagnostic, placed at the line and column of `casework.yaml` it
+  concerns, with its own `casework.<area>.<condition>` code, where each was
+  the first problem alone under `caseworkctl.refused` at path `authoring`.
+  The `--against-breg-package` refusals keep their codes and are placed at
+  `/sources` or `/sources/N/description`; the stale pin no longer repeats
+  either revision. Migration steps and the old-to-new table are in
+  `release/notes/config-conventions/casework.md`.
+- BREAKING: fixtures, simulations, and holiday sets are read through the
+  shared configuration reader and have published JSON Schemas. A fixture
+  declares `apiVersion: id.registrystack.org/formats/casework/fixture/v1alpha1`,
+  names itself with `id`, writes its request as `request: {source, entity}`,
+  and states its target as `target: {elapsedMinutes: N}` or `target: none`.
+  A simulation declares `kind: CaseworkSimulation`, names its record
+  `subject.recordId` and its rule `expect.rule` (or `rule: none`), writes
+  `dueState: at-risk`, and omits a routing field the record does not carry,
+  since `subject.fields` holds only a boolean, a number, or text; a holiday
+  set declares `kind: CaseworkHolidaySet`. `caseworkctl check` reads every
+  file under `fixtures/` and `simulations/` and refuses an undeclared
+  reference or a review display its kind's display schema rejects,
+  `caseworkctl test` also runs simulations, and each failure is its own
+  positioned diagnostic.
+  Migration steps and the code table are in
+  `release/notes/config-conventions/casework.md`.
+- BREAKING: a project declares at most 64 sources (`casework.source.too-many`
+  at `/sources`), and `caseworkctl check` and `test` refuse a `fixtures/`,
+  `simulations/`, or `simulations/holiday-sets/` directory holding more than
+  1024 YAML files (`casework.project.too-many-files`), so `filesChecked`
+  states its maximum. Migration steps are in
+  `release/notes/config-conventions/casework.md`.
+- BREAKING: `caseworkctl source add` reports its warnings in `diagnostics`,
+  where it reported them in `findings`. Each is a `warning` placed at the
+  JSON pointer of the BReg `registry.yaml` member it concerns, with that
+  file's line and column under `source`; `artifact` is gone and the message
+  names no value. `source add` reads `casework.yaml` through the project
+  reader, so an invalid project is refused with positioned diagnostics.
+  Migration steps are in `release/notes/config-conventions/casework.md`.
+- BREAKING: `dev-clients.yaml` declares
+  `apiVersion: id.registrystack.org/formats/casework/dev-clients/v1alpha1`
+  and `kind: CaseworkDevClients` in place of `version: 1`, is read through
+  the shared configuration reader, and has a published JSON Schema that
+  `caseworkctl init` copies into the project and names in a modeline.
+  `caseworkctl check` reads it beside `casework.yaml`, counts it in
+  `filesChecked`, and reports each problem at its line
+  and column with a `casework.dev-clients.*` code, where `caseworkctl dev`
+  reported the first problem alone as one sentence. A `${...}` expression
+  is refused, and `integrations.taskAuthority.jwksPort` must be 1 to 65535.
+  Client and service client IDs and the keys of `integrations.sources`,
+  `secretFiles`, and `taskAuthority.statusClients` are local identifiers (a
+  leading digit is refused, `_` is accepted), claim names are external
+  identifiers, a service client's claim values are text,
+  `taskAuthority.issuer` is an absolute URL, and a source binding no longer
+  takes its timeouts or reconciliation interval.
+  Migration steps are in `release/notes/config-conventions/casework.md`.
+- BREAKING: `.casework/dev/state.json`, the session state `caseworkctl dev`
+  retains, declares
+  `apiVersion: id.registrystack.org/formats/casework/dev-state/v1alpha1`
+  and `kind: CaseworkDevState` in place of `version: 2`, and is read through
+  the shared configuration reader. `caseworkctl dev` refuses a session an
+  earlier `caseworkctl` started, without changing it. `caseworkctl check`
+  reads the file when the project has one, counts it in `filesChecked` (now
+  at most 3140), and reports a problem at its line and column, or with
+  `casework.dev-state.invalid-ownership` for an owner, port, or container
+  `caseworkctl` never writes. Migration: run `caseworkctl dev stop --remove`
+  with the earlier `caseworkctl`, remove `.casework/dev`, and start again.
+- BREAKING: the 21 `caseworkctl --format json` report schemas are published
+  in the identifier catalog, `CheckReport` as
+  `https://id.registrystack.org/schemas/casework/check-report/check-report.v1alpha3.schema.json`
+  where it was `https://registrystack.org/caseworkctl/v1alpha3/CheckReport.schema.json`,
+  and declare their `apiVersion` and `kind` beside their variants. The members
+  they left open (attempt, retention, check, doctor, explain, package,
+  simulation, source add, plan, and apply detail) are now typed and closed,
+  and every count states its maximum. `ExplainReport` and `CheckReport` refer
+  to the project schema for the policy they carry. The reports themselves are
+  unchanged. Migration: load the schemas by their new identifiers, and give a
+  validator the project schema beside those two; the table is in
+  `release/notes/config-conventions/casework.md`.
 - `registry-casework-client`, which never resent a mutation, now resends an
   idempotency-keyed mutation whose outcome is unknown (a timeout or broken
   exchange after the request was sent, or a 5xx answer) byte for byte under

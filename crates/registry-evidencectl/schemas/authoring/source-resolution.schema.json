@@ -1,0 +1,90 @@
+{
+  "$defs": {
+    "ExternalId": {
+      "description": "An identifier another system issues, written exactly as its issuer gives it.",
+      "maxLength": 512,
+      "minLength": 1,
+      "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
+      "type": "string"
+    },
+    "Resolution": {
+      "description": "What to do with one artifact the three-way comparison could not decide.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "keep",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "adopt",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "type": {
+              "const": "file",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "path"
+          ],
+          "type": "object"
+        }
+      ]
+    }
+  },
+  "$id": "https://id.registrystack.org/schemas/evidence/source-resolution/source-resolution.v1alpha1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The resolution file as written. The reader checks and strips its\n`apiVersion` and `kind`.",
+  "properties": {
+    "apiVersion": {
+      "const": "id.registrystack.org/formats/evidence/source-resolution/v1alpha1",
+      "type": "string"
+    },
+    "artifacts": {
+      "additionalProperties": {
+        "$ref": "#/$defs/Resolution"
+      },
+      "maxProperties": 256,
+      "propertyNames": {
+        "$ref": "#/$defs/ExternalId"
+      },
+      "type": "object"
+    },
+    "kind": {
+      "const": "EvidenceSourceResolution",
+      "type": "string"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind",
+    "artifacts"
+  ],
+  "title": "Evidence source import resolution file",
+  "type": "object"
+}

@@ -1,4 +1,5 @@
-fixture: registry.evidence.reference.opencrvs-registered-parent-references/v1
+apiVersion: id.registrystack.org/formats/evidence/fixture/v1alpha1
+kind: EvidenceFixture
 synthetic_only: true
 common:
   observed_at: "2026-08-02T00:00:00Z"

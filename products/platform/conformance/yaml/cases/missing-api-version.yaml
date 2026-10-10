@@ -1,0 +1,15 @@
+id: missing-api-version
+rules: [CFG-ENV-1]
+summary: A document with a kind and no apiVersion is refused as a missing envelope.
+appliesTo:
+  envelope: true
+mutation:
+  envelope:
+    apiVersion: remove
+expect:
+  exit: 1
+  diagnostics:
+    - code: config.missing-envelope
+      path: ""
+      from: root
+      at: {line: 1, column: 1}

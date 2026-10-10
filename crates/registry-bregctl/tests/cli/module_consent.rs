@@ -60,11 +60,11 @@ accessProfiles:
   requiredPurposes: [food-assistance]
   permissions:
   - entity: person
-    rowBoundaries: []
+    rowBoundaries: unrestricted
     operations: [get, list]
     readableFields: [given-name, district]
   - entity: household
-    rowBoundaries: []
+    rowBoundaries: unrestricted
     operations: [get, list]
     readableFields: [head, label]
 - id: registrar
@@ -74,12 +74,12 @@ accessProfiles:
   requiredScopes: [records:manage]
   permissions:
   - entity: person
-    rowBoundaries: []
+    rowBoundaries: unrestricted
     operations: [create, get, patch]
     readableFields: [given-name, district]
     writableFields: [given-name, district]
   - entity: household
-    rowBoundaries: []
+    rowBoundaries: unrestricted
     operations: [create, get, patch]
     readableFields: [head, label]
     writableFields: [head, label]
@@ -148,18 +148,57 @@ fn registry_source(project: &Path) -> String {
     fs::read_to_string(project.join("registry.yaml")).expect("registry.yaml reads")
 }
 
+/// Each warning's code and the place it names, read back out of the source
+/// file its pointer addresses: every list item is named by the first of its
+/// `id`, `action`, or `entity` members.
 fn finding_codes(report: &Value) -> Vec<(String, String)> {
-    report["findings"]
+    report["diagnostics"]
         .as_array()
-        .expect("findings array")
+        .expect("diagnostics array")
         .iter()
+        .filter(|finding| finding["severity"] == "warning")
         .map(|finding| {
+            let file = finding["source"]["file"].as_str().expect("source file");
+            let bytes = fs::read(file).expect("the reported source reads");
+            let document = registry_platform_yaml::Reader::new(file)
+                .scan(&bytes)
+                .expect("the reported source scans")
+                .expect("the reported source is not empty")
+                .to_json_value();
+            let pointer = finding["path"].as_str().expect("path");
             (
                 finding["code"].as_str().expect("code").to_owned(),
-                finding["path"].as_str().expect("path").to_owned(),
+                named_path(&document, pointer),
             )
         })
         .collect()
+}
+
+fn named_path(document: &Value, pointer: &str) -> String {
+    let mut named = String::new();
+    let mut node = document;
+    for segment in pointer.split('/').skip(1) {
+        let segment = segment.replace("~1", "/").replace("~0", "~");
+        match node {
+            Value::Array(items) => {
+                let item = &items[segment.parse::<usize>().expect("an index")];
+                let (key, value) = ["id", "action", "entity"]
+                    .into_iter()
+                    .find_map(|key| item[key].as_str().map(|value| (key, value)))
+                    .expect("a list item names itself");
+                named.push_str(&format!("[{key}={value}]"));
+                node = item;
+            }
+            _ => {
+                if !named.is_empty() {
+                    named.push('.');
+                }
+                named.push_str(&segment);
+                node = &node[segment.as_str()];
+            }
+        }
+    }
+    named
 }
 
 /// The registry-wide findings a steward-issued consent action and the steward
@@ -186,9 +225,9 @@ fn expected_steward_findings(subject: &str) -> Vec<(String, String)> {
     ] {
         for target in targets {
             expected.push((
-                "access.target.unrestricted_rows".to_owned(),
+                "breg.access.target-unrestricted-rows".to_owned(),
                 format!(
-                    "actions[id={action}].permissions[profile={profile}].targets[entity={target}].rowBoundaries"
+                    "accessProfiles[id={profile}].permissions[action={action}].targets[entity={target}].rowBoundaries"
                 ),
             ));
         }
@@ -200,7 +239,7 @@ fn module_findings(report: &Value, subject: &str) -> Vec<(String, String)> {
     let mut findings = finding_codes(report)
         .into_iter()
         .filter(|(_, path)| path.contains(&format!("{subject}-consent")))
-        .filter(|(code, _)| code == "access.target.unrestricted_rows")
+        .filter(|(code, _)| code == "breg.access.target-unrestricted-rows")
         .collect::<Vec<_>>();
     findings.sort();
     findings
@@ -318,7 +357,7 @@ fn module_add_consent_writes_pins_and_compiles_once_a_profile_requires_consent()
     let ungated = bregctl(&["--format", "json", "check", path(project.path())]);
     assert!(!ungated.status.success(), "{ungated:?}");
     let refusal = String::from_utf8(ungated.stdout.clone()).expect("utf-8 report");
-    assert!(refusal.contains("consent.require.unused"), "{refusal}");
+    assert!(refusal.contains("breg.consent.require-unused"), "{refusal}");
     assert!(
         refusal.contains("add 'requireConsent: [{record: person-consent-decision, on: id}]' to a permission that reads person rows"),
         "{refusal}"
@@ -330,8 +369,8 @@ fn module_add_consent_writes_pins_and_compiles_once_a_profile_requires_consent()
         "{record: person-consent-decision, on: id}",
     );
     let gated = gated.replacen(
-        "  - entity: household\n    rowBoundaries: []\n    operations: [get, list]\n    readableFields: [head, label]\n",
-        "  - entity: household\n    rowBoundaries: []\n    operations: [get, list]\n    readableFields: [head, label]\n    requireConsent:\n    - {record: person-consent-decision, on: head}\n",
+        "  - entity: household\n    rowBoundaries: unrestricted\n    operations: [get, list]\n    readableFields: [head, label]\n",
+        "  - entity: household\n    rowBoundaries: unrestricted\n    operations: [get, list]\n    readableFields: [head, label]\n    requireConsent:\n    - {record: person-consent-decision, on: head}\n",
         1,
     );
     fs::write(project.path().join("registry.yaml"), gated).expect("gated project writes");
@@ -352,7 +391,7 @@ fn module_add_consent_writes_pins_and_compiles_once_a_profile_requires_consent()
     assert!(
         codes.iter().all(|(_, path)| ["give", "refuse", "withdraw"]
             .iter()
-            .all(|verb| !path.contains(&format!("actions[id={verb}-")))),
+            .all(|verb| !path.contains(&format!("permissions[action={verb}-")))),
         "{codes:?}"
     );
     let mut expected = expected_steward_findings("person");
@@ -575,6 +614,16 @@ fn module_add_consent_fits_a_freshly_initialized_project() {
         "{before}  - id: record-reader\n    principalClaim: registry_principal\n    actorKind: service\n    requesterClients: [food-agency-portal]\n    requiredScopes: [registry:generic:read]\n    requiredPurposes: [food-assistance]\n    permissions:\n      - entity: record\n        operations: [get, list]\n        readableFields: [code, label, group, status]\n        filterableFields: [code]\n        rowBoundaries:\n          - {{field: status, claim: registry_record_status, operator: equals}}\n        requireConsent:\n        - {{record: record-consent-decision, on: id}}\n{after}"
     );
     fs::write(destination.join("registry.yaml"), gated).expect("gated project writes");
+    // The project check holds the journeys to the profile they call, so they
+    // follow it to its purpose and actor kind.
+    let journeys = destination.join("tests/journeys.yaml");
+    let followed = fs::read_to_string(&journeys)
+        .expect("the init template's journeys are present")
+        .replace(
+            "          purpose: registry-reporting\n",
+            "          purpose: food-assistance\n          actorKind: service\n",
+        );
+    fs::write(&journeys, followed).expect("journeys write");
 
     let checked = bregctl(&["--format", "json", "check", path(&destination)]);
 

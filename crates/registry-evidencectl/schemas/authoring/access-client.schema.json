@@ -1,0 +1,116 @@
+{
+  "$defs": {
+    "ActiveClientExchange": {
+      "additionalProperties": false,
+      "description": "Local issuer wiring for a client whose Evidence authority comes from a task\nassertion. This does not grant access or change the governed task policy.",
+      "properties": {
+        "bootstrapResource": {
+          "description": "None means the issuer owner's default resource, not the Evidence resource.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "bootstrapScope": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/ActiveClientExchangeKind"
+        },
+        "sourceIssuer": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Url"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "bootstrapScope"
+      ],
+      "type": "object"
+    },
+    "ActiveClientExchangeKind": {
+      "enum": [
+        "institutional-grant",
+        "first-party"
+      ],
+      "type": "string"
+    },
+    "ClientStatus": {
+      "enum": [
+        "active",
+        "revoked"
+      ],
+      "type": "string"
+    },
+    "Url": {
+      "description": "An absolute http or https URL with a host and no user information.",
+      "format": "uri",
+      "maxLength": 2048,
+      "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://[^/?#@]+([/?#].*)?$",
+      "type": "string"
+    }
+  },
+  "$id": "https://id.registrystack.org/schemas/evidence/access-client/access-client.v1alpha1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "apiVersion": {
+      "const": "id.registrystack.org/formats/evidence/access-client/v1alpha1",
+      "type": "string"
+    },
+    "clientId": {
+      "type": "string"
+    },
+    "evidenceAudience": {
+      "type": "string"
+    },
+    "exchange": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ActiveClientExchange"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "keys": {
+      "items": true,
+      "type": "array"
+    },
+    "kind": {
+      "const": "EvidenceAccessClient",
+      "type": "string"
+    },
+    "policies": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "principal": {
+      "type": "string"
+    },
+    "status": {
+      "$ref": "#/$defs/ClientStatus"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind",
+    "clientId",
+    "status",
+    "policies",
+    "principal",
+    "evidenceAudience",
+    "keys"
+  ],
+  "title": "Evidence local access client",
+  "type": "object"
+}

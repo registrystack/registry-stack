@@ -1,3 +1,6 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/evidence/question/question.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/evidence/question/v1alpha1
+kind: EvidenceQuestion
 id: record-status-pair
 question: Which of the two reviewed record states applies?
 purpose: record-verification
@@ -10,10 +13,10 @@ source:
   ref: registry-status
 answers:
 - concept: currently_active
-  id: urn:example:concept:record-status-pair:currently_active
+  uri: urn:example:concept:record-status-pair:currently_active
   type: boolean
 - concept: retired
-  id: urn:example:concept:record-status-pair:retired
+  uri: urn:example:concept:record-status-pair:retired
   type: boolean
 derivation: derivations/record-status-pair.rhai
 disclosure:

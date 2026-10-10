@@ -7,8 +7,14 @@
 //! separate, explicitly requested operation. An unrelated occupant of the
 //! configured port is reported, never stopped or adopted.
 
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
+
+use registry_platform_yaml::{
+    ApiVersion, EnvelopeRule, Expect, ExternalId, FormatSpec, Reader, Report,
+    MAXIMUM_DOCUMENT_BYTES,
+};
 
 use crate::bootstrap::CommandRunner;
 use crate::ToolingError;
@@ -35,6 +41,69 @@ pub struct SessionState {
     pub container_name: Option<String>,
 }
 
+pub const SESSION_API_VERSION: &str =
+    "id.registrystack.org/formats/platform/thunderid-session/v1alpha1";
+pub const SESSION_KIND: &str = "PlatformThunderidSession";
+
+/// The session state file as the shared reader accepts it.
+pub const SESSION_FORMAT: FormatSpec<'static> = FormatSpec {
+    kind: SESSION_KIND,
+    envelope: EnvelopeRule::ApiVersionKind {
+        api_versions: &[ApiVersion::current(SESSION_API_VERSION)],
+        retired_api_versions: &[],
+    },
+    removed_keys: &[],
+};
+
+/// What to do with a session state file the reader refuses: this crate
+/// writes it, so it is recreated rather than corrected.
+const STATE_FIX: &str = "stop the development session, delete the directory that holds session.json, and start the session again; the local issuer is set up afresh";
+
+/// The session state file (`PlatformThunderidSession`), as it is read back.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(crate) struct StateFile {
+    // The envelope, which the reader checks before decoding; declared so
+    // the closed struct accepts it.
+    #[allow(dead_code)]
+    api_version: String,
+    #[allow(dead_code)]
+    kind: String,
+    setup_complete: bool,
+    #[serde(default)]
+    schema_applied: Option<ExternalId>,
+    #[serde(default)]
+    container_name: Option<ExternalId>,
+}
+
+/// The session state file as it is written.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StateFileOut<'a> {
+    api_version: &'a str,
+    kind: &'a str,
+    setup_complete: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    schema_applied: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    container_name: Option<&'a str>,
+}
+
+/// Read one session state document through the shared reader. `file` is
+/// the name every diagnostic carries.
+pub(crate) fn read_session_state(file: &str, bytes: &[u8]) -> Result<SessionState, Report> {
+    let mut hook = registry_platform_config::AuthoredExpressions;
+    let state = Reader::new(file)
+        .with_hook(&mut hook)
+        .decode::<StateFile>(bytes, &Expect::one(&SESSION_FORMAT))?
+        .value;
+    Ok(SessionState {
+        setup_complete: state.setup_complete,
+        schema_applied: state.schema_applied.map(ExternalId::into_string),
+        container_name: state.container_name.map(ExternalId::into_string),
+    })
+}
+
 pub struct Session<'a> {
     pub label: &'a str,
     pub id: &'a str,
@@ -49,12 +118,34 @@ impl Session<'_> {
     }
 
     pub fn load_state(&self) -> Result<SessionState, ToolingError> {
-        let bytes = std::fs::read(self.state_path()).map_err(|_| ToolingError::InvalidState {
+        self.read_state()?.ok_or(ToolingError::InvalidState {
             reason: "the session state file does not exist; run prepare before this step",
-        })?;
-        serde_json::from_slice(&bytes).map_err(|_| ToolingError::InvalidState {
-            reason: "the session state file is not readable",
         })
+    }
+
+    /// The retained state, or none before the first prepare. A state file
+    /// the reader refuses is reported with its findings, never replaced.
+    pub fn read_state(&self) -> Result<Option<SessionState>, ToolingError> {
+        let path = self.state_path();
+        let unreadable = ToolingError::InvalidState {
+            reason: "the session state file is not readable",
+        };
+        let file = match std::fs::File::open(&path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(_) => return Err(unreadable),
+        };
+        let mut bytes = Vec::new();
+        file.take(MAXIMUM_DOCUMENT_BYTES as u64 + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|_| unreadable)?;
+        read_session_state(&path.display().to_string(), &bytes)
+            .map(Some)
+            .map_err(|report| ToolingError::FileRefused {
+                what: "the development session state",
+                fix: STATE_FIX,
+                report: Box::new(report),
+            })
     }
 
     fn save_state(&self, state: &SessionState) -> Result<(), ToolingError> {
@@ -62,11 +153,16 @@ impl Session<'_> {
         // Session state is mutable bookkeeping, not a rendered document: the
         // completion markers it carries are updated as steps succeed, so
         // overwriting this one file is the intended behavior.
-        std::fs::write(
-            self.state_path(),
-            serde_json::to_vec(state).expect("state serializes"),
-        )
-        .map_err(|_| ToolingError::Filesystem {
+        let mut bytes = serde_json::to_vec_pretty(&StateFileOut {
+            api_version: SESSION_API_VERSION,
+            kind: SESSION_KIND,
+            setup_complete: state.setup_complete,
+            schema_applied: state.schema_applied.as_deref(),
+            container_name: state.container_name.as_deref(),
+        })
+        .expect("state serializes");
+        bytes.push(b'\n');
+        std::fs::write(self.state_path(), bytes).map_err(|_| ToolingError::Filesystem {
             reason: "the session state could not be written",
         })?;
         std::fs::set_permissions(self.state_path(), std::fs::Permissions::from_mode(0o600))
@@ -88,7 +184,7 @@ impl Session<'_> {
         ensure_owner_only_dir(&self.state_root.join("secrets"))?;
         ensure_regular_dir(&self.state_root.join("database"))?;
         ensure_regular_dir(&self.state_root.join("certs"))?;
-        if self.load_state().is_ok_and(|state| state.setup_complete) {
+        if self.read_state()?.is_some_and(|state| state.setup_complete) {
             return Ok(());
         }
         let admin_password_file = self.state_root.join("secrets/admin-password");
@@ -195,7 +291,7 @@ impl Session<'_> {
                 step: "the local ThunderID issuer's one-time upstream setup (its ./setup.sh bootstrap) did not complete; the partial state is retained for recovery",
             });
         }
-        let mut state = self.load_state().unwrap_or_default();
+        let mut state = self.read_state()?.unwrap_or_default();
         state.setup_complete = true;
         self.save_state(&state)
     }
@@ -581,6 +677,102 @@ mod tests {
             self.timeouts.push(timeout);
             self.run(program, args, secret_environment)
         }
+    }
+
+    fn state_session(root: &Path) -> Session<'_> {
+        Session {
+            label: "owned-test",
+            id: "0197aaaa-0000-7000-8000-0000000000a1",
+            port: 18091,
+            state_root: root,
+            image: "pinned-test-image",
+        }
+    }
+
+    #[test]
+    fn the_state_file_carries_its_envelope_and_reads_back() {
+        let root = std::env::temp_dir().join(format!(
+            "thunderid-state-test-{}-{}",
+            std::process::id(),
+            random_urlsafe(8).unwrap()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        let session = state_session(&root);
+        assert!(session.read_state().unwrap().is_none());
+        session
+            .save_state(&SessionState {
+                setup_complete: true,
+                container_name: Some(session.container_name()),
+                ..SessionState::default()
+            })
+            .unwrap();
+        let written = std::fs::read_to_string(session.state_path()).unwrap();
+        assert!(written.contains(SESSION_API_VERSION), "{written}");
+        assert!(!written.contains("schemaApplied"), "{written}");
+        let state = session.read_state().unwrap().unwrap();
+        assert!(state.setup_complete);
+        assert_eq!(state.container_name, Some(session.container_name()));
+        assert_eq!(state.schema_applied, None);
+
+        let example = std::fs::read(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../products/platform/examples/thunderid/session.json"
+        ))
+        .unwrap();
+        assert!(read_session_state("session.json", &example).is_ok());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_state_file_this_crate_did_not_write_is_refused_and_kept() {
+        let root = std::env::temp_dir().join(format!(
+            "thunderid-state-test-{}-{}",
+            std::process::id(),
+            random_urlsafe(8).unwrap()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        let session = state_session(&root);
+        let legacy = br#"{"setup_complete":true,"schema_applied":null,"container_name":"thunderid-owned-test"}"#;
+        std::fs::write(session.state_path(), legacy).unwrap();
+        let mut runner = Runner::default();
+
+        let error = session.prepare(&mut runner).unwrap_err();
+
+        let codes: Vec<_> = error
+            .report()
+            .expect("the refusal carries its findings")
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| diagnostic.code.clone())
+            .collect();
+        assert_eq!(codes, ["config.missing-envelope"], "{error}");
+        assert!(
+            error
+                .to_string()
+                .contains("delete the directory that holds session.json"),
+            "{error}"
+        );
+        assert!(
+            !error.to_string().contains("thunderid-owned-test"),
+            "{error}"
+        );
+        assert!(runner.commands.is_empty(), "{:?}", runner.commands);
+        assert_eq!(std::fs::read(session.state_path()).unwrap(), legacy);
+
+        let edited = format!(
+            "{{\"apiVersion\":\"{SESSION_API_VERSION}\",\"kind\":\"{SESSION_KIND}\",\"setupComplete\":\"${{SETUP}}\"}}"
+        );
+        std::fs::write(session.state_path(), edited).unwrap();
+        let error = session.load_state().unwrap_err();
+        let codes: Vec<_> = error
+            .report()
+            .unwrap()
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| diagnostic.code.clone())
+            .collect();
+        assert_eq!(codes, ["config.substitution-not-allowed"], "{error}");
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

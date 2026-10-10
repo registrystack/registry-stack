@@ -2,6 +2,85 @@
 
 ## Unreleased
 
+- `messaging.package.invalid` names the binary `messagingctl`, and when
+  nothing usable exists at `package.root` its next step is to build the
+  package with `messagingctl package` and point `package.root` at it, instead
+  of sending the reader to `check --project`.
+- `messagingctl check` closes a passed run with the summary line
+  (`0 errors, 0 warnings in 18 files`), and a refused run opens with
+  `messagingctl check refused the input.` and closes with the summary line.
+- A provider script that is a symbolic link is refused with `config.refused`
+  at the manifest member that names it (`/prepareScript`, `/interpretScript`,
+  or `/receiptScript`), with its line and column, instead of at the file.
+- A `template.yaml` or `provider.yaml` of up to 1 MiB, the shared YAML
+  document bound, is read. The package no longer applies a 64 KiB bound to
+  these two files; locale text, `schema.json`, and `sample.json` keep it.
+- BREAKING: an object key repeated at any depth in a template's `schema.json`
+  or `sample.json` is refused with `messaging.template.schema-syntax` or
+  `messaging.template.sample-syntax` at its line. Migration: keep one value
+  for each key.
+- BREAKING: a client listed twice in `authentication.oidc.allowedClients` is
+  refused with `config.duplicate-item` at the second item. Migration: list
+  each client once.
+- BREAKING: the `messagingctl --format json` reports of `check` and
+  `package` name the project the way the `--project` flag does: `project`,
+  `projectDigest`, and `projectFiles` replace `package`, `packageDigest`, and
+  `packageFiles`. Migration steps are in
+  `release/notes/config-conventions/messaging.md`.
+- BREAKING: an optional member written as an explicit `null` is refused with
+  `config.null-value` at the member (`actorKind: null` in an access profile,
+  `metricsListener: null` in the runtime file). Migration: remove the key;
+  leaving it out means what `null` did. Migration steps are in
+  `release/notes/config-conventions/messaging.md`.
+- BREAKING: `authentication.oidc.assertionIssuers: {}` is refused: delete the
+  member to apply no assertion-issuer rule. The generated runtime schema types
+  the client keys as `ExternalId` and requires at least one client.
+- BREAKING: the runtime file follows the Registry Stack configuration
+  conventions. Its `apiVersion` is
+  `id.registrystack.org/formats/messaging/runtime/v1alpha1`; the retention
+  periods are `*RetentionDays`; `audit.retainDays` is `audit.retentionDays`;
+  a provider connection, its `authentication`, and its `callbackVerifier`
+  are tagged by `type`; an `smtp` connection's `attemptTimeoutSeconds` is
+  `attemptTimeoutMilliseconds` (`attemptTimeoutSeconds: 10` becomes
+  `attemptTimeoutMilliseconds: 10000`); and an `http` connection's
+  `timeoutMilliseconds` and `concurrencyLimit` are
+  `attemptTimeoutMilliseconds` and `maximumConcurrentRequests`. Each old
+  spelling is refused with its replacement. The audit events and
+  `messagingctl` reports name the retention periods with the same keys.
+  Migration steps are in `release/notes/config-conventions/messaging.md`.
+- BREAKING: `messagingctl check --runtime-config` reports every refusal at
+  its line and column with its own `messaging.<area>.<condition>` or shared
+  `config.*` code and a JSON Pointer path, where it reported `config.refused`
+  at a dotted path. It checks a runtime file against `--project` or
+  `--package` offline, takes `--environment` and `--deny-warnings`, and the
+  digest mismatch names only the digest of the package found. A provider
+  connection's out-of-range integer and a malformed callback verifier are
+  refused by the reader at the member. `RuntimeConfigError::path` is
+  replaced by `RuntimeConfigError::pointer`. Migration steps and the
+  old-to-new code table are in
+  `release/notes/config-conventions/messaging.md`.
+- BREAKING: `messaging.yaml`, `template.yaml`, and `provider.yaml` follow
+  the Registry Stack configuration conventions. `messaging.yaml` declares
+  `apiVersion: id.registrystack.org/formats/messaging/project/v1alpha1`,
+  `kind: MessagingProject`, and a `project` block with `id` and `version`;
+  every `template.yaml` and `provider.yaml` declares its own `apiVersion` and
+  `kind`. `providers[].kind` is `providers[].type`,
+  `accessProfiles[].dailyLimit` is `maximumMessagesPerDay`, and a provider's
+  `capabilities.concurrencyLimit` is `maximumConcurrentRequests`; each old
+  spelling is refused with its replacement. Identifiers, references, lists,
+  and limits are typed and bounded when the file is read, and an access
+  profile states its `requiredScopes` or writes `unrestricted`.
+  `messagingctl check --project`, `package`, and the runtime report every
+  finding at its file, line, and column with a `messaging.<area>.<condition>`
+  or shared code, where they reported one `config.refused` or
+  `package.project-refused`. Migration steps are in
+  `release/notes/config-conventions/messaging.md`.
+- BREAKING: every `messagingctl --format json` report names its format with
+  `apiVersion: id.registrystack.org/formats/messaging/ctl-report/v1alpha1`
+  and `kind: MessagingCtlReport`, written after `ok`, `command`, and
+  `status`. `examples/formats/ctl-report.json` is the report `check` writes
+  for the starter project. Migration steps are in
+  `release/notes/config-conventions/messaging.md`.
 - BREAKING: a spent idempotency key is scoped to the caller's issuer and
   subject, as in Scheduling and Casework, instead of the caller's keyed audit
   pseudonym, so rotating `audit.hashKeyRef` no longer frees spent keys: an
@@ -11,12 +90,13 @@
   operation, and key; the raw issuer, subject, and key stay beside it only
   until retention erases the submission receipt, which clears all three,
   and the digest alone keeps the key spent for that caller after
-  `submissionReceiptDays`. Past that horizon a changed request under the key
-  is refused with `409 idempotency.key-reused`, as Base Registry Engine,
-  Scheduling, and Casework refuse it, instead of `410 idempotency.expired`:
-  only the exact request is `410`, and every request is once retention
-  deletes the message record after `recordDays`, since its request hash goes
-  with it. Audit records keep the pseudonym. The upgrade discards existing idempotency
+  `retention.submissionReceiptRetentionDays`. Past that horizon a changed
+  request under the key is refused with `409 idempotency.key-reused`, as Base
+  Registry Engine, Scheduling, and Casework refuse it, instead of
+  `410 idempotency.expired`: only the exact request is `410`, and every
+  request is once retention deletes the message record after
+  `retention.recordRetentionDays`, since its request hash goes with it. Audit
+  records keep the pseudonym. The upgrade discards existing idempotency
   records, so every key spent before it can be used again, and a retry the
   new runtime receives under a discarded key sends its message a second
   time. Before you run `messagingctl apply` with this release, stop new

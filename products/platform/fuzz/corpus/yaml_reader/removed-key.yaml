@@ -1,0 +1,6 @@
+apiVersion: id.registrystack.org/formats/fuzz/runtime/v1
+kind: FuzzRuntimeConfig
+legacyPort: 8080
+steps:
+  - id: a
+    secret: x

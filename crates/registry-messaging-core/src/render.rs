@@ -41,6 +41,7 @@ pub const MAXIMUM_HTML_BYTES: usize = 256 * 1024;
 
 /// A part of a message.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "kebab-case")]
 pub enum PartKind {
     Subject,
@@ -106,19 +107,15 @@ impl RenderFailure {
     }
 }
 
-/// Check that `source` parses as a template. The engine's message names the
-/// line of an author's own file, which is safe to report to that author.
-pub fn check_syntax(source: &str) -> Result<(), String> {
+/// Check that `source` parses as a template. A refusal carries the line the
+/// engine names, when it names one, and never the engine's message, which
+/// may quote the source.
+pub fn check_syntax(source: &str) -> Result<(), Option<usize>> {
     let environment = environment(PartKind::Text, LocaleStyle::Iso);
     environment
         .template_from_str(source)
         .map(|_| ())
-        .map_err(|error| {
-            let line = error
-                .line()
-                .map_or_else(String::new, |line| format!(" at line {line}"));
-            format!("{}{line}", error.kind())
-        })
+        .map_err(|error| error.line())
 }
 
 /// Render one part with `data` as the root context, in `locale`.
@@ -578,8 +575,7 @@ mod tests {
     #[test]
     fn syntax_errors_are_reported_with_their_line() {
         assert_eq!(check_syntax("Hello {{ name }}"), Ok(()));
-        let error = check_syntax("line one\n{% if %}").unwrap_err();
-        assert!(error.contains("line 2"), "{error}");
+        assert_eq!(check_syntax("line one\n{% if %}"), Err(Some(2)));
     }
 
     #[test]

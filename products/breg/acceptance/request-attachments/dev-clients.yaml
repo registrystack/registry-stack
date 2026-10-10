@@ -1,5 +1,6 @@
 {
-  "version": 1,
+  "apiVersion": "id.registrystack.org/formats/breg/dev-clients/v1alpha1",
+  "kind": "BRegDevClients",
   "clients": [
     {
       "id": "operator",

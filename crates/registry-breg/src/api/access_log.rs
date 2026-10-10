@@ -27,14 +27,11 @@ async fn read(
     State(service): State<Arc<HttpService>>,
     Extension(route): Extension<CompiledRoute>,
     Extension(correlation): Extension<RequestCorrelation>,
-    claims: Option<Extension<VerifiedRequestClaims>>,
+    Authenticated(claims): Authenticated,
     RawQuery(raw_query): RawQuery,
     headers: HeaderMap,
     Path(path): Path<HashMap<String, String>>,
 ) -> Response {
-    let claims = claims
-        .map(|Extension(value)| value)
-        .unwrap_or_else(VerifiedRequestClaims::anonymous);
     let parsed = parse_options(raw_query.as_deref());
     let (options, cursor, limit) = match parsed {
         Ok(value) => value,

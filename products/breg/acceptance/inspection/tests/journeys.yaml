@@ -1,15 +1,16 @@
-apiVersion: registry.registrystack.org/breg-journeys/v1
+apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
 journeys:
   - id: inspection-and-schema-validation
     steps:
       - id: create-inspection
         entity: inspection
         accessProfile: inspection-inspector
-        claims: &inspection_inspector_claims
+        claims:
           principal: synthetic-inspection-inspector
           purpose: facility-inspection
         request:
-          operation: create
+          type: create
           data:
             inspection-code: INSPECTION-SYNTH-001
             facility-code: FACILITY-SYNTH-001
@@ -27,11 +28,13 @@ journeys:
       - id: close-inspection
         entity: inspection
         accessProfile: inspection-inspector
-        claims: *inspection_inspector_claims
+        claims:
+          principal: synthetic-inspection-inspector
+          purpose: facility-inspection
         request:
-          operation: patch
-          recordRef: first-inspection
-          etagRef: first-inspection
+          type: patch
+          recordCapture: first-inspection
+          etagCapture: first-inspection
           changes:
             - field: closed-on
               value: 2026-01-20
@@ -46,10 +49,12 @@ journeys:
       - id: get-closed-inspection
         entity: inspection
         accessProfile: inspection-inspector
-        claims: *inspection_inspector_claims
+        claims:
+          principal: synthetic-inspection-inspector
+          purpose: facility-inspection
         request:
-          operation: get
-          recordRef: closed-inspection
+          type: get
+          recordCapture: closed-inspection
         expect:
           outcome: success
           status: 200
@@ -59,9 +64,11 @@ journeys:
       - id: list-inspections
         entity: inspection
         accessProfile: inspection-inspector
-        claims: *inspection_inspector_claims
+        claims:
+          principal: synthetic-inspection-inspector
+          purpose: facility-inspection
         request:
-          operation: list
+          type: list
         expect:
           outcome: success
           status: 200
@@ -69,9 +76,11 @@ journeys:
       - id: refuse-undeclared-observation-metadata
         entity: inspection-observation
         accessProfile: inspection-inspector
-        claims: *inspection_inspector_claims
+        claims:
+          principal: synthetic-inspection-inspector
+          purpose: facility-inspection
         request:
-          operation: create
+          type: create
           data:
             inspection: 00000000-0000-0000-0000-000000000001
             observed-at: 2026-01-11T09:00:00Z
@@ -92,8 +101,8 @@ journeys:
         claims:
           principal: synthetic-inspection-inspector
         request:
-          operation: get
-          recordRef: closed-inspection
+          type: get
+          recordCapture: closed-inspection
         expect:
           outcome: refusal
           status: 404

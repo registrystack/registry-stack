@@ -11,21 +11,41 @@ use registry_breg::fixtures::{
     execute_schema_test, validate_fixture_journeys, FixtureError, SchemaTestCredentialBinding,
     SchemaTestCredentialBindings, SchemaTestRuntimeSetupError,
 };
+use registry_breg::literal_text::{LiteralText, WRITE_THE_VALUE_OR_A_SECRET_REFERENCE};
 use registry_breg::postgres::{
     BaselineFingerprintDrift, MigrationRehearsalError, SuccessorMigrationRehearsal,
 };
 use registry_breg::runtime_config::{load_runtime_config, RuntimeConfig, RuntimeConfigError};
 use registry_breg::startup;
+use registry_platform_config::SecretReference;
+use registry_platform_yaml::{
+    tagged_union, ApiVersion, Decoded, Diagnostic, Document, EnvelopeRule, Expect, FormatSpec,
+    LocalId, Reader, Report, RetiredApiVersion, Severity,
+};
 use serde::Deserialize;
-use serde_json::Value;
 use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
 use crate::safe_path::{EntryStat, SafeDir, SafeEntry};
 use crate::CapturedPackageCandidate;
 
-const CREDENTIALS_API_VERSION: &str = "registry.registrystack.org/breg-schema-test-credentials/v1";
-const CREDENTIALS_KIND: &str = "SchemaTestCredentials";
+pub(crate) const CREDENTIALS_API_VERSION: &str =
+    "id.registrystack.org/formats/breg/schema-test-credentials/v1";
+pub(crate) const CREDENTIALS_KIND: &str = "BRegSchemaTestCredentials";
+/// The credentials file `bregctl test --credentials` reads.
+pub(crate) const CREDENTIALS_FORMAT: FormatSpec<'static> = FormatSpec {
+    kind: CREDENTIALS_KIND,
+    envelope: EnvelopeRule::ApiVersionKind {
+        api_versions: &[ApiVersion::current(CREDENTIALS_API_VERSION)],
+        retired_api_versions: &[RetiredApiVersion {
+            api_version: "registry.registrystack.org/breg-schema-test-credentials/v1",
+            replacement: "Start the file with `apiVersion: id.registrystack.org/formats/breg/schema-test-credentials/v1` and `kind: BRegSchemaTestCredentials`; the bindings are unchanged.",
+        }],
+    },
+    removed_keys: &[],
+};
+const CREDENTIALS_ACTION: &str =
+    "Bind every step of the packaged journeys exactly once, by its journeyId and stepId.";
 const MAX_CREDENTIAL_DOCUMENT_BYTES: u64 = 64 * 1024;
 const RECEIPT_ARTIFACT_PATH: &str = "schema-test-receipt.json";
 
@@ -71,9 +91,10 @@ pub(crate) enum TestLifecycleError {
     ReviewFingerprint { declared: String, measured: String },
     Rehearsal(Box<MigrationRehearsalError>),
     Journeys { message: String },
-    JourneySyntax { path: String, message: &'static str },
+    JourneyDocument(registry_platform_yaml::Report),
     JourneyStep { path: String, message: String },
     Credentials { path: String, message: String },
+    CredentialsDocument(Report),
     Database,
     FieldPatternSyntax { entity_id: String, field_id: String },
     Execution,
@@ -83,31 +104,44 @@ pub(crate) enum TestLifecycleError {
     Runtime,
 }
 
+/// The schema-test credentials file: one credential for every step of the
+/// packaged journeys, a bearer token only by secret reference (CFG-SEC-1).
 #[derive(Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-struct CredentialDocument {
-    api_version: String,
-    kind: String,
+pub(crate) struct CredentialDocument {
     bindings: Vec<CredentialBindingDocument>,
 }
 
+/// The JSON Schema of the credentials members the reader decodes. The header
+/// is checked and removed before decoding, so the publisher adds it.
+#[cfg(feature = "schema")]
+pub(crate) fn credentials_schema() -> schemars::Schema {
+    schemars::schema_for!(CredentialDocument)
+}
+
 #[derive(Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct CredentialBindingDocument {
-    journey_id: String,
-    step_id: String,
+    journey_id: LocalId,
+    step_id: LocalId,
     credential: CredentialDocumentMode,
 }
 
 #[derive(Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "snake_case", tag = "type")]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(
+    remote = "Self",
+    deny_unknown_fields,
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase"
+)]
+#[cfg_attr(feature = "schema", schemars(!remote, tag = "type"))]
 enum CredentialDocumentMode {
-    Anonymous,
-    Bearer {
-        #[serde(rename = "tokenRef")]
-        token_ref: String,
-    },
+    Bearer { token_ref: SecretReference },
 }
+tagged_union!(CredentialDocumentMode);
 
 pub(crate) fn preflight_output(path: &Path) -> Result<OutputTarget, TestLifecycleError> {
     if !path.is_absolute()
@@ -171,14 +205,13 @@ pub(crate) fn run(
         request.candidate.registry(),
     ) {
         Ok(suite) => suite,
+        Err(registry_breg::fixtures::FixtureError::JourneyDocument(report)) => {
+            return Err(TestLifecycleError::JourneyDocument(report));
+        }
         Err(error) => {
-            return Err(
-                diagnose_fixture_journey_shape(request.candidate.fixture_journeys()).unwrap_or(
-                    TestLifecycleError::Journeys {
-                        message: error.to_string(),
-                    },
-                ),
-            );
+            return Err(TestLifecycleError::Journeys {
+                message: error.to_string(),
+            });
         }
     };
     let credentials = load_credentials(request.credentials, &config, &suite)?;
@@ -277,33 +310,6 @@ pub(crate) fn measure(
     })
 }
 
-fn diagnose_fixture_journey_shape(bytes: &[u8]) -> Option<TestLifecycleError> {
-    let value: Value = serde_norway::from_slice(bytes).ok()?;
-    let journeys = value.get("journeys")?.as_array()?;
-    for (journey_index, journey) in journeys.iter().enumerate() {
-        let steps = journey.get("steps")?.as_array()?;
-        for (step_index, step) in steps.iter().enumerate() {
-            let request = step.get("request")?.as_object()?;
-            if request.get("operation").and_then(Value::as_str) != Some("revise_request") {
-                continue;
-            }
-            if request.contains_key("data") {
-                return Some(TestLifecycleError::JourneySyntax {
-                    path: format!("journeys[{journey_index}].steps[{step_index}].request.data"),
-                    message: "revise_request fixture steps require rebase directly under request; remove the data wrapper",
-                });
-            }
-            if !request.get("rebase").is_some_and(Value::is_boolean) {
-                return Some(TestLifecycleError::JourneySyntax {
-                    path: format!("journeys[{journey_index}].steps[{step_index}].request.rebase"),
-                    message: "revise_request fixture steps require a boolean rebase field",
-                });
-            }
-        }
-    }
-    None
-}
-
 fn load_test_runtime_config(path: &Path) -> Result<RuntimeConfig, TestLifecycleError> {
     if !path.is_absolute() || super::has_parent_component(path) {
         return Err(TestLifecycleError::RuntimeConfigPath);
@@ -317,110 +323,122 @@ fn load_credentials(
     suite: &registry_breg::fixtures::ValidatedFixtureJourneys,
 ) -> Result<SchemaTestCredentialBindings, TestLifecycleError> {
     let bytes = read_credentials(path)?;
-    let raw = std::str::from_utf8(&bytes).map_err(|_| {
-        credentials_refusal("credentials", "the credentials document must be UTF-8")
-    })?;
-    let document: CredentialDocument = serde_norway::from_str(raw).map_err(|error| {
-        let location = error
-            .location()
-            .map(|location| {
-                format!(
-                    " at line {} column {}",
-                    location.line(),
-                    location.column()
-                )
-            })
-            .unwrap_or_default();
-        credentials_refusal(
-            "credentials",
-            format!("the credentials document could not be parsed{location}; write a strict SchemaTestCredentials document"),
-        )
-    })?;
-    if document.api_version != CREDENTIALS_API_VERSION {
-        return Err(credentials_refusal(
-            "apiVersion",
-            format!("the credentials document apiVersion must be {CREDENTIALS_API_VERSION}"),
-        ));
-    }
-    if document.kind != CREDENTIALS_KIND {
-        return Err(credentials_refusal(
-            "kind",
-            format!("the credentials document kind must be {CREDENTIALS_KIND}"),
-        ));
-    }
+    let decoded = read_credentials_document(&path.display().to_string(), &bytes)
+        .map_err(TestLifecycleError::CredentialsDocument)?;
     let resolver = config.secret_resolver().map_err(|_| {
         credentials_refusal(
             "credentials",
             "the runtime configuration provides no usable secret resolver for credential references",
         )
     })?;
+    let document = &decoded.document;
     let journey_ids = suite.journey_ids();
     let mut bound_steps = std::collections::BTreeSet::new();
-    let mut bindings = Vec::with_capacity(document.bindings.len());
-    for (index, binding) in document.bindings.into_iter().enumerate() {
-        if !journey_ids.contains(&binding.journey_id.as_str()) {
-            return Err(credentials_refusal(
-                format!("bindings[{index}].journeyId"),
-                format!(
-                    "the packaged journey suite has no journey with this id; it declares {}",
-                    journey_ids.join(", ")
-                ),
+    let mut problems = Vec::new();
+    let mut bindings = Vec::with_capacity(decoded.value.bindings.len());
+    for (index, binding) in decoded.value.bindings.into_iter().enumerate() {
+        let journey_id = binding.journey_id.into_string();
+        let step_id = binding.step_id.into_string();
+        if !journey_ids.contains(&journey_id.as_str()) {
+            problems.push(document.diagnostic_at_value(
+                Severity::Error,
+                "breg.credentials.unknown-journey",
+                &format!("/bindings/{index}/journeyId"),
+                "the packaged journey suite has no journey with this id",
+                "Name a journey of tests/journeys.yaml in journeyId, or remove the binding.",
             ));
+            continue;
         }
-        if !bound_steps.insert((binding.journey_id.clone(), binding.step_id.clone())) {
-            return Err(credentials_refusal(
-                format!("bindings[{index}]"),
-                format!(
-                    "journey {} step {} already has a credential binding; bind every step exactly once",
-                    binding.journey_id, binding.step_id
-                ),
-            ));
+        if !bound_steps.insert((journey_id.clone(), step_id.clone())) {
+            problems.push(duplicate_binding(document, index));
+            continue;
         }
-        let journey_id = binding.journey_id.clone();
-        let step_id = binding.step_id.clone();
-        let binding = match binding.credential {
-            CredentialDocumentMode::Anonymous => {
-                SchemaTestCredentialBinding::anonymous(binding.journey_id, binding.step_id)
-            }
+        match binding.credential {
             CredentialDocumentMode::Bearer { token_ref } => {
-                if !is_protected_secret_reference(&token_ref) {
-                    return Err(credentials_refusal(
-                        format!("bindings[{index}].credential.tokenRef"),
-                        format!("the bearer credential for journey {journey_id} step {step_id} must reference a protected secret, either secret:file/<name> or secret:env/<NAME>"),
-                    ));
+                let pointer = format!("/bindings/{index}/credential/tokenRef");
+                let token = resolver
+                    .resolve_reference(&token_ref)
+                    .ok()
+                    .and_then(|secret| {
+                        std::str::from_utf8(secret.expose_secret())
+                            .ok()
+                            .map(|token| Zeroizing::new(token.to_owned()))
+                    });
+                match token {
+                    Some(token) => bindings.push(SchemaTestCredentialBinding::bearer(
+                        journey_id, step_id, token,
+                    )),
+                    None => problems.push(document.diagnostic_at_value(
+                        Severity::Error,
+                        "breg.credentials.unresolved-secret",
+                        &pointer,
+                        "the referenced secret could not be resolved as UTF-8 text",
+                        "Store the token as UTF-8 text under this reference, through a secret provider the runtime configuration enables.",
+                    )),
                 }
-                let secret = resolver.resolve(&token_ref).map_err(|_| {
-                    credentials_refusal(
-                        format!("bindings[{index}].credential.tokenRef"),
-                        format!("the secret referenced for journey {journey_id} step {step_id} could not be resolved"),
-                    )
-                })?;
-                let token = std::str::from_utf8(secret.expose_secret())
-                    .map_err(|_| {
-                        credentials_refusal(
-                            format!("bindings[{index}].credential.tokenRef"),
-                            format!("the secret referenced for journey {journey_id} step {step_id} is not UTF-8"),
-                        )
-                    })?
-                    .to_owned();
-                SchemaTestCredentialBinding::bearer(
-                    binding.journey_id,
-                    binding.step_id,
-                    Zeroizing::new(token),
-                )
             }
-        };
-        bindings.push(binding);
+        }
+    }
+    if !problems.is_empty() {
+        return Err(credentials_document_refusal(problems));
     }
     SchemaTestCredentialBindings::new(suite, bindings).map_err(|_| {
-        credentials_refusal(
-            "bindings",
-            format!(
-                "bind exactly one credential to every step of journeys {}; anonymous steps require an anonymous binding and protected steps require a well-formed bearer token",
-                journey_ids.join(", ")
-            ),
-        )
+        credentials_document_refusal(vec![document.diagnostic_at_value(
+            Severity::Error,
+            "breg.credentials.incomplete-bindings",
+            "/bindings",
+            "the bindings do not give exactly one credential to every step of the packaged journeys; every step requires a well-formed bearer token",
+            CREDENTIALS_ACTION,
+        )])
     })
+}
+
+/// Read a schema-test credentials file through the shared reader. The
+/// reader refuses the shape; journey coverage and secret resolution are
+/// checked by `bregctl test` against the packaged suite.
+pub(crate) fn read_credentials_document(
+    file: &str,
+    bytes: &[u8],
+) -> Result<Decoded<CredentialDocument>, Report> {
+    Reader::new(file)
+        .with_hook(&mut LiteralText {
+            remedy: WRITE_THE_VALUE_OR_A_SECRET_REFERENCE,
+        })
+        .decode::<CredentialDocument>(bytes, &Expect::one(&CREDENTIALS_FORMAT))
+}
+
+/// Check a credentials document `bregctl check --file` read: every binding
+/// names its journey step once. Whether each journey exists, and each
+/// secret reference resolves, is checked when `bregctl test` reads the file
+/// beside its package and runtime configuration.
+pub(crate) fn check_credentials(document: &Document) -> Result<Vec<Diagnostic>, Report> {
+    let credentials = document.decode::<CredentialDocument>()?;
+    let mut bound_steps = std::collections::BTreeSet::new();
+    Ok(credentials
+        .bindings
+        .iter()
+        .enumerate()
+        .filter(|(_, binding)| {
+            !bound_steps.insert((binding.journey_id.as_str(), binding.step_id.as_str()))
+        })
+        .map(|(index, _)| duplicate_binding(document, index))
+        .collect())
+}
+
+fn duplicate_binding(document: &Document, index: usize) -> Diagnostic {
+    document.diagnostic_at_value(
+        Severity::Error,
+        "breg.credentials.duplicate-binding",
+        &format!("/bindings/{index}"),
+        "an earlier binding already gives this journey step a credential",
+        "Remove this binding; bind every step exactly once.",
+    )
+}
+
+fn credentials_document_refusal(diagnostics: Vec<Diagnostic>) -> TestLifecycleError {
+    let mut report = Report::new(diagnostics);
+    report.set_files_checked(1);
+    TestLifecycleError::CredentialsDocument(report)
 }
 
 fn credentials_refusal(path: impl Into<String>, message: impl Into<String>) -> TestLifecycleError {
@@ -686,30 +704,6 @@ fn sha256(bytes: &[u8]) -> String {
     encoded
 }
 
-fn is_protected_secret_reference(value: &str) -> bool {
-    let Some(name) = value.strip_prefix("secret:env/") else {
-        return is_file_secret_reference(value);
-    };
-    let bytes = name.as_bytes();
-    matches!(bytes.first(), Some(b'A'..=b'Z'))
-        && bytes.len() <= 128
-        && bytes[1..]
-            .iter()
-            .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || *byte == b'_')
-}
-
-fn is_file_secret_reference(value: &str) -> bool {
-    let Some(name) = value.strip_prefix("secret:file/") else {
-        return false;
-    };
-    let bytes = name.as_bytes();
-    matches!(bytes.first(), Some(b'a'..=b'z'))
-        && bytes.len() <= 128
-        && bytes[1..].iter().all(|byte| {
-            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'.' | b'_' | b'-')
-        })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -718,6 +712,153 @@ mod tests {
     use std::path::PathBuf;
 
     static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    const CREDENTIALS_EXAMPLE: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../products/breg/examples/formats/credentials.yaml"
+    ));
+
+    fn credentials_codes(source: &str) -> Vec<(String, String, Option<usize>)> {
+        let Err(report) = read_credentials_document("credentials.yaml", source.as_bytes()) else {
+            panic!("the credentials document is refused");
+        };
+        report
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| {
+                (
+                    diagnostic.code.clone(),
+                    diagnostic.path.clone(),
+                    diagnostic.source.as_ref().and_then(|source| source.line),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_registered_credentials_example_reads() {
+        let decoded = read_credentials_document("credentials.yaml", CREDENTIALS_EXAMPLE.as_bytes())
+            .expect("the registered example reads");
+        let modes = decoded
+            .value
+            .bindings
+            .iter()
+            .map(|binding| match &binding.credential {
+                CredentialDocumentMode::Bearer { .. } => "bearer",
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(modes, ["bearer", "bearer", "bearer"]);
+    }
+
+    #[test]
+    fn credentials_with_a_retired_header_name_the_current_one() {
+        let current = "apiVersion: id.registrystack.org/formats/breg/schema-test-credentials/v1\n";
+        let retired = "apiVersion: registry.registrystack.org/breg-schema-test-credentials/v1\n";
+        let body = "bindings: []\n";
+
+        let old_kind = credentials_codes(&format!("{retired}kind: SchemaTestCredentials\n{body}"));
+        assert_eq!(
+            old_kind,
+            [
+                (
+                    "config.retired-api-version".to_owned(),
+                    "/apiVersion".to_owned(),
+                    Some(1)
+                ),
+                ("config.wrong-kind".to_owned(), "/kind".to_owned(), Some(2))
+            ]
+        );
+
+        let source = format!("{retired}kind: BRegSchemaTestCredentials\n{body}");
+        let Err(report) = read_credentials_document("credentials.yaml", source.as_bytes()) else {
+            panic!("the retired header is refused");
+        };
+        let [diagnostic] = report.diagnostics() else {
+            panic!("one diagnostic");
+        };
+        assert_eq!(diagnostic.code, "config.retired-api-version");
+        assert!(
+            diagnostic
+                .suggested_action
+                .contains(CREDENTIALS_API_VERSION),
+            "{}",
+            diagnostic.suggested_action
+        );
+
+        read_credentials_document(
+            "credentials.yaml",
+            format!("{current}kind: BRegSchemaTestCredentials\n{body}").as_bytes(),
+        )
+        .expect("the current header reads");
+    }
+
+    #[test]
+    fn every_unknown_credentials_key_is_reported_at_its_position() {
+        let source = "apiVersion: id.registrystack.org/formats/breg/schema-test-credentials/v1
+kind: BRegSchemaTestCredentials
+bindings:
+  - journeyId: journey
+    stepId: step
+    credential:
+      type: bearer
+      tokenRef: secret:file/token
+      scope: unused
+    note: unused
+";
+        assert_eq!(
+            credentials_codes(source),
+            [
+                (
+                    "config.unknown-key".to_owned(),
+                    "/bindings/0/credential/scope".to_owned(),
+                    Some(9)
+                ),
+                (
+                    "config.unknown-key".to_owned(),
+                    "/bindings/0/note".to_owned(),
+                    Some(10)
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_credential_type_is_a_kebab_case_tag_and_a_reference_never_a_literal() {
+        let binding = |credential: &str| {
+            format!(
+                "apiVersion: id.registrystack.org/formats/breg/schema-test-credentials/v1
+kind: BRegSchemaTestCredentials
+bindings:
+  - journeyId: journey
+    stepId: step
+    credential:
+{credential}"
+            )
+        };
+        let codes = credentials_codes(&binding(
+            "      type: Bearer\n      tokenRef: secret:file/token\n",
+        ));
+        assert_eq!(codes[0].0, "config.unknown-variant");
+        assert_eq!(codes[0].1, "/bindings/0/credential/type");
+
+        // The registry serves authenticated callers only, so a step has no
+        // credential other than a bearer token.
+        let codes = credentials_codes(&binding("      type: anonymous\n"));
+        assert_eq!(codes[0].0, "config.unknown-variant");
+        assert_eq!(codes[0].1, "/bindings/0/credential/type");
+
+        let source = binding("      type: bearer\n      tokenRef: aaa.bbb.ccc\n");
+        let Err(report) = read_credentials_document("credentials.yaml", source.as_bytes()) else {
+            panic!("a literal token is refused");
+        };
+        let [diagnostic] = report.diagnostics() else {
+            panic!("one diagnostic");
+        };
+        assert_eq!(diagnostic.code, "config.invalid-value");
+        assert_eq!(diagnostic.path, "/bindings/0/credential/tokenRef");
+        assert!(!diagnostic.message.contains("aaa.bbb.ccc"));
+        assert!(!diagnostic.suggested_action.contains("aaa.bbb.ccc"));
+    }
 
     struct TestDirectory {
         path: PathBuf,
@@ -1002,47 +1143,110 @@ mod tests {
         assert!(!report.to_string().contains("recreate"));
     }
 
-    #[test]
-    fn revise_request_data_body_reports_field_path() {
-        let source = br#"apiVersion: registry.registrystack.org/breg-journeys/v1
-journeys:
-  - id: stale-flow
-    steps:
-      - id: rebase-primary-request
-        request:
-          operation: revise_request
-          data: {rebase: true}
-"#;
-
-        let error = diagnose_fixture_journey_shape(source).expect("specific diagnostic");
-        match error {
-            TestLifecycleError::JourneySyntax { path, message } => {
-                assert_eq!(path, "journeys[0].steps[0].request.data");
-                assert!(message.contains("remove the data wrapper"));
-            }
-            other => panic!("unexpected diagnostic: {other:?}"),
+    /// The shared reader's refusal of a journeys document, as `bregctl test`
+    /// receives it for a project at `/project`.
+    fn journey_refusal(source: &[u8]) -> crate::DocumentRefusal {
+        let Err(FixtureError::JourneyDocument(report)) =
+            registry_breg::fixtures::journey_step_profiles(source)
+        else {
+            panic!("the reader refuses the journeys document");
+        };
+        crate::DocumentRefusal {
+            command: "test",
+            subject: "the fixture journeys",
+            report: crate::report_in_project(report, Path::new("/project")),
         }
     }
 
+    fn written(refusal: &crate::DocumentRefusal, format: crate::OutputFormat) -> (u8, String) {
+        let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
+        let code = crate::write_document_failure(refusal, format, &mut stdout, &mut stderr);
+        let text = if format == crate::OutputFormat::Json {
+            assert!(stderr.is_empty());
+            stdout
+        } else {
+            assert!(stdout.is_empty());
+            stderr
+        };
+        let code = if code == std::process::ExitCode::from(crate::DOMAIN_REFUSAL_EXIT) {
+            crate::DOMAIN_REFUSAL_EXIT
+        } else {
+            u8::MAX
+        };
+        (code, String::from_utf8(text).expect("output is UTF-8"))
+    }
+
     #[test]
-    fn revise_request_missing_rebase_reports_field_path() {
-        let source = br#"apiVersion: registry.registrystack.org/breg-journeys/v1
+    fn revise_request_data_body_prints_the_reader_diagnostic_with_its_position() {
+        let source = br#"apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
 journeys:
   - id: stale-flow
     steps:
       - id: rebase-primary-request
+        accessProfile: requester
         request:
-          operation: revise_request
+          type: revise-request
+          recordCapture: request
+          etagCapture: request
+          data: {rebase: true}
+        expect: {outcome: success, status: 200}
 "#;
 
-        let error = diagnose_fixture_journey_shape(source).expect("specific diagnostic");
-        match error {
-            TestLifecycleError::JourneySyntax { path, message } => {
-                assert_eq!(path, "journeys[0].steps[0].request.rebase");
-                assert!(message.contains("boolean rebase"));
-            }
-            other => panic!("unexpected diagnostic: {other:?}"),
-        }
+        let (code, human) = written(&journey_refusal(source), crate::OutputFormat::Human);
+
+        assert_eq!(code, crate::DOMAIN_REFUSAL_EXIT);
+        assert_eq!(
+            human,
+            "bregctl test refused the fixture journeys.
+error[config.missing-key] /project/tests/journeys.yaml:8:9 /journeys/0/steps/0/request
+  the required member `rebase` is missing
+  next: Add `rebase`.
+error[config.unknown-key] /project/tests/journeys.yaml:12:11 /journeys/0/steps/0/request/data
+  `data` is not a member of this mapping
+  next: Remove `data`; the accepted keys are `type`, `recordCapture`, `etagCapture`, `rebase`.
+2 errors, 0 warnings in 1 file
+"
+        );
+    }
+
+    #[test]
+    fn revise_request_missing_rebase_reports_the_reader_shape_in_json() {
+        let source = br#"apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
+journeys:
+  - id: stale-flow
+    steps:
+      - id: rebase-primary-request
+        accessProfile: requester
+        request:
+          type: revise-request
+          recordCapture: request
+          etagCapture: request
+        expect: {outcome: success, status: 200}
+"#;
+
+        let (code, json) = written(&journey_refusal(source), crate::OutputFormat::Json);
+        let report: serde_json::Value = serde_json::from_str(&json).expect("JSON report");
+
+        assert_eq!(code, crate::DOMAIN_REFUSAL_EXIT);
+        assert_eq!(report["ok"], false);
+        assert_eq!(report["command"], "test");
+        let diagnostics = report["diagnostics"].as_array().expect("diagnostics");
+        assert_eq!(diagnostics.len(), 1, "{json}");
+        let diagnostic = &diagnostics[0];
+        assert_eq!(diagnostic["severity"], "error");
+        assert_eq!(diagnostic["code"], "config.missing-key");
+        assert_eq!(diagnostic["artifact"], "BRegJourneys");
+        assert_eq!(diagnostic["path"], "/journeys/0/steps/0/request");
+        assert!(
+            diagnostic["message"].as_str().unwrap().contains("rebase"),
+            "{json}"
+        );
+        assert_eq!(
+            diagnostic["source"],
+            serde_json::json!({"file": "/project/tests/journeys.yaml", "line": 8, "column": 9})
+        );
     }
 
     /// Deterministic ancestor-swap regressions for the receipt and credentials

@@ -11,10 +11,11 @@ use registry_breg::contract::{parse_module_json, Operation};
 use registry_breg::{compile_project, parse_project_json, CompileFailure, CompileProfile};
 use serde_json::{json, Value};
 
-const OPERATION_FORBIDDEN: &str = "access_profile.standing_agent.operation_forbidden";
-const DIRECT_MUTATION_FORBIDDEN: &str = "access_profile.standing_agent.direct_mutation_forbidden";
-const ACTION_FORBIDDEN: &str = "access_profile.standing_agent.action_forbidden";
-const MODULE_TASK_GRANT_FORBIDDEN: &str = "access_profile.task_grant.module_forbidden";
+const OPERATION_FORBIDDEN: &str = "breg.access-profile.standing-agent-operation-forbidden";
+const DIRECT_MUTATION_FORBIDDEN: &str =
+    "breg.access-profile.standing-agent-direct-mutation-forbidden";
+const ACTION_FORBIDDEN: &str = "breg.access-profile.standing-agent-action-forbidden";
+const MODULE_TASK_GRANT_FORBIDDEN: &str = "breg.access-profile.task-grant-module-forbidden";
 
 fn project() -> Value {
     json!({
@@ -63,42 +64,42 @@ fn project() -> Value {
         ],
         "accessProfiles": [
             {
-                "id": "clerk", "default": true, "principalClaim": "registry_principal",
+                "id": "clerk", "default": true, "principalClaim": "registry_principal", "requiredScopes": "unrestricted",
                 "actorKind": "human", "requesterClients": ["clerk-portal"],
                 "permissions": [
                     {
                         "entity": "case",
                         "operations": ["create", "get", "list", "import"],
-                        "readableFields": ["label"], "writableFields": ["label"], "rowBoundaries": []
+                        "readableFields": ["label"], "writableFields": ["label"], "rowBoundaries": "unrestricted"
                     },
                     {
                         "entity": "correction",
                         "operations": ["create", "get", "list", "patch", "submit_request", "revise_request", "cancel_request", "apply_request"],
-                        "readableFields": ["case", "label"], "writableFields": ["case", "label"], "rowBoundaries": [],
-                        "applyTargets": [{"entity": "case", "rowBoundaries": []}]
+                        "readableFields": ["case", "label"], "writableFields": ["case", "label"], "rowBoundaries": "unrestricted",
+                        "applyTargets": [{"entity": "case", "rowBoundaries": "unrestricted"}]
                     },
                     {
                         "entity": "note",
                         "operations": ["create", "get", "list", "patch", "tombstone", "batch"],
-                        "readableFields": ["label"], "writableFields": ["label"], "rowBoundaries": []
+                        "readableFields": ["label"], "writableFields": ["label"], "rowBoundaries": "unrestricted"
                     },
                     {
                         "action": "relabel-note", "operations": ["invoke"],
-                        "targets": [{"entity": "note", "rowBoundaries": []}], "results": ["relabelled"]
+                        "targets": [{"entity": "note", "rowBoundaries": "unrestricted"}], "results": ["relabelled"]
                     }
                 ]
             },
             {
-                "id": "assistant", "principalClaim": "registry_principal",
+                "id": "assistant", "principalClaim": "registry_principal", "requiredScopes": "unrestricted",
                 "actorKind": "agent", "requesterClients": ["assistant-client"],
                 "permissions": [
-                    {"entity": "case", "operations": ["get", "list"], "readableFields": ["label"], "rowBoundaries": []},
+                    {"entity": "case", "operations": ["get", "list"], "readableFields": ["label"], "rowBoundaries": "unrestricted"},
                     {
                         "entity": "correction",
                         "operations": ["create", "get", "list", "patch"],
-                        "readableFields": ["case", "label"], "writableFields": ["case", "label"], "rowBoundaries": []
+                        "readableFields": ["case", "label"], "writableFields": ["case", "label"], "rowBoundaries": "unrestricted"
                     },
-                    {"entity": "note", "operations": ["get", "list"], "readableFields": ["label"], "writableFields": ["label"], "rowBoundaries": []}
+                    {"entity": "note", "operations": ["get", "list"], "readableFields": ["label"], "writableFields": ["label"], "rowBoundaries": "unrestricted"}
                 ]
             }
         ]
@@ -148,7 +149,7 @@ fn standing_agent_may_read_and_author_change_request_drafts() {
     let registry = compile(&project()).expect("reads and draft authoring compile");
     let draft = &registry.entities()["correction"].access_profiles["assistant"];
     assert_eq!(
-        draft.operations,
+        *draft.operations,
         BTreeSet::from([
             Operation::Create,
             Operation::Get,
@@ -235,7 +236,7 @@ fn with_assistant_action(value: &mut Value) {
         .expect("permissions array")
         .push(json!({
             "action": "relabel-note", "operations": ["invoke"],
-            "targets": [{"entity": "note", "rowBoundaries": []}], "results": ["relabelled"]
+            "targets": [{"entity": "note", "rowBoundaries": "unrestricted"}], "results": ["relabelled"]
         }));
 }
 
@@ -300,7 +301,8 @@ fn module_contributed_standing_agent_profiles_meet_the_same_ceiling() {
                         "id": "module-assistant", "principalClaim": "registry_principal",
                         "actorKind": "agent", "requesterClients": ["assistant-client"],
                         "operations": ["get", operation],
-                        "readableFields": ["label"], "writableFields": ["label"], "rowBoundaries": []
+                        "readableFields": ["label"], "writableFields": ["label"],
+                        "requiredScopes": "unrestricted", "rowBoundaries": "unrestricted"
                     }]
                 }]
             }))
@@ -351,7 +353,7 @@ fn task_grant_and_human_profiles_keep_their_ceilings() {
         .push(json!("apply_request"));
     let failure = refused(compile(&delegated_apply), "a task grant still cannot apply");
     let apply_codes = codes(&failure);
-    assert!(apply_codes.contains(&"access_profile.task_grant.operation_forbidden"));
+    assert!(apply_codes.contains(&"breg.access-profile.task-grant-operation-forbidden"));
     assert!(!apply_codes.contains(&OPERATION_FORBIDDEN));
 
     let mut delegated_direct = delegated;
@@ -362,7 +364,7 @@ fn task_grant_and_human_profiles_keep_their_ceilings() {
         "a task grant still cannot write directly",
     );
     let direct_codes = codes(&failure);
-    assert!(direct_codes.contains(&"access_profile.task_grant.direct_mutation_forbidden"));
+    assert!(direct_codes.contains(&"breg.access-profile.task-grant-direct-mutation-forbidden"));
     assert!(!direct_codes.contains(&DIRECT_MUTATION_FORBIDDEN));
 
     let mut delegated_action = project();
@@ -375,7 +377,7 @@ fn task_grant_and_human_profiles_keep_their_ceilings() {
         "a task grant still cannot invoke an immediate action",
     );
     let action_codes = codes(&failure);
-    assert!(action_codes.contains(&"access_profile.task_grant.direct_mutation_forbidden"));
+    assert!(action_codes.contains(&"breg.access-profile.task-grant-direct-mutation-forbidden"));
     assert!(!action_codes.contains(&ACTION_FORBIDDEN));
 
     let mut delegated_import = project();
@@ -389,7 +391,7 @@ fn task_grant_and_human_profiles_keep_their_ceilings() {
         "a task grant still cannot import records",
     );
     let import_codes = codes(&failure);
-    assert!(import_codes.contains(&"access_profile.task_grant.direct_mutation_forbidden"));
+    assert!(import_codes.contains(&"breg.access-profile.task-grant-direct-mutation-forbidden"));
     assert!(!import_codes.contains(&DIRECT_MUTATION_FORBIDDEN));
 }
 
@@ -407,7 +409,8 @@ fn module_contributed_profiles_cannot_declare_a_task_grant() {
         "actorKind": "agent", "requesterClients": ["assistant-client"],
         "taskGrant": {"sourceIssuer": "http://not-https.example", "permissions": []},
         "operations": ["get", "list", "patch"],
-        "readableFields": ["label"], "writableFields": ["label"], "rowBoundaries": []
+        "readableFields": ["label"], "writableFields": ["label"],
+                        "requiredScopes": "unrestricted", "rowBoundaries": "unrestricted"
     });
     for module in [
         json!({

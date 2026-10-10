@@ -104,6 +104,8 @@ close the OpenCRVS-specific request and extraction decisions.
 Replace `sources/opencrvs-birth-certificate.yaml` with:
 
 ```yaml
+apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1
+kind: EvidenceSource
 transport: http-json
 baseUrl: https://events.farajaland-integration.opencrvs.dev
 posture: record-transformed
@@ -341,6 +343,8 @@ search response does not provide a reviewed human-readable place label.
 Create `questions/birth-certificate.yaml`:
 
 ```yaml
+apiVersion: id.registrystack.org/formats/evidence/question/v1alpha1
+kind: EvidenceQuestion
 id: birth-certificate
 question: What birth details are recorded for this person?
 purpose: civil-registration-extract

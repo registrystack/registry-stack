@@ -1,16 +1,17 @@
-apiVersion: registry.registrystack.org/breg-journeys/v1
+apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
 journeys:
   - id: widget-lifecycle
     steps:
       - id: create-widget
         entity: widget
         accessProfile: operator
-        claims: &operator_claims
+        claims:
           principal: fixture-operator
           purpose: case-management
           directClaims: {jurisdiction: zone-a}
         request:
-          operation: create
+          type: create
           data: {jurisdiction: zone-a, label: first, note: initial, quantity: 1}
         expect:
           outcome: success
@@ -20,8 +21,11 @@ journeys:
       - id: get-widget
         entity: widget
         accessProfile: operator
-        claims: *operator_claims
-        request: {operation: get, recordRef: first-widget}
+        claims:
+          principal: fixture-operator
+          purpose: case-management
+          directClaims: {jurisdiction: zone-a}
+        request: {type: get, recordCapture: first-widget}
         expect:
           outcome: success
           status: 200
@@ -29,17 +33,23 @@ journeys:
       - id: list-widgets
         entity: widget
         accessProfile: operator
-        claims: *operator_claims
-        request: {operation: list}
+        claims:
+          principal: fixture-operator
+          purpose: case-management
+          directClaims: {jurisdiction: zone-a}
+        request: {type: list}
         expect: {outcome: success, status: 200, count: 1}
       - id: patch-widget
         entity: widget
         accessProfile: operator
-        claims: *operator_claims
+        claims:
+          principal: fixture-operator
+          purpose: case-management
+          directClaims: {jurisdiction: zone-a}
         request:
-          operation: patch
-          recordRef: first-widget
-          etagRef: first-widget
+          type: patch
+          recordCapture: first-widget
+          etagCapture: first-widget
           changes:
             - {field: note, value: revised}
         expect:
@@ -50,12 +60,15 @@ journeys:
       - id: batch-create-widgets
         entity: widget
         accessProfile: operator
-        claims: *operator_claims
+        claims:
+          principal: fixture-operator
+          purpose: case-management
+          directClaims: {jurisdiction: zone-a}
         request:
-          operation: batch
+          type: batch
           items:
-            - {operation: create, data: {jurisdiction: zone-a, label: second, quantity: 2}}
-            - {operation: create, data: {jurisdiction: zone-a, label: third, quantity: 3}}
+            - {type: create, data: {jurisdiction: zone-a, label: second, quantity: 2}}
+            - {type: create, data: {jurisdiction: zone-a, label: third, quantity: 3}}
         expect: {outcome: success, status: 200, count: 2}
       - id: concealed-without-purpose
         entity: widget
@@ -63,7 +76,7 @@ journeys:
         claims:
           principal: fixture-operator
           directClaims: {jurisdiction: zone-a}
-        request: {operation: get, recordRef: revised-widget}
+        request: {type: get, recordCapture: revised-widget}
         expect:
           outcome: refusal
           status: 404

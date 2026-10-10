@@ -1,4 +1,5 @@
-apiVersion: registry.registrystack.org/scheduling-fixture/v1alpha1
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/scheduling/fixture/fixture.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/scheduling/fixture/v1alpha1
 kind: SchedulingFixture
 name: counter-stations
 now: 2026-10-05T00:00:00Z
@@ -10,12 +11,9 @@ facts:
     - id: update-stations
       members:
         - resourceId: station-1
-          capabilities: []
           available: true
         - resourceId: station-2
-          capabilities: []
           available: true
-initial: []
 cases:
   - name: first-caller-takes-a-station
     request:
@@ -26,10 +24,8 @@ cases:
         attendees: 1
       duplicateKey: subject:one
       policyRevision: 1
-      capabilities: []
-      prerequisites: []
     expect:
-      outcome: admitted
+      type: admitted
       units: 1
       resource: station-1
   - name: same-key-retry-is-refused
@@ -41,10 +37,8 @@ cases:
         attendees: 1
       duplicateKey: subject:one
       policyRevision: 1
-      capabilities: []
-      prerequisites: []
     expect:
-      outcome: refused
+      type: refused
       code: booking.duplicate-active
   - name: second-caller-gets-the-other-station
     request:
@@ -55,10 +49,8 @@ cases:
         attendees: 1
       duplicateKey: subject:two
       policyRevision: 1
-      capabilities: []
-      prerequisites: []
     expect:
-      outcome: admitted
+      type: admitted
       units: 1
       resource: station-2
   - name: both-stations-busy-refuses-another-caller
@@ -70,8 +62,6 @@ cases:
         attendees: 1
       duplicateKey: subject:three
       policyRevision: 1
-      capabilities: []
-      prerequisites: []
     expect:
-      outcome: refused
+      type: refused
       code: capacity.exhausted

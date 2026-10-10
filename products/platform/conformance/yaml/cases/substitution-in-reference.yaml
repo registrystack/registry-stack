@@ -1,0 +1,14 @@
+id: substitution-in-reference
+rules: [CFG-SEC-2, CFG-SEC-3]
+summary: A substitution expression in a member ending in `Ref` is refused at the value, without reading the variable.
+appliesTo:
+  audiences: [operator]
+mutation:
+  append: |
+    conformanceRef: "${REGISTRY_CONFORMANCE_VALUE}"
+expect:
+  exit: 1
+  diagnostics:
+    - code: config.substitution-not-allowed
+      path: /conformanceRef
+      at: {line: 1, column: 17}

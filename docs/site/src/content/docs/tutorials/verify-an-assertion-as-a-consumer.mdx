@@ -110,6 +110,14 @@ tutorial verified:
 It opens no listener, contacts no issuer, fetches no discovery document, and calls no source. The
 named JWKS file is the complete trust set for this verification.
 
+A policy `evidence verify` cannot read fails as `stored response verification failed (malformed)`,
+which says nothing about where the policy is wrong. Run
+`evidence check-policy --verification-policy verification-policy.json` to read the policy exactly
+as `verify` reads it and report every problem with its line, column, and code, without repeating a
+value written in the policy. It exits `0` when the policy reads, `1` when it was refused, and `3`
+when the file could not be read. A holder-bound policy takes `--holder-bound-policy` instead, as
+`evidence verify-presentation` reads it (`crates/registry-evidence/src/cli.rs`).
+
 `authentic` and `currently-valid` answer different questions. An expired stored response can remain
 authentic evidence of what was signed and accepted at an earlier decision time. It must not be used
 as a current answer. Record the instant at which your application made its decision and use that

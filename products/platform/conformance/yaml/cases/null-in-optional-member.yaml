@@ -1,0 +1,14 @@
+id: null-in-optional-member
+rules: [CFG-EMPTY-1, CFG-DIAG-6]
+summary: A `~` in an optional text member is refused at the value; absence has one spelling, the omitted key.
+mutation:
+  member:
+    role: optionalText
+    value: "~"
+expect:
+  exit: 1
+  diagnostics:
+    - code: config.null-value
+      path: "{pointer}"
+      at: {line: 1, column: 1}
+      suggestedAction: Give a value, or remove the key if the member is optional.

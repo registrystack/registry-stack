@@ -112,7 +112,7 @@ accessProfiles:
     requiredScopes: ['address-correction:self']
     permissions:
       - entity: person-address
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         membershipBoundaries:
           - {field: subject, membershipEntity: self-service-link, membershipKeyField: subject, principalField: principal, activeField: active}
         operations: [get, list]
@@ -139,7 +139,7 @@ accessProfiles:
         writableFields: [new-address-line, new-locality, new-postal-code]
         requestVisibility: owner
       - entity: person-address
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         membershipBoundaries:
           - {field: subject, membershipEntity: self-service-link, membershipKeyField: subject, principalField: principal, activeField: active}
         operations: [get]
@@ -151,7 +151,7 @@ accessProfiles:
     requiredScopes: ['address-correction:review']
     permissions:
       - entity: address-correction-request
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [get, list]
         readableFields: [address, new-address-line, new-locality, new-postal-code]
   - id: applier
@@ -161,23 +161,23 @@ accessProfiles:
     requiredScopes: ['address-correction:apply']
     permissions:
       - entity: address-correction-request
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [get, apply_request]
         readableFields: [address, new-address-line, new-locality, new-postal-code]
         applyTargets:
-          - {entity: person-address, rowBoundaries: []}
+          - {entity: person-address, rowBoundaries: unrestricted}
   - id: steward
     principalClaim: sub
     actorKind: human
     requesterClients: [registry-staff-console]
     requiredScopes: ['registry:steward']
     permissions:
-      - {entity: person, rowBoundaries: [], operations: [create, get, list], readableFields: [person-code, family-name, given-name], writableFields: [person-code, family-name, given-name]}
+      - {entity: person, rowBoundaries: unrestricted, operations: [create, get, list], readableFields: [person-code, family-name, given-name], writableFields: [person-code, family-name, given-name]}
       - entity: person-address
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [create, get, list]
         readableFields: [subject, address-line, locality, postal-code]
         writableFields: [subject, address-line, locality, postal-code]
         requestPresence:
-          - {requestType: address-correction-request, rowBoundaries: []}
-      - {entity: self-service-link, rowBoundaries: [], operations: [create, get, list, patch], readableFields: [subject, principal, active], writableFields: [subject, principal, active]}
+          - {requestType: address-correction-request, rowBoundaries: unrestricted}
+      - {entity: self-service-link, rowBoundaries: unrestricted, operations: [create, get, list, patch], readableFields: [subject, principal, active], writableFields: [subject, principal, active]}

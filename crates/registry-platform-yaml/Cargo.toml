@@ -1,0 +1,24 @@
+[package]
+name = "registry-platform-yaml"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The shared Registry Stack configuration reader: one YAML subset, typed decoding, and value-free diagnostics."
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[features]
+schema = ["dep:schemars"]
+
+[dependencies]
+saphyr-parser.workspace = true
+schemars = { workspace = true, optional = true }
+serde.workspace = true
+serde_json.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+schemars.workspace = true

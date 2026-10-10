@@ -20,7 +20,12 @@ jsonschema.workspace = true
 # `fuel` bounds execution.
 minijinja = { workspace = true, features = ["fuel"] }
 registry-platform-crypto.workspace = true
+registry-platform-yaml.workspace = true
+schemars = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 url.workspace = true
+
+[features]
+schema = ["dep:schemars", "registry-platform-yaml/schema"]

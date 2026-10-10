@@ -1,0 +1,13 @@
+id: unclosed-quote
+rules: [CFG-YAML-8]
+summary: A quoted value with no closing quote is refused where the quote opens.
+mutation:
+  append: |
+    conformanceQuote: "never closed
+expect:
+  exit: 1
+  diagnostics:
+    - code: yaml.unclosed-quote
+      path: /conformanceQuote
+      at: {line: 1, column: 19}
+      suggestedAction: Close the quote.

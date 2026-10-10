@@ -1,18 +1,19 @@
-apiVersion: registry.registrystack.org/breg-journeys/v1
+apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
 journeys:
   - id: bounded-facility-and-batch-validation
     steps:
       - id: create-north-district-facility
         entity: facility
         accessProfile: facility-operator
-        claims: &north_operator_claims
+        claims:
           principal: synthetic-facility-operator
           purpose: facility-registry
           scopes: []
           directClaims:
             administrative_boundaries: [north-district]
         request:
-          operation: create
+          type: create
           data:
             facility-code: FACILITY-SYNTH-001
             display-name: Synthetic North District Facility
@@ -28,10 +29,15 @@ journeys:
       - id: get-north-district-facility
         entity: facility
         accessProfile: facility-operator
-        claims: *north_operator_claims
+        claims:
+          principal: synthetic-facility-operator
+          purpose: facility-registry
+          scopes: []
+          directClaims:
+            administrative_boundaries: [north-district]
         request:
-          operation: get
-          recordRef: north-facility
+          type: get
+          recordCapture: north-facility
         expect:
           outcome: success
           status: 200
@@ -41,11 +47,16 @@ journeys:
       - id: rename-north-district-facility
         entity: facility
         accessProfile: facility-operator
-        claims: *north_operator_claims
+        claims:
+          principal: synthetic-facility-operator
+          purpose: facility-registry
+          scopes: []
+          directClaims:
+            administrative_boundaries: [north-district]
         request:
-          operation: patch
-          recordRef: north-facility
-          etagRef: north-facility
+          type: patch
+          recordCapture: north-facility
+          etagCapture: north-facility
           changes:
             - field: display-name
               value: Synthetic North District Producer
@@ -60,9 +71,14 @@ journeys:
       - id: list-north-district-facilities
         entity: facility
         accessProfile: facility-operator
-        claims: *north_operator_claims
+        claims:
+          principal: synthetic-facility-operator
+          purpose: facility-registry
+          scopes: []
+          directClaims:
+            administrative_boundaries: [north-district]
         request:
-          operation: list
+          type: list
         expect:
           outcome: success
           status: 200
@@ -77,8 +93,8 @@ journeys:
           directClaims:
             administrative_boundaries: [south-district]
         request:
-          operation: get
-          recordRef: updated-north-facility
+          type: get
+          recordCapture: updated-north-facility
         expect:
           outcome: refusal
           status: 404
@@ -86,11 +102,16 @@ journeys:
       - id: batch-refuses-out-of-bounds-installation
         entity: installation
         accessProfile: facility-operator
-        claims: *north_operator_claims
+        claims:
+          principal: synthetic-facility-operator
+          purpose: facility-registry
+          scopes: []
+          directClaims:
+            administrative_boundaries: [north-district]
         request:
-          operation: batch
+          type: batch
           items:
-            - operation: create
+            - type: create
               data:
                 installation-code: INSTALLATION-SYNTH-INVALID-001
                 permit: 00000000-0000-0000-0000-000000000001

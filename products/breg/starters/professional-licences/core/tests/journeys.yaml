@@ -1,4 +1,5 @@
-apiVersion: registry.registrystack.org/breg-journeys/v1
+apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
 journeys:
   - id: starter-model-policy
     steps:
@@ -11,7 +12,7 @@ journeys:
             - starter:editor
           purpose: starter-learning
         request:
-          operation: create
+          type: create
           data:
             localIdentifier: JOURNEY-FIRST-001
             personReference: https://people.example.org/people/journey-first-001
@@ -37,10 +38,10 @@ journeys:
             - starter:editor
           purpose: starter-learning
         request:
-          operation: create
+          type: create
           data:
             record:
-              recordRef: first-record
+              recordCapture: first-record
             reason: Correction to the recorded professional decision
             supportingReference: SYNTHETIC-SUPPORT-001
             licensedActivities:
@@ -60,8 +61,8 @@ journeys:
             - starter:editor
           purpose: starter-learning
         request:
-          operation: get
-          recordRef: draft
+          type: get
+          recordCapture: draft
         expect:
           outcome: success
           status: 200
@@ -75,9 +76,9 @@ journeys:
             - starter:editor
           purpose: starter-learning
         request:
-          operation: submit_request
-          etagRef: before-submit
-          recordRef: before-submit
+          type: submit-request
+          etagCapture: before-submit
+          recordCapture: before-submit
         expect:
           outcome: success
           status: 200
@@ -92,8 +93,8 @@ journeys:
           actorKind: human
           requesterClient: supervisor
         request:
-          operation: get
-          recordRef: draft
+          type: get
+          recordCapture: draft
         expect:
           outcome: success
           status: 200
@@ -107,8 +108,8 @@ journeys:
             - starter:editor
           purpose: starter-learning
         request:
-          operation: get
-          recordRef: first-record
+          type: get
+          recordCapture: first-record
         expect:
           outcome: success
           status: 200

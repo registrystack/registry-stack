@@ -1,5 +1,5 @@
 $schema: https://json-schema.org/draft/2020-12/schema
-$id: https://registrystack.org/schemas/evidence/verification-policy-v1.json
+$id: https://id.registrystack.org/schemas/evidence/verification-policy/verification-policy.v1.schema.json
 title: Evidence relying-procedure verification policy Version 1
 type: object
 additionalProperties: false

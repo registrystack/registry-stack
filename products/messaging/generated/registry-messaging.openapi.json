@@ -385,7 +385,7 @@
             "description": "The template data, validated against the template version's schema; required with `template`. It is rendered at acceptance and never stored."
           },
           "expiresAt": {
-            "description": "The instant an unsent message expires. It must lie within `retention.payloadDays` of acceptance, and defaults to the sender profile's expiry.",
+            "description": "The instant an unsent message expires. It must lie within `retention.payloadRetentionDays` of acceptance, and defaults to the sender profile's expiry.",
             "format": "date-time",
             "type": "string"
           },

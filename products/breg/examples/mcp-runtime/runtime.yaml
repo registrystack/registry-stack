@@ -1,0 +1,54 @@
+# A breg-mcp runtime file for the address-correction citizen service. Check it
+# offline with `breg-mcp --runtime-config runtime.yaml check`.
+apiVersion: id.registrystack.org/formats/breg/mcp-runtime/v1alpha1
+kind: BRegMcpRuntimeConfig
+listener:
+  bind: 127.0.0.1:8110
+  tlsTermination: operator-controlled-upstream
+secretProviders:
+  file:
+    root: /run/secrets/breg-mcp
+resourceServer:
+  resource: https://gateway.example.test/mcp
+  issuer: https://login.example.test
+  jwksSource:
+    kind: uri
+    uri: https://login.example.test/jwks.json
+  algorithms: [EdDSA, ES256]
+  allowedClients: [chat-host]
+  requiredScopes: [address-correction:self]
+  maximumTokenLifetimeSeconds: 3600
+registry:
+  baseUrl: https://registry.example.test/
+  accessProfile: citizen-agent
+  audience: urn:breg:citizen-address-correction
+  scopes: [address-correction:self]
+exchange:
+  tokenEndpoint: https://login.example.test/token
+  clientId: citizen-gateway
+  privateKeyRef: secret:file/gateway-key
+  assertionAudience: https://login.example.test
+service:
+  name: Address correction
+  description: Correct the postal address the registry holds for you.
+  disclosure: The assistant you use will see your current address and the correction you request.
+  details:
+    entity: person-address
+  application:
+    entity: address-correction-request
+    targetField: address
+    ownerField: owner
+  reviewBaseUrl: https://review.example.test
+audit:
+  hashKeyRef: secret:file/audit-key
+  destination: file
+  path: /var/lib/breg-mcp/audit/audit.jsonl
+rateLimits:
+  perCitizen:
+    requestsPerMinute: 30
+    burst: 10
+  perClient:
+    requestsPerMinute: 600
+    burst: 100
+limits:
+  maximumRequestBytes: 65536

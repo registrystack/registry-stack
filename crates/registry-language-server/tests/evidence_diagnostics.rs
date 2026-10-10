@@ -1,17 +1,17 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The authoring library's findings, placed in the document that holds them.
 //!
-//! The editor does not decide what a question must look like. It deserializes the document with the
-//! same reader the compiler uses, runs `registry_evidence_authoring::validate::validate_question`,
-//! and puts each finding where the field it names is written.
+//! The editor does not decide what a question must look like. It reads the document with
+//! `registry_evidence_authoring::formats::check_question`, the shared configuration reader and the
+//! authoring checks the compiler uses, and puts each diagnostic at the line and column that reading
+//! reports.
 //!
-//! A test of a finding asserts the same sentence twice: once from the library, called directly, and
-//! once from the diagnostic the server would publish, so a diagnostic can never drift away from the
-//! refusal behind it. A document the reader cannot deserialize is paired the same way, against that
-//! reader.
+//! A test of a finding asserts the same code and sentence twice: once from the library, called
+//! directly, and once from the diagnostic the server would publish, so a diagnostic can never drift
+//! away from the refusal behind it. A document the reader cannot decode is paired the same way.
 //!
 //! The diagnostics the index draws from one document's name for another are not paired here. The
-//! `evidence/unknown-*` codes and the two file-name codes are refused by `registry-evidencectl`,
+//! `evidence.project.unknown-*` codes and the two file-name codes are refused by `registry-evidencectl`,
 //! which depends on this crate: a dependency the other way is a cycle, and that crate builds a
 //! binary rather than a library, so there is nothing here to call. `tests/evidence_index.rs` holds
 //! each of those diagnostics to its own exact sentence and names the refusal it stands for in prose.
@@ -21,8 +21,8 @@
 mod support;
 
 use registry_evidence_authoring::{
-    model::{AccessPolicy, Question},
-    validate::{validate_access_policy, validate_question},
+    default_project_marker_document,
+    formats::{check_access_policy, check_question},
 };
 use registry_language_server::IndexedDiagnostic;
 use support::{
@@ -32,12 +32,17 @@ use support::{
 use tower_lsp_server::ls_types::DiagnosticSeverity;
 
 /// What the authoring library says about one question document, as `(code, message)` pairs.
-fn authoring_findings(text: &str) -> Vec<(&'static str, String)> {
-    let question = serde_norway::from_str::<Question>(text).expect("the question deserializes");
-    validate_question(&question)
-        .into_iter()
-        .map(|finding| (finding.code, finding.message))
-        .collect()
+fn authoring_findings(text: &str) -> Vec<(String, String)> {
+    check_question(QUESTION_PATH, text.as_bytes()).map_or_else(
+        |report| {
+            report
+                .diagnostics()
+                .iter()
+                .map(|diagnostic| (diagnostic.code.clone(), diagnostic.message.clone()))
+                .collect()
+        },
+        |_| Vec::new(),
+    )
 }
 
 /// The project built from one question text, and the diagnostics reported for that question.
@@ -73,7 +78,7 @@ fn an_invalid_marker_stops_dependent_diagnostics() {
         &replacing(
             &adult_status_project(),
             "evidence-project.yaml",
-            "version: 2\nproject: evidence-authoring\n",
+            &format!("{}version: 2\n", default_project_marker_document()),
         ),
         QUESTION_PATH,
         &QUESTION.replace("<|source-ref|>people", "missing"),
@@ -83,13 +88,11 @@ fn an_invalid_marker_stops_dependent_diagnostics() {
 
     assert_eq!(reported.len(), 1, "{reported:?}");
     assert_eq!(reported[0].path, project.path("evidence-project.yaml"));
-    assert_eq!(
-        reported[0].code.as_deref(),
-        Some("evidence/project-marker-version")
-    );
-    assert_eq!(
-        reported[0].message,
-        "evidence-project.yaml version must be 1"
+    assert_eq!(reported[0].code.as_deref(), Some("config.removed-key"));
+    assert!(
+        reported[0].message.contains("`version`"),
+        "{}",
+        reported[0].message
     );
 }
 
@@ -111,7 +114,7 @@ fn an_invalid_openapi_prerequisite_stops_dependent_diagnostics() {
     assert_eq!(reported[0].path, project.path(OPENAPI_PATH));
     assert_eq!(
         reported[0].code.as_deref(),
-        Some("evidence/openapi-prerequisite")
+        Some("evidence.openapi.prerequisite")
     );
     assert!(
         reported[0]
@@ -125,14 +128,21 @@ fn an_invalid_openapi_prerequisite_stops_dependent_diagnostics() {
 #[test]
 fn an_invalid_access_policy_stops_filename_and_question_resolution() {
     let policy = ACCESS_POLICY
-        .replace("version: 1", "version: 2")
+        .replace(
+            "kind: EvidenceAccessPolicy\n",
+            "kind: EvidenceAccessPolicy\nversion: 2\n",
+        )
         .replace("adult-checks", "wrong-name")
         .replace("adult-status", "missing");
-    let parsed = serde_norway::from_str::<AccessPolicy>(&without_cursors(&policy))
-        .expect("the policy has the closed shape");
+    let refused = check_access_policy(ACCESS_POLICY_PATH, without_cursors(&policy).as_bytes())
+        .expect_err("the policy writes a removed member");
     assert_eq!(
-        validate_access_policy(&parsed)[0].code,
-        "access-policy-version"
+        refused
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| diagnostic.code.as_str())
+            .collect::<Vec<_>>(),
+        ["config.removed-key"]
     );
 
     let project = EvidenceProject::new(&replacing(
@@ -144,11 +154,8 @@ fn an_invalid_access_policy_stops_filename_and_question_resolution() {
 
     assert_eq!(reported.len(), 1, "{reported:?}");
     assert_eq!(reported[0].path, project.path(ACCESS_POLICY_PATH));
-    assert_eq!(
-        reported[0].code.as_deref(),
-        Some("evidence/access-policy-version")
-    );
-    assert_eq!(reported[0].message, "access policy version must be 1");
+    assert_eq!(reported[0].code.as_deref(), Some("config.removed-key"));
+    assert_eq!(reported[0].message, refused.diagnostics()[0].message);
 }
 
 #[test]
@@ -160,7 +167,7 @@ fn a_finding_is_reported_at_the_field_it_names() {
     assert_eq!(
         authoring_findings(&without_cursors(&text)),
         vec![(
-            "answer-concept-identifier",
+            "evidence.question.answer-concept-identifier".to_owned(),
             "answer concept must be a lowercase local identifier".to_owned()
         )],
         "the authoring library refuses this question"
@@ -168,7 +175,7 @@ fn a_finding_is_reported_at_the_field_it_names() {
     assert_eq!(reported.len(), 1, "{reported:?}");
     assert_eq!(
         reported[0].code.as_deref(),
-        Some("evidence/answer-concept-identifier")
+        Some("evidence.question.answer-concept-identifier")
     );
     assert_eq!(
         reported[0].message,
@@ -193,7 +200,7 @@ fn a_referenced_subject_source_marker_is_reported_by_the_shared_check() {
     assert_eq!(
         authoring_findings(&without_cursors(&text)),
         vec![(
-            "subject-source-context",
+            "evidence.question.subject-source-context".to_owned(),
             "subject.source is available only to an inline OpenAPI operation".to_owned()
         )],
         "the authoring library refuses this question"
@@ -201,7 +208,7 @@ fn a_referenced_subject_source_marker_is_reported_by_the_shared_check() {
     assert_eq!(reported.len(), 1, "{reported:?}");
     assert_eq!(
         reported[0].code.as_deref(),
-        Some("evidence/subject-source-context")
+        Some("evidence.question.subject-source-context")
     );
     assert_eq!(
         reported[0].message,
@@ -234,7 +241,7 @@ fn a_finding_naming_a_field_the_document_omits_lands_on_the_field_above_it() {
     assert_eq!(
         authoring_findings(&without_cursors(&text)),
         vec![(
-            "structured-answer-schema",
+            "evidence.question.structured-answer-schema".to_owned(),
             "a reviewed structured answer requires schema".to_owned()
         )],
         "the authoring library refuses this question"
@@ -242,7 +249,7 @@ fn a_finding_naming_a_field_the_document_omits_lands_on_the_field_above_it() {
     assert_eq!(reported.len(), 1, "{reported:?}");
     assert_eq!(
         reported[0].code.as_deref(),
-        Some("evidence/structured-answer-schema")
+        Some("evidence.question.structured-answer-schema")
     );
     assert_eq!(
         reported[0].range.start,
@@ -257,9 +264,9 @@ fn a_finding_naming_a_field_the_document_omits_lands_on_the_field_above_it() {
 #[test]
 fn a_doubled_concept_is_reported_once_by_the_check_that_owns_it() {
     let text = QUESTION.replace(
-        "  - concept: <|concept|>is_adult\n    id: urn:example:concepts:is-adult\n    type: boolean\n",
-        "  - concept: is_adult\n    id: urn:example:concepts:is-adult\n    type: boolean\n  \
-         - concept: <|concept|>is_adult\n    id: urn:example:concepts:is-adult\n    type: boolean\n",
+        "  - concept: <|concept|>is_adult\n    uri: urn:example:concepts:is-adult\n    type: boolean\n",
+        "  - concept: is_adult\n    uri: urn:example:concepts:is-adult\n    type: boolean\n  \
+         - concept: <|concept|>is_adult\n    uri: urn:example:concepts:is-adult\n    type: boolean\n",
     );
 
     let (project, reported) = question_project(&text);
@@ -267,7 +274,7 @@ fn a_doubled_concept_is_reported_once_by_the_check_that_owns_it() {
     assert_eq!(
         authoring_findings(&without_cursors(&text)),
         vec![(
-            "answer-concept-unique",
+            "evidence.question.answer-concept-unique".to_owned(),
             "answer concepts must be unique".to_owned()
         )],
         "the authoring library refuses this question"
@@ -278,7 +285,7 @@ fn a_doubled_concept_is_reported_once_by_the_check_that_owns_it() {
             .map(|diagnostic| (diagnostic.code.as_deref(), diagnostic.message.as_str()))
             .collect::<Vec<_>>(),
         vec![(
-            Some("evidence/answer-concept-unique"),
+            Some("evidence.question.answer-concept-unique"),
             "answer concepts must be unique"
         )],
         "{reported:?}"
@@ -290,11 +297,10 @@ fn a_doubled_concept_is_reported_once_by_the_check_that_owns_it() {
     );
 }
 
-/// A finding quotes the name the author wrote, and the instruction it gives comes after that name.
-/// The sentence reaches the editor whole, so the author reads the part they have to act on rather
-/// than the part they already have in front of them.
+/// A finding about a long name says what is wrong without repeating the name, which the author
+/// already has in front of them, and the sentence reaches the editor whole.
 #[test]
-fn a_finding_that_quotes_a_long_name_reaches_the_editor_whole() {
+fn a_finding_about_a_long_name_reaches_the_editor_whole() {
     let fact = "date_of_birth_of_the_person_this_question_is_asked_about_in_full";
     let text = QUESTION.replace(
         "source:\n  ref: <|source-ref|>people\n",
@@ -303,23 +309,27 @@ fn a_finding_that_quotes_a_long_name_reaches_the_editor_whole() {
              path: /records/*/date_of_birth\n      combine: <|combine|>exactly-one\n"
         ),
     );
-    let sentence = format!(
-        "source fact `{fact}` visits a collection and must explicitly use `combine: collect`"
-    );
-    assert!(sentence.chars().count() > 120, "{sentence}");
+    let sentence =
+        "this source fact visits a collection and must explicitly use `combine: collect`"
+            .to_owned();
 
     let (project, reported) = question_project(&text);
 
     assert_eq!(
         authoring_findings(&without_cursors(&text)),
-        vec![("fact-combination", sentence.clone())],
+        vec![(
+            "evidence.question.fact-combination".to_owned(),
+            sentence.clone()
+        )],
         "the authoring library refuses this question"
     );
     // Which edges a compact-form question draws is `evidence_index.rs`'s subject. What is asserted
     // here is the sentence the finding carries, whole.
     let paired = reported
         .iter()
-        .filter(|diagnostic| diagnostic.code.as_deref() == Some("evidence/fact-combination"))
+        .filter(|diagnostic| {
+            diagnostic.code.as_deref() == Some("evidence.question.fact-combination")
+        })
         .collect::<Vec<_>>();
     assert_eq!(paired.len(), 1, "{reported:?}");
     assert_eq!(paired[0].message, sentence);
@@ -330,17 +340,22 @@ fn a_finding_that_quotes_a_long_name_reaches_the_editor_whole() {
     );
 }
 
-/// A document the deserializer cannot read is one problem, reported once, and the question is still
-/// the question its file names: the access policy that admits it keeps navigating and stays quiet.
+/// A document the reader cannot decode is one problem, reported once, and the question is still the
+/// question its file names: the access policy that admits it keeps navigating and stays quiet.
 #[test]
-fn a_question_the_deserializer_cannot_read_is_reported_once_and_still_names_itself() {
+fn a_question_the_reader_cannot_decode_is_reported_once_and_still_names_itself() {
     let text = QUESTION.replace("    type: boolean\n", "    type: mystery\n");
 
     let project = EvidenceProject::new(&replacing(&adult_status_project(), QUESTION_PATH, &text));
     let index = project.index();
 
-    assert!(
-        serde_norway::from_str::<Question>(&without_cursors(&text)).is_err(),
+    let refused = authoring_findings(&without_cursors(&text));
+    assert_eq!(
+        refused
+            .iter()
+            .map(|(code, _)| code.as_str())
+            .collect::<Vec<_>>(),
+        ["config.unknown-variant"],
         "the authoring library's own reader refuses this question"
     );
     let reported = index.diagnostics();
@@ -349,14 +364,8 @@ fn a_question_the_deserializer_cannot_read_is_reported_once_and_still_names_itse
         .filter(|diagnostic| diagnostic.path == project.path(QUESTION_PATH))
         .collect::<Vec<_>>();
     assert_eq!(question.len(), 1, "{reported:?}");
-    assert_eq!(question[0].code.as_deref(), Some("evidence/question-shape"));
-    assert!(
-        question[0]
-            .message
-            .starts_with("This is not the shape of a question:"),
-        "{}",
-        question[0].message
-    );
+    assert_eq!(question[0].code.as_deref(), Some("config.unknown-variant"));
+    assert_eq!(question[0].message, refused[0].1);
     assert!(
         reported
             .iter()
@@ -365,7 +374,7 @@ fn a_question_the_deserializer_cannot_read_is_reported_once_and_still_names_itse
     );
 }
 
-/// A question the deserializer cannot read says nothing about the names it spells.
+/// A question the reader cannot decode says nothing about the names it spells.
 ///
 /// The compiler reaches a question's cross-file checks through `compile_question_plan`, which runs
 /// on a question the form has already accepted, so a source that is not there is not a second
@@ -373,7 +382,7 @@ fn a_question_the_deserializer_cannot_read_is_reported_once_and_still_names_itse
 /// Answering one mistake with two sentences puts the author's attention on a field that may well be
 /// correct once the shape is.
 #[test]
-fn a_question_the_deserializer_cannot_read_says_nothing_about_the_names_it_spells() {
+fn a_question_the_reader_cannot_decode_says_nothing_about_the_names_it_spells() {
     let text = QUESTION
         .replace("    type: boolean\n", "    type: mystery\n")
         .replace("<|source-ref|>people", "ledger");
@@ -385,7 +394,7 @@ fn a_question_the_deserializer_cannot_read_says_nothing_about_the_names_it_spell
             .iter()
             .map(|diagnostic| diagnostic.code.as_deref().unwrap_or("<no code>"))
             .collect::<Vec<_>>(),
-        vec!["evidence/question-shape"],
+        vec!["config.unknown-variant"],
         "{reported:?}"
     );
 }
@@ -398,7 +407,7 @@ fn a_question_the_deserializer_cannot_read_says_nothing_about_the_names_it_spell
 /// it, and telling it the question is missing would be the diagnostic this whole surface refuses to
 /// draw.
 #[test]
-fn an_access_policy_admitting_a_question_the_deserializer_cannot_read_is_told_nothing() {
+fn an_access_policy_admitting_a_question_the_reader_cannot_decode_is_told_nothing() {
     let text = QUESTION
         .replace("    type: boolean\n", "    type: mystery\n")
         .replace("<|source-ref|>people", "ledger");
@@ -427,27 +436,27 @@ fn every_evidence_diagnostic_is_an_error_that_names_its_rule() {
         // A name with nothing behind it.
         (
             QUESTION.replace("<|source-ref|>people", "ledger"),
-            vec!["evidence/unknown-source"],
+            vec!["evidence.project.unknown-source"],
         ),
         // A shape the reader refuses.
         (
             QUESTION.replace("    type: boolean\n", "    type: mystery\n"),
-            vec!["evidence/question-shape"],
+            vec!["config.unknown-variant"],
         ),
         // A field the authoring library refuses.
         (
             QUESTION.replace("<|concept|>is_adult", "IsAdult"),
-            vec!["evidence/answer-concept-identifier"],
+            vec!["evidence.question.answer-concept-identifier"],
         ),
         // An identifier that disagrees with the file it is written in.
         (
             QUESTION.replace("id: <|id|>adult-status", "id: adult-status-v2"),
-            vec!["evidence/question-file-name"],
+            vec!["evidence.question.file-name"],
         ),
-        // A document that stops parsing.
+        // A document that stops parsing, reported with the reader's own code.
         (
             format!("{QUESTION}unterminated: [\n"),
-            vec!["evidence/syntax"],
+            vec!["yaml.unexpected-end"],
         ),
     ];
 

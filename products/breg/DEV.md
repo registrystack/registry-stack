@@ -83,15 +83,18 @@ port is refused. To deliver to an external local receiver instead, bind every
 compiled destination ID in `dev-clients.yaml`:
 
 ```yaml
+secretProviders:
+  file: {root: /absolute/owner-only/dev-secrets}
 eventDestinations:
   openfn:
     origin: http://127.0.0.1:8088
     path: /webhooks/registry
-    hmacKeyFile: /absolute/owner-only/openfn-webhook-key
+    hmacSha256KeyRef: secret:file/openfn-webhook-key
 ```
 
-The key file must be an ordinary owner-only file. The session copies it into
-its private state and uses the same bounded outbox delivery and replay rules.
+The key is a [secret reference](#secret-references). The session copies it
+into its private state and uses the same bounded outbox delivery and replay
+rules.
 The origin must be numeric loopback HTTP with an explicit port. An explicit
 destination map starts no built-in receiver, so `dev events` has no inbox
 receipts; inspect the receiving service and `bregctl webhook list` instead.
@@ -104,14 +107,14 @@ evidenceProviders:
   qualification:
     baseUrl: http://127.0.0.1:8093
     trustBindingId: exact-local-trust-v1
-    tokenFile: /absolute/owner-only/evidence-token
-    trustedJwksFile: /absolute/owner-only/evidence-jwks.json
+    tokenRef: secret:file/evidence-token
+    trustedJwksRef: secret:file/evidence-jwks.json
     revokedKeyIds: []
-    caBundleFile: null
 ```
 
-The dev command accepts exact numeric loopback origins and ordinary owner-only
-input files, copies the token, trusted keys and optional CA bundle into its
+The dev command accepts exact numeric loopback origins and
+[secret references](#secret-references), copies the token, trusted keys and
+optional CA bundle (`caBundleRef`) into its
 private state, and generates the corresponding `evidenceProviders` runtime
 bindings. It does not relax package activation: provider IDs must match the
 compiled action requirements, and the runtime still resolves and validates
@@ -186,12 +189,12 @@ Polling needs no callback credential. To test authenticated completion delivery,
 add both optional fields; declaring only one is refused:
 
 ```yaml
-    completionTokenFile: /absolute/owner-only/casework-completion-token
+    completionTokenRef: secret:file/casework-completion-token
     completionRecipient: registry-breg
 ```
 
-The completion token is an independent sender credential copied into private
-state. It is never used for review requests or source application. Operated
+The completion token is an independent sender credential, named by a
+[secret reference](#secret-references) and copied into private state. It is never used for review requests or source application. Operated
 runtime configuration also supports an explicit static `tokenRef` for an
 opaque renewable credential supplied by the deployment, but `bregctl dev`
 always generates the refreshing `privateKeyJwt` branch.
@@ -243,7 +246,10 @@ deployments must bind their own destinations and signing keys.
 
 ## Explicit teaching clients
 
-The clients file is ordinary YAML with a closed versioned format. It declares
+The clients file is ordinary YAML with a closed format. It starts with
+`apiVersion: id.registrystack.org/formats/breg/dev-clients/v1alpha1` and
+`kind: BRegDevClients`, and `bregctl dev start` reports every unknown or
+removed member at its line and column before any service starts. It declares
 local issuer registrations; it does not add or infer BReg access profiles.
 Every protected journey step without an exact binding needs one default client
 for its profile whose scopes and claims match the ordinary step. A maintained refusal step may
@@ -257,6 +263,12 @@ claims for another product, such as Casework. The empty list gives that client
 no BReg access-profile binding. It is registered with the local issuer but omitted
 from the BReg runtime's `allowedClients`, so it cannot call BReg.
 
+When no client is left to name in `allowedClients` (every client is profile-free
+and none sets `allowBregAccess`), the session writes `allowedClients:
+unrestricted`, so the runtime accepts a token from every client of its local
+issuer. The local issuer is the only issuer the session trusts, and governed
+profiles and token scopes still authorize each call.
+
 An integration client that must call BReg without becoming a journey or seed
 binding must opt in with `allowBregAccess: true`. Use that flag only when its
 scopes and authority claims are intentionally sufficient for the BReg profiles
@@ -264,7 +276,8 @@ it will select. `caseworkctl source add` sets it only for exported Staff and
 Supervisor reviewers; other profile-free Casework clients remain excluded.
 
 ```yaml
-version: 1
+apiVersion: id.registrystack.org/formats/breg/dev-clients/v1alpha1
+kind: BRegDevClients
 clients:
   - id: operator
     accessProfiles: [operator, reference-loader]
@@ -326,7 +339,7 @@ distinct claim names of all of them together, counting `registry_actor_kind`,
 `registry_purpose`, and `scope`, may number at most 16, and a multi-purpose
 client cannot also be listed on any authored exchange connection. That signer
 makes the client first-party, so the issuer projects the purpose connection's
-claims into its exchanged tokens: through an `institutional_grant` connection
+claims into its exchanged tokens: through an `institutional-grant` connection
 they would lack the `registry_grant_*` claims the registry requires. Both are
 refused when the clients file is read.
 
@@ -368,8 +381,9 @@ authority before the next step. Import steps do not capture a record response;
 a later list or lookup step verifies the imported rows.
 
 Each client has its own ES256 private key, generated by default. An existing
-owner-only key can be imported with `assertionKeyInputFile` on that client,
-for example when Evidence already created its active access client. The dev
+key can be imported with `assertionKeyRef` on that client, a
+[secret reference](#secret-references) to its private JWK, for example when
+Evidence already created its active access client. The dev
 session validates the private key, copies it into retained state, and registers
 only its public half. The service issuer,
 operator and source workload use different keys. The reserved client ID `issuer`
@@ -399,21 +413,33 @@ Conflicting files, links, or unsafe permissions are refused without replacement;
 choose fresh output names and update the target if you intentionally replaced the
 session. The report contains file references and endpoints, never credentials.
 
-The clients file also supports first-start publication through both absolute paths:
+Credentials remain under `.breg/dev/credentials/<client-id>/`, and
+`export-client` is the only way a pair leaves the session. Export only the
+dedicated source client when configuring Evidence. Evidence's caller credential
+and BReg's operator credential retain separate authority.
+
+### Secret references
+
+A member that names a secret holds a secret reference, never a path:
+`assertionKeyRef`, `hmacSha256KeyRef`, `tokenRef`, `trustedJwksRef`,
+`caBundleRef`, `privateKeyRef`, `completionTokenRef`, `clientSecretRef`, and
+`passwordRef`. `secret:file/<name>` names one file directly below
+`secretProviders.file.root`, which must be absolute. `secret:env/<NAME>` names
+an environment variable of the `bregctl dev start` process and is resolved only
+when `secretProviders.environment` is declared:
 
 ```yaml
-    clientIdFile: /absolute/private/evidence/secrets/registry-client-id
-    assertionKeyFile: /absolute/private/evidence/secrets/registry-client-key
+secretProviders:
+  file: {root: /absolute/owner-only/dev-secrets}
+  environment: {}
 ```
 
-Both parent directories must already exist, be canonical ordinary directories,
-and be accessible only to their owner. Existing output files are refused before
-initialization. The private state records the intended pair before publishing
-either file. An interrupted publication resumes only the matching owned pair;
-different bytes, links or public permissions are refused. Without these options,
-credentials remain under `.breg/dev/credentials/<client-id>/`. Choose output paths
-only for the dedicated source client when configuring Evidence. Evidence's caller
-credential and BReg's operator credential retain separate authority.
+A referenced file must be an ordinary file you own, with mode 0400 or 0600 and
+a single link. A referenced value must be non-empty, contain no NUL byte, and
+fit the member's limit. The session copies each value into its private state
+when it is prepared, so editing a referenced file later changes nothing until
+the session is replaced. A refusal names the member, never the value, the file,
+or the variable.
 
 ## Apply-time Evidence in development
 
@@ -421,27 +447,30 @@ A registry with Evidence guards needs the exact provider bindings declared by
 its package. Put the binding in `dev-clients.yaml` before first start:
 
 ```yaml
+secretProviders:
+  file: {root: /absolute/private/dev-secrets}
 evidenceProviders:
   qualification:
     baseUrl: http://127.0.0.1:8095
     trustBindingId: reviewed-local-provider
-    trustedJwksFile: /absolute/private/evidence-signing-jwks.json
+    trustedJwksRef: secret:file/evidence-signing-jwks.json
     privateKeyJwt:
       tokenEndpoint: http://127.0.0.1:8091/oauth2/token
       assertionAudience: http://127.0.0.1:8091
       clientId: qualification-reader
-      privateKeyFile: /absolute/private/qualification-client.jwk
+      privateKeyRef: secret:file/qualification-client.jwk
       resource: urn:example:evidence
       scopes: [evidence:invoke]
 ```
 
 The provider URL and token endpoint use numeric loopback HTTP. Provision the
 client at the issuer with precisely that resource and scope. The session copies
-owner-only key and JWKS files to its private state; it gives the runtime secret
-references. The ordinary BREG credential provider refreshes expired service
-tokens. `tokenFile` is an alternative for a pre-issued token and cannot be
-combined with `privateKeyJwt`. An optional `caBundleFile` and `revokedKeyIds`
-retain their ordinary relying-party meanings.
+the referenced key and JWKS ([secret references](#secret-references)) to its
+private state; it gives the runtime secret references. The ordinary BREG
+credential provider refreshes expired service tokens. `tokenRef` is an
+alternative for a pre-issued token and cannot be combined with `privateKeyJwt`.
+An optional `caBundleRef` and `revokedKeyIds` retain their ordinary
+relying-party meanings.
 
 The same bindings apply to the disposable schema-test rehearsal and the local
 runtime. A journey that applies a guarded request needs a reachable configured
@@ -468,12 +497,12 @@ issuer:
     - id: casework
       issuer: https://casework.example.test
       jwksEndpoint: http://host.docker.internal:8094/oauth2/jwks
-      mapping: institutional_grant
+      mapping: institutional-grant
       clients: [task-agent]
     - id: portal
       issuer: http://127.0.0.1:8095
       jwksEndpoint: http://host.docker.internal:8095/oauth2/jwks
-      mapping: first_party
+      mapping: first-party
       clients: [portal-exchange]
       tokenAttributes:
         registry_principal: string
@@ -481,22 +510,19 @@ issuer:
   exchangeClients: [task-agent, portal-exchange]
   interactiveApplications:
     - id: staff-portal
-      clientSecretFile: /absolute/owner-only/staff-portal-secret
+      clientSecretRef: secret:file/staff-portal-secret
       origin: http://127.0.0.1:3000
       redirectUris: [http://127.0.0.1:3000/callback]
-      audience: null
       grants:
-        - audience: null
-          scopes: [registry:generic:operate]
+        - scopes: [registry:generic:operate]
       tokenAttributes: [registry_actor_kind]
   syntheticUsers:
     - username: officer
       email: officer@example.test
-      passwordFile: /absolute/owner-only/officer-password
+      passwordRef: secret:file/officer-password
       attributes: {registry_actor_kind: human}
       grants:
-        - audience: null
-          scopes: [registry:generic:operate]
+        - scopes: [registry:generic:operate]
 ```
 
 Every referenced client also needs its own ordinary `clients` entry with exact
@@ -504,15 +530,16 @@ scopes and claims. `exchangeClients` must have one bootstrap scope, and the
 external authority must be pre-registered. List each exchange client under
 every connection whose authority it may present: the local resource servers
 read that pairing and refuse a token exchanged from any other authority, so a
-client named by no connection is refused before startup. A `first_party`
+client named by no connection is refused before startup. A `first-party`
 connection's `clients` list also selects the claims that connection projects;
-an `institutional_grant` connection projects none. Local browser applications use
+an `institutional-grant` connection projects none. Local browser applications use
 authorization code with PKCE and explicit redirect URIs. Their secrets and
 synthetic passwords are copied into the owner's private issuer state. Explicit
 app and user grants render issuer role assignments for the matching
 resource; requested scopes without both permissions are not granted. An app
-using the owner's default BREG audience enters the local runtime's allowed
-client list; an app mapped to another resource does not. The app still needs a
+or grant that omits `audience` uses the owner's default BREG audience; such an
+app enters the local runtime's allowed client list, and an app mapped to
+another resource does not. The app still needs a
 token with the governed profile's actual `scope` and principal/purpose claims
 to call BREG.
 

@@ -43,7 +43,7 @@
 
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -297,6 +297,17 @@ async function stopBackgrounds(outDir) {
   for (const group of text.trim().split('\n').filter(Boolean)) await stopGroup(Number(group));
 }
 
+// Map each file under root, by its path relative to root, to its modification
+// time.
+async function modificationTimes(root) {
+  const times = new Map();
+  for (const entry of await readdir(root, { recursive: true })) {
+    const info = await lstat(join(root, entry));
+    if (!info.isDirectory()) times.set(entry, info.mtimeMs);
+  }
+  return times;
+}
+
 async function replay(pages, toolset, checkout) {
   const steps = pages.flat();
   const workRoot = await realpath(await mkdtemp(join(tmpdir(), 'tutorial-run.')));
@@ -316,10 +327,14 @@ async function replay(pages, toolset, checkout) {
 
   let status = 1;
   let prepared = false;
+  let inherited = new Map();
   try {
     const toolsetEnv = await toolset.prepare({ repoRoot: REPO_ROOT, binDir, workRoot });
     prepared = true;
-    if (checkout) await copyCheckout(REPO_ROOT, readerDir);
+    if (checkout) {
+      await copyCheckout(REPO_ROOT, readerDir);
+      inherited = await modificationTimes(readerDir);
+    }
     const scriptPath = join(workRoot, 'journey.sh');
     await writeFile(scriptPath, await journeyScript(pages, outDir, readerDir));
     const code = await runScript(scriptPath, readerDir, binDir, toolsetEnv, (send) => {
@@ -354,7 +369,7 @@ async function replay(pages, toolset, checkout) {
     try {
       await stopBackgrounds(outDir);
       unlock(workRoot);
-      const stoppedAll = prepared ? await toolset.teardown({ readerDir, binDir }) : true;
+      const stoppedAll = prepared ? await toolset.teardown({ readerDir, binDir, inherited }) : true;
       if (stoppedAll) {
         await rm(workRoot, { recursive: true, force: true });
       } else {

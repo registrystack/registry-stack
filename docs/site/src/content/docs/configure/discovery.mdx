@@ -15,6 +15,8 @@ standards_referenced:
   - shacl
 ---
 
+import ConfigurationFormatChecks from '../../../components/ConfigurationFormatChecks.astro';
+
 {/* Evidence: products/discovery/README.md describes the operator flow as offline `check`, one
     explicit `package`, immutable-package deployment, then restart. `crates/registry-discoveryctl/src/lib.rs`
     exposes only `check` and `package`; `crates/registry-discovery/src/server.rs` fixes the public routes. */}
@@ -136,17 +138,27 @@ Run the offline check before packaging.
 discoveryctl check --project "<discovery-project>"
 ```
 
-Expected output reports the validated origin and mapping counts:
+Expected output reports the validated origin and mapping counts, then the files it read:
 
 ```text
 valid origins=1 mappings=1
+0 errors, 0 warnings in 2 files
 ```
 
-The check reads the two authoring inputs but does not contact the provider URL.
+The check reads `origins.yaml`, every mapping, and every runtime file beside them, and does not
+contact the provider URL. Each finding names its file, line, column, and the edit that fixes it.
+`--format json` prints one report instead, with every finding in the same shape the other Registry
+Stack checks use. The command exits 0 when nothing was refused, 1 when something was (or a warning
+was reported under `--deny-warnings`), 2 when the command line is wrong, and 3 when a file could not
+be read.
 
-{/* Evidence: `crates/registry-discoveryctl/src/lib.rs`, `Command::Check`, prints this output.
-    `crates/registry-discoveryctl/src/project.rs`, test
-    `check_is_offline_and_accepts_an_unreachable_https_origin`, proves that validation is offline. */}
+{/* Evidence: `crates/registry-discoveryctl/src/lib.rs`, `check()`, prints this output, and its
+    tests `cfg_diag_2_a_clean_check_prints_the_counts_and_the_summary`,
+    `cfg_diag_1_a_clean_check_reports_json_in_the_ctl_envelope`, and the `cfg_diag_4_` tests cover
+    the report and exit codes. `crates/registry-discoveryctl/src/project.rs`, tests
+    `check_is_offline_and_accepts_an_unreachable_https_origin` and
+    `cfg_check_2_the_project_check_reads_every_yaml_file_beside_the_origins`, prove that the check
+    is offline and reads every file. */}
 
 ## Package one bounded index
 
@@ -175,11 +187,20 @@ collection records new `originFetchedAt` and `builtAt` provenance, so its packag
 even when `catalogRevision` and `mappingRevision` stay the same. Build a new directory and deploy it
 as a unit. Do not edit a package in place.
 
+`discoveryctl check --index <package-directory>/discovery-index.json` parses an index offline
+exactly as the runtime parses it, and reports its origin, service, and mapping counts and its two
+revisions. An index packaged before the index carried `apiVersion` and `kind` is refused with
+`discovery.index.retired-header`; package it again and update `package.expectedDigest` if you pin it.
+
 {/* Evidence: `crates/registry-discoveryctl/src/build.rs`, `fetch_origins()`, `write_index_package()`,
     and `packaging_the_same_compiled_index_twice_is_repeatable`;
     `crates/registry-discoveryctl/tests/build.rs`,
     `package_fetches_each_origin_once_and_preserves_semantic_revisions` and
-    `production_package_time_is_captured_after_origin_collection`. */}
+    `production_package_time_is_captured_after_origin_collection`;
+    `crates/registry-discoveryctl/src/index.rs`, `inspect_index_file()` and
+    `cfg_change_2_an_index_with_the_retired_header_names_the_rebuild`;
+    `crates/registry-discoveryctl/src/lib.rs`,
+    `cfg_check_1_the_index_checks_on_its_own_in_both_formats`. */}
 
 ## Deploy and restart the service
 
@@ -203,6 +224,10 @@ limits:
   shutdownTimeoutSeconds: 10
 logLevel: info
 ```
+
+Check the file before you start the service. `discoveryctl check --runtime-config <file>` reads it
+as the runtime does, without the package, the network, or the environment; add `--environment` to
+fill its `${NAME}` expressions from the current environment and check the values they produce.
 
 Start the new revision after deploying the complete package directory.
 
@@ -292,14 +317,24 @@ No credential, evidence request, or assertion passes through Discovery.
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
-| `discoveryctl check` fails | An origin or mapping does not match the closed authoring schema. | Correct the reported field and rerun the offline check. |
+| `discoveryctl check` fails | An origin, mapping, or runtime file does not match its closed format. | Make the edit each finding names at its line and column, then rerun the offline check. |
 | Packaging cannot fetch an origin | The approved description is unavailable or violates the fetch policy. | Restore the exact approved publication and package into a new directory. |
 | Startup reports a digest mismatch | The package is incomplete, changed, or different from `expectedDigest`. | Redeploy the complete reviewed package. |
+| Startup says the index was built before it carried `apiVersion` and `kind` | The package predates the current index header. | Package it again with `discoveryctl package`, then update `package.expectedDigest` if you pin it. |
 | Search returns no items | No Evidence advertisement matches every supplied filter. | Review the indexed descriptions and requested identifiers. |
 
-{/* Evidence: `crates/registry-discoveryctl/src/build.rs`, `BuildError`; `crates/registry-discovery/src/query.rs`,
+{/* Evidence: `crates/registry-discoveryctl/src/build.rs`, `BuildError`; `crates/registry-discovery/src/startup.rs`,
+    `startup_refuses_an_index_with_the_retired_header_with_rebuild_guidance`; `crates/registry-discovery/src/query.rs`,
     `service_matches_filters`; `crates/registry-discovery-client/src/selection.rs`, exact selection
     errors and no-native-I/O test. */}
+
+## Check commands
+
+Every file Registry Discovery reads has a command that checks it offline, with no service running. Each prints
+the diagnostics, JSON output, and exit codes that
+[Check a file before you deploy it](../../reference/configuration-files/#check-a-file-before-you-deploy-it) describes.
+
+<ConfigurationFormatChecks product="discovery" />
 
 ## Next
 

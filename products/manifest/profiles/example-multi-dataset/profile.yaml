@@ -19,4 +19,3 @@ fixtures:
     manifest: true
     expect: valid
     description: Two datasets served by one data service, with one distribution bound to exactly one dataset.
-generator_command: null

@@ -12,6 +12,8 @@ standards_referenced: []
 wide: true
 ---
 
+import ConfigurationFormatChecks from '../../../components/ConfigurationFormatChecks.astro';
+
 import ConfigurationReference from '../../../components/ConfigurationReference.astro';
 import reference from '../../../data/generated/evidence-configuration.json';
 
@@ -118,15 +120,26 @@ the authoring keys in the context of a whole project. Start with
 [Configure Evidence Gateway](../../configure/evidence/), or follow
 [Connect a published SQLite extract](../../tutorials/connect-a-sqlite-extract/) for that transport's
 complete authoring and deployment path.
+[Configuration files](../configuration-files/) describes the YAML rules and environment
+substitution that apply when the runtime reads its runtime file.
 
-A key path that this page lists is not a deployment that runs. `evidence check` is the authoritative
-runtime acceptance gate. `evidencectl artifact inspect <deployment-target>` reports custody for the target and installed package, and
+A key path that this page lists is not a deployment that runs. `evidence check` proves the
+configuration offline, and `evidence check --require-runtime-dependencies` on the target host is
+the authoritative runtime acceptance gate. `evidencectl artifact inspect <deployment-target>` reports custody for the target and installed package, and
 `evidencectl doctor --runtime-config <absolute-file>` performs the live startup dependency
 preflight without opening the public listener or sending an Evidence request. `evidencectl test`
 invokes the real Evidence checks before evaluating fixtures offline.
 
 {/* Evidence: crates/registry-evidencectl/src/runtime.rs, DoctorArgs and run();
     crates/registry-evidencectl/src/doctor.rs; crates/registry-evidencectl/src/fixtures.rs. */}
+
+## Check commands
+
+Every file Evidence Gateway reads has a command that checks it offline, with no service running. Each prints
+the diagnostics, JSON output, and exit codes that
+[Check a file before you deploy it](../configuration-files/#check-a-file-before-you-deploy-it) describes.
+
+<ConfigurationFormatChecks product="evidence" />
 
 ## Next
 

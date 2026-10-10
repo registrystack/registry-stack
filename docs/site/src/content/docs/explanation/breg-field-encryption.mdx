@@ -34,7 +34,7 @@ fields are sealed.
 {/* Evidence: products/breg/generated/authoring/registry-project.schema.json;
     crates/registry-breg/src/contract.rs, FieldSource, FieldLookupSource, and
     NormalizationStep; crates/registry-breg/src/compiler.rs,
-    field.encrypted.classification_invalid and field.encrypted.type_unsupported. */}
+    breg.field.encrypted-classification-invalid and breg.field.encrypted-type-unsupported. */}
 
 ## What sealing does
 
@@ -46,7 +46,7 @@ still open. Envelopes live in dedicated `bytea` columns beside the rest of the r
 decrypt them at their response edges: a record read, a history read, and a revision read each
 decrypt on the way out, so no caller-facing surface ever returns envelope bytes.
 
-Phase 1 refuses `pattern` on an encrypted field with `field.encrypted.pattern_refused`. Native
+Phase 1 refuses `pattern` on an encrypted field with `breg.field.encrypted-pattern-refused`. Native
 patterns are PostgreSQL checks, while encrypted plaintext must not reach PostgreSQL. Remove
 `pattern`, or keep the field in plaintext storage when the native pattern is required.
 
@@ -54,7 +54,7 @@ patterns are PostgreSQL checks, while encrypted plaintext must not reach Postgre
     open_field(), FieldAad, derive_field_aead_key(), and MAX_FIELD_PLAINTEXT_BYTES;
     crates/registry-breg/src/field_encryption.rs, FieldEncryptionService::seal() and
     FieldEncryptionService::open(); crates/registry-breg/src/compiler.rs,
-    field.encrypted.pattern_refused; crates/registry-breg/src/mutation.rs,
+    breg.field.encrypted-pattern-refused; crates/registry-breg/src/mutation.rs,
     encrypted_column_values();
     crates/registry-breg/src/postgres/{read,history_read,revision_read}.rs,
     with_field_encryption(); crates/registry-breg/src/api/mod.rs, opened_held_body(). */}
@@ -112,9 +112,9 @@ event projection of it. A registry whose process needs reviewed change requests 
 field cannot encrypt that field in Phase 1: the compiler refuses the combination at authoring time
 rather than at the first reviewed change.
 
-{/* Evidence: crates/registry-breg/src/compiler.rs, access_profile.processing.encrypted and
-    event.projection.encrypted; crates/registry-breg/src/change_request.rs,
-    change_request.effect.field_encrypted; crates/registry-breg/src/derived_sql.rs,
+{/* Evidence: crates/registry-breg/src/compiler.rs, breg.access-profile.processing-encrypted and
+    breg.event.projection-encrypted; crates/registry-breg/src/change_request.rs,
+    breg.change-request.effect-field-encrypted; crates/registry-breg/src/derived_sql.rs,
     refuse_encrypted_columns(); crates/registry-breg/src/postgres/read.rs, predicate_sql();
     crates/registry-breg/src/request_prepare.rs, refuse_encrypted_participation();
     crates/registry-breg/src/outbox.rs, projected_event_values(). */}

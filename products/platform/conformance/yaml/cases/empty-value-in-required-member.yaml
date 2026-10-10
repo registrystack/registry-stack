@@ -1,0 +1,15 @@
+id: empty-value-in-required-member
+rules: [CFG-EMPTY-1]
+summary: An empty value after a required member's key is null, refused at the key.
+mutation:
+  member:
+    role: requiredText
+    value: ""
+expect:
+  exit: 1
+  diagnostics:
+    - code: config.null-value
+      path: "{pointer}"
+      from: key
+      at: {line: 1, column: 1}
+      suggestedAction: Give a value, or remove the key if the member is optional.

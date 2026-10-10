@@ -22,7 +22,7 @@ statisticalDatasets:
     unit: discharge-report
     population: "substanceCode ne null"
     period:
-      kind: flow
+      type: flow
       field: period-start
       granularity: month
       firstPeriod: 2025-01
@@ -32,12 +32,30 @@ statisticalDatasets:
     disclosure:
       minimumCount: 5
       roundingBase: 5
-    live:
-      - facility-operator
-    releases:
-      publisher: statistics-publisher
-      readers:
-        - statistics-reader
+```
+
+The declaration names no profile. Each access profile grants the dataset in
+its own `permissions`, beside its record grants:
+
+```yaml
+accessProfiles:
+  - id: facility-operator
+    permissions:
+      - dataset: monthly-discharge-reports
+        operations:
+          - read-live
+          - read-releases
+  - id: statistics-publisher
+    permissions:
+      - dataset: monthly-discharge-reports
+        operations:
+          - publish
+          - read-releases
+  - id: statistics-reader
+    permissions:
+      - dataset: monthly-discharge-reports
+        operations:
+          - read-releases
 ```
 
 The unit is a mutable entity. Population expressions use the typed read-filter
@@ -55,13 +73,28 @@ one of them. Encrypted fields and consent-gated source grants are refused.
 
 ## Profiles and count equivalence
 
-Every dataset profile is authenticated. A declaration needs live profiles,
-release grants, or both. Releases have exactly one publisher and at least one
-reader. A released-data reader can have no record permissions at all.
-Release GET routes authorize the publisher, every live profile, and every
-profile listed in `releases.readers`. A reader can have no entity permission.
+Every dataset profile is authenticated. A dataset permission holds `dataset`
+and `operations` only, and a profile names a dataset in at most one
+permission. The operations are `read-live` for exact live counts, `publish`
+for publishing and withdrawing releases, and `read-releases` for reading
+released documents. A dataset needs at least one grant
+(`breg.statistical-dataset.grants-empty`), and a permission on a dataset the
+project does not declare is refused
+(`breg.access-profile.permission-dataset-unknown`).
 
-A live profile and the publisher must have an ordinary `list` grant on the unit
+At most one profile holds `publish` on a dataset
+(`breg.statistical-dataset.publisher-multiple`). Release GET routes authorize
+the publisher, every `read-live` profile, and every other `read-releases`
+profile, so the file says so: when a dataset has a publisher, the publisher
+and every `read-live` profile must also write `read-releases`
+(`breg.statistical-dataset.read-releases-required`). `read-releases` on a
+dataset nobody publishes is refused
+(`breg.statistical-dataset.publisher-missing`). A profile that only holds
+`read-releases` can have no record permission at all. `bregctl explain
+access` lists, per dataset, the profiles holding each operation under
+`statisticalDatasets`.
+
+A `read-live` profile and the publisher must have an ordinary `list` grant on the unit
 with `allowCount: true`. That grant must permit the fields and typed filter
 operators used by the population, period or validity selection, and dimensions.
 The statistical query uses the same list predicates, forced row security,
@@ -99,7 +132,7 @@ rows valid at the reference date. It may use the entity's temporal declaration:
 
 ```yaml
 period:
-  kind: stock
+  type: stock
   granularity: month
   firstPeriod: 2025-01
   validity: temporal
@@ -185,7 +218,7 @@ A definition digest covers everything that can affect the true or published
 cells: unit, population, period, dimensions and codes, the definitions of
 referenced fields and derived SQL inputs, publisher visibility on every source
 dependency, and disclosure parameters.
-Reader and live grants and `firstPeriod` do not change it. Read eligibility
+`read-releases` and `read-live` grants and `firstPeriod` do not change it. Read eligibility
 uses the active definition digest, so versions from another definition remain
 stored but are unavailable until that exact definition is active again.
 

@@ -162,6 +162,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3d036a3c4ab069c7b410a2ce876bd74808d2d0888a82667669f8e783a898bf1"
 
 [[package]]
+name = "arraydeque"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7d902e3d592a523def97af8f317b08ce16b7ab854c1985a0c671e6f15cebc236"
+
+[[package]]
 name = "arrayref"
 version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4869,6 +4875,7 @@ dependencies = [
  "registry-platform-oidc",
  "registry-platform-script",
  "registry-platform-testing",
+ "registry-platform-yaml",
  "registry-review-client",
  "reqwest 0.12.28",
  "rhai",
@@ -4963,6 +4970,7 @@ dependencies = [
  "base64 0.23.1",
  "clap",
  "http",
+ "jsonschema",
  "jsonwebtoken",
  "registry-breg",
  "registry-breg-client",
@@ -4978,8 +4986,10 @@ dependencies = [
  "registry-platform-oidc",
  "registry-platform-ratelimit",
  "registry-platform-testing",
+ "registry-platform-yaml",
  "reqwest 0.12.28",
  "rmcp",
+ "schemars",
  "serde",
  "serde_json",
  "tempfile",
@@ -5002,6 +5012,7 @@ dependencies = [
  "base64 0.23.1",
  "clap",
  "getrandom 0.4.3",
+ "jsonschema",
  "jsonwebtoken",
  "minijinja",
  "registry-breg",
@@ -5016,7 +5027,9 @@ dependencies = [
  "registry-platform-oidc",
  "registry-platform-ratelimit",
  "registry-platform-testing",
+ "registry-platform-yaml",
  "reqwest 0.12.28",
+ "schemars",
  "serde",
  "serde_json",
  "sha2 0.11.0",
@@ -5062,10 +5075,12 @@ dependencies = [
  "registry-platform-hooks",
  "registry-platform-httputil",
  "registry-platform-testing",
+ "registry-platform-yaml",
  "registry-thunderid-tooling",
  "reqwest 0.12.28",
  "rustix 1.1.5",
  "rustls",
+ "schemars",
  "serde",
  "serde_json",
  "serde_norway",
@@ -5114,6 +5129,7 @@ dependencies = [
  "registry-platform-httputil",
  "registry-platform-oidc",
  "registry-platform-testing",
+ "registry-platform-yaml",
  "registry-thunderid-tooling",
  "reqwest 0.12.28",
  "rustls",
@@ -5149,6 +5165,7 @@ dependencies = [
  "registry-platform-crypto",
  "registry-platform-hooks",
  "registry-platform-httputil",
+ "registry-platform-yaml",
  "schemars",
  "serde",
  "serde_json",
@@ -5227,11 +5244,12 @@ dependencies = [
  "registry-platform-calendar",
  "registry-platform-canonical-json",
  "registry-platform-httputil",
+ "registry-platform-yaml",
  "registry-review-protocol",
+ "schemars",
  "serde",
  "serde_json",
  "serde_norway",
- "serde_path_to_error",
  "sha2 0.11.0",
  "thiserror 2.0.21",
  "uuid",
@@ -5257,9 +5275,11 @@ dependencies = [
  "registry-platform-config",
  "registry-platform-crypto",
  "registry-platform-httputil",
+ "registry-platform-yaml",
  "registry-thunderid-tooling",
  "reqwest 0.12.28",
  "rustix 1.1.5",
+ "schemars",
  "serde",
  "serde_json",
  "serde_norway",
@@ -5318,6 +5338,8 @@ dependencies = [
  "registry-platform-canonical-json",
  "registry-platform-config",
  "registry-platform-httpsec",
+ "registry-platform-yaml",
+ "schemars",
  "serde",
  "serde_json",
  "sha2 0.11.0",
@@ -5413,16 +5435,16 @@ dependencies = [
  "registry-platform-canonical-json",
  "registry-platform-config",
  "registry-platform-httputil",
+ "registry-platform-yaml",
  "reqwest 0.12.28",
+ "schemars",
  "serde",
  "serde_json",
- "serde_yaml_ng",
  "sha2 0.11.0",
  "tempfile",
  "thiserror 2.0.21",
  "time",
  "tokio",
- "url",
 ]
 
 [[package]]
@@ -5461,6 +5483,7 @@ dependencies = [
  "registry-platform-ratelimit",
  "registry-platform-sdjwt",
  "registry-platform-sqlite",
+ "registry-platform-yaml",
  "reqwest 0.12.28",
  "rhai",
  "rusqlite",
@@ -5492,6 +5515,7 @@ version = "0.40.0"
 dependencies = [
  "anyhow",
  "jsonschema",
+ "registry-platform-yaml",
  "rhai",
  "schemars",
  "serde",
@@ -5508,6 +5532,7 @@ dependencies = [
  "chrono",
  "ed25519-dalek",
  "getrandom 0.4.3",
+ "jsonschema",
  "p256",
  "registry-evidence",
  "registry-evidence-verifier",
@@ -5516,8 +5541,10 @@ dependencies = [
  "registry-platform-httpsec",
  "registry-platform-httputil",
  "registry-platform-sdjwt",
+ "registry-platform-yaml",
  "registry-thunderid-tooling",
  "reqwest 0.12.28",
+ "schemars",
  "serde",
  "serde_json",
  "tempfile",
@@ -5588,21 +5615,23 @@ dependencies = [
  "clap",
  "ed25519-dalek",
  "getrandom 0.4.3",
+ "jsonschema",
  "jsonwebtoken",
  "p256",
  "registry-evidence-client",
  "registry-evidence-verifier",
  "registry-platform-buildinfo",
+ "registry-platform-config",
  "registry-platform-crypto",
  "registry-platform-httputil",
  "registry-platform-oidc",
  "registry-platform-sdjwt",
+ "registry-platform-yaml",
  "registry-thunderid-tooling",
  "reqwest 0.12.28",
- "rustix 1.1.5",
+ "schemars",
  "serde",
  "serde_json",
- "serde_norway",
  "subtle",
  "tempfile",
  "thiserror 2.0.21",
@@ -5660,9 +5689,11 @@ dependencies = [
  "registry-platform-buildinfo",
  "registry-platform-config",
  "registry-platform-crypto",
+ "registry-platform-yaml",
  "registry-thunderid-tooling",
  "rhai",
  "rustix 1.1.5",
+ "schemars",
  "serde",
  "serde_json",
  "serde_norway",
@@ -5684,6 +5715,7 @@ dependencies = [
  "anyhow",
  "futures",
  "registry-evidence-authoring",
+ "registry-platform-yaml",
  "rustix 1.1.5",
  "serde_json",
  "serde_norway",
@@ -5699,6 +5731,7 @@ dependencies = [
 name = "registry-linkml"
 version = "0.40.0"
 dependencies = [
+ "registry-platform-yaml",
  "serde",
  "serde_json",
  "serde_norway",
@@ -5709,12 +5742,14 @@ dependencies = [
 name = "registry-manifest-cli"
 version = "0.40.0"
 dependencies = [
+ "jsonschema",
  "registry-manifest-core",
  "registry-platform-buildinfo",
+ "registry-platform-config",
+ "registry-platform-yaml",
+ "schemars",
  "serde",
  "serde_json",
- "serde_yaml_ng",
- "unsafe-libyaml",
 ]
 
 [[package]]
@@ -5724,10 +5759,11 @@ dependencies = [
  "oxiri 0.3.1",
  "oxjsonld",
  "registry-platform-canonical-json",
+ "registry-platform-yaml",
+ "schemars",
  "serde",
  "serde_json",
  "serde_path_to_error",
- "serde_yaml_ng",
  "sha2 0.11.0",
  "thiserror 2.0.21",
 ]
@@ -5745,6 +5781,7 @@ dependencies = [
  "deadpool-postgres",
  "hex",
  "ipnet",
+ "jsonschema",
  "jsonwebtoken",
  "lettre",
  "rcgen",
@@ -5763,6 +5800,7 @@ dependencies = [
  "registry-platform-ratelimit",
  "registry-platform-script",
  "registry-platform-testing",
+ "registry-platform-yaml",
  "reqwest 0.12.28",
  "rhai",
  "rustls",
@@ -5770,7 +5808,6 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_norway",
- "serde_path_to_error",
  "sha2 0.11.0",
  "tempfile",
  "thiserror 2.0.21",
@@ -5838,6 +5875,8 @@ dependencies = [
  "jsonschema",
  "minijinja",
  "registry-platform-crypto",
+ "registry-platform-yaml",
+ "schemars",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
@@ -5864,6 +5903,7 @@ dependencies = [
  "registry-platform-dispatch",
  "registry-platform-oidc",
  "registry-platform-testing",
+ "registry-platform-yaml",
  "reqwest 0.12.28",
  "rustix 1.1.5",
  "serde",
@@ -5957,12 +5997,11 @@ name = "registry-platform-config"
 version = "0.40.0"
 dependencies = [
  "registry-platform-canonical-json",
+ "registry-platform-yaml",
  "rustix 1.1.5",
  "schemars",
  "serde",
  "serde_json",
- "serde_norway",
- "serde_path_to_error",
  "sha2 0.11.0",
  "tempfile",
  "thiserror 2.0.21",
@@ -6019,6 +6058,7 @@ dependencies = [
  "registry-platform-canonical-json",
  "registry-platform-dispatch",
  "registry-platform-httputil",
+ "registry-platform-yaml",
  "schemars",
  "serde",
  "serde_json",
@@ -6176,6 +6216,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "registry-platform-yaml"
+version = "0.40.0"
+dependencies = [
+ "saphyr-parser",
+ "schemars",
+ "serde",
+ "serde_json",
+ "url",
+]
+
+[[package]]
 name = "registry-record"
 version = "0.40.0"
 dependencies = [
@@ -6203,10 +6254,11 @@ dependencies = [
  "registry-platform-config",
  "registry-platform-crypto",
  "registry-platform-httpsec",
+ "registry-platform-yaml",
  "rustix 1.1.5",
+ "schemars",
  "serde",
  "serde_json",
- "serde_norway",
  "sha2 0.11.0",
  "subtle",
  "tempfile",
@@ -6280,6 +6332,7 @@ dependencies = [
  "registry-platform-httpsec",
  "registry-platform-httputil",
  "registry-platform-oidc",
+ "registry-platform-yaml",
  "registry-scheduling-core",
  "reqwest 0.12.28",
  "rustls",
@@ -6287,7 +6340,6 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_norway",
- "serde_path_to_error",
  "sha2 0.11.0",
  "tempfile",
  "thiserror 2.0.21",
@@ -6352,13 +6404,17 @@ name = "registry-scheduling-core"
 version = "0.40.0"
 dependencies = [
  "chrono",
+ "chrono-tz",
+ "jsonschema",
  "registry-platform-calendar",
  "registry-platform-canonical-json",
+ "registry-platform-config",
  "registry-platform-hooks",
+ "registry-platform-yaml",
+ "schemars",
  "serde",
  "serde_json",
  "serde_norway",
- "serde_path_to_error",
  "sha2 0.11.0",
  "thiserror 2.0.21",
 ]
@@ -6369,17 +6425,15 @@ version = "0.40.0"
 dependencies = [
  "anyhow",
  "chrono",
- "chrono-tz",
  "clap",
  "registry-platform-audit",
  "registry-platform-buildinfo",
  "registry-platform-config",
+ "registry-platform-yaml",
  "registry-scheduling",
  "registry-scheduling-core",
  "serde",
  "serde_json",
- "serde_norway",
- "serde_path_to_error",
  "tempfile",
  "tokio",
  "tokio-postgres",
@@ -6408,13 +6462,17 @@ version = "0.40.0"
 dependencies = [
  "base64 0.23.1",
  "getrandom 0.4.3",
+ "jsonschema",
  "p256",
  "registry-platform-authcommon",
+ "registry-platform-config",
  "registry-platform-crypto",
  "registry-platform-httputil",
  "registry-platform-oidc",
+ "registry-platform-yaml",
  "reqwest 0.12.28",
  "rustix 1.1.5",
+ "schemars",
  "serde",
  "serde_json",
  "serde_norway",
@@ -6852,6 +6910,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "saphyr-parser"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7429158804c36e705d9423b7848018e535b3e92d439a763e364ee12670ef473b"
+dependencies = [
+ "arraydeque",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "schannel"
 version = "0.1.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7044,19 +7112,6 @@ name = "serde_yaml"
 version = "0.9.34+deprecated"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6a8b1a1a2ebf674015cc02edccce75287f1a0130d394307b36743c2f5d504b47"
-dependencies = [
- "indexmap",
- "itoa",
- "ryu",
- "serde",
- "unsafe-libyaml",
-]
-
-[[package]]
-name = "serde_yaml_ng"
-version = "0.10.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7b4db627b98b36d4203a7b458cf3573730f2bb591b28871d916dfa9efabfd41f"
 dependencies = [
  "indexmap",
  "itoa",

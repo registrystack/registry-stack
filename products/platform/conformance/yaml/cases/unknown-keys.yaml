@@ -1,0 +1,16 @@
+id: unknown-keys
+rules: [CFG-DIAG-5, CFG-SEC-3, CFG-SCHEMA-8]
+summary: Two unknown top-level keys are both reported, each at its key, without repeating their values.
+mutation:
+  append: |
+    conformanceFirst: "{marker}"
+    conformanceSecond: "{marker}"
+expect:
+  exit: 1
+  diagnostics:
+    - code: config.unknown-key
+      path: /conformanceFirst
+      at: {line: 1, column: 1}
+    - code: config.unknown-key
+      path: /conformanceSecond
+      at: {line: 2, column: 1}

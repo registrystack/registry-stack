@@ -59,7 +59,7 @@ impl PhysicalNameBuilder {
         let name = format!("breg_{kind}_{slug}_{suffix}");
         if name.len() > 63 || !self.used.insert(name.clone()) {
             return Err(Diagnostic::error(
-                "physical_name.collision",
+                "breg.physical-name.collision",
                 path,
                 "stable identifiers do not produce a unique PostgreSQL name",
             ));

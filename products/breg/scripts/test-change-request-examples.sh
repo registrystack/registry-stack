@@ -579,8 +579,8 @@ if not bindings:
     raise SystemExit("journey suite was not found or had no steps")
 
 document = {
-    "apiVersion": "registry.registrystack.org/breg-schema-test-credentials/v1",
-    "kind": "SchemaTestCredentials",
+    "apiVersion": "id.registrystack.org/formats/breg/schema-test-credentials/v1",
+    "kind": "BRegSchemaTestCredentials",
     "bindings": bindings,
 }
 output.write_text(json.dumps(document, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")

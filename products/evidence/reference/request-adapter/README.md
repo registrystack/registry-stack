@@ -46,7 +46,9 @@ provider can satisfy the Version 1 request and cardinality boundary.
    false-as-success, boundary, no-match, ambiguity, missing data, protocol
    failure, privacy canaries, and exact request transport.
 9. Run `evidence check --runtime-config <absolute-runtime-yaml>` to validate the
-   complete immutable bundle and runtime bindings.
+   complete bundle and runtime bindings offline, and add
+   `--require-runtime-dependencies` on the target host to prove the frozen
+   inputs, secret material, and runtime dependencies there.
 10. Run `evidence evaluate --runtime-config <absolute-runtime-yaml> --fixture
     <bundle-relative-fixture-path>` for every referenced fixture before
     deployment. Add `--explain` to a run that failed to see the stages each

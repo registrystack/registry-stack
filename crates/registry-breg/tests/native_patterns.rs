@@ -18,7 +18,7 @@ fn project(pattern: Option<&str>) -> registry_breg::contract::RegistryProject {
         },
         "entities":[{"id":"entry","primaryDataset":"records","route":"entries","mutationMode":"mutable","classification":"internal",
             "fields":[{"id":"identifier","type":"string","maxLength":100,"classification":"internal"}]}],
-        "accessProfiles":[{"id":"reader","default":true,"principalClaim":"sub","permissions":[{"entity":"entry","operations":["get","list"],"readableFields":["identifier"],"rowBoundaries":[]}]}]
+        "accessProfiles":[{"id":"reader","default":true,"principalClaim":"sub","requiredScopes":"unrestricted","permissions":[{"entity":"entry","operations":["get","list"],"readableFields":["identifier"],"rowBoundaries":"unrestricted"}]}]
     });
     if let Some(pattern) = pattern {
         value["entities"][0]["fields"][0]["pattern"] = json!(pattern);
@@ -67,7 +67,7 @@ fn native_pattern_is_persisted_bounded_and_not_a_portable_schema_pattern() {
         assert!(error
             .diagnostics()
             .iter()
-            .any(|d| d.code == "field.pattern.bounds_invalid"));
+            .any(|d| d.code == "breg.field.pattern-bounds-invalid"));
         assert!(!format!("{error:?}").contains(&invalid));
     }
 }

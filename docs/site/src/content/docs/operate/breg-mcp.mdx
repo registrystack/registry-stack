@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-09-25"
+last_reviewed: "2026-10-08"
 doc_type: how-to
 locale: en
 standards_referenced: []
@@ -35,7 +35,7 @@ these responsibilities:
 - **Pass `Authorization` through unchanged** to the gateway.
 - **Rate limit at the edge.** The gateway charges its per-citizen and per-client limits only after
   a token verifies, so requests with missing or invalid tokens cost nothing in process. The review
-  page reads no peer address and no forwarded header, so `limits.globalSignIn` is one ceiling
+  page reads no peer address and no forwarded header, so `rateLimits.globalSignIn` is one ceiling
   shared by everyone on `/signin` and `/signin/callback`. Limit both services by client address at
   the proxy, and give the sign-in routes their own tighter limit.
 - **Serve the review page at `publicOrigin`.** The page builds its sign-in redirect URI from
@@ -73,12 +73,14 @@ with an error page. Watch the warnings in the next section for those.
 
 Each service writes one JSON object per line on standard output. The level is set by
 `BREG_MCP_LOG` or `BREG_REVIEW_LOG`, which accept exactly `error`, `warn`, or `info` and default to
-`info`. Any other value stops the process before it starts, with a message on standard error and
-exit status 2. See [environment variables](../../reference/environment-variables/).
+`info`. Any other value stops `serve` before it starts, with a message on standard error and exit
+status 2; `check` reads no level. See [environment variables](../../reference/environment-variables/).
 
-Startup failures take different channels. `breg-mcp` writes an `ERROR` JSON line on standard output
-and exits with status 1. `breg-review` writes a plain line starting `breg-review:` on standard error
-and exits with status 1. Collect both streams.
+Startup failures take different channels. A refused runtime configuration is reported by either
+service on standard error, as a line naming the service followed by the same diagnostic lines
+`check` prints, with exit status 1. After the configuration is read, `breg-mcp` writes any other
+startup failure as an `ERROR` JSON line on standard output, and `breg-review` writes it as a plain
+line starting `breg-review:` on standard error; both exit with status 1. Collect both streams.
 
 These records are the ones to watch:
 
@@ -149,7 +151,7 @@ directories, and keeps files owner-only. The active file has `.lock` and `.seq` 
 those companions in place while the stream is in use.
 
 Files rotate at `audit.rotateBytes`, 100 MiB by default. Sealed files expire after
-`audit.retainDays`, 90 days by default. Ship sealed files to append-only storage before expiry;
+`audit.retentionDays`, 90 days by default. Ship sealed files to append-only storage before expiry;
 the local files have no hash chain and cannot prove completeness. `audit.destination: stdout`
 is best effort: flushing a line does not prove durable storage. A failed writer stays unavailable
 until restart, so investigate the operator diagnostic and destination before restarting.
@@ -193,6 +195,11 @@ The new writer does not verify a hash chain or detect a changed pseudonym key.
 
 When upgrading from the draft chained format, archive its files and configure a fresh audit path.
 Set each `listener.bind` explicitly.
+
+A configuration written for an earlier release may still carry a retired `apiVersion` or a renamed
+key. `check` refuses each one and names what to write instead: the current `apiVersion` is
+`id.registrystack.org/formats/breg/mcp-runtime/v1alpha1` for the gateway and
+`id.registrystack.org/formats/breg/review-runtime/v1alpha1` for the review page.
 
 Run `check` from the new binary against the revised configuration, then replace the
 binary and restart:
@@ -283,12 +290,12 @@ docker run --rm \
 
 Set `audit.path` to a file in the mounted journal directory, such as
 `/var/lib/breg-mcp/audit.jsonl`. The image user owns that directory, and the audit journal
-refuses a directory it does not own. Run `check` in the same image before you serve:
+refuses a directory it does not own. Run `check` in the same image before you serve. It reads no
+secret, so it needs only the configuration:
 
 ```sh
 docker run --rm \
   --mount type=bind,source=/etc/breg-mcp/runtime.yaml,target=/etc/breg-mcp/runtime.yaml,readonly \
-  --mount type=bind,source=/run/secrets/breg-mcp,target=/run/secrets/breg-mcp,readonly \
   "$BREG_MCP_IMAGE" \
   --runtime-config /etc/breg-mcp/runtime.yaml check
 ```

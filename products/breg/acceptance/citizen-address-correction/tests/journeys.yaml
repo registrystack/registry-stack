@@ -1,17 +1,18 @@
-apiVersion: registry.registrystack.org/breg-journeys/v1
+apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
 journeys:
   - id: agent-drafts-and-review-page-submits
     steps:
       - id: steward-registers-person
         entity: person
         accessProfile: steward
-        claims: &steward_claims
+        claims:
           principal: synthetic-steward
           scopes: ['registry:steward']
           actorKind: human
           requesterClient: registry-staff-console
         request:
-          operation: create
+          type: create
           data: {person-code: P-0001, family-name: Okafor, given-name: Ada}
         expect:
           outcome: success
@@ -21,10 +22,14 @@ journeys:
       - id: steward-registers-address
         entity: person-address
         accessProfile: steward
-        claims: *steward_claims
+        claims:
+          principal: synthetic-steward
+          scopes: ['registry:steward']
+          actorKind: human
+          requesterClient: registry-staff-console
         request:
-          operation: create
-          data: {subject: {recordRef: person}, address-line: 1 Harbour Road, locality: Port Selene, postal-code: PS-100}
+          type: create
+          data: {subject: {recordCapture: person}, address-line: 1 Harbour Road, locality: Port Selene, postal-code: PS-100}
         expect:
           outcome: success
           status: 201
@@ -33,10 +38,14 @@ journeys:
       - id: steward-links-citizen
         entity: self-service-link
         accessProfile: steward
-        claims: *steward_claims
+        claims:
+          principal: synthetic-steward
+          scopes: ['registry:steward']
+          actorKind: human
+          requesterClient: registry-staff-console
         request:
-          operation: create
-          data: {subject: {recordRef: person}, principal: synthetic-citizen-a, active: true}
+          type: create
+          data: {subject: {recordCapture: person}, principal: synthetic-citizen-a, active: true}
         expect:
           outcome: success
           status: 201
@@ -44,13 +53,13 @@ journeys:
       - id: agent-reads-own-address
         entity: person-address
         accessProfile: citizen-agent
-        claims: &agent_claims
+        claims:
           principal: synthetic-citizen-a
           scopes: ['address-correction:self']
           actorKind: agent
           requesterClient: citizen-gateway
           actorSubject: 6f1c2d8e-3b4a-4e59-9c7d-2a8b5e0f1d34
-        request: {operation: get, recordRef: address}
+        request: {type: get, recordCapture: address}
         expect:
           outcome: success
           status: 200
@@ -58,7 +67,7 @@ journeys:
       - id: agent-drafts-correction
         entity: address-correction-request
         accessProfile: citizen-agent
-        claims: &agent_request_claims
+        claims:
           principal: synthetic-citizen-a
           scopes: ['address-correction:self']
           actorKind: agent
@@ -66,8 +75,8 @@ journeys:
           actorSubject: 6f1c2d8e-3b4a-4e59-9c7d-2a8b5e0f1d34
           directClaims: {sub: synthetic-citizen-a}
         request:
-          operation: create
-          data: {address: {recordRef: address}, new-address-line: 2 Quarry Lane, new-locality: Port Selene, new-postal-code: PS-100, owner: synthetic-citizen-a}
+          type: create
+          data: {address: {recordCapture: address}, new-address-line: 2 Quarry Lane, new-locality: Port Selene, new-postal-code: PS-100, owner: synthetic-citizen-a}
         expect:
           outcome: success
           status: 201
@@ -76,11 +85,17 @@ journeys:
       - id: agent-edits-draft
         entity: address-correction-request
         accessProfile: citizen-agent
-        claims: *agent_request_claims
+        claims:
+          principal: synthetic-citizen-a
+          scopes: ['address-correction:self']
+          actorKind: agent
+          requesterClient: citizen-gateway
+          actorSubject: 6f1c2d8e-3b4a-4e59-9c7d-2a8b5e0f1d34
+          directClaims: {sub: synthetic-citizen-a}
         request:
-          operation: patch
-          recordRef: draft
-          etagRef: draft
+          type: patch
+          recordCapture: draft
+          etagCapture: draft
           changes:
             - {field: new-postal-code, value: PS-205}
         expect:
@@ -91,13 +106,13 @@ journeys:
       - id: review-page-reads-draft
         entity: address-correction-request
         accessProfile: citizen-review
-        claims: &review_claims
+        claims:
           principal: synthetic-citizen-a
           scopes: ['address-correction:self']
           actorKind: human
           requesterClient: citizen-review-page
           directClaims: {sub: synthetic-citizen-a}
-        request: {operation: get, recordRef: edited-draft}
+        request: {type: get, recordCapture: edited-draft}
         expect:
           outcome: success
           status: 200
@@ -106,8 +121,13 @@ journeys:
       - id: review-page-submits
         entity: address-correction-request
         accessProfile: citizen-review
-        claims: *review_claims
-        request: {operation: submit_request, recordRef: reviewed-draft, etagRef: reviewed-draft}
+        claims:
+          principal: synthetic-citizen-a
+          scopes: ['address-correction:self']
+          actorKind: human
+          requesterClient: citizen-review-page
+          directClaims: {sub: synthetic-citizen-a}
+        request: {type: submit-request, recordCapture: reviewed-draft, etagCapture: reviewed-draft}
         expect: {outcome: success, status: 200}
       - id: reviewer-sees-submission
         entity: address-correction-request
@@ -117,7 +137,7 @@ journeys:
           scopes: ['address-correction:review']
           actorKind: human
           requesterClient: registry-staff-console
-        request: {operation: get, recordRef: draft}
+        request: {type: get, recordCapture: draft}
         expect:
           outcome: success
           status: 200
@@ -125,8 +145,12 @@ journeys:
       - id: address-unchanged-after-submission
         entity: person-address
         accessProfile: steward
-        claims: *steward_claims
-        request: {operation: get, recordRef: address}
+        claims:
+          principal: synthetic-steward
+          scopes: ['registry:steward']
+          actorKind: human
+          requesterClient: registry-staff-console
+        request: {type: get, recordCapture: address}
         expect:
           outcome: success
           status: 200
@@ -136,9 +160,13 @@ journeys:
       - id: steward-registers-first-person
         entity: person
         accessProfile: steward
-        claims: *steward_claims
+        claims:
+          principal: synthetic-steward
+          scopes: ['registry:steward']
+          actorKind: human
+          requesterClient: registry-staff-console
         request:
-          operation: create
+          type: create
           data: {person-code: P-0003, family-name: Mensah, given-name: Kofi}
         expect:
           outcome: success
@@ -148,10 +176,14 @@ journeys:
       - id: steward-registers-first-address
         entity: person-address
         accessProfile: steward
-        claims: *steward_claims
+        claims:
+          principal: synthetic-steward
+          scopes: ['registry:steward']
+          actorKind: human
+          requesterClient: registry-staff-console
         request:
-          operation: create
-          data: {subject: {recordRef: first-person}, address-line: 3 Lighthouse Way, locality: Port Selene, postal-code: PS-300}
+          type: create
+          data: {subject: {recordCapture: first-person}, address-line: 3 Lighthouse Way, locality: Port Selene, postal-code: PS-300}
         expect:
           outcome: success
           status: 201
@@ -160,10 +192,14 @@ journeys:
       - id: steward-links-first-citizen
         entity: self-service-link
         accessProfile: steward
-        claims: *steward_claims
+        claims:
+          principal: synthetic-steward
+          scopes: ['registry:steward']
+          actorKind: human
+          requesterClient: registry-staff-console
         request:
-          operation: create
-          data: {subject: {recordRef: first-person}, principal: synthetic-citizen-c, active: true}
+          type: create
+          data: {subject: {recordCapture: first-person}, principal: synthetic-citizen-c, active: true}
         expect:
           outcome: success
           status: 201
@@ -179,8 +215,8 @@ journeys:
           actorSubject: 6f1c2d8e-3b4a-4e59-9c7d-2a8b5e0f1d34
           directClaims: {sub: synthetic-citizen-c}
         request:
-          operation: create
-          data: {address: {recordRef: first-address}, new-address-line: 5 Beacon Street, new-locality: Port Selene, new-postal-code: PS-300, owner: synthetic-citizen-c}
+          type: create
+          data: {address: {recordCapture: first-address}, new-address-line: 5 Beacon Street, new-locality: Port Selene, new-postal-code: PS-300, owner: synthetic-citizen-c}
         expect:
           outcome: success
           status: 201
@@ -189,13 +225,13 @@ journeys:
       - id: other-agent-cannot-read-draft
         entity: address-correction-request
         accessProfile: citizen-agent
-        claims: &other_agent_claims
+        claims:
           principal: synthetic-citizen-d
           scopes: ['address-correction:self']
           actorKind: agent
           requesterClient: citizen-gateway
           actorSubject: 6f1c2d8e-3b4a-4e59-9c7d-2a8b5e0f1d34
-        request: {operation: get, recordRef: first-draft}
+        request: {type: get, recordCapture: first-draft}
         expect:
           outcome: refusal
           status: 404
@@ -203,8 +239,13 @@ journeys:
       - id: other-agent-cannot-read-address
         entity: person-address
         accessProfile: citizen-agent
-        claims: *other_agent_claims
-        request: {operation: get, recordRef: first-address}
+        claims:
+          principal: synthetic-citizen-d
+          scopes: ['address-correction:self']
+          actorKind: agent
+          requesterClient: citizen-gateway
+          actorSubject: 6f1c2d8e-3b4a-4e59-9c7d-2a8b5e0f1d34
+        request: {type: get, recordCapture: first-address}
         expect:
           outcome: refusal
           status: 404
@@ -217,7 +258,7 @@ journeys:
           scopes: ['address-correction:self']
           actorKind: human
           requesterClient: citizen-review-page
-        request: {operation: get, recordRef: first-draft}
+        request: {type: get, recordCapture: first-draft}
         expect:
           outcome: refusal
           status: 404

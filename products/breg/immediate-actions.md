@@ -288,7 +288,7 @@ The selected action permission must explicitly include the target entity and mee
 its mandatory scopes, purposes, and row boundaries. That grant admits the
 reviewed action's exact required processing, including checking a field that
 the caller cannot retrieve. It does not grant ordinary reads or expose the
-checked value. Anonymous action invocation remains forbidden. The compiled
+checked value. Every invocation comes from a verified caller. The compiled
 action inventory and fingerprint include the requirement and the referenced
 entity contract, so a changed check is a governed authority change.
 

@@ -32,7 +32,8 @@ runtime are not fixture inputs and never appear in the package.
 ## File shape
 
 ```yaml
-fixture: registry.evidence.reference.example/v1
+apiVersion: id.registrystack.org/formats/evidence/fixture/v1alpha1
+kind: EvidenceFixture
 synthetic_only: true
 common:
   observed_at: "2026-08-02T00:00:00Z"
@@ -54,11 +55,21 @@ privacyExpectation:
 
 | Key | Required | Meaning |
 |---|---|---|
-| `fixture` | yes | Unique fixture contract identifier ending in `/v1`. |
+| `apiVersion` | yes | `id.registrystack.org/formats/evidence/fixture/v1alpha1`. |
+| `kind` | yes | `EvidenceFixture`. |
 | `synthetic_only` | yes | Must be literal `true`. Live values are forbidden. |
 | `common` | yes | Deterministic inputs inherited by every case. |
 | `cases` | yes | Non-empty ordered array with unique case ids. |
 | `privacyExpectation` | yes | Tokens/canaries that must be present or absent at public and diagnostic boundaries. |
+
+The bundle loader reads every referenced fixture with the shared configuration
+reader. A missing or unknown envelope, the retired `fixture` identifier key, and
+a `${...}` expression are refused, and so is a fixture that is not synthetic or
+does not cover every required case category. Each refusal names the file, the
+member, its line and column, and the fix, and never repeats a value from the
+file. The evaluator runs a fixture that declares
+`coequal_acceptance_definition: true` as a coequal acceptance definition and
+every other fixture under this contract.
 
 `observed_at` is required and may be overridden by a case. Rust derives
 `legal_local_date` and `legal_local_time` from that instant and the requirement's

@@ -1,0 +1,12 @@
+id: alias
+rules: [CFG-YAML-3]
+summary: An alias is refused at the alias.
+mutation:
+  append: |
+    conformanceAlias: *conformance
+expect:
+  exit: 1
+  diagnostics:
+    - code: yaml.alias
+      path: /conformanceAlias
+      at: {line: 1, column: 19}

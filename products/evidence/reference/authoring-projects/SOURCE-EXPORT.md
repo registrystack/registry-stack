@@ -11,13 +11,14 @@ the provider, runs external setup commands, creates authority, or starts a
 service. Target validation may execute reviewed bounded adapters against local
 synthetic fixtures through the ordinary Evidence evaluator.
 
-## Export manifest version 1
+## Export manifest
 
 The export directory contains `source-export.json`:
 
 ```json
 {
-  "formatVersion": 1,
+  "apiVersion": "id.registrystack.org/formats/breg/evidence-source-export/v1alpha1",
+  "kind": "BRegEvidenceSourceExport",
   "sourceId": "registry-status",
   "provenance": {
     "producer": "institution-source-exporter",
@@ -26,14 +27,18 @@ The export directory contains `source-export.json`:
   "artifacts": [
     {
       "path": "sources/registry-status.yaml",
-      "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      "digest": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
     }
   ]
 }
 ```
 
-The checksum above is illustrative. Each actual `sha256` is the lowercase
-64-character SHA-256 checksum of that file's exact UTF-8 bytes. The manifest and
+The digest above is illustrative. Each actual `digest` is `sha256:` followed by
+the lowercase 64-character SHA-256 checksum of that file's exact UTF-8 bytes.
+The manifest opens with its `apiVersion` and `kind`, and is read by the shared
+configuration reader: a refusal names its code, position, and fix. A manifest
+written with `formatVersion` or an artifact `sha256` is refused with
+`config.removed-key`, naming the member that replaces it. The manifest and
 artifact entries are closed objects; unknown fields are refused. The manifest
 is at most 1 MiB and inventories 1 to 256 artifacts, each at most 1 MiB and at
 most 16 MiB together. `provenance` is a map of 1 to 32 nonempty printable string
@@ -44,7 +49,8 @@ Provenance is attribution and review context, never proof of provider authority.
 One export inventories exactly `sources/<sourceId>.yaml` and its auxiliary
 artifacts under `selectors/`, `schemas/`, and `adapters/`. Source, selector, and
 schema files use `.yaml`; adapter files use `.rhai`. YAML files must contain
-mapping objects. Names are bounded lowercase authoring names. Paths have
+mapping objects. A source and a selector carry the `apiVersion` and `kind`
+header of their format; a schema is a foreign JSON Schema file and carries none. Names are bounded lowercase authoring names. Paths have
 exactly two components and cannot be absolute, contain `.` or `..` components,
 backslashes, or symbolic links. Files must be regular files with one hard link.
 The ordinary authoring compiler remains the authority for usable document
@@ -100,7 +106,7 @@ Structural validation checks the complete source artifact graph and any
 existing questions without requiring a target, local credentials, or a first
 question. It includes each existing derivation's fact reads, so a next fact
 schema that no longer declares a fact a derivation reads fails structural
-validation with `evidence.authoring.derivation-fact-undeclared`
+validation with `evidence.derivation.fact-undeclared`
 ([CONFIG.md](CONFIG.md#the-derivation-program)). The report identifies its
 validation kind explicitly. Target
 validation runs the ordinary compiled-bundle and fixture checks. If the current
@@ -117,16 +123,21 @@ requests, audit history, or running-service state. Candidates are bounded to
 
 ## Finish a customization conflict
 
-Write an explicit resolution file and supply it to diff or update:
+Write an explicit resolution file and supply it to diff or update. A
+resolution file is a closed JSON document of kind `EvidenceSourceResolution`;
+the conventional names `source-resolutions.json` and `*.resolutions.json` get
+an editor schema from `editors/configure.py`, and a file written with
+`formatVersion` is refused with `config.removed-key`:
 
 ```json
 {
-  "formatVersion": 1,
+  "apiVersion": "id.registrystack.org/formats/evidence/source-resolution/v1alpha1",
+  "kind": "EvidenceSourceResolution",
   "artifacts": {
-    "adapters/registry-status-extract.rhai": {"choice": "keep"},
-    "schemas/registry-status-response.yaml": {"choice": "adopt"},
+    "adapters/registry-status-extract.rhai": {"type": "keep"},
+    "schemas/registry-status-response.yaml": {"type": "adopt"},
     "adapters/registry-status-prepare.rhai": {
-      "choice": "file",
+      "type": "file",
       "path": "reviewed/registry-status-prepare.rhai"
     }
   }

@@ -1,0 +1,7 @@
+id: usage-error
+rules: [CFG-DIAG-4]
+summary: An option the command does not define is a usage error, exit 2, whatever the file holds.
+args: [--conformance-unknown-option]
+expect:
+  exit: 2
+  report: false

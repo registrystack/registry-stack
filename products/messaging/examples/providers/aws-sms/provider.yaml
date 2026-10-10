@@ -1,3 +1,6 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/messaging/provider/provider.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/messaging/provider/v1alpha1
+kind: MessagingProvider
 # AWS End User Messaging SMS SendTextMessage over its AWS JSON 1.0 API.
 # The runtime supplies application/x-amz-json-1.0 and signs the final request
 # with the regional credentials in connection.example.yaml.
@@ -11,5 +14,5 @@ request:
 # this package declares neither idempotent submission nor direct receipts.
 capabilities:
   receipts: none
-  concurrencyLimit: 16
+  maximumConcurrentRequests: 16
 

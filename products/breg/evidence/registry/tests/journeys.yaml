@@ -1,4 +1,5 @@
-apiVersion: registry.registrystack.org/breg-journeys/v1
+apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
 # Journeys rehearse the native request schema, so every field appears under the
 # identifier registry.yaml declares. `registration-number` also declares
 # `apiName: registrationNumber`, the property name the HTTP API uses and the one
@@ -15,7 +16,7 @@ journeys:
       scopes:
       - registry:generic:operate
     request:
-      operation: create
+      type: create
       data:
         code: SYNTHETIC-JOURNEY
         registration-number: SYNTHETIC-JOURNEY-REG
@@ -31,13 +32,13 @@ journeys:
   - id: source-looks-up-by-code
     entity: record
     accessProfile: evidence-source
-    claims: &id001
+    claims:
       principal: evidence-source
       purpose: evidence-source-read
       scopes:
       - registry:evidence:lookup
     request:
-      operation: lookup
+      type: lookup
       selector: by-code
       values:
         code: SYNTHETIC-JOURNEY
@@ -50,9 +51,13 @@ journeys:
   - id: source-looks-up-by-registration-number
     entity: record
     accessProfile: evidence-source
-    claims: *id001
+    claims:
+      principal: evidence-source
+      purpose: evidence-source-read
+      scopes:
+      - registry:evidence:lookup
     request:
-      operation: lookup
+      type: lookup
       selector: by-registration-number
       values:
         registration-number: SYNTHETIC-JOURNEY-REG
@@ -65,9 +70,13 @@ journeys:
   - id: source-unresolved-is-not-a-negative-status
     entity: record
     accessProfile: evidence-source
-    claims: *id001
+    claims:
+      principal: evidence-source
+      purpose: evidence-source-read
+      scopes:
+      - registry:evidence:lookup
     request:
-      operation: lookup
+      type: lookup
       selector: by-code
       values:
         code: SYNTHETIC-NOT-REGISTERED

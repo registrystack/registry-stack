@@ -19,7 +19,7 @@ async fn ordinary_profile_removal_applies_and_matches_fresh_catalog() {
 async fn ordinary_profile_operation_narrowing_applies_and_matches_fresh_catalog() {
     assert_profile_successor(
         Some(json!({
-            "id": "auditor", "principalClaim": "principal", "rowBoundaries": [],
+            "id": "auditor", "principalClaim": "principal", "requiredScopes":"unrestricted","rowBoundaries":"unrestricted",
             "operations": ["create"], "writableFields": ["code", "note"]
         })),
         ProfileSuccessor::Compiler,
@@ -31,7 +31,7 @@ async fn ordinary_profile_operation_narrowing_applies_and_matches_fresh_catalog(
 async fn ordinary_profile_create_revocation_applies_and_matches_fresh_catalog() {
     assert_profile_successor(
         Some(json!({
-            "id": "auditor", "principalClaim": "principal", "rowBoundaries": [],
+            "id": "auditor", "principalClaim": "principal", "requiredScopes":"unrestricted","rowBoundaries":"unrestricted",
             "operations": ["get", "list"], "readableFields": ["code", "note"]
         })),
         ProfileSuccessor::Compiler,
@@ -43,7 +43,7 @@ async fn ordinary_profile_create_revocation_applies_and_matches_fresh_catalog() 
 async fn ordinary_profile_field_narrowing_applies_and_matches_fresh_catalog() {
     assert_profile_successor(
         Some(json!({
-            "id": "auditor", "principalClaim": "principal", "rowBoundaries": [],
+            "id": "auditor", "principalClaim": "principal", "requiredScopes":"unrestricted","rowBoundaries":"unrestricted",
             "operations": ["create", "get", "list"],
             "writableFields": ["code", "note"], "readableFields": ["code"]
         })),
@@ -194,8 +194,8 @@ fn change_request_policy_module(add_submitter: bool, add_optional_field: bool) -
                     "revise_request", "cancel_request", "apply_request"],
                 "readableFields": ["asset", "label"],
                 "writableFields": ["asset", "label"],
-                "applyTargets": [{"entity": "asset", "rowBoundaries": []}],
-                "rowBoundaries": []
+                "applyTargets": [{"entity": "asset", "rowBoundaries":"unrestricted"}],
+                "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"
             }]
         }]
     });
@@ -215,7 +215,7 @@ fn change_request_policy_module(add_submitter: bool, add_optional_field: bool) -
             .push(json!({
                 "id": "backup-submitter", "principalClaim": "principal",
                 "operations": ["get", "list", "submit_request"],
-                "readableFields": ["asset", "label"], "rowBoundaries": []
+                "readableFields": ["asset", "label"], "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"
             }));
     }
     serde_json::to_vec(&module).unwrap()
@@ -266,7 +266,7 @@ async fn fresh_fingerprint(registry: &registry_breg::model::CompiledRegistry) ->
 
 async fn assert_profile_successor(auditor: Option<Value>, kind: ProfileSuccessor) {
     let baseline_bytes = profile_module(Some(json!({
-        "id": "auditor", "principalClaim": "principal", "rowBoundaries": [],
+        "id": "auditor", "principalClaim": "principal", "requiredScopes":"unrestricted","rowBoundaries":"unrestricted",
         "operations": ["create", "get", "list"],
         "writableFields": ["code", "note"], "readableFields": ["code", "note"]
     })));

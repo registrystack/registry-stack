@@ -1,17 +1,18 @@
-apiVersion: registry.registrystack.org/breg-journeys/v1
+apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
 journeys:
   - id: business-establishment-lifecycle
     steps:
       - id: create-north-head-office
         entity: establishment
         accessProfile: business-operator
-        claims: &business_operator_claims
+        claims:
           principal: synthetic-business-operator
           scopes:
             - registry:business:operate
           purpose: business-administration
         request:
-          operation: create
+          type: create
           data:
             establishment-code: ESTABLISHMENT-SYNTH-001
             site-name: North Quay Head Office
@@ -32,9 +33,13 @@ journeys:
       - id: create-production-branch
         entity: establishment
         accessProfile: business-operator
-        claims: *business_operator_claims
+        claims:
+          principal: synthetic-business-operator
+          scopes:
+            - registry:business:operate
+          purpose: business-administration
         request:
-          operation: create
+          type: create
           data:
             establishment-code: ESTABLISHMENT-SYNTH-002
             site-name: North Quay Riverside Works
@@ -54,9 +59,13 @@ journeys:
       - id: create-central-head-office
         entity: establishment
         accessProfile: business-operator
-        claims: *business_operator_claims
+        claims:
+          principal: synthetic-business-operator
+          scopes:
+            - registry:business:operate
+          purpose: business-administration
         request:
-          operation: create
+          type: create
           data:
             establishment-code: ESTABLISHMENT-SYNTH-003
             site-name: Central Fabrication Works
@@ -75,9 +84,13 @@ journeys:
       - id: create-central-branch
         entity: establishment
         accessProfile: business-operator
-        claims: *business_operator_claims
+        claims:
+          principal: synthetic-business-operator
+          scopes:
+            - registry:business:operate
+          purpose: business-administration
         request:
-          operation: create
+          type: create
           data:
             establishment-code: ESTABLISHMENT-SYNTH-004
             site-name: Central Distribution Branch
@@ -96,9 +109,13 @@ journeys:
       - id: create-central-depot
         entity: establishment
         accessProfile: business-operator
-        claims: *business_operator_claims
+        claims:
+          principal: synthetic-business-operator
+          scopes:
+            - registry:business:operate
+          purpose: business-administration
         request:
-          operation: create
+          type: create
           data:
             establishment-code: ESTABLISHMENT-SYNTH-005
             site-name: Central Storage Depot
@@ -117,9 +134,13 @@ journeys:
       - id: create-isolation-head-office
         entity: establishment
         accessProfile: business-operator
-        claims: *business_operator_claims
+        claims:
+          principal: synthetic-business-operator
+          scopes:
+            - registry:business:operate
+          purpose: business-administration
         request:
-          operation: create
+          type: create
           data:
             establishment-code: ESTABLISHMENT-SYNTH-006
             site-name: South Harbour Head Office
@@ -138,9 +159,13 @@ journeys:
       - id: create-isolation-regional-office
         entity: establishment
         accessProfile: business-operator
-        claims: *business_operator_claims
+        claims:
+          principal: synthetic-business-operator
+          scopes:
+            - registry:business:operate
+          purpose: business-administration
         request:
-          operation: create
+          type: create
           data:
             establishment-code: ESTABLISHMENT-SYNTH-007
             site-name: South Harbour Regional Office
@@ -159,9 +184,13 @@ journeys:
       - id: create-isolation-branch
         entity: establishment
         accessProfile: business-operator
-        claims: *business_operator_claims
+        claims:
+          principal: synthetic-business-operator
+          scopes:
+            - registry:business:operate
+          purpose: business-administration
         request:
-          operation: create
+          type: create
           data:
             establishment-code: ESTABLISHMENT-SYNTH-008
             site-name: South Harbour Branch
@@ -180,9 +209,13 @@ journeys:
       - id: create-north-business
         entity: business
         accessProfile: business-operator
-        claims: *business_operator_claims
+        claims:
+          principal: synthetic-business-operator
+          scopes:
+            - registry:business:operate
+          purpose: business-administration
         request:
-          operation: create
+          type: create
           data:
             business-code: BUSINESS-SYNTH-001
             local-registration-number: 1001
@@ -200,9 +233,13 @@ journeys:
       - id: create-central-business
         entity: business
         accessProfile: business-operator
-        claims: *business_operator_claims
+        claims:
+          principal: synthetic-business-operator
+          scopes:
+            - registry:business:operate
+          purpose: business-administration
         request:
-          operation: create
+          type: create
           data:
             business-code: BUSINESS-SYNTH-002
             local-registration-number: 1002
@@ -219,9 +256,13 @@ journeys:
       - id: create-isolation-business
         entity: business
         accessProfile: business-operator
-        claims: *business_operator_claims
+        claims:
+          principal: synthetic-business-operator
+          scopes:
+            - registry:business:operate
+          purpose: business-administration
         request:
-          operation: create
+          type: create
           data:
             business-code: BUSINESS-SYNTH-003
             local-registration-number: 1003
@@ -238,9 +279,13 @@ journeys:
       - id: lookup-north-business
         entity: business
         accessProfile: business-operator
-        claims: *business_operator_claims
+        claims:
+          principal: synthetic-business-operator
+          scopes:
+            - registry:business:operate
+          purpose: business-administration
         request:
-          operation: lookup
+          type: lookup
           selector: by-local-reference
           values:
             administrative-area: demonstration-north
@@ -254,11 +299,15 @@ journeys:
       - id: read-establishments-from-north-business
         entity: business
         accessProfile: business-operator
-        claims: *business_operator_claims
+        claims:
+          principal: synthetic-business-operator
+          scopes:
+            - registry:business:operate
+          purpose: business-administration
         request:
-          operation: read_path
+          type: read-path
           path: establishments
-          recordRef: north-business
+          recordCapture: north-business
           select:
             - establishment-code
             - site-name
@@ -272,9 +321,13 @@ journeys:
       - id: query-establishment-summary
         entity: business
         accessProfile: business-operator
-        claims: *business_operator_claims
+        claims:
+          principal: synthetic-business-operator
+          scopes:
+            - registry:business:operate
+          purpose: business-administration
         request:
-          operation: query
+          type: query
           select:
             - business-code
             - local-registration-number
@@ -292,9 +345,13 @@ journeys:
       - id: refuse-incomplete-assignment
         entity: operator-assignment
         accessProfile: business-operator
-        claims: *business_operator_claims
+        claims:
+          principal: synthetic-business-operator
+          scopes:
+            - registry:business:operate
+          purpose: business-administration
         request:
-          operation: create
+          type: create
           data:
             relationship: head-office
             valid-from: 2026-01-01
@@ -310,8 +367,8 @@ journeys:
           scopes:
             - registry:business:operate
         request:
-          operation: get
-          recordRef: north-head-office
+          type: get
+          recordCapture: north-head-office
         expect:
           outcome: refusal
           status: 404

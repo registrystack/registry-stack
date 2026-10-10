@@ -176,7 +176,7 @@ fn hook_project_json(
             }}
           }}],
           "accessProfiles":[{{
-            "id":"operator","default":true,"principalClaim":"registry_principal",
+            "id":"operator","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "requiredPurposes":["case-management"],
             "permissions":[{{
               "entity":"case","operations":["create","get","list"],
@@ -185,10 +185,10 @@ fn hook_project_json(
               "rowBoundaries":[{{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}}]
             }}]
           }},{{
-            "id":"case-hook","principalClaim":"registry_principal",
+            "id":"case-hook","principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "permissions":[{{
               "action":"open-followup","operations":["invoke"],
-              "targets":[{{"entity":"followup","rowBoundaries":[]}}],
+              "targets":[{{"entity":"followup","rowBoundaries":"unrestricted"}}],
               {case_hook_results}
             }}]
           }}]
@@ -465,7 +465,7 @@ fn tally_proposal_registry() -> CompiledRegistry {
     project["accessProfiles"][1]["permissions"][0]["targets"]
         .as_array_mut()
         .unwrap()
-        .push(json!({"entity": "tally", "rowBoundaries": []}));
+        .push(json!({"entity": "tally", "rowBoundaries": "unrestricted"}));
     let project = parse_project_json(
         &serde_json::to_vec(&project).expect("hook proposal fixture serializes"),
     )

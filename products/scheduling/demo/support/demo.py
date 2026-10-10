@@ -295,6 +295,8 @@ DEMO_RECORDS = """\
 # station at the Bangkok counter (so the race scenario competes for the last
 # unit), one at the New York hall, and the fold-day prep closure that moves
 # the 2026-11-01 grid anchor past 04:45Z.
+apiVersion: id.registrystack.org/formats/scheduling/records/v1alpha1
+kind: SchedulingRecords
 locations:
   - id: bangkok-counter
     timezone: Asia/Bangkok
@@ -396,7 +398,7 @@ def runtime_config(
         else ""
     )
     return f"""\
-apiVersion: registry.registrystack.org/scheduling-runtime/v1alpha1
+apiVersion: id.registrystack.org/formats/scheduling/runtime/v1alpha1
 kind: SchedulingRuntimeConfig
 package:
   root: {package_root}
@@ -424,7 +426,6 @@ audit:
   hashKeyRef: secret:file/audit-key
 retention: {{}}
 destinations:
-  reminders: null
   hooks: {{}}
 """
 

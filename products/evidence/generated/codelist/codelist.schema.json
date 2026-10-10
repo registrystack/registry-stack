@@ -1,0 +1,113 @@
+{
+  "$defs": {
+    "Code": {
+      "description": "A code of 1 to 128 ASCII letters, digits, `.`, `_`, `:`, or `-`, starting with a letter or digit.",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+      "type": "string"
+    },
+    "CodelistId": {
+      "description": "An absolute URI of at most 512 bytes, such as urn:example:codelist:regions.",
+      "format": "uri",
+      "maxLength": 512,
+      "minLength": 1,
+      "type": "string"
+    },
+    "CodelistVersion": {
+      "description": "A version of 1 to 128 bytes without a NUL character, such as '2026-01'.",
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[^\\u0000]+$",
+      "type": "string"
+    },
+    "ExternalId": {
+      "description": "An identifier another system issues, written exactly as its issuer gives it.",
+      "maxLength": 512,
+      "minLength": 1,
+      "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
+      "type": "string"
+    }
+  },
+  "$id": "https://id.registrystack.org/schemas/evidence/codelist/codelist.v1alpha1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "dependentRequired": {
+    "allowed_outputs": [
+      "entries"
+    ],
+    "entries": [
+      "allowed_outputs"
+    ]
+  },
+  "description": "A codelist file as written. Exactly one form is declared: `codes`, or\n`entries` with `allowed_outputs`.",
+  "oneOf": [
+    {
+      "required": [
+        "codes"
+      ]
+    },
+    {
+      "required": [
+        "entries",
+        "allowed_outputs"
+      ]
+    }
+  ],
+  "properties": {
+    "allowed_outputs": {
+      "description": "The output codes a mapping may produce; every `entries` output is one\nof them. Declared with `entries` and only with it.",
+      "items": {
+        "$ref": "#/$defs/Code"
+      },
+      "maxItems": 4096,
+      "minItems": 1,
+      "type": "array",
+      "uniqueItems": true
+    },
+    "codes": {
+      "description": "The exact code set, for a code list. Omit it in a mapping.",
+      "items": {
+        "$ref": "#/$defs/Code"
+      },
+      "maxItems": 4096,
+      "minItems": 1,
+      "type": "array",
+      "uniqueItems": true
+    },
+    "entries": {
+      "additionalProperties": false,
+      "description": "The exact source-to-output mapping, for a mapping. Omit it in a code\nlist.",
+      "maxProperties": 4096,
+      "minProperties": 1,
+      "patternProperties": {
+        "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$": {
+          "$ref": "#/$defs/Code"
+        }
+      },
+      "propertyNames": {
+        "allOf": [
+          {
+            "$ref": "#/$defs/ExternalId"
+          },
+          {
+            "$ref": "#/$defs/Code"
+          }
+        ]
+      },
+      "type": "object"
+    },
+    "id": {
+      "$ref": "#/$defs/CodelistId",
+      "description": "The absolute URI identifying the codelist; a bucket concept's\n`bucketScheme` names it."
+    },
+    "version": {
+      "$ref": "#/$defs/CodelistVersion",
+      "description": "The codelist version; a referencing concept's `codelistVersion` or\n`schemeVersion` repeats it exactly."
+    }
+  },
+  "required": [
+    "id",
+    "version"
+  ],
+  "title": "Evidence code list",
+  "type": "object"
+}

@@ -1,0 +1,80 @@
+---
+import docsetsManifest from '../data/generated/docsets.json';
+import { docsetHasProduct, selectedDocset } from '../lib/docset-products.mjs';
+import formats from '../data/generated/configuration-formats.json';
+
+interface Props {
+  product: string;
+}
+
+const { product: productId } = Astro.props;
+const product = formats.products.find((entry) => entry.id === productId);
+if (!product) {
+  throw new Error(`the configuration format registry has no formats for ${productId}; run npm run generate`);
+}
+
+// A docset publishes a product's formats only when it publishes the product.
+const docset = selectedDocset(docsetsManifest, process.env);
+const published = (gate: string | null) => gate === null || docsetHasProduct(docset, gate);
+const rows = product.formats.filter((format) => published(format.docsetProduct));
+---
+
+<div class="table-scroll">
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">Format and files</th>
+        <th scope="col">Check command</th>
+      </tr>
+    </thead>
+    <tbody>
+      {
+        rows.map((format) => (
+          <tr id={`check-${format.id.replace('/', '-')}`}>
+            <th scope="row">
+              {format.title}
+              <ul class="value-list">
+                {format.files.map((file) => (
+                  <li>
+                    <code>{file}</code>
+                  </li>
+                ))}
+              </ul>
+            </th>
+            <td>{format.check ? <code>{format.check}</code> : 'None'}</td>
+          </tr>
+        ))
+      }
+    </tbody>
+  </table>
+</div>
+
+<style>
+  .table-scroll {
+    overflow-x: auto;
+  }
+
+  .table-scroll th[scope='row'] {
+    text-align: start;
+    vertical-align: top;
+  }
+
+  .table-scroll td {
+    vertical-align: top;
+  }
+
+  .table-scroll code {
+    overflow-wrap: anywhere;
+  }
+
+  .value-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  th[scope='row'] .value-list {
+    font-weight: 400;
+    margin-top: 0.25rem;
+  }
+</style>

@@ -1,116 +1,126 @@
 //! The marker that anchors a directory as an Evidence authoring project.
 //!
-//! The marker is deliberately small: a format version and the one project
-//! kind this crate authors today. A directory with no marker is not an
-//! error; the marker is how a caller that already found the other authoring
-//! parts confirms it read them for the reason it thinks it did, not a gate
-//! those parts must pass through.
+//! The marker is deliberately small: its envelope and nothing else. The
+//! `apiVersion` names the format version and the `kind` names the one project
+//! kind this crate authors today. A directory with no marker is not an error;
+//! the marker is how a caller that already found the other authoring parts
+//! confirms it read them for the reason it thinks it did, not a gate those
+//! parts must pass through.
 
+use registry_platform_yaml::{Decoded, Report};
 use serde::Deserialize;
 
-use crate::finding::{FieldPath, Finding};
+use crate::formats::{decode_authored, AUTHORING_PROJECT};
 
 /// The file name a project root carries when it opts into the marker.
 pub const PROJECT_MARKER_FILE: &str = "evidence-project.yaml";
 
-/// The one marker version this crate parses.
-const MARKER_VERSION: u8 = 1;
-
-/// The marker document a project root carries: nothing but its format
-/// version and the kind of project it names. An unknown field is a
-/// rejection, the same rule the rest of the authoring form holds to.
+/// The marker document a project root carries: its envelope and no other
+/// member. An unknown member is a rejection, the same rule the rest of the
+/// authoring form holds to.
 #[derive(Debug, Deserialize, Eq, PartialEq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
-pub struct ProjectMarker {
-    pub version: u8,
-    pub project: ProjectKind,
-}
+pub struct ProjectMarker {}
 
-/// The one kind of project this crate's marker names today.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(rename_all = "kebab-case")]
-pub enum ProjectKind {
-    EvidenceAuthoring,
-}
-
-/// Parse a project root's marker document.
+/// Read a project root's marker document. `file` is the name its diagnostics
+/// carry.
 ///
 /// # Errors
 ///
-/// Returns a [`Finding`] when `bytes` is not the marker's closed shape, or
-/// names a version newer or older than the one this crate parses.
-pub fn parse_project_marker(bytes: &[u8]) -> Result<ProjectMarker, Finding> {
-    let marker: ProjectMarker = serde_norway::from_slice(bytes).map_err(|error| {
-        Finding::new(
-            FieldPath::root(),
-            "project-marker-parse",
-            format!("{PROJECT_MARKER_FILE} does not parse: {error}"),
-        )
-    })?;
-    if marker.version != MARKER_VERSION {
-        return Err(Finding::new(
-            FieldPath::root().key("version"),
-            "project-marker-version",
-            format!("{PROJECT_MARKER_FILE} version must be {MARKER_VERSION}"),
-        ));
-    }
-    Ok(marker)
+/// Returns every diagnostic the reader found: a document that is not the
+/// marker's envelope, a member the marker no longer takes, or any other
+/// member.
+pub fn parse_project_marker(file: &str, bytes: &[u8]) -> Result<Decoded<ProjectMarker>, Report> {
+    decode_authored(file, bytes, &AUTHORING_PROJECT)
 }
 
 /// The exact document `evidencectl new` writes, and the one this crate's own
 /// tests and an author's doctor advisory quote rather than restate.
 #[must_use]
 pub fn default_project_marker_document() -> &'static str {
-    "version: 1\nproject: evidence-authoring\n"
+    "# yaml-language-server: $schema=https://id.registrystack.org/schemas/evidence/authoring-project/authoring-project.v1alpha1.schema.json\n\
+     apiVersion: id.registrystack.org/formats/evidence/authoring-project/v1alpha1\n\
+     kind: EvidenceAuthoringProject\n"
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{default_project_marker_document, parse_project_marker, ProjectKind};
+    use super::{default_project_marker_document, parse_project_marker, PROJECT_MARKER_FILE};
+    use crate::formats::{
+        envelope_lines, schema_modeline, AUTHORING_PROJECT_API_VERSION, AUTHORING_PROJECT_KIND,
+        AUTHORING_PROJECT_SCHEMA_ID,
+    };
 
-    #[test]
-    fn the_default_document_parses_to_the_evidence_authoring_marker() {
-        let marker = parse_project_marker(default_project_marker_document().as_bytes())
-            .expect("the default document is a valid marker");
-        assert_eq!(marker.version, 1);
-        assert_eq!(marker.project, ProjectKind::EvidenceAuthoring);
+    fn codes(bytes: &[u8]) -> Vec<String> {
+        parse_project_marker(PROJECT_MARKER_FILE, bytes)
+            .expect_err("the document is not a valid marker")
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| diagnostic.code.clone())
+            .collect()
     }
 
     #[test]
-    fn the_default_document_is_exactly_two_lines() {
+    fn the_default_document_parses_to_the_evidence_authoring_marker() {
+        let marker = parse_project_marker(
+            PROJECT_MARKER_FILE,
+            default_project_marker_document().as_bytes(),
+        )
+        .expect("the default document is a valid marker");
+        assert_eq!(marker.document.envelope().kind, AUTHORING_PROJECT_KIND);
+    }
+
+    #[test]
+    fn the_default_document_is_the_modeline_and_the_envelope() {
         assert_eq!(
             default_project_marker_document(),
-            "version: 1\nproject: evidence-authoring\n"
+            format!(
+                "{}{}",
+                schema_modeline(AUTHORING_PROJECT_SCHEMA_ID),
+                envelope_lines(AUTHORING_PROJECT_API_VERSION, AUTHORING_PROJECT_KIND)
+            )
         );
     }
 
     #[test]
     fn corrupt_yaml_is_rejected() {
-        let error = parse_project_marker(b"version: 1\nproject: [\n")
-            .expect_err("truncated YAML does not parse");
-        assert_eq!(error.code, "project-marker-parse");
+        assert_eq!(
+            codes(b"apiVersion: [\n"),
+            ["yaml.unexpected-end".to_owned()]
+        );
     }
 
     #[test]
-    fn an_unknown_field_is_rejected() {
-        let error = parse_project_marker(b"version: 1\nproject: evidence-authoring\nextra: true\n")
-            .expect_err("an unknown field is not the closed marker shape");
-        assert_eq!(error.code, "project-marker-parse");
+    fn an_unknown_member_is_rejected() {
+        let document = format!("{}extra: true\n", default_project_marker_document());
+        assert_eq!(
+            codes(document.as_bytes()),
+            ["config.unknown-key".to_owned()]
+        );
     }
 
     #[test]
-    fn an_unknown_project_kind_is_rejected() {
-        let error = parse_project_marker(b"version: 1\nproject: something-else\n")
-            .expect_err("the project kind is a closed enum");
-        assert_eq!(error.code, "project-marker-parse");
+    fn another_kind_is_rejected() {
+        let document = default_project_marker_document()
+            .replace("kind: EvidenceAuthoringProject", "kind: EvidenceQuestion");
+        assert_eq!(codes(document.as_bytes()), ["config.wrong-kind".to_owned()]);
     }
 
     #[test]
-    fn a_wrong_version_is_rejected() {
-        let error = parse_project_marker(b"version: 2\nproject: evidence-authoring\n")
-            .expect_err("this crate parses only version 1");
-        assert_eq!(error.code, "project-marker-version");
+    fn the_retired_version_and_project_members_name_their_replacement() {
+        let document = format!(
+            "{}version: 1\nproject: evidence-authoring\n",
+            default_project_marker_document()
+        );
+        assert_eq!(
+            codes(document.as_bytes()),
+            [
+                "config.removed-key".to_owned(),
+                "config.removed-key".to_owned()
+            ]
+        );
+        let unmigrated = codes(b"version: 1\nproject: evidence-authoring\n");
+        assert!(unmigrated.contains(&"config.missing-envelope".to_owned()));
     }
 }

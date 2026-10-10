@@ -1,3 +1,7 @@
+#![allow(
+    clippy::disallowed_methods,
+    reason = "tests read back the YAML the code under test wrote, or a published contract or fixture, to assert on it; they read no operator configuration"
+)]
 // SPDX-License-Identifier: Apache-2.0
 use registry_breg::{
     compiler::{compile_project_with_assets, CompileProfile},
@@ -22,7 +26,7 @@ fn project() -> Value {
             {"id":"friend","target":{"entity":"person"},"operation":"create","fields":["name","friend"]},
             {"id":"existing","target":{"fromField":"person"},"operation":"patch","fields":["name","friend"]}
         ]}}],
-        "accessProfiles":[{"id":"registrar","default":true,"principalClaim":"principal","permissions":[{"action":"register-person","operations":["invoke"],"targets":[{"entity":"person","rowBoundaries":[]}],"results":["person","friend","existing"]}]}]
+        "accessProfiles":[{"id":"registrar","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{"action":"register-person","operations":["invoke"],"targets":[{"entity":"person","rowBoundaries":"unrestricted"}],"results":["person","friend","existing"]}]}]
     })
 }
 
@@ -175,7 +179,7 @@ fn imported_contract_is_sealed_and_rederived() {
         modules: vec![],
         fixture_journeys: PackageSourceFile {
             path: "tests/journeys.yaml".into(),
-            bytes: b"apiVersion: registry.registrystack.org/breg-journeys/v1\njourneys: []\n"
+            bytes: b"apiVersion: id.registrystack.org/formats/breg/journeys/v1\nkind: BRegJourneys\njourneys: []\n"
                 .to_vec(),
         },
         migration_plan: PackageMigrationPlanInput::InitialCompiledDdl,
@@ -293,7 +297,7 @@ fn evidence_calls_require_v2_in_statements_expressions_and_nested_blocks() {
                     failure
                         .diagnostics()
                         .iter()
-                        .any(|diagnostic| diagnostic.code == "action.handler.helper_contract"),
+                        .any(|diagnostic| diagnostic.code == "breg.action.handler-helper-contract"),
                     "{body}"
                 );
             } else {

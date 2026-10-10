@@ -1,0 +1,9 @@
+{
+  "ok": true,
+  "command": "dev identity",
+  "status": "complete",
+  "apiVersion": "registry.registrystack.org/caseworkctl/v1alpha3",
+  "clientId": "reviewer",
+  "kind": "DevIdentityReport",
+  "subject": "a16ae1bd-400e-77c8-892e-3bcb691c1ba0"
+}

@@ -1,3 +1,7 @@
+#![allow(
+    clippy::disallowed_methods,
+    reason = "tests read back the YAML the code under test wrote, or a published contract or fixture, to assert on it; they read no operator configuration"
+)]
 // SPDX-License-Identifier: Apache-2.0
 
 //! Database-backed message route tests: `POST /v1/messages` renders and
@@ -1044,7 +1048,7 @@ fn with_daily_limit(limit: u32) -> impl FnOnce(&std::path::Path) {
         let text = std::fs::read_to_string(&manifest).unwrap();
         let limited = text.replacen(
             "    burst: 10\n",
-            &format!("    burst: 10\n    dailyLimit: {limit}\n"),
+            &format!("    burst: 10\n    maximumMessagesPerDay: {limit}\n"),
             1,
         );
         assert_ne!(limited, text, "the starter's sender profile moved");

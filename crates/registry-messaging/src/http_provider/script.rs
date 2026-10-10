@@ -24,6 +24,7 @@
 use std::collections::BTreeMap;
 use std::time::Instant;
 
+use registry_messaging_core::FindingReason;
 use registry_platform_script::rhai::{
     build_engine, call_with_fresh_scope, classify_failure, compile_entrypoint, RhaiBaseEngine,
     RhaiCompileError, RhaiFailureCategory, RhaiLimits, RhaiProfile,
@@ -69,6 +70,23 @@ const PROVIDER_SCRIPT_PROFILE: RhaiProfile = RhaiProfile {
 pub(crate) const PREPARE_ENTRYPOINT: &str = "prepare";
 pub(crate) const INTERPRET_ENTRYPOINT: &str = "interpret";
 pub(crate) const RECEIPT_ENTRYPOINT: &str = "receipt";
+
+/// Why the script a package member names does not compile, and the line of
+/// a parse failure when the engine knows it.
+pub(crate) fn compile_finding(
+    source: &str,
+    entrypoint: &str,
+    arity: usize,
+) -> Option<(FindingReason, Option<usize>)> {
+    match compile_entrypoint(&PROVIDER_SCRIPT_PROFILE, source, entrypoint, &[arity]) {
+        Ok(_) => None,
+        Err(RhaiCompileError::SourceBound) => Some((FindingReason::ScriptDoesNotCompile, None)),
+        Err(RhaiCompileError::Parse(position)) => {
+            Some((FindingReason::ScriptDoesNotCompile, position.line()))
+        }
+        Err(RhaiCompileError::Entrypoint) => Some((FindingReason::ScriptEntrypoint, None)),
+    }
+}
 
 /// Compile one provider script under its entry-point contract.
 pub(crate) fn compile(

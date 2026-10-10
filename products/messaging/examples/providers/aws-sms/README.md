@@ -21,7 +21,7 @@ above from this example, and change the package manifest to:
 ```yaml
 providers:
   - id: aws-sms
-    kind: http
+    type: http
 senderProfiles:
   - id: reminders-sms
     channel: sms
@@ -60,19 +60,19 @@ VPC interface endpoint is allowed as `baseUrl` when the deployment needs one;
 keep `authentication.region` set to the region that endpoint serves, as
 listed in AWS's endpoint reference for the service.
 Keep `authentication.service: sms-voice`. Configure the runtime outside the
-package; `connection.example.yaml` supplies the members below `kind`:
+package; `connection.example.yaml` supplies the members below `type`:
 
 ```yaml
 providers:
   aws-sms:
-    kind: http
+    type: http
     baseUrl: https://sms-voice.af-south-1.amazonaws.com/
-    timeoutMilliseconds: 10000
+    attemptTimeoutMilliseconds: 10000
     maximumResponseBytes: 65536
-    concurrencyLimit: 8
+    maximumConcurrentRequests: 8
     redirects: deny
     authentication:
-      kind: aws-sigv4
+      type: aws-sigv4
       region: af-south-1
       service: sms-voice
       accessKeyIdRef: secret:file/aws-access-key-id

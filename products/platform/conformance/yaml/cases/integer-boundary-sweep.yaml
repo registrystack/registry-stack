@@ -1,0 +1,11 @@
+id: integer-boundary-sweep
+rules: [CFG-QTY-4, CFG-VAL-1]
+summary: Each integer in the example whose schema states both bounds is set one past its maximum, then one below its minimum, and each is refused at the value.
+mutation:
+  boundaries: {}
+expect:
+  exit: 1
+  diagnostics:
+    - code: config.out-of-range
+      path: "{pointer}"
+      at: {line: 1, column: 1}

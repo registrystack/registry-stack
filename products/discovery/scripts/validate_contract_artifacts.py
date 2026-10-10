@@ -101,10 +101,10 @@ def check_profile() -> None:
 
 def check_product_schemas_and_fixture() -> None:
     expected_ids = {
-        "origins": "https://registrystack.org/discovery/schema/origins-v1alpha1.json",
-        "evidence-mapping": "https://registrystack.org/discovery/schema/evidence-mapping-v1alpha1.json",
-        "runtime": "https://registrystack.org/discovery/schema/runtime-v1alpha1.json",
-        "index": "https://registrystack.org/discovery/schema/index-v1alpha1.json",
+        "origins": "https://id.registrystack.org/schemas/discovery/origins/origins.v1alpha1.schema.json",
+        "evidence-mapping": "https://id.registrystack.org/schemas/discovery/evidence-mapping/evidence-mapping.v1alpha1.schema.json",
+        "runtime": "https://id.registrystack.org/schemas/discovery/runtime/runtime.v1alpha1.schema.json",
+        "index": "https://id.registrystack.org/schemas/discovery/index/index.v1alpha1.schema.json",
     }
     for name, path in PRODUCT_SCHEMAS.items():
         schema = load(path)
@@ -120,8 +120,6 @@ def check_product_schemas_and_fixture() -> None:
     mapping = load(PRODUCT_SCHEMAS["evidence-mapping"])
     if mapping["properties"]["alternatives"].get("maxItems") != 32:
         fail("mapping schema must carry the authored-alternative hard bound")
-    if mapping.get("x-maximumDocumentBytes") != 20 * 1024 * 1024:
-        fail("mapping schema must publish the aggregate authored-file byte bound")
     runtime = load(PRODUCT_SCHEMAS["runtime"])
     if runtime["properties"]["limits"].get("additionalProperties") is not False:
         fail("runtime limit schema must be closed")

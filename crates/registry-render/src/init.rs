@@ -3,18 +3,28 @@
 
 use std::path::Path;
 
+use registry_platform_yaml::LocalId;
+
 use crate::problem::{ProblemKind, RenderProblem};
 
-const MANIFEST: &str = r#"apiVersion: render.registrystack.org/v1alpha1
+const MANIFEST: &str = r#"# yaml-language-server: $schema=https://id.registrystack.org/schemas/render/bundle/bundle.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/render/bundle/v1alpha1
 kind: RenderBundle
 bundleVersion: 1
 documents:
   - id: letter
     version: 1
-    entry: templates/letter.typ
-    schema: schemas/letter.schema.json
+    entryFile: templates/letter.typ
+    schemaFile: schemas/letter.schema.json
     labels: [en]
 "#;
+
+/// The head of every scaffolded label table (CFG-SCHEMA-7).
+const LABELS_HEAD: &str = "# yaml-language-server: $schema=https://id.registrystack.org/schemas/render/labels/labels.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/render/labels/v1alpha1
+kind: RenderLabels
+labels:
+";
 
 /// The template is generated per scaffold so `payload.labels.<locale>`
 /// always points at a declared table.
@@ -89,8 +99,9 @@ const README: &str = r#"# Render bundle
 - `templates/` — Typst entry points. Author them with any upstream Typst
   tooling; `registry-render compile` (and `--watch`) run the authored bundle.
 - `schemas/` — the JSON Schema each request's `data` must satisfy.
-- `labels/` — one flat YAML string map per locale; seeded in English,
-  localize at will. A script beyond Latin needs a font in `fonts/` (for
+- `labels/` — one label table per locale, a `RenderLabels` file whose
+  `labels` map holds the text by label key; seeded in English, localize at
+  will. A script beyond Latin needs a font in `fonts/` (for
   example Noto Naskh Arabic); `registry-render check` names the gap.
 - `fonts/` — starter fonts (Noto Sans + Noto Naskh Arabic, OFL — the
   license is in `fonts/OFL.txt`); replace them with your own. The binary
@@ -130,10 +141,11 @@ const STARTER_FONT_FILES: &[(&str, &[u8])] = &[
 pub fn scaffold(dir: &Path, labels: &[String]) -> Result<i32, RenderProblem> {
     let mut seen = std::collections::BTreeSet::new();
     for locale in labels {
-        if locale.is_empty() || !locale.chars().all(|c| c.is_ascii_lowercase() || c == '-') {
+        if LocalId::new(locale.as_str()).is_err() {
             return Err(RenderProblem::new(
                 ProblemKind::InvalidArgument,
-                format!("label locale must be kebab-case, got {locale:?}"),
+                "each --labels locale must be a local identifier: a lowercase letter, then up \
+                 to 63 lowercase letters, digits, `-`, or `_`",
             ));
         }
         // A repeat would scaffold one label file twice and list the locale
@@ -141,7 +153,7 @@ pub fn scaffold(dir: &Path, labels: &[String]) -> Result<i32, RenderProblem> {
         if !seen.insert(locale) {
             return Err(RenderProblem::new(
                 ProblemKind::InvalidArgument,
-                format!("label locale {locale:?} is listed more than once"),
+                "a --labels locale is listed more than once; list each locale once",
             ));
         }
     }
@@ -186,9 +198,12 @@ pub fn scaffold(dir: &Path, labels: &[String]) -> Result<i32, RenderProblem> {
     write_new(&dir.join("templates/letter.typ"), &template)?;
     write_new(&dir.join("schemas/letter.schema.json"), SCHEMA)?;
     for locale in &labels {
-        let seeded: String = LABEL_KEYS
-            .iter()
-            .map(|(key, value)| format!("{key}: \"{value}\"\n"))
+        let seeded: String = std::iter::once(LABELS_HEAD.to_owned())
+            .chain(
+                LABEL_KEYS
+                    .iter()
+                    .map(|(key, value)| format!("  {key}: \"{value}\"\n")),
+            )
             .collect();
         if locale != "en" {
             eprintln!(

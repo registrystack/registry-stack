@@ -1,0 +1,12 @@
+id: alias-spelling
+rules: [CFG-CHANGE-1]
+summary: The other spelling of a member's key (snake_case for camelCase, or the reverse) is an unknown key, not an alias.
+mutation:
+  spelling:
+    role: integer
+expect:
+  exit: 1
+  diagnostics:
+    - code: config.unknown-key
+      path: "{pointer}"
+      at: {line: 1, column: 1}

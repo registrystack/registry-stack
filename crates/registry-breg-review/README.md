@@ -15,14 +15,28 @@ submit is the registry's decision, not the page's.
 `breg-review --runtime-config /absolute/path/review.yaml serve` reads one
 closed YAML document and serves the page until SIGINT or SIGTERM, then stops
 accepting connections and exits once the requests in flight are answered.
-`breg-review --runtime-config /absolute/path/review.yaml check` validates the
-same document, reads and parses its secrets, refuses a client key the sign-in
-client could not sign with, and exits without serving: it neither calls the
-provider nor opens the audit journal. Unknown keys are
-refused, and an error names the key path without echoing its value.
+Before it listens it resolves the secrets the document names and refuses a
+client key the sign-in client could not sign with.
+
+`breg-review --runtime-config /absolute/path/review.yaml check` reads the same
+document offline, as `serve` reads it, and reports its findings in the shared
+diagnostic shape: human lines by default, or one `BRegReviewCtlReport` JSON
+document with `--format json`. It resolves no secret, calls no provider,
+opens no socket, and writes no audit file. It exits 0 when the file is
+accepted, 1 when something is refused (or a warning is reported under
+`--deny-warnings`), 2 on a usage error, and 3 when the file cannot be read. A
+`${NAME}` expression is checked by syntax and position only, unless
+`--environment` substitutes it from the environment first. Unknown keys are
+refused, and every finding names the member by its path, line, and column
+without echoing its value.
+
+The runtime file
+[`products/breg/examples/review-runtime/runtime.yaml`](../../products/breg/examples/review-runtime/runtime.yaml)
+is a complete example; its JSON Schema is
+[`products/breg/generated/review-runtime/review-runtime.schema.json`](../../products/breg/generated/review-runtime/review-runtime.schema.json).
 
 ```yaml
-apiVersion: registry.registrystack.org/breg-review-runtime/v1alpha1
+apiVersion: id.registrystack.org/formats/breg/review-runtime/v1alpha1
 kind: BRegReviewRuntimeConfig
 listener:
   bind: 127.0.0.1:8115                           # required
@@ -36,7 +50,7 @@ signIn:
   issuer: https://issuer.example
   clientId: citizen-review-page
   clientKeyRef: secret:file/client-key.jwk       # private JWK for private_key_jwt
-  scopes: [address-correction:self]
+  scopes: [address-correction:self]             # 1 to 16, never openid
 registry:
   baseUrl: https://registry.example
   resource: https://registry.example/citizen-address-correction
@@ -48,8 +62,8 @@ audit:
   destination: file                              # the default, or stdout
   path: /var/lib/breg-review/audit.jsonl          # required for file
   rotateBytes: 104857600                         # optional
-  retainDays: 90                                 # optional
-limits:                                           # optional
+  retentionDays: 90                              # optional
+rateLimits:                                       # optional
   perCitizen: { requestsPerMinute: 120, burst: 30 }      # each signed-in person
   globalSignIn: { requestsPerMinute: 600, burst: 120 }   # everyone, sign-in routes only
 session:                                          # optional
@@ -69,9 +83,11 @@ HSTS, and relaxes the provider endpoint policy to loopback HTTP.
 
 `BREG_REVIEW_LOG` selects the operational log level: `error`, `warn`, or
 `info` (the default). Any other value stops startup with exit status 2, so a
-typo cannot silently change what is logged. The operational log is JSON on
-standard output; a startup refusal is one line on standard error, and the
-process exits with status 1.
+typo cannot silently change what is logged. `check` reads no level. The
+operational log is JSON on standard output. A refused runtime file is
+reported on standard error in the same lines `check` prints, and any other
+startup refusal is one line on standard error; either way the process exits
+with status 1.
 
 ## Sign-in
 
@@ -141,10 +157,10 @@ finds its key still spent and the first receipt gone, so the page answers
   tell one browser from another before sign-in, and behind a reverse proxy
   every browser would share one address anyway. It keeps two limits of its
   own:
-  - `limits.perCitizen` applies to every request that presents a session,
+  - `rateLimits.perCitizen` applies to every request that presents a session,
     keyed by the signed-in person, so one person's sessions share it and
     never slow anyone else.
-  - `limits.globalSignIn` is one limit shared by everyone on `/signin` and
+  - `rateLimits.globalSignIn` is one limit shared by everyone on `/signin` and
     `/signin/callback`. It bounds the sign-in work the page does, and a flood
     of sign-in starts can use it up for everyone until it refills. A callback
     it refuses still ends that sign-in, its cookie and its pending entry
@@ -153,10 +169,10 @@ finds its key still spent and the first receipt gone, so the page answers
   it there: the page's global sign-in limit is a ceiling, not a defense for
   any one person.
 - Every started sign-in waits in memory until its callback or
-  `signInLifetimeSeconds`. Startup refuses a `maximumPendingSignIns` smaller
-  than the sign-ins `globalSignIn` admits in that lifetime (its burst plus its
-  rate over the lifetime), so the limit, not a full store, is what refuses a
-  sign-in. A full store would still answer a `sign-ins-exhausted` page.
+  `signInLifetimeSeconds`. `check` and startup refuse a
+  `maximumPendingSignIns` smaller than the sign-ins `globalSignIn` admits in
+  that lifetime (its burst plus its rate over the lifetime), so the limit, not
+  a full store, is what refuses a sign-in. A full store would still answer a `sign-ins-exhausted` page.
 - Every session is held in memory, at most `maximumSessions` of them. One
   person holds at most three: a sign-in past that share ends their oldest
   session before the store's bound is checked, so signing in again and again
@@ -179,7 +195,7 @@ finds its key still spent and the first receipt gone, so the page answers
 
 `cargo test -p registry-breg-review` runs the page against a mock registry and
 the platform test authorization server, and runs the built binary to check
-`check`, its startup refusals, its shutdown on SIGINT and SIGTERM, and that a
+its offline `check`, its startup refusals, its shutdown on SIGINT and SIGTERM, and that a
 full journey leaves no credential in its log or journal.
 
 The `postgres-test` feature adds `tests/postgres_breg.rs`, which runs the page

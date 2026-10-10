@@ -1,16 +1,17 @@
-apiVersion: registry.registrystack.org/breg-journeys/v1
+apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
 journeys:
   - id: household-contact-registration-request-flow
     steps:
       - id: create-household
         entity: household
         accessProfile: household-operator
-        claims: &operator_claims
+        claims:
           principal: household-operator
           scopes: [registry:household:operate]
           purpose: household-administration
         request:
-          operation: create
+          type: create
           data:
             household-code: hh-001
             local-household-number: 1001
@@ -30,14 +31,14 @@ journeys:
       - id: create-contact-request
         entity: register-household-contact-request
         accessProfile: household-contact-submitter
-        claims: &submitter_claims
+        claims:
           principal: household-contact-submitter
           scopes: [registry:household-contact:submit]
           purpose: household-contact-registration
         request:
-          operation: create
+          type: create
           data:
-            household: {recordRef: household}
+            household: {recordCapture: household}
             person-code: person-001
             legal-name: Ana Ortega
             family-name: Ortega
@@ -62,11 +63,14 @@ journeys:
       - id: edit-contact-request
         entity: register-household-contact-request
         accessProfile: household-contact-submitter
-        claims: *submitter_claims
+        claims:
+          principal: household-contact-submitter
+          scopes: [registry:household-contact:submit]
+          purpose: household-contact-registration
         request:
-          operation: patch
-          recordRef: contact-request
-          etagRef: contact-request
+          type: patch
+          recordCapture: contact-request
+          etagCapture: contact-request
           changes:
             - {field: reason, value: registration packet and field visit verified}
         expect:
@@ -78,8 +82,11 @@ journeys:
       - id: get-before-submit
         entity: register-household-contact-request
         accessProfile: household-contact-submitter
-        claims: *submitter_claims
-        request: {operation: get, recordRef: edited-contact-request}
+        claims:
+          principal: household-contact-submitter
+          scopes: [registry:household-contact:submit]
+          purpose: household-contact-registration
+        request: {type: get, recordCapture: edited-contact-request}
         expect:
           outcome: success
           status: 200
@@ -88,8 +95,11 @@ journeys:
       - id: submit-contact-request
         entity: register-household-contact-request
         accessProfile: household-contact-submitter
-        claims: *submitter_claims
-        request: {operation: submit_request, recordRef: contact-before-submit, etagRef: contact-before-submit}
+        claims:
+          principal: household-contact-submitter
+          scopes: [registry:household-contact:submit]
+          purpose: household-contact-registration
+        request: {type: submit-request, recordCapture: contact-before-submit, etagCapture: contact-before-submit}
         expect: {outcome: success, status: 200}
       - id: external-review-reader-sees-submission
         entity: register-household-contact-request
@@ -98,7 +108,7 @@ journeys:
           principal: household-contact-reviewer
           scopes: [registry:household-contact:review]
           purpose: household-contact-review
-        request: {operation: get, recordRef: contact-request}
+        request: {type: get, recordCapture: contact-request}
         expect:
           outcome: success
           status: 200
@@ -106,13 +116,19 @@ journeys:
       - id: submitter-reads-submitted-request
         entity: register-household-contact-request
         accessProfile: household-contact-submitter
-        claims: *submitter_claims
-        request: {operation: get, recordRef: contact-request}
+        claims:
+          principal: household-contact-submitter
+          scopes: [registry:household-contact:submit]
+          purpose: household-contact-registration
+        request: {type: get, recordCapture: contact-request}
         expect: {outcome: success, status: 200}
         capture: submitted-contact-request
       - id: submitter-cancels-external-review
         entity: register-household-contact-request
         accessProfile: household-contact-submitter
-        claims: *submitter_claims
-        request: {operation: cancel_request, recordRef: submitted-contact-request, etagRef: submitted-contact-request}
+        claims:
+          principal: household-contact-submitter
+          scopes: [registry:household-contact:submit]
+          purpose: household-contact-registration
+        request: {type: cancel-request, recordCapture: submitted-contact-request, etagCapture: submitted-contact-request}
         expect: {outcome: success, status: 200}

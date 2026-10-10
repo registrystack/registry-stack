@@ -15,6 +15,7 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use base64::Engine as _;
+use registry_platform_yaml::Diagnostic;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -61,6 +62,8 @@ pub struct WorkerProblem {
     pub pointers: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub locations: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub diagnostics: Vec<Diagnostic>,
 }
 
 impl From<&RenderProblem> for WorkerProblem {
@@ -70,6 +73,7 @@ impl From<&RenderProblem> for WorkerProblem {
             detail: problem.detail.clone(),
             pointers: problem.pointers.clone(),
             locations: problem.locations.clone(),
+            diagnostics: problem.diagnostics.clone(),
         }
     }
 }
@@ -80,6 +84,7 @@ impl WorkerProblem {
         let mut problem = RenderProblem::new(kind, self.detail);
         problem.pointers = self.pointers;
         problem.locations = self.locations;
+        problem.diagnostics = self.diagnostics;
         problem
     }
 }
@@ -239,6 +244,14 @@ fn redact_bundle_root(mut problem: RenderProblem, root: &Path) -> RenderProblem 
         .iter()
         .map(|location| redact(location))
         .collect();
+    for diagnostic in &mut problem.diagnostics {
+        if let Some(source) = &mut diagnostic.source {
+            source.file = redact(&source.file);
+        }
+        for related in &mut diagnostic.related {
+            related.file = redact(&related.file);
+        }
+    }
     problem
 }
 

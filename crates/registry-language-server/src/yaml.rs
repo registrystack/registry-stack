@@ -82,7 +82,20 @@ fn is_plain(value: &str) -> bool {
     {
         return false;
     }
-    serde_norway::from_str::<String>(value).is_ok_and(|read| read == value)
+    read_scalar(value).is_some_and(|read| read == value)
+}
+
+/// The text the shared configuration reader reads `source` as, when `source` is one scalar it reads
+/// as text. The authoring form reads every document with that reader, so this is the reading a
+/// stored value has to agree with.
+pub(crate) fn read_scalar(source: &str) -> Option<String> {
+    let node = registry_platform_yaml::Reader::new("")
+        .scan(source.as_bytes())
+        .ok()??;
+    match node.value {
+        registry_platform_yaml::NodeValue::String(text) => Some(text.text),
+        _ => None,
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -286,8 +299,8 @@ fn scalar_from_node(
     // than one line is folded, plainly and inside quotes alike, so its line breaks and the
     // indentation that continues it are not in the value either.
     //
-    // What is stored has to be what `serde_norway` reads, because that is the deserializer the
-    // authoring form reads the same document with. A name stored as its source text resolves to
+    // What is stored has to be what the shared configuration reader reads, because that is the
+    // reader the authoring form reads the same document with. A name stored as its source text resolves to
     // nothing on screen while the compiler resolves it, which reports a project the compiler
     // accepts. Storing nothing costs the navigation on that one field and reports nothing at all,
     // so it is what a form no cheap rule decodes faithfully is worth.
@@ -295,18 +308,18 @@ fn scalar_from_node(
         return None;
     }
 
-    // A quoted scalar's escapes are decoded by handing its own source text to `serde_norway`, rather
+    // A quoted scalar's escapes are decoded by handing its own source text to that reader, rather
     // than by a hand-written unescaper, because `raw` is already a complete, valid YAML document on
     // its own: a quoted scalar's meaning does not depend on the block or flow context around it. A
     // double-quoted scalar accepts escapes `serde_json` does not (`\x41`, `\_`, `\e`, and more), and a
     // hand-written single-quote rule that trims every leading and trailing quote mishandles a value
     // whose content itself starts or ends with an escaped quote, such as `'''a'''`. Both are the same
     // mistake `written_as` warns against for the double-quoted case above: a decoder that is not the
-    // one the compiler reads with. An escape `serde_norway` refuses is refused here too, by the same
+    // one the compiler reads with. An escape the reader refuses is refused here too, by the same
     // precedent that leaves a folded scalar out of the index rather than store its raw spelling.
     let (value, style, start_byte, end_byte) = match node.kind() {
         "double_quote_scalar" | "single_quote_scalar" => {
-            let value = serde_norway::from_str::<String>(raw).ok()?;
+            let value = read_scalar(raw)?;
             let style = if node.kind() == "double_quote_scalar" {
                 ScalarStyle::DoubleQuoted
             } else {
@@ -379,7 +392,27 @@ impl<'a> SourceMap<'a> {
 mod tests {
     use std::collections::BTreeMap;
 
+    use registry_platform_yaml::{NodeValue, Reader};
+
     use super::*;
+
+    /// The string members of a mapping, read the way the shared configuration reader reads them.
+    fn read(source: &str) -> BTreeMap<String, String> {
+        let node = Reader::new("")
+            .scan(source.as_bytes())
+            .unwrap_or_else(|report| panic!("{source:?} does not parse: {report:?}"))
+            .expect("the fragment is a document");
+        let NodeValue::Mapping(entries) = node.value else {
+            panic!("{source:?} is not a mapping");
+        };
+        entries
+            .into_iter()
+            .filter_map(|entry| match entry.value.value {
+                NodeValue::String(text) => Some((entry.key, text.text)),
+                _ => None,
+            })
+            .collect()
+    }
 
     fn value_depth(value: &YamlValue) -> usize {
         match value {
@@ -397,7 +430,7 @@ mod tests {
 
     /// Every form a scalar can be written in, against the reading the compiler will do of it.
     ///
-    /// `serde_norway` is the deserializer `registry_evidence_authoring` reads a document with, so a
+    /// The shared configuration reader is what `registry_evidence_authoring` reads a document with, so a
     /// value stored here that differs from the one it reads is a name resolved against a document
     /// the compiler reads differently: the editor would report a project it accepts, which is the
     /// one thing an editor beside a compiler may not do. A form left out of the index is allowed,
@@ -424,9 +457,11 @@ mod tests {
             let Some(indexed) = parsed.value.get_scalar("concept") else {
                 continue;
             };
-            let read = serde_norway::from_str::<BTreeMap<String, String>>(source)
-                .expect("the fragment is a mapping of strings");
-            assert_eq!(indexed.value, read["concept"], "{source:?}");
+            assert_eq!(
+                Some(&indexed.value),
+                read(source).get("concept"),
+                "{source:?}"
+            );
         }
     }
 
@@ -507,10 +542,8 @@ mod tests {
                 let written =
                     written_as(name, style).expect("a name free of control characters is written");
                 let source = document.replace("{}", &written);
-                let read = serde_norway::from_str::<BTreeMap<String, String>>(&source)
-                    .unwrap_or_else(|error| panic!("{source:?} does not parse: {error}"));
                 assert_eq!(
-                    read.get("concept").map(String::as_str),
+                    read(&source).get("concept").map(String::as_str),
                     Some(name),
                     "{source:?}"
                 );
@@ -533,14 +566,12 @@ mod tests {
     }
 
     /// A double-quoted scalar accepts escapes JSON does not, such as `\x` and `\_`. Decoding it any
-    /// other way than `serde_norway` itself stores a name the compiler reads differently, which is
+    /// other way than the shared reader itself stores a name the compiler reads differently, which is
     /// exactly the report the governing rule above forbids.
     #[test]
     fn a_double_quoted_scalar_decodes_escapes_serde_json_does_not_accept() {
         let source = "concept: \"is\\x5fadult\"\n";
-        let read = serde_norway::from_str::<BTreeMap<String, String>>(source)
-            .expect("the fragment is a mapping of strings");
-        assert_eq!(read["concept"], "is_adult");
+        assert_eq!(read(source)["concept"], "is_adult");
 
         let indexed = parse_yaml(source)
             .unwrap()
@@ -548,10 +579,10 @@ mod tests {
             .get_scalar("concept")
             .cloned()
             .expect("the scalar decodes");
-        assert_eq!(indexed.value, read["concept"]);
+        assert_eq!(indexed.value, read(source)["concept"]);
     }
 
-    /// An escape `serde_norway` itself refuses is left out of the index rather than stored as its raw
+    /// An escape the shared reader itself refuses is left out of the index rather than stored as its raw
     /// spelling, the same precedent a block scalar sets above.
     #[test]
     fn a_double_quoted_scalar_with_an_invalid_escape_is_left_out_of_the_index() {
@@ -598,7 +629,7 @@ mod tests {
         }
     }
 
-    /// Decoding the scalar through `serde_norway` changes what `value` holds but must not change what
+    /// Decoding the scalar through the shared reader changes what `value` holds but must not change what
     /// `range` covers: completion still has to replace exactly the text between the quotes, not the
     /// (possibly shorter) decoded value.
     #[test]

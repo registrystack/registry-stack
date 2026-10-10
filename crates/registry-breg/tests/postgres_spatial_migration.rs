@@ -45,7 +45,8 @@ use uuid::Uuid;
 const INSTANCE: &str = "spatial-migration-instance";
 const DATABASE: &str = "spatial-migration-database";
 const SOURCE_REVISION: &str = "spatial-migration-source-revision";
-const FIXTURE_JOURNEYS: &[u8] = br#"apiVersion: registry.registrystack.org/breg-journeys/v1
+const FIXTURE_JOURNEYS: &[u8] = br#"apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
 journeys:
   - id: site-list
     steps:
@@ -53,7 +54,7 @@ journeys:
         entity: site
         accessProfile: reader
         claims: {principal: package-reader}
-        request: {operation: list}
+        request: {type: list}
         expect: {outcome: success, status: 200, count: 0}
 "#;
 const SITE_RECORD: &str = "00000000-0000-4000-8000-000000000101";
@@ -493,7 +494,7 @@ fn module_bytes(variant: Variant) -> Vec<u8> {
         r#",{"id":"legacy","type":"string","maxLength":16,"classification":"internal"}"#
     };
     format!(
-        r#"{{"id":"core","version":"1","entities":[{{"id":"site","primaryDataset":"spatial-migration-registry","route":"sites","mutationMode":"mutable","classification":"internal","fields":[{{"id":"code","type":"string","maxLength":16,"required":true,"classification":"internal"}},{{"id":"location","type":"crs84-point","precision":6,"required":true,"classification":"internal"}}{legacy}],"geojson":{{"geometryField":"location"}},"accessProfiles":[{{"rowBoundaries": [], "id":"reader","principalClaim":"principal","operations":["get","list","create","patch"],"readableFields":["code","location"],"writableFields":["code","location"]{spatial_queries}}}]}}]}}"#
+        r#"{{"id":"core","version":"1","entities":[{{"id":"site","primaryDataset":"spatial-migration-registry","route":"sites","mutationMode":"mutable","classification":"internal","fields":[{{"id":"code","type":"string","maxLength":16,"required":true,"classification":"internal"}},{{"id":"location","type":"crs84-point","precision":6,"required":true,"classification":"internal"}}{legacy}],"geojson":{{"geometryField":"location"}},"accessProfiles":[{{"requiredScopes":"unrestricted","rowBoundaries":"unrestricted", "id":"reader","principalClaim":"principal","operations":["get","list","create","patch"],"readableFields":["code","location"],"writableFields":["code","location"]{spatial_queries}}}]}}]}}"#
     )
     .into_bytes()
 }
@@ -642,7 +643,6 @@ fn metadata_only_source_between(
         postgres_major: 17,
         row_assertions: Vec::new(),
         final_schema_fingerprint: final_fingerprint.to_owned(),
-        proofs: None,
     };
     ReviewedMigrationSource {
         module_id: "core".to_owned(),
@@ -792,7 +792,6 @@ fn reviewed_source(request: ReviewedSourceRequest<'_>) -> ReviewedMigrationSourc
         postgres_major: 17,
         row_assertions: Vec::new(),
         final_schema_fingerprint: final_fingerprint.to_owned(),
-        proofs: None,
     };
     let mut files = steps
         .into_iter()

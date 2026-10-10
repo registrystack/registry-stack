@@ -1,0 +1,8 @@
+apiVersion: id.registrystack.org/formats/fuzz/runtime/v1
+kind: FuzzRuntimeConfig
+id: example
+version: "1"
+digest: sha256:ABC
+endpoint: http://user:pass@example.org
+issuerId: ""
+pair: [1]

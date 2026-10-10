@@ -4,19 +4,22 @@ mod breg_package;
 mod dev;
 mod display_schema;
 mod lifecycle;
+mod offline;
 mod policy;
 mod project;
 mod report;
+#[cfg(feature = "schema")]
+pub mod schema;
 mod source_add;
 
 use anyhow::{Context, Result};
 use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use registry_casework::{AttemptSettlementError, RuntimeConfigError, StoreError};
 use registry_casework_core::{
-    AttemptSettlement, AttemptSettlementOutcome, AttemptUncertainMarking, ConfigError,
-    ConfigLoadError,
+    AttemptSettlement, AttemptSettlementOutcome, AttemptUncertainMarking, ConfigLoadError,
 };
-use registry_platform_config::RuntimeConfigErrorKind;
+use registry_platform_config::UNAVAILABLE_CODE;
+use registry_platform_yaml::{Diagnostic, Report};
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::ffi::{OsStr, OsString};
@@ -52,13 +55,13 @@ enum Command {
     Explain(ProjectArgs),
     /// Report the occurrence and review state machines the runtime enforces.
     Lifecycle,
-    /// Evaluate a fixture using its controlled clock and source facts.
+    /// Evaluate a simulation using its controlled clock and source facts.
     Simulate(SimulateArgs),
     /// Package validated policy and exact imported descriptions for deployment.
     ///
     /// The package is the unit caseworkctl plan and apply activate: a new directory holding the checked policy and the source descriptions it pins, named by the runtime configuration. bregctl package is a different verb that builds a Base Registry Engine (BReg) registry package from a tested BReg project.
     Package(PackageArgs),
-    /// Run the project's bounded synthetic fixtures offline.
+    /// Run the project's fixtures and simulations offline.
     Test(ProjectArgs),
     /// Check live database, issuer, source and directory readiness.
     Doctor(DoctorArgs),
@@ -145,9 +148,9 @@ struct CheckArgs {
     /// Require every declared source import and all deployment policy inputs.
     #[arg(long)]
     production: bool,
-    /// Exit unsuccessfully when the authoring check reports any finding.
+    /// Exit 1 when the check reports any warning.
     #[arg(long)]
-    deny_findings: bool,
+    deny_warnings: bool,
     /// Closed Base Registry Engine (BReg) package whose rederived registry
     /// revision must equal the pinned sourceRevision of a BReg source; verified
     /// by bregctl.
@@ -160,6 +163,14 @@ struct CheckArgs {
     /// bregctl binary of the same release that verifies the package.
     #[arg(long, env = "BREGCTL_BIN", default_value = "bregctl")]
     bregctl_bin: PathBuf,
+    /// Runtime configuration to check offline against PROJECT, as casework
+    /// serve reads it, with no package, database, network, or secret material.
+    #[arg(long, value_name = "FILE")]
+    runtime_config: Option<PathBuf>,
+    /// Fill the runtime file's ${NAME} expressions from this process's
+    /// environment and check the values they produce.
+    #[arg(long, requires = "runtime_config")]
+    environment: bool,
 }
 
 #[derive(Debug, Args)]
@@ -174,7 +185,7 @@ struct SimulateArgs {
     /// Authored Casework project directory.
     #[arg(value_name = "PROJECT")]
     project: PathBuf,
-    /// Synthetic fixture with source facts and a controlled clock.
+    /// Simulation file (CaseworkSimulation) with source facts and a controlled clock.
     #[arg(long, value_name = "FILE")]
     fixture: PathBuf,
 }
@@ -474,6 +485,11 @@ where
             stderr,
         ),
         Err(error) => {
+            if let Some(report) = configuration_report(&error) {
+                let exit = configuration_exit(&error);
+                write_configuration_report(report, format, report_kind, exit, stdout, stderr);
+                return ExitCode::from(exit);
+            }
             if let Some((exit, diagnostics)) = activation_failure(&error) {
                 write_failure(
                     &machine_report(
@@ -487,20 +503,6 @@ where
                     stderr,
                 );
                 return ExitCode::from(exit);
-            }
-            if let Some(denied) = error.downcast_ref::<project::DeniedFindings>() {
-                write_failure(
-                    &machine_report(
-                        format,
-                        report_kind,
-                        json!({"ok":false,"command":"check","diagnostics":denied.0}),
-                        DOMAIN_REFUSAL_EXIT,
-                    ),
-                    format,
-                    stdout,
-                    stderr,
-                );
-                return ExitCode::from(DOMAIN_REFUSAL_EXIT);
             }
             let (exit, diagnostic) = classify_failure(command_kind, &error);
             write_failure(
@@ -732,79 +734,48 @@ fn classify_failure(kind: CommandKind, error: &anyhow::Error) -> (u8, Value) {
         || matches!(
             runtime_error,
             Some(RuntimeConfigError::Load(load))
-                if load.kind() == RuntimeConfigErrorKind::Unavailable
+                if load
+                    .diagnostics()
+                    .iter()
+                    .any(|diagnostic| diagnostic.code == UNAVAILABLE_CODE)
         );
-    let project_error = error
-        .chain()
-        .find_map(|cause| cause.downcast_ref::<ConfigLoadError>());
-    let semantic_error = error
-        .chain()
-        .find_map(|cause| cause.downcast_ref::<ConfigError>());
-    let authored_expression = error
-        .chain()
-        .filter_map(|cause| cause.downcast_ref::<registry_platform_config::RuntimeConfigError>())
-        .find(|authored| authored.kind() == RuntimeConfigErrorKind::AuthoredExpression);
-    let runtime_project_error =
-        matches!(runtime_error, Some(RuntimeConfigError::Project(_))) && project_error.is_some();
     let runtime_dependency_unavailable = matches!(runtime_error, Some(RuntimeConfigError::Oidc));
     let domain = !io_failure
         && !runtime_dependency_unavailable
-        && (runtime_error.is_some()
-            || authored_expression.is_some()
-            || project_error.is_some()
-            || semantic_error.is_some()
-            || matches!(kind, CommandKind::Authoring));
+        && (runtime_error.is_some() || matches!(kind, CommandKind::Authoring));
     let (artifact, path, action) = if io_failure {
         (
             "filesystem",
             "filesystem".to_owned(),
-            "Correct the path or permissions, then retry.",
+            "Correct the path or permissions, then retry.".to_owned(),
         )
-    } else if runtime_dependency_unavailable {
-        (
-            "runtime_dependency",
-            "runtime.yaml:/authentication/oidc".to_owned(),
-            "Restore access to the configured OIDC issuer or mounted JWKS, then retry.",
-        )
-    } else if let Some(authored) = authored_expression {
-        (
-            "casework_project",
-            format!("casework.yaml:/{}", authored.field().replace('.', "/")),
-            "Write the value in casework.yaml directly; environment substitution applies to runtime.yaml only.",
-        )
-    } else if runtime_project_error {
-        project_diagnostic_location(project_error.expect("runtime project error has source"))
     } else if let Some(runtime) = runtime_error {
-        runtime_diagnostic_location(runtime)
-    } else if let Some(project) = project_error {
-        project_diagnostic_location(project)
-    } else if let Some(semantic) = semantic_error {
-        semantic_diagnostic_location(semantic)
+        (
+            if runtime_dependency_unavailable {
+                "runtime_dependency"
+            } else {
+                "runtime_configuration"
+            },
+            format!("runtime.yaml:{}", runtime.pointer()),
+            runtime.suggested_action(),
+        )
     } else if matches!(kind, CommandKind::Authoring) {
         (
             "authoring_input",
             "authoring".to_owned(),
-            "Correct the authored input named by the refusal, then retry.",
+            "Correct the authored input named by the refusal, then retry.".to_owned(),
         )
     } else {
         (
             "runtime_dependency",
             "runtime".to_owned(),
-            "Correct the unavailable runtime dependency, then retry.",
+            "Correct the unavailable runtime dependency, then retry.".to_owned(),
         )
     };
     let code = if io_failure {
         "caseworkctl.io-failure"
-    } else if runtime_dependency_unavailable {
-        "casework.runtime-dependency.unavailable"
-    } else if runtime_project_error
-        || authored_expression.is_some()
-        || project_error.is_some()
-        || semantic_error.is_some()
-    {
-        "casework.project.invalid"
-    } else if runtime_error.is_some() {
-        "casework.runtime-configuration.invalid"
+    } else if let Some(runtime) = runtime_error {
+        runtime.code()
     } else if domain {
         "caseworkctl.refused"
     } else {
@@ -814,18 +785,8 @@ fn classify_failure(kind: CommandKind, error: &anyhow::Error) -> (u8, Value) {
         "A required filesystem operation failed.".to_owned()
     } else if runtime_dependency_unavailable {
         "The configured OIDC runtime dependency is unavailable.".to_owned()
-    } else if let Some(authored) = authored_expression {
-        authored.to_string()
-    } else if runtime_project_error {
-        project_error
-            .expect("runtime project error has source")
-            .to_string()
     } else if let Some(runtime) = runtime_error {
         runtime.to_string()
-    } else if let Some(project) = project_error {
-        project.to_string()
-    } else if let Some(semantic) = semantic_error {
-        semantic.to_string()
     } else if domain {
         format!("{error:#}")
     } else {
@@ -1087,121 +1048,6 @@ fn activation_refusal_diagnostics(refusals: &[registry_casework::ActivationRefus
         .collect()
 }
 
-fn runtime_diagnostic_location(error: &RuntimeConfigError) -> (&'static str, String, &'static str) {
-    let removed_key = match error {
-        RuntimeConfigError::Load(load) if load.kind() == RuntimeConfigErrorKind::RemovedKey => {
-            Some(load.field())
-        }
-        _ => None,
-    };
-    let path = if let Some(field) = removed_key {
-        format!("runtime.yaml:/{}", field.replace('.', "/"))
-    } else if error.path() == "/" {
-        "runtime.yaml".to_owned()
-    } else {
-        format!("runtime.yaml:/{}", error.path().trim_start_matches('/'))
-    };
-    if matches!(error, RuntimeConfigError::AllowedClientsRequired) {
-        return (
-            "runtime_configuration",
-            path,
-            "List every client identifier this deployment admits in authentication.oidc.allowedClients, then retry.",
-        );
-    }
-    let action = match removed_key {
-        Some("authentication.oidc.principalClaim") => {
-            "Remove authentication.oidc.principalClaim and configure accessProfiles[].principalClaim in casework.yaml."
-        }
-        Some("authentication.oidc.jwksUri") => {
-            "Replace authentication.oidc.jwksUri with authentication.oidc.jwksSource, kind: uri, and the same https URL as uri."
-        }
-        _ => "Correct the named runtime configuration field, then retry.",
-    };
-    ("runtime_configuration", path, action)
-}
-
-fn project_diagnostic_location(error: &ConfigLoadError) -> (&'static str, String, &'static str) {
-    let path = if error.path() == "/" {
-        "casework.yaml".to_owned()
-    } else {
-        format!("casework.yaml:/{}", error.path().trim_start_matches('/'))
-    };
-    (
-        "casework_project",
-        path,
-        "Correct the named Casework project member, then retry.",
-    )
-}
-
-fn semantic_diagnostic_location(error: &ConfigError) -> (&'static str, String, &'static str) {
-    if let ConfigError::Reference { path, .. } | ConfigError::Semantic { path, .. } = error {
-        return (
-            "casework_project",
-            format!("casework.yaml:{path}"),
-            "Correct the named project member and its reference, then retry.",
-        );
-    }
-    let (artifact, path, action) = match error {
-        ConfigError::TaskTemplate => (
-            "casework_project",
-            "casework.yaml:/taskTemplates",
-            "Use unique task templates with eligible teams and human profiles, valid source fields, exact bounds, and a lifetime of at most 900 seconds.",
-        ),
-        ConfigError::Envelope => (
-            "casework_project",
-            "casework.yaml:/apiVersion",
-            "Use the supported Casework project envelope.",
-        ),
-        ConfigError::Identifier => (
-            "casework_project",
-            "casework.yaml",
-            "Correct the invalid identifier named by the project member.",
-        ),
-        ConfigError::DefaultQueue => (
-            "casework_project",
-            "casework.yaml:/queues",
-            "Declare unique queues and valid queue references.",
-        ),
-        ConfigError::AccessProfiles | ConfigError::AccessProfileScopes => (
-            "casework_project",
-            "casework.yaml:/accessProfiles",
-            "Correct the access profile roles, claims, and distinct scopes.",
-        ),
-        ConfigError::ReviewKinds => (
-            "casework_project",
-            "casework.yaml:/reviewKinds",
-            "Correct the unified review kind, stage, schema, outcome, retention, clock, or access-profile reference.",
-        ),
-        ConfigError::ReviewProducers => (
-            "casework_project",
-            "casework.yaml:/reviewProducers",
-            "Correct the producer identity, requester profile, source namespace, kind grant, recovery, or completion binding.",
-        ),
-        ConfigError::NoConfiguredWork => (
-            "casework_project",
-            "casework.yaml:/sources",
-            "Declare a source or unified review kind.",
-        ),
-        ConfigError::Routing => (
-            "casework_project",
-            "casework.yaml:/sources",
-            "Correct the routing rule, field, or queue reference.",
-        ),
-        ConfigError::Clocks => (
-            "casework_project",
-            "casework.yaml:/clocks",
-            "Correct the clock, calendar, holiday, or queue reference.",
-        ),
-        ConfigError::InboxBounds => (
-            "casework_project",
-            "casework.yaml:/inbox",
-            "Correct the inbox limits.",
-        ),
-        ConfigError::Reference { .. } | ConfigError::Semantic { .. } => unreachable!(),
-    };
-    (artifact, path.to_owned(), action)
-}
-
 fn diagnostic(code: &str, path: &str, message: String, suggested_action: &str) -> Value {
     json!({
         "severity": "error",
@@ -1258,6 +1104,57 @@ fn write_failure(
     }
 }
 
+/// The reader's report when a command refused a configuration file.
+fn configuration_report(error: &anyhow::Error) -> Option<&Report> {
+    error.chain().find_map(|cause| {
+        if let Some(refusal) = cause.downcast_ref::<project::RuntimeConfigRefusal>() {
+            return Some(&refusal.report);
+        }
+        match cause.downcast_ref::<ConfigLoadError>() {
+            Some(ConfigLoadError::Refused(report)) => Some(report),
+            _ => cause.downcast_ref::<Report>(),
+        }
+    })
+}
+
+/// The exit code of a configuration refusal: an operational failure when the
+/// runtime file could not be read at all, and otherwise a domain refusal.
+fn configuration_exit(error: &anyhow::Error) -> u8 {
+    let unavailable = error.chain().any(|cause| {
+        cause
+            .downcast_ref::<project::RuntimeConfigRefusal>()
+            .is_some_and(|refusal| refusal.unavailable)
+    });
+    if unavailable {
+        OPERATIONAL_FAILURE_EXIT
+    } else {
+        DOMAIN_REFUSAL_EXIT
+    }
+}
+
+/// Print a configuration refusal unchanged: the CFG-DIAG-2 lines on stderr,
+/// or, with `--format json`, the CFG-DIAG-1 diagnostics in the report
+/// envelope on stdout.
+fn write_configuration_report(
+    report: &Report,
+    format: OutputFormat,
+    report_kind: &'static str,
+    exit: u8,
+    stdout: &mut dyn io::Write,
+    stderr: &mut dyn io::Write,
+) {
+    if format == OutputFormat::Json {
+        let envelope = json_report(
+            report_kind,
+            json!({"ok": false, "diagnostics": report.to_json_value()}),
+            exit,
+        );
+        let _ = report::write(&envelope, stdout);
+    } else {
+        let _ = write!(stderr, "{}", report.render_human());
+    }
+}
+
 fn render_human(report: &Value, stdout: &mut dyn io::Write) -> io::Result<()> {
     let command = report["command"].as_str().unwrap_or("command");
     let lead = match (
@@ -1282,8 +1179,10 @@ fn render_human(report: &Value, stdout: &mut dyn io::Write) -> io::Result<()> {
     }
     if let Some(fields) = report.as_object() {
         for (key, value) in fields {
-            if matches!(key.as_str(), "ok" | "command" | "findings" | "diagnostics")
-                || value.is_null()
+            if matches!(
+                key.as_str(),
+                "ok" | "command" | "diagnostics" | "filesChecked"
+            ) || value.is_null()
             {
                 continue;
             }
@@ -1294,21 +1193,26 @@ fn render_human(report: &Value, stdout: &mut dyn io::Write) -> io::Result<()> {
             writeln!(stdout, "{key}: {rendered}")?;
         }
     }
-    if let Some(findings) = report["findings"].as_array() {
-        for finding in findings {
-            writeln!(
-                stdout,
-                "finding[{}] {}: {}",
-                finding["code"].as_str().unwrap_or("casework.finding"),
-                finding["path"].as_str().unwrap_or("casework.yaml"),
-                finding["message"].as_str().unwrap_or("review required")
-            )?;
-            if let Some(action) = finding["suggestedAction"].as_str() {
-                writeln!(stdout, "  next: {action}")?;
-            }
-        }
+    if let Some(diagnostics) = checked_diagnostics(report)? {
+        write!(stdout, "{}", diagnostics.render_human())?;
     }
     Ok(())
+}
+
+/// The diagnostics a successful check reports beside its outcome, as the
+/// shared report that renders them with its summary line (CFG-DIAG-2). A
+/// refusal's diagnostics are written by [`write_failure`].
+fn checked_diagnostics(report: &Value) -> io::Result<Option<Report>> {
+    let Some(diagnostics) = report.get("diagnostics").filter(|_| report["ok"] == true) else {
+        return Ok(None);
+    };
+    let diagnostics =
+        serde_json::from_value::<Vec<Diagnostic>>(diagnostics.clone()).map_err(io::Error::other)?;
+    let mut checked = Report::new(diagnostics);
+    if let Some(files) = report["filesChecked"].as_u64() {
+        checked.set_files_checked(usize::try_from(files).map_err(io::Error::other)?);
+    }
+    Ok(Some(checked))
 }
 
 /// Command tree available to command-reference tooling.
@@ -1323,7 +1227,17 @@ fn run(cli: Cli) -> Result<Value> {
         Command::Source(args) => match args.command {
             SourceCommand::Add(args) => source_add::run(&args),
         },
-        Command::Check(args) => project::check(&args.project, args.production, args.deny_findings)
+        Command::Check(args) => {
+            let checked = project::check(&args.project, args.production, args.deny_warnings);
+            match &args.runtime_config {
+                Some(runtime_config) => project::check_runtime_config(
+                    &args.project,
+                    runtime_config,
+                    args.environment,
+                    checked,
+                ),
+                None => checked,
+            }
             .and_then(|report| match &args.against_breg_package {
                 Some(package) => breg_package::compare(
                     &args.project,
@@ -1333,7 +1247,8 @@ fn run(cli: Cli) -> Result<Value> {
                     report,
                 ),
                 None => Ok(report),
-            }),
+            })
+        }
         Command::Explain(args) => project::explain(&args.project),
         Command::Lifecycle => lifecycle::lifecycle(),
         Command::Package(args) => match args.output {
@@ -1394,7 +1309,6 @@ fn run(cli: Cli) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use registry_casework::RuntimeConfig;
     use std::fs;
 
     #[test]
@@ -1464,7 +1378,7 @@ mod tests {
             "check",
             "/tmp/project",
             "--production",
-            "--deny-findings",
+            "--deny-warnings",
         ])
         .unwrap();
         assert_eq!(cli.format, OutputFormat::Human);
@@ -1472,7 +1386,11 @@ mod tests {
             panic!("expected check")
         };
         assert!(args.production);
-        assert!(args.deny_findings);
+        assert!(args.deny_warnings);
+        assert!(
+            Cli::try_parse_from(["caseworkctl", "check", "/tmp/project", "--deny-findings"])
+                .is_err()
+        );
 
         let cli = Cli::try_parse_from([
             "caseworkctl",
@@ -1617,15 +1535,14 @@ mod tests {
         assert_eq!(report["apiVersion"], CLI_API_VERSION);
         assert_eq!(report["kind"], "TestReport");
         let diagnostic = &report["diagnostics"][0];
-        assert_eq!(diagnostic["artifact"], "authoring_input");
-        assert_eq!(diagnostic["path"], "authoring");
+        assert_eq!(diagnostic["code"], "casework.test.no-fixtures", "{report}");
+        assert_eq!(diagnostic["path"], "");
         assert!(diagnostic["message"]
             .as_str()
-            .is_some_and(|message| message.contains("test requires at least one YAML fixture")));
-        assert_eq!(
-            diagnostic["suggestedAction"],
-            "Correct the authored input named by the refusal, then retry."
-        );
+            .is_some_and(|message| message.contains("holds no fixture under fixtures/")));
+        assert!(diagnostic["suggestedAction"]
+            .as_str()
+            .is_some_and(|action| action.contains("caseworkctl init writes a starting fixture")));
 
         stdout.clear();
         let mut stderr = Vec::new();
@@ -1641,8 +1558,64 @@ mod tests {
         assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT));
         assert!(stdout.is_empty());
         let rendered = String::from_utf8(stderr).unwrap();
-        assert!(rendered.contains("test requires at least one YAML fixture"));
+        assert!(
+            rendered.contains("error[casework.test.no-fixtures]"),
+            "{rendered}"
+        );
         assert!(!rendered.contains("runtime dependency"));
+    }
+
+    #[test]
+    fn check_places_a_routing_value_the_source_description_rejects_in_casework_yaml() {
+        let root = crate::canonical_tempdir();
+        let project = root.path().join("casework");
+        let example = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/casework/examples/multi-stage-routing-clocks");
+        std::fs::create_dir_all(project.join("sources")).unwrap();
+        let policy = std::fs::read_to_string(example.join("casework.yaml")).unwrap();
+        let rejected = policy.replace("{region: {equals: north}}", "{region: {equals: west}}");
+        assert_ne!(rejected, policy);
+        std::fs::write(project.join("casework.yaml"), rejected).unwrap();
+        for source in ["regional-register.json", "response-register.json"] {
+            std::fs::copy(
+                example.join("sources").join(source),
+                project.join("sources").join(source),
+            )
+            .unwrap();
+        }
+
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let exit = main_entry_from(
+            [
+                OsString::from("caseworkctl"),
+                OsString::from("--format=json"),
+                OsString::from("check"),
+                project.clone().into_os_string(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        );
+        assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT));
+        assert!(stderr.is_empty());
+        let report: Value = serde_json::from_slice(&stdout).unwrap();
+        let diagnostics = report["diagnostics"].as_array().unwrap();
+        assert_eq!(diagnostics.len(), 1, "{report:#}");
+        let diagnostic = &diagnostics[0];
+        assert_eq!(
+            diagnostic["code"],
+            "casework.routing.invalid-predicate-value"
+        );
+        assert_eq!(
+            diagnostic["path"],
+            "/sources/0/requests/0/routing/0/when/fields/region"
+        );
+        assert_eq!(
+            diagnostic["source"]["file"],
+            project.join("casework.yaml").display().to_string()
+        );
+        assert_eq!(diagnostic["source"]["line"], 28);
+        assert!(!diagnostic["message"].as_str().unwrap().contains("west"));
     }
 
     #[test]
@@ -1673,7 +1646,7 @@ mod tests {
                 OsString::from("caseworkctl"),
                 OsString::from("--format=json"),
                 OsString::from("check"),
-                project.into_os_string(),
+                project.clone().into_os_string(),
             ],
             &mut stdout,
             &mut stderr,
@@ -1683,144 +1656,452 @@ mod tests {
         let report: Value = serde_json::from_slice(&stdout).unwrap();
         let diagnostic = &report["diagnostics"][0];
         let message = diagnostic["message"].as_str().unwrap();
-        assert!(message.contains("regional-register"), "{message}");
         assert!(message.contains("missing-review-kind"), "{message}");
-        assert!(
-            message.contains("sha256:regional-source-revision"),
-            "{message}"
+        assert!(!message.contains("sha256:"), "{message}");
+        assert_eq!(
+            diagnostic["code"],
+            "casework.source-description.unknown-review-kind"
         );
-        assert_eq!(diagnostic["artifact"], "authoring_input");
-        assert_eq!(diagnostic["path"], "authoring");
+        assert_eq!(diagnostic["path"], "/sources/0/description");
+        assert_eq!(
+            diagnostic["source"]["file"],
+            project.join("casework.yaml").display().to_string()
+        );
+        assert_eq!(
+            diagnostic["related"][0]["file"],
+            regional_path.display().to_string()
+        );
+        assert_eq!(diagnostic["related"][0]["path"], "/request/review/policyId");
     }
 
     #[test]
-    fn denied_authoring_findings_use_exit_one_and_the_same_diagnostics() {
+    fn denied_authoring_warnings_use_exit_one_and_the_same_positioned_diagnostics() {
         let root = crate::canonical_tempdir();
         let project = root.path().join("casework");
         project::init(&project, "professional-review").unwrap();
-        let mut stdout = Vec::new();
-        let mut stderr = Vec::new();
-        let exit = main_entry_from(
-            [
-                OsString::from("caseworkctl"),
-                OsString::from("--format=json"),
-                OsString::from("check"),
-                project.clone().into_os_string(),
-                OsString::from("--deny-findings"),
-            ],
-            &mut stdout,
-            &mut stderr,
+        let file = project.join("casework.yaml").display().to_string();
+        let run = |arguments: &[&str]| {
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+            let mut full = vec![OsString::from("caseworkctl")];
+            full.extend(arguments.iter().map(OsString::from));
+            let exit = main_entry_from(full, &mut stdout, &mut stderr);
+            (
+                exit,
+                String::from_utf8(stdout).unwrap(),
+                String::from_utf8(stderr).unwrap(),
+            )
+        };
+        let project_argument = project.to_str().unwrap();
+
+        // Authoring reports the missing import as a warning beside a passing
+        // check, in the shared diagnostic shape.
+        let (exit, stdout, stderr) = run(&["--format=json", "check", project_argument]);
+        assert_eq!(exit, ExitCode::SUCCESS, "{stderr}");
+        let report: Value = serde_json::from_str(&stdout).unwrap();
+        assert_eq!(report["status"], "incomplete");
+        assert_eq!(report["filesChecked"], 3);
+        let warning = &report["diagnostics"][0];
+        assert_eq!(warning["severity"], "warning");
+        assert_eq!(warning["code"], "casework.source-description.missing");
+        assert_eq!(warning["artifact"], "CaseworkProject");
+        assert_eq!(warning["path"], "/sources/0/description");
+        assert_eq!(warning["source"]["file"], file.as_str());
+        assert!(warning["source"]["line"].as_u64().unwrap() > 1);
+        assert!(warning["source"]["column"].as_u64().unwrap() > 1);
+        assert!(warning["suggestedAction"]
+            .as_str()
+            .unwrap()
+            .contains("--source-id SOURCE_ID"));
+
+        let (exit, stdout, _) = run(&["check", project_argument]);
+        assert_eq!(exit, ExitCode::SUCCESS);
+        assert!(stdout.starts_with("Authoring check completed with incomplete inputs."));
+        assert!(
+            stdout.contains("warning[casework.source-description.missing] "),
+            "{stdout}"
         );
+        assert!(
+            stdout.ends_with("0 errors, 1 warning in 3 files\n"),
+            "{stdout}"
+        );
+
+        // --deny-warnings refuses the same warning with exit 1.
+        let (exit, stdout, stderr) = run(&[
+            "--format=json",
+            "check",
+            project_argument,
+            "--deny-warnings",
+        ]);
         assert_eq!(exit, ExitCode::from(1));
         assert!(stderr.is_empty());
-        let report: Value = serde_json::from_slice(&stdout).unwrap();
-        let diagnostic = &report["diagnostics"][0];
-        for field in [
-            "severity",
-            "code",
-            "artifact",
-            "path",
-            "message",
-            "suggestedAction",
-        ] {
-            assert!(diagnostic.get(field).is_some(), "missing {field}");
-        }
-        assert_eq!(diagnostic["code"], "casework.source-description.missing");
-        assert_eq!(diagnostic["path"], "casework.yaml:/sources/0/description");
+        let refused: Value = serde_json::from_str(&stdout).unwrap();
+        assert_eq!(refused["ok"], false);
+        assert_eq!(refused["status"], "domain-refusal");
+        assert_eq!(refused["diagnostics"], report["diagnostics"]);
 
-        stdout.clear();
-        let exit = main_entry_from(
-            [
-                OsString::from("caseworkctl"),
-                OsString::from("check"),
-                project.into_os_string(),
-                OsString::from("--deny-findings"),
-            ],
-            &mut stdout,
-            &mut stderr,
-        );
+        let (exit, stdout, stderr) = run(&["check", project_argument, "--deny-warnings"]);
         assert_eq!(exit, ExitCode::from(1));
         assert!(stdout.is_empty());
-        assert!(String::from_utf8_lossy(&stderr)
-            .starts_with("finding[casework.source-description.missing]"));
+        assert!(stderr.starts_with(&format!(
+            "warning[casework.source-description.missing] {file}:"
+        )));
+        assert!(
+            stderr.ends_with("0 errors, 1 warning in 3 files\n"),
+            "{stderr}"
+        );
+
+        // --production requires every import, so the same diagnostic is an
+        // error there.
+        let (exit, stdout, _) = run(&["--format=json", "check", project_argument, "--production"]);
+        assert_eq!(exit, ExitCode::from(1));
+        let refused: Value = serde_json::from_str(&stdout).unwrap();
+        assert_eq!(refused["diagnostics"][0]["severity"], "error");
+        assert_eq!(
+            refused["diagnostics"][0]["code"],
+            "casework.source-description.missing"
+        );
+    }
+
+    /// Run `caseworkctl check PROJECT`, in JSON when `json` is set, and
+    /// return the exit code, stdout, and stderr.
+    fn check_project(project: &std::path::Path, json: bool) -> (ExitCode, String, String) {
+        let mut arguments = vec![OsString::from("caseworkctl")];
+        if json {
+            arguments.push(OsString::from("--format=json"));
+        }
+        arguments.extend([OsString::from("check"), project.as_os_str().to_owned()]);
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let exit = main_entry_from(arguments, &mut stdout, &mut stderr);
+        (
+            exit,
+            String::from_utf8(stdout).unwrap(),
+            String::from_utf8(stderr).unwrap(),
+        )
+    }
+
+    /// Write the standalone template with `edit` applied and return the
+    /// project, its casework.yaml, and the edited text.
+    fn edited_standalone(
+        root: &std::path::Path,
+        edit: impl FnOnce(&str) -> String,
+    ) -> (PathBuf, PathBuf, String) {
+        let project = root.join("standalone");
+        project::init(&project, "standalone-decision").unwrap();
+        let policy_path = project.join("casework.yaml");
+        let original = std::fs::read_to_string(&policy_path).unwrap();
+        let edited = edit(&original);
+        assert_ne!(edited, original);
+        std::fs::write(&policy_path, &edited).unwrap();
+        (project, policy_path, edited)
+    }
+
+    fn line_of(text: &str, line: &str) -> u64 {
+        u64::try_from(
+            text.lines()
+                .position(|candidate| candidate == line)
+                .unwrap()
+                + 1,
+        )
+        .unwrap()
     }
 
     #[test]
     fn check_refuses_an_environment_expression_in_the_authored_project() {
         let root = crate::canonical_tempdir();
-        let project = root.path().join("standalone");
-        project::init(&project, "standalone-decision").unwrap();
-        let policy_path = project.join("casework.yaml");
-        let mut policy: Value =
-            serde_norway::from_slice(&std::fs::read(&policy_path).unwrap()).unwrap();
-        assert!(policy["queues"][0]["label"].is_string());
-        policy["queues"][0]["label"] = json!("${QUEUE_LABEL}");
-        std::fs::write(&policy_path, serde_norway::to_string(&policy).unwrap()).unwrap();
+        let (project, policy_path, edited) = edited_standalone(root.path(), |text| {
+            text.replace(
+                "    label: Decisions awaiting review\n",
+                "    label: \"${QUEUE_LABEL}\"\n",
+            )
+        });
+        let line = line_of(&edited, "    label: \"${QUEUE_LABEL}\"");
 
-        let mut stdout = Vec::new();
-        let mut stderr = Vec::new();
-        let exit = main_entry_from(
-            [
-                OsString::from("caseworkctl"),
-                OsString::from("--format=json"),
-                OsString::from("check"),
-                project.into_os_string(),
-            ],
-            &mut stdout,
-            &mut stderr,
-        );
+        let (exit, stdout, stderr) = check_project(&project, true);
         assert_eq!(exit, ExitCode::from(1));
         assert!(stderr.is_empty());
-        let report: Value = serde_json::from_slice(&stdout).unwrap();
-        let diagnostic = &report["diagnostics"][0];
-        assert_eq!(diagnostic["code"], "casework.project.invalid");
-        assert_eq!(diagnostic["path"], "casework.yaml:/queues/0/label");
-        assert!(diagnostic["message"]
-            .as_str()
-            .is_some_and(|message| message.contains("runtime.yaml only")));
+        let report: Value = serde_json::from_str(&stdout).unwrap();
+        assert_eq!(report["ok"], false);
+        assert_eq!(report["command"], "check");
+        let diagnostics = report["diagnostics"].as_array().unwrap();
+        assert_eq!(diagnostics.len(), 1, "{report:#}");
+        let diagnostic = &diagnostics[0];
+        assert_eq!(diagnostic["code"], "config.substitution-not-allowed");
+        assert_eq!(diagnostic["artifact"], "CaseworkProject");
+        assert_eq!(diagnostic["path"], "/queues/0/label");
+        assert_eq!(
+            diagnostic["source"],
+            json!({"file": policy_path.display().to_string(), "line": line, "column": 12})
+        );
         assert!(diagnostic["suggestedAction"]
             .as_str()
-            .is_some_and(|action| action.contains("casework.yaml")));
+            .is_some_and(|action| action.contains("in casework.yaml directly")));
+        assert!(!stdout.contains("QUEUE_LABEL"), "{stdout}");
+
+        let (exit, stdout, stderr) = check_project(&project, false);
+        assert_eq!(exit, ExitCode::from(1));
+        assert!(stdout.is_empty());
+        assert!(
+            stderr.starts_with(&format!(
+                "error[config.substitution-not-allowed] {}:{line}:12 /queues/0/label\n",
+                policy_path.display()
+            )),
+            "{stderr}"
+        );
+        assert!(
+            stderr.ends_with("1 error, 0 warnings in 3 files\n"),
+            "{stderr}"
+        );
+        assert!(!stderr.contains("QUEUE_LABEL"), "{stderr}");
+    }
+
+    fn check_runtime_config(
+        project: &std::path::Path,
+        runtime_config: &std::path::Path,
+        extra: &[&str],
+    ) -> (ExitCode, String, String) {
+        let mut arguments = vec![
+            OsString::from("caseworkctl"),
+            OsString::from("check"),
+            project.as_os_str().to_owned(),
+            OsString::from("--runtime-config"),
+            runtime_config.as_os_str().to_owned(),
+        ];
+        arguments.extend(extra.iter().map(OsString::from));
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let exit = main_entry_from(arguments, &mut stdout, &mut stderr);
+        (
+            exit,
+            String::from_utf8(stdout).unwrap(),
+            String::from_utf8(stderr).unwrap(),
+        )
+    }
+
+    /// The standalone template's runtime example with `edit` applied, beside
+    /// the project, and its edited text.
+    fn edited_runtime_example(
+        project: &std::path::Path,
+        name: &str,
+        edit: impl FnOnce(&str) -> String,
+    ) -> (PathBuf, String) {
+        let original = std::fs::read_to_string(project.join("runtime.example.yaml")).unwrap();
+        let edited = edit(&original);
+        assert_ne!(edited, original);
+        let path = project.join(name);
+        std::fs::write(&path, &edited).unwrap();
+        (path, edited)
     }
 
     #[test]
-    fn review_connection_retention_diagnostic_names_the_incompatible_pair() {
+    fn check_reads_the_runtime_example_offline_against_the_project() {
         let root = crate::canonical_tempdir();
         let project = root.path().join("standalone");
         project::init(&project, "standalone-decision").unwrap();
-        let policy_path = project.join("casework.yaml");
-        let mut policy: Value =
-            serde_norway::from_slice(&std::fs::read(&policy_path).unwrap()).unwrap();
-        policy["reviewProducers"][0]["recoveryDays"] = json!(91);
-        std::fs::write(&policy_path, serde_norway::to_string(&policy).unwrap()).unwrap();
+        let runtime_config = project.join("runtime.example.yaml");
 
-        let mut stdout = Vec::new();
-        let mut stderr = Vec::new();
-        let exit = main_entry_from(
-            [
-                OsString::from("caseworkctl"),
-                OsString::from("--format=json"),
-                OsString::from("check"),
-                project.into_os_string(),
-            ],
-            &mut stdout,
-            &mut stderr,
+        let (exit, stdout, stderr) =
+            check_runtime_config(&project, &runtime_config, &["--format=json"]);
+
+        assert_eq!(exit, ExitCode::SUCCESS, "{stdout}{stderr}");
+        let report: Value = serde_json::from_str(&stdout).unwrap();
+        assert_eq!(report["ok"], true);
+        assert_eq!(
+            report["runtimeConfig"],
+            runtime_config.display().to_string()
         );
+        assert_eq!(report["databaseAccess"], false);
+        assert_eq!(report["networkAccess"], false);
+    }
+
+    #[test]
+    fn check_reports_every_rule_a_runtime_file_breaks_at_its_position() {
+        let root = crate::canonical_tempdir();
+        let project = root.path().join("standalone");
+        project::init(&project, "standalone-decision").unwrap();
+        let (runtime_config, edited) = edited_runtime_example(&project, "runtime.yaml", |text| {
+            text.replace("databaseId: casework-example", "databaseId: \" padded \"")
+                .replace("bind: 127.0.0.1:8100", "bind: 10.0.0.5:8100")
+        });
+        let file = runtime_config.display().to_string();
+        let identity = line_of(&edited, "  databaseId: \" padded \"");
+        let bind = line_of(&edited, "  bind: 10.0.0.5:8100");
+
+        let (exit, stdout, stderr) = check_runtime_config(&project, &runtime_config, &[]);
+
+        assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT));
+        assert!(stdout.is_empty(), "{stdout}");
+        let lines = stderr.lines().collect::<Vec<_>>();
+        assert_eq!(
+            lines[0],
+            format!(
+                "error[casework.runtime.invalid-database-id] {file}:{identity}:15 /identity/databaseId"
+            )
+        );
+        assert_eq!(
+            lines[3],
+            format!("error[casework.runtime.invalid-listener] {file}:{bind}:9 /listener/bind")
+        );
+        assert_eq!(lines.last(), Some(&"2 errors, 0 warnings in 1 file"));
+        assert!(!stderr.contains("padded"), "{stderr}");
+        assert!(!stderr.contains("10.0.0.5"), "{stderr}");
+
+        let (exit, stdout, _) = check_runtime_config(&project, &runtime_config, &["--format=json"]);
+        assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT));
+        let report: Value = serde_json::from_str(&stdout).unwrap();
+        assert_eq!(report["status"], "domain-refusal");
+        let diagnostics = report["diagnostics"].as_array().unwrap();
+        assert_eq!(diagnostics.len(), 2, "{report:#}");
+        assert_eq!(diagnostics[0]["artifact"], "CaseworkRuntimeConfig");
+        assert_eq!(
+            diagnostics[0]["source"],
+            json!({"file": file, "line": identity, "column": 15})
+        );
+    }
+
+    #[test]
+    fn check_reports_the_project_and_runtime_refusals_together() {
+        let root = crate::canonical_tempdir();
+        let (project, policy_path, _) = edited_standalone(root.path(), |text| {
+            text.replace(
+                "    label: Decisions awaiting review\n",
+                "    label: \"${QUEUE_LABEL}\"\n",
+            )
+        });
+        let (runtime_config, _) = edited_runtime_example(&project, "runtime.yaml", |text| {
+            text.replace("databaseId: casework-example", "databaseId: \" padded \"")
+        });
+
+        let (exit, stdout, stderr) = check_runtime_config(&project, &runtime_config, &[]);
+
+        assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT));
+        assert!(stdout.is_empty(), "{stdout}");
+        assert!(
+            stderr.starts_with(&format!(
+                "error[config.substitution-not-allowed] {}:",
+                policy_path.display()
+            )),
+            "{stderr}"
+        );
+        assert!(
+            stderr.contains(&format!(
+                "error[casework.runtime.invalid-database-id] {}:",
+                runtime_config.display()
+            )),
+            "{stderr}"
+        );
+        assert!(
+            stderr.ends_with("2 errors, 0 warnings in 4 files\n"),
+            "{stderr}"
+        );
+    }
+
+    #[test]
+    fn check_leaves_a_deferred_runtime_value_out_unless_asked_to_substitute() {
+        let root = crate::canonical_tempdir();
+        let project = root.path().join("standalone");
+        project::init(&project, "standalone-decision").unwrap();
+        let (runtime_config, edited) = edited_runtime_example(&project, "runtime.yaml", |text| {
+            text.replace(
+                "bind: 127.0.0.1:8100",
+                "bind: ${CASEWORKCTL_CHECK_TEST_UNSET_BIND}",
+            )
+        });
+        let bind = line_of(&edited, "  bind: ${CASEWORKCTL_CHECK_TEST_UNSET_BIND}");
+
+        let (exit, stdout, stderr) = check_runtime_config(&project, &runtime_config, &[]);
+        assert_eq!(exit, ExitCode::SUCCESS, "{stdout}{stderr}");
+
+        let (exit, stdout, stderr) =
+            check_runtime_config(&project, &runtime_config, &["--environment"]);
+        assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT), "{stdout}");
+        assert!(
+            stderr.starts_with(&format!(
+                "error[config.substitution] {}:{bind}:9 /listener/bind\n",
+                runtime_config.display()
+            )),
+            "{stderr}"
+        );
+    }
+
+    #[test]
+    fn check_names_a_runtime_file_it_cannot_read_as_an_operational_failure() {
+        let root = crate::canonical_tempdir();
+        let project = root.path().join("standalone");
+        project::init(&project, "standalone-decision").unwrap();
+        let missing = project.join("missing-runtime.yaml");
+
+        let (exit, stdout, _) = check_runtime_config(&project, &missing, &["--format=json"]);
+
+        assert_eq!(exit, ExitCode::from(OPERATIONAL_FAILURE_EXIT));
+        let report: Value = serde_json::from_str(&stdout).unwrap();
+        assert_eq!(report["status"], "operational-failure");
+        assert_eq!(
+            report["diagnostics"][0]["code"],
+            "platform.runtime-config.unavailable"
+        );
+    }
+
+    #[test]
+    fn check_substitutes_the_environment_only_for_a_runtime_file() {
+        let error = Cli::try_parse_from(["caseworkctl", "check", "/tmp/project", "--environment"])
+            .unwrap_err();
+        assert_eq!(
+            error.kind(),
+            clap::error::ErrorKind::MissingRequiredArgument
+        );
+    }
+
+    /// The check prints the reader's report unchanged: every semantic
+    /// finding at its position, with the place it relates to.
+    #[test]
+    fn review_connection_retention_diagnostic_names_the_incompatible_pair() {
+        let root = crate::canonical_tempdir();
+        let (project, policy_path, edited) = edited_standalone(root.path(), |text| {
+            text.replace("    recoveryDays: 30\n", "    recoveryDays: 91\n")
+        });
+        let file = policy_path.display().to_string();
+        let line = line_of(&edited, "    recoveryDays: 91");
+        let related_line = line_of(&edited, "      terminalDays: 90");
+
+        let (exit, stdout, stderr) = check_project(&project, true);
         assert_eq!(exit, ExitCode::from(1));
         assert!(stderr.is_empty());
-        let report: Value = serde_json::from_slice(&stdout).unwrap();
-        let diagnostic = &report["diagnostics"][0];
-        assert_eq!(diagnostic["code"], "casework.project.invalid");
+        let report: Value = serde_json::from_str(&stdout).unwrap();
         assert_eq!(
-            diagnostic["path"],
-            "casework.yaml:/reviewProducers[0].recoveryDays"
+            report["diagnostics"],
+            json!([{
+                "severity": "error",
+                "code": "casework.review-producer.recovery-exceeds-retention",
+                "artifact": "CaseworkProject",
+                "path": "/reviewProducers/0/recoveryDays",
+                "message": "recoveryDays is longer than the result retention of a review kind this producer submits",
+                "suggestedAction": "Make recoveryDays no longer than that review kind's retention.terminalDays.",
+                "source": {"file": file, "line": line, "column": 19},
+                "related": [{
+                    "file": file,
+                    "line": related_line,
+                    "column": 21,
+                    "path": "/reviewKinds/0/retention/terminalDays",
+                    "message": "terminalDays is written here"
+                }]
+            }])
         );
-        assert!(diagnostic["message"].as_str().is_some_and(
-            |message| message.contains("recovery window no longer than result retention")
-        ));
+
+        let (exit, stdout, stderr) = check_project(&project, false);
+        assert_eq!(exit, ExitCode::from(1));
+        assert!(stdout.is_empty());
         assert_eq!(
-            diagnostic["suggestedAction"],
-            "Correct the named Casework project member, then retry."
+            stderr,
+            format!(
+                "error[casework.review-producer.recovery-exceeds-retention] {file}:{line}:19 /reviewProducers/0/recoveryDays
+  recoveryDays is longer than the result retention of a review kind this producer submits
+  next: Make recoveryDays no longer than that review kind's retention.terminalDays.
+  note: {file}:{related_line}:21 /reviewKinds/0/retention/terminalDays terminalDays is written here
+1 error, 0 warnings in 3 files
+"
+            )
         );
     }
 
@@ -1845,16 +2126,11 @@ mod tests {
         assert!(stderr.is_empty());
         let report: Value = serde_json::from_slice(&stdout).unwrap();
         let diagnostic = &report["diagnostics"][0];
-        for field in [
-            "severity",
-            "code",
-            "artifact",
-            "path",
-            "message",
-            "suggestedAction",
-        ] {
+        for field in ["severity", "code", "path", "message", "suggestedAction"] {
             assert!(diagnostic.get(field).is_some(), "missing {field}");
         }
+        assert_eq!(diagnostic["code"], "platform.runtime-config.unavailable");
+        assert_eq!(report["status"], "operational-failure");
 
         stdout.clear();
         let exit = main_entry_from(
@@ -1869,7 +2145,8 @@ mod tests {
         );
         assert_eq!(exit, ExitCode::from(3));
         assert!(stdout.is_empty());
-        assert!(String::from_utf8_lossy(&stderr).starts_with("error[caseworkctl.io-failure]"));
+        assert!(String::from_utf8_lossy(&stderr)
+            .starts_with("error[platform.runtime-config.unavailable]"));
     }
 
     #[test]
@@ -1933,12 +2210,12 @@ mod tests {
         for (removed, path, replacement) in [
             (
                 "principalClaim: sub",
-                "runtime.yaml:/authentication/oidc/principalClaim",
+                "/authentication/oidc/principalClaim",
                 "accessProfiles[].principalClaim",
             ),
             (
                 "jwksUri: https://issuer.example/jwks",
-                "runtime.yaml:/authentication/oidc/jwksUri",
+                "/authentication/oidc/jwksUri",
                 "authentication.oidc.jwksSource",
             ),
         ] {
@@ -1951,11 +2228,32 @@ mod tests {
                 ),
             )
             .unwrap();
-            let error = anyhow::Error::new(RuntimeConfig::load(&runtime_config).unwrap_err());
-            let (exit, diagnostic) = classify_failure(CommandKind::Operational, &error);
-            assert_eq!(exit, DOMAIN_REFUSAL_EXIT);
-            assert_eq!(diagnostic["code"], "casework.runtime-configuration.invalid");
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+            let exit = main_entry_from(
+                [
+                    OsString::from("caseworkctl"),
+                    OsString::from("--format=json"),
+                    OsString::from("doctor"),
+                    OsString::from("--runtime-config"),
+                    runtime_config.clone().into_os_string(),
+                ],
+                &mut stdout,
+                &mut stderr,
+            );
+            assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT));
+            let report: Value = serde_json::from_slice(&stdout).unwrap();
+            let diagnostic = report["diagnostics"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|diagnostic| diagnostic["code"] == "config.removed-key")
+                .expect("the removed key is reported");
             assert_eq!(diagnostic["path"], path);
+            assert_eq!(
+                diagnostic["source"]["file"],
+                runtime_config.display().to_string()
+            );
             assert!(
                 diagnostic["suggestedAction"]
                     .as_str()
@@ -1972,10 +2270,13 @@ mod tests {
         let (exit, diagnostic) = classify_failure(CommandKind::Operational, &error);
 
         assert_eq!(exit, DOMAIN_REFUSAL_EXIT);
-        assert_eq!(diagnostic["code"], "casework.runtime-configuration.invalid");
+        assert_eq!(
+            diagnostic["code"],
+            "casework.runtime.allowed-clients-required"
+        );
         assert_eq!(
             diagnostic["path"],
-            "runtime.yaml:/authentication.oidc.allowedClients"
+            "runtime.yaml:/authentication/oidc/allowedClients"
         );
         assert!(
             diagnostic["suggestedAction"]
@@ -2495,23 +2796,34 @@ mod tests {
 
     #[test]
     fn human_reports_distinguish_incomplete_authoring_from_offline_fixture_proof() {
-        let finding = json!({
-            "severity":"finding",
+        let warning = json!({
+            "severity":"warning",
             "code":"casework.source-description.missing",
-            "artifact":"casework_project",
-            "path":"casework.yaml:/sources/0/description",
-            "message":"a declared source import is missing",
-            "suggestedAction":"Import the declared source description."
+            "artifact":"CaseworkProject",
+            "path":"/sources/0/description",
+            "message":"no source description file exists at this path, relative to casework.yaml",
+            "suggestedAction":"Import the declared source description.",
+            "source":{"file":"project/casework.yaml","line":12,"column":18}
         });
         let mut check_output = Vec::new();
         render_human(
-            &json!({"ok":true,"command":"check","status":"incomplete","findings":[finding.clone()]}),
+            &json!({
+                "ok":true,
+                "command":"check",
+                "status":"incomplete",
+                "filesChecked":1,
+                "diagnostics":[warning.clone()]
+            }),
             &mut check_output,
         )
         .unwrap();
-        assert!(String::from_utf8(check_output)
-            .unwrap()
-            .starts_with("Authoring check completed with incomplete inputs."));
+        let check_output = String::from_utf8(check_output).unwrap();
+        assert!(check_output.starts_with("Authoring check completed with incomplete inputs."));
+        assert!(check_output.contains(
+            "warning[casework.source-description.missing] project/casework.yaml:12:18 /sources/0/description\n"
+        ));
+        assert!(!check_output.contains("filesChecked"));
+        assert!(check_output.ends_with("0 errors, 1 warning in 1 file\n"));
 
         let mut test_output = Vec::new();
         render_human(
@@ -2519,7 +2831,8 @@ mod tests {
                 "ok":true,
                 "command":"test",
                 "authoringStatus":"incomplete",
-                "findings":[finding],
+                "filesChecked":2,
+                "diagnostics":[warning],
                 "proofBoundary":"offline_synthetic",
                 "productionClosure":false
             }),
@@ -2531,6 +2844,7 @@ mod tests {
             .starts_with("Offline synthetic fixtures passed with incomplete authored inputs."));
         assert!(test_output.contains("proofBoundary: offline_synthetic"));
         assert!(test_output.contains("productionClosure: false"));
+        assert!(test_output.ends_with("0 errors, 1 warning in 2 files\n"));
     }
 
     const ATTEMPT_ID: &str = "7c9e6679-7425-40de-944b-e07fc1f90ae7";

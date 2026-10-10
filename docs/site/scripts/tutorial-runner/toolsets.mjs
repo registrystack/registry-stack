@@ -7,7 +7,7 @@
 
 import { spawn, spawnSync } from 'node:child_process';
 import { accessSync, closeSync, constants, existsSync, mkdtempSync, openSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { chmod, mkdir, readdir, symlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readdir, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -137,10 +137,13 @@ function productToolset({
     // Stop every local development session the journey started and reclaim
     // its container and volume, if it has one. A journey that fails halfway
     // leaves its sessions running, and deleting the reader directory alone
-    // would orphan them. Stopping is idempotent. Returns false
+    // would orphan them. Stopping is idempotent. A session state file the
+    // checkout copy carried in and the journey never rewrote (inherited maps
+    // its path to the modification time it had) belongs to a committed example,
+    // not to a session the journey started, so it is left alone. Returns false
     // when a session could not be stopped, so its project is kept for a second
     // attempt.
-    async teardown({ readerDir, binDir }) {
+    async teardown({ readerDir, binDir, inherited = new Map() }) {
       let entries;
       try {
         entries = await readdir(readerDir, { recursive: true });
@@ -151,6 +154,7 @@ function productToolset({
       let stoppedAll = true;
       for (const [tool, state] of sessions) {
         for (const entry of entries.filter((path) => path.endsWith(state)).sort()) {
+          if (inherited.get(entry) === (await stat(join(readerDir, entry))).mtimeMs) continue;
           const project = dirname(dirname(dirname(join(readerDir, entry))));
           const stop = spawnSync(join(binDir, tool), stopArgs(project), { encoding: 'utf8' });
           if (stop.status === 0) {

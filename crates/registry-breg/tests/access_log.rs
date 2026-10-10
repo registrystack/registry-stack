@@ -55,31 +55,34 @@ fn source() -> Value {
                 "id": "subject",
                 "default": true,
                 "principalClaim": "registry_principal",
+                "requiredScopes": "unrestricted",
                 "permissions": [{
                     "entity": "person",
                     "operations": ["get", "list"],
                     "readableFields": ["citizen-id", "display-name"],
-                    "rowBoundaries": []
+                    "rowBoundaries": "unrestricted"
                 }]
             },
             {
                 "id": "investigator",
                 "principalClaim": "registry_principal",
+                "requiredScopes": "unrestricted",
                 "permissions": [{
                     "entity": "person",
                     "operations": ["get"],
                     "readableFields": ["display-name"],
-                    "rowBoundaries": []
+                    "rowBoundaries": "unrestricted"
                 }]
             },
             {
                 "id": "writer",
                 "principalClaim": "registry_principal",
+                "requiredScopes": "unrestricted",
                 "permissions": [{
                     "entity": "person",
                     "operations": ["create"],
                     "writableFields": ["citizen-id", "display-name"],
-                    "rowBoundaries": []
+                    "rowBoundaries": "unrestricted"
                 }]
             }
         ]
@@ -108,7 +111,7 @@ fn assert_refused(value: &Value, code: &str) {
     );
 }
 
-fn add_relationship_reader(value: &mut Value, anonymous: bool) {
+fn add_relationship_reader(value: &mut Value) {
     value["entities"]
         .as_array_mut()
         .unwrap()
@@ -136,21 +139,18 @@ fn add_relationship_reader(value: &mut Value, anonymous: bool) {
                 {"id": "person", "type": "reference", "target": "person", "required": true, "classification": "restricted"}
             ]
         })]);
-    let mut profile = json!({
+    let profile = json!({
         "id": "relationship-investigator",
-        "anonymous": anonymous,
         "principalClaim": "registry_principal",
+        "requiredScopes": "unrestricted",
         "permissions": [{
             "entity": "case",
             "operations": ["get"],
             "readableFields": ["case-code"],
-            "rowBoundaries": [],
+            "rowBoundaries": "unrestricted",
             "readPaths": [{"path": "people", "readableFields": ["display-name"]}]
         }]
     });
-    if anonymous {
-        profile.as_object_mut().unwrap().remove("principalClaim");
-    }
     value["accessProfiles"]
         .as_array_mut()
         .unwrap()
@@ -270,26 +270,26 @@ fn generated_openapi_omits_access_log_route_without_entity_opt_in() {
 fn subject_field_must_be_required_bounded_plaintext_text() {
     let mut unknown = source();
     unknown["entities"][0]["accessLog"]["subjectField"] = json!("unknown");
-    assert_refused(&unknown, "access_log.subject_field.invalid");
+    assert_refused(&unknown, "breg.access-log.subject-field-invalid");
 
     let mut optional = source();
     optional["entities"][0]["fields"][0]["required"] = json!(false);
-    assert_refused(&optional, "access_log.subject_field.invalid");
+    assert_refused(&optional, "breg.access-log.subject-field-invalid");
 
     let mut encrypted = source();
     encrypted["entities"][0]["fields"][0]["encrypted"] = json!(true);
-    assert_refused(&encrypted, "access_log.subject_field.invalid");
+    assert_refused(&encrypted, "breg.access-log.subject-field-invalid");
 
     let mut wrong_type = source();
     wrong_type["entities"][0]["fields"][0] = json!({
         "id": "citizen-id", "type": "int64", "required": true,
         "classification": "restricted"
     });
-    assert_refused(&wrong_type, "access_log.subject_field.invalid");
+    assert_refused(&wrong_type, "breg.access-log.subject-field-invalid");
 
     let mut too_long = source();
     too_long["entities"][0]["fields"][0]["maxLength"] = json!(513);
-    assert_refused(&too_long, "access_log.subject_field.invalid");
+    assert_refused(&too_long, "breg.access-log.subject-field-invalid");
 }
 
 #[test]
@@ -297,13 +297,13 @@ fn retention_and_exemption_delays_are_bounded() {
     for invalid in [0, 3_651] {
         let mut value = source();
         value["entities"][0]["accessLog"]["retentionDays"] = json!(invalid);
-        assert_refused(&value, "access_log.retention_days.invalid");
+        assert_refused(&value, "breg.access-log.retention-days-invalid");
     }
     for invalid in [0, 90] {
         let mut value = source();
         value["entities"][0]["accessLog"]["exemptions"]["investigator"]["delayDays"] =
             json!(invalid);
-        assert_refused(&value, "access_log.exemption.delay_invalid");
+        assert_refused(&value, "breg.access-log.exemption-delay-invalid");
     }
 }
 
@@ -312,14 +312,14 @@ fn trusted_intermediaries_are_explicit_and_bounded() {
     for invalid in ["", "evidence service", "evidence\nservice"] {
         let mut value = source();
         value["entities"][0]["accessLog"]["trustedIntermediaries"] = json!([invalid]);
-        assert_refused(&value, "access_log.trusted_intermediary.invalid");
+        assert_refused(&value, "breg.access-log.trusted-intermediary-invalid");
     }
 
     let mut too_many = source();
     too_many["entities"][0]["accessLog"]["trustedIntermediaries"] = json!((0..65)
         .map(|index| format!("client-{index}"))
         .collect::<Vec<_>>());
-    assert_refused(&too_many, "access_log.trusted_intermediaries.too_many");
+    assert_refused(&too_many, "breg.access-log.trusted-intermediaries-too-many");
 }
 
 #[test]
@@ -331,7 +331,7 @@ fn exemptions_name_read_profiles_and_bounded_policy_text() {
         .remove("investigator")
         .unwrap();
     unknown["entities"][0]["accessLog"]["exemptions"]["missing"] = exemption;
-    assert_refused(&unknown, "access_log.exemption.profile_invalid");
+    assert_refused(&unknown, "breg.access-log.exemption-profile-invalid");
 
     let mut nonreader = source();
     let exemption = nonreader["entities"][0]["accessLog"]["exemptions"]
@@ -340,24 +340,24 @@ fn exemptions_name_read_profiles_and_bounded_policy_text() {
         .remove("investigator")
         .unwrap();
     nonreader["entities"][0]["accessLog"]["exemptions"]["writer"] = exemption;
-    assert_refused(&nonreader, "access_log.exemption.profile_invalid");
+    assert_refused(&nonreader, "breg.access-log.exemption-profile-invalid");
 
     for invalid in ["", " padded", "line\nbreak"] {
         let mut value = source();
         value["entities"][0]["accessLog"]["exemptions"]["investigator"]["reason"] = json!(invalid);
-        assert_refused(&value, "access_log.exemption.reason_invalid");
+        assert_refused(&value, "breg.access-log.exemption-reason-invalid");
     }
 
     let mut too_long = source();
     too_long["entities"][0]["accessLog"]["exemptions"]["investigator"]["reason"] =
         json!("x".repeat(257));
-    assert_refused(&too_long, "access_log.exemption.reason_invalid");
+    assert_refused(&too_long, "breg.access-log.exemption-reason-invalid");
 }
 
 #[test]
 fn relationship_exemptions_bind_the_authority_entity_and_read_path() {
     let mut value = source();
-    add_relationship_reader(&mut value, false);
+    add_relationship_reader(&mut value);
     value["entities"][0]["accessLog"]["exemptions"]["relationship-investigator"] = json!({
         "sourceEntity": "case",
         "reason": "active-investigation",
@@ -373,29 +373,14 @@ fn relationship_exemptions_bind_the_authority_entity_and_read_path() {
 
     let mut no_grant = value.clone();
     no_grant["accessProfiles"][3]["permissions"][0]["readPaths"] = json!([]);
-    assert_refused(&no_grant, "access_log.exemption.profile_invalid");
+    assert_refused(&no_grant, "breg.access-log.exemption-profile-invalid");
 
     let mut wrong_target = value.clone();
     wrong_target["entities"][1]["readPaths"][0]["to"] = json!("case");
-    assert_refused(&wrong_target, "access_log.exemption.profile_invalid");
+    assert_refused(&wrong_target, "breg.access-log.exemption-profile-invalid");
 
     let mut unknown_source = value;
     unknown_source["entities"][0]["accessLog"]["exemptions"]["relationship-investigator"]
         ["sourceEntity"] = json!("missing");
-    assert_refused(&unknown_source, "access_log.exemption.profile_invalid");
-}
-
-#[test]
-fn anonymous_profiles_cannot_read_logged_entities() {
-    let mut value = source();
-    value["accessProfiles"][0]["anonymous"] = json!(true);
-    value["accessProfiles"][0]
-        .as_object_mut()
-        .unwrap()
-        .remove("principalClaim");
-    assert_refused(&value, "access_log.anonymous_read_forbidden");
-
-    let mut relationship = source();
-    add_relationship_reader(&mut relationship, true);
-    assert_refused(&relationship, "access_log.anonymous_read_forbidden");
+    assert_refused(&unknown_source, "breg.access-log.exemption-profile-invalid");
 }

@@ -1,7 +1,9 @@
 //! Optional local source exports, explicit three-way updates, and recoverable
 //! authoring mutations. Export provenance never supplies runtime authority.
 
+mod export;
 mod files;
+mod resolution;
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -12,17 +14,29 @@ use std::{
 use anyhow::{anyhow, bail, Context as _, Result};
 use clap::Args;
 use registry_evidence_authoring::validate::valid_local_identifier;
+use registry_platform_yaml::Reader;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+pub(crate) use export::DocumentRefused;
+#[cfg(test)]
+pub(crate) use export::EXPORT_API_VERSION;
+pub(crate) use export::EXPORT_KIND;
 pub(crate) use files::ProjectLock;
 use files::{
     artifact_path, authored_bound, digest, read, snapshot, write, Contents, JOURNAL_PATH,
     MAX_FILE_BYTES, MAX_JOURNAL_BYTES, MAX_STATE_BYTES, STATE_PATH,
 };
+use resolution::{decode_resolution_file, MAX_ARTIFACTS};
+#[cfg(feature = "schema")]
+pub(crate) use resolution::{resolution_schema, RESOLUTION_API_VERSION, RESOLUTION_SCHEMA_ID};
+pub(crate) use resolution::{Resolution, RESOLUTION_KIND};
+
+/// The largest file `evidencectl check --file` reads: the importer's own
+/// largest file, the transaction journal.
+pub(crate) const MAX_CHECKED_FILE_BYTES: u64 = MAX_JOURNAL_BYTES;
 
 const MANIFEST_FILE: &str = "source-export.json";
-const MAX_ARTIFACTS: usize = 256;
 const MAX_EXPORT_BYTES: usize = 16 * 1024 * 1024;
 
 /// The same export set and explicit resolutions are usable for a read-only
@@ -55,10 +69,42 @@ pub(crate) struct DetachArgs {
     pub project: PathBuf,
 }
 
+/// The `apiVersion` and `kind` of the baseline `evidencectl source import`
+/// keeps in `.evidence/source-imports/state.json`.
+pub(crate) const STATE_API_VERSION: &str =
+    "id.registrystack.org/formats/evidence/source-import-state/v1alpha1";
+pub(crate) const STATE_KIND: &str = "EvidenceSourceImportState";
+/// The `apiVersion` and `kind` of the transaction journal kept in
+/// `.evidence/source-imports/transaction.json` while an import is applied.
+pub(crate) const JOURNAL_API_VERSION: &str =
+    "id.registrystack.org/formats/evidence/source-import-journal/v1alpha1";
+pub(crate) const JOURNAL_KIND: &str = "EvidenceSourceImportJournal";
+/// Refusals for a file an earlier evidencectl wrote without the envelope. The
+/// file is left as it is, so that evidencectl can still finish its work.
+const STATE_EARLIER: &str = "the source-import baseline in .evidence/source-imports/state.json was written by an earlier evidencectl; keep it for inspection, delete .evidence/source-imports, and run evidencectl source import again";
+const JOURNAL_EARLIER: &str = "the source-import transaction journal in .evidence/source-imports/transaction.json was written by an earlier evidencectl; run evidencectl source import with that evidencectl to finish or roll back the transaction, then rerun it";
+
+/// Refuse a file that does not open with the expected `apiVersion` and
+/// `kind`, naming the fix. Both files embed project content beyond the
+/// shared reader's document bound, so the envelope is checked here.
+pub(crate) fn require_envelope(
+    text: &str,
+    api_version: &str,
+    kind: &str,
+    earlier: &str,
+) -> Result<()> {
+    let document: serde_json::Value =
+        serde_json::from_str(text).context("the file is not valid JSON")?;
+    if document["apiVersion"] != api_version || document["kind"] != kind {
+        bail!("{earlier}");
+    }
+    Ok(())
+}
+
+/// The manifest as the source-import baseline records it.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ExportManifest {
-    format_version: u32,
     source_id: String,
     provenance: BTreeMap<String, String>,
     artifacts: Vec<ExportArtifact>,
@@ -95,7 +141,8 @@ struct RetainedArtifact {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct State {
-    format_version: u32,
+    api_version: String,
+    kind: String,
     imports: BTreeMap<String, InstalledExport>,
     /// Exact accepted local content, including keep/resolved choices. Current
     /// authored bytes may subsequently differ and are read anew for every plan.
@@ -105,26 +152,12 @@ struct State {
 impl Default for State {
     fn default() -> Self {
         Self {
-            format_version: 1,
+            api_version: STATE_API_VERSION.to_owned(),
+            kind: STATE_KIND.to_owned(),
             imports: BTreeMap::new(),
             accepted: BTreeMap::new(),
         }
     }
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[serde(tag = "choice", rename_all = "kebab-case", deny_unknown_fields)]
-pub(crate) enum Resolution {
-    Keep,
-    Adopt,
-    File { path: PathBuf },
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct ResolutionFile {
-    format_version: u32,
-    artifacts: BTreeMap<String, Resolution>,
 }
 
 pub(crate) fn read_resolutions(path: Option<&Path>) -> Result<BTreeMap<String, Resolution>> {
@@ -142,13 +175,9 @@ pub(crate) fn read_resolutions(path: Option<&Path>) -> Result<BTreeMap<String, R
         .ok_or_else(|| anyhow!("resolution file needs a UTF-8 name"))?;
     let content =
         read(&parent, name, MAX_FILE_BYTES)?.ok_or_else(|| anyhow!("resolution file is absent"))?;
-    let mut resolutions: ResolutionFile =
-        serde_json::from_str(&content.text).context("parsing the closed source resolution file")?;
-    if resolutions.format_version != 1 || resolutions.artifacts.len() > MAX_ARTIFACTS {
-        bail!("source resolution file requires formatVersion 1 and at most 256 artifacts");
-    }
-    for (artifact, resolution) in &mut resolutions.artifacts {
-        artifact_path(artifact)?;
+    let mut resolutions =
+        decode_resolution_file(&path.display().to_string(), content.text.as_bytes())?;
+    for resolution in resolutions.artifacts.values_mut() {
         if let Resolution::File { path } = resolution {
             if !path.is_absolute() {
                 *path = parent.join(&*path);
@@ -360,8 +389,8 @@ pub(crate) fn prepare(
             || (retained_by_fork && current != upstream && old != upstream);
         let resolution = resolutions.get(&path);
         let (accepted, resolution_name) = match resolution {
-            Some(Resolution::Keep) => (current.clone(), Some("keep".to_owned())),
-            Some(Resolution::Adopt) => (upstream.clone(), Some("adopt".to_owned())),
+            Some(Resolution::Keep {}) => (current.clone(), Some("keep".to_owned())),
+            Some(Resolution::Adopt {}) => (upstream.clone(), Some("adopt".to_owned())),
             Some(Resolution::File { path }) => {
                 (Some(read_resolution(path)?), Some("file".to_owned()))
             }
@@ -398,7 +427,7 @@ pub(crate) fn prepare(
                 else { None },
         });
         next.accepted.insert(path.clone(), accepted.clone());
-        if collision && matches!(resolution, Some(Resolution::Keep)) {
+        if collision && matches!(resolution, Some(Resolution::Keep {})) {
             for id in &next_owner_ids {
                 if let Some(text) = &upstream {
                     let record = next.imports.get_mut(id).expect("candidate owner exists");
@@ -412,7 +441,7 @@ pub(crate) fn prepare(
                 }
             }
         }
-        if matches!(resolution, Some(Resolution::Adopt)) {
+        if matches!(resolution, Some(Resolution::Adopt {})) {
             for id in &next_owner_ids {
                 next.imports
                     .get_mut(id)
@@ -545,10 +574,24 @@ fn load_export(directory: &Path) -> Result<InstalledExport> {
     let root = files::plain_directory(directory)?;
     let content = read(&root, MANIFEST_FILE, MAX_FILE_BYTES)?
         .ok_or_else(|| anyhow!("local export is missing source-export.json"))?;
-    let mut manifest: ExportManifest = serde_json::from_str(&content.text)
-        .context("source export must use the closed Version 1 manifest")?;
-    if manifest.format_version != 1 || !valid_local_identifier(&manifest.source_id) {
-        bail!("source export requires formatVersion 1 and a stable lowercase sourceId");
+    let document = export::read_export_manifest(
+        &directory.join(MANIFEST_FILE).display().to_string(),
+        content.text.as_bytes(),
+    )?;
+    let mut manifest = ExportManifest {
+        source_id: document.source_id,
+        provenance: document.provenance,
+        artifacts: document
+            .artifacts
+            .into_iter()
+            .map(|artifact| ExportArtifact {
+                path: artifact.path,
+                sha256: artifact.digest.hex().to_owned(),
+            })
+            .collect(),
+    };
+    if !valid_local_identifier(&manifest.source_id) {
+        bail!("source export requires a stable lowercase sourceId");
     }
     if manifest.provenance.is_empty()
         || manifest.provenance.len() > 32
@@ -572,14 +615,6 @@ fn load_export(directory: &Path) -> Result<InstalledExport> {
     let mut bytes = 0;
     for artifact in &manifest.artifacts {
         artifact_path(&artifact.path)?;
-        if artifact.sha256.len() != 64
-            || !artifact
-                .sha256
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-        {
-            bail!("export checksums must be lowercase hexadecimal SHA-256");
-        }
         let content = read(&root, &artifact.path, MAX_FILE_BYTES)?
             .ok_or_else(|| anyhow!("export inventory artifact is absent: {}", artifact.path))?;
         bytes += content.text.len();
@@ -593,7 +628,7 @@ fn load_export(directory: &Path) -> Result<InstalledExport> {
             );
         }
         if artifact.path.ends_with(".yaml") {
-            let value: Value = serde_norway::from_str(&content.text)
+            let value = yaml_artifact(&artifact.path, &content.text)
                 .context("export artifact is not YAML or JSON")?;
             if !value.is_object() {
                 bail!("export source, selector, and schema artifacts must be objects");
@@ -629,16 +664,14 @@ fn parse_state(content: Option<&Contents>) -> Result<State> {
     let Some(content) = content else {
         return Ok(State::default());
     };
+    require_envelope(&content.text, STATE_API_VERSION, STATE_KIND, STATE_EARLIER)?;
     let state: State =
         serde_json::from_str(&content.text).context("parsing the source-import baseline")?;
-    if state.format_version != 1 || state.imports.len() > 64 {
-        bail!("source-import baseline has an unsupported version or exceeds its bound");
+    if state.imports.len() > 64 {
+        bail!("source-import baseline exceeds its bound");
     }
     for (id, installed) in &state.imports {
-        if id != &installed.manifest.source_id
-            || !valid_local_identifier(id)
-            || installed.manifest.format_version != 1
-        {
+        if id != &installed.manifest.source_id || !valid_local_identifier(id) {
             bail!("source-import baseline has inconsistent source identity");
         }
         for path in installed.upstream.keys().chain(installed.retained.keys()) {
@@ -729,6 +762,20 @@ fn change_kind(before: &Option<String>, after: &Option<String>) -> &'static str 
     }
 }
 
+/// One exported YAML artifact as a JSON value, read through the shared
+/// reader's YAML subset. The Evidence authoring checks own the artifact's
+/// format; this reads only its tree, to follow references.
+fn yaml_artifact(path: &str, text: &str) -> Result<Value> {
+    match Reader::new(path).scan(text.as_bytes()) {
+        Ok(Some(node)) => Ok(node.to_json_value()),
+        Ok(None) => Ok(Value::Null),
+        Err(report) => bail!(
+            "{path} is outside the YAML subset; correct it as the diagnostics say:\n{}",
+            report.render_human()
+        ),
+    }
+}
+
 fn references(value: &Value, path: &str, stem: &str) -> bool {
     match value {
         Value::String(value) => value == path || value == stem,
@@ -745,7 +792,7 @@ fn has_reference(artifacts: &BTreeMap<String, Contents>, path: &str) -> Result<b
         .unwrap_or(path);
     for (name, content) in artifacts {
         if name != path && name.ends_with(".yaml") {
-            let value: Value = serde_norway::from_str(&content.text)
+            let value = yaml_artifact(name, &content.text)
                 .with_context(|| format!("reading authored references in {name}"))?;
             if references(&value, path, stem) {
                 return Ok(true);
@@ -775,7 +822,7 @@ fn affected_questions(
         let count = changed.len();
         for (path, content) in before.iter().chain(after) {
             if path.ends_with(".yaml") && !changed.contains(path) {
-                let value: Value = serde_norway::from_str(&content.text)
+                let value = yaml_artifact(path, &content.text)
                     .with_context(|| format!("reading structural source impact in {path}"))?;
                 if changed.iter().any(|dependency| {
                     references(
@@ -816,7 +863,8 @@ struct Operation {
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Journal {
-    format_version: u32,
+    api_version: String,
+    kind: String,
     operations: Vec<Operation>,
 }
 
@@ -828,7 +876,8 @@ fn transact(lock: &ProjectLock, operations: Vec<Operation>) -> Result<()> {
     }
     files::ensure_state_directory(&lock.root)?;
     let journal = Journal {
-        format_version: 1,
+        api_version: JOURNAL_API_VERSION.to_owned(),
+        kind: JOURNAL_KIND.to_owned(),
         operations,
     };
     let text = serde_json::to_string(&journal)?;
@@ -871,17 +920,14 @@ fn transact(lock: &ProjectLock, operations: Vec<Operation>) -> Result<()> {
     Ok(())
 }
 
-fn recover(lock: &ProjectLock) -> Result<()> {
-    if !files::validate_recovery_state(&lock.root)? {
-        return Ok(());
-    }
-    let Some(content) = read(&lock.root, JOURNAL_PATH, MAX_JOURNAL_BYTES)? else {
-        return Ok(());
-    };
+/// Read a transaction journal: its envelope, its shape and the paths it
+/// names, without touching the project.
+fn parse_journal(text: &str) -> Result<Journal> {
+    require_envelope(text, JOURNAL_API_VERSION, JOURNAL_KIND, JOURNAL_EARLIER)?;
     let journal: Journal =
-        serde_json::from_str(&content.text).context("reading source-import recovery journal")?;
-    if journal.format_version != 1 || journal.operations.len() > files::MAX_PROJECT_FILES + 1 {
-        bail!("source-import recovery journal has an unsupported version or bound");
+        serde_json::from_str(text).context("reading source-import recovery journal")?;
+    if journal.operations.len() > files::MAX_PROJECT_FILES + 1 {
+        bail!("source-import recovery journal exceeds its bound");
     }
     let mut paths = BTreeSet::new();
     for operation in &journal.operations {
@@ -891,6 +937,43 @@ fn recover(lock: &ProjectLock) -> Result<()> {
         if !paths.insert(&operation.path) {
             bail!("source-import recovery journal repeats an artifact");
         }
+    }
+    Ok(journal)
+}
+
+/// Check a baseline file on its own. The error is static text.
+pub(crate) fn check_state_file(text: &str) -> Result<()> {
+    parse_state(Some(&Contents {
+        text: text.to_owned(),
+        mode: 0o600,
+    }))
+    .map(drop)
+}
+
+/// Check a transaction journal file on its own. The error is static text.
+pub(crate) fn check_journal_file(text: &str) -> Result<()> {
+    parse_journal(text).map(drop)
+}
+
+/// Check an export manifest on its own.
+pub(crate) fn check_export_manifest(file: &str, bytes: &[u8]) -> Result<(), DocumentRefused> {
+    export::read_export_manifest(file, bytes).map(drop)
+}
+
+/// Check a resolution file on its own.
+pub(crate) fn check_resolution_file(file: &str, bytes: &[u8]) -> Result<(), DocumentRefused> {
+    decode_resolution_file(file, bytes).map(drop)
+}
+
+fn recover(lock: &ProjectLock) -> Result<()> {
+    if !files::validate_recovery_state(&lock.root)? {
+        return Ok(());
+    }
+    let Some(content) = read(&lock.root, JOURNAL_PATH, MAX_JOURNAL_BYTES)? else {
+        return Ok(());
+    };
+    let journal = parse_journal(&content.text)?;
+    for operation in &journal.operations {
         let current = read(&lock.root, &operation.path, authored_bound(&operation.path))?;
         if current != operation.before && current != operation.after {
             bail!("source-import recovery found an independent edit to {}; preserve it, restore the recorded before or after content, and retry", operation.path);

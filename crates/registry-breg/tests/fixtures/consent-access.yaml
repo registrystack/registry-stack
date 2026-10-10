@@ -143,7 +143,7 @@ accessProfiles:
   requiredPurposes: [food-assistance]
   permissions:
   - entity: person
-    rowBoundaries: []
+    rowBoundaries: unrestricted
     operations: [get, list, lookup, snapshot, revisions]
     readableFields: [given-name, district]
     filterableFields: [district]
@@ -159,7 +159,7 @@ accessProfiles:
     requireConsent:
     - {record: consent-decision, on: id}
   - entity: enrolment
-    rowBoundaries: []
+    rowBoundaries: unrestricted
     operations: [get, list, lookup, snapshot, revisions]
     readableFields: [person, programme]
     allowCount: true
@@ -175,7 +175,7 @@ accessProfiles:
   # The read path's target needs its own permission in the profile; without
   # one the runtime answers the path with 503.
   - entity: household
-    rowBoundaries: []
+    rowBoundaries: unrestricted
     operations: [get]
     readableFields: [label]
 - id: recipient-feed
@@ -194,37 +194,37 @@ accessProfiles:
   requiredScopes: [records:manage]
   permissions:
   - entity: person
-    rowBoundaries: []
+    rowBoundaries: unrestricted
     operations: [create, get, patch]
     readableFields: [given-name, district]
     writableFields: [given-name, district]
   - entity: household
-    rowBoundaries: []
+    rowBoundaries: unrestricted
     operations: [create, get]
     readableFields: [label]
     writableFields: [label]
   - entity: household-member
-    rowBoundaries: []
+    rowBoundaries: unrestricted
     operations: [create, get]
     readableFields: [person, household]
     writableFields: [person, household]
   - entity: enrolment
-    rowBoundaries: []
+    rowBoundaries: unrestricted
     operations: [create, get]
     readableFields: [person, programme]
     writableFields: [person, programme]
   - entity: consent-decision
-    rowBoundaries: []
+    rowBoundaries: unrestricted
     operations: [get, list]
     readableFields: [subject, recipient, purpose, scope, decision, effective-at, expires-at]
   - action: record-consent
     operations: [invoke]
     targets:
-    - {entity: person, rowBoundaries: []}
-    - {entity: consent-decision, rowBoundaries: []}
+    - {entity: person, rowBoundaries: unrestricted}
+    - {entity: consent-decision, rowBoundaries: unrestricted}
     results: [decision]
   - entity: enrolment-household
-    rowBoundaries: []
+    rowBoundaries: unrestricted
     operations: [create, get]
     readableFields: [enrolment, household]
     writableFields: [enrolment, household]

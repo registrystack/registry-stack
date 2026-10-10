@@ -20,11 +20,11 @@ use uuid::Uuid;
 
 /// A minimal exact-time policy that passes its checks, in the vocabulary of
 /// the standalone starter project.
-const POLICY: &str = r#"apiVersion: registry.registrystack.org/scheduling-policy-package/v1alpha1
-kind: SchedulingPolicyPackage
-scheduling:
+const POLICY: &str = r#"apiVersion: id.registrystack.org/formats/scheduling/project/v1alpha1
+kind: SchedulingProject
+project:
   id: registry-updates
-  version: 1
+  version: "1"
 services:
   - id: registry-update
     label: Registry record update
@@ -43,10 +43,8 @@ offerings:
       horizonDays: 60
       pool: update-stations
       startIncrementMinutes: 30
-      maxRecipients: 1
+      maximumRecipients: 1
     cancellationCutoffMinutes: 240
-    requiresCapabilities: []
-    prerequisites: []
   - id: registry-arrivals
     service: registry-update
     label: Counter arrivals
@@ -58,13 +56,10 @@ offerings:
       leadTimeMinutes: 60
       horizonDays: 45
     cancellationCutoffMinutes: 240
-    requiresCapabilities: []
-    prerequisites: []
 holidaySets:
   - id: office-holidays
     revision: 1
     because: Public holidays observed by the registry offices.
-    dates: []
 openings:
   - id: bangkok-counter-hours
     location: bangkok-counter
@@ -75,13 +70,16 @@ openings:
     effectiveFrom: "2026-10-01"
     effectiveUntil: "2026-12-31"
     because: Counter opening hours reviewed by the office manager.
+channels: [public, assisted]
 holdPolicy:
   ttlMinutes: 5
-  maxPerCaller: 3
+  maximumPerCaller: 3
   because: Holds are short because counter capacity is scarce.
 "#;
 
-const FIRST_RECORDS: &str = r#"locations:
+const FIRST_RECORDS: &str = r#"apiVersion: id.registrystack.org/formats/scheduling/records/v1alpha1
+kind: SchedulingRecords
+locations:
   - id: bangkok-counter
     timezone: Asia/Bangkok
 pools:
@@ -101,8 +99,7 @@ windows:
     start: 2026-10-08T02:00:00Z
     end: 2026-10-08T04:00:00Z
     units: 10
-    unitsPolicy: {kind: fixed, units: 1, because: Each arrival consumes one unit.}
-    subquotas: []
+    unitsPolicy: {type: fixed, units: 1, because: Each arrival consumes one unit.}
     because: The operator published the morning arrival block.
 exceptions:
   - id: staff-training
@@ -113,7 +110,9 @@ exceptions:
     endTime: "12:30"
 "#;
 
-const SECOND_RECORDS: &str = r#"locations:
+const SECOND_RECORDS: &str = r#"apiVersion: id.registrystack.org/formats/scheduling/records/v1alpha1
+kind: SchedulingRecords
+locations:
   - id: bangkok-counter
     timezone: Asia/Bangkok
   - id: chiang-mai-counter
@@ -132,8 +131,7 @@ windows:
     start: 2026-10-08T03:00:00Z
     end: 2026-10-08T05:00:00Z
     units: 8
-    unitsPolicy: {kind: fixed, units: 1, because: Each arrival consumes one unit.}
-    subquotas: []
+    unitsPolicy: {type: fixed, units: 1, because: Each arrival consumes one unit.}
     because: The operator republished the arrival block.
 "#;
 
@@ -221,7 +219,7 @@ async fn records_apply_replaces_facts_wholesale_and_audits_each_write() {
     std::fs::write(
         root.path().join("runtime.yaml"),
         format!(
-            "apiVersion: registry.registrystack.org/scheduling-runtime/v1alpha1\n\
+            "apiVersion: id.registrystack.org/formats/scheduling/runtime/v1alpha1\n\
              kind: SchedulingRuntimeConfig\n\
              package:\n  root: {project}\n\
              listener:\n  bind: 127.0.0.1:8105\n  tlsTermination: development-loopback\n\
@@ -229,11 +227,12 @@ async fn records_apply_replaces_facts_wholesale_and_audits_each_write() {
              identity:\n  databaseId: scheduling-ctl-test\n\
              authentication:\n  oidc:\n    issuer: https://identity.example.test\n\
              \x20   audience: urn:example:scheduling\n\
+             \x20   allowedClients: [scheduling-test-client]\n\
              database:\n  runtimeUrlRef: secret:env/SCHEDULING_RECORDS_TEST_DATABASE\n\
              \x20 migrationUrlRef: secret:env/SCHEDULING_RECORDS_TEST_DATABASE\n\
              \x20 testOnlyPlaintext: true\n\
              audit:\n  path: {audit}\n  hashKeyRef: secret:env/SCHEDULING_RECORDS_TEST_AUDIT\n\
-             retention:\n  attemptReceiptDays: 2\n",
+             retention:\n  attemptReceiptRetentionDays: 2\n",
             project = project.display(),
             audit = root.path().join("audit.ndjson").display(),
         ),
@@ -380,7 +379,7 @@ async fn records_apply_rejects_a_different_deployment_identity_without_writing()
 
     let runtime = |project: &Path, audit: &Path| {
         format!(
-            "apiVersion: registry.registrystack.org/scheduling-runtime/v1alpha1\n\
+            "apiVersion: id.registrystack.org/formats/scheduling/runtime/v1alpha1\n\
              kind: SchedulingRuntimeConfig\n\
              package:\n  root: {project}\n\
              listener:\n  bind: 127.0.0.1:8105\n  tlsTermination: development-loopback\n\
@@ -388,11 +387,12 @@ async fn records_apply_rejects_a_different_deployment_identity_without_writing()
              identity:\n  databaseId: scheduling-ctl-test\n\
              authentication:\n  oidc:\n    issuer: https://identity.example.test\n\
              \x20   audience: urn:example:scheduling\n\
+             \x20   allowedClients: [scheduling-test-client]\n\
              database:\n  runtimeUrlRef: secret:env/SCHEDULING_RECORDS_IDENTITY_DATABASE\n\
              \x20 migrationUrlRef: secret:env/SCHEDULING_RECORDS_IDENTITY_DATABASE\n\
              \x20 testOnlyPlaintext: true\n\
              audit:\n  path: {audit}\n  hashKeyRef: secret:env/SCHEDULING_RECORDS_IDENTITY_AUDIT\n\
-             retention:\n  attemptReceiptDays: 2\n",
+             retention:\n  attemptReceiptRetentionDays: 2\n",
             project = project.display(),
             audit = audit.display(),
         )
@@ -564,7 +564,7 @@ async fn records_apply_refuses_a_database_where_this_package_is_not_active() {
     .expect("the package is sealed");
     std::fs::write(root.path().join("first.yaml"), FIRST_RECORDS).unwrap();
     let runtime_text = format!(
-        "apiVersion: registry.registrystack.org/scheduling-runtime/v1alpha1\n\
+        "apiVersion: id.registrystack.org/formats/scheduling/runtime/v1alpha1\n\
              kind: SchedulingRuntimeConfig\n\
              package:\n  root: {project}\n\
              listener:\n  bind: 127.0.0.1:8105\n  tlsTermination: development-loopback\n\
@@ -572,11 +572,12 @@ async fn records_apply_refuses_a_database_where_this_package_is_not_active() {
              identity:\n  databaseId: scheduling-ctl-test\n\
              authentication:\n  oidc:\n    issuer: https://identity.example.test\n\
              \x20   audience: urn:example:scheduling\n\
+             \x20   allowedClients: [scheduling-test-client]\n\
              database:\n  runtimeUrlRef: secret:env/SCHEDULING_RECORDS_INACTIVE_DATABASE\n\
              \x20 migrationUrlRef: secret:env/SCHEDULING_RECORDS_INACTIVE_DATABASE\n\
              \x20 testOnlyPlaintext: true\n\
              audit:\n  path: {audit}\n  hashKeyRef: secret:env/SCHEDULING_RECORDS_INACTIVE_AUDIT\n\
-             retention:\n  attemptReceiptDays: 2\n",
+             retention:\n  attemptReceiptRetentionDays: 2\n",
         project = project.display(),
         audit = root.path().join("audit.ndjson").display(),
     );

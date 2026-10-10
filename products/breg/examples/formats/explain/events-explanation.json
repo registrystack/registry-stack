@@ -1,0 +1,5 @@
+{
+  "apiVersion": "registry.registrystack.org/breg-explain/v1alpha4",
+  "deliveries": [],
+  "kind": "EventsExplanation"
+}

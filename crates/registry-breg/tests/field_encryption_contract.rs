@@ -34,8 +34,8 @@ fn encrypted_project() -> Value {
                  "lookup":{"normalization":["trim","uppercase"],"unique":true}}
             ]
         }],
-        "accessProfiles":[{"id":"caseworker","default":true,"principalClaim":"principal","permissions":[{
-            "entity":"case","rowBoundaries":[],"operations":["get","list","create","patch"],
+        "accessProfiles":[{"id":"caseworker","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
+            "entity":"case","rowBoundaries":"unrestricted","operations":["get","list","create","patch"],
             "readableFields":["label","secret"],"writableFields":["label","secret"]
         }]}]
     })
@@ -162,7 +162,7 @@ fn encrypted_field_shape_refuses_unsupported_declarations() {
     source["entities"][0]["fields"][1]["classification"] = json!("internal");
     let failure = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap_err();
     let diagnostic = &failure.diagnostics()[0];
-    assert_eq!(diagnostic.code, "source.shape.invalid");
+    assert_eq!(diagnostic.code, "breg.source.shape-invalid");
     assert_eq!(diagnostic.path, "project.entities[0].fields[1]");
 }
 
@@ -273,7 +273,7 @@ fn encrypted_field_refuses_pattern_with_a_pinned_diagnostic() {
     let diagnostics = failure.diagnostics();
     assert_eq!(diagnostics.len(), 1, "the refusal stays stable and focused");
     let diagnostic = &diagnostics[0];
-    assert_eq!(diagnostic.code, "field.encrypted.pattern_refused");
+    assert_eq!(diagnostic.code, "breg.field.encrypted-pattern-refused");
     assert_eq!(diagnostic.path, "entities[case].fields[secret].pattern");
     assert_eq!(
         diagnostic.message,
@@ -293,7 +293,7 @@ fn encrypted_field_bounds_fit_the_phase_one_seal_limit() {
     let diagnostic = failure
         .diagnostics()
         .iter()
-        .find(|diagnostic| diagnostic.code == "field.encrypted.size_bound_exceeds_seal_limit")
+        .find(|diagnostic| diagnostic.code == "breg.field.encrypted-size-bound-exceeds-seal-limit")
         .expect("the encrypted string bound diagnostic is present");
     assert_eq!(diagnostic.path, "entities[case].fields[secret].maxLength");
     assert_eq!(
@@ -305,7 +305,7 @@ fn encrypted_field_bounds_fit_the_phase_one_seal_limit() {
     text["entities"][0]["fields"][1]["type"] = json!("text");
     text["entities"][0]["fields"][1]["maxLength"] =
         json!(MAX_ENCRYPTED_FIELD_STRING_CHARACTERS + 1);
-    expect_code(&text, "field.encrypted.size_bound_exceeds_seal_limit");
+    expect_code(&text, "breg.field.encrypted-size-bound-exceeds-seal-limit");
 
     let mut structured = encrypted_project();
     structured["entities"][0]["fields"][1] = json!({
@@ -323,7 +323,7 @@ fn encrypted_field_bounds_fit_the_phase_one_seal_limit() {
     let diagnostic = failure
         .diagnostics()
         .iter()
-        .find(|diagnostic| diagnostic.code == "field.encrypted.size_bound_exceeds_seal_limit")
+        .find(|diagnostic| diagnostic.code == "breg.field.encrypted-size-bound-exceeds-seal-limit")
         .expect("the encrypted structured bound diagnostic is present");
     assert_eq!(diagnostic.path, "entities[case].fields[secret].maxBytes");
     assert_eq!(
@@ -344,7 +344,7 @@ fn encrypted_field_count_bounds_snapshot_envelope_overhead() {
             "encrypted":true
         }));
     }
-    expect_code(&source, "entity.encrypted_fields.too_many");
+    expect_code(&source, "breg.entity.encrypted-fields-too-many");
 
     source["entities"][0]["fields"]
         .as_array_mut()
@@ -366,7 +366,7 @@ fn encrypted_lookup_refuses_structured_values_and_unbounded_normalization() {
     let diagnostic = failure
         .diagnostics()
         .iter()
-        .find(|diagnostic| diagnostic.code == "field.encrypted.lookup_type_unsupported")
+        .find(|diagnostic| diagnostic.code == "breg.field.encrypted-lookup-type-unsupported")
         .expect("the structured lookup diagnostic is present");
     assert_eq!(diagnostic.path, "entities[case].fields[secret].lookup");
     assert_eq!(
@@ -393,7 +393,7 @@ fn encrypted_lookup_refuses_structured_values_and_unbounded_normalization() {
     let diagnostic = &diagnostics[0];
     assert_eq!(
         diagnostic.code,
-        "field.encrypted.lookup_normalization_too_long"
+        "breg.field.encrypted-lookup-normalization-too-long"
     );
     assert_eq!(
         diagnostic.path,
@@ -409,7 +409,7 @@ fn encrypted_lookup_refuses_structured_values_and_unbounded_normalization() {
 fn encrypted_field_refuses_valid_time_role_and_inconsistent_classification() {
     let mut source = encrypted_project();
     source["entities"][0]["fields"][1]["validTimeRole"] = json!("valid_from");
-    expect_code(&source, "field.encrypted.valid_time_refused");
+    expect_code(&source, "breg.field.encrypted-valid-time-refused");
 
     // The compiler keeps its own refusal for programmatically assembled
     // contracts that skip the value-free shape parse.
@@ -420,7 +420,7 @@ fn encrypted_field_refuses_valid_time_role_and_inconsistent_classification() {
     assert!(failure
         .diagnostics()
         .iter()
-        .any(|diagnostic| diagnostic.code == "field.encrypted.classification_invalid"));
+        .any(|diagnostic| diagnostic.code == "breg.field.encrypted-classification-invalid"));
 }
 
 #[test]
@@ -428,11 +428,11 @@ fn encrypted_field_refuses_storage_constraints_and_authored_indexes() {
     let mut constrained = encrypted_project();
     constrained["entities"][0]["constraints"] =
         json!([{"id":"secret-unique","kind":"unique","fields":["secret"]}]);
-    expect_code(&constrained, "constraint.field.encrypted");
+    expect_code(&constrained, "breg.constraint.field-encrypted");
 
     let mut indexed = encrypted_project();
     indexed["entities"][0]["indexes"] = json!([{"id":"secret-index","fields":["secret"]}]);
-    expect_code(&indexed, "index.fields.encrypted");
+    expect_code(&indexed, "breg.index.fields-encrypted");
 }
 
 #[test]
@@ -440,12 +440,12 @@ fn encrypted_field_refuses_processing_row_boundaries_and_lookupless_selectors() 
     let mut processing = encrypted_project();
     processing["accessProfiles"][0]["permissions"][0]["filterableFields"] = json!(["secret"]);
     processing["accessProfiles"][0]["permissions"][0]["sortableFields"] = json!(["secret"]);
-    expect_code(&processing, "access_profile.processing.encrypted");
+    expect_code(&processing, "breg.access-profile.processing-encrypted");
 
     let mut boundary = encrypted_project();
     boundary["accessProfiles"][0]["permissions"][0]["rowBoundaries"] =
         json!([{"field":"secret","claim":"secrets","operator":"equals"}]);
-    expect_code(&boundary, "access_profile.row_boundary.encrypted");
+    expect_code(&boundary, "breg.access-profile.row-boundary-encrypted");
 
     // A selector profile over an encrypted field is exact-match lookup and
     // must declare the blind index that serves it.
@@ -455,7 +455,7 @@ fn encrypted_field_refuses_processing_row_boundaries_and_lookupless_selectors() 
         .as_object_mut()
         .unwrap()
         .remove("lookup");
-    expect_code(&selector, "selector_profile.encrypted_lookup_required");
+    expect_code(&selector, "breg.selector-profile.encrypted-lookup-required");
     // Declaring the lookup removes the refusal.
     selector["entities"][0]["fields"][1]["lookup"] =
         json!({"normalization":["uppercase"],"unique":true});
@@ -467,21 +467,21 @@ fn encrypted_fields_refuse_event_projection_and_conditions() {
     let mut projected = encrypted_project();
     projected["entities"][0]["hooks"] =
         json!([{"id":"secret-seen","phase":"after","trigger":"created","projection":["secret"]}]);
-    expect_code(&projected, "event.projection.encrypted");
+    expect_code(&projected, "breg.event.projection-encrypted");
 
     let mut conditioned = encrypted_project();
     conditioned["entities"][0]["hooks"] = json!([{
         "id":"secret-seen","phase":"after","trigger":"created","projection":["label"],
         "when":{"kind":"fields","afterEquals":{"secret":"canary"}}
     }]);
-    expect_code(&conditioned, "event.when.encrypted");
+    expect_code(&conditioned, "breg.event.when-encrypted");
 
     let mut changed = encrypted_project();
     changed["entities"][0]["hooks"] = json!([{
         "id":"secret-seen","phase":"after","trigger":"patched","projection":["label"],
         "when":{"kind":"fields","changed":["secret"]}
     }]);
-    expect_code(&changed, "event.when.encrypted");
+    expect_code(&changed, "breg.event.when-encrypted");
 }
 
 #[test]
@@ -506,7 +506,7 @@ fn derived_sql_cannot_reference_encrypted_columns() {
     assert!(failure
         .diagnostics()
         .iter()
-        .any(|diagnostic| diagnostic.code == "derived.sql.encrypted_column"));
+        .any(|diagnostic| diagnostic.code == "breg.derived.sql-encrypted-column"));
 
     let accepting = compile_with_assets(
         &source,
@@ -610,7 +610,7 @@ fn derived_sql_resolves_qualified_columns_to_their_source_relation() {
         assert!(failure
             .diagnostics()
             .iter()
-            .any(|diagnostic| diagnostic.code == "derived.sql.encrypted_column"));
+            .any(|diagnostic| diagnostic.code == "breg.derived.sql-encrypted-column"));
     }
 }
 
@@ -666,11 +666,11 @@ fn change_request_project() -> Value {
                 }}
             }
         }],
-        "accessProfiles":[{"id":"reviewer","default":true,"principalClaim":"principal","permissions":[{
+        "accessProfiles":[{"id":"reviewer","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
             "entity":"release-request",
             "operations":["get","submit_request","apply_request"],
             "readableFields":["lot","owner-reference","report-reference","release-state","valid-from","valid-through"],
-            "applyTargets":[{"entity":"lot","rowBoundaries":[]}],"rowBoundaries":[]
+            "applyTargets":[{"entity":"lot","rowBoundaries":"unrestricted"}],"rowBoundaries":"unrestricted"
         }]}]
     })
 }
@@ -754,10 +754,10 @@ fn change_request_paths_refuse_encrypted_fields() {
             json!({"normalization":["uppercase"]});
     }
     for code in [
-        "change_request.preconditions.predicate_field_encrypted",
-        "change_request.preconditions.predicate_request_field_encrypted",
-        "change_request.preconditions.evidence_requirement_encrypted",
-        "change_request.preconditions.selector_field_encrypted",
+        "breg.change-request.preconditions-predicate-field-encrypted",
+        "breg.change-request.preconditions-predicate-request-field-encrypted",
+        "breg.change-request.preconditions-evidence-requirement-encrypted",
+        "breg.change-request.preconditions-selector-field-encrypted",
     ] {
         expect_request_code(&request_encrypted, code);
     }
@@ -772,10 +772,13 @@ fn change_request_paths_refuse_encrypted_fields() {
         "writes":[{"target":{"fromField":"lot"},"operation":"patch","fields":["release-state"]}]
     });
     let failure = compile_request(&planned).unwrap_err();
-    assert!(failure
-        .diagnostics()
-        .iter()
-        .any(|diagnostic| diagnostic.code == "change_request.planner.request_field_encrypted"));
+    assert!(
+        failure
+            .diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.code
+                == "breg.change-request.planner-request-field-encrypted")
+    );
 
     // A target selector cannot bind an encrypted stored field either.
     let mut target_selector = change_request_project();
@@ -783,7 +786,7 @@ fn change_request_paths_refuse_encrypted_fields() {
     target_selector["entities"][0]["fields"][1]["lookup"] = json!({"normalization":["uppercase"]});
     expect_request_code(
         &target_selector,
-        "change_request.preconditions.selector_field_encrypted",
+        "breg.change-request.preconditions-selector-field-encrypted",
     );
 }
 
@@ -793,7 +796,7 @@ fn change_request_targets_and_value_sources_refuse_encrypted_fields() {
     // target's release-state, so encrypting that field refuses the effect.
     let mut set_target = change_request_project();
     set_target["entities"][0]["fields"][3]["encrypted"] = json!(true);
-    expect_request_code(&set_target, "change_request.effect.field_encrypted");
+    expect_request_code(&set_target, "breg.change-request.effect-field-encrypted");
 
     // Declarative clear on an encrypted patch target: the base plan gains a
     // clear of an optional field, and encrypting that field refuses it. The
@@ -814,7 +817,7 @@ fn change_request_targets_and_value_sources_refuse_encrypted_fields() {
     compile_request(&clear_base).expect("the plaintext clear compiles");
     let mut clear_target = clear_base.clone();
     clear_target["entities"][0]["fields"][4]["encrypted"] = json!(true);
-    expect_request_code(&clear_target, "change_request.effect.field_encrypted");
+    expect_request_code(&clear_target, "breg.change-request.effect-field-encrypted");
 
     // A create target refuses the same way: the create effect sets the
     // target's release-state, and encrypting it refuses the set.
@@ -830,7 +833,7 @@ fn change_request_targets_and_value_sources_refuse_encrypted_fields() {
     compile_request(&create_base).expect("the plaintext create compiles");
     let mut create_target = create_base;
     create_target["entities"][0]["fields"][3]["encrypted"] = json!(true);
-    expect_request_code(&create_target, "change_request.effect.field_encrypted");
+    expect_request_code(&create_target, "breg.change-request.effect-field-encrypted");
 
     // An encrypted request field cannot flow into an effect through fromField,
     // even when the target field itself is unencrypted.
@@ -838,7 +841,7 @@ fn change_request_targets_and_value_sources_refuse_encrypted_fields() {
     encrypted_source["entities"][1]["fields"][3]["encrypted"] = json!(true);
     expect_request_code(
         &encrypted_source,
-        "change_request.effect.value_field_encrypted",
+        "breg.change-request.effect-value-field-encrypted",
     );
 
     // A Rhai planner's write ceiling cannot name an encrypted target field,
@@ -856,7 +859,7 @@ fn change_request_targets_and_value_sources_refuse_encrypted_fields() {
     });
     expect_request_code(
         &planned_patch,
-        "change_request.planner.write_field_encrypted",
+        "breg.change-request.planner-write-field-encrypted",
     );
 
     let mut planned_create = change_request_project();
@@ -874,7 +877,7 @@ fn change_request_targets_and_value_sources_refuse_encrypted_fields() {
     });
     expect_request_code(
         &planned_create,
-        "change_request.planner.write_field_encrypted",
+        "breg.change-request.planner-write-field-encrypted",
     );
 }
 
@@ -886,7 +889,7 @@ fn membership_principal_field_cannot_be_encrypted() {
     assert!(failure
         .diagnostics()
         .iter()
-        .any(|diagnostic| diagnostic.code == "access.membership.principal_encrypted"));
+        .any(|diagnostic| diagnostic.code == "breg.access.membership-principal-encrypted"));
 }
 
 #[test]
@@ -904,7 +907,7 @@ fn action_requirements_cannot_name_encrypted_fields() {
     assert!(failure
         .diagnostics()
         .iter()
-        .any(|diagnostic| diagnostic.code == "action.requires.field_encrypted"));
+        .any(|diagnostic| diagnostic.code == "breg.action.requires-field-encrypted"));
 }
 
 #[cfg(feature = "runtime")]

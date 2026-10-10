@@ -673,10 +673,13 @@ async fn a_pinned_digest_must_match_the_package_before_any_ledger_write() {
     deployment.write_runtime(Some(&format!("sha256:{}", "0".repeat(64))));
     match RuntimeConfig::load(deployment.runtime_path()) {
         Err(error @ RuntimeConfigError::Package(_)) => {
-            assert_eq!(error.path(), "package.expectedDigest");
+            assert_eq!(error.pointer(), "/package/expectedDigest");
+            assert_eq!(error.code(), "messaging.package.digest-mismatch");
+            // The refusal names the digest of the package found, never the
+            // pinned value as written.
             let rendered = error.to_string();
             assert!(
-                rendered.contains(&format!("sha256:{}", "0".repeat(64))),
+                !rendered.contains(&format!("sha256:{}", "0".repeat(64))),
                 "{rendered}"
             );
             assert!(rendered.contains(&digest), "{rendered}");

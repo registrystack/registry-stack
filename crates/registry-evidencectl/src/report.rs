@@ -1,8 +1,8 @@
 //! The one report contract every `--format json` command shares.
 //!
 //! A report is one JSON object on standard output. It opens with `ok`,
-//! `command`, and `status`, in that order, followed by the command's own
-//! camelCase members. `ok` is true exactly when the process exits
+//! `command`, `status`, `apiVersion`, and `kind`, in that order, followed by
+//! the command's own camelCase members. `ok` is true exactly when the process exits
 //! [`SUCCESS_EXIT`]; `status` names what happened, including an incomplete
 //! but accepted result. Refusals use the same envelope with `ok: false` and a
 //! `diagnostics` array. Under `--format json` nothing else is written to
@@ -13,7 +13,7 @@ use std::io::Write as _;
 use serde::ser::{Serialize, SerializeMap as _, Serializer};
 use serde_json::{Map, Value};
 
-/// The operation completed. A report may still carry findings or an
+/// The operation completed. A report may still carry warnings or an
 /// incomplete status; the exit class says the command did what was asked.
 pub(crate) const SUCCESS_EXIT: u8 = 0;
 /// The command refused authored, configuration, or selected input, or its
@@ -24,8 +24,13 @@ pub(crate) const USAGE_EXIT: u8 = 2;
 /// A file, process, or service the command depends on was unavailable.
 pub(crate) const OPERATIONAL_FAILURE_EXIT: u8 = 3;
 
+/// The `apiVersion` every report carries.
+pub(crate) const API_VERSION: &str = "id.registrystack.org/formats/evidence/ctl-report/v1alpha1";
+/// The `kind` every report carries.
+pub(crate) const KIND: &str = "EvidenceCtlReport";
+
 /// The members every report opens with, in the order they are written.
-const HEAD: [&str; 3] = ["ok", "command", "status"];
+const HEAD: [&str; 5] = ["ok", "command", "status", "apiVersion", "kind"];
 
 /// A successful report: `ok: true`, the command path, its status, then the
 /// command's own members.
@@ -60,6 +65,11 @@ fn envelope(ok: bool, command: &str, status: &str, members: Value) -> Value {
     report.insert("ok".to_owned(), Value::Bool(ok));
     report.insert("command".to_owned(), Value::String(command.to_owned()));
     report.insert("status".to_owned(), Value::String(status.to_owned()));
+    report.insert(
+        "apiVersion".to_owned(),
+        Value::String(API_VERSION.to_owned()),
+    );
+    report.insert("kind".to_owned(), Value::String(KIND.to_owned()));
     for (key, value) in members {
         debug_assert!(
             !HEAD.contains(&key.as_str()),
@@ -143,15 +153,29 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn a_report_opens_with_ok_command_and_status_in_that_order() {
+    fn a_report_opens_with_its_envelope_in_order() {
         let rendered = render(&success(
             "keygen signing",
             "complete",
             json!({"alpha": 1, "zulu": 2}),
         ));
         assert!(
-            rendered.starts_with(r#"{"ok":true,"command":"keygen signing","status":"complete","#),
+            rendered.starts_with(concat!(
+                r#"{"ok":true,"command":"keygen signing","status":"complete","#,
+                r#""apiVersion":"id.registrystack.org/formats/evidence/ctl-report/v1alpha1","#,
+                r#""kind":"EvidenceCtlReport","alpha":1"#
+            )),
             "{rendered}"
+        );
+    }
+
+    #[test]
+    fn the_registered_example_is_the_envelope_a_report_writes() {
+        let committed = include_str!("../../../products/evidence/examples/formats/ctl-report.json");
+        let committed: Value = serde_json::from_str(committed).expect("example parses");
+        assert_eq!(
+            committed,
+            success("check", "complete", json!({"diagnostics": []}))
         );
     }
 
@@ -173,7 +197,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "carries diagnostics")]
     fn a_refused_report_without_diagnostics_is_a_programming_error() {
-        let _ = refused("check", "refused", json!({"findings": []}));
+        let _ = refused("check", "refused", json!({"diagnostics": []}));
     }
 
     #[test]

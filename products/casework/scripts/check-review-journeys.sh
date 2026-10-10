@@ -8,7 +8,7 @@ set -eu
 #
 # It also loads the exact unified Node and Python Casework facades against the
 # candidate product-native bindings and real HTTP service. The unified release
-# artifacts normally bundle five native products. Building all five here would
+# artifacts normally bundle six native products. Building all six here would
 # duplicate the release assembly gate, so the test supplies inert sibling
 # namespaces and only the candidate Casework native artifact. This proves the
 # Casework facade/native/HTTP boundary, but does not claim installed tarball or

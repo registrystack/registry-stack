@@ -1,0 +1,12 @@
+{
+  "apiVersion": "id.registrystack.org/formats/breg/backup-binding/v1alpha1",
+  "kind": "BRegBackupBinding",
+  "database": "registry",
+  "priorPackageDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+  "priorSchemaFingerprint": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+  "backupFile": "/srv/registry/backups/retire-legacy-field.dump",
+  "digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+  "sizeBytes": 1048576,
+  "createdAt": "2026-10-08T09:30:00Z",
+  "maximumAgeSeconds": 86400
+}

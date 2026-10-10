@@ -45,22 +45,43 @@ pub enum Command {
         #[arg(long = "labels", value_delimiter = ',')]
         labels: Vec<String>,
     },
-    /// Verify source or package structure, labels, fonts, and schemas.
+    /// Check a bundle or package and a runtime file offline, reporting every
+    /// finding. Exits 0 when nothing was refused, 1 when something was (or a
+    /// warning was reported under --deny-warnings), 2 on a usage error, and
+    /// 3 when an input could not be read.
     Check {
-        /// Authored bundle or package directory (default: current directory).
-        #[arg(long, default_value = ".")]
-        bundle: PathBuf,
+        /// Authored bundle or package directory (default: the current
+        /// directory, unless only --runtime-config is given).
+        #[arg(long)]
+        bundle: Option<PathBuf>,
         /// Retired. Use `registry-render package` after check succeeds.
         #[arg(long, hide = true)]
         seal: bool,
-        /// Runtime file whose audit file is proven to resolve under the
-        /// given root (the container preflight proof). A stdout audit
-        /// destination is refused.
+        /// Runtime file to check as `registry-render serve` reads it, with
+        /// no package, secret material, or listener.
         #[arg(long = "runtime-config", value_name = "FILE")]
         runtime: Option<PathBuf>,
-        /// Root the audit file must resolve under (with --runtime-config).
-        #[arg(long)]
+        /// Substitute `${NAME}` expressions in the runtime file from this
+        /// environment and check every value. Without it, each expression
+        /// is checked by syntax and position only.
+        #[arg(long, requires = "runtime")]
+        environment: bool,
+        /// Prove that the runtime file's audit file resolves under this
+        /// directory, the one the deployment mounts as persistent storage. A
+        /// stdout audit destination is refused.
+        #[arg(
+            long,
+            value_name = "ABSOLUTE_DIRECTORY",
+            requires = "runtime",
+            value_parser = parse_absolute_directory
+        )]
         require_audit_under: Option<PathBuf>,
+        /// How to write the findings.
+        #[arg(long, value_enum, default_value_t = crate::check::OutputFormat::Human)]
+        format: crate::check::OutputFormat,
+        /// Refuse warnings as well as errors (exit 1).
+        #[arg(long)]
+        deny_warnings: bool,
     },
     /// Dry-run request data against a document's schema, without rendering.
     Validate {
@@ -170,6 +191,17 @@ pub enum Command {
     Worker,
 }
 
+/// The `--require-audit-under` directory: the proof compares resolved
+/// absolute paths, so a relative one is a usage error.
+fn parse_absolute_directory(value: &str) -> Result<PathBuf, String> {
+    let path = PathBuf::from(value);
+    if path.is_absolute() {
+        Ok(path)
+    } else {
+        Err("--require-audit-under needs an absolute directory path".to_owned())
+    }
+}
+
 fn parse_asset_arg(spec: &str) -> Result<(String, PathBuf), String> {
     let (name, path) = spec
         .split_once('=')
@@ -193,13 +225,14 @@ pub fn run(cli: Cli) -> i32 {
                     "detail": problem.detail,
                     "pointers": problem.pointers,
                     "locations": problem.locations,
+                    "diagnostics": problem.diagnostics,
                 });
                 eprintln!(
                     "{}",
                     serde_json::to_string(&document).expect("problem json")
                 );
             } else {
-                eprintln!("registry-render: {problem}");
+                eprint!("{}", problem.render_human());
             }
             problem.exit_code()
         }
@@ -223,21 +256,38 @@ fn run_inner(cli: Cli) -> Result<i32, RenderProblem> {
             bundle,
             seal,
             runtime,
+            environment,
             require_audit_under,
-        } => crate::check::run(
-            &bundle,
-            seal,
-            runtime.as_deref(),
-            require_audit_under.as_deref(),
-        ),
+            format,
+            deny_warnings,
+        } => {
+            if seal {
+                return Err(RenderProblem::new(
+                    crate::problem::ProblemKind::InvalidArgument,
+                    "`registry-render check --seal` is no longer accepted; run `registry-render check`, then build a new directory with `registry-render package --bundle <source> --output <directory>`",
+                ));
+            }
+            let request = crate::check::CheckRequest {
+                bundle: bundle.as_deref(),
+                runtime: runtime.as_deref(),
+                require_audit_under: require_audit_under.as_deref(),
+                environment,
+                format,
+                deny_warnings,
+            };
+            Ok(crate::check::run(
+                &request,
+                &mut std::io::stdout().lock(),
+                &mut std::io::stderr().lock(),
+            ))
+        }
         Command::Package {
             bundle,
             output,
             revision,
         } => {
             let loaded = Bundle::load(&bundle)?;
-            crate::check::check_script_coverage(&loaded)?;
-            crate::check::check_label_key_sets(&loaded)?;
+            crate::check::check_package_source(&loaded, &bundle)?;
             let written = registry_platform_config::package::write_package(
                 &output,
                 &loaded.package_inputs(),
@@ -583,7 +633,7 @@ fn watch_loop(
                     }
                 }
                 Err(problem) => {
-                    eprintln!("registry-render: {problem}");
+                    eprint!("{}", problem.render_human());
                 }
             }
             last_fingerprint = Some(fingerprint);

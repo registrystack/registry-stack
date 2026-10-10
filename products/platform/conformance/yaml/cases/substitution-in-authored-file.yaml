@@ -1,0 +1,15 @@
+id: substitution-in-authored-file
+rules: [CFG-SEC-2]
+summary: A substitution expression in an authored file is refused at the value, without reading the variable.
+appliesTo:
+  audiences: [authored]
+mutation:
+  member:
+    role: requiredText
+    value: '"${REGISTRY_CONFORMANCE_VALUE}"'
+expect:
+  exit: 1
+  diagnostics:
+    - code: config.substitution-not-allowed
+      path: "{pointer}"
+      at: {line: 1, column: 1}

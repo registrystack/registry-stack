@@ -110,10 +110,7 @@ rows are hidden immediately even when their physical deletion awaits a later
 tick. Operator backup retention is separate from the live subject-log retention
 contract.
 
-An access-logged entity cannot grant an anonymous profile a direct, list,
-lookup, snapshot, or revision read. A source entity also cannot grant an
-anonymous relationship read path that reaches the logged entity. A named
-verified caller is required for every log entry.
+Every access profile names a verified caller, so every log entry has one.
 
 ## Preserve requester attribution through an intermediary
 

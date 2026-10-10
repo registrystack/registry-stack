@@ -19,11 +19,14 @@ workspace = true
 [dependencies]
 base64.workspace = true
 getrandom.workspace = true
+registry-platform-config.workspace = true
 registry-platform-crypto.workspace = true
 registry-platform-httputil.workspace = true
 registry-platform-oidc.workspace = true
+registry-platform-yaml.workspace = true
 reqwest.workspace = true
 rustix.workspace = true
+schemars = { workspace = true, optional = true }
 tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -34,5 +37,17 @@ url.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
+jsonschema.workspace = true
 p256.workspace = true
 registry-platform-authcommon.workspace = true
+
+[features]
+schema = [
+  "dep:schemars",
+  "registry-platform-config/schema",
+  "registry-platform-yaml/schema",
+]
+
+[[example]]
+name = "task-connection-schema"
+required-features = ["schema"]

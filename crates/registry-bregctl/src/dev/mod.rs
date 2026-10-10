@@ -5,7 +5,7 @@
 //! start or stop is the container whose random ownership label and immutable
 //! Docker ID match its private journal. There is intentionally no reset.
 
-mod config;
+pub(crate) mod config;
 mod events;
 pub mod examples;
 mod export_client;
@@ -15,10 +15,20 @@ mod purpose;
 #[cfg(test)]
 mod tests;
 
+pub(crate) use config::{check as check_clients, DEV_CLIENTS_FORMAT};
+pub(crate) use prepare_source::{
+    check_prepared, check_transition, PREPARED_SOURCE_FORMAT, SOURCE_TRANSITION_FORMAT,
+};
+
 use anyhow::{bail, Context, Result};
 use clap::{Args, Subcommand};
 use config::Clients;
+pub(crate) use config::ClientsRefused;
 use registry_platform_canonical_json::canonicalize_json;
+use registry_platform_yaml::{
+    ApiVersion, Diagnostic, Document, EnvelopeRule, Expect, FormatSpec, Reader, RemovedKey, Report,
+    Severity, UniqueList,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -69,6 +79,25 @@ const MISSING_SESSION: &str = "no local development session exists in this proje
 /// files to a new project directory.
 const CHANGED_INPUTS: &str = "authored package, clients, ports or issuer image differ from the retained development session, which still holds records; run bregctl dev stop --remove to discard them and start again from the edited inputs, or copy the authored files to a new project directory to keep the records. Use the normal reviewed package lifecycle for an operated upgrade";
 const MAX_BYTES: u64 = 4 * 1024 * 1024;
+pub(super) const STATE_API_VERSION: &str = "id.registrystack.org/formats/breg/dev-state/v1alpha1";
+pub(super) const STATE_KIND: &str = "BRegDevState";
+/// The session state `bregctl dev` retains in `.breg/dev/state.json`. Only
+/// this bregctl writes it; a refusal names no member value.
+pub(crate) const DEV_STATE_FORMAT: FormatSpec<'static> = FormatSpec {
+    kind: STATE_KIND,
+    envelope: EnvelopeRule::ApiVersionKind {
+        api_versions: &[ApiVersion::current(STATE_API_VERSION)],
+        retired_api_versions: &[],
+    },
+    removed_keys: &[RemovedKey {
+        pointer: "/version",
+        replacement: "Delete `version`; the apiVersion header names the format version.",
+    }],
+};
+/// Refusal for retained state this bregctl cannot read, including state an
+/// earlier bregctl wrote. Nothing is changed, so the earlier bregctl can still
+/// stop and remove what it started.
+const INVALID_STATE: &str = "retained dev state is invalid; preserve it for inspection, or, if an earlier bregctl started this session, run bregctl dev stop --remove with that bregctl, then remove .breg/dev and start again";
 /// Longest one supervised prerequisite command may run before the supervisor
 /// stops it and fails the start.
 const CHILD_DEADLINE: Duration = Duration::from_secs(120);
@@ -133,12 +162,12 @@ enum DevAction {
 
 #[derive(Debug, Args)]
 struct GrantArgs {
-    /// Registered agent client ID in the owner-only connection file.
+    /// Registered agent client ID listed under `clients` in the task connection file.
     client: String,
     /// Existing Casework-approved grant UUID; this command does not approve tasks.
     #[arg(long)]
     grant: String,
-    /// Owner-only task connection v1 file with the registered agent key and fixed target.
+    /// Task connection file (`PlatformTaskConnection`) naming the fixed target and each client's assertion key reference.
     #[arg(long, value_name = "FILE")]
     connection: PathBuf,
     /// Existing project whose private directory receives the grant-specific header.
@@ -222,39 +251,62 @@ pub struct SupervisorArgs {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct State {
-    version: u8,
+    #[serde(skip_deserializing, default = "state_api_version")]
+    api_version: String,
+    #[serde(skip_deserializing, default = "state_kind")]
+    kind: String,
     project: PathBuf,
     owner: String,
     status: Status,
+    #[serde(deserialize_with = "members::port")]
     breg_port: u16,
+    #[serde(deserialize_with = "members::port")]
     issuer_port: u16,
     /// A separate ready BREG dev session owns this issuer and its registrations.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     issuer_project: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     issuer_owner: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     issuer_image: Option<String>,
     /// Session-owned loopback assertion endpoint used only while issuing
     /// multi-purpose rehearsal tokens.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "members::optional_port"
+    )]
     purpose_port: Option<u16>,
+    #[serde(deserialize_with = "members::port")]
     database_port: u16,
     /// Fixed at first start from the compiled schema; retained with the database.
     requires_postgis: bool,
     /// Kernel-selected loopback receiver port, retained with destination bindings.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "members::optional_port"
+    )]
     webhook_port: Option<u16>,
     clients_file: PathBuf,
     /// The pin `capture` derives from what the session runs: the compiled
     /// registry revision, the package identity, and the canonical journeys
     /// and clients. A change of spelling alone leaves it unchanged.
     source_digest: String,
+    #[serde(deserialize_with = "members::sequence")]
     sequence: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     baseline_runtime: Option<PathBuf>,
     instance_id: String,
     source_revision: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     container_id: Option<String>,
     tls_files_copied: bool,
     database_ready: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     package_digest: Option<String>,
     activated: bool,
-    seeded: BTreeSet<String>,
+    seeded: UniqueList<String>,
     /// Import authorities opened for a seed but not yet closed. Keeping the
     /// identifiers makes a failed start recover its own authority before it
     /// retries the seed.
@@ -265,13 +317,13 @@ struct State {
     /// own when the open commits but its identifier never reaches
     /// `seed_import_authorities`.
     seed_import_intents: BTreeMap<String, chrono::DateTime<chrono::Utc>>,
-    outputs: Vec<CredentialOutput>,
     /// Installed prerequisites this session resolved, keyed by command name.
     binaries: BTreeMap<String, Binary>,
     /// Why the detached supervisor stopped, recorded so the terminal that
     /// asked for the start can report it. The supervisor writes both its
     /// streams to a private log, so this is the only path a refusal has back
     /// to the owner. A session that has not failed records none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     failure: Option<String>,
 }
 
@@ -295,13 +347,33 @@ enum Status {
     Failed,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct CredentialOutput {
-    path: PathBuf,
-    client: String,
-    key: bool,
-    digest: String,
+/// Bounded integer members of the retained session state.
+mod members {
+    use registry_platform_yaml::{BoundedU32, BoundedU64, Invalid};
+    use serde::{Deserialize, Deserializer};
+
+    pub(super) fn port<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u16, D::Error> {
+        let port = BoundedU32::<1, { u16::MAX as u32 }>::deserialize(deserializer)?;
+        u16::try_from(port.get()).map_err(|_| Invalid::out_of_range(1, u16::MAX).into_error())
+    }
+
+    pub(super) fn optional_port<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Option<u16>, D::Error> {
+        port(deserializer).map(Some)
+    }
+
+    pub(super) fn sequence<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u64, D::Error> {
+        BoundedU64::<1, { u64::MAX }>::deserialize(deserializer).map(BoundedU64::get)
+    }
+}
+
+fn state_api_version() -> String {
+    STATE_API_VERSION.to_owned()
+}
+
+fn state_kind() -> String {
+    STATE_KIND.to_owned()
 }
 
 impl State {
@@ -348,6 +420,15 @@ impl State {
             self.issuer_owner.as_deref().unwrap_or(&self.owner)
         )
     }
+    /// Record a seed as complete. A seed already recorded stays recorded once.
+    fn mark_seeded(&mut self, id: &str) -> Result<()> {
+        if !self.seeded.iter().any(|seeded| seeded == id) {
+            let mut seeded = std::mem::take(&mut self.seeded).into_vec();
+            seeded.push(id.to_owned());
+            self.seeded = UniqueList::new(seeded)?;
+        }
+        Ok(())
+    }
     fn save(&self) -> Result<()> {
         private::replace(
             &self.root().join("state.json"),
@@ -355,15 +436,7 @@ impl State {
         )
     }
     fn report(&self) -> Result<Value> {
-        let clients: Clients = serde_json::from_slice(&private::read(
-            &self.root().join("clients.json"),
-            MAX_BYTES,
-        )?)
-        .map_err(|_| {
-            anyhow::anyhow!(
-                "retained clients are invalid; inspect the owned state before reusing credentials"
-            )
-        })?;
+        let clients = retained_clients(&self.root())?;
         Ok(
             json!({"ok":true,"command":"dev","status":self.status,"project":self.project,
             "stateFile":self.root().join("state.json"),"runtimeConfig":self.root().join("runtime.yaml"),
@@ -374,8 +447,8 @@ impl State {
             "eventsFile":self.webhook_port.map(|_|self.root().join("events.jsonl")),
             "audience":self.audience(),"packageDigest":self.package_digest,"packageSequence":self.sequence,"activationPending":!self.activated,
             "clients":clients.clients.iter().map(|client|json!({"id":client.id,"accessProfiles":client.access_profiles,"scopes":client.scopes,
-                "clientIdFile":client.client_id_file.clone().unwrap_or_else(||self.root().join("credentials").join(&client.id).join("client-id")),
-                "assertionKeyFile":client.assertion_key_file.clone().unwrap_or_else(||self.root().join("credentials").join(&client.id).join("assertion-key.jwk"))})).collect::<Vec<_>>()}),
+                "clientIdFile":self.root().join("credentials").join(&client.id).join("client-id"),
+                "assertionKeyFile":self.root().join("credentials").join(&client.id).join("assertion-key.jwk")})).collect::<Vec<_>>()}),
         )
     }
 }
@@ -409,9 +482,11 @@ fn approved_grant(args: GrantArgs) -> Result<Value> {
             &args.client,
             &args.grant,
         ))?;
-    Ok(
-        json!({"ok":true,"command":"dev grant","headerFile":output.header_file,"grantExpiresAt":output.grant_expires_at}),
-    )
+    Ok(grant_report(&output))
+}
+
+fn grant_report(output: &registry_thunderid_tooling::grant_file::GrantOutput) -> Value {
+    json!({"ok":true,"command":"dev grant","headerFile":output.header_file,"grantExpiresAt":output.grant_expires_at,"diagnostics":[]})
 }
 
 fn fresh_token(project_path: &Path, client: &str) -> Result<Value> {
@@ -428,8 +503,7 @@ fn fresh_token(project_path: &Path, client: &str) -> Result<Value> {
         bail!("the local development session must be ready before requesting a token");
     }
     // Resolve admission before opening any caller-derived credential path.
-    let clients: Clients =
-        serde_json::from_slice(&private::read(&root.join("clients.json"), MAX_BYTES)?)?;
+    let clients = retained_clients(&root)?;
     if !clients
         .clients
         .iter()
@@ -491,19 +565,60 @@ fn clients_file(
     }
 }
 
+/// The clients a session retained when it started.
+fn retained_clients(root: &Path) -> Result<Clients> {
+    config::retained(&private::read(&root.join("clients.json"), MAX_BYTES)?).map_err(|_| {
+        anyhow::anyhow!(
+            "retained clients are invalid; inspect the owned state before reusing credentials, \
+             or, if an earlier bregctl started this session, run bregctl dev stop --remove with \
+             that bregctl, then remove .breg/dev and start again"
+        )
+    })
+}
+
 fn read_state(root: &Path) -> Result<State> {
     private::check(root, true)?;
-    let bytes = private::read(&root.join("state.json"), MAX_BYTES)?;
-    let invalid = || anyhow::anyhow!("retained dev state is invalid; preserve it for inspection");
-    let state: State = serde_json::from_slice(&bytes).map_err(|_| invalid())?;
-    if state.version != 2
-        || state.sequence == 0
+    let file = root.join("state.json");
+    let bytes = private::read(&file, MAX_BYTES)?;
+    let state: State = Reader::new(file.display().to_string())
+        .decode::<State>(&bytes, &Expect::one(&DEV_STATE_FORMAT))
+        .map_err(|_| anyhow::anyhow!(INVALID_STATE))?
+        .value;
+    if state.sequence == 0
         || state.baseline_runtime
             != (state.sequence > 1).then(|| {
                 root.join(format!("baseline-{}", state.sequence - 1))
                     .join("runtime.yaml")
             })
         || state.root() != root
+    {
+        bail!("retained dev state ownership is invalid; no resources were changed");
+    }
+    state_rules(&state)?;
+    Ok(state)
+}
+
+/// Check a session state document `bregctl check --file` read against the
+/// rules that hold wherever the state is kept. The rules bound to the
+/// session directory, its baseline and its root, are checked when a session
+/// reads its own state. A refusal is one diagnostic at the document root.
+pub(crate) fn check_state(document: &Document) -> Result<Vec<Diagnostic>, Report> {
+    let state = document.decode::<State>()?;
+    Ok(match state_rules(&state) {
+        Ok(()) => Vec::new(),
+        Err(error) => vec![document.diagnostic_at_value(
+            Severity::Error,
+            "breg.dev-state.refused",
+            "",
+            &error.to_string(),
+            "Write the session state again with `bregctl dev start`; only bregctl writes it.",
+        )],
+    })
+}
+
+/// The rules a session state satisfies wherever it is read.
+fn state_rules(state: &State) -> Result<()> {
+    if state.sequence == 0
         || uuid::Uuid::parse_str(&state.owner).is_err()
         || state.issuer_project.is_some() != state.issuer_owner.is_some()
         || state
@@ -533,7 +648,7 @@ fn read_state(root: &Path) -> Result<State> {
     }) {
         bail!("retained purpose authority needs a distinct nonzero loopback port");
     }
-    Ok(state)
+    Ok(())
 }
 
 /// Verify the live registration owner before borrowing its issuer or private
@@ -677,37 +792,24 @@ fn receiver_port(state: &State) -> Result<u16> {
 /// tells the author which profile the clients file still lacks while the fix
 /// is one edit away.
 fn bind_journey_profiles(journeys: &[u8], clients: &Clients) -> Result<()> {
-    let journeys: Value = serde_norway::from_slice(journeys)
-        .context("tests/journeys.yaml must parse before local development starts")?;
+    let steps = registry_breg::fixtures::journey_step_profiles(journeys).map_err(|error| {
+        anyhow::anyhow!("tests/journeys.yaml must be read before local development starts: {error}")
+    })?;
     let mut used = BTreeSet::new();
-    for journey in journeys["journeys"]
-        .as_array()
-        .context("journeys must contain an array")?
-    {
-        for step in journey["steps"]
-            .as_array()
-            .context("journey steps must be an array")?
-        {
-            let journey_id = journey["id"].as_str().context("journey requires an id")?;
-            let step_id = step["id"].as_str().context("journey step requires an id")?;
-            let profile = step["accessProfile"]
-                .as_str()
-                .context("journey step requires an access profile")?;
-            if let Some(client) = exact_journey_client(clients, journey_id, step_id, profile)? {
-                used.insert((journey_id.to_owned(), step_id.to_owned()));
-                let _ = client;
-                continue;
-            }
-            if step["claims"]
-                .as_object()
-                .is_some_and(|claims| claims.is_empty())
-            {
-                continue;
-            }
-            let client = journey_client(clients, journey_id, step_id, profile)?;
-            if !client.test_bindings.is_empty() {
-                used.insert((journey_id.to_owned(), step_id.to_owned()));
-            }
+    for step in &steps {
+        let (journey_id, step_id, profile) = (
+            step.journey_id.as_str(),
+            step.step_id.as_str(),
+            step.access_profile.as_str(),
+        );
+        if let Some(client) = exact_journey_client(clients, journey_id, step_id, profile)? {
+            used.insert((journey_id.to_owned(), step_id.to_owned()));
+            let _ = client;
+            continue;
+        }
+        let client = journey_client(clients, journey_id, step_id, profile)?;
+        if !client.test_bindings.is_empty() {
+            used.insert((journey_id.to_owned(), step_id.to_owned()));
         }
     }
     for client in &clients.clients {
@@ -835,8 +937,12 @@ fn capture(project: &Path, client_bytes: &[u8]) -> Result<CapturedSource> {
     // pinned by their canonical JSON form.
     let package = canonicalize_json(&serde_json::to_value(identity)?)
         .map_err(|_| anyhow::anyhow!("package identity must canonicalize"))?;
-    let journeys = canonical_yaml(&files["tests/journeys.yaml"], "tests/journeys.yaml")?;
-    let clients = canonical_yaml(client_bytes, "clients file")?;
+    let journeys = canonical_yaml(
+        &files["tests/journeys.yaml"],
+        "tests/journeys.yaml",
+        &registry_breg::fixtures::JOURNEYS_FORMAT,
+    )?;
+    let clients = canonical_yaml(client_bytes, "clients file", &DEV_CLIENTS_FORMAT)?;
     let mut hasher = Sha256::new();
     hasher.update(b"breg-dev-source/v2\0");
     for part in [
@@ -860,12 +966,19 @@ fn capture(project: &Path, client_bytes: &[u8]) -> Result<CapturedSource> {
     })
 }
 
-/// The canonical JSON form of one authored YAML document, so comments, layout
-/// and key order do not distinguish two spellings of the same content.
-fn canonical_yaml(bytes: &[u8], name: &str) -> Result<Vec<u8>> {
-    let value: Value =
-        serde_norway::from_slice(bytes).with_context(|| format!("{name} must parse as YAML"))?;
-    canonicalize_json(&value).map_err(|_| {
+/// The canonical JSON form of one authored YAML document, read through the
+/// shared reader as its format, so comments, layout and key order do not
+/// distinguish two spellings of the same content.
+fn canonical_yaml(bytes: &[u8], name: &str, format: &FormatSpec<'_>) -> Result<Vec<u8>> {
+    let document = Reader::new(name)
+        .read(bytes, &Expect::one(format))
+        .map_err(|report| {
+            anyhow::anyhow!(
+                "{name} must be read before local development starts; correct it as the diagnostics say:\n{}",
+                report.render_human()
+            )
+        })?;
+    canonicalize_json(&document.to_json_value()).map_err(|_| {
         anyhow::anyhow!("{name} must hold only values with an exact canonical JSON form")
     })
 }
@@ -896,7 +1009,7 @@ fn start(args: StartArgs) -> Result<Value> {
     let client_bytes =
         crate::read_bounded_source_file(&clients_file, "dev.clients", "clients", MAX_BYTES)
             .map_err(|_| anyhow::anyhow!("clients file must be one bounded ordinary file"))?;
-    let clients = config::clients(&client_bytes)?;
+    let clients = config::clients(&clients_file.display().to_string(), &client_bytes)?;
     let CapturedSource {
         files,
         digest,
@@ -940,7 +1053,6 @@ fn start(args: StartArgs) -> Result<Value> {
         private::validate_tree(&root.join("secrets"))?;
         if control(&root, "status").is_ok_and(|status| status == "ready") {
             borrowed_owner(&state)?;
-            verify_outputs(&state)?;
             return state.report();
         }
         // A live owner lock is conclusive even when its control socket is not ready.
@@ -972,7 +1084,8 @@ fn start(args: StartArgs) -> Result<Value> {
             None
         };
         let mut state = State {
-            version: 2,
+            api_version: state_api_version(),
+            kind: state_kind(),
             project: project.clone(),
             owner: uuid::Uuid::new_v4().to_string(),
             status: Status::Stopped,
@@ -1009,10 +1122,9 @@ fn start(args: StartArgs) -> Result<Value> {
             database_ready: false,
             package_digest: None,
             activated: false,
-            seeded: BTreeSet::new(),
+            seeded: UniqueList::default(),
             seed_import_authorities: BTreeMap::new(),
             seed_import_intents: BTreeMap::new(),
-            outputs: vec![],
             binaries: BTreeMap::new(),
             failure: None,
         };
@@ -1051,7 +1163,6 @@ fn start(args: StartArgs) -> Result<Value> {
     if state.sequence > 1 && state.container_id.is_none() {
         bail!("the retained successor database was explicitly removed; a successor package cannot initialize empty records. Remove the project's .breg/dev directory, then run bregctl dev start to begin a fresh session");
     }
-    verify_outputs(&state)?;
     let breg = executable("breg", args.breg_bin.as_deref())?;
     let docker = executable("docker", args.docker_bin.as_deref())?;
     // Identify the prerequisites before the session stops a container or
@@ -1148,16 +1259,6 @@ fn initialize(
     clients: &Clients,
     files: &BTreeMap<String, Vec<u8>>,
 ) -> Result<()> {
-    for client in &clients.clients {
-        for path in [&client.client_id_file, &client.assertion_key_file]
-            .into_iter()
-            .flatten()
-        {
-            if fs::symlink_metadata(path).is_ok() {
-                bail!("credential output already exists; choose fresh pair paths, preserving existing credentials");
-            }
-        }
-    }
     let stage = root
         .parent()
         .context("dev parent missing")?
@@ -1181,30 +1282,9 @@ fn initialize(
         if original.issuer_project.is_none() && original.purpose_port.is_some() {
             purpose::prepare(&stage)?;
         }
-        let mut state = original.clone();
-        for client in &clients.clients {
-            for (destination, key) in [
-                (&client.client_id_file, false),
-                (&client.assertion_key_file, true),
-            ] {
-                if let Some(path) = destination {
-                    let source = stage.join("credentials").join(&client.id).join(if key {
-                        "assertion-key.jwk"
-                    } else {
-                        "client-id"
-                    });
-                    state.outputs.push(CredentialOutput {
-                        path: path.clone(),
-                        client: client.id.clone(),
-                        key,
-                        digest: config::hash(&private::read(&source, MAX_BYTES)?),
-                    });
-                }
-            }
-        }
         private::create(
             &stage.join("state.json"),
-            &serde_json::to_vec_pretty(&state)?,
+            &serde_json::to_vec_pretty(original)?,
         )?;
         fs::rename(&stage, root)?;
         Ok(())
@@ -1213,34 +1293,6 @@ fn initialize(
         fs::remove_dir_all(&stage).context("cannot clean owned incomplete initialization")?;
     }
     result
-}
-
-fn verify_outputs(state: &State) -> Result<()> {
-    for output in &state.outputs {
-        let source = state
-            .root()
-            .join("credentials")
-            .join(&output.client)
-            .join(if output.key {
-                "assertion-key.jwk"
-            } else {
-                "client-id"
-            });
-        let bytes = Zeroizing::new(private::read(&source, MAX_BYTES)?);
-        if config::hash(&bytes) != output.digest {
-            bail!(
-                "owned credential changed; preserve state and inspect the private credential pair"
-            );
-        }
-        if fs::symlink_metadata(&output.path).is_ok() {
-            if config::hash(&private::read(&output.path, MAX_BYTES)?) != output.digest {
-                bail!("credential output conflicts with retained ownership; no credentials were replaced");
-            }
-        } else {
-            private::create(&output.path, &bytes)?;
-        }
-    }
-    Ok(())
 }
 
 fn stop(project_path: &Path, remove: bool, docker_bin: Option<&Path>) -> Result<Value> {
@@ -1345,7 +1397,7 @@ fn reclaimed(state: &mut State) {
     state.tls_files_copied = false;
     state.database_ready = false;
     state.activated = false;
-    state.seeded.clear();
+    state.seeded = UniqueList::default();
     // No authority in a reclaimed database can be a seed's own, and a
     // journaled one names a row the removed database held.
     state.seed_import_authorities.clear();
@@ -1434,8 +1486,7 @@ pub fn run_supervisor(args: SupervisorArgs) -> Result<()> {
     ] {
         signal_hook::flag::register(signal, Arc::clone(&terminate))?;
     }
-    let clients: Clients =
-        serde_json::from_slice(&private::read(&root.join("clients.json"), MAX_BYTES)?)?;
+    let clients = retained_clients(&root)?;
     let mut children = Children::default();
     let result = (|| {
         ensure_active(&terminate)?;
@@ -2394,10 +2445,7 @@ fn tokens(state: &State, clients: &Clients) -> Result<()> {
 /// assertion key never leaves the session's private credentials tree, and the
 /// credential is stored owner-only for the seeding and rehearsal steps.
 fn token(state: &State, id: &str) -> Result<()> {
-    let client: Clients = serde_json::from_slice(&private::read(
-        &state.root().join("clients.json"),
-        MAX_BYTES,
-    )?)?;
+    let client = retained_clients(&state.root())?;
     let scopes = client
         .clients
         .iter()
@@ -2417,10 +2465,7 @@ fn token_with_scopes(state: &State, id: &str, scopes: Vec<String>) -> Result<()>
 }
 
 async fn token_async(state: &State, id: &str) -> Result<()> {
-    let client: Clients = serde_json::from_slice(&private::read(
-        &state.root().join("clients.json"),
-        MAX_BYTES,
-    )?)?;
+    let client = retained_clients(&state.root())?;
     let scopes = client
         .clients
         .iter()
@@ -2590,45 +2635,35 @@ fn package(docker: &Path, state: &mut State, clients: &Clients) -> Result<()> {
         initialization.as_bytes(),
         None,
     )?;
-    let journeys: Value = serde_norway::from_slice(&private::read(
+    let steps = registry_breg::fixtures::journey_step_profiles(&private::read(
         &root.join("project/tests/journeys.yaml"),
         MAX_BYTES,
-    )?)?;
+    )?)
+    .map_err(|error| {
+        anyhow::anyhow!("tests/journeys.yaml must be read before rehearsal: {error}")
+    })?;
     let mut bindings = Vec::new();
     let mut rehearsal_tokens = BTreeSet::new();
-    for journey in journeys["journeys"]
-        .as_array()
-        .context("journeys must contain an array")?
-    {
-        for step in journey["steps"]
-            .as_array()
-            .context("journey steps must be an array")?
-        {
-            let profile = step["accessProfile"]
-                .as_str()
-                .context("journey step requires an access profile")?;
-            let journey_id = journey["id"].as_str().context("journey requires an id")?;
-            let step_id = step["id"].as_str().context("journey step requires an id")?;
-            let explicit = exact_journey_client(clients, journey_id, step_id, profile)?;
-            let credential = if let Some(client) = explicit {
-                let token = rehearsal_token(client, step)?;
-                let token_ref = token.output_id.clone();
-                rehearsal_tokens.insert(token);
-                json!({"type":"bearer","tokenRef":format!("secret:file/{token_ref}-token")})
-            } else if step["claims"]
-                .as_object()
-                .is_some_and(|claims| claims.is_empty())
-            {
-                json!({"type":"anonymous"})
-            } else {
-                let client = journey_client(clients, journey_id, step_id, profile)?;
-                let token = rehearsal_token(client, step)?;
-                let token_ref = token.output_id.clone();
-                rehearsal_tokens.insert(token);
-                json!({"type":"bearer","tokenRef":format!("secret:file/{token_ref}-token")})
-            };
-            bindings.push(json!({"journeyId":journey_id,"stepId":step_id,"credential":credential}));
-        }
+    for step in &steps {
+        let (journey_id, step_id, profile) = (
+            step.journey_id.as_str(),
+            step.step_id.as_str(),
+            step.access_profile.as_str(),
+        );
+        let explicit = exact_journey_client(clients, journey_id, step_id, profile)?;
+        let credential = if let Some(client) = explicit {
+            let token = rehearsal_token(client, step)?;
+            let token_ref = token.output_id.clone();
+            rehearsal_tokens.insert(token);
+            json!({"type":"bearer","tokenRef":format!("secret:file/{token_ref}-token")})
+        } else {
+            let client = journey_client(clients, journey_id, step_id, profile)?;
+            let token = rehearsal_token(client, step)?;
+            let token_ref = token.output_id.clone();
+            rehearsal_tokens.insert(token);
+            json!({"type":"bearer","tokenRef":format!("secret:file/{token_ref}-token")})
+        };
+        bindings.push(json!({"journeyId":journey_id,"stepId":step_id,"credential":credential}));
     }
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -2693,7 +2728,11 @@ fn package(docker: &Path, state: &mut State, clients: &Clients) -> Result<()> {
             &purpose_requests,
         ))?;
     }
-    let credentials = json!({"apiVersion":"registry.registrystack.org/breg-schema-test-credentials/v1","kind":"SchemaTestCredentials","bindings":bindings});
+    let credentials = json!({
+        "apiVersion": crate::test_lifecycle::CREDENTIALS_API_VERSION,
+        "kind": crate::test_lifecycle::CREDENTIALS_KIND,
+        "bindings": bindings,
+    });
     private::replace(
         &root.join("schema-test-credentials.yaml"),
         serde_norway::to_string(&credentials)?.as_bytes(),
@@ -2745,30 +2784,18 @@ struct RehearsalToken {
     output_id: String,
 }
 
-fn rehearsal_token(client: &config::Client, step: &Value) -> Result<RehearsalToken> {
-    let scopes = step["claims"]["scopes"]
-        .as_array()
-        .context("an authenticated journey step must declare scopes")?
-        .iter()
-        .map(|scope| {
-            scope
-                .as_str()
-                .map(str::to_owned)
-                .context("journey scopes must be strings")
-        })
-        .collect::<Result<Vec<_>>>()?;
+fn rehearsal_token(
+    client: &config::Client,
+    step: &registry_breg::fixtures::JourneyStepProfile,
+) -> Result<RehearsalToken> {
+    let scopes = step
+        .scopes
+        .clone()
+        .context("an authenticated journey step must declare scopes")?;
     if scopes.iter().any(|scope| !client.scopes.contains(scope)) {
         bail!("journey scopes exceed the bound local client's registered scopes");
     }
-    let purpose = step["claims"]
-        .get("purpose")
-        .map(|purpose| {
-            purpose
-                .as_str()
-                .map(str::to_owned)
-                .context("journey purpose must be a string")
-        })
-        .transpose()?;
+    let purpose = step.purpose.clone();
     let purposes = config::client_purposes(client)?;
     if !purposes.iter().any(|declared| declared == &purpose) {
         bail!("journey purpose exceeds the bound local client's declared purposes");
@@ -2930,7 +2957,7 @@ fn seed(state: &mut State, clients: &Clients) -> Result<()> {
         if status != 201 {
             bail!("synthetic seed was refused; inspect the authored seed/profile and retained state. Earlier completed seeds will not repeat");
         }
-        state.seeded.insert(seed.id.clone());
+        state.mark_seeded(&seed.id)?;
         state.save()?;
     }
     Ok(())
@@ -2992,7 +3019,7 @@ fn import_seed(state: &mut State, seed: &config::Seed) -> Result<()> {
                         anyhow::anyhow!("cannot close resumed seed authority: {error:?}")
                     })?;
                     state.seed_import_authorities.remove(&seed.id);
-                    state.seeded.insert(seed.id.clone());
+                    state.mark_seeded(&seed.id)?;
                     state.save()?;
                     return Ok(());
                 }
@@ -3147,7 +3174,7 @@ fn import_seed(state: &mut State, seed: &config::Seed) -> Result<()> {
         anyhow::anyhow!("cannot close seed import authority after import: {error:?}")
     })?;
     state.seed_import_authorities.remove(&seed.id);
-    state.seeded.insert(seed.id.clone());
+    state.mark_seeded(&seed.id)?;
     state.save()?;
     Ok(())
 }

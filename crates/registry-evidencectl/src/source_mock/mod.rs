@@ -12,6 +12,12 @@ mod openapi;
 mod plan;
 mod server;
 
+/// The derived JSON Schema of one mock plan document.
+#[cfg(feature = "schema")]
+pub(crate) fn plan_schema() -> serde_json::Value {
+    plan::plan_schema()
+}
+
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
@@ -24,9 +30,15 @@ use std::{
 use anyhow::{anyhow, bail, Context as _, Result};
 use chrono::NaiveDate;
 use clap::{Args, Subcommand};
-use registry_evidence_authoring::openapi::types::OperationKey;
+use registry_evidence_authoring::{
+    formats::{decode_authored, MOCK_PLAN},
+    openapi::types::OperationKey,
+};
 use registry_platform_crypto::parse_json_strict;
-use serde_json::Value;
+use registry_platform_yaml::{Diagnostic, Report, Severity};
+use serde_json::{json, Value};
+
+use crate::{authored, report, OutputFormat};
 
 use self::{
     files::PublicationFile,
@@ -58,7 +70,7 @@ pub struct ServeArgs {
     /// Materialized mock configuration whose checked body bytes are authoritative.
     #[arg(
         long,
-        conflicts_with_all = ["openapi", "project", "legacy_project", "operation", "seed", "as_of", "explain"]
+        conflicts_with_all = ["openapi", "project", "operation", "seed", "as_of", "explain"]
     )]
     config: Option<PathBuf>,
 
@@ -68,9 +80,6 @@ pub struct ServeArgs {
     /// sources/ beside evidence-project.yaml.
     #[arg(value_name = "PROJECT", conflicts_with_all = ["openapi", "config"])]
     project: Option<PathBuf>,
-    /// Retired spelling of the project directory argument, still accepted.
-    #[arg(long = "project", value_name = "PROJECT", hide = true, conflicts_with_all = ["project", "openapi", "config"])]
-    legacy_project: Option<PathBuf>,
 
     /// Narrow ephemeral discovery to one `METHOD /path/template` operation.
     #[arg(long)]
@@ -106,7 +115,6 @@ pub struct GenerateArgs {
             "openapi",
             "output",
             "project",
-            "legacy_project",
             "seed",
             "as_of"
         ]
@@ -123,9 +131,6 @@ pub struct GenerateArgs {
     /// sources/ beside evidence-project.yaml.
     #[arg(value_name = "PROJECT", conflicts_with_all = ["openapi", "config"])]
     project: Option<PathBuf>,
-    /// Retired spelling of the project directory argument, still accepted.
-    #[arg(long = "project", value_name = "PROJECT", hide = true, conflicts_with_all = ["project", "openapi", "config"])]
-    legacy_project: Option<PathBuf>,
 
     /// Select one `METHOD /path/template` operation.
     #[arg(long)]
@@ -164,25 +169,16 @@ pub struct CheckArgs {
     /// sources/ beside evidence-project.yaml.
     #[arg(value_name = "PROJECT", conflicts_with = "config")]
     project: Option<PathBuf>,
-    /// Retired spelling of the project directory argument, still accepted.
-    #[arg(long = "project", value_name = "PROJECT", hide = true, conflicts_with_all = ["project", "config"])]
-    legacy_project: Option<PathBuf>,
+    /// Refuse a plan whose check reports any warning.
+    #[arg(long)]
+    deny_warnings: bool,
 }
 
-pub fn run(command: MockCommand) -> Result<ExitCode> {
+pub fn run(command: MockCommand, format: OutputFormat) -> Result<ExitCode> {
     match command {
-        MockCommand::Serve(mut args) => {
-            args.project = args.legacy_project.take().or(args.project);
-            serve(args)
-        }
-        MockCommand::Generate(mut args) => {
-            args.project = args.legacy_project.take().or(args.project);
-            generate(args)
-        }
-        MockCommand::Check(mut args) => {
-            args.project = args.legacy_project.take().or(args.project);
-            check(args)
-        }
+        MockCommand::Serve(args) => serve(args),
+        MockCommand::Generate(args) => generate(args),
+        MockCommand::Check(args) => check(args, format),
     }
 }
 
@@ -194,7 +190,11 @@ fn serve(args: ServeArgs) -> Result<ExitCode> {
                 || args.as_of.is_some()
                 || args.explain =>
         {
-            bail!("materialized serve rejects generation and operation-selection flags")
+            Err(argument_refusal(
+                "evidence.mock.serve-config-flags",
+                "serve --config rejects generation and operation-selection flags",
+                "Remove --operation, --seed, --as-of, and --explain, or serve with --openapi to use them.",
+            ))
         }
         (Some(openapi_path), None) => {
             let root = current_root()?;
@@ -259,7 +259,11 @@ fn serve(args: ServeArgs) -> Result<ExitCode> {
                 .http_addr
                 .is_some_and(|requested| requested != configured.address)
             {
-                bail!("--http-addr must exactly match the applicable project source origin");
+                return Err(argument_refusal(
+                    "evidence.mock.http-addr-mismatch",
+                    "--http-addr must exactly match the applicable project source origin",
+                    "Omit --http-addr to serve the project source origin, or change the source's base URL to the address you want.",
+                ));
             }
             serve_ephemeral(
                 prepared,
@@ -378,7 +382,11 @@ fn serve_materialized(checked: CheckedPlan, address: SocketAddr) -> Result<ExitC
 fn generate(args: GenerateArgs) -> Result<ExitCode> {
     if args.config.is_some() {
         if args.seed.is_some() || args.as_of.is_some() {
-            bail!("generate --config uses the stored generation settings");
+            return Err(argument_refusal(
+                "evidence.mock.generate-config-flags",
+                "generate --config uses the stored generation settings",
+                "Remove --seed and --as-of; the plan's generation settings apply.",
+            ));
         }
         if args.operation.is_some() {
             return append_generated_case(args);
@@ -463,7 +471,7 @@ fn generate_initial(args: GenerateArgs) -> Result<ExitCode> {
             path: operation.key.path.clone(),
             operation_id: operation.operation_id.clone(),
             response: PlanResponse {
-                status: 200,
+                status: plan::ResponseStatus::new(200).context("the mock response status")?,
                 media_type: "application/json".to_owned(),
             },
             cases: vec![PlanCase {
@@ -484,12 +492,11 @@ fn generate_initial(args: GenerateArgs) -> Result<ExitCode> {
         &openapi_relative,
     )?;
     let plan = MockPlan {
-        version: plan::PLAN_VERSION,
         openapi: config_reference,
         openapi_digest: Some(Digest::from_bytes(prepared.normalized_digest)),
         generation: Some(GenerationSettings {
             contract: generator::GENERATOR_CONTRACT.to_owned(),
-            seed,
+            seed: plan::Seed::new(seed).context("--seed must be at most 9007199254740991")?,
             as_of: as_of.to_string(),
             datasets: prepared
                 .datasets
@@ -562,7 +569,7 @@ fn generate_missing(args: GenerateArgs) -> Result<ExitCode> {
         let (generated, body) =
             checked
                 .prepared
-                .generate(operation, &raw, generation.seed, as_of)?;
+                .generate(operation, &raw, generation.seed.get(), as_of)?;
         explanations.extend(generated.inference);
         publications.push(PublicationFile::new(&case.body, body));
     }
@@ -619,7 +626,7 @@ fn append_generated_case(args: GenerateArgs) -> Result<ExitCode> {
     let (generated, body) = checked.prepared.generate(
         operation,
         &parameters,
-        generation.seed,
+        generation.seed.get(),
         generation.as_of_date()?,
     )?;
     let body_path = case_body_path(&selected, case_name);
@@ -717,7 +724,10 @@ fn restore_generation_inputs(
     Ok(generation)
 }
 
-fn check(args: CheckArgs) -> Result<ExitCode> {
+/// What corrects a mock plan that is refused.
+const PLAN_ACTION: &str = "Correct the mock plan, the OpenAPI description it names, or its response bodies as the message says, then rerun evidencectl source mock check.";
+
+fn check(args: CheckArgs, format: OutputFormat) -> Result<ExitCode> {
     let root = project_root(args.project.as_deref())?;
     let config = normal_relative(
         args.config
@@ -725,25 +735,157 @@ fn check(args: CheckArgs) -> Result<ExitCode> {
             .unwrap_or_else(|| Path::new(DEFAULT_CONFIG)),
         "--config",
     )?;
-    let checked = load_checked_plan(&root, &config, false)?;
-    println!(
-        "Mock plan valid: operations={} cases={}",
-        checked.plan.operations.len(),
-        checked.routes.len()
-    );
+    let base = args.project.as_deref().unwrap_or_else(|| Path::new(""));
+    let checked = load_checked_plan(&root, &config, false)
+        .map_err(|error| plan_refusal(error, &config, base))?;
+    let mut warnings = checked.warnings;
+    warnings.set_files_checked(1);
+    let warnings = authored::rebase(warnings, base);
+    if args.deny_warnings && warnings.warning_count() > 0 {
+        return Err(warnings.into());
+    }
+    match format {
+        OutputFormat::Human => {
+            println!(
+                "Mock plan valid: operations={} cases={}",
+                checked.plan.operations.len(),
+                checked.routes.len()
+            );
+            if !warnings.is_empty() {
+                print!("{}", warnings.render_human());
+            }
+        }
+        OutputFormat::Json => report::print(&report::success(
+            "source mock check",
+            "valid",
+            json!({
+                "config": base.join(&config),
+                "operations": checked.plan.operations.len(),
+                "cases": checked.routes.len(),
+                "diagnostics": warnings.to_json_value(),
+            }),
+        ))?,
+    }
     Ok(ExitCode::SUCCESS)
+}
+
+/// A refusal located at one member of the mock plan. Its message is a fixed
+/// sentence plus schema-derived pointers, never a value or path the plan
+/// holds.
+#[derive(Debug)]
+struct PlanMemberFault {
+    pointer: String,
+    message: String,
+}
+
+impl std::fmt::Display for PlanMemberFault {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{}: {}", self.pointer, self.message)
+    }
+}
+
+impl std::error::Error for PlanMemberFault {}
+
+/// The refusal a mock plan check raised, as the report of every problem it
+/// found, each file named from `base`, the project path as given. The
+/// reader's own report is kept; any other refusal is one diagnostic naming
+/// the plan. An operational failure is returned unchanged.
+fn plan_refusal(error: anyhow::Error, config: &Path, base: &Path) -> anyhow::Error {
+    let found = if let Some(found) = authored::report_in(&error) {
+        found.clone()
+    } else if let Some(fault) = error.downcast_ref::<PlanMemberFault>() {
+        let mut found = Report::new(vec![authored::file_diagnostic(
+            Severity::Error,
+            "evidence.mock-plan.invalid",
+            None,
+            &config.to_string_lossy(),
+            &fault.pointer,
+            &fault.message,
+            PLAN_ACTION,
+        )]);
+        found.set_files_checked(1);
+        found
+    } else if error
+        .chain()
+        .any(|cause| cause.downcast_ref::<std::io::Error>().is_some())
+    {
+        return error;
+    } else {
+        let mut found = Report::new(vec![authored::file_diagnostic(
+            Severity::Error,
+            "evidence.mock-plan.invalid",
+            None,
+            &config.to_string_lossy(),
+            "",
+            &error.to_string(),
+            PLAN_ACTION,
+        )]);
+        found.set_files_checked(1);
+        found
+    };
+    authored::rebase(found, base).into()
+}
+
+/// Check what the mock plan at `file`, named from `project`, depends on: the
+/// OpenAPI description it names and each response body it lists, as
+/// `evidencectl source mock check` reads them. The plan's own structure is
+/// checked by [`check_plan_document`]; its reader warnings are reported there.
+pub(crate) fn check_plan_dependencies(project: &Path, file: &str) -> Report {
+    let config = Path::new(file);
+    let Err(error) = load_checked_plan(project, config, false) else {
+        return Report::default();
+    };
+    let message = error.to_string();
+    let refusal = plan_refusal(error, config, Path::new(""));
+    if let Some(report) = authored::report_in(&refusal) {
+        return report.clone();
+    }
+    Report::new(vec![authored::file_diagnostic(
+        Severity::Error,
+        "evidence.mock-plan.invalid",
+        None,
+        file,
+        "",
+        &message,
+        PLAN_ACTION,
+    )])
+}
+
+/// Check one mock plan read from a project: the reader's diagnostics, then
+/// the plan's own structure. The OpenAPI description and the response bodies
+/// the plan names are read by `source mock check`, not here.
+pub(crate) fn check_plan_document(file: &str, bytes: &[u8]) -> Report {
+    let decoded = match decode_authored::<MockPlan>(file, bytes, &MOCK_PLAN) {
+        Ok(decoded) => decoded,
+        Err(found) => return found,
+    };
+    let mut found = decoded.document.warnings();
+    if let Err(error) = plan::validate_plan(&decoded.value) {
+        found.push(decoded.document.diagnostic_at_value(
+            Severity::Error,
+            "evidence.mock-plan.invalid",
+            "",
+            &error.to_string(),
+            PLAN_ACTION,
+        ));
+    }
+    found
 }
 
 struct CheckedPlan {
     plan: MockPlan,
+    /// The warnings the reader reported on the plan.
+    warnings: Report,
     prepared: openapi::PreparedOpenApi,
     routes: Vec<server::RouteSpec>,
     missing: Vec<(usize, usize)>,
 }
 
 fn load_checked_plan(root: &Path, config: &Path, allow_missing: bool) -> Result<CheckedPlan> {
-    let bytes = files::read_confined(root, config, plan::MAX_PLAN_BYTES as u64, "mock plan")?;
-    let plan = plan::parse_plan(&bytes)?;
+    // One byte past the reader's limit, so an oversized plan is refused by
+    // the reader the way every other configuration file is.
+    let bytes = files::read_confined(root, config, plan::MAX_PLAN_BYTES as u64 + 1, "mock plan")?;
+    let (plan, warnings) = plan::parse_plan_reporting(&config.to_string_lossy(), &bytes)?;
     let openapi_bytes = files::read_openapi_reference(root, config, &plan.openapi)?;
     let mut prepared = openapi::discover(&openapi_bytes, "configured OpenAPI document", None)?;
     let configured_operations = plan
@@ -796,16 +938,17 @@ fn load_checked_plan(root: &Path, config: &Path, allow_missing: bool) -> Result<
                             &failure.schema_pointer
                         })
                         .expect("string serialization cannot fail");
-                        bail!(
-                            "body `{}` case `{}` for {} {} failed {} at instance {} schema {}",
-                            case.body,
-                            case.name,
-                            plan_operation.method,
-                            plan_operation.path,
-                            failure.rule,
-                            instance,
-                            schema,
-                        );
+                        return Err(PlanMemberFault {
+                            pointer: format!(
+                                "/operations/{operation_index}/cases/{case_index}/body"
+                            ),
+                            message: format!(
+                                "the response body failed the operation's response schema \
+                                 (rule {} at instance {instance}, schema {schema})",
+                                failure.rule,
+                            ),
+                        }
+                        .into());
                     }
                     let expanded =
                         plan::expand_path(&plan_operation.path, &case.request.path_parameters)
@@ -824,6 +967,7 @@ fn load_checked_plan(root: &Path, config: &Path, allow_missing: bool) -> Result<
     }
     Ok(CheckedPlan {
         plan,
+        warnings,
         prepared,
         routes,
         missing,
@@ -838,19 +982,33 @@ fn path_is_absent(path: &Path) -> Result<bool> {
     }
 }
 
+/// A refusal of an argument combination clap cannot express, reported as a
+/// diagnostic with a code and the next step.
+fn argument_refusal(code: &str, message: &str, fix: &str) -> anyhow::Error {
+    Report::new(vec![Diagnostic::error(code, "", message, fix)]).into()
+}
+
 fn parse_path_parameters(arguments: &[String]) -> Result<BTreeMap<String, String>> {
     let mut parameters = BTreeMap::new();
     for argument in arguments {
-        let (name, value) = argument
-            .split_once('=')
-            .context("--path-parameter must use NAME=VALUE")?;
+        let (name, value) = argument.split_once('=').ok_or_else(|| {
+            argument_refusal(
+                "evidence.mock.path-parameter-form",
+                "--path-parameter must use NAME=VALUE",
+                "Write each --path-parameter as NAME=VALUE, such as person_id=person-123.",
+            )
+        })?;
         if name.is_empty()
             || value.is_empty()
             || parameters
                 .insert(name.to_owned(), value.to_owned())
                 .is_some()
         {
-            bail!("--path-parameter names must be non-empty and unique");
+            return Err(argument_refusal(
+                "evidence.mock.path-parameter-names",
+                "--path-parameter names and values must be non-empty, and each name unique",
+                "Give each path template parameter one non-empty NAME=VALUE.",
+            ));
         }
     }
     Ok(parameters)
@@ -947,9 +1105,10 @@ fn current_root() -> Result<PathBuf> {
 fn project_root(project: Option<&Path>) -> Result<PathBuf> {
     match project {
         Some(project) => {
-            let metadata = fs::symlink_metadata(project).context("inspecting --project")?;
+            let metadata =
+                fs::symlink_metadata(project).context("inspecting the project directory")?;
             if metadata.file_type().is_symlink() || !metadata.is_dir() {
-                bail!("--project must be a plain directory");
+                bail!("the project directory must be a plain directory");
             }
             Ok(project.to_path_buf())
         }
@@ -1112,17 +1271,20 @@ fn project_source_binding(
         }
         let bytes =
             files::read_confined(root, &relative, plan::MAX_PLAN_BYTES as u64, "source draft")?;
-        let value: serde_norway::Value =
-            serde_norway::from_slice(&bytes).context("source draft YAML is invalid")?;
+        let value = registry_evidence_authoring::formats::scan_authored(
+            &relative.to_string_lossy(),
+            &bytes,
+        )
+        .map(crate::authored::node_value)?;
         let method = value
             .get("request")
             .and_then(|request| request.get("method"))
-            .and_then(serde_norway::Value::as_str);
+            .and_then(serde_json::Value::as_str);
         let path = value.get("request").and_then(|request| {
             request
                 .get("pathTemplate")
                 .or_else(|| request.get("path"))
-                .and_then(serde_norway::Value::as_str)
+                .and_then(serde_json::Value::as_str)
         });
         let Some((method, source_path)) = method.zip(path) else {
             continue;
@@ -1132,7 +1294,7 @@ fn project_source_binding(
         };
         let base_url = value
             .get("baseUrl")
-            .and_then(serde_norway::Value::as_str)
+            .and_then(serde_json::Value::as_str)
             .context("applicable project sources need an explicit baseUrl")?;
         addresses.insert(loopback_origin_address(base_url)?);
         let key = (operation.0.to_owned(), operation.1.to_owned());
@@ -1237,6 +1399,27 @@ fn print_explanations(explanations: &[generator::ExplainedInference]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn path_parameter_refusals_are_diagnostics_with_a_code_and_a_fix() {
+        for (arguments, code) in [
+            (
+                vec!["person_id".to_owned()],
+                "evidence.mock.path-parameter-form",
+            ),
+            (vec!["a=".to_owned()], "evidence.mock.path-parameter-names"),
+            (
+                vec!["a=1".to_owned(), "a=2".to_owned()],
+                "evidence.mock.path-parameter-names",
+            ),
+        ] {
+            let error = parse_path_parameters(&arguments).expect_err("refused");
+            let report = authored::report_in(&error).expect("a diagnostic report");
+            let diagnostic = &report.diagnostics()[0];
+            assert_eq!(diagnostic.code, code);
+            assert!(!diagnostic.suggested_action.is_empty());
+        }
+    }
 
     #[test]
     fn project_sources_prefer_exact_then_longest_operation_suffix() {

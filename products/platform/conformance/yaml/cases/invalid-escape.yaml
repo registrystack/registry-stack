@@ -1,0 +1,13 @@
+id: invalid-escape
+rules: [CFG-YAML-8]
+summary: A backslash in double quotes that starts no YAML escape is refused where the quoted value opens, with a fix.
+mutation:
+  append: |
+    conformanceEscape: "C:\Users\conformance"
+expect:
+  exit: 1
+  diagnostics:
+    - code: yaml.invalid-escape
+      path: /conformanceEscape
+      at: {line: 1, column: 20}
+      suggestedAction: Use single quotes, or double the backslash.

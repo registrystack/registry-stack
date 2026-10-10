@@ -7,7 +7,7 @@
 //! Both are `registry-platform-ratelimit` token buckets, so both are per
 //! process: one replica is the supported topology, and with more replicas
 //! each one enforces its own limits. The one limit that must survive a
-//! restart, an access profile's `dailyLimit`, is counted in the acceptance
+//! restart, an access profile's `maximumMessagesPerDay`, is counted in the acceptance
 //! transaction instead (see [`crate::messages`]).
 //!
 //! A caller's rate is charged once per submission, before its body is read,
@@ -132,7 +132,8 @@ pub const CALLBACK_REQUESTS_PER_MINUTE: u32 = 6_000;
 pub const CALLBACK_BURST: u32 = 600;
 
 /// The one budget every callback path naming no receiving provider shares.
-/// A provider id is a lowercase kebab identifier, so this key is never one.
+/// A provider id is a local identifier, which starts with a letter, so this
+/// key is never one.
 const UNROUTED_CALLBACK_KEY: &str = "_unrouted";
 
 /// The rate the unauthenticated callback routes admit, charged before a
@@ -290,7 +291,7 @@ mod tests {
             allow_direct_content: false,
             requests_per_minute,
             burst,
-            daily_limit: None,
+            maximum_messages_per_day: None,
         }
     }
 

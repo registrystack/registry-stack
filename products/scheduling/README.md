@@ -47,9 +47,17 @@ schedulingctl test ./scheduling
 schedulingctl explain ./scheduling
 ```
 
-Check reports `complete` or `incomplete` with field-addressed findings. Test
-repeats that authoring status and replays the project's bounded synthetic
-fixtures offline; a passing report carries the `offline_synthetic` proof
+Check reads the policy, `records.yaml`, and every fixture, and names each
+problem as an error at its file, line, column, and JSON pointer; any error
+exits 1, `--deny-warnings` makes a warning refuse too, and `--format json`
+writes the same diagnostics in one envelope. Every JSON report names its format
+as `apiVersion: id.registrystack.org/formats/scheduling/ctl-report/v1alpha1`
+and `kind: SchedulingCtlReport`;
+[`examples/formats/ctl-report.json`](examples/formats/ctl-report.json) is the
+report check writes for the exact-time example. `--runtime-config FILE` checks
+a runtime file offline as well. Test runs the same checks and replays the
+project's bounded synthetic fixtures offline; a passing report carries the
+`offline_synthetic` proof
 boundary and `productionClosure: false`, so it does not establish source
 reachability or deployment readiness. Explain publishes what the runtime would
 serve: identity, policy digest, offerings, the operator-published windows with
@@ -253,7 +261,7 @@ The hook id becomes the event `type`. The source is
 fields. `state` is the public value `confirmed` or `cancelled`; actor identity,
 task grants, resource and channel identifiers, duplicate keys, and cancellation
 reasons cannot be projected. Retained payloads expire after
-`retention.hookPayloadDays`. Operator replay is not exposed in this slice.
+`retention.hookPayloadRetentionDays`. Operator replay is not exposed in this slice.
 
 ## Phase 1 scope and exclusions
 

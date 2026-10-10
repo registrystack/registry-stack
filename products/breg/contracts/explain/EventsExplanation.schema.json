@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://registrystack.org/breg-explain/v1alpha3/EventsExplanation.schema.json",
+  "$id": "https://id.registrystack.org/schemas/breg/events-explanation/events-explanation.v1alpha4.schema.json",
   "title": "EventsExplanation",
   "description": "Wire shape of `explanation` for `bregctl explain events`. `deliveries` is a raw passthrough of the compiled event delivery inventory (`CompiledEventDeliveryInventory`, a `deny_unknown_fields` type shared with package inventories); it is declared opaque in full, because bregctl serializes it directly and its shape can change without any corresponding line changing in bregctl.",
   "type": "object",
@@ -8,7 +8,7 @@
   "required": ["apiVersion", "kind", "deliveries"],
   "properties": {
     "apiVersion": {
-      "const": "registry.registrystack.org/breg-explain/v1alpha3"
+      "const": "registry.registrystack.org/breg-explain/v1alpha4"
     },
     "kind": {
       "const": "EventsExplanation"
@@ -16,7 +16,7 @@
     "deliveries": {
       "type": "array",
       "description": "Passthrough of the compiled event delivery inventory. Shape follows CompiledEventDelivery and is outside this contract version.",
-      "items": { "type": "object" }
+      "items": { "type": "object", "x-registry-passthrough": "bregctl writes each compiled event delivery as the engine holds it; its shape follows CompiledEventDelivery and is outside this contract version." }
     }
   }
 }

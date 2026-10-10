@@ -99,10 +99,14 @@ pub enum AuthenticationConfigError {
     InvalidVerifierProfile,
     #[error("an authority claim mapping is invalid")]
     InvalidClaimMapping,
+    #[error(
+        "the project names clients in requesterClients, trusted actors, or consent recipients \
+         that authentication.oidc.allowedClients does not list; list each of them in \
+         authentication.oidc.allowedClients, because the keyword unrestricted lists none"
+    )]
+    NamedClientNotListed,
     #[error("a contextual authority claim overlaps another configured claim role")]
     ConflictingClaimMapping,
-    #[error("a compiled anonymous access profile carries a principal claim, required scopes, required purposes, or row boundaries")]
-    AnonymousProfileCarriesAuthority,
     #[error("the configured principal claim is not the principal claim a compiled access profile requires")]
     PrincipalClaimMismatch,
     #[error("a compiled row boundary selects a field the compiled entity does not declare")]
@@ -376,9 +380,9 @@ impl fmt::Debug for RegistryAuthenticator {
 }
 
 /// Authenticate a presented bearer before any Registry route authorization.
-/// Absence is preserved for anonymous profiles, while every invalid presented
-/// credential fails closed. Any caller-supplied authority extension is removed
-/// before either branch.
+/// A missing credential and every invalid presented credential fail closed:
+/// the registry serves authenticated callers only. Any caller-supplied
+/// authority extension is removed first.
 pub(crate) async fn authenticate_request(
     State(authenticator): State<Arc<RegistryAuthenticator>>,
     mut request: Request<Body>,
@@ -386,7 +390,7 @@ pub(crate) async fn authenticate_request(
 ) -> Response {
     request.extensions_mut().remove::<VerifiedRequestClaims>();
     let token = match bearer_token(request.headers()) {
-        Ok(None) => return next.run(request).await,
+        Ok(None) => return authentication_refused(),
         Ok(Some(token)) => token,
         Err(_) => return authentication_refused(),
     };
@@ -453,6 +457,16 @@ fn admits_one_access_token_type(allowed_typ: &[String]) -> bool {
         || is_access_token_typ_pair(allowed_typ)
 }
 
+/// Hold a claim mapping to the compiled access profiles without building an
+/// authenticator, so an offline check refuses what startup refuses.
+pub(crate) fn check_claim_mapping(
+    registry: &CompiledRegistry,
+    verifier: &TokenVerifierConfig,
+    claims: &AuthorityClaimConfig,
+) -> Result<(), AuthenticationConfigError> {
+    validate_claim_mapping(registry, verifier, claims).map(|_| ())
+}
+
 fn validate_claim_mapping(
     registry: &CompiledRegistry,
     verifier: &TokenVerifierConfig,
@@ -499,10 +513,16 @@ fn validate_claim_mapping(
                 || !valid_config_value(actor)
                 || actor.chars().any(char::is_whitespace)
                 || uuid::Uuid::parse_str(actor).is_err()
-                || !verifier.allowed_clients.contains(client)
         })
     {
         return Err(AuthenticationConfigError::InvalidClaimMapping);
+    }
+    if claims
+        .trusted_actors
+        .keys()
+        .any(|client| !verifier.allowed_clients.contains(client))
+    {
+        return Err(AuthenticationConfigError::NamedClientNotListed);
     }
     if !(valid_authority_claim_name(&claims.principal_claim) || claims.principal_claim == "sub")
         || claims.principal_claim == verifier.scope_claim
@@ -518,9 +538,6 @@ fn validate_claim_mapping(
         }
     }
     let inventory = authority_inventory(registry).map_err(|error| match error {
-        AuthorityInventoryError::AnonymousProfileCarriesAuthority => {
-            AuthenticationConfigError::AnonymousProfileCarriesAuthority
-        }
         AuthorityInventoryError::PrincipalClaimMissing => {
             AuthenticationConfigError::PrincipalClaimMismatch
         }
@@ -553,7 +570,7 @@ fn validate_claim_mapping(
             .iter()
             .any(|client| !verifier.allowed_clients.contains(client))
         {
-            return Err(AuthenticationConfigError::InvalidClaimMapping);
+            return Err(AuthenticationConfigError::NamedClientNotListed);
         }
         if profile.actor_kind == Some(crate::contract::ActorKindSource::Agent)
             && profile.task_grant.is_none()
@@ -573,7 +590,7 @@ fn validate_claim_mapping(
             .iter()
             .any(|allowed| allowed == client)
     }) {
-        return Err(AuthenticationConfigError::InvalidClaimMapping);
+        return Err(AuthenticationConfigError::NamedClientNotListed);
     }
     if inventory
         .principal_claims
@@ -799,7 +816,7 @@ fn mapped_scalar_claim(
     Ok(value)
 }
 
-fn authentication_refused() -> Response {
+pub(crate) fn authentication_refused() -> Response {
     crate::correlation::problem_response(
         StatusCode::UNAUTHORIZED,
         "Unauthorized",

@@ -1,0 +1,10 @@
+apiVersion: id.registrystack.org/formats/fuzz/runtime/v1
+kind: FuzzRuntimeConfig
+id: Example
+version: 1
+port: "8080"
+enabled: yes
+retentionDays: 0
+maximumBytes: 10MB
+ratio: abc
+offset: 1_000

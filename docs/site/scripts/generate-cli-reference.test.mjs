@@ -168,6 +168,43 @@ test('renders repeatable option cardinality', () => {
   assert.match(page, /\| Option \| Always required \| Repeatable \|/u);
 });
 
+test('escapes MDX expression and JSX characters in help text outside code spans', () => {
+  const catalog = fixtureCatalog();
+  const evidencectl = catalog.binaries.find((binary) => binary.name === 'evidencectl');
+  const tooling = evidencectl.subcommands.find((command) => command.name === 'tooling');
+  evidencectl.about = 'Read {a} map before <b> applies';
+  evidencectl.long_about = 'Fill ${NAME} values; a path\\{x} keeps its backslash';
+  tooling.about = 'Write {x} and <y>';
+  evidencectl.options.push({
+    ...argument('--environment'),
+    description: 'Fill ${NAME} values, written `${NAME}` or ``a `{b}` <c>``, unless a < b',
+  });
+
+  const pages = renderCatalog(catalog, fixtureReviewMetadata());
+  const page = pages.get('evidencectl.mdx');
+  assert.match(page, /^Read \\\{a\\\} map before \\<b> applies\.$/mu);
+  assert.match(page, /^Fill \$\\\{NAME\\\} values; a path\\\\\\\{x\\\} keeps its backslash\.$/mu);
+  assert.match(page, /\| \[`tooling`\]\(\.\/tooling\/\) \| Write \\\{x\\\} and \\<y> \|/u);
+  assert.ok(
+    page.includes(
+      '| Fill $\\{NAME\\} values, written `${NAME}` or ``a `{b}` <c>``, unless a \\< b |',
+    ),
+    page,
+  );
+  assert.match(pages.get('index.mdx'), /\| \[`evidencectl`\]\(\.\/evidencectl\/\) \| Read \\\{a\\\} map before \\<b> applies \|/u);
+  assert.match(pages.get('evidencectl/tooling.mdx'), /^Write \\\{x\\\} and \\<y>\.$/mu);
+  // Every brace and angle bracket outside a code span carries its escape.
+  for (const [name, contents] of pages) {
+    const body = contents.split('\n---\n').slice(1).join('\n---\n');
+    const prose = body
+      .replace(/^\{\/\*.*\*\/\}$/gmu, '')
+      .replace(/^<\/?DocsetProduct[^>]*>$/gmu, '')
+      .replace(/```[\s\S]*?```/gu, '')
+      .replace(/(`+)[\s\S]*?[^`]\1(?!`)/gu, '');
+    assert.doesNotMatch(prose, /(?<!\\)[{}<]/u, name);
+  }
+});
+
 test('rejects a hidden command even if a collector emits it', () => {
   const catalog = fixtureCatalog();
   catalog.binaries[0].subcommands.push(command('bundle-check', 'evidence'));

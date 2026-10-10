@@ -103,7 +103,7 @@ async fn a_file_that_comes_back_does_not_take_the_tab_still_open_over_it_from_di
     change(&mut session, &question, &unsaved, 2).await;
     assert_eq!(
         published_codes(&session, &question),
-        vec!["evidence/unknown-source"],
+        vec!["evidence.project.unknown-source"],
         "the unsaved revision names a source the project does not hold"
     );
 
@@ -120,7 +120,7 @@ async fn a_file_that_comes_back_does_not_take_the_tab_still_open_over_it_from_di
 
     assert_eq!(
         published_codes(&session, &question),
-        vec!["evidence/unknown-source"],
+        vec!["evidence.project.unknown-source"],
         "the tab was never closed, so the unsaved revision is still what the server answers from"
     );
 }
@@ -153,7 +153,7 @@ async fn a_question_that_comes_back_unannounced_stops_being_reported_as_unknown(
     watched(&mut session, &question, 3).await;
     assert_eq!(
         published_codes(&session, &policy),
-        vec!["evidence/unknown-question"],
+        vec!["evidence.project.unknown-question"],
         "the compiler refuses this project too: the policy admits a question it does not hold"
     );
 
@@ -204,7 +204,7 @@ async fn a_saved_description_answers_the_question_that_names_its_operation() {
     session.open(&description, &unpublished, 1).await;
     assert_eq!(
         published_codes(&session, &question),
-        vec!["evidence/unknown-operation"],
+        vec!["evidence.project.unknown-operation"],
         "the description on disk publishes no operation the question could name"
     );
 

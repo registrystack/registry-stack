@@ -12,6 +12,8 @@ standards_referenced:
   - json-schema
 ---
 
+import ConfigurationFormatChecks from '../../../components/ConfigurationFormatChecks.astro';
+
 You have decided an item in [Decide your first Casework item](../../tutorials/first-casework/), and now you want to author the policy a real team will work under.
 This page covers the project file: the access profiles that separate people from producer services, the queues work waits in, the unified review policies, the routing rules and clocks that move work over time, and the source declaration that binds a Base Registry Engine (BReg) register.
 At the end, `caseworkctl package` writes a directory whose `SHA256SUMS` an operator verifies before a runtime serves it.
@@ -104,7 +106,7 @@ A Requester profile is a calling system rather than a person.
 The separate `reviewProducers` policy binds that profile to an exact issuer, subject, source namespace, and set of review kinds.
 
 {/* Evidence: crates/registry-casework-core/src/config.rs, AccessProfile and
-    access_roles_are_separately_scoped(). */}
+    profiles_without_a_separate_scope(). */}
 
 ### Queues
 
@@ -249,7 +251,8 @@ Each entry binds one client to one access profile the policy declares, carries t
 The `directory` block names one team per queue, with its Staff and its Supervisors, so a queue has someone serving it from the first start.
 
 ```yaml
-version: 1
+apiVersion: id.registrystack.org/formats/casework/dev-clients/v1alpha1
+kind: CaseworkDevClients
 clients:
   - id: administrator
     accessProfile: administrator
@@ -276,12 +279,17 @@ directory:
     supervisors: [supervisor]
 ```
 
+`caseworkctl check` reads this file beside `casework.yaml` and reports, at the entry that causes it, a client bound to a profile the policy does not declare, a missing required scope or claim, and a directory team on an unknown queue or with a member whose profile does not fit the role.
+The file takes literal text only: a `${...}` substitution is refused.
+
 Nothing in this file is a credential.
 `caseworkctl dev` generates a fresh private key per client under the project's own owner-only `.casework/dev/credentials/` directory, and the file names claims and scopes only.
 It has no role in a deployment: a deployed runtime takes its callers from your identity provider and its teams from an Administrator, and `caseworkctl package` leaves this file out of the package entirely.
 
 {/* Evidence: crates/registry-caseworkctl/src/project.rs, STANDALONE_DEV_CLIENTS and package();
-    crates/registry-caseworkctl/src/dev/mod.rs, capture(). */}
+    crates/registry-caseworkctl/src/dev/mod.rs, capture();
+    crates/registry-caseworkctl/src/dev/config.rs, DEV_CLIENTS_FORMAT, read_against(), and bind();
+    crates/registry-caseworkctl/src/offline.rs, check_dev_clients(). */}
 
 ## Extend the policy
 
@@ -370,7 +378,7 @@ A clock occurrence reads the source fresh, may append a reminder or apply a rout
 The person who held the item loses the claim and the item reappears in the new queue; the decision itself is still a human action.
 
 {/* Evidence: crates/registry-casework-core/src/policy.rs, ClockPolicy, ClockStep, and
-    check_clock_policies(); crates/registry-casework/src/clocks.rs, apply_clock_claim(). */}
+    clock_policy_findings(); crates/registry-casework/src/clocks.rs, apply_clock_claim(). */}
 
 ### Calendars and holiday revisions
 
@@ -435,6 +443,8 @@ Five commands read the project and touch no network and no database, so run them
 | `package` | What exactly would an operator receive? |
 
 `caseworkctl check` validates the project and prints the effective policy, including the values you did not write.
+It prints each problem position first, as `warning[CODE] FILE:LINE:COLUMN /path` or `error[CODE] ...`, then the message and a `next:` line with the fix, and ends with a count of errors and warnings; `--format json` reports the same problems as a `diagnostics` list.
+It exits 1 when it reports an error, and `--deny-warnings` makes a warning fail it too.
 For the standalone project it reports standalone mode, the resolved review kind and producer admission with its schemas and retention, and the inbox defaults.
 For a project that declares sources it reports every one of them, and for each of their requests the entity, the fallback queue, the routing rule count, the clock the request names, and its target; it also reports the state of the imported source descriptions, which reads `pending_source_add` before you connect the source and `checked` after.
 
@@ -449,31 +459,36 @@ Read it when you want to confirm that what you wrote is what a team will experie
 
 `caseworkctl simulate` runs one case at one instant.
 The fixture below belongs to the [complete regional-review example](https://github.com/registrystack/registry-stack/tree/6a3bff6efcc89e0d53d0bc37ebcbe7cd62dc0c0d/products/casework/examples/multi-stage-routing-clocks), which also supplies the matching policy, source descriptions, and holiday-set revision.
-A simulation fixture names the source, the subject with its activity, stage, and projected fields, the moment `now`, the holiday revisions in force, and what you expect:
+A simulation names the source, the subject with its activity, stage, and projected fields, the moment `now`, the holiday-set revisions in force, and what you expect:
 
 ```yaml
+apiVersion: id.registrystack.org/formats/casework/simulation/v1alpha1
+kind: CaseworkSimulation
 id: friday-review
 source: regional-register
-holidayRevisions:
-  office-holidays: 7
+holidayRevisions: {office-holidays: 7}
 subject:
   entity: regional-correction
-  id: request-0042
+  recordId: request-0042
   version: "1"
   activity: review
   stage: technical
-  fields:
-    region: north
+  fields: {region: north}
   stageEnteredAt: "2026-09-04T15:00:00+07:00"
 now: "2026-09-11T17:00:00+07:00"
 expect:
   queue: northern-review
-  ruleId: northern-requests
+  rule: northern-requests
   dueAt: "2026-09-14T17:00:00+07:00"
-  dueState: atRisk
+  dueState: at-risk
   eligibleReminders: [due-soon]
   eligibleSteps: []
 ```
+
+Each `holidayRevisions` entry pins one revision, read from `simulations/holiday-sets/<holiday-set>-<revision>.yaml` beside the simulation.
+Each `fields` value is a boolean, a number, or text. Leave out a field the record does not carry: routing reads a missing field and a `null` one alike, so `null` is refused.
+Every member of `expect` other than `queue` is optional, and a member you leave out is not checked.
+Write `rule: none` to expect that no routing rule matched.
 
 If you have saved that complete example as `./regional-review`, run:
 
@@ -484,10 +499,26 @@ caseworkctl simulate ./regional-review \
 
 The report names the rule that matched and the sentence behind it, the calendar and holiday revision used, the due instant in UTC, the due state, and the reminders and steps eligible at that moment.
 That is how you prove a five-working-day deadline entered on a Friday lands where you meant it to, across a weekend and a holiday.
-A simulation fixture is not a test fixture: pass a `test` fixture to `simulate` and the command refuses and names the six members a simulation accepts, `id`, `source`, `holidayRevisions`, `subject`, `now`, and `expect`.
+An expectation that does not hold is reported at the `expect` member that states it.
 
-`caseworkctl test` runs the fixtures the project carries under `fixtures/`, which assert the queue and the available outcomes for a case without a source.
-It reports each fixture as passed or failed, so it belongs in the same loop as `check`.
+`caseworkctl test` runs every fixture under `fixtures/` and every simulation under `simulations/`.
+`caseworkctl check` and `test` read at most 1024 YAML files from each of `fixtures/`, `simulations/`, and `simulations/holiday-sets/`.
+A fixture asserts the queue, the available outcomes, the target, and the application mode for one review or source request:
+
+```yaml
+apiVersion: id.registrystack.org/formats/casework/fixture/v1alpha1
+kind: CaseworkFixture
+id: professional-review-offline
+request:
+  source: professional-licences
+  entity: scope-correction
+expect:
+  queue: corrections
+  target: {elapsedMinutes: 2880}
+```
+
+It reports each file as passed, or refuses at the expectation that failed, so it belongs in the same loop as `check`.
+`check` reads the same files and refuses a reference the project does not declare, or a review display value of a type its review kind's display schema does not admit.
 
 ```sh
 caseworkctl test ./decisions
@@ -550,7 +581,7 @@ Each entry in `requests` binds one BReg entity to one fallback queue; `target` i
 One source can declare up to 32 request entities from the same register, each named once.
 `caseworkctl source add` pairs them all in one pass, and requests that share a review authority must agree on its producer admission.
 Casework discovers work entity by entity, in the order you declare them.
-Until the description exists, `caseworkctl check` reports `"sourceDescription": "pending_source_add"`.
+Until the description exists, `caseworkctl check` reports `"sourceDescription": "pending_source_add"` and a `casework.source-description.missing` warning at the source's `description`, which `--production` refuses as an error.
 
 The template's `scope-correction` review kind uses `contextStrategy: source`, so its `displaySchema` must admit exactly what the source discloses to a reviewer.
 It restates each projected field's schema under its API name, as `bregctl explain change-requests` reports it: `record` is a UUID string, not an object.
@@ -580,7 +611,7 @@ caseworkctl source add ./tutorial-work/project \
   --project ./licence-casework --source-id professional-licences
 ```
 
-`source add` drives your own `bregctl` of the same Registry Stack version, requires it on `PATH` or named with `--bregctl-bin`, runs its public `check` and `explain change-requests`, and refuses a mismatched source namespace, policy, producer admission, or application binding. It also reports a finding when another change-request entity in the same BReg registry names this Casework project's review authority with a `policyId` that no declared `reviewKinds` entry matches, since that entity would pass BReg's own compile check yet still be unreviewable here; several Casework projects can share an authority id, so that entity's policy may legitimately live in one of them, and pairing does not wait on it.
+`source add` drives your own `bregctl` of the same Registry Stack version, requires it on `PATH` or named with `--bregctl-bin`, runs its public `check` and `explain change-requests`, and refuses a mismatched source namespace, policy, producer admission, or application binding. It also reports a warning when another change-request entity in the same BReg registry names this Casework project's review authority with a `policyId` that no declared `reviewKinds` entry matches, since that entity would pass BReg's own compile check yet still be unreviewable here; several Casework projects can share an authority id, so that entity's policy may legitimately live in one of them, and pairing does not wait on it.
 Without `--apply` it previews the lifecycle event, the least-privilege `casework-reader` profile,
 the paired local clients, and the authority and optional executor runtime bindings.
 The local review authority it adds to BReg's `dev-clients.yaml` calls Casework at `http://127.0.0.1:8092`, the default `caseworkctl dev` port; when your Casework session runs on another port, pass its URL with `--casework-endpoint http://127.0.0.1:PORT`.
@@ -628,14 +659,15 @@ Without a running registry session the command stops and names the `--source-pro
 [Review Base Registry Engine changes in Casework](../../tutorials/review-breg-changes-in-casework/) walks that local journey end to end.
 For a deployment, package the connected project and hand it to an operator, who adds the matching source binding to the runtime file.
 
-### Findings
+### Warnings
 
-`source add` can report these findings in its `preview` and `applied` output, alongside `status`; none of them block the pairing:
+`source add` can report these warnings in the `diagnostics` of its `preview` and `applied` output, alongside `status`; none of them block the pairing.
+Each is placed at the JSON pointer of the BReg `registry.yaml` member it concerns, with that file's line and column:
 
-| Finding | Meaning | What to do |
+| Warning | Meaning | What to do |
 |---|---|---|
 | `casework.source-add.review-policy-unresolved` | Another change-request entity in the BReg registry names this Casework project's review authority with a `policyId` that no `reviewKinds[].id` matches. | Add a matching `reviewKinds[].id` to `casework.yaml`, or correct the entity's `changeRequest.review.policyId`, once that entity's review kind is meant to live here. |
-| `casework.source-add.row-boundary-claim-unsupported` | The selected request's review or apply access profile declares a `rowBoundaries` claim using operator `equals` over a string-shaped field, and the local dev-client export does not add the claim it depends on. An `in` operator, or `equals` over a non-string-shaped field (for example Boolean or Int64), refuses `source add` outright: the local Casework dev-client claim model holds only strings, and neither pairing can be represented that way. | Add the named claim to the local Casework reviewer dev clients that need the profile, each set to the string value equal to the field's stored value. |
+| `casework.source-add.row-boundary-claim-unsupported` | The selected request's review or apply access profile declares a `rowBoundaries` claim using operator `equals` over a string-shaped field, and the local dev-client export does not add the claim it depends on. An `in` operator, or `equals` over a non-string-shaped field (for example Boolean or Int64), refuses `source add` outright: the local Casework dev-client claim model holds only strings, and neither pairing can be represented that way. | Add each claim the `rowBoundaries` name to the local Casework reviewer dev clients that need the profile, each set to the string value equal to the field's stored value. |
 
 {/* Evidence: crates/registry-caseworkctl/src/source_add.rs, run(), select_request(),
     candidate_fragments(), runtime_binding(), check_unpaired_review_policies(), and
@@ -659,6 +691,14 @@ Tell them which queues need teams, since the inbox stays closed until every decl
 {/* Evidence: crates/registry-caseworkctl/src/project.rs, package();
     crates/registry-casework/src/config.rs, verify_casework_package() and RuntimeConfig::check;
     products/casework/examples/professional-review/runtime.example.yaml. */}
+
+## Check commands
+
+Every file Registry Casework reads has a command that checks it offline, with no service running. Each prints
+the diagnostics, JSON output, and exit codes that
+[Check a file before you deploy it](../../reference/configuration-files/#check-a-file-before-you-deploy-it) describes.
+
+<ConfigurationFormatChecks product="casework" />
 
 ## Next
 

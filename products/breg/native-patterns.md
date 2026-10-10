@@ -7,7 +7,7 @@ minimum version. There is no second regular-expression engine in BREG.
 Phase 1 field encryption cannot preserve that database-enforced contract without
 disclosing plaintext to PostgreSQL. The compiler therefore refuses a field that
 combines `pattern` with `encrypted: true` at the authored `pattern` path, using
-`field.encrypted.pattern_refused`. Remove `pattern`, or keep the field in plaintext
+`breg.field.encrypted-pattern-refused`. Remove `pattern`, or keep the field in plaintext
 storage when the native pattern is required.
 
 ```yaml
@@ -46,14 +46,14 @@ Runtime callers supply values, never expressions.
 
 `bregctl check <project>` performs offline structural checks and generates safely
 quoted PostgreSQL SQL. It cannot establish PostgreSQL expression syntax or
-existing-data conformance. It reports `field.pattern.unverified_offline` for each
+existing-data conformance. It reports `breg.field.pattern-unverified-offline` for each
 pattern at its authored field path. These are advisory findings unless
-`--deny-findings` is selected. Use the normal PostgreSQL-backed `bregctl test <project> --runtime-config <config>
+`--deny-warnings` is selected. Use the normal PostgreSQL-backed `bregctl test <project> --runtime-config <config>
 --credentials <credentials> --output <receipt.json>`
 and package workflow before activation. The compiled installer explicitly evaluates
 each native expression even when all fixture tables are empty. An invalid
 expression refuses schema-test and installation. Schema-test and activation report
-`field.pattern.syntax_invalid` at `entities[<id>].fields[<id>].pattern`, using
+`breg.field.pattern-syntax-invalid` at `entities[<id>].fields[<id>].pattern`, using
 authored identifiers and a repair hint without including the expression or raw
 database diagnostic. A failed activation keeps its exact target pinned in
 maintenance. Invalid syntax cannot be repaired by changing that target's bytes:
@@ -110,7 +110,7 @@ existing added CHECK constraints. This classification permits the compiler-owned
 DDL path; it does not promise that existing rows or future writes satisfy the
 new rule. PostgreSQL validates every existing row before the addition commits.
 A failure leaves the old package active and the target pinned in maintenance.
-Activation reports `field.pattern.existing_rows_invalid` at the authored field.
+Activation reports `breg.field.pattern-existing-rows-invalid` at the authored field.
 Correct the violating data using the documented operator recovery procedure,
 then retry the exact target. A successful future write alone does not validate
 the preexisting rows.
@@ -123,8 +123,8 @@ representative data, and size
 `operationalTimeouts.migrationStatementMilliseconds` for lock acquisition and
 the full validation scan. `migrationLockMilliseconds` bounds each lock wait;
 keep it shorter than the statement timeout when a separate lock-wait limit is
-useful. Reviewed steps use their packaged `lockTimeoutMs` and
-`statementTimeoutMs` bounds. A timeout leaves the same maintenance and recovery
+useful. Reviewed steps use their packaged `lockTimeoutMilliseconds` and
+`statementTimeoutMilliseconds` bounds. A timeout leaves the same maintenance and recovery
 interlock. See PostgreSQL's [ALTER TABLE locking and validation](https://www.postgresql.org/docs/18/sql-altertable.html)
 and [statement and lock timeouts](https://www.postgresql.org/docs/18/runtime-config-client.html).
 

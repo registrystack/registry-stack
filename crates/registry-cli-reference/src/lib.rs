@@ -492,6 +492,8 @@ fn sample_value(argument: &Arg) -> OsString {
         || name.contains("SIZE")
     {
         OsString::from("1")
+    } else if name.contains("ABSOLUTE") {
+        OsString::from("/value")
     } else {
         OsString::from("value")
     }

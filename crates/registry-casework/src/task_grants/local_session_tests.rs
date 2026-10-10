@@ -336,7 +336,7 @@ async fn source_backed_dev_approves_exchanges_and_revokes_on_stock_issuer() {
     .unwrap();
     let webhook = workspace.path().join("webhook");
     private(&webhook, b"synthetic-source-webhook-key-32-bytes");
-    let clients = json!({"version":1,"clients":[{"id":"supervisor","accessProfile":"supervisor","scopes":["casework:supervisor"],"claims":{"registry_actor_kind":"human"}},{"id":"administrator","accessProfile":"administrator","scopes":["casework:admin"],"claims":{"registry_actor_kind":"human"}},{"id":"staff","accessProfile":"staff","scopes":["casework:staff","records:get"],"claims":{"registry_actor_kind":"human","tenant_claim":"tenant-a","registry_purpose":"review"}},{"id":"producer","accessProfile":"producer","scopes":["casework:reviews:request"]}],"directory":[{"team":"team","queue":"review","staff":["staff"],"supervisors":["supervisor"]}],"integrations":{"resource":AUDIENCE,"sources":{"source":{"baseUrl":source_url,"readerProfile":"reader","tokenEndpoint":format!("{}/oauth2/token",session.issuer()),"clientAssertionAudience":session.issuer(),"resource":AUDIENCE,"scopes":["records:get"],"clientIdRef":"secret:file/service-source-reader-id","clientAssertionKeyRef":"secret:file/service-source-reader-key","webhookSecretRef":"secret:file/source-webhook","eventSource":"urn:registrystack:registry:task-authority-http:instance:task-instance"}},"secretFiles":{"source-webhook":webhook},"serviceClients":[{"id":"source-reader","scopes":["records:get"],"claims":{"tenant_claim":"tenant-a","registry_purpose":"review"}},{"id":"seed-client","scopes":["records:get"],"claims":{"tenant_claim":"tenant-a","registry_purpose":"review"}},{"id":"task-agent","scopes":["casework:grants:assert"],"taskExchange":true},{"id":"status-client","scopes":["casework:grants:status"]}],"taskAuthority":{"issuer":AUTHORITY,"jwksPort":session.ports[3],"statusClients":{"status-client":AUDIENCE}}}});
+    let clients = json!({"apiVersion":"id.registrystack.org/formats/casework/dev-clients/v1alpha1","kind":"CaseworkDevClients","clients":[{"id":"supervisor","accessProfile":"supervisor","scopes":["casework:supervisor"],"claims":{"registry_actor_kind":"human"}},{"id":"administrator","accessProfile":"administrator","scopes":["casework:admin"],"claims":{"registry_actor_kind":"human"}},{"id":"staff","accessProfile":"staff","scopes":["casework:staff","records:get"],"claims":{"registry_actor_kind":"human","tenant_claim":"tenant-a","registry_purpose":"review"}},{"id":"producer","accessProfile":"producer","scopes":["casework:reviews:request"]}],"directory":[{"team":"team","queue":"review","staff":["staff"],"supervisors":["supervisor"]}],"integrations":{"resource":AUDIENCE,"sources":{"source":{"baseUrl":source_url,"readerProfile":"reader","tokenEndpoint":format!("{}/oauth2/token",session.issuer()),"clientAssertionAudience":session.issuer(),"resource":AUDIENCE,"scopes":["records:get"],"clientIdRef":"secret:file/service-source-reader-id","clientAssertionKeyRef":"secret:file/service-source-reader-key","webhookSecretRef":"secret:file/source-webhook","eventSource":"urn:registrystack:registry:task-authority-http:instance:task-instance"}},"secretFiles":{"source-webhook":webhook},"serviceClients":[{"id":"source-reader","scopes":["records:get"],"claims":{"tenant_claim":"tenant-a","registry_purpose":"review"}},{"id":"seed-client","scopes":["records:get"],"claims":{"tenant_claim":"tenant-a","registry_purpose":"review"}},{"id":"task-agent","scopes":["casework:grants:assert"],"taskExchange":true},{"id":"status-client","scopes":["casework:grants:status"]}],"taskAuthority":{"issuer":AUTHORITY,"jwksPort":session.ports[3],"statusClients":{"status-client":AUDIENCE}}}});
     fs::write(
         session.project.join("dev-clients.yaml"),
         serde_norway::to_string(&clients).unwrap(),
@@ -353,16 +353,16 @@ async fn source_backed_dev_approves_exchanges_and_revokes_on_stock_issuer() {
     .unwrap();
     let checker = Arc::new(
         TaskGrantStatusRegistry::activate(
-            &[TaskGrantStatusConfig {
-                source_issuer: AUTHORITY.into(),
-                base_url: session.url(),
-                token_endpoint: format!("{}/oauth2/token", session.issuer()),
-                client_assertion_audience: session.issuer(),
-                client_id: "status-client".into(),
-                private_key_ref: "secret:file/assertion-key.jwk".into(),
-                casework_resource: AUDIENCE.into(),
-                ca_bundle_ref: None,
-            }],
+            &[serde_json::from_value::<TaskGrantStatusConfig>(json!({
+                "sourceIssuer": AUTHORITY,
+                "baseUrl": session.url(),
+                "tokenEndpoint": format!("{}/oauth2/token", session.issuer()),
+                "clientAssertionAudience": session.issuer(),
+                "clientId": "status-client",
+                "privateKeyRef": "secret:file/assertion-key.jwk",
+                "caseworkResource": AUDIENCE,
+            }))
+            .unwrap()],
             AUDIENCE,
             &secrets,
         )
@@ -569,7 +569,7 @@ async fn source_backed_dev_approves_exchanges_and_revokes_on_stock_issuer() {
         assert_eq!(denied.status, StatusCode::NOT_FOUND);
     }
     let connection = workspace.path().join("connection.yaml");
-    private(&connection,serde_norway::to_string(&json!({"version":1,"caseworkUrl":session.url(),"tokenEndpoint":format!("{}/oauth2/token",session.issuer()),"clientAssertionAudience":session.issuer(),"bootstrapResource":AUDIENCE,"clients":{"task-agent":{"assertionKeyFile":session.root().join("credentials/task-agent/assertion-key.jwk"),"resource":AUDIENCE,"scopes":["records:get"]}}})).unwrap().as_bytes());
+    private(&connection,serde_norway::to_string(&json!({"apiVersion":registry_thunderid_tooling::task_connection::API_VERSION,"kind":registry_thunderid_tooling::task_connection::KIND,"caseworkUrl":session.url(),"tokenEndpoint":format!("{}/oauth2/token",session.issuer()),"clientAssertionAudience":session.issuer(),"bootstrapResource":AUDIENCE,"secretProviders":{"file":{"root":session.root().join("credentials/task-agent")}},"clients":{"task-agent":{"assertionKeyRef":"secret:file/assertion-key.jwk","resource":AUDIENCE,"scopes":["records:get"]}}})).unwrap().as_bytes());
     let args = vec![
         "dev".into(),
         "grant".into(),

@@ -355,18 +355,11 @@ impl SourceConnectionPool {
             if connections.contains_key(name) {
                 continue;
             }
-            let token_timeout = Duration::from_millis(connection.token_timeout_milliseconds);
+            let token_timeout = Duration::from_millis(connection.token_timeout_milliseconds.get());
             let admission_timeout =
-                Duration::from_millis(connection.admission_timeout_milliseconds);
-            if token_timeout.is_zero()
-                || token_timeout > Duration::from_secs(30)
-                || admission_timeout.is_zero()
-                || admission_timeout > Duration::from_secs(30)
-                || connection.concurrency_limit == 0
-                || connection.concurrency_limit > 256
-            {
-                return Err(SourceError::InvalidPlan);
-            }
+                Duration::from_millis(connection.admission_timeout_milliseconds.get());
+            let concurrency = usize::try_from(connection.concurrency_limit.get())
+                .map_err(|_| SourceError::InvalidPlan)?;
             let mut authentication =
                 compile_authentication(&connection.authentication, token_timeout)?;
             if let AuthenticationPlan::Oauth2(plan) = &mut authentication {
@@ -384,7 +377,7 @@ impl SourceConnectionPool {
                 )?,
                 authentication,
                 secrets: Arc::clone(&secrets),
-                concurrency: Semaphore::new(usize::from(connection.concurrency_limit)),
+                concurrency: Semaphore::new(concurrency),
                 admission_timeout,
             };
             connections.insert(name.to_owned(), (connection.clone(), Arc::new(resources)));
@@ -1173,16 +1166,9 @@ impl HttpTransport {
         {
             return Err(SourceError::InvalidPlan);
         }
-        let timeout = Duration::from_millis(configured_request.timeout_milliseconds);
-        if timeout.is_zero()
-            || configured_request.timeout_milliseconds > 30_000
-            || configured_request.maximum_response_bytes == 0
-            || configured_request.maximum_response_bytes > 1_048_576
-            || configured_request.concurrency_limit == 0
-            || configured_request.concurrency_limit > 256
-        {
-            return Err(SourceError::InvalidPlan);
-        }
+        let timeout = Duration::from_millis(configured_request.timeout_milliseconds.get());
+        let concurrency = usize::try_from(configured_request.concurrency_limit.get())
+            .map_err(|_| SourceError::InvalidPlan)?;
         let base_url = validate_url(configured_base_url, true)?;
         let resources = if let Some(resources) = shared_resources {
             resources
@@ -1196,7 +1182,7 @@ impl HttpTransport {
                 )?,
                 authentication: compile_authentication(configured_authentication, timeout)?,
                 secrets,
-                concurrency: Semaphore::new(usize::from(configured_request.concurrency_limit)),
+                concurrency: Semaphore::new(concurrency),
                 admission_timeout: timeout,
             })
         };
@@ -1222,7 +1208,7 @@ impl HttpTransport {
             maximum_request_bytes: configured_request
                 .preparation_limits
                 .maximum_normalized_bytes
-                .unwrap_or(65_536) as usize,
+                .map_or(65_536, |bytes| bytes.get()) as usize,
         })
     }
 
@@ -1483,7 +1469,7 @@ impl StatementTransport {
             allowed_selector_sets,
             parameter_bindings,
             projection,
-            maximum_response_bytes: configured_request.maximum_response_bytes,
+            maximum_response_bytes: configured_request.maximum_response_bytes.get(),
         };
         // The statement is checked as strongly as the caller's inputs allow.
         // Opening the extract checks it against the schema it will actually
@@ -1859,7 +1845,7 @@ fn compile_request(
         allowed_selector_sets,
         posture,
         projection,
-        maximum_response_bytes: request.maximum_response_bytes,
+        maximum_response_bytes: request.maximum_response_bytes.get(),
     })
 }
 
@@ -2185,8 +2171,9 @@ fn compile_authentication(
                 scope: scope.clone(),
                 audience: audience.clone(),
                 resource: resource.clone(),
-                maximum_cache_lifetime: Duration::from_secs(*maximum_cache_seconds),
-                assumed_lifetime: assumed_lifetime_seconds.map(Duration::from_secs),
+                maximum_cache_lifetime: Duration::from_secs(maximum_cache_seconds.get()),
+                assumed_lifetime: assumed_lifetime_seconds
+                    .map(|seconds| Duration::from_secs(seconds.get())),
                 admission_timeout,
                 request_timeout: admission_timeout,
                 cache: Mutex::new(None),
@@ -2937,7 +2924,7 @@ fn exact_declared_unresolved_problem(
         && object
             .get("status")
             .and_then(JsonValue::as_u64)
-            .is_some_and(|value| value == u64::from(declared.status))
+            .is_some_and(|value| value == u64::from(declared.status.get()))
         && object.get("detail").is_some_and(JsonValue::is_string)
         && object
             .get("code")
@@ -3824,7 +3811,7 @@ mod tests {
             "secret:file/independent-secret".into();
         document["sources"]["independent"]["authentication"]["clientSecretRef"] =
             "secret:file/independent-secret".into();
-        config = serde_json::from_value(document).unwrap();
+        config = EvidenceConfig::decode_without_rules(&serde_json::to_vec(&document).unwrap());
         let executors = connection_test_executors(&config, Arc::clone(&secrets));
         let request = prepared_batch_request();
         let (first, second) = tokio::join!(

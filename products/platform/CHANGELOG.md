@@ -2,6 +2,71 @@
 
 ## Unreleased
 
+- `registry-platform-config` `check_offline` without the environment chooses the
+  stand-in for a value that holds an expression by its member, and replaces the
+  whole value, so `${HOST}:${PORT}` in a listener address and one variable in
+  two members of different types no longer stop the check silently. Two
+  different expressions in a set take different default stand-ins and are not
+  reported as a repeat. When a member refuses its stand-in, the check reports
+  the warning `platform.runtime-config.check-incomplete` (`INCOMPLETE_CODE`) at
+  that member, where it returned no diagnostic and no configuration.
+- A file with a kind no format reads and a retired `apiVersion` reports both
+  `config.wrong-kind` and `config.retired-api-version`; `config.wrong-kind` still
+  decides the refusal.
+- `config.unknown-variant` with a single accepted value says "expected `x`" and
+  "Write `x`." instead of listing one value.
+- `config.invalid-type` for a mapping no longer suggests writing `{}`; the reader
+  cannot know whether an empty mapping is valid there.
+- `yaml.ambiguous-number` no longer offers quoting everywhere: its `next` says to
+  write the number in decimal digits and to quote it only where the key takes text.
+- A removed key's `next` sentence now opens with a capital letter, whatever case
+  the product wrote its replacement in. Render writes its own with code formatting.
+- `registry-platform-yaml` is the shared configuration reader: one YAML
+  subset (no anchors, aliases, merge keys, tags, or several documents), one
+  scalar table, the `apiVersion` and `kind` envelope check, and a serde
+  decoder that refuses unknown keys and null and reports every problem with
+  a two-segment code, a JSON pointer, a line and column, and the fix, never
+  a value from the file. Input is bounded at 1 MiB and 128 levels. It parses
+  with `saphyr-parser` 0.1.0, which has no unsafe code.
+- BREAKING: `registry-platform-config` `RuntimeConfigLoader` reads
+  `runtime.yaml` through `registry-platform-yaml`. It now refuses anchors,
+  aliases, null members, and keys the product's type does not declare, and
+  it checks the envelope before removed keys. Substitution runs on string
+  scalars while the document is read, so a diagnostic about a substituted
+  value points at the expression; a substituted value never fills a number or
+  boolean, and an expression in a key, `apiVersion`, or `kind` is refused.
+  `RuntimeConfigError` carries `file()` and `diagnostics()`, and its `Display`
+  renders every diagnostic as `error[code] file:line:col /pointer`, then the
+  message and `next:` with the fix. The text of a diagnostic is no longer the
+  `serde` decoder's. `reject_environment_expressions_in_authored_yaml`
+  reads authored files with the same reader, so it also refuses YAML outside
+  the shared subset.
+- BREAKING: `registry-platform-config` removes the second, legacy code system
+  from `RuntimeConfigError`. `RuntimeConfigErrorKind`, `kind()`, `code()`,
+  `field()`, and `message()` are gone, with the `runtime_config.*` and
+  `authored_config.*` codes they reported. Match on a diagnostic's `code`
+  instead: `deciding_diagnostic()` is the error a consumer words the refusal
+  from, `diagnostics()` lists them all, and `Display` renders them. The code
+  of a refusal for a file that cannot be read is `UNAVAILABLE_CODE`
+  (`platform.runtime-config.unavailable`). The dotted field becomes the
+  diagnostic's JSON pointer `path`; a missing `apiVersion` or `kind` is
+  reported at the root, where the reader reports it.
+- BREAKING: `registry-platform-config` `RuntimeConfigLoader` refuses a
+  `${VAR}` value that holds a control character other than tab, line feed, or
+  carriage return, with `config.substitution` naming only the variable, as the
+  reader refuses the same character written in the file. Migration: remove
+  the control character from the variable.
+- BREAKING: `registry-platform-yaml` refuses a mapping key that holds a control
+  character other than tab, line feed, or carriage return with
+  `yaml.control-character`, at the key's position and at the enclosing mapping's
+  pointer, so the diagnostic never repeats the key. Migration: remove the
+  control character from the key.
+- `registry-platform-yaml` `Debug` output for a node shows its kind and
+  position and no scalar value, and an entry's key is redacted, where integers,
+  floats, booleans, and keys printed.
+- `registry-platform-config` decides a refusal by `config.unknown-key` ahead
+  of any other value problem, so a typo of a required key names the typo, not
+  the missing member.
 - `registry-platform-httputil` adds the bounded same-key resend the BReg,
   Casework, Messaging, and Scheduling clients share:
   `client::retry_keyed_mutation`,
@@ -21,6 +86,32 @@
   Evidence clients and the token exchanges change only the reported kind,
   from `timeout` to `connect`; the review client still classifies the
   failure as ambiguous.
+- BREAKING: `registry-thunderid-tooling` reads the task connection file that
+  `evidencectl dev grant`, `bregctl dev grant`, and `caseworkctl dev grant`
+  share through `registry-platform-yaml`. The file opens with
+  `apiVersion: id.registrystack.org/formats/platform/task-connection/v1alpha1`
+  and `kind: PlatformTaskConnection` in place of `version: 1`; each client
+  names its key as `assertionKeyRef: secret:file/<name>` or
+  `secret:env/NAME`, resolved through a top-level `secretProviders` block,
+  in place of `assertionKeyFile`. The file may be readable by others but not
+  writable by group or others. A refusal reports every finding with a
+  `platform.task-connection.*` or reader code and repeats no value; an
+  unopenable file makes `evidencectl dev grant` exit 3. Migration: replace
+  `version: 1` with the envelope, and move each `assertionKeyFile` to
+  `secretProviders.file.root` plus `assertionKeyRef: secret:file/<name>`.
+  Its JSON Schema is `products/platform/schemas/task-connection.schema.json`.
+- BREAKING: the ThunderID development session state file, `session.json`,
+  opens with `apiVersion` and `kind: PlatformThunderidSession` and uses
+  camelCase members; the unused `schema_applied` member is gone. A file
+  written by an earlier release is refused. Migration: stop the development
+  session, delete the directory that holds `session.json`, and start it
+  again.
+  Migration steps and the diagnostic code table for both files:
+  `release/notes/config-conventions/platform.md`.
+- `evidencectl dev check <file>` checks a task connection file or a session
+  state file offline, without resolving a secret reference, and exits 0, 1,
+  or 3 under the shared check contract; `--format json` reports the
+  diagnostics.
 
 ## v0.39.0 - 2026-10-06
 

@@ -50,8 +50,29 @@ use crate::{
     keygen, OutputFormat,
 };
 use registry_evidence_authoring::model::{AccessPolicy, AccessTaskGrant};
+use registry_platform_yaml::{
+    ApiVersion, EnvelopeRule, Expect, FormatSpec, LocalId, Reader, RemovedKey,
+};
 
-const STATE_SCHEMA: &str = "registry.evidencectl.dev-state/v6";
+const DEV_STATE_API_VERSION: &str = "id.registrystack.org/formats/evidence/dev-state/v6";
+pub(crate) const DEV_STATE_KIND: &str = "EvidenceDevState";
+/// The session state `evidencectl dev` retains in `.evidence/dev/state.json`
+/// (CFG-ENV-1). Only evidencectl writes it.
+const DEV_STATE_FORMAT: FormatSpec<'static> = FormatSpec {
+    kind: DEV_STATE_KIND,
+    envelope: EnvelopeRule::ApiVersionKind {
+        api_versions: &[ApiVersion::current(DEV_STATE_API_VERSION)],
+        retired_api_versions: &[],
+    },
+    removed_keys: &[RemovedKey {
+        pointer: "/schema",
+        replacement: "Remove schema; apiVersion and kind identify the file.",
+    }],
+};
+/// Refusal for retained state this evidencectl cannot read, including state
+/// an earlier evidencectl wrote. Nothing is changed, so the earlier
+/// evidencectl can still stop and remove what it started.
+const UNREADABLE_STATE: &str = "retained dev state is not readable by this evidencectl; preserve it for inspection, or, if an earlier evidencectl started this session, run evidencectl dev stop and evidencectl dev clean with that evidencectl, then start again";
 const CONTROL_SOCKET_NAME: &str = "control.sock";
 const CALLER_ID: &str = "local-tutorial-caller";
 const LOCAL_ACCESS_TOKEN_AUDIENCE: &str = "urn:registrystack:evidence:local:gateway";
@@ -62,6 +83,11 @@ pub(crate) const RETAINED_STOPPED_SESSION: &str = "dev-stopped-before-restart";
 const PRIVATE_DIR_MODE: u32 = 0o700;
 const PRIVATE_FILE_MODE: u32 = 0o600;
 const MAX_STATE_BYTES: u64 = 4 * 1024 * 1024;
+/// The header `bregctl dev` writes on the session state it retains in
+/// `.breg/dev/state.json`. A borrowed issuer owner is read only from state
+/// carrying it; state an earlier bregctl wrote names no ready owner.
+const BREG_DEV_STATE_API_VERSION: &str = "id.registrystack.org/formats/breg/dev-state/v1alpha1";
+const BREG_DEV_STATE_KIND: &str = "BRegDevState";
 /// The bundle's own bound on `authentication.allowedClients`, named here so a
 /// session borrowing a shared issuer is refused where the operator can act
 /// rather than by the Evidence binary checking the compiled result.
@@ -193,16 +219,29 @@ enum DevAction {
     Token(TokenArgs),
     /// Exchange an existing Casework approval using an explicit configured issuer connection.
     Grant(GrantArgs),
+    /// Check a task connection or local issuer session state file offline.
+    Check(CheckArgs),
+}
+
+#[derive(Debug, Args)]
+struct CheckArgs {
+    /// A task connection file or a local issuer session state file; its
+    /// envelope says which. No secret reference is resolved.
+    #[arg(value_name = "FILE")]
+    file: PathBuf,
+    /// Exit 1 when the check reports a warning.
+    #[arg(long)]
+    deny_warnings: bool,
 }
 
 #[derive(Debug, Args)]
 struct GrantArgs {
-    /// Registered agent client ID in the owner-only connection file.
+    /// Registered agent client ID listed under `clients` in the task connection file.
     client: String,
     /// Existing Casework-approved grant UUID; this command does not approve tasks.
     #[arg(long)]
     grant: String,
-    /// Owner-only task connection v1 file with the registered agent key and fixed target.
+    /// Task connection file (`PlatformTaskConnection`) naming the fixed target and each client's assertion key reference.
     #[arg(long, value_name = "FILE")]
     connection: PathBuf,
     /// Existing project whose private directory receives the grant-specific header.
@@ -223,9 +262,6 @@ struct TokenArgs {
 struct StopArgs {
     /// Project root. Defaults to the current directory.
     project: Option<PathBuf>,
-    /// Compatibility spelling for the project root.
-    #[arg(long = "project", hide = true, conflicts_with = "project")]
-    legacy_project: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]
@@ -233,14 +269,6 @@ struct CleanArgs {
     /// Project root. Defaults to the current directory.
     #[arg(value_name = "PROJECT", default_value = ".")]
     project: PathBuf,
-    /// Retired spelling of the project directory argument, still accepted.
-    #[arg(
-        long = "project",
-        value_name = "PROJECT",
-        hide = true,
-        conflicts_with = "project"
-    )]
-    legacy_project: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]
@@ -326,7 +354,8 @@ enum FailureKind {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct DevState {
-    schema: String,
+    api_version: String,
+    kind: String,
     status: DevStatus,
     project: PathBuf,
     runtime_path: PathBuf,
@@ -334,13 +363,17 @@ struct DevState {
     issuer_origin: String,
     issuer_session_id: String,
     name_prefix: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     issuer_project: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     issuer_owner: Option<String>,
     token_url: String,
     access_token_audience: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     caller: Option<CallerState>,
     access_policies: Vec<AccessPolicyState>,
     questions: Vec<QuestionState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     failure: Option<FailureKind>,
 }
 
@@ -530,19 +563,13 @@ pub(crate) fn run_with_format(args: DevArgs, format: OutputFormat) -> Result<Exi
             )
         }
         Some(DevAction::Stop(stop)) => {
-            let project = stop
-                .project
-                .as_deref()
-                .or(stop.legacy_project.as_deref())
-                .unwrap_or_else(|| Path::new("."));
+            let project = stop.project.as_deref().unwrap_or_else(|| Path::new("."));
             stop_dev(project, format)
         }
-        Some(DevAction::Clean(clean)) => clean_dev(
-            clean.legacy_project.as_ref().unwrap_or(&clean.project),
-            format,
-        ),
+        Some(DevAction::Clean(clean)) => clean_dev(&clean.project, format),
         Some(DevAction::Token(token)) => fresh_token(&token.project, &token.client, format),
         Some(DevAction::Grant(args)) => approved_grant(args, format),
+        Some(DevAction::Check(args)) => Ok(check_platform_file(&args, format)),
         None => {
             if !args.detach {
                 return Err(DevRefusal {
@@ -598,6 +625,7 @@ fn action_name(action: &DevAction) -> &'static str {
         DevAction::Clean(_) => "clean",
         DevAction::Token(_) => "token",
         DevAction::Grant(_) => "grant",
+        DevAction::Check(_) => "check",
     }
 }
 
@@ -684,7 +712,8 @@ fn load_breg_issuer(project: &Path) -> Result<BorrowedIssuer> {
         .as_u64()
         .filter(|port| *port > 0 && *port <= u16::MAX as u64)
         .context("BREG issuer owner has no valid port")? as u16;
-    if state["version"] != 2
+    if state["apiVersion"] != BREG_DEV_STATE_API_VERSION
+        || state["kind"] != BREG_DEV_STATE_KIND
         || state["status"] != "ready"
         || state["project"] != project.to_string_lossy().as_ref()
         || !state["issuerProject"].is_null()
@@ -756,7 +785,7 @@ fn client_task_sources(
                 if !registration.requester_tags.contains(&policy.requester_tag) {
                     bail!("task grant requester is not assigned its access policy");
                 }
-                task_sources.insert(task.source_issuer.clone());
+                task_sources.insert(task.source_issuer.as_str().to_owned());
             }
         }
     }
@@ -897,7 +926,11 @@ fn verify_borrowed_registrations(
                         (source_issuers.clone(), "institutional_grant")
                     }
                     access::ActiveClientExchangeKind::FirstParty => (
-                        binding.source_issuer.iter().cloned().collect(),
+                        binding
+                            .source_issuer
+                            .iter()
+                            .map(|issuer| issuer.as_str().to_owned())
+                            .collect(),
                         "first_party",
                     ),
                 };
@@ -946,9 +979,61 @@ fn verify_borrowed_registrations(
     Ok(())
 }
 
+/// Check one platform file offline (CFG-CHECK-1): exit 0 when nothing was
+/// refused, 1 when something was or a warning was reported under
+/// `--deny-warnings`, and 3 when the file could not be read.
+fn check_platform_file(args: &CheckArgs, format: OutputFormat) -> ExitCode {
+    let checked = registry_thunderid_tooling::check::check_file(&args.file);
+    let report = &checked.report;
+    let exit = if checked.unreadable {
+        crate::report::OPERATIONAL_FAILURE_EXIT
+    } else if report.error_count() > 0 || (args.deny_warnings && report.warning_count() > 0) {
+        crate::report::DOMAIN_REFUSAL_EXIT
+    } else {
+        crate::report::SUCCESS_EXIT
+    };
+    match format {
+        OutputFormat::Json => {
+            let members = json!({
+                "filesChecked": report.files_checked().unwrap_or(0),
+                "errors": report.error_count(),
+                "warnings": report.warning_count(),
+                "diagnostics": report.to_json_value(),
+            });
+            crate::print_report(&match exit {
+                crate::report::SUCCESS_EXIT => {
+                    crate::report::success("dev check", "checked", members)
+                }
+                crate::report::DOMAIN_REFUSAL_EXIT => {
+                    crate::report::refused("dev check", "refused", members)
+                }
+                _ => {
+                    let mut failed = crate::report::failure("dev check", exit, Vec::new());
+                    for (key, value) in members.as_object().into_iter().flatten() {
+                        failed[key] = value.clone();
+                    }
+                    failed
+                }
+            });
+        }
+        OutputFormat::Human if exit == crate::report::SUCCESS_EXIT => {
+            print!("{}", report.render_human());
+        }
+        OutputFormat::Human => {
+            let sentence = if checked.unreadable {
+                "evidencectl dev check could not read the file."
+            } else {
+                "evidencectl dev check refused the file."
+            };
+            eprint!("{sentence}\n{}", report.render_human());
+        }
+    }
+    ExitCode::from(exit)
+}
+
 fn approved_grant(args: GrantArgs, format: OutputFormat) -> Result<ExitCode> {
     let project = fs::canonicalize(&args.project).context("the grant output project must exist")?;
-    let output = tokio::runtime::Builder::new_current_thread()
+    let acquired = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?
         .block_on(registry_thunderid_tooling::grant_file::acquire_to_header(
@@ -956,7 +1041,39 @@ fn approved_grant(args: GrantArgs, format: OutputFormat) -> Result<ExitCode> {
             &project.join(".evidence"),
             &args.client,
             &args.grant,
-        ))?;
+        ));
+    let output = match acquired {
+        Ok(output) => output,
+        Err(error) => {
+            let Some(found) = error.report() else {
+                return Err(error.into());
+            };
+            // An unopenable connection file is unavailable input; every
+            // other finding refuses the file's content or mode.
+            let exit = if found
+                .diagnostics()
+                .iter()
+                .any(|diagnostic| diagnostic.code == "platform.task-connection.unreadable")
+            {
+                crate::report::OPERATIONAL_FAILURE_EXIT
+            } else {
+                crate::report::DOMAIN_REFUSAL_EXIT
+            };
+            match format {
+                OutputFormat::Human => eprintln!("evidencectl: {error}"),
+                OutputFormat::Json => crate::print_report(&crate::report::failure(
+                    "dev grant",
+                    exit,
+                    found
+                        .to_json_value()
+                        .as_array()
+                        .cloned()
+                        .unwrap_or_default(),
+                )),
+            }
+            return Ok(ExitCode::from(exit));
+        }
+    };
     match format {
         OutputFormat::Human => println!(
             "Wrote approved task authorization header to {}",
@@ -1357,8 +1474,7 @@ fn valid_access_policy_state(
             .iter()
             .all(|question| question_aliases.contains(question.as_str()))
         && crate::authoring::access_policy_requester_tag_for(&AccessPolicy {
-            version: 1,
-            id: policy.id.clone(),
+            id: LocalId::new(policy.id.clone()).expect("a validated local identifier"),
             questions: policy.questions.clone(),
             task_grant: policy.task_grant.clone(),
         })
@@ -1466,8 +1582,12 @@ fn state_matches_sealed_bundle(
     if bytes.len() > 1024 * 1024 {
         return Ok(false);
     }
-    let bundle: Value =
-        serde_norway::from_slice(&bytes).context("the sealed local bundle is invalid")?;
+    // The bundle is this command's own generated output, read back through
+    // the shared YAML subset; its grammar is the runtime's to check.
+    let bundle = registry_platform_yaml::Reader::new("evidence.yaml")
+        .scan(&bytes)
+        .map(crate::authored::node_value)
+        .map_err(|_| anyhow!("the sealed local bundle is invalid"))?;
     let requirements = bundle
         .get("requirements")
         .and_then(Value::as_array)
@@ -1601,7 +1721,7 @@ fn authority_profile_matches(
     }
     if let Some(task) = task_grant {
         if profile["requesterClients"] != json!(task.requester_clients)
-            || profile["grantSourceIssuer"] != task.source_issuer
+            || profile["grantSourceIssuer"] != task.source_issuer.as_str()
         {
             return false;
         }
@@ -1908,7 +2028,9 @@ fn source_local_serving_cannot_bind(project: &Path) -> Option<String> {
         let Ok(bytes) = fs::read(&path) else {
             continue;
         };
-        let Ok(source) = serde_norway::from_slice::<Value>(&bytes) else {
+        let Ok(source) = registry_evidence_authoring::formats::scan_authored(source_id, &bytes)
+            .map(crate::authored::node_value)
+        else {
             continue;
         };
         if source.get("transport").and_then(Value::as_str) == Some("sqlite-extract") {
@@ -2434,7 +2556,8 @@ fn prepare_and_start(
     }
 
     let state = DevState {
-        schema: STATE_SCHEMA.to_owned(),
+        api_version: DEV_STATE_API_VERSION.to_owned(),
+        kind: DEV_STATE_KIND.to_owned(),
         status: DevStatus::Starting,
         project: project.to_path_buf(),
         runtime_path: compiled.runtime_path.clone(),
@@ -3366,12 +3489,21 @@ fn replace_private_file(path: &Path, bytes: &[u8]) -> Result<()> {
 
 fn read_state(path: &Path) -> Result<DevState> {
     let bytes = read_owner_file(path, MAX_STATE_BYTES)?;
-    let shape: Value = serde_json::from_slice(&bytes).context("local state is invalid")?;
-    if shape.get("schema").and_then(Value::as_str) != Some(STATE_SCHEMA) {
-        bail!("local state schema is unsupported");
-    }
-    let state: DevState = serde_json::from_slice(&bytes).context("local state is invalid")?;
-    Ok(state)
+    let decoded = Reader::new(path.display().to_string())
+        .decode::<DevState>(&bytes, &Expect::one(&DEV_STATE_FORMAT))
+        .map_err(|_| anyhow!(UNREADABLE_STATE))?;
+    Ok(decoded.value)
+}
+
+/// Check a retained session state file on its own: its envelope and shape,
+/// without the owner-only checks that guard the file a session reads.
+pub(crate) fn check_state_document(
+    file: &str,
+    bytes: &[u8],
+) -> Result<(), registry_platform_yaml::Report> {
+    Reader::new(file)
+        .decode::<DevState>(bytes, &Expect::one(&DEV_STATE_FORMAT))
+        .map(drop)
 }
 
 fn validate_control_socket(path: &Path) -> Result<()> {
@@ -3475,6 +3607,10 @@ fn ready_question(question: QuestionState) -> ReadyQuestionState {
 
 #[cfg(test)]
 mod tests {
+    #![allow(
+        clippy::disallowed_methods,
+        reason = "tests read back the YAML the code under test wrote, or a published contract or fixture, to assert on it; they read no operator configuration"
+    )]
     use super::*;
     use crate::authoring::CompiledProject;
 
@@ -3519,7 +3655,8 @@ mod tests {
     #[test]
     fn a_retained_state_without_a_name_prefix_is_invalid() {
         let state: serde_json::Value = serde_json::json!({
-            "schema": STATE_SCHEMA,
+            "apiVersion": DEV_STATE_API_VERSION,
+            "kind": DEV_STATE_KIND,
             "status": "stopped",
             "project": "/project",
             "runtimePath": "/project/.evidence/dev/runtime.yaml",
@@ -3542,13 +3679,23 @@ mod tests {
     }
 
     #[test]
-    fn a_retained_state_under_another_schema_is_unsupported() {
+    fn the_registered_example_is_a_readable_state() {
+        let example = include_bytes!(
+            "../../../products/evidence/examples/formats/dev-session/.evidence/dev/state.json"
+        );
+        Reader::new("state.json")
+            .decode::<DevState>(example, &Expect::one(&DEV_STATE_FORMAT))
+            .expect("the example reads");
+    }
+
+    #[test]
+    fn a_retained_state_in_another_shape_is_unreadable() {
         let root = tempfile::tempdir().expect("tempdir");
         let private = root.path().join("private");
         create_private_directory(&private).expect("private directory");
         for (index, retained) in [
-            serde_json::json!({"schema": "registry.evidencectl.dev-state/v5", "mintOrigin": "http://127.0.0.1:8081"}),
-            serde_json::json!({"schema": "registry.evidencectl.dev-state/v7"}),
+            serde_json::json!({"schema": "registry.evidencectl.dev-state/v6", "status": "stopped"}),
+            serde_json::json!({"apiVersion": "id.registrystack.org/formats/evidence/dev-state/v7", "kind": "EvidenceDevState"}),
             serde_json::json!({"mintOrigin": "http://127.0.0.1:8081"}),
         ]
         .into_iter()
@@ -3560,8 +3707,8 @@ mod tests {
                 .expect("retained state file")
                 .write_all(&bytes)
                 .expect("retained state");
-            let error = read_state(&path).expect_err("another schema is refused");
-            assert_eq!(error.to_string(), "local state schema is unsupported");
+            let error = read_state(&path).expect_err("another shape is refused");
+            assert_eq!(error.to_string(), UNREADABLE_STATE);
             assert_eq!(fs::read(&path).expect("retained state stays"), bytes);
         }
     }
@@ -3674,14 +3821,15 @@ mod tests {
         let question = QuestionState::from(&compiled(Path::new("/tmp/unused")).questions[0]);
         let task = AccessTaskGrant {
             kind: "delegated".to_owned(),
-            source_issuer: "https://casework.invalid".to_owned(),
+            source_issuer: registry_platform_yaml::Url::new("https://casework.invalid")
+                .expect("a URL"),
             requester_clients: vec!["task-agent".to_owned()],
             bindings: vec![registry_evidence_authoring::model::AccessTaskBinding {
                 question: "adult-status".to_owned(),
                 role: "person".to_owned(),
                 selector_profile: "local-subject-adult-status-v1".to_owned(),
                 value_claims: BTreeMap::from([(
-                    "person_id".to_owned(),
+                    LocalId::new("person_id").expect("a local id"),
                     "identity.person_reference".to_owned(),
                 )]),
             }],
@@ -3939,7 +4087,8 @@ requirements:
         .expect("seal package sum file");
         fs::set_permissions(&bundle, fs::Permissions::from_mode(0o500)).expect("seal bundle");
         let mut state = DevState {
-            schema: STATE_SCHEMA.to_owned(),
+            api_version: DEV_STATE_API_VERSION.to_owned(),
+            kind: DEV_STATE_KIND.to_owned(),
             status: DevStatus::Ready,
             project: project.clone(),
             runtime_path: runtime.clone(),
@@ -4462,7 +4611,9 @@ requirements:
             kind: access::ActiveClientExchangeKind::FirstParty,
             bootstrap_scope: "evidence:invoke".into(),
             bootstrap_resource: Some(LOCAL_ACCESS_TOKEN_AUDIENCE.into()),
-            source_issuer: Some("http://127.0.0.1:4494".into()),
+            source_issuer: Some(
+                registry_platform_yaml::Url::new("http://127.0.0.1:4494").expect("a URL"),
+            ),
         };
         let exchanges =
             BTreeMap::from([("evidence-client".to_owned(), (first_party, BTreeSet::new()))]);
@@ -4588,7 +4739,7 @@ requirements:
                 questions: vec!["lot-status".into()],
                 task_grant: Some(AccessTaskGrant {
                     kind: "institutional".into(),
-                    source_issuer: source.into(),
+                    source_issuer: registry_platform_yaml::Url::new(source).expect("a URL"),
                     requester_clients: vec!["assistant".into()],
                     bindings: Vec::new(),
                 }),
@@ -4605,7 +4756,7 @@ requirements:
             bootstrap_scope: "tasks:assert".into(),
             bootstrap_resource: None,
             source_issuer: (kind == access::ActiveClientExchangeKind::FirstParty)
-                .then(|| "http://127.0.0.1:4494".to_owned()),
+                .then(|| registry_platform_yaml::Url::new("http://127.0.0.1:4494").expect("a URL")),
         };
         let registration = |client: &str, tag: &str, binding| access::ActiveClientRegistration {
             client_id: client.into(),
@@ -4691,5 +4842,42 @@ requirements:
                     .to_string();
             assert_eq!(error, refusal, "{case}");
         }
+    }
+
+    /// The committed example `bregctl check` reads stands for the state a
+    /// current `bregctl dev` retains; the issuer owner it describes is
+    /// accepted, and the headerless state an earlier bregctl wrote is not.
+    #[test]
+    fn a_current_bregctl_dev_state_names_the_borrowed_issuer_owner() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let project = fs::canonicalize(root.path()).expect("canonical project");
+        let dev = project.join(".breg/dev");
+        for directory in [project.join(".breg"), dev.clone()] {
+            fs::create_dir(&directory).expect("private directory");
+            fs::set_permissions(&directory, fs::Permissions::from_mode(PRIVATE_DIR_MODE))
+                .expect("private directory mode");
+        }
+        let mut state: Value = serde_json::from_str(include_str!(
+            "../../../products/breg/examples/formats/dev-session/.breg/dev/state.json"
+        ))
+        .expect("example state");
+        state["project"] = json!(project);
+        let write = |state: &Value| {
+            let path = dev.join("state.json");
+            fs::write(&path, serde_json::to_vec(state).expect("state bytes")).expect("state");
+            fs::set_permissions(&path, fs::Permissions::from_mode(PRIVATE_FILE_MODE))
+                .expect("state mode");
+        };
+        write(&state);
+        let owner = load_breg_issuer(&project).expect("current owner state");
+        assert_eq!(owner.project, project);
+        assert_eq!(owner.owner, state["owner"].as_str().unwrap());
+        assert_eq!(u64::from(owner.port), state["issuerPort"].as_u64().unwrap());
+
+        let fields = state.as_object_mut().unwrap();
+        fields.remove("apiVersion").unwrap();
+        fields.remove("kind").unwrap();
+        write(&state);
+        assert!(load_breg_issuer(&project).is_err());
     }
 }

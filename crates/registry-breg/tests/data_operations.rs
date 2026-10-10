@@ -9,7 +9,8 @@ use registry_breg::contract::parse_project_json;
 use registry_breg::data::{
     execute_export_page, DataError, DataExportCheckpoint, DataExportOutputState, DataExportPlan,
     DataHttpResponse, DataImportCheckpoint, DataImportOperation, DataImportPlan,
-    MAX_DATA_EXPORT_PAGE_BYTES, MAX_DATA_HTTP_RESPONSE_BYTES,
+    EXPORT_CHECKPOINT_API_VERSION, EXPORT_CHECKPOINT_KIND, IMPORT_CHECKPOINT_API_VERSION,
+    IMPORT_CHECKPOINT_KIND, MAX_DATA_EXPORT_PAGE_BYTES, MAX_DATA_HTTP_RESPONSE_BYTES,
 };
 use registry_platform_canonical_json::{canonicalize_json, parse_json_strict};
 use serde_json::{json, Value};
@@ -19,6 +20,8 @@ const ENTITY: &str = "entity-canary-9f31";
 const PROFILE: &str = "operator-canary";
 const PACKAGE: &str = "package-revision-canary";
 const SCHEMA: &str = "schema-fingerprint-canary";
+const IMPORT_CHECKPOINT: &str = "records.checkpoint.json";
+const EXPORT_CHECKPOINT: &str = "export.checkpoint.json";
 const WIDE_REGISTRY: &str = "data-contract-wide";
 const WIDE_ENTITY: &str = "entity-wide-canary";
 const WIDE_DATASET: &str = "wide-dataset";
@@ -49,13 +52,14 @@ fn compiled(allow_data_export: bool) -> registry_breg::CompiledRegistry {
         "accessProfiles": [{
             "id": PROFILE,
             "principalClaim": "principal",
+            "requiredScopes": "unrestricted",
             "permissions": [{
                 "entity": ENTITY,
                 "operations": ["create", "patch", "batch", "list"],
                 "readableFields": ["code", "count", "readonly"],
                 "writableFields": ["code", "count"],
                 "allowDataExport": allow_data_export,
-              "rowBoundaries": []
+              "rowBoundaries": "unrestricted"
             }]
         }]
     });
@@ -109,13 +113,14 @@ fn wide_export_registry() -> registry_breg::CompiledRegistry {
         "accessProfiles": [{
             "id": PROFILE,
             "principalClaim": "principal",
+            "requiredScopes": "unrestricted",
             "permissions": [{
                 "entity": WIDE_ENTITY,
                 "operations": ["list"],
                 "readableFields": ["payload"],
                 "writableFields": [],
                 "allowDataExport": true,
-                "rowBoundaries": []
+                "rowBoundaries": "unrestricted"
             }]
         }]
     });
@@ -158,14 +163,14 @@ fn block_on<F: Future>(future: F) -> F::Output {
 }
 
 #[test]
-fn data_export_requires_explicit_nonanonymous_profile_permission() {
+fn data_export_requires_explicit_profile_permission() {
     let ordinary_list = compiled(false);
     assert_eq!(
         DataExportPlan::from_compiled(&ordinary_list, ENTITY, PROFILE, ["code"]),
         Err(DataError::InvalidBinding)
     );
 
-    let base = |anonymous: bool, operations: Value, readable: Value| {
+    let base = |operations: Value, readable: Value| {
         json!({
             "apiVersion": "registry.registrystack.org/v1alpha1",
             "kind": "RegistryProject",
@@ -176,10 +181,9 @@ fn data_export_requires_explicit_nonanonymous_profile_permission() {
                             "classification": "internal"}]
             }],
             "accessProfiles": [{
-                "id": PROFILE, "anonymous": anonymous,
-                "principalClaim": if anonymous { Value::Null } else { json!("principal") },
+                "id": PROFILE, "principalClaim": "principal", "requiredScopes": "unrestricted",
                 "permissions": [{
-                    "rowBoundaries": [], "entity": ENTITY,
+                    "rowBoundaries": "unrestricted", "entity": ENTITY,
                     "operations": operations, "readableFields": readable,
                     "allowDataExport": true
                 }]
@@ -187,14 +191,13 @@ fn data_export_requires_explicit_nonanonymous_profile_permission() {
         })
     };
     for invalid in [
-        base(true, json!(["list"]), json!(["code"])),
-        base(false, json!(["get"]), json!(["code"])),
-        base(false, json!(["list"]), json!([])),
+        base(json!(["get"]), json!(["code"])),
+        base(json!(["list"]), json!([])),
     ] {
         let diagnostics = compile_source(invalid).expect_err("invalid export authority is refused");
         assert!(diagnostics
             .iter()
-            .any(|code| code == "access_profile.data_export.invalid"));
+            .any(|code| code == "breg.access-profile.data-export-invalid"));
     }
 
     let explicit = compiled(true);
@@ -209,9 +212,9 @@ fn data_export_requires_explicit_nonanonymous_profile_permission() {
         "kind": "RegistryProject",
         "registry": {"id": "project-export", "version": "1", "defaultLanguage": "en", "canonicalBaseIri": "https://authoring.example.test"},
         "accessProfiles": [{
-            "id": "project-exporter", "principalClaim": "principal",
+            "id": "project-exporter", "principalClaim": "principal", "requiredScopes": "unrestricted",
             "permissions": [{"entity": ENTITY, "operations": ["list"],
-                        "readableFields": ["code"], "allowDataExport": true, "rowBoundaries": []}]
+                        "readableFields": ["code"], "allowDataExport": true, "rowBoundaries": "unrestricted"}]
         }],
         "entities": [{
             "id": ENTITY, "primaryDataset": "test-dataset", "route": "records", "mutationMode": "create_only",
@@ -341,10 +344,10 @@ fn data_validate_and_chunk_plan_reuse_runtime_rules_and_compiled_batch_bounds() 
                 "batch":{"maximumItems":2,"maximumBytes":100},
                 "fields":[{"id":"code","type":"text","maxLength":1000,"required":true,
                            "classification":"internal"}]}],
-            "accessProfiles":[{"id":PROFILE,"principalClaim":"principal","permissions":[{
+            "accessProfiles":[{"id":PROFILE,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
                     "entity":ENTITY,
                     "operations":["create","batch"],"readableFields":["code"],
-                    "writableFields":["code"], "rowBoundaries": []}]}]
+                    "writableFields":["code"], "rowBoundaries": "unrestricted"}]}]
         });
         compile_source(source).unwrap()
     };
@@ -392,13 +395,14 @@ fn data_lifecycle_uses_exact_compiled_api_names() {
         "accessProfiles": [{
             "id": PROFILE,
             "principalClaim": "principal",
+            "requiredScopes": "unrestricted",
             "permissions": [{
                 "entity": ENTITY,
                 "operations": ["create", "patch", "batch", "list"],
                 "readableFields": ["record-code"],
                 "writableFields": ["record-code"],
                 "allowDataExport": true,
-              "rowBoundaries": []
+              "rowBoundaries": "unrestricted"
             }]
         }]
     }))
@@ -491,7 +495,15 @@ fn data_import_checkpoint_and_idempotency_are_exact_and_value_free() {
     assert!(!checkpoint.is_complete());
     let canonical = checkpoint.canonical_json().unwrap();
     assert_eq!(canonical, checkpoint.canonical_json().unwrap());
-    DataImportCheckpoint::from_json(&canonical, &plan, PACKAGE, SCHEMA, &import_id).unwrap();
+    DataImportCheckpoint::from_json(
+        IMPORT_CHECKPOINT,
+        &canonical,
+        &plan,
+        PACKAGE,
+        SCHEMA,
+        &import_id,
+    )
+    .unwrap();
 
     for field in [
         "packageRevision",
@@ -518,8 +530,15 @@ fn data_import_checkpoint_and_idempotency_are_exact_and_value_free() {
             }
         };
         let bytes = canonicalize_json(&substituted).unwrap();
-        let error = DataImportCheckpoint::from_json(&bytes, &plan, PACKAGE, SCHEMA, &import_id)
-            .expect_err("every checkpoint binding is exact");
+        let error = DataImportCheckpoint::from_json(
+            IMPORT_CHECKPOINT,
+            &bytes,
+            &plan,
+            PACKAGE,
+            SCHEMA,
+            &import_id,
+        )
+        .expect_err("every checkpoint binding is exact");
         let rendered = format!("{error:?} {error}");
         assert!(!rendered.contains("SUBSTITUTED-CANARY"));
         assert!(!rendered.contains(PACKAGE));
@@ -527,15 +546,28 @@ fn data_import_checkpoint_and_idempotency_are_exact_and_value_free() {
     }
     let mut unknown = parse_json_strict(&canonical).unwrap();
     unknown["unknownCanary"] = json!(true);
+    let Err(DataError::CheckpointDocument(report)) = DataImportCheckpoint::from_json(
+        IMPORT_CHECKPOINT,
+        &canonicalize_json(&unknown).unwrap(),
+        &plan,
+        PACKAGE,
+        SCHEMA,
+        &import_id,
+    ) else {
+        panic!("an unknown checkpoint member is a document refusal");
+    };
+    let diagnostic = report
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.code == "config.unknown-key")
+        .expect("the unknown member is reported");
+    assert_eq!(diagnostic.path, "/unknownCanary");
     assert_eq!(
-        DataImportCheckpoint::from_json(
-            &canonicalize_json(&unknown).unwrap(),
-            &plan,
-            PACKAGE,
-            SCHEMA,
-            &import_id,
-        ),
-        Err(DataError::CheckpointMismatch)
+        diagnostic
+            .source
+            .as_ref()
+            .map(|source| source.file.as_str()),
+        Some(IMPORT_CHECKPOINT)
     );
     let debug = format!("{plan:?} {checkpoint:?}");
     for canary in [
@@ -562,8 +594,16 @@ fn data_export_checkpoint_refuses_package_profile_projection_or_prefix_substitut
     assert_eq!(checkpoint.record_count(), 0);
     assert!(!checkpoint.is_complete());
     let canonical = checkpoint.canonical_json().unwrap();
-    DataExportCheckpoint::from_json(&canonical, &plan, PACKAGE, SCHEMA, &[], &resume_state)
-        .unwrap();
+    DataExportCheckpoint::from_json(
+        EXPORT_CHECKPOINT,
+        &canonical,
+        &plan,
+        PACKAGE,
+        SCHEMA,
+        &[],
+        &resume_state,
+    )
+    .unwrap();
 
     assert_eq!(
         checkpoint.validate_resume(&plan, "other-package", SCHEMA, &[], &resume_state,),
@@ -593,9 +633,16 @@ fn data_export_checkpoint_refuses_package_profile_projection_or_prefix_substitut
         let mut substituted = parse_json_strict(&canonical).unwrap();
         substituted[field] = replacement;
         let bytes = canonicalize_json(&substituted).unwrap();
-        let error =
-            DataExportCheckpoint::from_json(&bytes, &plan, PACKAGE, SCHEMA, &[], &resume_state)
-                .expect_err("export resume substitution is refused");
+        let error = DataExportCheckpoint::from_json(
+            EXPORT_CHECKPOINT,
+            &bytes,
+            &plan,
+            PACKAGE,
+            SCHEMA,
+            &[],
+            &resume_state,
+        )
+        .expect_err("export resume substitution is refused");
         let rendered = format!("{error:?} {error}");
         for canary in [
             PACKAGE,
@@ -612,10 +659,10 @@ fn data_export_checkpoint_refuses_package_profile_projection_or_prefix_substitut
     forged_terminal["outputPrefixDigest"] = json!(sha256_hex(first_prefix));
     forged_terminal["recordCount"] = json!(1);
     forged_terminal["completedPageCount"] = json!(1);
-    forged_terminal["nextCursor"] = Value::Null;
     forged_terminal["complete"] = json!(true);
     assert_eq!(
         DataExportCheckpoint::from_json(
+            EXPORT_CHECKPOINT,
             &canonicalize_json(&forged_terminal).unwrap(),
             &plan,
             PACKAGE,
@@ -630,6 +677,167 @@ fn data_export_checkpoint_refuses_package_profile_projection_or_prefix_substitut
     for canary in [ENTITY, PROFILE, PACKAGE, SCHEMA, "OUTPUT-ROW-CANARY"] {
         assert!(!debug.contains(canary), "Debug leaked canary {canary}");
     }
+}
+
+/// The header an earlier `bregctl` wrote into a checkpoint.
+const EARLIER_CHECKPOINT_API_VERSION: &str = "registry.registrystack.org/v1alpha1";
+
+fn checkpoint_refusal_codes(error: DataError, file: &str) -> Vec<(String, String)> {
+    let DataError::CheckpointDocument(report) = error else {
+        panic!("a checkpoint header refusal is a document refusal, got {error:?}");
+    };
+    report
+        .diagnostics()
+        .iter()
+        .map(|diagnostic| {
+            assert_eq!(
+                diagnostic
+                    .source
+                    .as_ref()
+                    .map(|source| source.file.as_str()),
+                Some(file),
+                "every diagnostic names the checkpoint file as given"
+            );
+            (diagnostic.code.clone(), diagnostic.suggested_action.clone())
+        })
+        .collect()
+}
+
+#[test]
+fn checkpoints_carry_their_header_and_refuse_the_one_an_earlier_bregctl_wrote() {
+    let registry = compiled(true);
+    let import_plan = DataImportPlan::from_jsonl(
+        &registry,
+        ENTITY,
+        DataImportOperation::Create,
+        PROFILE,
+        format!("{}\n", create_line("ROW-CANARY-A", 1)).as_bytes(),
+    )
+    .unwrap();
+    let import = DataImportCheckpoint::start(&import_plan, PACKAGE, SCHEMA).unwrap();
+    let import_canonical = import.canonical_json().unwrap();
+    let import_json = parse_json_strict(&import_canonical).unwrap();
+    assert_eq!(import_json["apiVersion"], IMPORT_CHECKPOINT_API_VERSION);
+    assert_eq!(import_json["kind"], IMPORT_CHECKPOINT_KIND);
+    let read = DataImportCheckpoint::read(IMPORT_CHECKPOINT, &import_canonical).unwrap();
+    assert_eq!(read.canonical_json().unwrap(), import_canonical);
+
+    let export_plan =
+        DataExportPlan::from_compiled(&registry, ENTITY, PROFILE, ["readonly", "code"]).unwrap();
+    let (export, _) = DataExportCheckpoint::start(&export_plan, PACKAGE, SCHEMA).unwrap();
+    let export_canonical = export.canonical_json().unwrap();
+    let export_json = parse_json_strict(&export_canonical).unwrap();
+    assert_eq!(export_json["apiVersion"], EXPORT_CHECKPOINT_API_VERSION);
+    assert_eq!(export_json["kind"], EXPORT_CHECKPOINT_KIND);
+    assert!(
+        export_json.get("nextCursor").is_none(),
+        "a checkpoint without a cursor leaves the member out"
+    );
+    let read = DataExportCheckpoint::read(EXPORT_CHECKPOINT, &export_canonical).unwrap();
+    assert_eq!(read.canonical_json().unwrap(), export_canonical);
+
+    for (current, file, earlier_kind, current_kind, fix) in [
+        (
+            &import_json,
+            IMPORT_CHECKPOINT,
+            "RegistryDataImportCheckpoint",
+            IMPORT_CHECKPOINT_KIND,
+            "Finish this import with the bregctl that wrote the checkpoint",
+        ),
+        (
+            &export_json,
+            EXPORT_CHECKPOINT,
+            "RegistryDataExportCheckpoint",
+            EXPORT_CHECKPOINT_KIND,
+            "Finish this export with the bregctl that wrote the checkpoint",
+        ),
+    ] {
+        let read = |document: &Value| {
+            let bytes = canonicalize_json(document).unwrap();
+            if file == IMPORT_CHECKPOINT {
+                DataImportCheckpoint::read(file, &bytes).map(|_| ())
+            } else {
+                DataExportCheckpoint::read(file, &bytes).map(|_| ())
+            }
+        };
+
+        let mut earlier = current.clone();
+        earlier["apiVersion"] = json!(EARLIER_CHECKPOINT_API_VERSION);
+        earlier["kind"] = json!(earlier_kind);
+        let codes = checkpoint_refusal_codes(read(&earlier).unwrap_err(), file);
+        assert!(
+            codes.iter().any(|(code, _)| code == "config.wrong-kind"),
+            "{codes:?}"
+        );
+
+        let mut retired = current.clone();
+        retired["apiVersion"] = json!(EARLIER_CHECKPOINT_API_VERSION);
+        retired["kind"] = json!(current_kind);
+        let codes = checkpoint_refusal_codes(read(&retired).unwrap_err(), file);
+        assert!(
+            codes
+                .iter()
+                .any(|(code, action)| code == "config.retired-api-version" && action.contains(fix)),
+            "{codes:?}"
+        );
+    }
+}
+
+#[test]
+fn checkpoint_counts_are_refused_outside_their_bounds() {
+    let registry = compiled(true);
+    let import_plan = DataImportPlan::from_jsonl(
+        &registry,
+        ENTITY,
+        DataImportOperation::Create,
+        PROFILE,
+        format!("{}\n", create_line("ROW-CANARY-A", 1)).as_bytes(),
+    )
+    .unwrap();
+    let import = DataImportCheckpoint::start(&import_plan, PACKAGE, SCHEMA).unwrap();
+    let import_json = parse_json_strict(&import.canonical_json().unwrap()).unwrap();
+    for (member, value) in [
+        ("maximumItems", json!(0)),
+        ("maximumItems", json!(101)),
+        ("maximumBytes", json!(0)),
+        ("itemCount", json!(1_000_001)),
+        ("nextByteOffset", json!(256 * 1024 * 1024 + 1)),
+    ] {
+        let mut changed = import_json.clone();
+        changed[member] = value;
+        let bytes = canonicalize_json(&changed).unwrap();
+        let Err(DataError::CheckpointDocument(report)) =
+            DataImportCheckpoint::read(IMPORT_CHECKPOINT, &bytes)
+        else {
+            panic!("{member} outside its bounds is refused by the reader");
+        };
+        let found: Vec<_> = report
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| (diagnostic.code.clone(), diagnostic.path.clone()))
+            .collect();
+        assert_eq!(
+            found,
+            [("config.out-of-range".to_owned(), format!("/{member}"))],
+            "{member}"
+        );
+    }
+}
+
+#[test]
+fn the_registered_checkpoint_examples_read() {
+    let examples = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../products/breg/examples/formats");
+    let bytes = std::fs::read(examples.join("import.checkpoint.json"))
+        .expect("the import checkpoint example reads");
+    let checkpoint = DataImportCheckpoint::read("import.checkpoint.json", &bytes)
+        .expect("the import checkpoint example is accepted");
+    assert_eq!(checkpoint.canonical_json().unwrap(), bytes);
+    let bytes = std::fs::read(examples.join("export.checkpoint.json"))
+        .expect("the export checkpoint example reads");
+    let checkpoint = DataExportCheckpoint::read("export.checkpoint.json", &bytes)
+        .expect("the export checkpoint example is accepted");
+    assert_eq!(checkpoint.canonical_json().unwrap(), bytes);
 }
 
 /// `bregctl` resumes an interrupted export by discarding at most one page of

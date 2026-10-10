@@ -24,6 +24,13 @@ postgres-test = [
     "registry-breg/runtime",
     "registry-breg/tooling",
 ]
+# Derives the runtime configuration JSON Schema the generator below writes.
+schema = [
+    "dep:schemars",
+    "registry-platform-audit/schema",
+    "registry-platform-config/schema",
+    "registry-platform-yaml/schema",
+]
 
 [[test]]
 name = "postgres_gateway"
@@ -37,6 +44,13 @@ required-features = ["postgres-test"]
 name = "citizen_local_run"
 path = "examples/citizen_local_run.rs"
 required-features = ["postgres-test"]
+
+# Writes the runtime configuration JSON Schema committed under
+# products/breg/generated/mcp-runtime.
+[[example]]
+name = "mcp-runtime-schema"
+path = "examples/mcp-runtime-schema.rs"
+required-features = ["schema"]
 
 [dependencies]
 async-trait.workspace = true
@@ -55,7 +69,9 @@ registry-platform-httpsec = { workspace = true, features = ["server"] }
 registry-platform-httputil.workspace = true
 registry-platform-oidc.workspace = true
 registry-platform-ratelimit.workspace = true
+registry-platform-yaml.workspace = true
 rmcp = { workspace = true, features = ["server", "transport-streamable-http-server"] }
+schemars = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
@@ -69,6 +85,7 @@ zeroize.workspace = true
 
 [dev-dependencies]
 base64.workspace = true
+jsonschema.workspace = true
 registry-breg.workspace = true
 # The composed journey test serves the citizen review page beside the gateway;
 # the gateway itself never links the page.

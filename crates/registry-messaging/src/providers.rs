@@ -24,8 +24,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use registry_messaging_core::{
-    CallbackBodyEncoding, CallbackVerifierConfig, ResolvedCallbackVerifier, SenderProfile,
-    UncertainPolicy,
+    CallbackBodyEncoding, ResolvedCallbackVerifier, SenderProfile, UncertainPolicy,
 };
 use registry_platform_config::{ProtectedSecret, SecretResolver};
 use registry_platform_dispatch::SendOutcome;
@@ -33,7 +32,7 @@ use thiserror::Error;
 
 use crate::config::{describe_secret_failure, ProviderConnection, RuntimeConfig, TlsTermination};
 use crate::dispatch::{MessageTransport, OutboundMessage, Transports, MINIMUM_ATTEMPT_TIMEOUT};
-use crate::http_provider::{HttpProvider, HttpProviderMessage};
+use crate::http_provider::{CallbackVerifierConfig, HttpProvider, HttpProviderMessage};
 use crate::package::LoadedPackage;
 use crate::smtp::{SmtpMessage, SmtpProvider};
 
@@ -73,7 +72,7 @@ pub fn activate_providers(
             reason,
         };
         let transport: Arc<dyn MessageTransport> = match connection {
-            ProviderConnection::Smtp(settings) => Arc::new(SmtpTransport(
+            ProviderConnection::Smtp { settings } => Arc::new(SmtpTransport(
                 settings
                     .activate(
                         secrets,
@@ -81,7 +80,7 @@ pub fn activate_providers(
                     )
                     .map_err(|error| refused(error.to_string()))?,
             )),
-            ProviderConnection::Http(settings) => {
+            ProviderConnection::Http { settings } => {
                 let source = loaded.providers.get(id).ok_or_else(|| {
                     refused("the package ships no providers/<id>/provider.yaml".to_owned())
                 })?;

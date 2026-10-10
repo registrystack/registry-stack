@@ -1,0 +1,6 @@
+apiVersion: id.registrystack.org/formats/fuzz/runtime/v1
+kind: FuzzRuntimeConfig
+base: &base
+  port: 1
+other: *base
+star: *

@@ -249,7 +249,7 @@ accessProfiles:
           - licence-status
           - valid-from
           - valid-to
-        rowBoundaries: []
+        rowBoundaries: unrestricted
   - id: editor
     default: true
     principalClaim: registry_principal
@@ -275,7 +275,7 @@ accessProfiles:
           - valid-to
           - licensed-activities
           - authorization-conditions
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         revisionAccess: true
         writableFields:
           - local-identifier
@@ -312,7 +312,7 @@ accessProfiles:
           - reason
           - supporting-reference
         requestVisibility: owner
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         readableRequestFields:
           - reason
           - review_state
@@ -340,7 +340,7 @@ accessProfiles:
           - valid-to
           - licensed-activities
           - authorization-conditions
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         revisionAccess: true
         filterableFields:
           - local-identifier
@@ -357,10 +357,10 @@ accessProfiles:
           - supporting-reference
         filterableFields:
           - record
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         applyTargets:
           - entity: professional-license
-            rowBoundaries: []
+            rowBoundaries: unrestricted
         readableRequestFields:
           - reason
           - review_state
@@ -419,7 +419,7 @@ accessProfiles:
           - reason
           - supporting-reference
         requestVisibility: owner
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         submitterTargets:
           - professional-license
         readableRequestFields:

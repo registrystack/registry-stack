@@ -1,0 +1,16 @@
+id: substitution-fallback-in-integer
+rules: [CFG-SEC-2, CFG-VAL-3]
+summary: A substitution expression with a numeric fallback in an integer member is refused all the same.
+appliesTo:
+  audiences: [operator]
+mutation:
+  member:
+    role: integer
+    value: '"${REGISTRY_CONFORMANCE_UNSET:-7}"'
+expect:
+  exit: 1
+  diagnostics:
+    - code: config.expected-integer
+      path: "{pointer}"
+      at: {line: 1, column: 1}
+      suggestedAction: Write the value, or template the whole file.

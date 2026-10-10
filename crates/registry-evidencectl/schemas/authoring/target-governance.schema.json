@@ -1,0 +1,73 @@
+{
+  "$id": "https://id.registrystack.org/schemas/evidence/target-governance/target-governance.v1alpha1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "A deployment target's governance, decoded by the shared reader. Its\nmembers are carried into the bundle as written, where the runtime's own\nbundle check holds each one to its closed shape; the format version is the\ndocument's `apiVersion`.",
+  "properties": {
+    "apiVersion": {
+      "const": "id.registrystack.org/formats/evidence/target-governance/v1alpha1",
+      "type": "string"
+    },
+    "assuranceProfile": {
+      "enum": [
+        "local",
+        "production",
+        "evidence-grade"
+      ],
+      "type": "string"
+    },
+    "audit": {
+      "x-registry-passthrough": "A member of the Evidence bundle grammar; `evidencectl check` validates it against bundle.schema.yaml after the compile."
+    },
+    "authentication": {
+      "x-registry-passthrough": "A member of the Evidence bundle grammar; `evidencectl check` validates it against bundle.schema.yaml after the compile."
+    },
+    "authorityProfiles": {
+      "x-registry-passthrough": "A member of the Evidence bundle grammar; `evidencectl check` validates it against bundle.schema.yaml after the compile."
+    },
+    "issuer": {
+      "type": "object",
+      "x-registry-passthrough": "A member of the Evidence bundle grammar; `evidencectl check` validates it against bundle.schema.yaml after the compile."
+    },
+    "kind": {
+      "const": "EvidenceTargetGovernance",
+      "type": "string"
+    },
+    "publication": {
+      "x-registry-passthrough": "A member of the Evidence bundle grammar; `evidencectl check` validates it against bundle.schema.yaml after the compile."
+    },
+    "rateLimits": {
+      "x-registry-passthrough": "A member of the Evidence bundle grammar; `evidencectl check` validates it against bundle.schema.yaml after the compile."
+    },
+    "responseFormats": {
+      "x-registry-passthrough": "A member of the Evidence bundle grammar; `evidencectl check` validates it against bundle.schema.yaml after the compile."
+    },
+    "service": {
+      "x-registry-passthrough": "A member of the Evidence bundle grammar; `evidencectl check` validates it against bundle.schema.yaml after the compile."
+    },
+    "signing": {
+      "x-registry-passthrough": "A member of the Evidence bundle grammar; `evidencectl check` validates it against bundle.schema.yaml after the compile."
+    },
+    "sourceConnections": {
+      "x-registry-passthrough": "A member of the Evidence bundle grammar; `evidencectl check` validates it against bundle.schema.yaml after the compile."
+    },
+    "subjectBinding": {
+      "x-registry-passthrough": "A member of the Evidence bundle grammar; `evidencectl check` validates it against bundle.schema.yaml after the compile."
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind",
+    "assuranceProfile",
+    "service",
+    "issuer",
+    "authentication",
+    "audit",
+    "subjectBinding",
+    "rateLimits",
+    "signing",
+    "authorityProfiles"
+  ],
+  "title": "Evidence deployment target governance",
+  "type": "object"
+}

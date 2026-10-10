@@ -1,15 +1,16 @@
-apiVersion: registry.registrystack.org/breg-journeys/v1
+apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
 journeys:
   - id: registrar-and-public-register
     steps:
       - id: create-legal-entity
         entity: legal-entity
         accessProfile: business-registrar
-        claims: &business_registrar_claims
+        claims:
           principal: synthetic-business-registrar
           purpose: business-registry
         request:
-          operation: create
+          type: create
           data:
             jurisdiction-code: ZZ
             registration-number: BUSINESS-SYNTH-001
@@ -32,9 +33,13 @@ journeys:
       - id: public-register-gets-business
         entity: legal-entity
         accessProfile: public-register
+        claims:
+          principal: synthetic-public-reader
+          purpose: public-register
+          scopes: [business:public.read]
         request:
-          operation: get
-          recordRef: first-business
+          type: get
+          recordCapture: first-business
         expect:
           outcome: success
           status: 200
@@ -47,8 +52,12 @@ journeys:
       - id: public-register-lists-businesses
         entity: legal-entity
         accessProfile: public-register
+        claims:
+          principal: synthetic-public-reader
+          purpose: public-register
+          scopes: [business:public.read]
         request:
-          operation: list
+          type: list
         expect:
           outcome: success
           status: 200
@@ -56,11 +65,13 @@ journeys:
       - id: registrar-suspends-business
         entity: legal-entity
         accessProfile: business-registrar
-        claims: *business_registrar_claims
+        claims:
+          principal: synthetic-business-registrar
+          purpose: business-registry
         request:
-          operation: patch
-          recordRef: first-business
-          etagRef: first-business
+          type: patch
+          recordCapture: first-business
+          etagCapture: first-business
           changes:
             - field: entity-status
               value: suspended
@@ -75,9 +86,13 @@ journeys:
       - id: public-register-sees-new-status
         entity: legal-entity
         accessProfile: public-register
+        claims:
+          principal: synthetic-public-reader
+          purpose: public-register
+          scopes: [business:public.read]
         request:
-          operation: get
-          recordRef: suspended-business
+          type: get
+          recordCapture: suspended-business
         expect:
           outcome: success
           status: 200
@@ -91,8 +106,8 @@ journeys:
         claims:
           principal: synthetic-business-registrar
         request:
-          operation: get
-          recordRef: suspended-business
+          type: get
+          recordCapture: suspended-business
         expect:
           outcome: refusal
           status: 404

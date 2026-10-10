@@ -106,7 +106,7 @@ mod tests {
         assert_eq!(files.len(), 4);
         assert!(files.contains(&ProjectFile {
             path: "evidence-project.yaml".to_owned(),
-            contents: "version: 1\nproject: evidence-authoring\n".to_owned(),
+            contents: crate::marker::default_project_marker_document().to_owned(),
         }));
         assert!(files.contains(&ProjectFile {
             path: "source.openapi.yaml".to_owned(),

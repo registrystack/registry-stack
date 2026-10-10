@@ -1,0 +1,18 @@
+id: duplicate-key
+rules: [CFG-YAML-1, CFG-YAML-2, CFG-CHECK-2, CFG-CHECK-3, CFG-DIAG-1, CFG-DIAG-2, CFG-DIAG-3]
+summary: A key defined twice in one mapping is refused at the second definition, naming the first, in JSON and in the position-first human output.
+mutation:
+  append: |
+    conformanceDuplicate: first
+    conformanceDuplicate: second
+expect:
+  exit: 1
+  diagnostics:
+    - code: yaml.duplicate-key
+      path: /conformanceDuplicate
+      at: {line: 2, column: 1}
+      suggestedAction: Keep one definition of the key.
+      related:
+        - path: /conformanceDuplicate
+          at: {line: 1, column: 1}
+human: true

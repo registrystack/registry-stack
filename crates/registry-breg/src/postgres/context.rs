@@ -319,7 +319,7 @@ impl ClaimContext {
             .as_deref()
             .map(validate_required_context_value)
             .transpose()?;
-        if !profile.anonymous && principal.is_none() {
+        if principal.is_none() {
             return Err(invalid_context());
         }
         if !profile.required_purposes.is_empty()
@@ -3501,11 +3501,11 @@ mod tests {
                 }
               ],
               "accessProfiles":[{
-                "id":"typed","default":true,"principalClaim":"registry_principal",
+                "id":"typed","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
                 "permissions":[
                   {
                     "entity":"parent-entry","operations":["get"],"readableFields":["name"],
-                    "rowBoundaries": []
+                    "rowBoundaries": "unrestricted"
                   },
                   {
                     "entity":"typed-entry","operations":["get"],
@@ -3609,13 +3609,12 @@ mod tests {
                 ProjectAccessProfileSource {
                     id: "operator".to_owned(),
                     default: true,
-                    anonymous: false,
                     actor_kind: None,
-                    requester_clients: BTreeSet::new(),
+                    requester_clients: Default::default(),
                     task_grant: None,
                     principal_claim: Some("registry_principal".to_owned()),
-                    required_scopes: BTreeSet::new(),
-                    required_purposes: BTreeSet::from(["operations".to_owned()]),
+                    required_scopes: Default::default(),
+                    required_purposes: ["operations".to_owned()].into(),
                     permissions: vec![AccessPermissionSource {
                         membership_boundaries: Vec::new(),
                         require_consent: Vec::new(),
@@ -3657,17 +3656,17 @@ mod tests {
                         results: BTreeSet::new(),
                         allow_count: false,
                     }],
+                    dataset_permissions: Vec::new(),
                 },
                 ProjectAccessProfileSource {
                     id: "viewer".to_owned(),
                     default: false,
-                    anonymous: false,
                     actor_kind: None,
-                    requester_clients: BTreeSet::new(),
+                    requester_clients: Default::default(),
                     task_grant: None,
                     principal_claim: Some("registry_principal".to_owned()),
-                    required_scopes: BTreeSet::new(),
-                    required_purposes: BTreeSet::new(),
+                    required_scopes: Default::default(),
+                    required_purposes: Default::default(),
                     permissions: vec![AccessPermissionSource {
                         membership_boundaries: Vec::new(),
                         require_consent: Vec::new(),
@@ -3702,6 +3701,7 @@ mod tests {
                         results: BTreeSet::new(),
                         allow_count: false,
                     }],
+                    dataset_permissions: Vec::new(),
                 },
             ],
             vocabularies: Vec::new(),
@@ -3743,6 +3743,7 @@ mod tests {
                 "id":"contact-registrar",
                 "default":true,
                 "principalClaim":"registry_principal",
+                "requiredScopes":"unrestricted",
                 "requiredPurposes":["contact-registration"],
                 "permissions":[{
                   "action":"rename-household-local",
@@ -3801,36 +3802,36 @@ mod tests {
               ],
               "accessProfiles":[
                 {
-                  "id":"steward","default":true,"principalClaim":"registry_principal",
+                  "id":"steward","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
                   "permissions":[{
                     "entity":"asset-placement",
                     "operations":["get","list"],
                     "readableFields":["tenant","site"],
                     "requestPresence":[{"requestType":"placement-correction-request","rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]}],
-                    "rowBoundaries": []
+                    "rowBoundaries": "unrestricted"
                   }]
                 },
                 {
-                  "id":"submitter","default":true,"principalClaim":"registry_principal",
+                  "id":"submitter","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
                   "permissions":[{
                     "entity":"placement-correction-request",
                     "operations":["create","get","list","patch","submit_request","revise_request"],
                     "readableFields":["placement","proposed-site","reason"],
                     "writableFields":["placement","proposed-site","reason"],
-                    "rowBoundaries": []
+                    "rowBoundaries": "unrestricted"
                   }]
                 },
                 {
-                  "id":"reviewer","principalClaim":"registry_principal","requiredPurposes":["review"],
+                  "id":"reviewer","principalClaim":"registry_principal","requiredScopes":"unrestricted","requiredPurposes":["review"],
                   "permissions":[{
                     "entity":"placement-correction-request",
                     "operations":["get","list"],
                     "readableFields":["placement","proposed-site","reason"],
-                    "rowBoundaries": []
+                    "rowBoundaries": "unrestricted"
                   }]
                 },
                 {
-                  "id":"applier","principalClaim":"registry_principal","requiredPurposes":["apply"],
+                  "id":"applier","principalClaim":"registry_principal","requiredScopes":"unrestricted","requiredPurposes":["apply"],
                   "permissions":[{
                     "entity":"placement-correction-request",
                     "operations":["get","apply_request"],
@@ -3839,7 +3840,7 @@ mod tests {
                       "entity":"asset-placement",
                       "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]
                     }],
-                    "rowBoundaries": []
+                    "rowBoundaries": "unrestricted"
                   }]
                 }
               ]

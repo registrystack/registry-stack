@@ -1,3 +1,6 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/scheduling/records/records.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/scheduling/records/v1alpha1
+kind: SchedulingRecords
 locations:
   - id: bangkok-counter
     timezone: Asia/Bangkok
@@ -7,17 +10,13 @@ pools:
   - id: update-stations
     members:
       - resourceId: station-1
-        capabilities: []
         available: true
       - resourceId: station-2
-        capabilities: []
         available: true
   - id: hall-stations
     members:
       - resourceId: hall-station-1
-        capabilities: []
         available: true
-windows: []
 exceptions:
   - id: hall-prep
     location: new-york-hall

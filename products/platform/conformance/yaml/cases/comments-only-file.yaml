@@ -1,0 +1,14 @@
+id: comments-only-file
+rules: [CFG-ENV-4, CFG-YAML-7]
+summary: A file holding only comments is refused as a missing envelope at its start.
+appliesTo:
+  envelope: true
+mutation:
+  replace: |
+    # Only a comment.
+expect:
+  exit: 1
+  diagnostics:
+    - code: config.missing-envelope
+      path: ""
+      at: {line: 1, column: 1}

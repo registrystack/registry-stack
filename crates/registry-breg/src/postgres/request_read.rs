@@ -1401,10 +1401,9 @@ fn may_disclose_application_reason(entity: &CompiledEntity, request: &RecordRead
         .access_profiles
         .get(request.context.selected_profile())
         .is_some_and(|profile| {
-            !profile.anonymous
-                && profile
-                    .readable_request_fields
-                    .contains(&RequestMetadataFieldSource::Reason)
+            profile
+                .readable_request_fields
+                .contains(&RequestMetadataFieldSource::Reason)
         })
 }
 
@@ -1413,10 +1412,9 @@ fn may_disclose_review_state(entity: &CompiledEntity, request: &RecordReadReques
         .access_profiles
         .get(request.context.selected_profile())
         .is_some_and(|profile| {
-            !profile.anonymous
-                && profile
-                    .readable_request_fields
-                    .contains(&RequestMetadataFieldSource::ReviewState)
+            profile
+                .readable_request_fields
+                .contains(&RequestMetadataFieldSource::ReviewState)
         })
 }
 
@@ -1425,18 +1423,16 @@ fn may_disclose_actor_references(entity: &CompiledEntity, request: &RecordReadRe
         .access_profiles
         .get(request.context.selected_profile())
         .is_some_and(|profile| {
-            !profile.anonymous
-                && profile
-                    .readable_request_fields
-                    .contains(&RequestMetadataFieldSource::ActorReference)
+            profile
+                .readable_request_fields
+                .contains(&RequestMetadataFieldSource::ActorReference)
         })
 }
 
 fn may_disclose_effect_digests(entity: &CompiledEntity, request: &RecordReadRequest) -> bool {
     entity
         .access_profiles
-        .get(request.context.selected_profile())
-        .is_some_and(|profile| !profile.anonymous)
+        .contains_key(request.context.selected_profile())
 }
 
 fn selected_profile_allows_draft_patch(
@@ -1821,19 +1817,19 @@ mod tests {
                 "fields":[{"id":"label","type":"string","maxLength":64,"classification":"internal"}]
               }],
               "accessProfiles":[{
-                "id":"reader","principalClaim":"principal","permissions":[{
+                "id":"reader","principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
                   "entity":"request","operations":["get"],"readableFields":["label"],
-                  "rowBoundaries": []
+                  "rowBoundaries": "unrestricted"
                 }]
               },{
-                "id":"empty-editor","principalClaim":"principal","permissions":[{
+                "id":"empty-editor","principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
                   "entity":"request","operations":["get","patch"],"readableFields":["label"],
-                  "rowBoundaries": []
+                  "rowBoundaries": "unrestricted"
                 }]
               },{
-                "id":"editor","default":true,"principalClaim":"principal","permissions":[{
+                "id":"editor","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
                   "entity":"request","operations":["get","patch"],"readableFields":["label"],"writableFields":["label"],
-                  "rowBoundaries": []
+                  "rowBoundaries": "unrestricted"
                 }]
               }]
             }"#,
@@ -1997,24 +1993,6 @@ mod tests {
         assert!(!may_disclose_application_reason(&entity, &request));
         assert!(!may_disclose_actor_references(&entity, &request));
         assert!(!may_disclose_review_state(&entity, &request));
-        entity
-            .access_profiles
-            .get_mut("correction-submitter")
-            .expect("profile")
-            .readable_request_fields
-            .extend([
-                crate::contract::RequestMetadataFieldSource::Reason,
-                crate::contract::RequestMetadataFieldSource::ActorReference,
-                crate::contract::RequestMetadataFieldSource::ReviewState,
-            ]);
-        entity
-            .access_profiles
-            .get_mut("correction-submitter")
-            .expect("profile")
-            .anonymous = true;
-        assert!(!may_disclose_application_reason(&entity, &request));
-        assert!(!may_disclose_actor_references(&entity, &request));
-        assert!(!may_disclose_review_state(&entity, &request));
         assert!(!may_disclose_application_reason(
             &entity,
             &request_for_profile("missing")
@@ -2055,7 +2033,7 @@ mod tests {
     }
 
     #[test]
-    fn retained_history_withholds_effect_digest_for_anonymous_claims() {
+    fn retained_history_withholds_effect_digest_when_disclosure_is_not_granted() {
         let value = retained_history_value(
             RetainedRequestProposal {
                 request_entity_id: "request".to_owned(),
@@ -2159,7 +2137,7 @@ mod tests {
     }
 
     #[test]
-    fn erased_terminal_metadata_withholds_effect_digest_for_anonymous_claims() {
+    fn erased_terminal_metadata_withholds_effect_digest_when_disclosure_is_not_granted() {
         let value = erased_terminal_request_metadata(
             &crate::request_store::RequestWorkflowHeader {
                 owner_reference: "owner-ref".to_owned(),

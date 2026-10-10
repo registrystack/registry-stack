@@ -8,46 +8,70 @@ owns and validates the rest of its configuration contract.
 ## Loader
 
 `RuntimeConfigLoader` reads one runtime configuration file named by an
-absolute path. It refuses:
+absolute path, through the shared configuration reader in
+`registry-platform-yaml`. It refuses:
 
 - a relative path, or one with `.` or `..` components;
 - a symbolic link in any path component;
-- anything but a regular file, an empty file, or one over the size bound
-  (1 MiB unless the product sets another);
-- text that is not UTF-8, more than one YAML document, a root that is not a
-  mapping, a non-string key, a duplicate key, or a YAML tag;
+- anything but a regular file, or one over the size bound (1 MiB,
+  `yaml.too-large`; the reader refuses a larger document whatever the
+  bound);
+- an empty file, or one that holds only comments, as a missing envelope
+  (`config.missing-envelope` at line 1, column 1);
+- text that is not UTF-8, and YAML outside the reader's subset: more than one
+  document, a root that is not a mapping, a non-string key, a duplicate key,
+  a YAML tag, or an anchor or alias;
+- an `apiVersion` or `kind` other than the product's literal envelope, before
+  anything else in the document is looked at;
 - a key the product removed, naming the key that replaced it;
-- an `apiVersion` or `kind` other than the product's literal envelope.
+- a key the product's configuration type does not declare;
+- a null member (`null`, `~`, or a key with nothing after it): leave the key
+  out instead.
 
 A product may also require trusted ownership: every ancestor directory and
 the file owned by root or the runtime user and not writable by group or
 others, except a root-owned sticky directory.
 
 Every refusal names the file, the field, and the fix, and never repeats a
-configured value.
+configured value. A `RuntimeConfigError` carries the reader's diagnostics
+(`diagnostics()`), each with a two-segment code, a JSON pointer, a line and
+column, a message, and a suggested action; its `Display` renders every one of
+them in the human form `error[code] file:line:col /pointer`. A consumer
+classifies a refusal by a diagnostic's `code`; `deciding_diagnostic()` is the
+one it words the refusal from, and `UNAVAILABLE_CODE` is the code of a file
+that cannot be read. A refusal found before the reader ran carries one
+`platform.runtime-config.*` diagnostic.
 
 ## Environment substitution
 
-After parsing, the loader substitutes environment expressions inside string
-values of `runtime.yaml`:
+While reading, the loader substitutes environment expressions inside string
+values of `runtime.yaml`, in place, so a diagnostic about a substituted value
+points at the expression in the file:
 
 - `${VAR}` requires `VAR` to be set and non-empty;
 - `${VAR:-default}` uses `default` when `VAR` is unset or empty;
 - `${VAR:?message}` refuses when `VAR` is unset or empty. The refusal names
   `VAR` and withholds `message`, because the message is configured text.
 
-Keys and comments are never substituted, a substituted value stays a string,
-and substitution runs once, so a value that itself looks like an expression is
-kept as written. There is no escape syntax: a literal `${` reaches the
-configuration as the value of a variable. An expression inside a field whose
-name ends in `Ref` or `Refs`, or anywhere beneath one, is refused: a secret
-reference names a provider, and the provider reads the value. An expression
-anywhere under `secretProviders` is refused too, because a provider setting
-chooses which secret a reference resolves to. Authored package files are not
-substituted; `reject_environment_expressions_in_authored_yaml` refuses an
-authored document that carries an expression, and refuses text it cannot read
-as YAML rather than letting it pass unchecked. Its refusals carry the
-`authored_config.environment_expression` and `authored_config.syntax` codes.
+Comments are never substituted, a substituted value stays a string, so it
+never fills a number or a boolean, and substitution runs once, so a value that
+itself looks like an expression is kept as written. A `${` followed by
+anything but a name character or `}` is text; an expression without its
+closing brace, or with a name that is not letters, digits, and underscores
+starting with a letter or underscore, is refused. There is no escape syntax:
+a literal `${...}` reaches the configuration as the value of a variable. An expression is refused in a key, in `apiVersion` or `kind`, inside
+a field whose name ends in `Ref` or `Refs` or anywhere beneath one (a secret
+reference names a provider, and the provider reads the value), and anywhere
+under `secretProviders`, because a provider setting chooses which secret a
+reference resolves to. A refusal names the variable but never its value or a
+`${NAME:?message}` message.
+
+Authored package files are not substituted.
+`reject_environment_expressions_in_authored_yaml` reads an authored document
+with the same reader and refuses one that carries an expression in a key or
+a value, and refuses text it cannot read rather than letting it pass
+unchecked. Its refusals carry the `authored_config.environment_expression` and
+`authored_config.syntax` codes.
 
 The effective digest of a loaded file is the `sha256:` label of the canonical
 JSON of the substituted document, so a comment or formatting change does not

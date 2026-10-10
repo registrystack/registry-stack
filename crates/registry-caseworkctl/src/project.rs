@@ -8,15 +8,19 @@ use registry_casework::{
 use registry_casework_breg::MAXIMUM_REQUEST_ENTITIES;
 use registry_casework_core::{
     AttemptSettlement, AttemptSettlementReport, AttemptUncertainMarking,
-    AttemptUncertainMarkingReport, CaseworkProject, ReviewContextStrategy, ReviewKindPurpose,
-    SourcePolicy, SourceRequestPolicy, SourceRetentionReport, SourceRetentionSelector,
+    AttemptUncertainMarkingReport, CaseworkProject, ConfigFinding, ConfigLoadError,
+    ReviewContextStrategy, ReviewKindPurpose, SourceRequestPolicy, SourceRetentionReport,
+    SourceRetentionSelector,
 };
 use registry_platform_config::{
     plan_package, sha256_uri, write_package, SecretError, SecretProvider, SecretReference,
     SecretResolver,
 };
+use registry_platform_yaml::{Decoded, Diagnostic, LocalId, Related, Report, Severity, Source};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
+
+use crate::offline::OfflineFiles;
 use std::fs;
 use std::os::unix::fs::DirBuilderExt as _;
 use std::path::{Path, PathBuf};
@@ -25,6 +29,21 @@ const CASEWORK_YAML: &str = include_str!("../templates/professional-review/casew
 
 const RUNTIME_SCHEMA: &str =
     include_str!("../../../products/casework/generated/runtime/runtime.schema.json");
+
+const FIXTURE_SCHEMA: &str =
+    include_str!("../../../products/casework/generated/fixture/fixture.schema.json");
+
+const PROJECT_SCHEMA: &str =
+    include_str!("../../../products/casework/generated/project/project.schema.json");
+
+const DEV_CLIENTS_SCHEMA: &str =
+    include_str!("../../../products/casework/generated/dev-clients/dev-clients.schema.json");
+
+/// The first line of a YAML file `init` writes, naming the local schema copy
+/// beside it so an editor validates the file without reaching the network.
+fn modeline(schema: &str) -> String {
+    format!("# yaml-language-server: $schema=./.casework/schemas/{schema}\n")
+}
 
 /// Where the generated runtime example expects the package
 /// `caseworkctl package . --output .casework/package` writes.
@@ -93,16 +112,15 @@ const BREG_SOURCE_DESCRIPTION: &str = r#"{
 }
 "#;
 
-const FIXTURE: &str = r#"apiVersion: registry.registrystack.org/casework-fixture/v1alpha1
+const FIXTURE: &str = r#"apiVersion: id.registrystack.org/formats/casework/fixture/v1alpha1
 kind: CaseworkFixture
-name: professional-review-offline
-source:
-  id: professional-licences
-  requestEntity: scope-correction
-  reviewStage: review
+id: professional-review-offline
+request:
+  source: professional-licences
+  entity: scope-correction
 expect:
   queue: corrections
-  targetElapsed: PT48H
+  target: {elapsedMinutes: 2880}
 "#;
 
 const EVENT_WIRING_GUIDANCE: &str = "The configured source reader cannot attest that BReg sends lifecycle events to this Casework receiver with the same key. Run bregctl doctor against the BReg runtime configuration, then cause and confirm one lifecycle delivery.";
@@ -171,9 +189,9 @@ reviewProducers:
     recoveryDays: 30
 "#;
 
-const STANDALONE_FIXTURE: &str = r#"apiVersion: registry.registrystack.org/casework-fixture/v1alpha1
+const STANDALONE_FIXTURE: &str = r#"apiVersion: id.registrystack.org/formats/casework/fixture/v1alpha1
 kind: CaseworkFixture
-name: standalone-decision-offline
+id: standalone-decision-offline
 review:
   kind: decision
   display:
@@ -196,7 +214,8 @@ pub(super) const STANDALONE_DEV_CLIENTS: &str = r#"# Local callers for `casework
 # `dev` generates a fresh private key per client under
 # `.casework/dev/credentials/`; nothing here is a credential, and none of it
 # belongs in a deployment.
-version: 1
+apiVersion: id.registrystack.org/formats/casework/dev-clients/v1alpha1
+kind: CaseworkDevClients
 clients:
   - id: administrator
     accessProfile: administrator
@@ -242,7 +261,8 @@ pub(super) const PROFESSIONAL_REVIEW_DEV_CLIENTS: &str = r#"# Local callers for 
 # principal, which `caseworkctl source add --apply` writes into the registry's
 # own dev-clients.yaml. For a deployment, point these clients at the runtime's
 # own token issuer instead.
-version: 1
+apiVersion: id.registrystack.org/formats/casework/dev-clients/v1alpha1
+kind: CaseworkDevClients
 clients:
   - id: administrator
     accessProfile: administrator
@@ -304,18 +324,39 @@ pub(super) fn init(project: &Path, template: &str) -> Result<Value> {
         .create(staging.path().join(".casework"))?;
     fs::create_dir(staging.path().join(".casework/schemas"))?;
     fs::create_dir(staging.path().join(".vscode"))?;
-    fs::write(staging.path().join("casework.yaml"), project_yaml)?;
+    fs::write(
+        staging.path().join("casework.yaml"),
+        modeline("project.schema.json") + project_yaml,
+    )?;
     fs::write(
         staging.path().join("runtime.example.yaml"),
-        runtime_example(project, template == "professional-review")?,
+        modeline("runtime.schema.json")
+            + &runtime_example(project, template == "professional-review")?,
+    )?;
+    fs::write(
+        staging.path().join(".casework/schemas/project.schema.json"),
+        PROJECT_SCHEMA,
     )?;
     fs::write(
         staging.path().join(".casework/schemas/runtime.schema.json"),
         RUNTIME_SCHEMA,
     )?;
+    fs::write(
+        staging.path().join(".casework/schemas/fixture.schema.json"),
+        FIXTURE_SCHEMA,
+    )?;
+    fs::write(
+        staging
+            .path()
+            .join(".casework/schemas/dev-clients.schema.json"),
+        DEV_CLIENTS_SCHEMA,
+    )?;
     let mut editor_settings = serde_json::to_vec_pretty(&json!({
         "yaml.schemas": {
-            "./.casework/schemas/runtime.schema.json": ["runtime.example.yaml", "runtime.yaml"]
+            "./.casework/schemas/project.schema.json": ["casework.yaml"],
+            "./.casework/schemas/runtime.schema.json": ["runtime.example.yaml", "runtime.yaml"],
+            "./.casework/schemas/fixture.schema.json": ["fixtures/*.yaml"],
+            "./.casework/schemas/dev-clients.schema.json": ["dev-clients.yaml"]
         }
     }))?;
     editor_settings.push(b'\n');
@@ -323,8 +364,15 @@ pub(super) fn init(project: &Path, template: &str) -> Result<Value> {
         staging.path().join(".vscode/settings.json"),
         editor_settings,
     )?;
-    fs::write(staging.path().join("fixtures").join(fixture_name), fixture)?;
-    fs::write(staging.path().join("dev-clients.yaml"), dev_clients)?;
+    // A fixture sits one directory below the schemas' parent.
+    fs::write(
+        staging.path().join("fixtures").join(fixture_name),
+        modeline("fixture.schema.json").replace("$schema=./", "$schema=../") + fixture,
+    )?;
+    fs::write(
+        staging.path().join("dev-clients.yaml"),
+        modeline("dev-clients.schema.json") + dev_clients,
+    )?;
     let staging_path = staging.keep();
     fs::rename(&staging_path, project)
         .context("publishing Casework project without replacement")?;
@@ -333,37 +381,168 @@ pub(super) fn init(project: &Path, template: &str) -> Result<Value> {
         "command": "init",
         "template": template,
         "project": project,
-        "created": ["casework.yaml", "runtime.example.yaml", "dev-clients.yaml", format!("fixtures/{fixture_name}"), "sources/", ".casework/schemas/runtime.schema.json", ".vscode/settings.json"],
+        "created": ["casework.yaml", "runtime.example.yaml", "dev-clients.yaml", format!("fixtures/{fixture_name}"), "sources/", ".casework/schemas/project.schema.json", ".casework/schemas/runtime.schema.json", ".casework/schemas/fixture.schema.json", ".casework/schemas/dev-clients.schema.json", ".vscode/settings.json"],
         "next": [next]
     }))
 }
 
+/// A refused runtime file, with every diagnostic its check reported, and
+/// for `check --runtime-config` those of the project beside them.
 #[derive(Debug)]
-pub(super) struct DeniedFindings(pub Vec<Value>);
+pub(super) struct RuntimeConfigRefusal {
+    pub report: Report,
+    /// The runtime file could not be read at all.
+    pub unavailable: bool,
+}
 
-impl std::fmt::Display for DeniedFindings {
+impl std::fmt::Display for RuntimeConfigRefusal {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(formatter, "the Casework authoring findings were denied")
+        write!(formatter, "the Casework runtime configuration was refused")
     }
 }
 
-impl std::error::Error for DeniedFindings {}
+impl std::error::Error for RuntimeConfigRefusal {}
 
-fn missing_source_findings(project: &Path, policy: &CaseworkProject) -> Vec<Value> {
-    policy
-        .sources
-        .iter()
-        .enumerate()
-        .filter(|(_, source)| !project.join(&source.description).is_file())
-        .map(|(index, source)| json!({
-            "severity": "finding",
-            "code": "casework.source-description.missing",
-            "artifact": "casework_project",
-            "path": format!("casework.yaml:/sources/{index}/description"),
-            "message": format!("source {} has no imported source description", source.id),
-            "suggestedAction": format!("Run caseworkctl source add BREG_PROJECT --project {} --source-id {} --apply.", project.display(), source.id),
-        }))
-        .collect()
+/// Add to `checked`, the project check's outcome, the check of the runtime
+/// file at `runtime_config` as `casework serve` reads it, offline and against
+/// the project when it loads. Diagnostics name the file as it was given.
+pub(super) fn check_runtime_config(
+    project: &Path,
+    runtime_config: &Path,
+    environment: bool,
+    checked: Result<Value>,
+) -> Result<Value> {
+    let policy = load_and_check_policy(project).ok();
+    let given = runtime_config.display().to_string();
+    let absolute = absolute_lexical(runtime_config)
+        .context("resolving the --runtime-config path against the working directory")?;
+    let runtime = registry_casework::check_runtime(&absolute, policy.as_ref(), environment);
+    let absolute = absolute.display().to_string();
+    let named = |mut diagnostic: Diagnostic| {
+        if let Some(source) = &mut diagnostic.source {
+            if source.file == absolute {
+                source.file.clone_from(&given);
+            }
+        }
+        for related in &mut diagnostic.related {
+            if related.file == absolute {
+                related.file.clone_from(&given);
+            }
+        }
+        diagnostic
+    };
+    let mut report = Report::new(runtime.diagnostics.into_iter().map(named).collect());
+    report.set_files_checked(1);
+    if !report.has_errors() {
+        let mut checked = checked?;
+        checked["runtimeConfig"] = json!(given);
+        if let (Some(diagnostics), Value::Array(warnings)) = (
+            checked["diagnostics"].as_array_mut(),
+            report.to_json_value(),
+        ) {
+            diagnostics.extend(warnings);
+        }
+        if let Some(files) = checked["filesChecked"].as_u64() {
+            checked["filesChecked"] = json!(files + 1);
+        }
+        return Ok(checked);
+    }
+    let refused = match checked {
+        Ok(_) => report,
+        Err(error) => match crate::configuration_report(&error) {
+            Some(project) => {
+                let mut project = project.clone();
+                if project.files_checked().is_none() {
+                    project.set_files_checked(1);
+                }
+                project.extend(report);
+                project
+            }
+            None => return Err(error),
+        },
+    };
+    Err(RuntimeConfigRefusal {
+        report: refused,
+        unavailable: runtime.unavailable,
+    }
+    .into())
+}
+
+/// Read the runtime file at `path` as `casework serve` does. A refusal of the
+/// file itself carries every rule it breaks, each at its position, exactly as
+/// the runtime prints them at startup.
+fn load_runtime_config(path: &Path) -> Result<RuntimeConfig> {
+    RuntimeConfig::load(path).map_err(|error| {
+        let unavailable = matches!(
+            &error,
+            registry_casework::RuntimeConfigError::Load(load)
+                if load
+                    .diagnostics()
+                    .iter()
+                    .any(|diagnostic| diagnostic.code == registry_platform_config::UNAVAILABLE_CODE)
+        );
+        match registry_casework::startup_report(path, &error) {
+            Some(report) => RuntimeConfigRefusal {
+                report,
+                unavailable,
+            }
+            .into(),
+            None => anyhow::Error::new(error).context("loading Casework runtime configuration"),
+        }
+    })
+}
+
+/// `path` made absolute against the working directory, with `.` and `..`
+/// resolved by name, as the runtime loader requires.
+fn absolute_lexical(path: &Path) -> std::io::Result<PathBuf> {
+    let absolute = std::path::absolute(path)?;
+    let mut normal = PathBuf::new();
+    for component in absolute.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                normal.pop();
+            }
+            other => normal.push(other),
+        }
+    }
+    Ok(normal)
+}
+
+pub(crate) const MISSING_SOURCE_DESCRIPTION: &str = "casework.source-description.missing";
+
+/// The warnings found reading `casework.yaml`, and one diagnostic for every
+/// source whose imported description file does not exist: a warning while
+/// authoring, and an error under `--production`, which requires every import.
+fn authoring_diagnostics(
+    project: &Path,
+    decoded: &Decoded<CaseworkProject>,
+    production: bool,
+) -> Report {
+    let mut report = decoded.document.warnings();
+    let command = format!(
+        "caseworkctl source add BREG_PROJECT --project {} --source-id SOURCE_ID --apply",
+        crate::source_add::shell_word(&project.display().to_string())
+    );
+    for (index, source) in decoded.value.sources.iter().enumerate() {
+        if project.join(&source.description).is_file() {
+            continue;
+        }
+        let mut diagnostic = ConfigFinding::new(
+            MISSING_SOURCE_DESCRIPTION,
+            format!("/sources/{index}/description"),
+            "no source description file exists at this path, relative to casework.yaml",
+            format!(
+                "Import the source description with {command}, where SOURCE_ID is the id at /sources/{index}/id."
+            ),
+        )
+        .to_diagnostic(&decoded.document);
+        if !production {
+            diagnostic.severity = Severity::Warning;
+        }
+        report.push(diagnostic);
+    }
+    report
 }
 
 /// One authored request, as `check` reports it.
@@ -372,16 +551,9 @@ fn missing_source_findings(project: &Path, policy: &CaseworkProject) -> Vec<Valu
 /// clock and no target reports `null` for both rather than a stand-in, because
 /// a reader takes this block for what the engine compiled.
 fn request_description(request: &SourceRequestPolicy, description: Option<&Value>) -> Value {
-    let application_mode = description.and_then(|root| {
-        let requests = match root.get("requests").and_then(Value::as_array) {
-            Some(requests) => requests.iter().collect::<Vec<_>>(),
-            None => vec![&root["request"]],
-        };
-        requests
-            .into_iter()
-            .find(|described| described["requestEntity"] == request.entity)
-            .and_then(|described| described["onApproved"]["mode"].as_str())
-    });
+    let application_mode = description
+        .and_then(|root| crate::offline::described_request(root, &request.entity))
+        .and_then(|(_, described)| described["onApproved"]["mode"].as_str());
     json!({
         "entity": request.entity,
         "queue": request.queue,
@@ -396,14 +568,102 @@ fn request_description(request: &SourceRequestPolicy, description: Option<&Value
     })
 }
 
-pub(super) fn check(project: &Path, production: bool, deny_findings: bool) -> Result<Value> {
-    let policy = load_and_check_policy(project)?;
-    let findings = missing_source_findings(project, &policy);
-    if (production || deny_findings) && !findings.is_empty() {
-        return Err(DeniedFindings(findings).into());
+/// A project `check` accepted, with the diagnostics it reported and the
+/// offline files it read.
+pub(super) struct CheckedProject {
+    pub report: Value,
+    pub diagnostics: Report,
+    pub decoded: Decoded<CaseworkProject>,
+    pub offline: OfflineFiles,
+}
+
+/// Check the project offline. Every diagnostic is reported; the check is
+/// refused when one is an error, or, under `--deny-warnings`, a warning
+/// (CFG-DIAG-4).
+pub(super) fn check(project: &Path, production: bool, deny_warnings: bool) -> Result<Value> {
+    checked_project(project, production, deny_warnings).map(|checked| checked.report)
+}
+
+/// `check`, keeping what it read: `casework.yaml`, every imported source
+/// description, every fixture, simulation, and holiday set the project
+/// holds, its `dev-clients.yaml`, and its retained development session state
+/// (CFG-CHECK-2), each reference resolved (CFG-ID-4) and each fixture
+/// display checked against its review kind (CFG-VAL-9).
+pub(super) fn checked_project(
+    project: &Path,
+    production: bool,
+    deny_warnings: bool,
+) -> Result<CheckedProject> {
+    let (offline, scanned) = crate::offline::scan(project);
+    let decoded = match read_project(project) {
+        Ok(decoded) => decoded,
+        Err(error) => {
+            let Some(refused) = crate::configuration_report(&error) else {
+                return Err(error);
+            };
+            let (clients_read, clients) = crate::offline::check_dev_clients(project, None);
+            let (state_read, state) = crate::offline::check_dev_state(project);
+            let mut report = refused.clone();
+            report.extend(scanned);
+            report.extend(clients);
+            report.extend(state);
+            report.set_files_checked(1 + offline.files_read + clients_read + state_read);
+            return Err(report.into());
+        }
+    };
+    let (clients_read, clients) = crate::offline::check_dev_clients(project, Some(&decoded.value));
+    let (state_read, state) = crate::offline::check_dev_state(project);
+    let dev_read = clients_read + state_read;
+    let mut diagnostics = authoring_diagnostics(project, &decoded, production);
+    diagnostics.extend(scanned);
+    diagnostics.extend(crate::offline::resolve(&decoded, &offline));
+    diagnostics.extend(clients);
+    diagnostics.extend(state);
+    let refused = |diagnostics: &Report| {
+        diagnostics.has_errors() || (deny_warnings && diagnostics.warning_count() > 0)
+    };
+    if refused(&diagnostics) {
+        diagnostics.set_files_checked(1 + offline.files_read + dev_read);
+        return Err(diagnostics.into());
     }
-    if policy.sources.is_empty() {
-        return Ok(json!({
+    let policy = &decoded.value;
+    let pending = diagnostics
+        .diagnostics()
+        .iter()
+        .any(|diagnostic| diagnostic.code == MISSING_SOURCE_DESCRIPTION);
+    let files_checked = 1
+        + offline.files_read
+        + dev_read
+        + policy
+            .sources
+            .iter()
+            .filter(|source| project.join(&source.description).is_file())
+            .count();
+    if !policy.sources.is_empty() {
+        if let Err(error) = check_source_descriptions(project) {
+            let Some(refused) = crate::configuration_report(&error) else {
+                return Err(error);
+            };
+            let mut report = diagnostics.clone();
+            report.extend(refused.clone());
+            report.set_files_checked(files_checked);
+            return Err(report.into());
+        }
+        for simulation in &offline.simulations {
+            for diagnostic in
+                crate::policy::simulation_input_diagnostics(project, &decoded, &simulation.decoded)?
+            {
+                diagnostics.push(diagnostic);
+            }
+        }
+        if refused(&diagnostics) {
+            diagnostics.set_files_checked(files_checked);
+            return Err(diagnostics.into());
+        }
+    }
+    let diagnostics_json = diagnostics.to_json_value();
+    let report = if policy.sources.is_empty() {
+        json!({
             "ok": true,
             "command": "check",
             "status": "complete",
@@ -418,24 +678,49 @@ pub(super) fn check(project: &Path, production: bool, deny_findings: bool) -> Re
                 "sourceConnections": 0
             },
             "profile": if production { "production" } else { "authoring" },
-            "findings": findings,
+            "filesChecked": files_checked,
+            "diagnostics": diagnostics_json,
             "networkAccess": false,
             "databaseAccess": false
-        }));
-    }
-    let source_description = if findings.is_empty() {
-        check_source_descriptions(project)?;
-        crate::policy::check(project, &policy)?;
-        "checked"
+        })
     } else {
+        sources_report(
+            project,
+            policy,
+            production,
+            pending,
+            files_checked,
+            diagnostics_json,
+        )?
+    };
+    Ok(CheckedProject {
+        report,
+        diagnostics,
+        decoded,
+        offline,
+    })
+}
+
+/// The `check` report of a project that declares sources.
+fn sources_report(
+    project: &Path,
+    policy: &CaseworkProject,
+    production: bool,
+    pending: bool,
+    files_checked: usize,
+    diagnostics: Value,
+) -> Result<Value> {
+    let source_description = if pending {
         "pending_source_add"
+    } else {
+        "checked"
     };
     let inbox = serde_json::to_value(&policy.inbox)?;
     let sources = policy
         .sources
         .iter()
         .map(|source| -> Result<Value> {
-            // A missing imported description is an authoring finding. Its
+            // A missing imported description is an authoring warning. Its
             // mode is unknown, never an invented manual application default.
             let description = if project.join(&source.description).is_file() {
                 let path = project_input_path(project, &source.description)?;
@@ -456,18 +741,15 @@ pub(super) fn check(project: &Path, production: bool, deny_findings: bool) -> Re
             }))
         })
         .collect::<Result<Vec<_>>>()?;
-    let status = if findings.is_empty() {
-        "complete"
-    } else {
-        "incomplete"
-    };
+    let status = if pending { "incomplete" } else { "complete" };
     Ok(json!({
         "ok": true,
         "command": "check",
         "status": status,
         "project": project,
         "profile": if production { "production" } else { "authoring" },
-        "findings": findings,
+        "filesChecked": files_checked,
+        "diagnostics": diagnostics,
         "effective": {
             "projectId": policy.casework.id,
             "sources": sources,
@@ -482,44 +764,73 @@ pub(super) fn check(project: &Path, production: bool, deny_findings: bool) -> Re
     }))
 }
 
+/// Check the project, then evaluate every fixture and simulation it holds
+/// against it. Each unmet expectation is one error at the expectation.
 pub(super) fn test(project: &Path) -> Result<Value> {
-    let checked = check(project, false, false)?;
-    let policy = load_and_check_policy(project)?;
-    let effective = &checked["effective"];
-    let fixture_dir = project.join("fixtures");
-    let mut paths = fs::read_dir(&fixture_dir)
-        .context("reading fixtures directory")?
-        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
-        .filter(|path| path.extension().and_then(|value| value.to_str()) == Some("yaml"))
-        .collect::<Vec<_>>();
-    paths.sort();
-    if paths.is_empty() {
-        bail!("test requires at least one YAML fixture");
+    let CheckedProject {
+        report: checked,
+        diagnostics,
+        decoded,
+        offline,
+    } = checked_project(project, false, false)?;
+    let files_checked = checked["filesChecked"].clone();
+    if offline.fixtures.is_empty() && offline.simulations.is_empty() {
+        let mut diagnostic = Diagnostic::error(
+            "casework.test.no-fixtures",
+            "",
+            "the project holds no fixture under fixtures/ and no simulation under simulations/, so test has nothing to evaluate",
+            "Write a CaseworkFixture under fixtures/ or a CaseworkSimulation under simulations/; caseworkctl init writes a starting fixture.",
+        );
+        diagnostic.source = Some(Source {
+            file: project.display().to_string(),
+            line: None,
+            column: None,
+        });
+        let mut report = diagnostics;
+        report.push(diagnostic);
+        report.set_files_checked(files_checked.as_u64().unwrap_or_default() as usize);
+        return Err(report.into());
     }
+    let holidays = offline.holiday_documents();
+    let mut failures = Vec::new();
     let mut reports = Vec::new();
-    for path in paths {
-        let fixture = load_yaml(&path, "fixture")?;
-        let name = if fixture.get("subject").is_some() || fixture.get("now").is_some() {
-            crate::policy::simulate(project, &policy, &path)
-                .with_context(|| format!("simulation fixture {}", path.display()))?["fixture"]
-                .clone()
-        } else {
-            validate_fixture(&fixture, effective, &policy)
-                .with_context(|| format!("fixture {}", path.display()))?;
-            fixture["name"].clone()
-        };
-        reports.push(json!({
-            "name": name,
-            "status": "passed",
-            "file": path.strip_prefix(project).unwrap_or(&path)
-        }));
+    for fixture in &offline.fixtures {
+        let found = crate::offline::evaluate_fixture(project, &decoded, &fixture.decoded)?;
+        if found.is_empty() {
+            reports.push(json!({
+                "name": fixture.decoded.value.id,
+                "status": "passed",
+                "file": fixture.relative,
+            }));
+        }
+        failures.extend(found);
+    }
+    for simulation in &offline.simulations {
+        let outcome = crate::policy::simulate(project, &decoded, &simulation.decoded, &holidays)?;
+        if outcome.failures.is_empty() {
+            reports.push(json!({
+                "name": simulation.decoded.value.id,
+                "status": "passed",
+                "file": simulation.relative,
+            }));
+        }
+        failures.extend(outcome.failures);
+    }
+    if !failures.is_empty() {
+        let mut report = diagnostics;
+        for failure in failures {
+            report.push(failure);
+        }
+        report.set_files_checked(files_checked.as_u64().unwrap_or_default() as usize);
+        return Err(report.into());
     }
     Ok(json!({
         "ok": true,
         "command": "test",
         "project": project,
         "authoringStatus": checked["status"],
-        "findings": checked["findings"],
+        "filesChecked": files_checked,
+        "diagnostics": checked["diagnostics"],
         "fixtures": reports,
         "proofBoundary": "offline_synthetic",
         "productionClosure": false,
@@ -528,35 +839,70 @@ pub(super) fn test(project: &Path) -> Result<Value> {
     }))
 }
 
-fn load_yaml(path: &Path, label: &str) -> Result<Value> {
-    let bytes = fs::read(path).with_context(|| format!("reading {label}"))?;
-    if bytes.len() > 1024 * 1024 {
-        bail!("{label} exceeds the one MiB authoring limit");
-    }
-    serde_norway::from_slice(&bytes).with_context(|| format!("parsing {label}"))
-}
 pub(super) fn load_and_check_policy(project: &Path) -> Result<CaseworkProject> {
+    read_project(project).map(|decoded| decoded.value)
+}
+
+/// `casework.yaml` of `project`, read through the shared reader and checked,
+/// with the document its diagnostics are placed in. The file is named as the
+/// project path given joined with `casework.yaml` (CFG-DIAG-1).
+pub(crate) fn read_project(project: &Path) -> Result<Decoded<CaseworkProject>> {
     let policy_path = project.join("casework.yaml");
-    let policy =
-        CaseworkProject::load(&policy_path).context("loading and checking casework.yaml")?;
-    let authored = fs::read_to_string(&policy_path).context("reading casework.yaml")?;
-    registry_platform_config::reject_environment_expressions_in_authored_yaml(&authored)?;
-    if policy.sources.is_empty() {
-        if policy.review_kinds.is_empty() || policy.review_producers.is_empty() {
-            bail!("declare a review kind and producer or connect a source before checking the project");
+    let bytes = fs::read(&policy_path)
+        .map_err(ConfigLoadError::Read)
+        .context("loading and checking casework.yaml")?;
+    let decoded = CaseworkProject::read(&policy_path.display().to_string(), &bytes)
+        .map_err(ConfigLoadError::Refused)
+        .context("loading and checking casework.yaml")?;
+    let policy = &decoded.value;
+    let mut findings = Vec::new();
+    // The shared reader already refused a project with no work
+    // (`casework.project.no-work`, `casework.review-producer.none`), an empty
+    // adapter, and an empty request list; these are the bounds of the one
+    // adapter caseworkctl connects.
+    for (index, source) in policy.sources.iter().enumerate() {
+        if source.adapter != "breg" {
+            findings.push(ConfigFinding::new(
+                "casework.source.unsupported-adapter",
+                format!("/sources/{index}/adapter"),
+                "caseworkctl connects only the breg adapter",
+                "Write adapter: breg.",
+            ));
         }
-        return Ok(policy);
+        if source.requests.len() > MAXIMUM_REQUEST_ENTITIES {
+            findings.push(ConfigFinding::new(
+                "casework.source.too-many-requests",
+                format!("/sources/{index}/requests"),
+                format!("a breg source declares at most {MAXIMUM_REQUEST_ENTITIES} requests"),
+                format!(
+                    "Keep at most {MAXIMUM_REQUEST_ENTITIES} requests under this source, one per request entity."
+                ),
+            ));
+        }
     }
-    if policy.sources.iter().any(|source| {
-        source.adapter != "breg"
-            || source.requests.is_empty()
-            || source.requests.len() > MAXIMUM_REQUEST_ENTITIES
-    }) {
-        bail!(
-            "each source must use the breg adapter and declare between 1 and {MAXIMUM_REQUEST_ENTITIES} request entities"
-        );
+    if findings.is_empty() {
+        Ok(decoded)
+    } else {
+        let diagnostics = findings
+            .iter()
+            .map(|finding| finding.to_diagnostic(&decoded.document))
+            .collect();
+        Err(project_refusal(diagnostics))
     }
-    Ok(policy)
+}
+
+/// A refusal of `casework.yaml` carrying `diagnostics` already placed in its
+/// document, reported like the reader's own (CFG-DIAG-1).
+pub(crate) fn project_refusal(diagnostics: Vec<Diagnostic>) -> anyhow::Error {
+    let mut report = Report::new(diagnostics);
+    report.set_files_checked(1);
+    report.into()
+}
+
+/// `id` when a diagnostic may name it: an identifier that passes the
+/// `LocalId` grammar, and nothing for any other value (CFG-SEC-3).
+pub(crate) fn nameable(id: &str) -> Option<&str> {
+    LocalId::new(id).is_ok().then_some(id)
 }
 
 pub(super) fn explain(project: &Path) -> Result<Value> {
@@ -565,10 +911,34 @@ pub(super) fn explain(project: &Path) -> Result<Value> {
     crate::policy::explain(project, &policy)
 }
 
-pub(super) fn simulate(project: &Path, fixture: &Path) -> Result<Value> {
-    let policy = load_and_check_policy(project)?;
+/// Evaluate the simulation at `file` against the project and report what
+/// it computes; refused when the simulation does not resolve against the
+/// project or an expectation it states is not met.
+pub(super) fn simulate(project: &Path, file: &Path) -> Result<Value> {
+    let decoded = read_project(project)?;
     check_source_descriptions(project)?;
-    crate::policy::simulate(project, &policy, fixture)
+    let offline = crate::offline::read_simulation_file(file)?;
+    let mut report = crate::offline::resolve(&decoded, &offline);
+    if report.is_empty() {
+        let outcome = crate::policy::simulate(
+            project,
+            &decoded,
+            &offline.simulations[0].decoded,
+            &offline.holiday_documents(),
+        )?;
+        if outcome.failures.is_empty() {
+            let mut warnings = decoded.document.warnings();
+            warnings.extend(offline.warnings);
+            let mut simulated = outcome.report;
+            simulated["diagnostics"] = warnings.to_json_value();
+            return Ok(simulated);
+        }
+        for failure in outcome.failures {
+            report.push(failure);
+        }
+    }
+    report.set_files_checked(offline.files_read);
+    Err(report.into())
 }
 
 /// The compute-only half of a policy package: everything `package` and
@@ -585,7 +955,6 @@ fn compute_package(project: &Path) -> Result<PackageContents> {
     let project = fs::canonicalize(project).context("resolving the Casework authoring project")?;
     let policy = load_and_check_policy(&project)?;
     check_source_descriptions(&project)?;
-    crate::policy::check(&project, &policy)?;
 
     let mut inputs = BTreeMap::from([(
         "casework.yaml".to_owned(),
@@ -662,7 +1031,7 @@ pub(super) fn package(project: &Path, output: &Path, revision: Option<&str>) -> 
     }))
 }
 
-fn read_package_input(path: &Path) -> Result<Vec<u8>> {
+pub(crate) fn read_package_input(path: &Path) -> Result<Vec<u8>> {
     let metadata = fs::symlink_metadata(path)
         .with_context(|| format!("reading package input metadata {}", path.display()))?;
     if !metadata.file_type().is_file()
@@ -691,89 +1060,6 @@ pub(super) fn project_input_path(project: &Path, relative: &str) -> Result<PathB
         bail!("source description path leaves the Casework project");
     }
     Ok(candidate)
-}
-
-fn validate_fixture(fixture: &Value, effective: &Value, policy: &CaseworkProject) -> Result<()> {
-    if fixture["apiVersion"] != "registry.registrystack.org/casework-fixture/v1alpha1"
-        || fixture["kind"] != "CaseworkFixture"
-    {
-        bail!("fixture must declare the v1alpha1 CaseworkFixture contract");
-    }
-    if let Some(review) = fixture.get("review") {
-        let kind_id = review["kind"]
-            .as_str()
-            .context("review fixture requires a kind")?;
-        let kind = policy
-            .review_kinds
-            .iter()
-            .find(|kind| kind.id == kind_id)
-            .context("review fixture names an undeclared kind")?;
-        kind.snapshot()?
-            .validate_display(&review["display"])
-            .context("review fixture display does not satisfy the kind schema")?;
-        let outcomes = kind
-            .outcomes
-            .iter()
-            .map(|outcome| outcome.id.as_str())
-            .collect::<Vec<_>>();
-        if fixture["expect"]["queue"] != kind.stages[0].queue
-            || fixture["expect"]["outcomes"] != json!(outcomes)
-        {
-            bail!("review fixture queue or outcomes do not match the declared kind");
-        }
-        return Ok(());
-    }
-    let source_id = fixture["source"]["id"]
-        .as_str()
-        .context("fixture requires a source id")?;
-    let entity = fixture["source"]["requestEntity"]
-        .as_str()
-        .context("fixture requires a request entity")?;
-    // Resolve the request the fixture names. The project may declare several
-    // sources, so a fixture is checked against its own request rather than
-    // against whichever one the report happens to list first.
-    let source = effective["sources"]
-        .as_array()
-        .context("the effective project reports no sources")?
-        .iter()
-        .find(|source| source["sourceId"] == source_id)
-        .with_context(|| {
-            format!("fixture names source {source_id}, which this project does not declare")
-        })?;
-    let request = source["requests"]
-        .as_array()
-        .context("the effective source reports no requests")?
-        .iter()
-        .find(|request| request["entity"] == entity)
-        .with_context(|| {
-            format!(
-                "fixture names request entity {entity}, which source {source_id} does not declare"
-            )
-        })?;
-
-    let assertions = [
-        (&fixture["expect"]["queue"], &request["queue"], "queue"),
-        (
-            &fixture["expect"]["targetElapsed"],
-            &request["target"]["elapsed"],
-            "target elapsed time",
-        ),
-    ];
-    for (actual, expected, label) in assertions {
-        if actual != expected {
-            bail!("{label} expectation does not match the effective project");
-        }
-    }
-    // A starter has not imported its source description yet, so its offline
-    // fixture can check authored routing without guessing the source's mode.
-    // An explicitly authored expectation still needs exact source evidence.
-    if fixture["expect"]
-        .get("applicationMode")
-        .is_some_and(|expected| expected != &request["applicationMode"])
-    {
-        bail!("application mode expectation does not match the effective project");
-    }
-    Ok(())
 }
 
 /// Every secret reference the operator configuration names, in the order an
@@ -1048,8 +1334,7 @@ fn load_doctor_package(config: &RuntimeConfig) -> Result<registry_casework::Load
 }
 
 pub(super) fn doctor(runtime_config: &Path) -> Result<Value> {
-    let config =
-        RuntimeConfig::load(runtime_config).context("loading Casework runtime configuration")?;
+    let config = load_runtime_config(runtime_config)?;
     let runtime_config =
         fs::canonicalize(runtime_config).context("resolving Casework runtime configuration")?;
     let package_root = fs::canonicalize(&config.package.root)
@@ -1333,8 +1618,7 @@ struct ActivationInputs {
 
 impl ActivationInputs {
     fn load(runtime_config: &Path) -> Result<Self> {
-        let config = RuntimeConfig::load(runtime_config)
-            .context("loading Casework runtime configuration")?;
+        let config = load_runtime_config(runtime_config)?;
         let runtime_config =
             fs::canonicalize(runtime_config).context("resolving Casework runtime configuration")?;
         let package = config
@@ -1464,8 +1748,7 @@ pub(super) fn apply(
 }
 
 pub(super) fn status(runtime_config: &Path) -> Result<Value> {
-    let config =
-        RuntimeConfig::load(runtime_config).context("loading Casework runtime configuration")?;
+    let config = load_runtime_config(runtime_config)?;
     let runtime_config =
         fs::canonicalize(runtime_config).context("resolving Casework runtime configuration")?;
     let resolver = secret_resolver(&config).context("configuring Casework secret providers")?;
@@ -1630,8 +1913,7 @@ fn load_runtime(project: &Path, requested: Option<&Path>) -> Result<RuntimeSelec
         fs::canonicalize(project).context("resolving Casework development workspace")?;
     let runtime_config = fs::canonicalize(runtime_config_path(&workspace, requested))
         .context("resolving Casework runtime configuration")?;
-    let mut config =
-        RuntimeConfig::load(&runtime_config).context("loading Casework runtime configuration")?;
+    let mut config = load_runtime_config(&runtime_config)?;
     let package_root = fs::canonicalize(&config.package.root)
         .context("resolving the configured Casework package root")?;
     config.package.root = package_root;
@@ -1642,26 +1924,71 @@ fn load_runtime(project: &Path, requested: Option<&Path>) -> Result<RuntimeSelec
     })
 }
 
+/// Check every imported source description against `casework.yaml`, and
+/// refuse with every problem found, each placed in `casework.yaml`
+/// (CFG-DIAG-1, CFG-DIAG-5). A description that does not meet the BReg
+/// adapter contract is reported once, and nothing further is checked
+/// against it.
 fn check_source_descriptions(project: &Path) -> Result<()> {
-    let policy = load_and_check_policy(project)?;
+    let decoded = read_project(project)?;
+    let policy = &decoded.value;
+    let mut diagnostics = Vec::new();
     for (index, source) in policy.sources.iter().enumerate() {
+        let at = format!("/sources/{index}");
+        // A description not imported yet is reported by the offline
+        // resolution; the sources that are imported are still checked.
+        if !project.join(&source.description).is_file() {
+            continue;
+        }
         let path = project_input_path(project, &source.description)?;
         let bytes = read_package_input(&path)?;
-        validate_breg_source_description(source, &bytes).map_err(|refusal| match refusal {
-            // The description is current; the policy names a field its
-            // source never published, so repeating source add cannot help.
-            registry_casework_breg::DescriptionRefusal::UnpublishedPolicyField {
-                path: key_path,
-                field,
-            } => anyhow::anyhow!(
-                "casework.yaml sources[{index}].{key_path} names source field {field}, which source description {} does not publish; name a field listed in that description's fields, or remove it from the policy",
-                path.display()
-            ),
-            _ => anyhow::anyhow!("source description {} does not match the exact BReg adapter contract bound to this source; repeat source add", path.display()),
-        })?;
-        check_source_review_binding(&policy, source, &path, &bytes)?;
+        if let Err(refusal) = validate_breg_source_description(source, &bytes) {
+            let finding = match refusal {
+                // The description is current; the policy names a field its
+                // source never published, so repeating source add cannot help.
+                registry_casework_breg::DescriptionRefusal::UnpublishedPolicyField {
+                    path: key_path,
+                    ..
+                } => ConfigFinding::new(
+                    "casework.source.unpublished-field",
+                    format!("{at}{key_path}"),
+                    "the imported source description does not publish this field",
+                    "Name a field listed in the source description's fields, or remove it from the policy.",
+                )
+                .with_related(format!("{at}/description"), "the source description is named here"),
+                _ => ConfigFinding::new(
+                    "casework.source-description.contract-mismatch",
+                    format!("{at}/description"),
+                    "the imported source description does not match the exact BReg adapter contract bound to this source",
+                    format!("Repeat source add: {}.", source_add_command(project, index)),
+                ),
+            };
+            diagnostics.push(finding.to_diagnostic(&decoded.document));
+            continue;
+        }
+        diagnostics.extend(check_source_review_binding(
+            project, &decoded, index, &bytes,
+        )?);
+        diagnostics.extend(
+            crate::policy::routing_findings(project, policy, index)?
+                .iter()
+                .map(|finding| finding.to_diagnostic(&decoded.document)),
+        );
     }
-    Ok(())
+    if diagnostics.is_empty() {
+        Ok(())
+    } else {
+        Err(project_refusal(diagnostics))
+    }
+}
+
+/// The `source add` command that imports source `index` again. The source id
+/// is not repeated (CFG-SEC-3); the command names where it is written.
+fn source_add_command(project: &Path, index: usize) -> String {
+    format!(
+        "caseworkctl source add BREG_PROJECT --project {} --source-id SOURCE_ID --apply, where SOURCE_ID is the id at /sources/{index}/id",
+        crate::source_add::shell_word(&project.display().to_string())
+    )
 }
 
 /// Confirm the pinned description's declared review policy still resolves
@@ -1687,89 +2014,157 @@ fn check_source_descriptions(project: &Path) -> Result<()> {
 /// fault: the runtime resolves a producer by actor identity and is
 /// unaffected, but `source add` refuses to choose between two, so the
 /// project can no longer be repinned by the command that wrote the binding.
+/// The same pass refuses a source-context review kind whose displaySchema
+/// rejects what a described request discloses.
 ///
 /// This check is offline and only re-derives what the pinned description
 /// already asserts about itself against the policy on disk right now. It
 /// cannot detect drift in the BReg registry.yaml this description was
 /// compiled from after that compilation happened: confirming that would
 /// require re-deriving `sourceRevision`, which this check does not do.
-/// Every refusal below names the pinned `sourceRevision` and is worded to
-/// claim only that the binding is broken as pinned, never that the pin has
-/// been verified current.
+/// Every refusal below is worded to claim only that the binding is broken
+/// as pinned, never that the pin has been verified current, and names the
+/// pinned `review/policyId` in the description as a related location.
 fn check_source_review_binding(
-    policy: &CaseworkProject,
-    source: &SourcePolicy,
-    path: &Path,
+    project: &Path,
+    decoded: &Decoded<CaseworkProject>,
+    index: usize,
     bytes: &[u8],
-) -> Result<()> {
+) -> Result<Vec<Diagnostic>> {
+    let policy = &decoded.value;
+    let source = &policy.sources[index];
     let root: Value = serde_json::from_slice(bytes)
         .context("re-parsing a source description already validated as well-formed JSON")?;
     let described = match root.get("requests").and_then(Value::as_array) {
-        Some(requests) => requests.iter().collect::<Vec<_>>(),
-        None => vec![&root["request"]],
+        Some(requests) => requests
+            .iter()
+            .enumerate()
+            .map(|(position, request)| (format!("/requests/{position}"), request))
+            .collect::<Vec<_>>(),
+        None => vec![("/request".to_owned(), &root["request"])],
     };
-    for request in described {
-        check_request_review_binding(policy, source, path, &root, &request["review"])?;
-        crate::display_schema::check_described_request(policy, source, path, request)?;
+    let mut diagnostics = Vec::new();
+    for (request_at, request) in described {
+        diagnostics.extend(request_review_binding(
+            project,
+            decoded,
+            index,
+            &request_at,
+            &request["review"],
+        )?);
+        if let Some(refusal) = crate::display_schema::display_refusal(policy, source, request) {
+            diagnostics.push(
+                ConfigFinding::new(
+                    "casework.review-kind.display-hides-disclosure",
+                    format!("/reviewKinds/{}/displaySchema", refusal.kind),
+                    format!(
+                        "this displaySchema rejects what a source request can disclose to a reviewer, so Casework would hide those review tasks from every reviewer: {}",
+                        refusal.mismatches.join("; ")
+                    ),
+                    "Make this displaySchema admit each projected field's source schema under its API name, as bregctl explain change-requests reports it.",
+                )
+                .with_related(
+                    format!("/sources/{index}/requests/{}", refusal.request),
+                    "the request whose disclosure is rejected is declared here",
+                )
+                .to_diagnostic(&decoded.document),
+            );
+        }
     }
-    Ok(())
+    Ok(diagnostics)
 }
 
-fn check_request_review_binding(
-    policy: &CaseworkProject,
-    source: &SourcePolicy,
-    path: &Path,
-    root: &Value,
+fn request_review_binding(
+    project: &Path,
+    decoded: &Decoded<CaseworkProject>,
+    index: usize,
+    request_at: &str,
     review: &Value,
-) -> Result<()> {
+) -> Result<Option<Diagnostic>> {
     if review.get("mode").and_then(Value::as_str) == Some("none") {
-        return Ok(());
+        return Ok(None);
     }
-    let source_revision = root["sourceRevision"].as_str().context(
-        "source description sourceRevision was not a string despite passing description validation",
-    )?;
+    let policy = &decoded.value;
+    let source = &policy.sources[index];
     let policy_id = review["policyId"].as_str().context(
         "source description review.policyId was not a string despite passing description validation",
     )?;
-    let source_id = source.id.as_str();
-    let rendered_path = path.display();
-    let Some(kind) = policy.review_kinds.iter().find(|kind| kind.id == policy_id) else {
-        bail!(
-            "source {source_id} description {rendered_path} pins review.policyId {policy_id:?} at sourceRevision {source_revision:?}, but casework.yaml declares no reviewKinds[].id matching {policy_id:?} as pinned; declare a reviewKinds entry with id {policy_id:?} in casework.yaml, or re-run `caseworkctl source add` to repin a policy that resolves"
-        );
+    let pinned = nameable(policy_id).map_or_else(
+        || "a review kind".to_owned(),
+        |policy_id| format!("review kind {policy_id}"),
+    );
+    let at = format!("/sources/{index}/description");
+    let repin = source_add_command(project, index);
+    let named_here = "the source description that pins it is named here";
+    let finding = match policy
+        .review_kinds
+        .iter()
+        .position(|kind| kind.id == policy_id)
+    {
+        None => ConfigFinding::new(
+            "casework.source-description.unknown-review-kind",
+            at,
+            format!("the imported source description pins {pinned}, which reviewKinds does not declare"),
+            format!("Declare that review kind under reviewKinds, or repin one that resolves with {repin}."),
+        ),
+        Some(kind_index) => {
+            let kind = &policy.review_kinds[kind_index];
+            // Mirrors the producer filter `caseworkctl source add` applies
+            // when it chooses the producer it pins: an admitting producer is
+            // one whose sourceNamespaces contains this source's id and whose
+            // kinds contains the pinned policy id. Only the filter is
+            // mirrored, not `source add`'s exactly-one rule: that command has
+            // to pick the single identity it writes into the description,
+            // while the runtime resolves a producer by the authenticated
+            // actor's profile, issuer, and subject in
+            // ReviewRuntime::producer_for_actor. Two identities admitting one
+            // source and policy are a working failover pair, not a broken
+            // binding.
+            let admitted = policy.review_producers.iter().any(|producer| {
+                producer
+                    .source_namespaces
+                    .iter()
+                    .any(|namespace| namespace.as_str() == source.id)
+                    && producer.kinds.iter().any(|kind| kind.as_str() == policy_id)
+            });
+            if kind.purpose != ReviewKindPurpose::Approval {
+                ConfigFinding::new(
+                    "casework.source-description.review-kind-not-approval",
+                    format!("/reviewKinds/{kind_index}/purpose"),
+                    format!("the imported source description of /sources/{index} pins {pinned}, whose purpose must be approval"),
+                    format!("Write purpose: approval, or repin a review kind that qualifies with {repin}."),
+                )
+                .with_related(at, named_here)
+            } else if kind.context_strategy != ReviewContextStrategy::Source {
+                ConfigFinding::new(
+                    "casework.source-description.review-kind-not-source-context",
+                    format!("/reviewKinds/{kind_index}/contextStrategy"),
+                    format!("the imported source description of /sources/{index} pins {pinned}, whose contextStrategy must be source"),
+                    format!("Write contextStrategy: source, or repin a review kind that qualifies with {repin}."),
+                )
+                .with_related(at, named_here)
+            } else if !admitted {
+                ConfigFinding::new(
+                    "casework.source-description.review-not-admitted",
+                    at,
+                    format!("no review producer admits this source for {pinned}, which the imported source description pins"),
+                    format!("Add this source's id to the sourceNamespaces, and the review kind to the kinds, of a review producer under reviewProducers, or repin with {repin}."),
+                )
+                .with_related("/reviewProducers", "review producers are declared here")
+            } else {
+                return Ok(None);
+            }
+        }
     };
-    if kind.purpose != ReviewKindPurpose::Approval {
-        bail!(
-            "source {source_id} description {rendered_path} pins review.policyId {policy_id:?} at sourceRevision {source_revision:?}, which resolves to a reviewKinds entry whose purpose is not approval as pinned; set reviewKinds[].purpose to approval for {policy_id:?} in casework.yaml, or re-run `caseworkctl source add` to repin a policy that qualifies"
-        );
-    }
-    if kind.context_strategy != ReviewContextStrategy::Source {
-        bail!(
-            "source {source_id} description {rendered_path} pins review.policyId {policy_id:?} at sourceRevision {source_revision:?}, which resolves to a reviewKinds entry whose contextStrategy is not source as pinned; set reviewKinds[].contextStrategy to source for {policy_id:?} in casework.yaml, or re-run `caseworkctl source add` to repin a policy that qualifies"
-        );
-    }
-    // Mirrors the producer filter `caseworkctl source add` applies at
-    // crates/registry-caseworkctl/src/source_add.rs:450-464: an admitting
-    // producer is one whose sourceNamespaces contains this source's id and
-    // whose kinds contains the pinned policy id. Only the filter is mirrored,
-    // not `source add`'s exactly-one rule: that command has to pick the single
-    // identity it writes into the description, while the runtime resolves a
-    // producer by the authenticated actor's profile, issuer, and subject in
-    // ReviewRuntime::producer_for_actor. Two identities admitting one source
-    // and policy are a working failover pair, not a broken binding.
-    let admitted = policy.review_producers.iter().any(|producer| {
-        producer
-            .source_namespaces
-            .iter()
-            .any(|namespace| namespace.as_str() == source_id)
-            && producer.kinds.iter().any(|kind| kind.as_str() == policy_id)
+    let mut diagnostic = finding.to_diagnostic(&decoded.document);
+    diagnostic.related.push(Related {
+        file: project.join(&source.description).display().to_string(),
+        line: None,
+        column: None,
+        path: format!("{request_at}/review/policyId"),
+        message: "the imported source description pins the review kind here".to_owned(),
     });
-    if !admitted {
-        bail!(
-            "source {source_id} description {rendered_path} pins review.policyId {policy_id:?} at sourceRevision {source_revision:?}, but casework.yaml admits no reviewProducers[] entry whose sourceNamespaces includes {source_id:?} and whose kinds includes {policy_id:?} as pinned; declare a reviewProducers[] entry admitting source {source_id:?} for review kind {policy_id:?} in casework.yaml, or re-run `caseworkctl source add` to repin a policy a producer admits"
-        );
-    }
-    Ok(())
+    Ok(Some(diagnostic))
 }
 
 /// Attach the audit destination an applying operator command writes to. It
@@ -1820,8 +2215,13 @@ fn async_runtime() -> Result<tokio::runtime::Runtime> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(
+        clippy::disallowed_methods,
+        reason = "tests read back the YAML the code under test wrote, or a published contract or fixture, to assert on it; they read no operator configuration"
+    )]
     use super::*;
-    use registry_platform_config::{verify_package, ConfigBlockErrorKind, SUM_FILE};
+    use registry_casework_core::CaseworkFixture;
+    use registry_platform_config::{verify_package, SUM_FILE};
 
     /// Package the authored project where the generated runtime example
     /// selects it, as `caseworkctl package . --output .casework/package` does.
@@ -1832,7 +2232,7 @@ mod tests {
 
     #[test]
     fn template_has_only_checkpoint_capabilities() {
-        let policy: CaseworkProject = serde_norway::from_str(CASEWORK_YAML).unwrap();
+        let policy = CaseworkProject::from_slice(CASEWORK_YAML.as_bytes()).unwrap();
         policy.check().unwrap();
         assert_eq!(policy.sources.len(), 1);
         assert_eq!(policy.queues.len(), 1);
@@ -1840,7 +2240,7 @@ mod tests {
 
     #[test]
     fn starter_display_schema_admits_every_projected_source_field() {
-        let policy: CaseworkProject = serde_norway::from_str(CASEWORK_YAML).unwrap();
+        let policy = CaseworkProject::from_slice(CASEWORK_YAML.as_bytes()).unwrap();
         let description: Value = serde_json::from_str(BREG_SOURCE_DESCRIPTION).unwrap();
         let authored = &policy.sources[0].requests[0].context_projection;
         let kind = policy
@@ -1886,7 +2286,7 @@ mod tests {
 
     #[test]
     fn starter_producer_subject_matches_its_dev_client_principal() {
-        let policy: CaseworkProject = serde_norway::from_str(CASEWORK_YAML).unwrap();
+        let policy = CaseworkProject::from_slice(CASEWORK_YAML.as_bytes()).unwrap();
         let clients: Value = serde_norway::from_str(PROFESSIONAL_REVIEW_DEV_CLIENTS).unwrap();
         for producer in &policy.review_producers {
             let profile = &policy
@@ -1915,7 +2315,7 @@ mod tests {
 
     #[test]
     fn starter_review_excludes_the_person_who_submitted_the_request() {
-        let policy: CaseworkProject = serde_norway::from_str(CASEWORK_YAML).unwrap();
+        let policy = CaseworkProject::from_slice(CASEWORK_YAML.as_bytes()).unwrap();
         policy.check().unwrap();
         for kind in &policy.review_kinds {
             for stage in &kind.stages {
@@ -2117,7 +2517,8 @@ mod tests {
                 "{chain}"
             );
             assert!(
-                chain.contains("secret:file/migration-database-url could not be resolved"),
+                chain.contains("could not be resolved")
+                    && !chain.contains("secret:file/migration-database-url"),
                 "{chain}"
             );
             assert!(!chain.contains(RUNTIME_URL), "{chain}");
@@ -2211,18 +2612,123 @@ mod tests {
         );
     }
 
+    /// The fixture `text` read as `fixtures/starter.yaml` of the
+    /// professional-review starter, with what `check` and `test` report.
+    fn starter_fixture(text: &str) -> (Report, Vec<Diagnostic>) {
+        let root = crate::canonical_tempdir();
+        let project = CaseworkProject::read("casework.yaml", CASEWORK_YAML.as_bytes()).unwrap();
+        let fixture = CaseworkFixture::read("fixtures/starter.yaml", text.as_bytes()).unwrap();
+        let offline = OfflineFiles {
+            fixtures: vec![crate::offline::Located {
+                relative: "fixtures/starter.yaml".to_owned(),
+                decoded: fixture,
+            }],
+            ..OfflineFiles::default()
+        };
+        let resolved = crate::offline::resolve(&project, &offline);
+        let evaluated =
+            crate::offline::evaluate_fixture(root.path(), &project, &offline.fixtures[0].decoded)
+                .unwrap();
+        (resolved, evaluated)
+    }
+
     #[test]
     fn fixture_exercises_effective_defaults() {
-        let fixture: Value = serde_norway::from_str(FIXTURE).unwrap();
-        let effective = json!({"sources":[{"sourceId":"professional-licences","requests":[
-            {"entity":"scope-correction","queue":"corrections","applicationMode":"manual","target":{"elapsed":"PT48H"}}
-        ]}]});
-        validate_fixture(
-            &fixture,
-            &effective,
-            &serde_norway::from_str(CASEWORK_YAML).unwrap(),
+        let (resolved, evaluated) = starter_fixture(FIXTURE);
+        assert!(resolved.is_empty(), "{}", resolved.render_human());
+        assert!(evaluated.is_empty(), "{evaluated:?}");
+    }
+
+    #[test]
+    fn a_fixture_target_is_compared_in_minutes_and_placed_at_its_member() {
+        let (_, evaluated) = starter_fixture(&FIXTURE.replace("2880", "2881"));
+        assert_eq!(evaluated.len(), 1);
+        assert_eq!(evaluated[0].code, "casework.fixture.expectation-not-met");
+        assert_eq!(evaluated[0].path, "/expect/target/elapsedMinutes");
+        assert_eq!(evaluated[0].source.as_ref().unwrap().line, Some(9));
+        assert!(!evaluated[0].message.contains("2880"));
+        let (_, evaluated) = starter_fixture(&FIXTURE.replace("{elapsedMinutes: 2880}", "none"));
+        assert_eq!(evaluated[0].path, "/expect/target");
+        let (_, evaluated) =
+            starter_fixture(&FIXTURE.replace("\n  target: {elapsedMinutes: 2880}", ""));
+        assert!(
+            evaluated.is_empty(),
+            "an absent target is not checked: {evaluated:?}"
+        );
+    }
+
+    #[test]
+    fn a_fixture_reference_casework_yaml_does_not_declare_is_refused_with_a_note_there() {
+        let (resolved, _) = starter_fixture(
+            &FIXTURE
+                .replace("queue: corrections", "queue: elsewhere")
+                .replace("entity: scope-correction", "entity: transfer"),
+        );
+        let placed = resolved
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| {
+                (
+                    diagnostic.code.as_str(),
+                    diagnostic.path.as_str(),
+                    diagnostic.related[0].path.as_str(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            placed,
+            [
+                (
+                    "casework.fixture.unknown-reference",
+                    "/expect/queue",
+                    "/queues"
+                ),
+                (
+                    "casework.fixture.unknown-reference",
+                    "/request/entity",
+                    "/sources/0/requests"
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn check_refuses_a_fixture_display_value_of_another_type_naming_the_declared_type() {
+        let root = crate::canonical_tempdir();
+        let project = root.path().join("payment-review");
+        let example = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/casework/examples/payment-review");
+        fs::create_dir_all(project.join("fixtures")).unwrap();
+        fs::copy(example.join("casework.yaml"), project.join("casework.yaml")).unwrap();
+        let fixture = fs::read_to_string(example.join("fixtures/payment-review.yaml")).unwrap();
+        assert!(fixture.contains("amountMinor: 12500"));
+        fs::write(
+            project.join("fixtures/payment-review.yaml"),
+            fixture.replace("amountMinor: 12500", "amountMinor: \"2031-01-02T03:04:05\""),
         )
         .unwrap();
+        let error = check(&project, false, false).unwrap_err();
+        let report = crate::configuration_report(&error).unwrap();
+        let refused = report
+            .diagnostics()
+            .iter()
+            .filter(|diagnostic| diagnostic.code == "casework.fixture.display-mismatch")
+            .collect::<Vec<_>>();
+        assert_eq!(refused.len(), 1, "{}", report.render_human());
+        let refused = refused[0];
+        assert_eq!(refused.path, "/review/display/amountMinor");
+        assert_eq!(refused.source.as_ref().unwrap().line, Some(8));
+        assert_eq!(
+            refused.message,
+            "the review kind's displaySchema declares this value as integer, and it is written as string"
+        );
+        assert_eq!(
+            refused.related[0].path,
+            "/reviewKinds/0/displaySchema/properties/amountMinor"
+        );
+        assert_eq!(report.files_checked(), Some(2));
+        let rendered = report.render_human() + &report.to_json_value().to_string();
+        assert!(!rendered.contains("2031-01-02"), "{rendered}");
     }
 
     #[test]
@@ -2253,8 +2759,11 @@ mod tests {
                 .contains(&json!("dev-clients.yaml")));
             let clients = project.join("dev-clients.yaml");
             let text = fs::read_to_string(&clients).unwrap();
-            let value: Value = serde_norway::from_str(&text).unwrap();
-            assert_eq!(value["version"], 1);
+            let value = crate::dev::config::read("dev-clients.yaml", text.as_bytes())
+                .unwrap()
+                .document
+                .to_json_value();
+            assert_eq!(value["kind"], "CaseworkDevClients");
             let runtime: Value = serde_norway::from_str(
                 &fs::read_to_string(project.join("runtime.example.yaml")).unwrap(),
             )
@@ -2539,19 +3048,17 @@ mod tests {
             fs::write(&runtime_config, valid.replace(authored, malformed)).unwrap();
 
             let error = doctor(&runtime_config).unwrap_err();
-            let runtime_error = error
-                .chain()
-                .find_map(|cause| cause.downcast_ref::<registry_casework::RuntimeConfigError>());
-            assert!(
-                matches!(
-                    runtime_error,
-                    Some(registry_casework::RuntimeConfigError::Block(block))
-                        if block.kind() == ConfigBlockErrorKind::InvalidSecretReference
-                            && block.field() == setting
-                ),
-                "{error:#}"
-            );
-            let refusal = format!("{error:#}");
+            let report = crate::configuration_report(&error).expect("a positioned report");
+            let [diagnostic] = report.diagnostics() else {
+                panic!("one diagnostic: {report}")
+            };
+            assert_eq!(diagnostic.code, "casework.runtime.invalid-secret-reference");
+            assert_eq!(diagnostic.path, format!("/{}", setting.replace('.', "/")));
+            assert!(diagnostic
+                .source
+                .as_ref()
+                .is_some_and(|source| source.line.is_some()));
+            let refusal = report.render_human();
             assert!(
                 refusal.contains(&format!("{setting} must be an exact secret")),
                 "{refusal}"
@@ -2577,16 +3084,17 @@ mod tests {
         fs::write(&runtime_config, serde_norway::to_string(&document).unwrap()).unwrap();
 
         let error = doctor(&runtime_config).unwrap_err();
-        let runtime_error = error
-            .chain()
-            .find_map(|cause| cause.downcast_ref::<registry_casework::RuntimeConfigError>());
-        assert!(
-            matches!(
-                runtime_error,
-                Some(registry_casework::RuntimeConfigError::InvalidReviewCompletionAuth { path })
-                    if path == "reviewCompletionDestinations.receiver.auth.header"
-            ),
-            "{error:#}"
+        let report = crate::configuration_report(&error).expect("a positioned report");
+        let [diagnostic] = report.diagnostics() else {
+            panic!("one diagnostic: {report}")
+        };
+        assert_eq!(
+            diagnostic.code,
+            "casework.runtime.invalid-review-completion-auth"
+        );
+        assert_eq!(
+            diagnostic.path,
+            "/reviewCompletionDestinations/receiver/auth/header"
         );
     }
 
@@ -2674,14 +3182,36 @@ mod tests {
         assert_eq!(checked["status"], "complete");
         let tested = test(&project).unwrap();
         assert_eq!(tested["authoringStatus"], "complete");
-        assert_eq!(tested["findings"], json!([]));
+        assert_eq!(tested["diagnostics"], json!([]));
+        assert_eq!(tested["filesChecked"], 3);
         assert_eq!(tested["proofBoundary"], "offline_synthetic");
         assert_eq!(tested["productionClosure"], false);
         let fixture = project.join("fixtures/standalone-decision.yaml");
-        let mut value = load_yaml(&fixture, "fixture").unwrap();
-        value["review"]["display"]["undeclared"] = json!("synthetic");
-        fs::write(&fixture, serde_norway::to_string(&value).unwrap()).unwrap();
-        assert!(test(&project).is_err());
+        let written = fs::read_to_string(&fixture).unwrap();
+        assert_eq!(
+            written.lines().next(),
+            Some("# yaml-language-server: $schema=../.casework/schemas/fixture.schema.json")
+        );
+        assert_eq!(
+            fs::read_to_string(project.join(".casework/schemas/fixture.schema.json")).unwrap(),
+            FIXTURE_SCHEMA
+        );
+        fs::write(
+            &fixture,
+            written.replace(
+                "    reference: synthetic-batch-0042\n",
+                "    reference: synthetic-batch-0042\n    undeclared: synthetic\n",
+            ),
+        )
+        .unwrap();
+        let error = test(&project).unwrap_err();
+        let report = crate::configuration_report(&error).unwrap();
+        assert_eq!(
+            report.diagnostics()[0].code,
+            "casework.fixture.display-mismatch"
+        );
+        assert_eq!(report.diagnostics()[0].path, "/review/display");
+        fs::write(&fixture, written).unwrap();
         package_locally(&project);
         let runtime = RuntimeConfig::load(project.join("runtime.example.yaml")).unwrap();
         assert!(runtime.sources.is_empty());
@@ -2689,13 +3219,51 @@ mod tests {
             fs::read_to_string(project.join(".casework/schemas/runtime.schema.json")).unwrap(),
             RUNTIME_SCHEMA
         );
+        assert_eq!(
+            fs::read_to_string(project.join(".casework/schemas/project.schema.json")).unwrap(),
+            PROJECT_SCHEMA
+        );
+        assert_eq!(
+            fs::read_to_string(project.join(".casework/schemas/dev-clients.schema.json")).unwrap(),
+            DEV_CLIENTS_SCHEMA
+        );
+        for (file, schema) in [
+            ("casework.yaml", "project.schema.json"),
+            ("runtime.example.yaml", "runtime.schema.json"),
+            ("dev-clients.yaml", "dev-clients.schema.json"),
+        ] {
+            let text = fs::read_to_string(project.join(file)).unwrap();
+            assert_eq!(
+                text.lines().next(),
+                Some(
+                    format!("# yaml-language-server: $schema=./.casework/schemas/{schema}")
+                        .as_str()
+                ),
+                "{file} names its schema on its first line"
+            );
+        }
         let settings: Value =
             serde_json::from_slice(&fs::read(project.join(".vscode/settings.json")).unwrap())
                 .unwrap();
         assert_eq!(
+            settings["yaml.schemas"]["./.casework/schemas/project.schema.json"],
+            json!(["casework.yaml"])
+        );
+        assert_eq!(
             settings["yaml.schemas"]["./.casework/schemas/runtime.schema.json"],
             json!(["runtime.example.yaml", "runtime.yaml"])
         );
+        assert_eq!(
+            settings["yaml.schemas"]["./.casework/schemas/dev-clients.schema.json"],
+            json!(["dev-clients.yaml"])
+        );
+    }
+
+    #[test]
+    fn the_standalone_example_holds_the_clients_init_writes() {
+        let example = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/casework/examples/standalone-decision/dev-clients.yaml");
+        assert_eq!(fs::read_to_string(example).unwrap(), STANDALONE_DEV_CLIENTS);
     }
 
     #[test]
@@ -2930,6 +3498,79 @@ mod tests {
         (root, project)
     }
 
+    /// A source whose description is not imported yet leaves the checks of
+    /// the sources that are imported running.
+    #[test]
+    fn a_source_awaiting_import_does_not_hide_a_simulation_mismatch_on_another() {
+        let yaml = CASEWORK_YAML
+            .replace(
+                "        contextProjection:\n",
+                "        projection: [reason]\n        contextProjection:\n",
+            )
+            .replace(
+                "queues:\n",
+                "  - id: awaiting-register\n    adapter: breg\n    description: sources/awaiting.json\n    requests:\n      - entity: transfer\n        queue: corrections\nqueues:\n",
+            );
+        assert_ne!(yaml, CASEWORK_YAML);
+        let (_root, project) = write_offline_project(&yaml, BREG_SOURCE_DESCRIPTION);
+        fs::create_dir_all(project.join("simulations")).unwrap();
+        fs::write(
+            project.join("simulations/mistyped.yaml"),
+            "apiVersion: id.registrystack.org/formats/casework/simulation/v1alpha1\nkind: CaseworkSimulation\nid: mistyped\nsource: professional-licences\nsubject:\n  entity: scope-correction\n  recordId: request-1\n  version: \"1\"\n  activity: apply\n  fields: {reason: 5}\nnow: \"2026-09-11T17:00:00+07:00\"\nexpect:\n  queue: corrections\n",
+        )
+        .unwrap();
+
+        let error = check(&project, false, false).unwrap_err();
+        let report = error.downcast_ref::<Report>().unwrap();
+        let codes = report
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| diagnostic.code.as_str())
+            .collect::<Vec<_>>();
+        assert!(
+            codes.contains(&"casework.simulation.field-mismatch"),
+            "{report}"
+        );
+        assert!(codes.contains(&MISSING_SOURCE_DESCRIPTION), "{report}");
+    }
+
+    #[test]
+    fn read_project_places_every_source_caseworkctl_cannot_connect() {
+        let request = "      - entity: scope-correction\n        queue: corrections\n";
+        let extra = (0..32)
+            .map(|index| format!("      - entity: extra-{index}\n        queue: corrections\n"))
+            .collect::<String>();
+        let yaml = CASEWORK_YAML
+            .replace("    adapter: breg\n", "    adapter: other\n")
+            .replace(request, &format!("{extra}{request}"));
+        assert_ne!(yaml, CASEWORK_YAML);
+        let (_root, project) = write_offline_project(&yaml, BREG_SOURCE_DESCRIPTION);
+
+        let error = read_project(&project).unwrap_err();
+        let report = error.downcast_ref::<Report>().unwrap();
+        let placed = report
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| (diagnostic.code.as_str(), diagnostic.path.as_str()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            placed,
+            [
+                ("casework.source.unsupported-adapter", "/sources/0/adapter"),
+                ("casework.source.too-many-requests", "/sources/0/requests"),
+            ],
+            "{report}"
+        );
+        for diagnostic in report.diagnostics() {
+            let source = diagnostic.source.as_ref().unwrap();
+            assert_eq!(
+                source.file,
+                project.join("casework.yaml").display().to_string()
+            );
+            assert!(source.line.is_some(), "{report}");
+        }
+    }
+
     #[test]
     fn check_source_descriptions_refuses_an_unresolved_review_policy_id() {
         let mut description: Value = serde_json::from_str(BREG_SOURCE_DESCRIPTION).unwrap();
@@ -2938,8 +3579,19 @@ mod tests {
         let (_root, project) = write_offline_project(CASEWORK_YAML, &description);
 
         let error = format!("{:#}", check_source_descriptions(&project).unwrap_err());
+        assert!(
+            error.contains("casework.source-description.unknown-review-kind"),
+            "{error}"
+        );
+        assert!(
+            error.contains("casework.yaml:26:18 /sources/0/description"),
+            "{error}"
+        );
         assert!(error.contains("missing-review-kind"), "{error}");
-        assert!(error.contains("sha256:source-revision"), "{error}");
+        assert!(
+            error.contains("professional-licences.json /request/review/policyId"),
+            "{error}"
+        );
     }
 
     // registrystack/registry-stack#1467 (CASE-32): a policy that names a
@@ -2947,8 +3599,12 @@ mod tests {
     // a stale binding, so repeating source add cannot fix it and the refusal
     // must not suggest it.
     fn assert_names_unpublished_policy_field(error: &str, key_path: &str) {
+        assert!(
+            error.contains("casework.source.unpublished-field"),
+            "{error}"
+        );
+        assert!(error.contains("casework.yaml:"), "{error}");
         assert!(error.contains(key_path), "{error}");
-        assert!(error.contains("priority"), "{error}");
         assert!(error.contains("does not publish"), "{error}");
         assert!(!error.contains("source add"), "{error}");
         assert!(!error.contains("adapter contract"), "{error}");
@@ -2966,7 +3622,7 @@ mod tests {
         let error = format!("{:#}", check_source_descriptions(&project).unwrap_err());
         assert_names_unpublished_policy_field(
             &error,
-            "sources[0].requests[0].contextProjection[4]",
+            " /sources/0/requests/0/contextProjection/4\n",
         );
     }
 
@@ -2982,7 +3638,7 @@ mod tests {
         let error = format!("{:#}", check_source_descriptions(&project).unwrap_err());
         assert_names_unpublished_policy_field(
             &error,
-            "sources[0].requests[0].displayReference.field",
+            " /sources/0/requests/0/displayReference/field\n",
         );
     }
 
@@ -2996,7 +3652,7 @@ mod tests {
         let (_root, project) = write_offline_project(&yaml, BREG_SOURCE_DESCRIPTION);
 
         let error = format!("{:#}", check_source_descriptions(&project).unwrap_err());
-        assert_names_unpublished_policy_field(&error, "sources[0].requests[0].projection[1]");
+        assert_names_unpublished_policy_field(&error, " /sources/0/requests/0/projection/1\n");
     }
 
     #[test]
@@ -3014,7 +3670,12 @@ mod tests {
             error.contains("does not match the exact BReg adapter contract bound to this source"),
             "{error}"
         );
-        assert!(error.contains("repeat source add"), "{error}");
+        assert!(
+            error.contains("casework.source-description.contract-mismatch"),
+            "{error}"
+        );
+        assert!(error.contains(" /sources/0/description\n"), "{error}");
+        assert!(error.contains("Repeat source add"), "{error}");
         assert!(!error.contains("does not publish"), "{error}");
     }
 
@@ -3109,16 +3770,51 @@ mod tests {
         let (_root, project) = write_offline_project(CASEWORK_YAML, &description);
 
         let error = format!("{:#}", check_source_descriptions(&project).unwrap_err());
-        assert!(error.contains("review kind scope-correction"), "{error}");
-        assert!(error.contains("licensedActivities"), "{error}");
         assert!(
-            error.contains("\"example-general-nursing-care\""),
+            error.contains("casework.review-kind.display-hides-disclosure"),
             "{error}"
         );
-        assert!(error.contains("\"example-health-education\""), "{error}");
+        assert!(error.contains(" /reviewKinds/0/displaySchema\n"), "{error}");
+        assert!(!error.contains("licensedActivities"), "{error}");
+        assert!(!error.contains("example-general-nursing-care"), "{error}");
+        assert!(!error.contains("\"example-health-education\""), "{error}");
         // A value both sides admit is not an offending value.
         assert!(!error.contains("\"example-assessment\""), "{error}");
         assert!(error.contains("hide"), "{error}");
+    }
+
+    #[test]
+    fn a_display_mismatch_reports_positions_and_reasons_never_authored_text() {
+        let marker = "CANARY CONFIG VALUE";
+        let description = description_with_field_schema(
+            "licensedActivities",
+            licensed_activities_schema(&[marker, "example-assessment"]),
+        );
+        let (_root, project) = write_offline_project(CASEWORK_YAML, &description);
+        let error = format!("{:#}", check_source_descriptions(&project).unwrap_err());
+        assert!(
+            error.contains("casework.review-kind.display-hides-disclosure"),
+            "{error}"
+        );
+        assert!(error.contains("contextProjection position"), "{error}");
+        for authored in [marker, "licensedActivities", "licensed-activities"] {
+            assert!(!error.contains(authored), "{error}");
+        }
+
+        let mut described: Value = serde_json::from_str(BREG_SOURCE_DESCRIPTION).unwrap();
+        for field in described["request"]["fields"].as_array_mut().unwrap() {
+            field["schema"]["description"] = json!(marker);
+        }
+        let undeclared = CASEWORK_YAML.replace(
+            "        supportingReference: {type: string, minLength: 1, maxLength: 500}\n",
+            "",
+        );
+        let (_root, project) = write_offline_project(&undeclared, &described.to_string());
+        let error = format!("{:#}", check_source_descriptions(&project).unwrap_err());
+        assert!(error.contains("additionalProperties"), "{error}");
+        for authored in [marker, "supportingReference", "supporting-reference"] {
+            assert!(!error.contains(authored), "{error}");
+        }
     }
 
     // registrystack/registry-stack#1341: a source schema whose items enum
@@ -3136,12 +3832,13 @@ mod tests {
         let (_root, project) = write_offline_project(CASEWORK_YAML, &description);
 
         let error = format!("{:#}", check_source_descriptions(&project).unwrap_err());
-        assert!(error.contains("review kind scope-correction"), "{error}");
-        assert!(error.contains("licensedActivities"), "{error}");
         assert!(
-            error.contains("\"example-general-nursing-care\""),
+            error.contains("casework.review-kind.display-hides-disclosure"),
             "{error}"
         );
+        assert!(error.contains(" /reviewKinds/0/displaySchema\n"), "{error}");
+        assert!(!error.contains("licensedActivities"), "{error}");
+        assert!(!error.contains("example-general-nursing-care"), "{error}");
         assert!(error.contains("hide"), "{error}");
     }
 
@@ -3170,9 +3867,13 @@ mod tests {
         let (_root, project) = write_offline_project(&yaml, BREG_SOURCE_DESCRIPTION);
 
         let error = format!("{:#}", check_source_descriptions(&project).unwrap_err());
-        assert!(error.contains("review kind scope-correction"), "{error}");
-        assert!(error.contains("supportingReference"), "{error}");
-        assert!(error.contains("supporting-reference"), "{error}");
+        assert!(
+            error.contains("casework.review-kind.display-hides-disclosure"),
+            "{error}"
+        );
+        assert!(error.contains(" /reviewKinds/0/displaySchema\n"), "{error}");
+        assert!(!error.contains("supportingReference"), "{error}");
+        assert!(!error.contains("supporting-reference"), "{error}");
         assert!(error.contains("additionalProperties"), "{error}");
     }
 
@@ -3186,8 +3887,12 @@ mod tests {
         let (_root, project) = write_offline_project(&yaml, BREG_SOURCE_DESCRIPTION);
 
         let error = format!("{:#}", check_source_descriptions(&project).unwrap_err());
-        assert!(error.contains("review kind scope-correction"), "{error}");
-        assert!(error.contains("record"), "{error}");
+        assert!(
+            error.contains("casework.review-kind.display-hides-disclosure"),
+            "{error}"
+        );
+        assert!(error.contains(" /reviewKinds/0/displaySchema\n"), "{error}");
+        assert!(!error.contains("record"), "{error}");
         assert!(error.contains("object"), "{error}");
         assert!(error.contains("string"), "{error}");
     }
@@ -3275,9 +3980,13 @@ mod tests {
         let (_root, project) = write_offline_project(&yaml, BREG_SOURCE_DESCRIPTION);
 
         let error = format!("{:#}", check_source_descriptions(&project).unwrap_err());
-        assert!(error.contains("review kind scope-correction"), "{error}");
-        assert!(error.contains("supportingReference"), "{error}");
-        assert!(error.contains("supporting-reference"), "{error}");
+        assert!(
+            error.contains("casework.review-kind.display-hides-disclosure"),
+            "{error}"
+        );
+        assert!(error.contains(" /reviewKinds/0/displaySchema\n"), "{error}");
+        assert!(!error.contains("supportingReference"), "{error}");
+        assert!(!error.contains("supporting-reference"), "{error}");
         assert!(error.contains("additionalProperties"), "{error}");
     }
 
@@ -3301,9 +4010,13 @@ mod tests {
         let (_root, project) = write_offline_project(&yaml, BREG_SOURCE_DESCRIPTION);
 
         let error = format!("{:#}", check_source_descriptions(&project).unwrap_err());
-        assert!(error.contains("review kind scope-correction"), "{error}");
+        assert!(
+            error.contains("casework.review-kind.display-hides-disclosure"),
+            "{error}"
+        );
+        assert!(error.contains(" /reviewKinds/0/displaySchema\n"), "{error}");
         assert!(error.contains("allOf branch 1"), "{error}");
-        assert!(error.contains("authorizationConditions"), "{error}");
+        assert!(!error.contains("authorizationConditions"), "{error}");
         assert!(error.contains("number"), "{error}");
         assert!(error.contains("string"), "{error}");
     }
@@ -3318,9 +4031,13 @@ mod tests {
         let (_root, project) = write_offline_project(&yaml, BREG_SOURCE_DESCRIPTION);
 
         let error = format!("{:#}", check_source_descriptions(&project).unwrap_err());
-        assert!(error.contains("review kind scope-correction"), "{error}");
+        assert!(
+            error.contains("casework.review-kind.display-hides-disclosure"),
+            "{error}"
+        );
+        assert!(error.contains(" /reviewKinds/0/displaySchema\n"), "{error}");
         assert!(error.contains("allOf branch 1"), "{error}");
-        assert!(error.contains("authorizationConditions"), "{error}");
+        assert!(!error.contains("authorizationConditions"), "{error}");
         assert!(error.contains("additionalProperties"), "{error}");
         // The branch's other declared properties are compatible, so they
         // must not also be reported.
@@ -3337,7 +4054,11 @@ mod tests {
         let (_root, project) = write_offline_project(&yaml, BREG_SOURCE_DESCRIPTION);
 
         let error = format!("{:#}", check_source_descriptions(&project).unwrap_err());
-        assert!(error.contains("review kind scope-correction"), "{error}");
+        assert!(
+            error.contains("casework.review-kind.display-hides-disclosure"),
+            "{error}"
+        );
+        assert!(error.contains(" /reviewKinds/0/displaySchema\n"), "{error}");
         assert!(error.contains("allOf branch 1"), "{error}");
         assert!(error.contains("admits no value"), "{error}");
     }
@@ -3387,9 +4108,13 @@ mod tests {
         let (_root, project) = write_offline_project(&yaml, BREG_SOURCE_DESCRIPTION);
 
         let error = format!("{:#}", check_source_descriptions(&project).unwrap_err());
-        assert!(error.contains("review kind scope-correction"), "{error}");
-        assert!(error.contains("supportingReference"), "{error}");
-        assert!(error.contains("supporting-reference"), "{error}");
+        assert!(
+            error.contains("casework.review-kind.display-hides-disclosure"),
+            "{error}"
+        );
+        assert!(error.contains(" /reviewKinds/0/displaySchema\n"), "{error}");
+        assert!(!error.contains("supportingReference"), "{error}");
+        assert!(!error.contains("supporting-reference"), "{error}");
         assert!(error.contains("additionalProperties"), "{error}");
     }
 
@@ -3406,10 +4131,14 @@ mod tests {
         let (_root, project) = write_offline_project(&yaml, BREG_SOURCE_DESCRIPTION);
 
         let error = format!("{:#}", check_source_descriptions(&project).unwrap_err());
-        assert!(error.contains("review kind scope-correction"), "{error}");
-        assert!(error.contains("supportingReference"), "{error}");
+        assert!(
+            error.contains("casework.review-kind.display-hides-disclosure"),
+            "{error}"
+        );
+        assert!(error.contains(" /reviewKinds/0/displaySchema\n"), "{error}");
+        assert!(!error.contains("supportingReference"), "{error}");
         assert!(error.contains("patternProperties"), "{error}");
-        assert!(error.contains("^supporting"), "{error}");
+        assert!(!error.contains("^supporting"), "{error}");
         assert!(error.contains("number"), "{error}");
         assert!(error.contains("string"), "{error}");
     }
@@ -3469,10 +4198,13 @@ mod tests {
             write_offline_project(&renamed_namespace_yaml, BREG_SOURCE_DESCRIPTION);
 
         let error = format!("{:#}", check_source_descriptions(&project).unwrap_err());
-        assert!(error.contains("admits no reviewProducers"), "{error}");
-        assert!(error.contains("professional-licences"), "{error}");
+        assert!(
+            error.contains("casework.source-description.review-not-admitted"),
+            "{error}"
+        );
+        assert!(error.contains("no review producer admits"), "{error}");
         assert!(error.contains("scope-correction"), "{error}");
-        assert!(error.contains("sha256:source-revision"), "{error}");
+        assert!(error.contains(" /reviewProducers "), "{error}");
     }
 
     #[test]
@@ -3492,8 +4224,11 @@ mod tests {
             write_offline_project(&retargeted_kind_yaml, BREG_SOURCE_DESCRIPTION);
 
         let error = format!("{:#}", check_source_descriptions(&project).unwrap_err());
-        assert!(error.contains("admits no reviewProducers"), "{error}");
-        assert!(error.contains("professional-licences"), "{error}");
+        assert!(
+            error.contains("casework.source-description.review-not-admitted"),
+            "{error}"
+        );
+        assert!(error.contains("no review producer admits"), "{error}");
         assert!(error.contains("scope-correction"), "{error}");
     }
 
@@ -3630,10 +4365,19 @@ mod tests {
             "    subject: professional-review-breg\n    initiatorProfile: staff\n",
         );
         let (_root, project) = write_offline_project(&staff_initiator, BREG_SOURCE_DESCRIPTION);
-        let refused = format!("{:#}", check(&project, false, false).unwrap_err());
-        assert!(
-            refused.contains("reviewProducers[0].initiatorProfile"),
-            "{refused}"
+        let refused = check(&project, false, false).unwrap_err();
+        let report = crate::configuration_report(&refused).expect("a positioned report");
+        let diagnostics = report
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| (diagnostic.code.as_str(), diagnostic.path.as_str()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            diagnostics,
+            [(
+                "casework.review-producer.ineligible-initiator-profile",
+                "/reviewProducers/0/initiatorProfile"
+            )]
         );
     }
 
@@ -3801,7 +4545,7 @@ mod tests {
         );
         fs::create_dir_all(project.join("fixtures")).unwrap();
         let fixture_path = project.join("fixtures/automatic.yaml");
-        let fixture = "apiVersion: registry.registrystack.org/casework-fixture/v1alpha1\nkind: CaseworkFixture\nname: automatic\nsource: {id: response-register, requestEntity: response-correction}\nexpect: {queue: corrections, applicationMode: automatic, targetElapsed: PT72H}\n";
+        let fixture = "apiVersion: id.registrystack.org/formats/casework/fixture/v1alpha1\nkind: CaseworkFixture\nid: automatic\nrequest: {source: response-register, entity: response-correction}\nexpect: {queue: corrections, applicationMode: automatic, target: {elapsedMinutes: 4320}}\n";
         fs::write(&fixture_path, fixture).unwrap();
         test(&project).expect("automatic mode fixture");
         fs::write(
@@ -3821,11 +4565,11 @@ mod tests {
         fs::create_dir_all(project.join("fixtures")).unwrap();
         fs::write(
             project.join("fixtures/response.yaml"),
-            "apiVersion: registry.registrystack.org/casework-fixture/v1alpha1\n\
+            "apiVersion: id.registrystack.org/formats/casework/fixture/v1alpha1\n\
              kind: CaseworkFixture\n\
-             name: response-window\n\
-             source: {id: response-register, requestEntity: response-correction}\n\
-             expect: {queue: corrections, applicationMode: manual, targetElapsed: PT72H}\n",
+             id: response-window\n\
+             request: {source: response-register, entity: response-correction}\n\
+             expect: {queue: corrections, applicationMode: manual, target: {elapsedMinutes: 4320}}\n",
         )
         .unwrap();
 

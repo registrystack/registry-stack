@@ -112,10 +112,20 @@ fn alternatives_keep_one_route_and_selected_identity_with_stable_inventories() {
         json!(["string", "null"])
     );
     let manifest = yaml(&export, "source-export.json");
+    assert_eq!(manifest["apiVersion"], EVIDENCE_SOURCE_EXPORT_API_VERSION);
+    assert_eq!(manifest["kind"], EVIDENCE_SOURCE_EXPORT_KIND);
+    assert!(std::str::from_utf8(file(&export, "source-export.json"))
+        .unwrap()
+        .starts_with(&format!(
+            "{{\"apiVersion\":\"{EVIDENCE_SOURCE_EXPORT_API_VERSION}\",\"kind\":\"{EVIDENCE_SOURCE_EXPORT_KIND}\","
+        )));
     for entry in manifest["artifacts"].as_array().unwrap() {
         assert_eq!(
-            entry["sha256"],
-            digest(file(&export, entry["path"].as_str().unwrap()))
+            entry["digest"],
+            format!(
+                "sha256:{}",
+                digest(file(&export, entry["path"].as_str().unwrap()))
+            )
         );
     }
     let mut reordered = options();
@@ -266,7 +276,7 @@ fn membership_behavior_reaches_helper_semantics_source_fields_and_select_authori
     );
     let mut changed_policy = original.clone();
     changed_policy["accessProfiles"][0]["permissions"].as_array_mut().unwrap().push(json!({
-        "entity":"membership","operations":["get"],"readableFields":["active"],"rowBoundaries":[]
+        "entity":"membership","operations":["get"],"readableFields":["active"],"rowBoundaries":"unrestricted"
     }));
     assert_ne!(
         before.behavior_revision,
@@ -310,7 +320,7 @@ fn reached_derived_source_consumes_its_membership_helper() {
             {"id":"enabled","type":"boolean","classification":"internal"}]
     }));
     original["accessProfiles"][0]["permissions"].as_array_mut().unwrap().push(json!({
-        "entity":"flag","operations":["get"],"readableFields":["code","enabled"],"rowBoundaries":[],
+        "entity":"flag","operations":["get"],"readableFields":["code","enabled"],"rowBoundaries":"unrestricted",
         "membershipBoundaries":boundary
     }));
     let sql = "SELECT r.id AS id, f.enabled AS active FROM registry_source.record r JOIN registry_source.flag f ON f.code = r.code";
@@ -370,7 +380,7 @@ fn refuses_a_string_selector_field_that_accepts_the_empty_value() {
     // Omitting `minLength` defaults it to 0, so `code` accepts the empty value.
     empty_allowed["entities"][0]["fields"][0] = json!({"id":"code","type":"string","maxLength":32,"required":true,"classification":"internal"});
     let diagnostic = refused(&compiled(&empty_allowed, SQL), &options());
-    assert_eq!(diagnostic.code, "evidence_source.refused");
+    assert_eq!(diagnostic.code, "breg.evidence-source.refused");
     assert!(diagnostic.message.contains("minLength"));
     // `alternatives_keep_one_route_and_selected_identity_with_stable_inventories`
     // exports the same fixture with `code` declared at `minLength: 1`, so an
@@ -383,12 +393,12 @@ fn reached_source_select_authority_is_part_of_consumed_behavior() {
     original["entities"].as_array_mut().unwrap().push(json!({"id":"flag","primaryDataset":"test-dataset","route":"flags","mutationMode":"mutable","fields":[
         {"id":"code","type":"string","maxLength":32,"classification":"internal"},
         {"id":"enabled","type":"boolean","classification":"internal"}]}));
-    original["accessProfiles"][0]["permissions"].as_array_mut().unwrap().push(json!({"entity":"flag","operations":["get"],"readableFields":["code","enabled"],"rowBoundaries":[]}));
+    original["accessProfiles"][0]["permissions"].as_array_mut().unwrap().push(json!({"entity":"flag","operations":["get"],"readableFields":["code","enabled"],"rowBoundaries":"unrestricted"}));
     let sql="SELECT r.id AS id, f.enabled AS active FROM registry_source.record r JOIN registry_source.flag f ON f.code = r.code";
     let mut selection = options();
     selection.fields = vec!["active".into()];
     let before = export_evidence_source(&compiled(&original, sql), &selection).unwrap();
-    original["accessProfiles"][0]["permissions"][1] = json!({"entity":"flag","operations":["create"],"writableFields":["code","enabled"],"rowBoundaries":[]});
+    original["accessProfiles"][0]["permissions"][1] = json!({"entity":"flag","operations":["create"],"writableFields":["code","enabled"],"rowBoundaries":"unrestricted"});
     let after = export_evidence_source(&compiled(&original, sql), &selection).unwrap();
     assert_ne!(
         before.behavior_revision, after.behavior_revision,
@@ -500,17 +510,17 @@ fn refuses_change_request_lifecycle_entities() {
         .as_array_mut()
         .unwrap()
         .push(json!({"id":"record-request-steward","principalClaim":"principal","requiredScopes":["registry.write"],
-            "permissions":[{"entity":"record-request","rowBoundaries":[],
+            "permissions":[{"entity":"record-request","rowBoundaries":"unrestricted",
                 "operations":["create","get","submit_request","apply_request"],
                 "readableFields":["code","subject","new-status"],
                 "writableFields":["code","subject","new-status"],
-                "applyTargets":[{"entity":"record","rowBoundaries":[]}]}]}));
+                "applyTargets":[{"entity":"record","rowBoundaries":"unrestricted"}]}]}));
     original["accessProfiles"][0]["permissions"]
         .as_array_mut()
         .unwrap()
         .push(
             json!({"entity":"record-request","operations":["lookup"],"readableFields":["code"],
-            "lookups":[{"selector":"by-code","valueOrigin":"request"}],"rowBoundaries":[]}),
+            "lookups":[{"selector":"by-code","valueOrigin":"request"}],"rowBoundaries":"unrestricted"}),
         );
     let mut selection = options();
     selection.entity = "record-request".into();
@@ -518,7 +528,7 @@ fn refuses_change_request_lifecycle_entities() {
     selection.fields = vec!["code".into()];
     // The lookup is granted and routed; only the lifecycle shape is refused.
     let diagnostic = refused(&compiled(&original, SQL), &selection);
-    assert_eq!(diagnostic.code, "evidence_source.refused");
+    assert_eq!(diagnostic.code, "breg.evidence-source.refused");
     assert_eq!(
         diagnostic.message,
         "change-request lifecycle records require a reviewed custom Evidence adapter"
@@ -531,7 +541,7 @@ fn refuses_a_profile_that_does_not_grant_lookup() {
     original["accessProfiles"][0]["permissions"][0]["operations"] = json!(["get"]);
     original["accessProfiles"][0]["permissions"][0]["lookups"] = json!([]);
     let diagnostic = refused(&compiled(&original, SQL), &options());
-    assert_eq!(diagnostic.code, "evidence_source.refused");
+    assert_eq!(diagnostic.code, "breg.evidence-source.refused");
     assert_eq!(
         diagnostic.message,
         "the selected profile does not grant lookup; declare and review that authority in BReg first"
@@ -547,7 +557,7 @@ fn refuses_a_lookup_grant_without_a_compiled_lookup_route() {
         .retain(|route| route["operation"] != json!("lookup"));
     let routeless: CompiledRegistry = serde_json::from_value(compiled_registry).unwrap();
     let diagnostic = refused(&routeless, &options());
-    assert_eq!(diagnostic.code, "evidence_source.refused");
+    assert_eq!(diagnostic.code, "breg.evidence-source.refused");
     assert_eq!(
         diagnostic.message,
         "the compiled profile has no lookup route"
@@ -638,7 +648,7 @@ fn refuses_a_composite_selector_beyond_the_aggregate_selector_bound() {
     selection.selectors = vec!["by-parts".into()];
     // Each field stays inside the per-selector bound; only their union crosses it.
     let diagnostic = refused(&compiled(&original, SQL), &selection);
-    assert_eq!(diagnostic.code, "evidence_source.refused");
+    assert_eq!(diagnostic.code, "breg.evidence-source.refused");
     assert_eq!(
         diagnostic.message,
         "the complete composite selector exceeds Evidence's 8192-byte bound"

@@ -14,9 +14,9 @@ use support::{
 const BREG: &str = "apiVersion: registry.registrystack.org/v1alpha1\nkind: RegistryProject\nregistry: {id: example}\nmodules: [{id: <|module-use|>core}]\naccessProfiles:\n  - id: reader\n    permissions:\n      - entity: <|use|>person\n        readableFields: [<|field-use|>name]\n";
 const BREG_MODULE: &str = "id: <|module|>core\nentities:\n  - id: <|definition|>person\n    fields: [{id: <|field|>name, type: string}]\n";
 const CASEWORK: &str = "apiVersion: registry.registrystack.org/casework/v1alpha1\nkind: CaseworkProject\nqueues: [{id: <|definition|>triage}]\nsources:\n  - id: source\n    description: <|file-use|>sources/import.json\n    requests: [{queue: <|use|>triage}]\naccessProfiles: [{id: staff}]\nreviewKinds:\n  - id: decision\n    stages: [{id: review, queue: triage, decidingProfiles: [staff]}]\n";
-const SCHEDULING: &str = "apiVersion: registry.registrystack.org/scheduling-policy-package/v1alpha1\nkind: SchedulingPolicyPackage\nservices: [{id: <|definition|>visit}]\nofferings: [{id: consultation, service: <|use|>visit, location: <|location-use|>office, exactTime: {pool: <|pool-use|>stations}}]\n";
+const SCHEDULING: &str = "apiVersion: id.registrystack.org/formats/scheduling/project/v1alpha1\nkind: SchedulingProject\nservices: [{id: <|definition|>visit}]\nofferings: [{id: consultation, service: <|use|>visit, location: <|location-use|>office, exactTime: {pool: <|pool-use|>stations}}]\n";
 const RECORDS: &str = "locations: [{id: <|location|>office}]\npools: [{id: <|pool|>stations}]\n";
-const MESSAGING: &str = "apiVersion: registry.registrystack.org/messaging-package/v1alpha1\nkind: MessagingPackage\nproviders: [{id: <|definition|>smtp}]\nsenderProfiles: [{id: transactional, provider: <|use|>smtp}]\ntemplates: [{id: <|template|>notice, version: '1'}, {id: notice, version: '2'}]\naccessProfiles: [{id: staff, senderProfiles: [transactional], templates: [<|template-use|>notice]}]\n";
+const MESSAGING: &str = "apiVersion: id.registrystack.org/formats/messaging/project/v1alpha1\nkind: MessagingProject\nproviders: [{id: <|definition|>smtp}]\nsenderProfiles: [{id: transactional, provider: <|use|>smtp}]\ntemplates: [{id: <|template|>notice, version: '1'}, {id: notice, version: '2'}]\naccessProfiles: [{id: staff, senderProfiles: [transactional], templates: [<|template-use|>notice]}]\n";
 
 fn projects() -> Vec<(ProductKind, &'static str, Project, &'static str)> {
     vec![
@@ -519,7 +519,7 @@ fn casework_source_descriptions_follow_only_authoring_documents() {
 #[test]
 fn scheduling_reopen_and_messaging_bodies_use_owned_document_contracts() {
     let project=Project::new(&[
-        file("scheduling.yaml","kind: SchedulingPolicyPackage\n"),
+        file("scheduling.yaml","kind: SchedulingProject\n"),
         file("records.yaml","locations: [{id: office}, {id: other}]\nexceptions: [{id: <|closure|>closure, location: office}, {id: closure, location: other}, {id: reopening, location: office, reopens: <|reopens|>closure}]\n"),
     ]);
     let index = ProjectIndex::load_product(project.root(), ProductKind::Scheduling).unwrap();
@@ -531,7 +531,7 @@ fn scheduling_reopen_and_messaging_bodies_use_owned_document_contracts() {
         project.cursor("records.yaml", "closure")
     );
     let project=Project::new(&[
-        file("messaging.yaml","kind: MessagingPackage\nproviders: [{id: smtp}]\ntemplates: [{id: notice, version: '1'}]\n"),
+        file("messaging.yaml","kind: MessagingProject\nproviders: [{id: smtp}]\ntemplates: [{id: notice, version: '1'}]\n"),
         file("templates/notice/1/template.yaml","channel: email\nlocales: [<|locale|>en]\nparts: [subject, <|part|>text]\n"),
         file("templates/notice/1/en/subject.j2","Notification\n"),
         file("templates/notice/1/en/text.j2","{{ message }}\n"),

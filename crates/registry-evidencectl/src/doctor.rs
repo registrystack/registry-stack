@@ -708,7 +708,8 @@ fn check_acquisition(
         .map(Vec::as_slice)
         .unwrap_or_default()
     {
-        let Ok(projected) = serde_norway::from_value::<RequirementProjection>(requirement.clone())
+        let Ok(projected) = serde_json::to_value(requirement)
+            .and_then(serde_json::from_value::<RequirementProjection>)
         else {
             // Not passed over in silence: an acquisition this projection does
             // not recognize is one whose calls it cannot render and whose gate
@@ -850,7 +851,7 @@ fn check_rate_limits(
         return (run.finish(), None);
     }
     let message = format!(
-        "rateLimits.burstPerPrincipal is {burst}, below {cost}, the largest request cost this bundle admits: a request batch or holder-bound release that costs more than the burst is always refused as evidence.invalid_request. Raise rateLimits.burstPerPrincipal to at least {cost} unless capping those requests below {cost} is intended"
+        "rateLimits.burstPerPrincipal is below {cost}, the largest request cost this bundle admits: a request batch or holder-bound release that costs more than the burst is always refused as evidence.invalid_request. Raise rateLimits.burstPerPrincipal to at least {cost} unless capping those requests below {cost} is intended"
     );
     run.warn(bundle_config_path, message.clone());
     let diagnostic = serde_json::json!({
@@ -1169,7 +1170,9 @@ fn collect_secret_references(value: &YamlValue, names: &mut Vec<String>) {
 
 fn read_yaml(path: &Path) -> Result<YamlValue> {
     let bytes = fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
-    serde_norway::from_slice(&bytes).with_context(|| format!("failed to parse {}", path.display()))
+    let document = crate::authored::runtime_document(&path.to_string_lossy(), &bytes)?;
+    serde_norway::to_value(document)
+        .with_context(|| format!("failed to convert {}", path.display()))
 }
 
 /// Print one line per check, every finding beneath it, and a summary line.
@@ -1223,6 +1226,10 @@ fn print_diagnostics(report: &DoctorReport) {
 
 #[cfg(test)]
 mod tests {
+    #![allow(
+        clippy::disallowed_methods,
+        reason = "tests read back the YAML the code under test wrote, or a published contract or fixture, to assert on it; they read no operator configuration"
+    )]
     use super::{YamlValue, GATED_ACQUISITION_CAPABILITIES, REQUEST_BATCH_MAXIMUM_ITEMS};
 
     /// The rate-limit check restates the request-batch item ceiling; the

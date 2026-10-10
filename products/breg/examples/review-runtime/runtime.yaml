@@ -1,0 +1,38 @@
+# A breg-review runtime file for the address-correction citizen service. Check
+# it offline with `breg-review --runtime-config runtime.yaml check`.
+apiVersion: id.registrystack.org/formats/breg/review-runtime/v1alpha1
+kind: BRegReviewRuntimeConfig
+listener:
+  bind: 127.0.0.1:8115
+  tlsTermination: operator-controlled-upstream
+publicOrigin: https://review.example.test
+secretProviders:
+  file:
+    root: /run/secrets/breg-review
+signIn:
+  issuer: https://login.example.test
+  clientId: citizen-review-page
+  clientKeyRef: secret:file/client-key.jwk
+  scopes: [address-correction:self]
+registry:
+  baseUrl: https://registry.example.test/
+  resource: urn:breg:citizen-address-correction
+  entity: address-correction-request
+  targetField: address
+  accessProfile: citizen-review
+audit:
+  hashKeyRef: secret:file/audit-key
+  destination: file
+  path: /var/lib/breg-review/audit/audit.jsonl
+rateLimits:
+  perCitizen:
+    requestsPerMinute: 120
+    burst: 30
+  globalSignIn:
+    requestsPerMinute: 600
+    burst: 120
+session:
+  maximumSessions: 10000
+  maximumPendingSignIns: 10000
+  maximumLifetimeSeconds: 3600
+  signInLifetimeSeconds: 600

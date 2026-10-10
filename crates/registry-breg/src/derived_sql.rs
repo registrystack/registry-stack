@@ -175,7 +175,7 @@ fn refuse_encrypted_columns(
         };
         if matches {
             errors.push(Diagnostic::error(
-                "derived.sql.encrypted_column",
+                "breg.derived.sql-encrypted-column",
                 path,
                 "derived SQL cannot reference an encrypted column; registry_source views never expose it",
             ));
@@ -1244,7 +1244,7 @@ fn allowed_raw_node(node: NodeRef<'_>) -> bool {
 
 fn sql_error(path: &str) -> Diagnostic {
     Diagnostic::error(
-        "derived.sql.invalid",
+        "breg.derived.sql-invalid",
         path,
         "derived SQL must be one bounded read-only SELECT with declared output aliases over registry_source relations",
     )
@@ -1554,7 +1554,7 @@ mod tests {
             assert!(
                 errors
                     .iter()
-                    .any(|diagnostic| diagnostic.code == "derived.sql.encrypted_column"),
+                    .any(|diagnostic| diagnostic.code == "breg.derived.sql-encrypted-column"),
                 "encrypted column hidden in derived SQL was accepted: {sql}"
             );
         }

@@ -140,7 +140,7 @@ If the local check fails, repair the input or source identified by its diagnosti
 - `action.input.invalid` means admission failed before Rhai ran. Use the local
   authored input IDs, remove the HTTP envelope, and meet the input's type and
   bounds.
-- `action.handler.parse` or `action.handler.entrypoint` identifies script syntax
+- `breg.action.handler-parse` or `breg.action.handler-entrypoint` identifies script syntax
   or the missing `fn handle(ctx)` entry point. Correct the script at the reported
   action path.
 - `action.handler.result` or `action.handler.ceiling` identifies an invalid

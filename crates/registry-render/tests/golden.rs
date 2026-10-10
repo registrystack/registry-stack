@@ -312,7 +312,7 @@ fn verified_template_and_typst_package_bytes_are_bound_to_the_loaded_snapshot() 
     }
     std::fs::write(
         bundle_dir.join("manifest.yaml"),
-        "apiVersion: render.registrystack.org/v1alpha1\nkind: RenderBundle\nbundleVersion: 1\ndocuments:\n  - id: notice\n    version: 1\n    entry: templates/notice.typ\n",
+        "apiVersion: id.registrystack.org/formats/render/bundle/v1alpha1\nkind: RenderBundle\nbundleVersion: 1\ndocuments:\n  - id: notice\n    version: 1\n    entryFile: templates/notice.typ\n",
     )
     .unwrap();
     let template = "#import \"@preview/notice:0.1.0\": message\n#message #read(\"value.txt\")\n";
@@ -508,7 +508,7 @@ fn data_paths_cannot_escape_the_bundle() {
     let (_dir, bundle) = physical_tempdir();
     std::fs::write(
         bundle.join("manifest.yaml"),
-        "apiVersion: render.registrystack.org/v1alpha1\nkind: RenderBundle\nbundleVersion: 1\ndocuments:\n  - id: leak\n    version: 1\n    entry: templates/leak.typ\n",
+        "apiVersion: id.registrystack.org/formats/render/bundle/v1alpha1\nkind: RenderBundle\nbundleVersion: 1\ndocuments:\n  - id: leak\n    version: 1\n    entryFile: templates/leak.typ\n",
     )
     .unwrap();
     std::fs::create_dir_all(bundle.join("templates")).unwrap();
@@ -550,7 +550,7 @@ fn unvendored_package_import_fails_without_network() {
     let (_dir, bundle) = physical_tempdir();
     std::fs::write(
         bundle.join("manifest.yaml"),
-        "apiVersion: render.registrystack.org/v1alpha1\nkind: RenderBundle\nbundleVersion: 1\ndocuments:\n  - id: x\n    version: 1\n    entry: templates/x.typ\n",
+        "apiVersion: id.registrystack.org/formats/render/bundle/v1alpha1\nkind: RenderBundle\nbundleVersion: 1\ndocuments:\n  - id: x\n    version: 1\n    entryFile: templates/x.typ\n",
     )
     .unwrap();
     std::fs::create_dir_all(bundle.join("templates")).unwrap();
@@ -584,7 +584,7 @@ fn compile_diagnostics_report_virtual_paths_only() {
     let (_dir, bundle) = physical_tempdir();
     std::fs::write(
         bundle.join("manifest.yaml"),
-        "apiVersion: render.registrystack.org/v1alpha1\nkind: RenderBundle\nbundleVersion: 1\ndocuments:\n  - id: missing\n    version: 1\n    entry: templates/missing.typ\n",
+        "apiVersion: id.registrystack.org/formats/render/bundle/v1alpha1\nkind: RenderBundle\nbundleVersion: 1\ndocuments:\n  - id: missing\n    version: 1\n    entryFile: templates/missing.typ\n",
     )
     .unwrap();
     for sub in ["templates", "fonts", "labels", "packages/preview"] {

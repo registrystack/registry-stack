@@ -49,25 +49,272 @@ pub(super) struct PrepareSourceArgs {
     apply: bool,
 }
 
+pub(super) const TRANSITION_API_VERSION: &str =
+    "id.registrystack.org/formats/breg/dev-source-transition/v1alpha1";
+pub(super) const TRANSITION_KIND: &str = "BRegDevSourceTransition";
+pub(super) const PREPARED_API_VERSION: &str =
+    "id.registrystack.org/formats/breg/dev-prepared-source/v1alpha1";
+pub(super) const PREPARED_KIND: &str = "BRegDevPreparedSource";
+
+/// The journal an applied preparation writes as `.breg/dev/source-transition.json`
+/// and removes once the transition finishes. Only this bregctl writes it.
+pub(crate) const SOURCE_TRANSITION_FORMAT: FormatSpec<'static> = FormatSpec {
+    kind: TRANSITION_KIND,
+    envelope: EnvelopeRule::ApiVersionKind {
+        api_versions: &[ApiVersion::current(TRANSITION_API_VERSION)],
+        retired_api_versions: &[],
+    },
+    removed_keys: &[],
+};
+
+/// The record a finished preparation keeps as
+/// `.breg/dev/source-prepared-<client>.json`, so an identical request repeats
+/// its report. Only this bregctl writes it.
+pub(crate) const PREPARED_SOURCE_FORMAT: FormatSpec<'static> = FormatSpec {
+    kind: PREPARED_KIND,
+    envelope: EnvelopeRule::ApiVersionKind {
+        api_versions: &[ApiVersion::current(PREPARED_API_VERSION)],
+        retired_api_versions: &[],
+    },
+    removed_keys: &[],
+};
+
+/// Refusal for a retained preparation record or journal this bregctl cannot
+/// read. Nothing is changed.
+const INVALID_PREPARATION: &str = "retained source preparation is invalid; preserve it for inspection, or run bregctl dev stop --remove, then remove .breg/dev and start again";
+
+fn transition_sequence<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<u64, D::Error> {
+    registry_platform_yaml::BoundedU64::<2, { u64::MAX }>::deserialize(deserializer)
+        .map(registry_platform_yaml::BoundedU64::get)
+}
+
+fn transition_api_version() -> String {
+    TRANSITION_API_VERSION.to_owned()
+}
+
+fn transition_kind() -> String {
+    TRANSITION_KIND.to_owned()
+}
+
+fn prepared_api_version() -> String {
+    PREPARED_API_VERSION.to_owned()
+}
+
+fn prepared_kind() -> String {
+    PREPARED_KIND.to_owned()
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Transition {
+    #[serde(skip_deserializing, default = "transition_api_version")]
+    api_version: String,
+    #[serde(skip_deserializing, default = "transition_kind")]
+    kind: String,
     prior_digest: String,
     target_digest: String,
+    /// The package sequence the transition installs, which follows the
+    /// session's first package.
+    #[serde(deserialize_with = "transition_sequence")]
     sequence: u64,
     // Only the selected model document, registry identity, and clients change.
+    #[serde(with = "authoring_text")]
     originals: BTreeMap<PathBuf, Vec<u8>>,
+    #[serde(with = "authoring_text")]
     replacements: BTreeMap<PathBuf, Vec<u8>>,
     client: config::Client,
+    #[serde(with = "retained_clients")]
     clients: Clients,
+    #[serde(with = "prepared_record")]
     prepared: PreparedSource,
+}
+
+/// Authoring files a transition records, written as their UTF-8 text so the
+/// journal stays within the shared reader's document bound.
+mod authoring_text {
+    use registry_platform_yaml::Invalid;
+    use serde::{ser::Error as _, ser::SerializeMap, Deserialize, Deserializer, Serializer};
+    use std::{collections::BTreeMap, path::PathBuf};
+
+    pub(super) fn serialize<S: Serializer>(
+        files: &BTreeMap<PathBuf, Vec<u8>>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        let mut map = serializer.serialize_map(Some(files.len()))?;
+        for (path, bytes) in files {
+            let text = std::str::from_utf8(bytes)
+                .map_err(|_| S::Error::custom("a prepared authoring file is not UTF-8"))?;
+            map.serialize_entry(path, text)?;
+        }
+        map.end()
+    }
+
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<BTreeMap<PathBuf, Vec<u8>>, D::Error> {
+        let files = BTreeMap::<String, String>::deserialize(deserializer)?;
+        files
+            .into_iter()
+            .map(|(path, text)| {
+                if path.is_empty() {
+                    return Err(Invalid::expected(
+                        "a non-empty authoring file path",
+                        "Run bregctl dev prepare-source again.",
+                    )
+                    .into_error());
+                }
+                Ok((PathBuf::from(path), text.into_bytes()))
+            })
+            .collect()
+    }
+}
+
+/// The prepared record a transition installs, written as the full document
+/// and read back through the same reader as `source-prepared-<client>.json`.
+mod prepared_record {
+    use super::{read_prepared, PreparedSource};
+    use registry_platform_yaml::Invalid;
+    use serde::{de::Error as _, Deserialize, Deserializer, Serialize, Serializer};
+
+    const PREPARED: Invalid = Invalid::expected(
+        "the prepared source record",
+        "Run bregctl dev prepare-source again.",
+    );
+
+    pub(super) fn serialize<S: Serializer>(
+        prepared: &PreparedSource,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        prepared.serialize(serializer)
+    }
+
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<PreparedSource, D::Error> {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        let bytes = serde_json::to_vec(&value).map_err(|_| D::Error::custom(PREPARED))?;
+        read_prepared("source-transition.json#/prepared", &bytes)
+            .map_err(|_| D::Error::custom(PREPARED))
+    }
+}
+
+/// The clients a transition installs, written as the full retained document
+/// and read back through the same reader as `.breg/dev/clients.json`.
+mod retained_clients {
+    use super::{config, Clients};
+    use registry_platform_yaml::Invalid;
+    use serde::{de::Error as _, Deserialize, Deserializer, Serialize, Serializer};
+
+    const CLIENTS: Invalid = Invalid::expected(
+        "the retained development clients document",
+        "Run bregctl dev prepare-source again.",
+    );
+
+    pub(super) fn serialize<S: Serializer>(
+        clients: &Clients,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        clients.serialize(serializer)
+    }
+
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Clients, D::Error> {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        let bytes = serde_json::to_vec(&value).map_err(|_| D::Error::custom(CLIENTS))?;
+        config::retained(&bytes).map_err(|_| D::Error::custom(CLIENTS))
+    }
 }
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct PreparedSource {
+    #[serde(skip_deserializing, default = "prepared_api_version")]
+    api_version: String,
+    #[serde(skip_deserializing, default = "prepared_kind")]
+    kind: String,
     request_digest: String,
+    #[serde(with = "report_text")]
     report: Value,
+}
+
+/// The report a preparation printed, kept as its exact JSON text. The report
+/// is command output, not configuration, so it may carry null members the
+/// shared reader refuses in a configuration position.
+mod report_text {
+    use registry_platform_yaml::Invalid;
+    use serde::{ser::Error as _, Deserialize, Deserializer, Serializer};
+    use serde_json::Value;
+
+    pub(super) fn serialize<S: Serializer>(
+        report: &Value,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        let text = serde_json::to_string(report).map_err(S::Error::custom)?;
+        serializer.serialize_str(&text)
+    }
+
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Value, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        serde_json::from_str(&text).map_err(|_| {
+            Invalid::expected(
+                "the JSON text of a preparation report",
+                "Run bregctl dev prepare-source again.",
+            )
+            .into_error()
+        })
+    }
+}
+
+impl PreparedSource {
+    fn new(request_digest: String, report: Value) -> PreparedSource {
+        PreparedSource {
+            api_version: prepared_api_version(),
+            kind: prepared_kind(),
+            request_digest,
+            report,
+        }
+    }
+}
+
+fn read_prepared(
+    file: &str,
+    bytes: &[u8],
+) -> std::result::Result<PreparedSource, registry_platform_yaml::Report> {
+    Reader::new(file)
+        .decode::<PreparedSource>(bytes, &Expect::one(&PREPARED_SOURCE_FORMAT))
+        .map(|decoded| decoded.value)
+}
+
+/// Check a preparation record `bregctl check --file` read. The record has no
+/// rule beyond its shape; whether it matches a request is decided when a
+/// session reads it.
+pub(crate) fn check_prepared(
+    document: &Document,
+) -> std::result::Result<Vec<Diagnostic>, registry_platform_yaml::Report> {
+    document.decode::<PreparedSource>()?;
+    Ok(Vec::new())
+}
+
+/// Check a transition journal `bregctl check --file` read. The journal has no
+/// rule beyond its shape; whether it belongs to the session is decided when
+/// the session reads it.
+pub(crate) fn check_transition(
+    document: &Document,
+) -> std::result::Result<Vec<Diagnostic>, registry_platform_yaml::Report> {
+    document.decode::<Transition>()?;
+    Ok(Vec::new())
+}
+
+fn read_transition(
+    file: &str,
+    bytes: &[u8],
+) -> std::result::Result<Transition, registry_platform_yaml::Report> {
+    Reader::new(file)
+        .decode::<Transition>(bytes, &Expect::one(&SOURCE_TRANSITION_FORMAT))
+        .map(|decoded| decoded.value)
 }
 
 fn request_digest(args: &PrepareSourceArgs) -> Result<String> {
@@ -120,11 +367,25 @@ fn identifier(entity: &Value, field: &Value) -> bool {
                 .any(|c| c["kind"] == "unique" && c["fields"] == json!([field["id"]]))
         })
 }
+/// The captured registry and module documents as JSON trees, read through the
+/// shared reader's YAML subset. The capture already compiled them, so only
+/// their trees are needed here.
 fn documents(files: &BTreeMap<String, Vec<u8>>) -> Result<BTreeMap<String, Value>> {
     files
         .iter()
         .filter(|(path, _)| *path == "registry.yaml" || path.ends_with("/module.yaml"))
-        .map(|(path, bytes)| Ok((path.clone(), serde_norway::from_slice(bytes)?)))
+        .map(
+            |(path, bytes)| match Reader::new(path.as_str()).scan(bytes) {
+                Ok(node) => Ok((
+                    path.clone(),
+                    node.map_or(Value::Null, |node| node.to_json_value()),
+                )),
+                Err(report) => bail!(
+                    "{path} is outside the YAML subset; correct it as the diagnostics say:\n{}",
+                    report.render_human()
+                ),
+            },
+        )
         .collect()
 }
 fn inventory(docs: &BTreeMap<String, Value>, compiled: &registry_breg::CompiledRegistry) -> Value {
@@ -158,7 +419,7 @@ pub(super) fn run(args: PrepareSourceArgs) -> Result<Value> {
     let bytes =
         crate::read_bounded_source_file(&state.clients_file, "dev.clients", "clients", MAX_BYTES)
             .map_err(|_| anyhow::anyhow!("clients file is missing or unsafe"))?;
-    let clients = config::clients(&bytes)?;
+    let clients = config::clients(&state.clients_file.display().to_string(), &bytes)?;
     let client_scopes: Vec<&String> = clients
         .clients
         .iter()
@@ -188,8 +449,11 @@ pub(super) fn run(args: PrepareSourceArgs) -> Result<Value> {
     let request_digest = request_digest(&args)?;
     let prepared_path = root.join(format!("source-prepared-{}.json", args.client));
     if config::identifier(&args.client) && prepared_path.exists() {
-        let prepared: PreparedSource =
-            serde_json::from_slice(&private::read(&prepared_path, MAX_BYTES)?)?;
+        let prepared = read_prepared(
+            &prepared_path.display().to_string(),
+            &private::read(&prepared_path, MAX_BYTES)?,
+        )
+        .map_err(|_| anyhow::anyhow!(INVALID_PREPARATION))?;
         if prepared.request_digest != request_digest {
             bail!("selected source client already has different prepared authority; use fresh IDs for a separate source");
         }
@@ -226,7 +490,7 @@ pub(super) fn run(args: PrepareSourceArgs) -> Result<Value> {
     if !args.all_records && args.row_field.is_none() {
         bail!("select --all-records or an explicit --row-field, --row-claim and --row-value-file binding");
     }
-    let mut clients = config::clients(&bytes)?;
+    let mut clients = config::clients(&state.clients_file.display().to_string(), &bytes)?;
     if clients
         .clients
         .iter()
@@ -329,6 +593,13 @@ pub(super) fn run(args: PrepareSourceArgs) -> Result<Value> {
     if registry["accessProfiles"].is_null() {
         registry["accessProfiles"] = json!([]);
     }
+    // A row reach that binds no row is written as the keyword, never as an
+    // empty list.
+    let row_boundaries = if row_boundaries.is_empty() {
+        json!("unrestricted")
+    } else {
+        Value::Array(row_boundaries)
+    };
     registry["accessProfiles"].as_array_mut().context("access profiles missing")?.push(json!({
         "id":args.access_profile,"principalClaim":"registry_principal","requiredScopes":[scope],"requiredPurposes":["evidence-source-read"],
         "permissions":[{"entity":entity_id,"operations":["lookup"],"readableFields":grant_fields,
@@ -345,13 +616,11 @@ pub(super) fn run(args: PrepareSourceArgs) -> Result<Value> {
         scopes: vec![scope],
         claims,
         test_bindings: Vec::new(),
-        client_id_file: None,
-        assertion_key_file: None,
-        assertion_key_input_file: None,
+        assertion_key_ref: None,
     };
     clients.clients.push(client.clone());
     let client_bytes = yaml_with_comments(&serde_json::to_value(&clients)?, &bytes)?;
-    config::clients(&client_bytes)?;
+    config::clients(&state.clients_file.display().to_string(), &client_bytes)?;
     let candidate = root.join(format!(".source-preview-{}", uuid::Uuid::new_v4()));
     private::directory(&candidate)?;
     let result = (|| {
@@ -438,6 +707,8 @@ pub(super) fn run(args: PrepareSourceArgs) -> Result<Value> {
                 Ok((path.clone(),expected))
             }).collect::<Result<_>>()?;
             let transition = Transition {
+                api_version: transition_api_version(),
+                kind: transition_kind(),
                 prior_digest: state.source_digest.clone(),
                 target_digest: target.digest,
                 sequence,
@@ -445,14 +716,12 @@ pub(super) fn run(args: PrepareSourceArgs) -> Result<Value> {
                 replacements,
                 client,
                 clients,
-                prepared: PreparedSource {
-                    request_digest,
-                    report: report.clone(),
-                },
+                prepared: PreparedSource::new(request_digest, report.clone()),
             };
             let journal = serde_json::to_vec(&transition)?;
-            if journal.len() as u64 > MAX_BYTES {
-                bail!("source transition exceeds the retained journal size bound");
+            // A journal the reader would refuse could never be recovered.
+            if journal.len() > registry_platform_yaml::MAXIMUM_DOCUMENT_BYTES {
+                bail!("source transition exceeds the 1 MiB retained journal bound; reduce the size of the registry project's model documents and retry");
             }
             private::replace(&root.join("source-transition.json"), &journal)?;
             finish(&state, &transition)?;
@@ -491,7 +760,11 @@ pub(super) fn recover(root: &Path) -> Result<bool> {
     }
     let state = read_state(root)?;
     let _supervisor_lock = completed_supervisor_lock(root, &state.status)?;
-    let transition: Transition = serde_json::from_slice(&private::read(&journal, MAX_BYTES)?)?;
+    let transition = read_transition(
+        &journal.display().to_string(),
+        &private::read(&journal, MAX_BYTES)?,
+    )
+    .map_err(|_| anyhow::anyhow!(INVALID_PREPARATION))?;
     finish(&state, &transition)?;
     Ok(true)
 }
@@ -514,8 +787,11 @@ fn finish(original: &State, transition: &Transition) -> Result<()> {
         fs::rename(root.join("build"), baseline.join("build"))?;
     }
     if !baseline.join("runtime.yaml").exists() {
-        let mut runtime: Value =
-            serde_norway::from_slice(&private::read(&root.join("runtime.yaml"), MAX_BYTES)?)?;
+        let mut runtime: Value = Reader::new("runtime.yaml")
+            .scan(&private::read(&root.join("runtime.yaml"), MAX_BYTES)?)
+            .map_err(|report| anyhow::anyhow!("{report}"))?
+            .context("runtime.yaml is empty")?
+            .to_json_value();
         runtime["package"]["root"] = json!(baseline.join("build/package"));
         private::replace(
             &baseline.join("runtime.yaml"),
@@ -671,6 +947,10 @@ fn replace_authoring(path: &Path, bytes: &[u8]) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(
+        clippy::disallowed_methods,
+        reason = "tests read back the YAML the code under test wrote, or a published contract or fixture, to assert on it; they read no operator configuration"
+    )]
     use super::*;
     fn source_fixture() -> (tempfile::TempDir, State) {
         source_fixture_with_top_level_profiles(true)
@@ -814,8 +1094,8 @@ mod tests {
         let root = state.root();
         private::directory(&root.join("build")).unwrap();
         private::directory(&root.join("build/package")).unwrap();
-        let clients: Clients =
-            serde_json::from_slice(&private::read(&root.join("clients.json"), MAX_BYTES).unwrap())
+        let clients =
+            config::retained(&private::read(&root.join("clients.json"), MAX_BYTES).unwrap())
                 .unwrap();
         config::runtime(&root, &state, &clients, false).unwrap();
         let mut selected = args(&state);
@@ -872,13 +1152,13 @@ mod tests {
     #[test]
     fn preparation_retries_preserve_keys_seed_checkpoints_and_exact_source_recovery() {
         let (_temporary, mut state) = source_fixture();
-        state.seeded.insert("record-created".into());
+        state.mark_seeded("record-created").unwrap();
         state.save().unwrap();
         let root = state.root();
         private::directory(&root.join("build")).unwrap();
         private::directory(&root.join("build/package")).unwrap();
-        let old_clients: Clients =
-            serde_json::from_slice(&private::read(&root.join("clients.json"), MAX_BYTES).unwrap())
+        let old_clients =
+            config::retained(&private::read(&root.join("clients.json"), MAX_BYTES).unwrap())
                 .unwrap();
         config::runtime(&root, &state, &old_clients, false).unwrap();
         let operator_path = root.join("credentials/operator/assertion-key.jwk");
@@ -907,18 +1187,21 @@ mod tests {
         selected.apply = true;
         assert_eq!(run(selected).unwrap(), first);
         assert_eq!(private::read(&key_path, MAX_BYTES).unwrap(), key);
-        let prepared: PreparedSource = serde_json::from_slice(
+        let prepared = read_prepared(
+            "source-prepared-source-reader.json",
             &private::read(&root.join("source-prepared-source-reader.json"), MAX_BYTES).unwrap(),
         )
         .unwrap();
-        let clients: Clients =
-            serde_json::from_slice(&private::read(&root.join("clients.json"), MAX_BYTES).unwrap())
+        let clients =
+            config::retained(&private::read(&root.join("clients.json"), MAX_BYTES).unwrap())
                 .unwrap();
         let replacements = originals
             .keys()
             .map(|path| (path.clone(), fs::read(path).unwrap()))
             .collect();
         let transition = Transition {
+            api_version: transition_api_version(),
+            kind: transition_kind(),
             prior_digest: state.source_digest.clone(),
             target_digest: pending.source_digest.clone(),
             sequence: 2,
@@ -1213,8 +1496,8 @@ mod tests {
         let root = state.root();
         private::directory(&root.join("build")).unwrap();
         private::directory(&root.join("build/package")).unwrap();
-        let clients: Clients =
-            serde_json::from_slice(&private::read(&root.join("clients.json"), MAX_BYTES).unwrap())
+        let clients =
+            config::retained(&private::read(&root.join("clients.json"), MAX_BYTES).unwrap())
                 .unwrap();
         config::runtime(&root, &state, &clients, false).unwrap();
         let mut apply = selected();
@@ -1279,5 +1562,268 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("--all-records"));
+    }
+
+    #[test]
+    fn a_transition_reads_its_clients_through_the_shared_reader() {
+        let (_temporary, _state, clients, _) = super::super::tests::fixture();
+        let transition = Transition {
+            api_version: transition_api_version(),
+            kind: transition_kind(),
+            prior_digest: "a".repeat(64),
+            target_digest: "b".repeat(64),
+            sequence: 2,
+            originals: BTreeMap::from([(
+                PathBuf::from("/project/registry.yaml"),
+                b"apiVersion: before\n".to_vec(),
+            )]),
+            replacements: BTreeMap::from([(
+                PathBuf::from("/project/registry.yaml"),
+                b"apiVersion: after\n".to_vec(),
+            )]),
+            client: clients.clients[0].clone(),
+            clients: clients.clone(),
+            prepared: PreparedSource::new("c".repeat(64), json!({"ok": true})),
+        };
+        let written = serde_json::to_value(&transition).unwrap();
+        assert_eq!(written["apiVersion"], TRANSITION_API_VERSION);
+        assert_eq!(written["kind"], TRANSITION_KIND);
+        assert_eq!(written["clients"]["kind"], "BRegDevClients");
+        assert_eq!(written["prepared"]["kind"], PREPARED_KIND);
+        assert_eq!(
+            written["originals"]["/project/registry.yaml"],
+            "apiVersion: before\n"
+        );
+        let read = decode(&written).unwrap();
+        assert_eq!(
+            serde_json::to_value(&read.clients).unwrap(),
+            serde_json::to_value(&clients).unwrap()
+        );
+        assert_eq!(serde_json::to_value(&read).unwrap(), written);
+
+        // Each embedded document is read by its own format, and a refusal
+        // points to the member without repeating its value.
+        for (pointer, member) in [
+            ("/clients/version", "clients"),
+            ("/prepared/version", "prepared"),
+        ] {
+            let mut earlier = written.clone();
+            earlier[member]["version"] = json!(1);
+            let report = decode(&earlier).err().expect(pointer);
+            let diagnostic = &report.diagnostics()[0];
+            assert_eq!(diagnostic.code, "config.invalid-value", "{pointer}");
+            assert_eq!(diagnostic.path, format!("/{member}"), "{pointer}");
+        }
+
+        // The journal an earlier bregctl wrote has no header.
+        let mut headerless = written.clone();
+        headerless.as_object_mut().unwrap().remove("apiVersion");
+        headerless.as_object_mut().unwrap().remove("kind");
+        let report = decode(&headerless).err().unwrap();
+        assert_eq!(report.diagnostics()[0].code, "config.missing-envelope");
+    }
+
+    fn decode(value: &Value) -> std::result::Result<Transition, registry_platform_yaml::Report> {
+        read_transition(
+            "source-transition.json",
+            &serde_json::to_vec(value).unwrap(),
+        )
+    }
+
+    #[test]
+    fn a_prepared_record_carries_its_header_and_refuses_an_earlier_one() {
+        let prepared = PreparedSource::new("c".repeat(64), json!({"ok": true}));
+        let written = serde_json::to_vec(&prepared).unwrap();
+        let value: Value = serde_json::from_slice(&written).unwrap();
+        assert_eq!(value["apiVersion"], PREPARED_API_VERSION);
+        assert_eq!(value["kind"], PREPARED_KIND);
+        assert_eq!(value["report"], r#"{"ok":true}"#);
+        let read = read_prepared("source-prepared-a.json", &written).unwrap();
+        assert_eq!(read.request_digest, "c".repeat(64));
+        assert_eq!(read.report, json!({"ok": true}));
+
+        // A printed report may carry null members; the record repeats them.
+        let with_null = PreparedSource::new("c".repeat(64), json!({"id": null}));
+        let read = read_prepared(
+            "source-prepared-a.json",
+            &serde_json::to_vec(&with_null).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(read.report, json!({"id": null}));
+
+        let earlier = json!({"requestDigest": "c".repeat(64), "report": {}});
+        let report = read_prepared(
+            "source-prepared-a.json",
+            &serde_json::to_vec(&earlier).unwrap(),
+        )
+        .err()
+        .unwrap();
+        assert_eq!(report.diagnostics()[0].code, "config.missing-envelope");
+    }
+
+    #[test]
+    fn a_transition_refuses_an_authoring_file_that_is_not_text() {
+        let (_temporary, _state, clients, _) = super::super::tests::fixture();
+        let transition = Transition {
+            api_version: transition_api_version(),
+            kind: transition_kind(),
+            prior_digest: "a".repeat(64),
+            target_digest: "b".repeat(64),
+            sequence: 2,
+            originals: BTreeMap::from([(PathBuf::from("/project/registry.yaml"), vec![0xff])]),
+            replacements: BTreeMap::new(),
+            client: clients.clients[0].clone(),
+            clients,
+            prepared: PreparedSource::new("c".repeat(64), json!({})),
+        };
+        let refusal = serde_json::to_vec(&transition).unwrap_err().to_string();
+        assert!(refusal.contains("not UTF-8"), "{refusal}");
+    }
+
+    /// The registered examples of the three retained session files are what
+    /// the session writers write for one synthetic session, so the format
+    /// registry and `bregctl check --file` read the shape bregctl writes.
+    /// Each file ends with a newline the writer does not add.
+    /// `BREG_WRITE_DEV_EXAMPLES=1` rewrites them.
+    #[test]
+    fn the_retained_session_examples_are_what_the_writers_write() {
+        let examples = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/breg/examples/formats/dev-session/.breg/dev");
+        let project = PathBuf::from("/home/operator/my-registry");
+        let clients = config::decode(
+            "dev-clients.yaml",
+            br#"apiVersion: id.registrystack.org/formats/breg/dev-clients/v1alpha1
+kind: BRegDevClients
+clients:
+  - id: operator
+    accessProfiles: [operator]
+    scopes: [registry:generic:operate]
+    claims:
+      registry_principal: generic-registry-operator
+      registry_purpose: registry-operations
+  - id: source
+    accessProfiles: [evidence-source]
+    scopes: [registry:evidence:lookup]
+    claims:
+      registry_principal: evidence-source
+      registry_purpose: evidence-source-read
+"#,
+        )
+        .expect("the synthetic clients decode");
+        let state = State {
+            api_version: state_api_version(),
+            kind: state_kind(),
+            project: project.clone(),
+            owner: "6f1c2a7e-3b4d-4c5e-8f90-a1b2c3d4e5f6".into(),
+            status: Status::Ready,
+            breg_port: 8094,
+            issuer_port: 8095,
+            issuer_project: None,
+            issuer_owner: None,
+            issuer_image: None,
+            purpose_port: None,
+            database_port: 55448,
+            requires_postgis: false,
+            webhook_port: None,
+            clients_file: project.join("dev-clients.yaml"),
+            source_digest: "5".repeat(64),
+            sequence: 1,
+            baseline_runtime: None,
+            instance_id: "my-registry".into(),
+            source_revision: "local".into(),
+            container_id: Some("6".repeat(64)),
+            tls_files_copied: true,
+            database_ready: true,
+            package_digest: Some(format!("sha256:{}", "7".repeat(64))),
+            activated: true,
+            seeded: UniqueList::new(vec!["operator-records".to_owned()]).unwrap(),
+            seed_import_authorities: BTreeMap::new(),
+            seed_import_intents: BTreeMap::new(),
+            binaries: BTreeMap::from([
+                (
+                    "breg".into(),
+                    Binary {
+                        path: "/usr/local/bin/breg".into(),
+                        version: "breg 0.40.0".into(),
+                    },
+                ),
+                (
+                    "docker".into(),
+                    Binary {
+                        path: "/usr/local/bin/docker".into(),
+                        version: "Docker version 28.0.0".into(),
+                    },
+                ),
+            ]),
+            failure: None,
+        };
+        let report = json!({"ok":true,"command":"dev prepare-source","project":project,
+            "status":"prepared","entity":"record","client":"source","requiresRestart":true});
+        let registry = project.join("registry.yaml");
+        let transition = Transition {
+            api_version: transition_api_version(),
+            kind: transition_kind(),
+            prior_digest: "5".repeat(64),
+            target_digest: "9".repeat(64),
+            sequence: 2,
+            originals: BTreeMap::from([(
+                registry.clone(),
+                b"apiVersion: id.registrystack.org/formats/breg/project/v1alpha1\n".to_vec(),
+            )]),
+            replacements: BTreeMap::from([(
+                registry,
+                b"apiVersion: id.registrystack.org/formats/breg/project/v1alpha1\n".to_vec(),
+            )]),
+            client: clients.clients[1].clone(),
+            clients,
+            prepared: PreparedSource::new("8".repeat(64), report),
+        };
+        // What `State::save`, `finish` and an applied preparation write.
+        let written = [
+            ("state.json", serde_json::to_vec_pretty(&state).unwrap()),
+            (
+                "source-prepared-source.json",
+                serde_json::to_vec(&transition.prepared).unwrap(),
+            ),
+            (
+                "source-transition.json",
+                serde_json::to_vec(&transition).unwrap(),
+            ),
+        ];
+        for (name, mut bytes) in written {
+            bytes.push(b'\n');
+            let path = examples.join(name);
+            if std::env::var_os("BREG_WRITE_DEV_EXAMPLES").is_some() {
+                fs::create_dir_all(&examples).unwrap();
+                fs::write(&path, &bytes).unwrap();
+            }
+            assert_eq!(
+                fs::read(&path).unwrap_or_default(),
+                bytes,
+                "{name} differs from what the writer writes; run this test with BREG_WRITE_DEV_EXAMPLES=1"
+            );
+        }
+        let read = |name: &str, format: &FormatSpec<'_>| {
+            Reader::new(name)
+                .read(
+                    &fs::read(examples.join(name)).unwrap(),
+                    &Expect::one(format),
+                )
+                .unwrap()
+        };
+        assert!(check_state(&read("state.json", &DEV_STATE_FORMAT))
+            .unwrap()
+            .is_empty());
+        assert!(check_prepared(&read(
+            "source-prepared-source.json",
+            &PREPARED_SOURCE_FORMAT
+        ))
+        .unwrap()
+        .is_empty());
+        assert!(
+            check_transition(&read("source-transition.json", &SOURCE_TRANSITION_FORMAT))
+                .unwrap()
+                .is_empty()
+        );
     }
 }

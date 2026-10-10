@@ -29,7 +29,7 @@ fn stderr_of(output: &Output) -> String {
 fn generate_public_jwk(dir: &Path, name: &str) -> std::path::PathBuf {
     let out_dir = dir.join(name);
     let output = evidencectl()
-        .args(["keygen", "signing", "--out-dir"])
+        .args(["keygen", "signing", "--output-dir"])
         .arg(&out_dir)
         .output()
         .expect("run evidencectl keygen");
@@ -46,7 +46,7 @@ fn assembles_a_jwks_document_from_public_jwk_files() {
 
     let output = evidencectl()
         .arg("jwks")
-        .arg("--out")
+        .arg("--output")
         .arg(&out)
         .arg(&first)
         .arg(&second)
@@ -85,7 +85,7 @@ fn rejects_a_private_jwk_input_without_printing_its_contents() {
 
     let output = evidencectl()
         .arg("jwks")
-        .arg("--out")
+        .arg("--output")
         .arg(&out)
         .arg(&private_path)
         .output()
@@ -110,7 +110,7 @@ fn deduplicates_identical_duplicate_entries() {
 
     let output = evidencectl()
         .arg("jwks")
-        .arg("--out")
+        .arg("--output")
         .arg(&out)
         .arg(&public)
         .arg(&public)
@@ -148,7 +148,7 @@ fn conflicting_keys_sharing_a_kid_is_an_error() {
 
     let output = evidencectl()
         .arg("jwks")
-        .arg("--out")
+        .arg("--output")
         .arg(&out)
         .arg(&first)
         .arg(&second)
@@ -179,7 +179,7 @@ fn force_replaces_a_symlinked_output_path_without_writing_through_it() {
 
     let output = evidencectl()
         .arg("jwks")
-        .arg("--out")
+        .arg("--output")
         .arg(&out)
         .arg("--force")
         .arg(&public)
@@ -209,7 +209,7 @@ fn refuses_overwrite_without_force_then_succeeds_with_force() {
 
     let first = evidencectl()
         .arg("jwks")
-        .arg("--out")
+        .arg("--output")
         .arg(&out)
         .arg(&public)
         .output()
@@ -219,7 +219,7 @@ fn refuses_overwrite_without_force_then_succeeds_with_force() {
 
     let second = evidencectl()
         .arg("jwks")
-        .arg("--out")
+        .arg("--output")
         .arg(&out)
         .arg(&public)
         .output()
@@ -233,7 +233,7 @@ fn refuses_overwrite_without_force_then_succeeds_with_force() {
     let another = generate_public_jwk(dir.path(), "another");
     let third = evidencectl()
         .arg("jwks")
-        .arg("--out")
+        .arg("--output")
         .arg(&out)
         .arg("--force")
         .arg(&public)

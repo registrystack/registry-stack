@@ -603,14 +603,14 @@ pub(super) fn spec(product: ProductKind) -> Option<ProductSpec> {
         ),
         ProductKind::Scheduling => (
             "scheduling.yaml",
-            "registry.registrystack.org/scheduling-policy-package/",
-            "SchedulingPolicyPackage",
+            "id.registrystack.org/formats/scheduling/project/",
+            "SchedulingProject",
             SCHEDULING_DOCUMENTS,
         ),
         ProductKind::Messaging => (
             "messaging.yaml",
-            "registry.registrystack.org/messaging-package/",
-            "MessagingPackage",
+            "id.registrystack.org/formats/messaging/project/",
+            "MessagingProject",
             MESSAGING_DOCUMENTS,
         ),
         _ => return None,

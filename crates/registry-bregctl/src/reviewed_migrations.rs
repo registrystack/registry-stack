@@ -6,12 +6,12 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use registry_breg::migration_plan::{
-    reviewed_artifact_kind, MigrationRehearsalReceipt, ReviewedArtifactKind, ReviewedMigrationFile,
-    ReviewedMigrationSource,
+    read_migration_descriptor, read_rehearsal_receipt, reviewed_artifact_kind,
+    ReviewedArtifactKind, ReviewedMigrationFile, ReviewedMigrationSource,
 };
 use registry_breg::package::{MAX_PACKAGE_BYTES, MAX_PACKAGE_FILES, MAX_PACKAGE_SOURCE_FILE_BYTES};
 use registry_breg::Diagnostic;
-use registry_platform_canonical_json::parse_json_strict;
+use registry_platform_yaml::Report;
 
 #[derive(Debug)]
 pub(crate) struct CapturedReview {
@@ -21,13 +21,32 @@ pub(crate) struct CapturedReview {
     pub declared_schema_fingerprint: String,
 }
 
-pub(crate) fn capture(root: &Path) -> Result<CapturedReview, Diagnostic> {
+/// Why a capture was refused: a descriptor or receipt the shared reader
+/// refused keeps the reader's diagnostics, and every other refusal is the
+/// command's own diagnostic.
+#[derive(Debug)]
+pub(crate) enum CaptureRefusal {
+    Tool(Diagnostic),
+    Document {
+        subject: &'static str,
+        report: Report,
+    },
+}
+
+impl From<Diagnostic> for CaptureRefusal {
+    fn from(diagnostic: Diagnostic) -> Self {
+        Self::Tool(diagnostic)
+    }
+}
+
+pub(crate) fn capture(root: &Path) -> Result<CapturedReview, CaptureRefusal> {
     if super::has_parent_component(root) {
         return Err(refusal(
             "migration.review.path",
             "reviewedMigrations",
             "use a directory without parent traversal",
-        ));
+        )
+        .into());
     }
     super::validate_directory(root, "migration.review.path").map_err(|_| {
         refusal(
@@ -44,7 +63,8 @@ pub(crate) fn capture(root: &Path) -> Result<CapturedReview, Diagnostic> {
             "migration.review.empty",
             "reviewedMigrations",
             "provide modules/<module>/migrations/<id>/descriptor.json and its referenced evidence",
-        ));
+        )
+        .into());
     }
     let mut groups: BTreeMap<String, Vec<ReviewedMigrationFile>> = BTreeMap::new();
     let mut declared_schema_fingerprint = None;
@@ -52,32 +72,40 @@ pub(crate) fn capture(root: &Path) -> Result<CapturedReview, Diagnostic> {
         // Every file path was accepted by the package's existing path classifier.
         let parts = path.split('/').collect::<Vec<_>>();
         let base = parts[..4].join("/");
-        if reviewed_artifact_kind(&path) == Some(ReviewedArtifactKind::RehearsalReceipt) {
-            let value = parse_json_strict(&bytes).ok();
-            if value
-                .as_ref()
-                .is_some_and(|value| value.get("proofs").is_some())
-            {
-                return Err(refusal(
-                    "migration.review.receipt_proofs_retired",
-                    &path,
-                    "the rehearsal receipt carries the retired proofs member, which asserted nothing its descriptor does not already determine; regenerate the receipt without it",
-                ));
+        // Each descriptor and receipt is read here first, so a document the
+        // shared reader refuses is reported at its position before package
+        // validation weighs the plan as a whole.
+        let file = root.join(&path).display().to_string();
+        match reviewed_artifact_kind(&path) {
+            Some(ReviewedArtifactKind::Descriptor) => {
+                read_migration_descriptor(&file, &bytes).map_err(|report| {
+                    CaptureRefusal::Document {
+                        subject: "the reviewed migration descriptor",
+                        report,
+                    }
+                })?;
             }
-            let receipt: MigrationRehearsalReceipt = value
-                .and_then(|value| serde_json::from_value(value).ok())
-                .ok_or_else(|| refusal("migration.review.receipt", &path, "provide a strict rehearsal receipt using the existing MigrationRehearsalReceipt format"))?;
-            if declared_schema_fingerprint
-                .as_ref()
-                .is_some_and(|expected| expected != &receipt.final_schema_fingerprint)
-            {
-                return Err(refusal(
-                    "migration.review.fingerprint",
-                    &path,
-                    "all rehearsal receipts must bind the same candidate schema fingerprint",
-                ));
+            Some(ReviewedArtifactKind::RehearsalReceipt) => {
+                let receipt = read_rehearsal_receipt(&file, &bytes).map_err(|report| {
+                    CaptureRefusal::Document {
+                        subject: "the migration rehearsal receipt",
+                        report,
+                    }
+                })?;
+                if declared_schema_fingerprint
+                    .as_ref()
+                    .is_some_and(|expected| expected != &receipt.final_schema_fingerprint)
+                {
+                    return Err(refusal(
+                        "migration.review.fingerprint",
+                        &path,
+                        "all rehearsal receipts must bind the same candidate schema fingerprint",
+                    )
+                    .into());
+                }
+                declared_schema_fingerprint = Some(receipt.final_schema_fingerprint);
             }
-            declared_schema_fingerprint = Some(receipt.final_schema_fingerprint);
+            _ => {}
         }
         groups
             .entry(base)
@@ -241,6 +269,9 @@ mod tests {
             .expect_err("a resolution that would traverse the swapped ancestor is refused");
         drop(guard);
 
+        let CaptureRefusal::Tool(refused) = refused else {
+            panic!("a path refusal is the command's own diagnostic: {refused:?}");
+        };
         assert_eq!(refused.code, "migration.review.path");
     }
 }
@@ -255,19 +286,41 @@ mod tests {
 mod ordering_tests {
     use super::*;
 
+    const DIGEST: &str = "sha256:1111111111111111111111111111111111111111111111111111111111111111";
+
     fn write_minimal_rehearsal_receipt(path: &Path) {
         let receipt = serde_json::json!({
-            "priorPackageDigest": "rev-1",
-            "priorSchemaFingerprint": "fingerprint-1",
-            "planSha256": "plan-digest",
-            "sqlSha256": [],
-            "assertionSha256": [],
+            "apiVersion": "id.registrystack.org/formats/breg/migration-rehearsal-receipt/v1alpha1",
+            "kind": "BRegMigrationRehearsalReceipt",
+            "priorPackageDigest": DIGEST,
+            "priorSchemaFingerprint": DIGEST,
+            "planDigest": DIGEST,
+            "sqlDigests": [],
+            "assertionDigests": [],
             "fixtureInventory": [],
             "postgresMajor": 16,
             "rowAssertions": [],
-            "finalSchemaFingerprint": "fingerprint-2",
+            "finalSchemaFingerprint": DIGEST,
         });
         std::fs::write(path, serde_json::to_vec(&receipt).unwrap()).unwrap();
+    }
+
+    fn minimal_descriptor(id: &str) -> Vec<u8> {
+        serde_json::to_vec(&serde_json::json!({
+            "apiVersion": "id.registrystack.org/formats/breg/migration-descriptor/v1alpha1",
+            "kind": "BRegMigrationDescriptor",
+            "id": id,
+            "changeClass": "access_or_disclosure_change",
+            "covers": [],
+            "recovery": "exact_target_resume",
+            "lockTimeoutMilliseconds": 1000,
+            "statementTimeoutMilliseconds": 1000,
+            "steps": [],
+            "preAssertions": [],
+            "postAssertions": [],
+            "rehearsalReceiptPath": format!("modules/core/migrations/{id}/rehearsal.json"),
+        }))
+        .unwrap()
     }
 
     #[test]
@@ -280,7 +333,7 @@ mod ordering_tests {
         for id in ["m0002", "m0002-funding-source"] {
             let dir = root.join("modules/core/migrations").join(id);
             std::fs::create_dir_all(&dir).unwrap();
-            std::fs::write(dir.join("descriptor.json"), b"{}").unwrap();
+            std::fs::write(dir.join("descriptor.json"), minimal_descriptor(id)).unwrap();
         }
         write_minimal_rehearsal_receipt(&root.join("modules/core/migrations/m0002/rehearsal.json"));
 

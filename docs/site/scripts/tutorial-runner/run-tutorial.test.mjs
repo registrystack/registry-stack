@@ -353,6 +353,33 @@ test('a journey whose page asks for the checkout starts at the root of a copy of
   }
 });
 
+test('teardown stops only the sessions the journey started, not a committed example\'s state file', async () => {
+  const dir = await realpath(await mkdtemp(join(tmpdir(), 'tutorial-runner-inherited.')));
+  try {
+    const page = join(dir, 'page.mdx');
+    await writeFile(
+      page,
+      '---\ntitle: t\ntutorial_test:\n  toolset: breg\n  checkout: true\n---\n\n' +
+        fence('sh', 'test -f products/breg/examples/formats/dev-session/.breg/dev/state.json\nmkdir -p started/.breg/dev\necho {} >started/.breg/dev/state.json'),
+    );
+    const calls = join(dir, 'calls.log');
+    for (const name of ['breg', 'bregctl']) {
+      await writeFile(join(dir, name), `#!/bin/sh\nprintf '%s %s\\n' ${name} "$*" >>'${calls}'\n`);
+      await chmod(join(dir, name), 0o755);
+    }
+    const { code, output } = await run(['--toolset', 'breg', page], {
+      BREG_BIN: join(dir, 'breg'),
+      BREGCTL_BIN: join(dir, 'bregctl'),
+    });
+    assert.equal(code, 0, output);
+    const stops = (await readFile(calls, 'utf8')).split('\n').filter((line) => line.startsWith('bregctl dev stop'));
+    assert.equal(stops.length, 1, stops.join('\n'));
+    assert.match(stops[0], /\/started --remove$/u);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test('an interrupt stops the whole journey and shows what the running fence printed', async () => {
   const body = '## Wait\n\n' + fence('sh', 'echo started\nsleep 30\necho never');
   await withPage(body, async ({ page }) => {

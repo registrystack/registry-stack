@@ -139,7 +139,7 @@ raise SystemExit(17 if target in os.environ.get("FAKE_CARGO_FAILURES", "").split
 
 
 class PlatformFuzzWorkflowTest(unittest.TestCase):
-    def test_pr_matrix_runs_every_declared_fuzz_target_once_in_two_pairs(self) -> None:
+    def test_pr_matrix_runs_every_declared_fuzz_target_once_in_pairs(self) -> None:
         workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
         strategy = workflow["jobs"]["platform-fuzz"]["strategy"]
         matrix = strategy["matrix"]["include"]
@@ -154,6 +154,7 @@ class PlatformFuzzWorkflowTest(unittest.TestCase):
             {
                 ("authcommon_parsers", "sqlite_statement"),
                 ("sdjwt_holder_proof", "sdjwt_issuance"),
+                ("yaml_reader", "yaml_decode"),
             },
             set(pairs),
         )

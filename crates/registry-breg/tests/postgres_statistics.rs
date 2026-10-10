@@ -403,9 +403,9 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
             "fields":[{"id":"code","type":"string","maxLength":32,"required":true,"classification":"internal"}]
           }],
           "accessProfiles":[{
-            "id":"reader","default":true,"principalClaim":"registry_principal",
+            "id":"reader","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "permissions":[{
-              "entity":"entry","operations":["get"],"readableFields":["code"],"rowBoundaries":[]
+              "entity":"entry","operations":["get"],"readableFields":["code"],"rowBoundaries":"unrestricted"
             }]
           }]
         }"#,

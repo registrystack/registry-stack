@@ -125,9 +125,10 @@ Starting with v0.38.0, the release roster also admits the separate
 published, no public image exists under that name. The image runs
 `/usr/local/bin/evidence-oid4vci` from Distroless `cc-debian13` as the `nonroot` user. It starts
 `serve` with `/etc/registry-evidence-oid4vci/runtime.yaml` and uses
-`/var/lib/registry-evidence-oid4vci` as its working directory. Mount the runtime file and its
-referenced key files read-only. The mounted `tokenClient.privateKeyFile` must be owned by UID 65532
-with mode `0400` or `0600`; startup refuses a key owned by another user. To retain another runtime
+`/var/lib/registry-evidence-oid4vci` as its working directory. Mount the runtime file read-only,
+and mount the client key as one file under `secretProviders.file.root`: a regular file owned by
+UID 65532, mode `0400` or `0600`, with exactly one hard link. Startup refuses any other key file. To
+retain another runtime
 file path, override the image command with `serve --config <file>`. The image packages the existing
 adapter binary, so it keeps the same frozen profile and single-replica limit described on this
 page. Follow the release
@@ -136,40 +137,45 @@ verification procedure at
 by the digest that procedure authenticates rather than by the tag alone.
 
 The loopback listener in the example needs a TLS proxy in the same network namespace. For a proxy
-in another container, set `listener.address` to a private container address the proxy can reach.
+in another container, set `listener.bind` to a private container address the proxy can reach.
 Keep the separate metrics listener on a loopback or private address.
 
 {/* Evidence: crates/registry-evidencectl/install.sh, binaries;
     release/scripts/release_roster.py, EVIDENCE_OID4VCI_IMAGE_FIRST_RELEASE and
     evidence_oid4vci_image_in_release;
     release/docker/Dockerfile.evidence-oid4vci;
-    crates/registry-evidence-oid4vci/src/secretfile.rs, read_owner_only;
-    crates/registry-evidence-oid4vci/src/config.rs, ListenerConfig and MetricsListenerConfig. */}
+    crates/registry-platform-config/src/secrets.rs, validate_file_metadata;
+    crates/registry-evidence-oid4vci/src/config.rs, ListenerDocument and DeliveryDocument. */}
 
 ## Configure the deployment
 
-`evidence-oid4vci` reads one YAML document, validated as a whole with `deny_unknown_fields`: an
-unrecognized key fails the load rather than being silently ignored. Every relative path in it
-resolves against the document's own directory.
+`evidence-oid4vci` reads one YAML document through the shared Registry Stack configuration
+reader. An unrecognized key, a `null`, or a duplicate list item fails the load rather than being
+silently ignored, and every refusal names the line, the member, and the fix. A key an earlier
+release read, such as `version`, `mint`, `listener.address`, or `tokenClient.privateKeyFile`, is
+refused with the member that replaces it.
 
 ```yaml
-version: 1
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/evidence/oid4vci-runtime/oid4vci-runtime.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/evidence/oid4vci-runtime/v1alpha1
+kind: EvidenceOid4vciRuntimeConfig
 validationMode: strict
 credentialIssuer: https://wallet.example.org
 listener:
-  address: 127.0.0.1
-  port: 8090
+  bind: 127.0.0.1:8090
   maximumRequestBytes: 16384
   requestTimeoutMilliseconds: 5000
 metricsListener:
-  address: 127.0.0.1
-  port: 9090
+  bind: 127.0.0.1:9090
+secretProviders:
+  file:
+    root: /run/secrets/evidence-oid4vci
 evidence:
   baseUrl: https://evidence.example.org
 tokenClient:
   tokenEndpoint: https://id.example.org/oauth2/token
   clientId: evidence-oid4vci
-  privateKeyFile: keys/delivery-client.jwk.json
+  privateKeyRef: secret:file/delivery-client.jwk.json
   clientAssertionAudience: https://id.example.org
   resource: https://evidence.example.org
   scopes: [evidence:invoke]
@@ -213,8 +219,11 @@ operator-private loopback or private address. It cannot share the delivery liste
 The delivery listener does not serve metrics, and the metrics listener does not serve protocol or
 adopter routes.
 
-`tokenClient.privateKeyFile` is this service's own private JWK, read owner-only when its
-outbound OAuth client is built, and never logged or rendered.
+`tokenClient.privateKeyRef` names this service's own private JWK as a secret reference:
+`secret:file/<name>` reads the file `<name>` under `secretProviders.file.root`, and
+`secret:env/<NAME>` reads an environment variable when `secretProviders.environment: {}` is
+present. The key is resolved when the outbound OAuth client is built, never by `check`, and never
+logged or rendered.
 `tokenClient.clientAssertionAudience` defaults to `tokenClient.tokenEndpoint`.
 Set `tokenClient.resource` to the exact Evidence Gateway resource identifier registered with the
 issuer, and `tokenClient.scopes` to the scopes that client needs for Evidence Gateway.
@@ -230,12 +239,14 @@ token issuer with has nothing to do with the identities it accepts offer tokens 
 token's `iss` and read for its keys; both must be `https` in `strict` mode. `offers.audiences`
 names the resource identifiers this service answers to, so a token minted for another resource
 server cannot be replayed here; at least one is required. `offers.algorithms` defaults to
-`[EdDSA]` and accepts exactly one signature algorithm family per deployment. `offers.authorizedClients`
-defaults to empty, which accepts any client the issuer vouched for; naming one or more client
-identifiers narrows that further. `offers.maximumTokenLifetimeSeconds` defaults to `900` and is
-bounded to `60..=3600` seconds.
-Set `offers.requiredScopes` when the issuer grants a dedicated offer capability. Every named
-scope must occur in the verified offer token before the adapter creates an offer.
+`[EdDSA]` and accepts exactly one signature algorithm family per deployment.
+`offers.authorizedClients` and `offers.requiredScopes` are required, because each one decides who
+may create an offer. Each takes a list of at least one value, or the word `unrestricted`. A client
+list admits only those client identifiers; `unrestricted` admits any client the issuer vouched for.
+A scope list requires every named scope in the verified offer token before the adapter creates an
+offer; `unrestricted` applies no scope gate. An empty list is refused, and `check` warns about a
+list item such as `"*"` that reads as a wildcard but is matched literally.
+`offers.maximumTokenLifetimeSeconds` defaults to `900` and is bounded to `60..=3600` seconds.
 {/* Evidence: crates/registry-evidence-oid4vci/src/{config,authorizer}.rs required_scopes OfferAuthorizer */}
 
 Set `offers.claims` when the offer issuer uses custom contextual claim names.
@@ -261,15 +272,20 @@ each; `nonceLifetimeSeconds` to `30..=900` seconds and must not exceed
 `accessTokenLifetimeSeconds`; `maximumTransactionCodeAttempts`, how many wrong transaction codes an
 offer survives before it locks out for the rest of its life, to `1..=10`.
 
-Validate the deployment before opening a socket:
+Check the deployment before opening a socket:
 
 ```sh
 evidence-oid4vci check --config /etc/evidence-oid4vci/oid4vci.yaml
 ```
 
-`check` does everything `serve` does except bind a socket: it loads and validates the
-configuration document and the token client key, then exits.
-An old `mint:` block fails with an instruction to use `tokenClient:`.
+`check` reads the configuration exactly as `serve` reads it and applies every rule `serve`
+applies to the document, then exits. It reads that one file and nothing else: it opens no socket,
+makes no network request, and resolves no secret reference, so it runs where the client key is not
+mounted. The client key is resolved, and its JWK parsed, when `serve` or `inspect` starts.
+`--format json` prints one JSON document with a `diagnostics` list in place of the human lines, and
+`--deny-warnings` turns a warning into a refusal. The exit status is `0` when the file passes, `1`
+when it breaks a rule, `2` for an invalid command line, and `3` when the file cannot be read.
+An old `mint:` block is refused with an instruction to use `tokenClient:`.
 Configure `resource` and `scopes` to match the issuer's registered client and Evidence Gateway
 authorization profile. `check`, `inspect`, and `serve` accept
 `EVIDENCE_OID4VCI_CONFIG` in place of `--config`.
@@ -463,7 +479,8 @@ transaction code reduce the usefulness of copied offer material.
 
 | Symptom | Bounded cause | Corrective action |
 | --- | --- | --- |
-| `check` refuses the configuration | A required field, origin, bound, listener, or owner-only client key is invalid. | Correct the named configuration category and rerun `check`. Do not weaken `strict` mode for a shared deployment. |
+| `check` refuses the configuration | A required field, origin, bound, listener, or secret reference is invalid. | Correct the member each diagnostic names and rerun `check`. Do not weaken `strict` mode for a shared deployment. |
+| `serve` or `inspect` refuses the client key | The key `tokenClient.privateKeyRef` names is absent, unreadable, not owner-only, or not a private JWK. | Place the key under `secretProviders.file.root` owned by the runtime user with mode `0400` or `0600`, then start again. |
 | Issuer metadata is unavailable | The adapter could not derive a current holder-bound catalog from Evidence Gateway. | Check Evidence Gateway through operator-private monitoring, then inspect the metadata again. Do not add a hand-authored credential configuration. |
 | `/health` or `/ready` does not return its fixed success body | The process or listener is unavailable, or the loaded process state is not ready. | Remove the replica from traffic, correct the startup or listener failure, and start one replacement. |
 | A code or token stops working after a restart | Restart discarded the process-local exchange. | Create a new authorized offer and complete a new exchange. Do not retry an outstanding exchange against the replacement process. |

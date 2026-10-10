@@ -30,7 +30,7 @@ pub fn project() -> Value {
         }],
         "accessProfiles": [{"id": "registrar", "default": true, "principalClaim": "registry_principal", "requiredScopes": ["registry:register", "registry:parent:process"],
             "permissions": [{"action": "register-child", "operations": ["invoke"], "targets": [
-                {"entity": "parent", "rowBoundaries": [{"field": "zone", "claim": "zone", "operator": "equals"}]}, {"entity": "child", "rowBoundaries": []}
+                {"entity": "parent", "rowBoundaries": [{"field": "zone", "claim": "zone", "operator": "equals"}]}, {"entity": "child", "rowBoundaries": "unrestricted"}
             ], "results": ["child"]}]
         }]
     })

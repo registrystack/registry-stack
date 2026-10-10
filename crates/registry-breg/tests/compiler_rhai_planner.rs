@@ -1,3 +1,7 @@
+#![allow(
+    clippy::disallowed_methods,
+    reason = "tests read back the YAML the code under test wrote, or a published contract or fixture, to assert on it; they read no operator configuration"
+)]
 // SPDX-License-Identifier: Apache-2.0
 
 use std::{
@@ -246,7 +250,7 @@ fn rhai_planner_authoring_is_strict_and_compiles_declared_policy() {
     assert!(failure
         .diagnostics()
         .iter()
-        .any(|diagnostic| diagnostic.code == "change_request.planner.classification_ceiling"));
+        .any(|diagnostic| diagnostic.code == "breg.change-request.planner-classification-ceiling"));
 
     let undeclared_asset = compile_project_with_assets(
         &project,
@@ -270,7 +274,7 @@ fn rhai_planner_authoring_is_strict_and_compiles_declared_policy() {
     assert!(undeclared_asset
         .diagnostics()
         .iter()
-        .any(|diagnostic| diagnostic.code == "change_request.planner.asset_undeclared"));
+        .any(|diagnostic| diagnostic.code == "breg.change-request.planner-asset-undeclared"));
 
     let mut value: serde_json::Value =
         serde_norway::from_slice(&project_bytes).expect("fixture YAML converts");
@@ -319,7 +323,7 @@ fn rhai_planner_authoring_refuses_closed_contract_violations() {
     let both_diagnostics = compile_diagnostics(&both, vec![owned_asset()]);
     let exclusive = both_diagnostics
         .iter()
-        .find(|diagnostic| diagnostic.code == "change_request.plan.exclusive")
+        .find(|diagnostic| diagnostic.code == "breg.change-request.plan-exclusive")
         .expect("effects and planner are mutually exclusive");
     assert_eq!(
         exclusive.path,
@@ -331,14 +335,14 @@ fn rhai_planner_authoring_refuses_closed_contract_violations() {
         .as_object_mut()
         .expect("change request is an object")
         .remove("planner");
-    assert!(compile_codes(&neither, Vec::new()).contains("change_request.plan.exclusive"));
+    assert!(compile_codes(&neither, Vec::new()).contains("breg.change-request.plan-exclusive"));
 
     let mut wrong_abi = base.clone();
     wrong_abi["entities"][1]["changeRequest"]["planner"]["abi"] = json!("unsupported/v9");
     let abi_diagnostics = compile_diagnostics(&wrong_abi, vec![owned_asset()]);
     let invalid_abi = abi_diagnostics
         .iter()
-        .find(|diagnostic| diagnostic.code == "change_request.planner.abi_invalid")
+        .find(|diagnostic| diagnostic.code == "breg.change-request.planner-abi-invalid")
         .expect("unsupported planner ABI is refused");
     assert_eq!(
         invalid_abi.path,
@@ -350,7 +354,7 @@ fn rhai_planner_authoring_refuses_closed_contract_violations() {
     let wasm_diagnostics = compile_diagnostics(&wasm_planner, vec![owned_asset()]);
     let wasm = wasm_diagnostics
         .iter()
-        .find(|diagnostic| diagnostic.code == "change_request.planner.kind_unsupported")
+        .find(|diagnostic| diagnostic.code == "breg.change-request.planner-kind-unsupported")
         .expect("a WASM planner kind is refused explicitly");
     assert_eq!(
         wasm.path,
@@ -366,7 +370,7 @@ fn rhai_planner_authoring_refuses_closed_contract_violations() {
         compile_diagnostics(&unknown_request_field, vec![owned_asset()]);
     let unknown_request_field = request_field_diagnostics
         .iter()
-        .find(|diagnostic| diagnostic.code == "change_request.planner.request_field_unknown")
+        .find(|diagnostic| diagnostic.code == "breg.change-request.planner-request-field-unknown")
         .expect("unknown planner input is refused");
     assert_eq!(
         unknown_request_field.path,
@@ -381,7 +385,7 @@ fn rhai_planner_authoring_refuses_closed_contract_violations() {
     let write_diagnostics = compile_diagnostics(&unknown_write_field, vec![owned_asset()]);
     let unknown_field = write_diagnostics
         .iter()
-        .find(|diagnostic| diagnostic.code == "change_request.planner.write_field_unknown")
+        .find(|diagnostic| diagnostic.code == "breg.change-request.planner-write-field-unknown")
         .expect("unknown planner write field is refused");
     assert_eq!(
         unknown_field.path,
@@ -399,11 +403,11 @@ fn rhai_planner_authoring_refuses_closed_contract_violations() {
         }],
     );
     assert!(
-        escaping_codes.contains("change_request.planner.source_invalid"),
+        escaping_codes.contains("breg.change-request.planner-source-invalid"),
         "unexpected diagnostics: {escaping_codes:?}"
     );
 
-    assert!(compile_codes(&base, Vec::new()).contains("change_request.planner.source_missing"));
+    assert!(compile_codes(&base, Vec::new()).contains("breg.change-request.planner-source-missing"));
 
     let invalid_entrypoint = compile_codes(
         &base,
@@ -413,7 +417,7 @@ fn rhai_planner_authoring_refuses_closed_contract_violations() {
             bytes: b"fn not_plan(ctx) { #{} }".to_vec(),
         }],
     );
-    assert!(invalid_entrypoint.contains("change_request.planner.entrypoint"));
+    assert!(invalid_entrypoint.contains("breg.change-request.planner-entrypoint"));
 
     let wrong_origin = compile_codes(
         &base,
@@ -423,8 +427,8 @@ fn rhai_planner_authoring_refuses_closed_contract_violations() {
             bytes: script,
         }],
     );
-    assert!(wrong_origin.contains("change_request.planner.source_missing"));
-    assert!(wrong_origin.contains("change_request.planner.asset_undeclared"));
+    assert!(wrong_origin.contains("breg.change-request.planner-source-missing"));
+    assert!(wrong_origin.contains("breg.change-request.planner-asset-undeclared"));
 
     for (path, value) in [
         ("planner kind", json!("javascript")),
@@ -657,59 +661,6 @@ fn rhai_planner_output_abi_is_closed_and_symbolic() {
 }
 
 #[test]
-fn anonymous_presence_rejects_a_non_public_rhai_target_link() {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../products/breg/acceptance/person-name-change-rhai");
-    let project_bytes = std::fs::read(root.join("registry.yaml")).expect("fixture project reads");
-    let mut project: serde_json::Value =
-        serde_norway::from_slice(&project_bytes).expect("fixture YAML converts");
-    project["entities"][0]["classification"] = json!("public");
-    project["entities"][0]["fields"][0]["classification"] = json!("public");
-    project["entities"][1]["classification"] = json!("public");
-    for field in project["entities"][1]["fields"]
-        .as_array_mut()
-        .expect("request fields are an array")
-    {
-        field["classification"] = json!("public");
-    }
-    project["entities"][1]["fields"][0]["classification"] = json!("internal");
-    project["accessProfiles"]
-        .as_array_mut()
-        .expect("profiles are an array")
-        .push(json!({
-            "id": "public-person-reader",
-            "anonymous": true,
-            "permissions": [{
-                "entity": "person",
-                "operations": ["get", "list"],
-                "readableFields": ["person-code"],
-                "requestPresence": [{"requestType": "person-name-change-request", "rowBoundaries": []}],
-              "rowBoundaries": []
-            }]
-        }));
-    let project = registry_breg::contract::parse_project_json(
-        &serde_json::to_vec(&project).expect("test project serializes"),
-    )
-    .expect("strict project parses");
-    let failure = compile_project_with_assets(
-        &project,
-        &[],
-        &[ModuleAssetSource {
-            module: None,
-            path: "scripts/person-name-change.rhai".to_owned(),
-            bytes: std::fs::read(root.join("scripts/person-name-change.rhai"))
-                .expect("planner reads"),
-        }],
-        CompileProfile::Authoring,
-    )
-    .expect_err("anonymous presence cannot process a classified Rhai target link");
-    assert!(failure
-        .diagnostics()
-        .iter()
-        .any(|diagnostic| { diagnostic.code == "change_request.presence.anonymous_non_public" }));
-}
-
-#[test]
 fn automatic_apply_keeps_the_executor_separate_from_source_profiles() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../products/breg/acceptance/person-name-change-rhai");
@@ -768,22 +719,24 @@ fn reviewed_planner_allows_a_separate_manual_apply_profile() {
     profiles.push(json!({
         "id": "source-reader-without-apply",
         "principalClaim": "registry_principal",
+        "requiredScopes": "unrestricted",
         "permissions": [{
             "entity": "person-name-change-request",
             "operations": ["get"],
             "readableFields": ["person", "given-name", "family-name", "handling"],
-          "rowBoundaries": []
+          "rowBoundaries": "unrestricted"
         }]
     }));
     profiles.push(json!({
         "id": "separate-manual-applier",
         "principalClaim": "registry_principal",
+        "requiredScopes": "unrestricted",
         "permissions": [{
             "entity": "person-name-change-request",
             "operations": ["get", "apply_request"],
             "readableFields": ["person", "given-name", "family-name", "handling"],
-            "applyTargets": [{"entity": "person", "rowBoundaries": []}],
-          "rowBoundaries": []
+            "applyTargets": [{"entity": "person", "rowBoundaries": "unrestricted"}],
+          "rowBoundaries": "unrestricted"
         }]
     }));
     let project = registry_breg::contract::parse_project_json(

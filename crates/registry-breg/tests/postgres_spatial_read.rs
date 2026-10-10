@@ -2530,7 +2530,7 @@ fn plain_geojson_registry_source() -> &'static str {
           "operations":["create","get","list"],
           "readableFields":["code","location"],
           "writableFields":["code","location"],
-          "rowBoundaries": []
+          "rowBoundaries": "unrestricted"
         }]
       }]
     }"#

@@ -483,9 +483,27 @@ mod tests {
                 );
             }
 
-            crate::check(&destination, ProfileArg::Authoring).unwrap_or_else(|failure| {
-                panic!("{id}: {}", serde_json::to_string_pretty(&failure).unwrap())
-            });
+            let request = crate::check::Request {
+                project: Some(&destination),
+                package: None,
+                production: false,
+                deny_warnings: false,
+                runtime_config: None,
+                environment: false,
+            };
+            let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
+            let exit = crate::check::run(
+                &request,
+                crate::OutputFormat::Json,
+                &mut stdout,
+                &mut stderr,
+            );
+            assert_eq!(
+                exit,
+                std::process::ExitCode::SUCCESS,
+                "{id}: {}",
+                String::from_utf8_lossy(&stdout)
+            );
         }
     }
 

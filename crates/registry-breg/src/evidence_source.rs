@@ -7,6 +7,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use registry_platform_canonical_json::canonicalize_json;
+use serde::Serialize;
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 
@@ -16,6 +17,50 @@ use crate::{
     model::{CompiledEntity, CompiledLogicalField, CompiledRegistry},
     GeneratedArtifact,
 };
+
+/// The `apiVersion` of an export's `source-export.json`. `evidencectl source
+/// import` reads the same value.
+pub const EVIDENCE_SOURCE_EXPORT_API_VERSION: &str =
+    "id.registrystack.org/formats/breg/evidence-source-export/v1alpha1";
+pub const EVIDENCE_SOURCE_EXPORT_KIND: &str = "BRegEvidenceSourceExport";
+
+/// The header of an exported `sources/<id>.yaml`. `evidencectl` reads the same
+/// values under its source format.
+const SOURCE_HEADER: [(&str, &str); 2] = [
+    (
+        "apiVersion",
+        "id.registrystack.org/formats/evidence/source/v1alpha1",
+    ),
+    ("kind", "EvidenceSource"),
+];
+
+/// The header of an exported `selectors/<profile>.yaml`. `evidencectl` reads
+/// the same values under its selector format.
+const SELECTOR_HEADER: [(&str, &str); 2] = [
+    (
+        "apiVersion",
+        "id.registrystack.org/formats/evidence/selector/v1alpha1",
+    ),
+    ("kind", "EvidenceSelector"),
+];
+
+/// `source-export.json`, written with its header first. Every member has a
+/// fixed order, so the same inputs write the same bytes.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ExportManifest<'a> {
+    api_version: &'static str,
+    kind: &'static str,
+    source_id: &'a str,
+    provenance: BTreeMap<&'static str, &'a str>,
+    artifacts: Vec<ExportManifestArtifact<'a>>,
+}
+
+#[derive(Serialize)]
+struct ExportManifestArtifact<'a> {
+    path: &'a str,
+    digest: &'a str,
+}
 
 /// Technical choices only. Questions, permissions, targets and credentials stay with
 /// the Evidence project and its operator.
@@ -37,7 +82,7 @@ pub struct EvidenceSourceExport {
 }
 
 fn refusal(path: &str, message: &str) -> Diagnostic {
-    Diagnostic::error("evidence_source.refused", path, message)
+    Diagnostic::error("breg.evidence-source.refused", path, message)
 }
 
 fn local_name(value: &str) -> bool {
@@ -68,6 +113,22 @@ fn artifact(path: String, media_type: &str, bytes: Vec<u8>) -> GeneratedArtifact
         sha256: format!("sha256:{}", digest(&bytes)),
         bytes,
     }
+}
+
+/// A source or selector document: the flat body under its envelope header.
+fn enveloped_document(
+    path: String,
+    header: [(&str, &str); 2],
+    body: &Value,
+) -> Result<GeneratedArtifact, Diagnostic> {
+    let mut value = body.clone();
+    let members = value
+        .as_object_mut()
+        .expect("an exported source or selector body is an object");
+    for (name, text) in header {
+        members.insert(name.to_owned(), Value::String(text.to_owned()));
+    }
+    document(path, &value)
 }
 
 fn document(path: String, value: &Value) -> Result<GeneratedArtifact, Diagnostic> {
@@ -201,7 +262,7 @@ pub fn export_evidence_source(
         .contains_key(&options.access_profile)
     {
         return Err(Diagnostic::error(
-            "consent.require.evidence_source_unsupported",
+            "breg.consent.require-evidence-source-unsupported",
             "access-profile",
             "a consent-checked profile cannot back an Evidence source; the Evidence runtime is not the recipient the subject consented to",
         ));
@@ -339,8 +400,9 @@ pub fn export_evidence_source(
             checks
         ));
         alternatives.push(json!({"profile":profile,"fields":selector.fields}));
-        artifacts.push(document(
+        artifacts.push(enveloped_document(
             format!("selectors/{profile}.yaml"),
+            SELECTOR_HEADER,
             &json!({"maximumAggregateBytes":maximum,"fields":selector_fields}),
         )?);
         identity_fields.insert(
@@ -435,7 +497,7 @@ pub fn export_evidence_source(
         "text/plain",
         extract.into_bytes(),
     ));
-    artifacts.push(document(format!("sources/{prefix}.yaml"),&json!({
+    artifacts.push(enveloped_document(format!("sources/{prefix}.yaml"),SOURCE_HEADER,&json!({
         "transport":"http-json","connection":options.connection,"behaviorRevision":behavior_revision,"posture":"field-projected",
         "forwardAccessAttribution":entity.access_log.is_some(),
         "unresolvedProblem":{"status":404,"type":crate::problem::ProblemCode::LookupUnresolved.type_uri(),"code":"lookup.unresolved"},
@@ -447,11 +509,31 @@ pub fn export_evidence_source(
         "responseSchema":format!("schemas/{prefix}-response.yaml"),"extractScript":format!("adapters/{prefix}-extract.rhai"),"factSchema":format!("schemas/{prefix}-facts.yaml")
     }))?);
     artifacts.sort_by(|a, b| a.path.cmp(&b.path));
-    let manifest = json!({"formatVersion":1,"sourceId":prefix,"provenance":{"producer":"bregctl","registryId":registry.registry_id(),"registryRevision":registry.revision(),"entity":entity.id,"accessProfile":options.access_profile,"behaviorRevision":behavior_revision},"artifacts":artifacts.iter().map(|artifact|json!({"path":artifact.path,"sha256":digest(&artifact.bytes)})).collect::<Vec<_>>()});
+    let manifest = serde_json::to_vec(&ExportManifest {
+        api_version: EVIDENCE_SOURCE_EXPORT_API_VERSION,
+        kind: EVIDENCE_SOURCE_EXPORT_KIND,
+        source_id: prefix,
+        provenance: BTreeMap::from([
+            ("producer", "bregctl"),
+            ("registryId", registry.registry_id()),
+            ("registryRevision", registry.revision()),
+            ("entity", entity.id.as_str()),
+            ("accessProfile", options.access_profile.as_str()),
+            ("behaviorRevision", behavior_revision.as_str()),
+        ]),
+        artifacts: artifacts
+            .iter()
+            .map(|artifact| ExportManifestArtifact {
+                path: &artifact.path,
+                digest: &artifact.sha256,
+            })
+            .collect(),
+    })
+    .map_err(|_| refusal("export", "could not encode the export manifest"))?;
     artifacts.push(artifact(
         "source-export.json".into(),
         "application/json",
-        canonical(&manifest)?,
+        manifest,
     ));
     Ok(EvidenceSourceExport {
         artifacts,
@@ -516,7 +598,7 @@ fn selected_behavior(
         .map(|boundary| &boundary.field)
         .map(|id| field(entity, id).map(|field| json!(field)))
         .collect::<Result<Vec<_>, _>>()?;
-    let mut behavior = json!({"protocol":"breg-evidence-lookup-v2","readSemantics":"collection-dependencies-v1/evaluation-date-transaction-v1/access-attribution-v1","entity":entity.id,"route":entity.route,"canonicalId":entity.canonical_id,"tombstone":entity.tombstone,"fields":logical_fields,"selectors":selectors,"access":{"profile":access.id,"anonymous":access.anonymous,"principalClaim":access.principal_claim,"requiredScopes":access.required_scopes,"requiredPurposes":access.required_purposes,"rowBoundaries":access.row_boundaries,"boundaryFields":boundary_fields,"requestVisibility":access.request_visibility,"requirements":entity.access_requirements,"accessLog":entity.access_log,"selectPolicies":select_policies(registry,entity,&options.access_profile)},"derived":derived,"sources":sources});
+    let mut behavior = json!({"protocol":"breg-evidence-lookup-v2","readSemantics":"collection-dependencies-v1/evaluation-date-transaction-v1/access-attribution-v1","entity":entity.id,"route":entity.route,"canonicalId":entity.canonical_id,"tombstone":entity.tombstone,"fields":logical_fields,"selectors":selectors,"access":{"profile":access.id,"principalClaim":access.principal_claim,"requiredScopes":access.required_scopes,"requiredPurposes":access.required_purposes,"rowBoundaries":access.row_boundaries,"boundaryFields":boundary_fields,"requestVisibility":access.request_visibility,"requirements":entity.access_requirements,"accessLog":entity.access_log,"selectPolicies":select_policies(registry,entity,&options.access_profile)},"derived":derived,"sources":sources});
     let membership = membership_behavior(registry, entity, &options.access_profile)?;
     if !membership.is_empty() {
         behavior["access"]["membershipBoundaries"] = json!(membership);

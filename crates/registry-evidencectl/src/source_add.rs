@@ -38,14 +38,6 @@ pub(crate) struct SourceAddArgs {
     /// editable project when the directory is absent.
     #[arg(value_name = "PROJECT", default_value = ".")]
     pub project: PathBuf,
-    /// Retired spelling of the project directory argument, still accepted.
-    #[arg(
-        long = "project",
-        value_name = "PROJECT",
-        hide = true,
-        conflicts_with = "project"
-    )]
-    pub legacy_project: Option<PathBuf>,
     /// Existing registry entity; prompted when omitted in a terminal.
     #[arg(long)]
     pub entity: Option<String>,
@@ -150,10 +142,7 @@ struct RowScope {
     value_file: PathBuf,
 }
 
-pub(crate) fn run(mut args: SourceAddArgs, format: OutputFormat) -> Result<ExitCode> {
-    if let Some(project) = args.legacy_project.take() {
-        args.project = project;
-    }
+pub(crate) fn run(args: SourceAddArgs, format: OutputFormat) -> Result<ExitCode> {
     let binary = args
         .bregctl_bin
         .clone()
@@ -1077,6 +1066,10 @@ fn provider_refusal(arguments: &[OsString], bytes: &[u8]) -> anyhow::Error {
 
 #[cfg(test)]
 mod tests {
+    #![allow(
+        clippy::disallowed_methods,
+        reason = "tests read back the YAML the code under test wrote, or a published contract or fixture, to assert on it; they read no operator configuration"
+    )]
     use super::*;
     use clap::Parser as _;
 
@@ -1221,12 +1214,12 @@ mod tests {
     }
 
     fn write_export(root: &Path, id: &str, connection: &str) -> Result<()> {
-        let source = format!("transport: http-json\nconnection: {connection}\nrequest:\n  selectorInputs:\n    - role: subject\n      alternatives: [{{profile: record-code, fields: [code]}}]\n  prepareScript: adapters/{id}-prepare.rhai\n  adapterParametersSchema: schemas/{id}-parameters.yaml\nresponseSchema: schemas/{id}-response.yaml\nfactSchema: schemas/{id}-facts.yaml\nextractScript: adapters/{id}-extract.rhai\n");
+        let source = format!("apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1\nkind: EvidenceSource\ntransport: http-json\nconnection: {connection}\nrequest:\n  selectorInputs:\n    - role: subject\n      alternatives: [{{profile: record-code, fields: [code]}}]\n  prepareScript: adapters/{id}-prepare.rhai\n  adapterParametersSchema: schemas/{id}-parameters.yaml\nresponseSchema: schemas/{id}-response.yaml\nfactSchema: schemas/{id}-facts.yaml\nextractScript: adapters/{id}-extract.rhai\n");
         let artifacts = BTreeMap::from([
             (format!("sources/{id}.yaml"), source),
             (
                 "selectors/record-code.yaml".to_owned(),
-                "fields: {code: {type: string, minimumBytes: 1, maximumBytes: 128}}\n".to_owned(),
+                "apiVersion: id.registrystack.org/formats/evidence/selector/v1alpha1\nkind: EvidenceSelector\nfields: {code: {type: string, minimumBytes: 1, maximumBytes: 128}}\n".to_owned(),
             ),
             (
                 format!("schemas/{id}-parameters.yaml"),
@@ -1257,8 +1250,9 @@ mod tests {
         fs::write(
             root.join("source-export.json"),
             serde_json::to_vec(&json!({
-                "formatVersion":1,"sourceId":id,"provenance":{"producer":"source-add-test","revision":"one"},
-                "artifacts":artifacts.iter().map(|(path,text)|json!({"path":path,"sha256":hex::encode(Sha256::digest(text.as_bytes()))})).collect::<Vec<_>>()
+                "apiVersion":source_import::EXPORT_API_VERSION,"kind":source_import::EXPORT_KIND,
+                "sourceId":id,"provenance":{"producer":"source-add-test","revision":"one"},
+                "artifacts":artifacts.iter().map(|(path,text)|json!({"path":path,"digest":format!("sha256:{}",hex::encode(Sha256::digest(text.as_bytes())))})).collect::<Vec<_>>()
             }))?,
         )?;
         Ok(())

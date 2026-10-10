@@ -50,7 +50,8 @@ const INSTANCE_ID: &str = "change-request-activation-instance";
 const DATABASE_ID: &str = "change-request-activation-database";
 const SOURCE_REVISION: &str = "change-request-activation-source";
 const TENANT: &str = "tenant-a";
-const FIXTURE_JOURNEYS: &[u8] = br#"apiVersion: registry.registrystack.org/breg-journeys/v1
+const FIXTURE_JOURNEYS: &[u8] = br#"apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
 journeys:
   - id: activation-request-list
     steps:
@@ -58,7 +59,7 @@ journeys:
         entity: correction-request
         accessProfile: submitter
         claims: {principal: package-reader}
-        request: {operation: list}
+        request: {type: list}
         expect: {outcome: success, status: 200, count: 0}
 "#;
 
@@ -1053,7 +1054,7 @@ fn project_bytes_for_variant(variant: Variant) -> Vec<u8> {
           ],
           "accessProfiles":[
             {{
-              "id":"steward","default":true,"principalClaim":"registry_principal",
+              "id":"steward","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
               "permissions":[{{
                 "entity":"asset-site",
                 "operations":["create","get","list"],
@@ -1071,7 +1072,7 @@ fn project_bytes_for_variant(variant: Variant) -> Vec<u8> {
               }}]
             }},
             {{
-              "id":"submitter","default":true,"principalClaim":"registry_principal",
+              "id":"submitter","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
               "permissions":[{{
                 "entity":"correction-request",
                 "operations":["create","get","list","revisions","patch","submit_request","revise_request","cancel_request"],
@@ -1082,7 +1083,7 @@ fn project_bytes_for_variant(variant: Variant) -> Vec<u8> {
               }}]
             }},
             {{
-              "id":"reviewer","principalClaim":"registry_principal","requiredPurposes":["review"],
+              "id":"reviewer","principalClaim":"registry_principal","requiredScopes":"unrestricted","requiredPurposes":["review"],
               "permissions":[{{
                 "entity":"correction-request",
                 "operations":["get","list"],
@@ -1091,7 +1092,7 @@ fn project_bytes_for_variant(variant: Variant) -> Vec<u8> {
               }}]
             }},
             {{
-              "id":"applier","principalClaim":"registry_principal","requiredPurposes":["apply"],
+              "id":"applier","principalClaim":"registry_principal","requiredScopes":"unrestricted","requiredPurposes":["apply"],
               "permissions":[{{
                 "entity":"correction-request",
                 "operations":["get","apply_request"],

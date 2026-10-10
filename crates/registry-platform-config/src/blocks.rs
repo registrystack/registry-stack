@@ -114,10 +114,12 @@ fn require_absolute(field: &str, path: &Path) -> Result<(), ConfigBlockError> {
 pub struct SecretProvidersConfig {
     /// Enables `secret:file/name` references, read from files under `root`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(with = "FileSecretProviderConfig"))]
     pub file: Option<FileSecretProviderConfig>,
     /// Enables `secret:env/NAME` references, read from the process
     /// environment. Declared as an empty mapping: `environment: {}`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(with = "EnvironmentSecretProviderConfig"))]
     pub environment: Option<EnvironmentSecretProviderConfig>,
 }
 
@@ -208,11 +210,12 @@ impl SecretProvidersConfig {
 
 /// Explain one refused secret reference without disclosing what it protects.
 ///
-/// A valid reference is safe and useful to name, but invalid operator-authored
-/// text might itself be a literal credential, so only its field is named. The
-/// resolved bytes and opened path never appear.
+/// The reference is operator-authored text read from a configuration file, so
+/// it is never repeated: the member path and a fixed reason are named. The
+/// resolved bytes and opened path never appear either. The reference parameter
+/// stays so a caller keeps one call shape; it is not read.
 #[must_use]
-pub fn describe_secret_failure(field: &str, reference: &str, error: &SecretError) -> String {
+pub fn describe_secret_failure(field: &str, _reference: &str, error: &SecretError) -> String {
     let reason = match error {
         SecretError::InvalidReference => {
             "it is not an exact secret:env/NAME or secret:file/name reference".to_owned()
@@ -235,11 +238,7 @@ pub fn describe_secret_failure(field: &str, reference: &str, error: &SecretError
              without NUL bytes"
         ),
     };
-    if error == &SecretError::InvalidReference {
-        format!("the secret reference configured at {field} could not be resolved: {reason}")
-    } else {
-        format!("the secret reference {reference} could not be resolved: {reason}")
-    }
+    format!("the secret reference configured at {field} could not be resolved: {reason}")
 }
 
 /// The PostgreSQL connection a stateful runtime uses. Both URLs are secret
@@ -249,14 +248,15 @@ pub fn describe_secret_failure(field: &str, reference: &str, error: &SecretError
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DatabaseConfig {
     /// Secret reference to the least-privileged runtime connection URL.
-    #[cfg_attr(feature = "schema", schemars(extend("pattern" = SECRET_PROVIDER_PATTERN)))]
+    #[cfg_attr(feature = "schema", schemars(with = "SecretReference"))]
     pub runtime_url_ref: String,
     /// Secret reference to the migration connection URL.
-    #[cfg_attr(feature = "schema", schemars(extend("pattern" = SECRET_PROVIDER_PATTERN)))]
+    #[cfg_attr(feature = "schema", schemars(with = "SecretReference"))]
     pub migration_url_ref: String,
     /// Secret reference to a PEM root certificate the connection trusts.
-    #[serde(default)]
-    #[cfg_attr(feature = "schema", schemars(extend("pattern" = SECRET_PROVIDER_PATTERN)))]
+    /// Absent, the connection trusts the platform's root certificates.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(with = "SecretReference"))]
     pub trusted_root_certificate_ref: Option<String>,
     /// Allow a plaintext connection. Refused outside test builds.
     #[serde(default)]
@@ -298,8 +298,14 @@ impl DatabaseConfig {
 
 /// Where a runtime obtains the OIDC issuer's signing keys.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(
+    remote = "Self",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+#[cfg_attr(feature = "schema", schemars(!remote, tag = "kind"))]
 pub enum JwksSource {
     /// Read `jwks_uri` from the issuer's OpenID Connect discovery document.
     // A struct variant, so `deny_unknown_fields` refuses a `uri` or a
@@ -308,16 +314,35 @@ pub enum JwksSource {
     Discovery {},
     /// Fetch the key set from this absolute `https` URI, skipping discovery.
     Uri {
-        #[cfg_attr(feature = "schema", schemars(extend("pattern" = "^https?://")))]
+        #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::Url"))]
         uri: String,
     },
     /// Read the key set from a secret, for deployments without network access
     /// to the issuer.
     Static {
         #[serde(rename = "documentRef")]
-        #[cfg_attr(feature = "schema", schemars(extend("pattern" = SECRET_REFERENCE_PATTERN)))]
+        #[cfg_attr(feature = "schema", schemars(with = "SecretReference"))]
         document_ref: String,
     },
+}
+
+registry_platform_yaml::tagged_union!(JwksSource, tag = "kind");
+
+impl Serialize for JwksSource {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let (kind, member) = match self {
+            Self::Discovery {} => ("discovery", None),
+            Self::Uri { uri } => ("uri", Some(("uri", uri))),
+            Self::Static { document_ref } => ("static", Some(("documentRef", document_ref))),
+        };
+        let mut map = serializer.serialize_map(Some(1 + usize::from(member.is_some())))?;
+        map.serialize_entry("kind", kind)?;
+        if let Some((key, value)) = member {
+            map.serialize_entry(key, value)?;
+        }
+        map.end()
+    }
 }
 
 impl Default for JwksSource {
@@ -402,11 +427,14 @@ fn valid_jwks_uri(value: &str, allow_loopback_http: bool) -> bool {
 /// The key for the keyed references an audit record carries in place of raw
 /// identifiers, written `audit.hashKeyRef` beside the product's own audit
 /// settings.
-// A product's `audit` block embeds this with `#[serde(flatten)]`, so every
-// product spells the key the same way and one implementation checks it.
+// A product's `audit` block holds this as a member renamed to the reader's
+// shared-block marker `registry-platform-yaml/shared-block/...`, which the
+// reader reads as this block's members inline, so every product spells the key
+// the same way and one implementation checks it.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schema", schemars(deny_unknown_fields))]
 pub struct AuditKeyConfig {
     /// Secret reference to the audit hash key.
     pub hash_key_ref: SecretReference,
@@ -426,15 +454,18 @@ pub const MAX_OIDC_AUDIENCE_CHARACTERS: usize = 512;
 /// value, the `aud` value a token must carry, and where the issuer's signing
 /// keys come from, written under `authentication.oidc` beside the product's
 /// own token rules.
-// A product's `authentication.oidc` block embeds this with
-// `#[serde(flatten)]`.
+// A product's `authentication.oidc` block holds this as a member renamed to the
+// reader's shared-block marker `registry-platform-yaml/shared-block/...`, which
+// the reader reads as this block's members inline, beside the product's own
+// token rules.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schema", schemars(deny_unknown_fields))]
 pub struct OidcIssuerConfig {
     /// Exact issuer accepted in access-token `iss` claims, an absolute
     /// `https` URL.
-    #[cfg_attr(feature = "schema", schemars(extend("pattern" = "^https?://")))]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::Url"))]
     pub issuer: String,
     /// The audience every accepted access token must carry in `aud`.
     #[cfg_attr(feature = "schema", schemars(length(min = 1, max = 512)))]
@@ -503,30 +534,64 @@ pub const MAX_ASSERTION_ISSUER_BYTES: usize = 512;
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schema", schemars(deny_unknown_fields))]
 pub struct OidcClientsConfig {
     /// Client identifiers whose access tokens are admitted. A runtime decides
     /// whether an empty list is acceptable in production.
     #[serde(default)]
     pub allowed_clients: Vec<String>,
     /// Assertion authorities each client may exchange a subject token from,
-    /// keyed by client identifier. An empty map applies no rule. Once a
-    /// client is listed, a token it exchanged is accepted only for one of
-    /// that client's declared authorities.
-    #[serde(default)]
-    #[cfg_attr(
-        feature = "schema",
-        schemars(extend(
-            "maxProperties" = MAX_ASSERTION_ISSUER_CLIENTS,
-            "propertyNames" = {"minLength": 1, "maxLength": MAX_ASSERTION_ISSUER_CLIENT_BYTES},
-            "additionalProperties" = {
-                "type": "array",
-                "maxItems": MAX_ASSERTION_ISSUERS_PER_CLIENT,
-                "uniqueItems": true,
-                "items": {"type": "string", "minLength": 1, "maxLength": MAX_ASSERTION_ISSUER_BYTES}
-            }
-        ))
+    /// keyed by client identifier. Omitted, no assertion-issuer rule applies;
+    /// written, it lists at least one client. Once a client is listed, a
+    /// token it exchanged is accepted only for one of that client's declared
+    /// authorities.
+    #[serde(
+        default,
+        skip_serializing_if = "BTreeMap::is_empty",
+        deserialize_with = "non_empty_assertion_issuers"
     )]
+    #[cfg_attr(feature = "schema", schemars(schema_with = "assertion_issuers_schema"))]
     pub assertion_issuers: BTreeMap<String, Vec<String>>,
+}
+
+/// Client identifiers are external identifiers (CFG-ID-2) with a stated
+/// bound, so the schema types the keys with the shared `ExternalId` and states
+/// the bounds `OidcClientsConfig::check` enforces.
+#[cfg(feature = "schema")]
+fn assertion_issuers_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    let mut client = generator.subschema_for::<registry_platform_yaml::ExternalId>();
+    client.insert(
+        "maxLength".to_owned(),
+        serde_json::json!(MAX_ASSERTION_ISSUER_CLIENT_BYTES),
+    );
+    schemars::json_schema!({
+        "type": "object",
+        "minProperties": 1,
+        "maxProperties": MAX_ASSERTION_ISSUER_CLIENTS,
+        "propertyNames": client,
+        "additionalProperties": {
+            "type": "array",
+            "maxItems": MAX_ASSERTION_ISSUERS_PER_CLIENT,
+            "uniqueItems": true,
+            "items": {"type": "string", "minLength": 1, "maxLength": MAX_ASSERTION_ISSUER_BYTES}
+        }
+    })
+}
+
+/// An empty mapping is not how a file says "no assertion-issuer rule"
+/// (CFG-EMPTY-2): omitting the member says it.
+fn non_empty_assertion_issuers<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<BTreeMap<String, Vec<String>>, D::Error> {
+    let issuers = BTreeMap::<String, Vec<String>>::deserialize(deserializer)?;
+    if issuers.is_empty() {
+        return Err(registry_platform_yaml::Invalid::expected(
+            "at least one client",
+            "List at least one client with its assertion issuers, or omit assertionIssuers to apply no assertion-issuer rule.",
+        )
+        .into_error());
+    }
+    Ok(issuers)
 }
 
 impl OidcClientsConfig {
@@ -580,7 +645,7 @@ pub struct PackageConfig {
     /// `SHA256SUMS` file. When set, the runtime refuses to start on any other
     /// package.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(feature = "schema", schemars(extend("pattern" = "^sha256:[0-9a-f]{64}$")))]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::Digest"))]
     pub expected_digest: Option<String>,
 }
 
@@ -679,10 +744,10 @@ impl<'de> Deserialize<'de> for ListenerBind {
             .then(|| value.parse().ok())
             .flatten()
             .ok_or_else(|| {
-                serde::de::Error::custom(
-                    "listener.bind must be host:port with an IP address host, such as \
-                 127.0.0.1:8080 or [::1]:8080",
-                )
+                serde::de::Error::custom(registry_platform_yaml::Invalid::expected(
+                    "host:port with an IP address host, such as 127.0.0.1:8080 or [::1]:8080",
+                    "Write the address as host:port with an IP address host.",
+                ))
             })
     }
 }

@@ -4,7 +4,8 @@ Check a `metadata.yaml` file for errors, inspect individual rendered artifacts
 (service catalogues, catalog metadata, validation shapes, JSON Schemas, form schemas, and policies),
 or produce a complete static publication bundle for hosting.
 
-The validator collects all errors across every validation pass before reporting, so a single run surfaces every problem in the file.
+The validator reports every problem at each stage together: first every problem with the
+document's shape, then, once the document reads, every manifest rule it breaks.
 You do not need to fix one error at a time and re-run.
 
 For profile fixture validation, see [Validate against profile fixtures](./profile-fixtures.md) instead.
@@ -45,7 +46,17 @@ metadata manifest valid: profiles/example-civil-registration/fixtures/metadata.y
 source_manifest_digest: sha256:...
 ```
 
-On failure, all validation errors are printed together.
+On a refusal, the CLI prints one sentence and then every finding to standard error, and
+exits 1. Each finding names its code, the file, line, and column, the member's JSON
+Pointer, and the fix, and never repeats the refused value:
+
+```text
+error[manifest.metadata.invalid-url] metadata.yaml:5:13 /catalog/base_url
+  ...
+```
+
+Add `--format json` for a machine-readable report. The exit codes are listed in the
+[reference](./reference.md#check-exit-codes-and-diagnostics).
 
 Validation checks include:
 
@@ -240,7 +251,8 @@ an artifact changes the `package_digest` because the digest covers the full arti
 
 ## Verification
 
-After `validate`, confirm the exit code is zero:
+After `validate`, confirm the exit code is zero (1 means the manifest was refused,
+2 that the arguments were not understood, and 3 that the file could not be read):
 
 ```sh
 cargo run --bin registry-manifest -- validate \
@@ -265,10 +277,16 @@ written when the manifest declares the corresponding application profile.
 
 ## Troubleshooting
 
-### "schema_version mismatch" or validation error on schema_version
+### `manifest.metadata.unsupported-version` on `/schema_version`
 
 The manifest root must declare `schema_version: registry-manifest/v1`.
 Check the first line of your YAML.
+
+### `config.null-value` or `config.substitution-not-allowed`
+
+A manifest never writes `null`: omit an optional member instead. A manifest is a
+portable description that nothing substitutes values into, so text that contains
+`${...}` is refused; write the value itself.
 
 ### Validation prints errors about cardinality values
 

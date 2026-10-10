@@ -1,0 +1,1 @@
+{"apiVersion": "id.registrystack.org/formats/fuzz/package/v1", "kind": "FuzzPackage", "id": "pkg", "version": "1", "items": [1, 2.5, true, null, "x"]}

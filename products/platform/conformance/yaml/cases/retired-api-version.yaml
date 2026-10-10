@@ -1,0 +1,13 @@
+id: retired-api-version
+rules: [CFG-CHANGE-2]
+summary: Each apiVersion the format declares retired is refused at the value, naming the current one.
+appliesTo:
+  envelope: true
+mutation:
+  retiredApiVersion: {}
+expect:
+  exit: 1
+  diagnostics:
+    - code: config.retired-api-version
+      path: /apiVersion
+      at: {line: 1, column: 1}

@@ -75,9 +75,10 @@ accessProfiles:
   - id: person-operator
     default: true
     principalClaim: registry_principal
+    requiredScopes: unrestricted
     requiredPurposes: [person-maintenance]
     permissions:
-      - {entity: person, operations: [create, get, list], readableFields: [person-code, display-name], writableFields: [person-code, display-name], rowBoundaries: []}
+      - {entity: person, operations: [create, get, list], readableFields: [person-code, display-name], writableFields: [person-code, display-name], rowBoundaries: unrestricted}
   - id: name-change-submitter
     default: true
     principalClaim: registry_principal
@@ -85,22 +86,22 @@ accessProfiles:
     requiredPurposes: [person-name-change]
     permissions:
       - entity: person-name-change-request
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [create, get, submit_request, apply_request]
         readableFields: [person, given-name, family-name, handling]
         writableFields: [person, given-name, family-name, handling]
         applyTargets:
-          - {entity: person, rowBoundaries: []}
+          - {entity: person, rowBoundaries: unrestricted}
   - id: assisted-applier
     principalClaim: registry_principal
     requiredScopes: ["registry:person-name:apply-assisted"]
     requiredPurposes: [person-name-apply]
     permissions:
       - entity: person-name-change-request
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [get, list, apply_request]
         readableFields: [person, given-name, family-name, handling]
         applyTargets:
-          - {entity: person, rowBoundaries: []}
+          - {entity: person, rowBoundaries: unrestricted}
 vocabularies:
   - {id: name-change-handling, values: [routine, assisted]}

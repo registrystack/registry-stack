@@ -153,6 +153,57 @@ class CatalogGeneratorTest(unittest.TestCase):
         with self.assertRaisesRegex(generate.CatalogError, "outside the closed source groups"):
             self.build()
 
+    def test_yaml_schema_outside_closed_groups_is_rejected(self) -> None:
+        outside = self.root / "outside.schema.yaml"
+        outside.write_text(
+            "$schema: https://json-schema.org/draft/2020-12/schema\n"
+            f"$id: {generate.BASE_URL}/schemas/outside/yaml.schema.json\n"
+            "title: Outside YAML schema\n"
+            "properties:\n"
+            "  $id:\n"
+            "    type: string\n"
+        )
+        self.track("outside.schema.yaml")
+        with self.assertRaisesRegex(generate.CatalogError, "outside.schema.yaml"):
+            self.build()
+
+    def test_yaml_schema_in_a_closed_group_is_catalogued(self) -> None:
+        (self.root / "yaml-schemas").mkdir()
+        uri = f"{generate.BASE_URL}/schemas/example/yaml.schema.json"
+        (self.root / "yaml-schemas" / "one.schema.yaml").write_text(
+            f"$schema: https://json-schema.org/draft/2020-12/schema\n$id: {uri}\n"
+            'title: "Example YAML schema"\n'
+        )
+        self.track("yaml-schemas/one.schema.yaml")
+        document = json.loads(self.config.read_text())
+        document["schemaSources"].append(
+            {
+                "glob": "yaml-schemas/*.schema.yaml",
+                "owner": "example",
+                "status": "active",
+                "compatibilityLine": "v1",
+                "description": "Example YAML schema.",
+            }
+        )
+        self.config.write_text(json.dumps(document))
+        entry = next(e for e in self.build()["entries"] if e["uri"] == uri)
+        self.assertEqual(entry["title"], "Example YAML schema")
+        self.assertEqual(entry["artifact"]["mediaType"], "application/yaml")
+
+    def test_a_yaml_schema_identifier_nested_below_the_top_level_is_not_read(self) -> None:
+        nested = self.root / "nested.schema.yaml"
+        nested.write_text(
+            "properties:\n"
+            "  $id: https://example.org/nested.json\n"
+            "  title: Nested\n"
+        )
+        self.assertEqual(generate.read_schema_header(nested), {})
+
+    def test_a_yaml_file_that_is_not_text_is_ignored(self) -> None:
+        (self.root / "binary.yaml").write_bytes(b"\xff\xfe\x00")
+        self.track("binary.yaml")
+        self.build()
+
     def test_generated_schema_binds_distinct_source_and_artifact(self) -> None:
         document = json.loads(self.config.read_text())
         document["schemaSources"][0]["sourcePath"] = "src/vocab.rs"
@@ -377,6 +428,30 @@ class CatalogGeneratorTest(unittest.TestCase):
         )
         with self.assertRaisesRegex(generate.CatalogError, "matched no tracked files"):
             self.build()
+
+
+class RepositoryCatalogSourceTest(unittest.TestCase):
+    """The repository's own catalog source, read as it is committed."""
+
+    def test_the_breg_explain_group_names_the_line_its_schemas_carry(self) -> None:
+        repo_root = SCRIPT.parents[3]
+        source = json.loads(
+            (repo_root / "products/identifiers/contracts/catalog-source.json").read_text()
+        )
+        (group,) = [
+            group
+            for group in source["schemaSources"]
+            if group["glob"] == "products/breg/contracts/explain/*.schema.json"
+        ]
+        schemas = sorted(repo_root.glob(group["glob"]))
+        self.assertTrue(schemas)
+        for path in schemas:
+            with self.subTest(schema=path.name):
+                identifier = json.loads(path.read_text())["$id"]
+                self.assertTrue(
+                    identifier.endswith(f".{group['compatibilityLine']}.schema.json"),
+                    f"{identifier} is not on line {group['compatibilityLine']}",
+                )
 
 
 if __name__ == "__main__":

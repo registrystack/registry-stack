@@ -1,0 +1,21 @@
+{
+  "$id": "https://id.registrystack.org/schemas/evidence/selector/selector.v1alpha1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "apiVersion": {
+      "const": "id.registrystack.org/formats/evidence/selector/v1alpha1",
+      "type": "string"
+    },
+    "kind": {
+      "const": "EvidenceSelector",
+      "type": "string"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind"
+  ],
+  "title": "Evidence selector profile",
+  "type": "object",
+  "x-registry-passthrough": "A selector profile of the Evidence bundle grammar; `evidencectl check` validates it against bundle.schema.yaml after the compile."
+}

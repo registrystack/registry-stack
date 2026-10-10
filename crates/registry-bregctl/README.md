@@ -17,13 +17,15 @@ and `reviewed-change`. Inputs default to the file declared in
 The runner uses ordinary native client authorization and never issues a schema-test
 receipt. It accepts no remote endpoint, database credential or script.
 
-The examples v1 catalogue is a closed JSON object with `version: 1` and a
-`scenarios` array. Each scenario declares `id`, `description`, `input` (a relative
-file under `examples/`) and `steps`. Every step declares `id`, `operation`,
-`entity`, `client` and `accessProfile`. A `create` step additionally declares an
+The example scenarios catalogue is a closed JSON object that starts with
+`"apiVersion": "id.registrystack.org/formats/breg/example-scenarios/v1alpha1"`
+and `"kind": "BRegExampleScenarios"`, followed by a `scenarios` array. Each scenario
+declares `id`, `description`, `input` (a relative file under `examples/`) and
+`steps`. Every step declares `id`, `operation`, `entity`, `client` and
+`accessProfile`. A `create` step additionally declares an
 `input` payload key and `capture` alias; other steps declare a `record` alias.
 Inputs contain exactly those named payload objects. A field reference uses the
-same exact `{ "recordRef": "alias" }` form as authored fixtures. Captures must
+same exact `{ "recordCapture": "alias" }` form as authored fixtures. Captures must
 precede references, and their entity must match the native metadata's reference
 field target. The catalogue and input files are each bounded to 1 MiB; scenarios
 have at most 100 steps and nested reference inputs at most 32 levels. Payloads
@@ -139,5 +141,15 @@ authored or deployed values. Human diagnostics retain the existing
 Successful JSON reports put advisories in `findings[]`. Each finding has
 `code`, `artifact`, `path`, `message`, and `suggestedAction`; it omits
 `severity` because membership in `findings[]` already identifies the entry as
-a finding. A refusal keeps `severity` on every `diagnostics[]` entry, including
-findings promoted to a refusal by `check --deny-findings`.
+a finding. A refusal keeps `severity` on every `diagnostics[]` entry.
+
+`bregctl check` reports in the configuration diagnostic shape every Registry
+Stack check command shares. Its human report leads with one sentence, then
+prints each diagnostic as `severity[code] file:line:column path`, the message,
+and a `next:` line, and closes with the error, warning, and file counts. With
+`--format json` it prints `ok`, `command`, `profile`, `revision`, and
+`diagnostics[]`, whose entries carry `severity`, `code`, `artifact`, `path`,
+`message`, `suggestedAction`, and `source` (`file`, `line`, `column`). An
+advisory is a `warning`. The command exits 0 when the project passes, 1 when
+it reports an error or, with `--deny-warnings`, a warning, 2 on a usage error,
+and 3 when it could not read the project.

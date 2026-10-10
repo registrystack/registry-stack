@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 
 use serde_json::{Map, Value};
 
+use crate::compiler::{AUTHORING_API_VERSION, AUTHORING_KIND};
 use crate::contract::{RegistryModule, RegistryProject};
 #[cfg(feature = "runtime")]
 use crate::runtime_config::runtime_config_schema;
@@ -13,10 +14,10 @@ const SCHEMA_DIALECT: &str = "https://json-schema.org/draft/2020-12/schema";
 
 pub const REGISTRY_PROJECT_SCHEMA_FILE: &str = "registry-project.schema.json";
 pub const REGISTRY_PROJECT_SCHEMA_ID: &str =
-    "https://id.registrystack.org/schemas/breg/authoring/registry-project.v1alpha1.schema.json";
+    "https://id.registrystack.org/schemas/breg/project/project.v1alpha1.schema.json";
 pub const REGISTRY_MODULE_SCHEMA_FILE: &str = "registry-module.schema.json";
 pub const REGISTRY_MODULE_SCHEMA_ID: &str =
-    "https://id.registrystack.org/schemas/breg/authoring/registry-module.v1alpha1.schema.json";
+    "https://id.registrystack.org/schemas/breg/module/module.v1alpha1.schema.json";
 #[cfg(feature = "runtime")]
 pub const RUNTIME_CONFIG_SCHEMA_FILE: &str = "runtime.schema.json";
 #[cfg(feature = "runtime")]
@@ -30,7 +31,7 @@ pub fn documents() -> Result<BTreeMap<&'static str, String>, serde_json::Error> 
             REGISTRY_PROJECT_SCHEMA_FILE,
             "Base Registry Engine authored project",
             REGISTRY_PROJECT_SCHEMA_ID,
-            serde_json::to_value(schemars::schema_for!(RegistryProject))?,
+            project_schema()?,
         ),
         (
             REGISTRY_MODULE_SCHEMA_FILE,
@@ -64,7 +65,24 @@ pub fn runtime_documents() -> Result<BTreeMap<&'static str, String>, serde_json:
         .collect()
 }
 
-fn published(derived: Value, title: &str, identifier: &str) -> Value {
+fn project_schema() -> Result<Value, serde_json::Error> {
+    let mut derived = serde_json::to_value(schemars::schema_for!(RegistryProject))?;
+    for (property, expected) in [
+        ("apiVersion", AUTHORING_API_VERSION),
+        ("kind", AUTHORING_KIND),
+    ] {
+        if let Some(member) = derived
+            .pointer_mut(&format!("/properties/{property}"))
+            .and_then(Value::as_object_mut)
+        {
+            member.insert("const".to_owned(), Value::String(expected.to_owned()));
+        }
+    }
+    Ok(derived)
+}
+
+fn published(mut derived: Value, title: &str, identifier: &str) -> Value {
+    refuse_null(&mut derived, "");
     let mut object = match derived {
         Value::Object(object) => object,
         other => {
@@ -82,6 +100,56 @@ fn published(derived: Value, title: &str, identifier: &str) -> Value {
     Value::Object(object)
 }
 
+/// The reader refuses `null` in every member but a comparison literal
+/// (CFG-EMPTY-1), so an optional member is written by leaving it out. This
+/// drops the `null` schemars adds to an `Option` and the `default: null` it
+/// declares for one, everywhere except `$defs/DataLiteral`, the record value
+/// in which `null` means the stored value is null. Instance values under
+/// `default`, `const`, `enum`, and `examples` are left as written. `pointer`
+/// is the schema node's JSON pointer; a caller passes `""` for a document root.
+pub fn refuse_null(schema: &mut Value, pointer: &str) {
+    if pointer == "/$defs/DataLiteral" {
+        return;
+    }
+    match schema {
+        Value::Object(object) => {
+            if object.get("default") == Some(&Value::Null) {
+                object.remove("default");
+            }
+            if let Some(Value::Array(kinds)) = object.get_mut("type") {
+                kinds.retain(|kind| kind != "null");
+                if let [only] = kinds.as_slice() {
+                    let only = only.clone();
+                    object.insert("type".to_owned(), only);
+                }
+            }
+            for keyword in ["anyOf", "oneOf"] {
+                let Some(Value::Array(branches)) = object.get_mut(keyword) else {
+                    continue;
+                };
+                branches.retain(|branch| branch.get("type") != Some(&Value::from("null")));
+                if let [Value::Object(only)] = branches.as_slice() {
+                    let only = only.clone();
+                    object.remove(keyword);
+                    object.extend(only);
+                }
+            }
+            for (key, member) in object.iter_mut() {
+                if matches!(key.as_str(), "default" | "const" | "enum" | "examples") {
+                    continue;
+                }
+                refuse_null(member, &format!("{pointer}/{key}"));
+            }
+        }
+        Value::Array(items) => {
+            for (index, item) in items.iter_mut().enumerate() {
+                refuse_null(item, &format!("{pointer}/{index}"));
+            }
+        }
+        _ => {}
+    }
+}
+
 fn render(value: Value) -> Result<String, serde_json::Error> {
     let mut rendered = serde_json::to_string_pretty(&value)?;
     rendered.push('\n');
@@ -90,6 +158,10 @@ fn render(value: Value) -> Result<String, serde_json::Error> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(
+        clippy::disallowed_methods,
+        reason = "tests read back the YAML the code under test wrote, or a published contract or fixture, to assert on it; they read no operator configuration"
+    )]
     use std::{fs, path::Path};
 
     use jsonschema::{Draft, JSONSchema};
@@ -179,6 +251,7 @@ mod tests {
                     "accessTokenType": "JWT",
                     "scopeClaim": "scope",
                     "scopeSeparator": " ",
+                    "allowedClients": "unrestricted",
                     "maxTokenLifetimeSeconds": 300,
                     "leewayMilliseconds": 60000
                 },
@@ -240,6 +313,145 @@ mod tests {
         let path = acceptance_root().join(project).join("registry.yaml");
         serde_norway::from_str(&fs::read_to_string(path).expect("the fixture exists"))
             .expect("the fixture is well-formed YAML")
+    }
+
+    fn every_document() -> Vec<(&'static str, Value)> {
+        let rendered = documents().expect("the authoring schemas generate");
+        #[cfg(feature = "runtime")]
+        let rendered = rendered
+            .into_iter()
+            .chain(runtime_documents().expect("the runtime schema generates"))
+            .collect::<Vec<_>>();
+        rendered
+            .into_iter()
+            .map(|(file, document)| {
+                let value = serde_json::from_str(&document).expect("a generated schema is JSON");
+                (file, value)
+            })
+            .collect()
+    }
+
+    /// Collects the pointer of every place a schema admits `null`, outside
+    /// `$defs/DataLiteral`, the one member that holds a record value.
+    fn null_admissions(node: &Value, pointer: &str, found: &mut Vec<String>) {
+        if pointer == "/$defs/DataLiteral" {
+            return;
+        }
+        match node {
+            Value::Object(object) => {
+                if object.get("default") == Some(&Value::Null) {
+                    found.push(format!("{pointer}/default"));
+                }
+                match object.get("type") {
+                    Some(Value::String(kind)) if kind == "null" => found.push(pointer.to_owned()),
+                    Some(Value::Array(kinds)) if kinds.iter().any(|kind| kind == "null") => {
+                        found.push(format!("{pointer}/type"));
+                    }
+                    _ => {}
+                }
+                for keyword in ["enum", "const"] {
+                    let admitted = match object.get(keyword) {
+                        Some(Value::Array(values)) if keyword == "enum" => {
+                            values.contains(&Value::Null)
+                        }
+                        Some(Value::Null) => true,
+                        _ => false,
+                    };
+                    if admitted {
+                        found.push(format!("{pointer}/{keyword}"));
+                    }
+                }
+                for (key, member) in object {
+                    if matches!(key.as_str(), "default" | "const" | "enum" | "examples") {
+                        continue;
+                    }
+                    null_admissions(member, &format!("{pointer}/{key}"), found);
+                }
+            }
+            Value::Array(items) => {
+                for (index, item) in items.iter().enumerate() {
+                    null_admissions(item, &format!("{pointer}/{index}"), found);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    #[test]
+    fn generated_schemas_admit_null_only_as_a_data_literal() {
+        for (file, document) in every_document() {
+            let mut found = Vec::new();
+            null_admissions(&document, "", &mut found);
+            assert!(found.is_empty(), "{file} admits null at {found:#?}");
+        }
+        let project: Value = serde_json::from_str(&schema_document()).expect("the schema is JSON");
+        let literal = &project["$defs"]["DataLiteral"];
+        let mut found = Vec::new();
+        null_admissions(literal, "/literal", &mut found);
+        assert!(
+            !found.is_empty(),
+            "a comparison literal still admits null as a record value"
+        );
+    }
+
+    #[test]
+    fn registry_project_schema_states_its_envelope_values() {
+        let project: Value = serde_json::from_str(&schema_document()).expect("the schema is JSON");
+        assert_eq!(
+            project["properties"]["apiVersion"]["const"],
+            crate::compiler::AUTHORING_API_VERSION
+        );
+        assert_eq!(project["properties"]["kind"]["const"], "RegistryProject");
+        let schema = compile(&schema_document());
+        let mut instance = fixture("business");
+        assert!(schema.is_valid(&instance));
+        instance["kind"] = Value::String("RegistryModule".to_owned());
+        assert!(!schema.is_valid(&instance));
+    }
+
+    /// Collects every `schema` member: each holds an adopter's JSON Schema.
+    fn embedded_schema_members<'a>(
+        node: &'a Value,
+        pointer: &str,
+        found: &mut Vec<(String, &'a Value)>,
+    ) {
+        match node {
+            Value::Object(object) => {
+                if let Some(Value::Object(properties)) = object.get("properties") {
+                    if let Some(member) = properties.get("schema") {
+                        found.push((format!("{pointer}/properties/schema"), member));
+                    }
+                }
+                for (key, member) in object {
+                    embedded_schema_members(member, &format!("{pointer}/{key}"), found);
+                }
+            }
+            Value::Array(items) => {
+                for (index, item) in items.iter().enumerate() {
+                    embedded_schema_members(item, &format!("{pointer}/{index}"), found);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    #[test]
+    fn embedded_structured_schemas_carry_the_foreign_marker() {
+        for file in [REGISTRY_PROJECT_SCHEMA_FILE, REGISTRY_MODULE_SCHEMA_FILE] {
+            let document: Value =
+                serde_json::from_str(&documents().expect("the authoring schemas generate")[file])
+                    .expect("the schema is JSON");
+            let mut found = Vec::new();
+            embedded_schema_members(&document, "", &mut found);
+            assert_eq!(found.len(), 3, "{file}: {found:#?}");
+            for (pointer, member) in found {
+                assert_eq!(
+                    member.get("x-registry-foreign"),
+                    Some(&Value::String("json-schema-2020-12".to_owned())),
+                    "{file}{pointer}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -434,12 +646,66 @@ mod tests {
         let mut instance = fixture("business");
         instance["entities"][0]["accessProfiles"] = serde_json::json!([{
             "id": "entity-local-reader",
-            "anonymous": true,
+            "principalClaim": "sub",
+            "requiredScopes": ["registry.read"],
             "operations": ["get"],
             "readableFields": ["legal-name"]
         }]);
 
         assert!(!schema.is_valid(&instance));
+    }
+
+    #[test]
+    fn schema_states_a_dataset_permission_as_dataset_and_operations_only() {
+        let document = schema_document();
+        let schema = compile(&document);
+        let facility = fixture("facility");
+        let reader = facility["accessProfiles"]
+            .as_array()
+            .expect("the fixture lists access profiles")
+            .iter()
+            .position(|profile| profile["id"] == "statistics-reader")
+            .expect("the fixture declares statistics-reader");
+        assert!(facility["accessProfiles"][reader]["permissions"][0]["dataset"].is_string());
+        assert!(schema.is_valid(&facility));
+
+        for (member, written) in [
+            ("operations", serde_json::json!([])),
+            ("operations", serde_json::json!(["list"])),
+            ("operations", serde_json::json!(["read-releases", "list"])),
+            ("rowBoundaries", serde_json::json!("unrestricted")),
+            ("entity", serde_json::json!("permit")),
+        ] {
+            let mut instance = facility.clone();
+            instance["accessProfiles"][reader]["permissions"][0][member] = written.clone();
+            assert!(
+                !schema.is_valid(&instance),
+                "a dataset permission with {member}: {written}"
+            );
+        }
+
+        let mut entity_permission = facility.clone();
+        entity_permission["accessProfiles"][0]["permissions"][0]["operations"] =
+            serde_json::json!(["list", "read-live"]);
+        assert!(
+            !schema.is_valid(&entity_permission),
+            "an entity permission with a dataset operation"
+        );
+
+        for (member, written) in [
+            ("live", serde_json::json!(["facility-operator"])),
+            (
+                "releases",
+                serde_json::json!({"publisher": "statistics-publisher", "readers": ["statistics-reader"]}),
+            ),
+        ] {
+            let mut instance = facility.clone();
+            instance["statisticalDatasets"][0][member] = written;
+            assert!(
+                !schema.is_valid(&instance),
+                "a dataset that still writes {member}"
+            );
+        }
     }
 
     #[test]
@@ -557,6 +823,43 @@ mod tests {
     }
 
     #[cfg(feature = "runtime")]
+    #[test]
+    fn runtime_schema_types_every_contextual_claim_name_as_a_claim_name() {
+        let value: Value =
+            serde_json::from_str(&runtime_schema_document()).expect("the schema is JSON");
+        let claim_name = value
+            .pointer("/$defs/ClaimName")
+            .expect("ClaimName is a named definition");
+        assert_eq!(claim_name.get("type"), Some(&Value::from("string")));
+        for constraint in ["format", "pattern", "minLength", "maxLength", "enum"] {
+            assert!(
+                claim_name.get(constraint).is_none(),
+                "the reader accepts any text, so ClaimName states no {constraint}"
+            );
+        }
+        for member in [
+            "actorKind",
+            "purpose",
+            "grantId",
+            "grantSourceIssuer",
+            "grantClient",
+            "grantResource",
+            "grantExp",
+            "grantBounds",
+            "approver",
+        ] {
+            assert_eq!(
+                value
+                    .pointer(&format!(
+                        "/$defs/RawContextualClaimNames/properties/{member}/$ref"
+                    ))
+                    .and_then(Value::as_str),
+                Some("#/$defs/ClaimName"),
+                "{member}"
+            );
+        }
+    }
+
     #[test]
     fn runtime_schema_declares_the_published_dialect_identifier_and_title() {
         let document = runtime_schema_document();
@@ -676,9 +979,9 @@ mod tests {
         for pointer in [
             "/properties/eventDestinations/default",
             "/$defs/RawAuthorityClaimsConfig/properties/purpose/default",
-            "/$defs/RawDatabaseConfig/properties/password/default",
-            "/$defs/RawDatabaseConfig/properties/plaintext/default",
-            "/$defs/RawDatabaseConfig/properties/url/default",
+            "/$defs/RawRegistryDatabase/properties/password/default",
+            "/$defs/RawRegistryDatabase/properties/plaintext/default",
+            "/$defs/RawRegistryDatabase/properties/url/default",
             "/$defs/RawEventDestinationConfig/properties/tls/default",
             "/$defs/RawEventDestinationTlsConfig/properties/caBundleRef/default",
             "/$defs/RawEventDestinationTlsConfig/properties/clientIdentityRef/default",
@@ -815,6 +1118,30 @@ mod tests {
         );
         assert_schema_rejects_parser_refused_runtime(
             &schema,
+            "OIDC client decision omitted",
+            |instance| {
+                instance["authentication"]["oidc"]
+                    .as_object_mut()
+                    .expect("the OIDC section is a mapping")
+                    .remove("allowedClients");
+            },
+        );
+        assert_schema_rejects_parser_refused_runtime(
+            &schema,
+            "OIDC client list empty",
+            |instance| {
+                instance["authentication"]["oidc"]["allowedClients"] = serde_json::json!([]);
+            },
+        );
+        assert_schema_rejects_parser_refused_runtime(
+            &schema,
+            "OIDC client decision spelled as another word",
+            |instance| {
+                instance["authentication"]["oidc"]["allowedClients"] = Value::String("any".into());
+            },
+        );
+        assert_schema_rejects_parser_refused_runtime(
+            &schema,
             "OIDC client list uniqueness",
             |instance| {
                 instance["authentication"]["oidc"]["allowedClients"] =
@@ -937,12 +1264,14 @@ mod tests {
             (Some(Value::Null), Some(Value::Null), false),
             (Some(serde_json::json!("secret:file/token")), None, true),
             (None, Some(private_key_jwt.clone()), true),
+            // `null` is never a value (CFG-EMPTY-1): an absent credential
+            // is written by leaving its member out.
             (
                 Some(serde_json::json!("secret:file/token")),
                 Some(Value::Null),
-                true,
+                false,
             ),
-            (Some(Value::Null), Some(private_key_jwt.clone()), true),
+            (Some(Value::Null), Some(private_key_jwt.clone()), false),
             (
                 Some(serde_json::json!("secret:file/token")),
                 Some(private_key_jwt),

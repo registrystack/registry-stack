@@ -40,21 +40,33 @@ async fn real_postgres_registry_record_profile_matches_the_cross_product_semanti
     let protected_identifier = create_record(&harness, "protected-units", &writer, protected).await;
     let protected_reader =
         harness.token_with_scopes("bounded-read", &[], &["records:protected:read"]);
+    let public_reader = harness.token_with_scopes("public-read", &[], &["records:public:read"]);
 
     let public_single_uri = format!("/v1/records/public-units/{public_identifier}");
-    let public_json = get_success(&harness, &public_single_uri, None, "application/json").await;
+    let public_json = get_success(
+        &harness,
+        &public_single_uri,
+        Some(&public_reader),
+        "application/json",
+    )
+    .await;
     assert_profile_link(&public_json.headers);
     assert_shared_single(&public_json.document, &gold, public, false);
 
-    let public_json_ld =
-        get_success(&harness, &public_single_uri, None, "application/ld+json").await;
+    let public_json_ld = get_success(
+        &harness,
+        &public_single_uri,
+        Some(&public_reader),
+        "application/ld+json",
+    )
+    .await;
     assert_profile_link(&public_json_ld.headers);
     assert_shared_single(&public_json_ld.document, &gold, public, true);
 
     let public_list_json = get_success(
         &harness,
         "/v1/records/public-units",
-        None,
+        Some(&public_reader),
         "application/json",
     )
     .await;
@@ -64,7 +76,7 @@ async fn real_postgres_registry_record_profile_matches_the_cross_product_semanti
     let public_list_json_ld = get_success(
         &harness,
         "/v1/records/public-units",
-        None,
+        Some(&public_reader),
         "application/ld+json",
     )
     .await;
@@ -95,7 +107,13 @@ async fn real_postgres_registry_record_profile_matches_the_cross_product_semanti
     assert_shared_collection(&protected_list.document, &gold, protected, false);
 
     let unauthorized = harness
-        .send(Method::GET, &protected_single_uri, None, &[], Vec::new())
+        .send(
+            Method::GET,
+            &protected_single_uri,
+            Some(&public_reader),
+            &[],
+            Vec::new(),
+        )
         .await;
     let unknown = harness
         .send(
@@ -110,7 +128,7 @@ async fn real_postgres_registry_record_profile_matches_the_cross_product_semanti
         .await;
     assert_concealed_equivalence(unauthorized, unknown, protected).await;
 
-    let public_openapi = caller_openapi(&harness, "public-reader", None).await;
+    let public_openapi = caller_openapi(&harness, "public-reader", Some(&public_reader)).await;
     let public_openapi_text = public_openapi.to_string();
     assert!(!public_openapi_text.contains("protected-units"));
     assert!(!public_openapi_text.contains("PROTECTED-SEMANTIC-CANARY"));
@@ -180,6 +198,7 @@ async fn real_postgres_registry_record_profile_matches_the_cross_product_semanti
         &public_identifier,
         &second_public_identifier,
         &protected_identifier,
+        &public_reader,
         &protected_reader,
         public,
         protected,
@@ -508,19 +527,25 @@ async fn create_additional_record(
         .to_owned()
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn exercise_breg_client(
     base_url: &str,
     first_public_identifier: &str,
     second_public_identifier: &str,
     protected_identifier: &str,
+    public_reader_token: &str,
     protected_reader_token: &str,
     public: &Value,
     protected: &Value,
 ) {
-    let anonymous_client = BaseRegistryClient::new(BaseRegistryClientConfig::new(
-        base_url.parse().expect("pilot loopback URL parses"),
-    ))
-    .expect("anonymous Base Registry Engine client config is valid");
+    let public_client = BaseRegistryClient::new(
+        BaseRegistryClientConfig::new(base_url.parse().expect("pilot loopback URL parses"))
+            .with_token_provider(Arc::new(
+                StaticToken::new(public_reader_token)
+                    .expect("MockIdp token is an outbound bearer value"),
+            )),
+    )
+    .expect("public reader Base Registry Engine client config is valid");
     let protected_client = BaseRegistryClient::new(
         BaseRegistryClientConfig::new(base_url.parse().expect("pilot loopback URL parses"))
             .with_token_provider(Arc::new(
@@ -530,10 +555,10 @@ async fn exercise_breg_client(
     )
     .expect("protected Base Registry Engine client config is valid");
 
-    let public_openapi = anonymous_client
+    let public_openapi = public_client
         .openapi(Some("public-reader"))
         .await
-        .expect("anonymous caller receives its filtered OpenAPI");
+        .expect("the public reader receives its filtered OpenAPI");
     let public_openapi: Value = serde_json::from_slice(public_openapi.value.as_bytes())
         .expect("client preserves strict OpenAPI bytes");
     assert!(public_openapi["paths"]
@@ -557,10 +582,10 @@ async fn exercise_breg_client(
     let public_options = BRegRecordOptions::default()
         .access_profile("public-reader")
         .expect("compiled public profile is a valid client identifier");
-    let public_json = anonymous_client
+    let public_json = public_client
         .get_record("public-units", first_public_identifier, &public_options)
         .await
-        .expect("anonymous client decodes one JSON Registry Record");
+        .expect("public reader client decodes one JSON Registry Record");
     assert_eq!(
         public_json.value.data.record_identifier,
         first_public_identifier
@@ -575,21 +600,21 @@ async fn exercise_breg_client(
         .access_profile("public-reader")
         .expect("compiled public profile is a valid client identifier")
         .format(BRegRecordFormat::JsonLd);
-    let public_json_ld = anonymous_client
+    let public_json_ld = public_client
         .get_record(
             "public-units",
             first_public_identifier,
             &public_json_ld_options,
         )
         .await
-        .expect("anonymous client decodes one JSON-LD Registry Record");
+        .expect("public reader client decodes one JSON-LD Registry Record");
     assert!(public_json_ld
         .value
         .json_ld_context
         .as_ref()
         .is_some_and(|context| context.is_shared_only()));
 
-    let first_page = anonymous_client
+    let first_page = public_client
         .list_records(
             "public-units",
             &BRegListRequest::default()
@@ -598,7 +623,7 @@ async fn exercise_breg_client(
                 .expect("one is a valid BReg page size"),
         )
         .await
-        .expect("anonymous client decodes the first bounded collection page");
+        .expect("public reader client decodes the first bounded collection page");
     assert_eq!(first_page.value.value.items.len(), 1);
     assert!(first_page.metadata.etag().is_none());
     let continuation = first_page
@@ -606,7 +631,7 @@ async fn exercise_breg_client(
         .continuation
         .as_ref()
         .expect("two records with top=1 produce an explicit continuation");
-    let second_page = anonymous_client
+    let second_page = public_client
         .continue_list(continuation)
         .await
         .expect("client advances exactly one opaque BReg continuation");
@@ -645,10 +670,10 @@ async fn exercise_breg_client(
         .expect("authorized client decodes the protected collection");
     assert_eq!(protected_list.value.value.items.len(), 1);
 
-    let concealed = anonymous_client
+    let concealed = public_client
         .get_record("protected-units", protected_identifier, &protected_options)
         .await
-        .expect_err("anonymous access to the protected route stays concealed");
+        .expect_err("public reader access to the protected route stays concealed");
     assert_eq!(concealed.status(), Some(StatusCode::NOT_FOUND.as_u16()));
     assert_eq!(
         concealed.problem_code(),

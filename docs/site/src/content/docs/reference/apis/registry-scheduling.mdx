@@ -237,7 +237,7 @@ it under the same key.
 
 Once a task grant has expired, the token that carries it is refused with `authentication.refused` on
 every `/v1` route, its read scope included, and once the stored response has passed
-`retention.attemptReceiptDays`, a retry answers `410 idempotency.expired`. The sweep that erases the
+`retention.attemptReceiptRetentionDays`, a retry answers `410 idempotency.expired`. The sweep that erases the
 stored response also clears the token issuer, subject, and key it was filed under, and keeps only a
 SHA-256 digest of them and the command, so the key stays spent for that caller: a changed request
 under it is still `409 idempotency.key-reused`, and another caller's identical key is unrelated. In

@@ -333,6 +333,8 @@ secretProviders:
 database:
   runtimeUrlRef: secret:file/runtime-database-url
   migrationUrlRef: secret:file/migration-database-url
+  # Optional: a private certificate authority for the PostgreSQL connections.
+  # trustedRootCertificateRef: secret:file/database-root.pem
   pool:
     maxSize: 8
   roles:
@@ -386,9 +388,9 @@ configured prefix and never derive their authority from request headers.
 | `listener` | The bind address and the optional public origin that generated documents cite. The runtime reads neither peer addresses nor forwarded headers, so client addresses and TLS termination are enforced at your proxy. |
 | `identity` | The environment, instance, and database this file may serve. `environment` must equal `databaseInitializationEnvironment`. The first `apply` records `databaseId` in the database; every later `plan`, `apply`, and startup refuses a file that names another. `instanceId` names the `source` of every webhook event this runtime captures, and the delivery worker dead-letters a stored event whose source names another instance, so startup refuses a changed `instanceId` while pending deliveries were captured under the previous one; keep the previous `instanceId` until they drain, then change it. |
 | `secretProviders` | The file root (owner-only files) and, when declared, the environment provider. |
-| `database` | Secret references for the runtime and migration connection URLs, pool bounds, and the two role names the package's policies are written for. |
+| `database` | Secret references for the runtime and migration connection URLs, pool bounds, and the two role names the package's policies are written for. `trustedRootCertificateRef` is optional: a secret reference to PEM root certificates, every one of which both connections trust in place of the platform roots, for a PostgreSQL server whose certificate a private authority issued. `testOnlyPlaintext` exists for the project's own database tests; a deployment build refuses it, and the refusal asks you to remove it. |
 | `package` | The package directory the activation ledger names as active and, optionally, the `expectedDigest` it must carry. |
-| `authentication` | The OpenID Connect verifier and the names of the claims that carry the caller's principal and purpose. |
+| `authentication` | The OpenID Connect verifier and the names of the claims that carry the caller's principal and purpose. `oidc.allowedClients` is required: list the OAuth clients whose tokens the registry accepts, or write `unrestricted` to accept a token from every client of the issuer. A project that names clients itself, in a profile's `requesterClients`, in `authorityClaims.trustedActors`, or in a consent recipient organization, needs each of them listed here, so `unrestricted` does not start with such a project. |
 | `audit` and `cursor` | The audit destination and keyed-reference secret, and the secret that signs pagination cursors. Changing the audit key changes future pseudonyms only: spent idempotency keys are found and bound without it, so a retry after the rotation still replays or is refused. Changing the cursor secret invalidates existing cursors. |
 | `idempotency` | Optional `receiptRetentionDays` (default 7, 1 to 365): how long the response to a successful write stays available to an exact retry. The key stays spent after that; see [Drop expired idempotency responses](../breg-retention/#drop-expired-idempotency-responses). |
 | `eventDestinations` and `eventDelivery` | One binding per webhook destination the package declares, and payload retention; see [Bind webhook receivers](../breg-webhooks/). |
@@ -553,7 +555,7 @@ are never accepted by a running server.
 | `iss` | Equals `issuer`. |
 | `aud` | A string equal to `audience`, or an array of 1 to 16 distinct nonempty strings containing that exact resource audience. |
 | `exp`, `iat`, `nbf` | The lifetime is at most `maxTokenLifetimeSeconds`; clock skew up to `leewayMilliseconds` is tolerated. |
-| `azp` or `client_id` | Listed in `allowedClients` when that list is not empty. |
+| `azp` or `client_id` | Listed in `allowedClients`, unless that member is `unrestricted`. |
 | `scope` | The single claim named by `scopeClaim` covers every required permission. It is a string split on `scopeSeparator`, or a JSON array of permission strings. Other shapes are refused; permissions from several claims are not merged. |
 | principal claim | The claim named by `authorityClaims.principal` carries the identity recorded in audit and workflow decisions. It must match each authenticated profile's `principalClaim`. |
 | purpose claim | The claim named by `authorityClaims.purpose` is required when the profile lists `requiredPurposes`. |
@@ -648,11 +650,11 @@ receipt that `package` later binds to. Prepare three inputs:
    schema-test database and `package.root` an empty directory.
 2. Real access tokens from your issuer for each journey principal, stored as owner-only files under
    the secret root.
-3. A credentials document binding every journey step to a token or to anonymous access:
+3. A credentials document binding every journey step to a bearer token:
 
 ```yaml
-apiVersion: registry.registrystack.org/breg-schema-test-credentials/v1
-kind: SchemaTestCredentials
+apiVersion: id.registrystack.org/formats/breg/schema-test-credentials/v1
+kind: BRegSchemaTestCredentials
 bindings:
   - journeyId: record-lifecycle
     stepId: create-record
@@ -667,7 +669,8 @@ bindings:
   - journeyId: record-lifecycle
     stepId: list-records
     credential:
-      type: anonymous
+      type: bearer
+      tokenRef: secret:file/schema-test-token
 ```
 
 Then run the test:
@@ -1170,7 +1173,7 @@ metricsListener:
 
 The address must be a loopback or private address (an IPv4 private range, or IPv6 unique-local)
 with a non-zero port, and it must differ from `listener.bind`; the runtime file is otherwise
-refused with `runtime_config.invalid_metrics_listener`. The listener answers `GET /metrics` in the
+refused with `breg.runtime.invalid-metrics-listener`. The listener answers `GET /metrics` in the
 Prometheus text format and nothing else, and it carries no authentication, so keep it behind the
 scraper's network boundary rather than a public one.
 
@@ -1178,7 +1181,6 @@ scraper's network boundary rather than a public one.
 | --- | --- | --- |
 | `breg_http_requests_total` | counter | `route`, `method`, `status` |
 | `breg_http_request_duration_seconds` | histogram | `route`, `method`, `status` |
-| `breg_anonymous_refusals_total` | counter | `route`, `method`, `reason` |
 | `breg_pool_connections` | gauge | `state`: `max_size`, `size`, `available`, `waiting` |
 | `breg_worker_last_success_age_seconds` | gauge | `worker` |
 | `breg_queue_oldest_pending_age_seconds` | gauge | `queue` |
@@ -1195,25 +1197,20 @@ Startup refuses a package the activation ledger does not name as active, so the 
 reports an earlier digest after an apply has not restarted onto the successor. Anyone who reaches
 the metrics listener can read that digest.
 
-`breg_anonymous_refusals_total` counts requests that presented no credential and were refused
-before admission: a profile the caller cannot hold, a route it cannot see, an absent scope or
-purpose, or a query the route cannot parse. `reason` is one of nine fixed values,
-`read_request_invalid`, `read_concealed`, `read_refused`, `revision_request_invalid`,
-`revision_concealed`, `revision_refused`, `mutation_concealed`, `mutation_refused`, and
-`action_refused`, derived from the refusal itself rather than from anything the request carried.
-These refusals are counted rather than journaled, because a caller with no principal names nobody
-the journal could hold accountable; refusals of an authenticated principal are journaled, and so
-is every admitted request. Alert on a sharp rise in this counter the way you would on a rise in
-`client_error` responses: it is the signal the journal no longer carries.
+A request that presents no verified bearer token is refused with `401` and the problem code
+`authentication.refused` before any access profile, query, or record is read. It names nobody the
+journal could hold accountable, so it is counted as a `client_error` response in
+`breg_http_requests_total` rather than journaled; refusals of an authenticated principal are
+journaled, and so is every admitted request. Alert on a sharp rise in `client_error` responses on
+the record routes: for unauthenticated traffic it is the signal the journal does not carry. The
+runtime enforces no request-rate limit of its own, so put the registry behind an upstream rate
+limit.
 
-An admitted anonymous read writes the same pre-I/O audit envelope as any admitted request, and the
-runtime enforces no request-rate limit of its own, so put a registry that admits anonymous reads
-behind an upstream rate limit.
-
-{/* Evidence: crates/registry-breg/src/metrics.rs, AnonymousRefusalReason;
-    crates/registry-breg/src/api/mod.rs, anonymous_refusal();
+{/* Evidence: crates/registry-breg/src/metrics.rs;
+    crates/registry-breg/src/auth.rs, authentication_refused();
+    crates/registry-breg/src/api/context.rs, Authenticated;
     crates/registry-breg/src/postgres/read.rs, record_pre_io_audit() call in execute();
-    crates/registry-breg/tests/postgres_anonymous_refusals.rs;
+    crates/registry-breg/tests/postgres_unauthenticated_refusals.rs;
     crates/registry-breg/src/runtime_config.rs, MetricsListenerConfig;
     crates/registry-breg/src/startup.rs. */}
 
@@ -1334,7 +1331,7 @@ See [publish a statistical series](../../configure/breg-statistics/) and the [AP
 | `doctor` reports `startup.package.refused` with `the package compiler derivation failed` after an engine upgrade | The upgraded compiler derives a different schema from the active package, for example a new reference index. Build and apply a successor package with the upgraded `bregctl` before starting the upgraded `breg`, as [Change an active registry](../breg-changes/#test-and-package-the-successor) describes. `diff --runtime-config` reads the active package, and `test` and `package` accept its directory through `--baseline-package`; `verify` refuses it until the successor is active. |
 | `doctor` or startup warns `postgres.connections.pool_over_half` | Lower `database.pool.maxSize` or raise `max_connections` until every replica, operator command, and monitoring session fits; see [Set a PostgreSQL baseline](#set-a-postgresql-baseline). |
 | `doctor` or startup warns `postgres.autovacuum.off` or `postgres.track_counts.off` | Turn the setting back on in the server configuration and reload PostgreSQL, then run `ANALYZE` in the registry database so planner statistics catch up. |
-| The runtime file is refused with `runtime_config.invalid_metrics_listener` | `metricsListener.bind` must be a loopback or private address with a non-zero port, distinct from `listener.bind`. |
+| The runtime file is refused with `breg.runtime.invalid-metrics-listener` | `metricsListener.bind` must be a loopback or private address with a non-zero port, distinct from `listener.bind`. |
 | Every token is refused | Compare the token's header and claims with the token table; a list-valued `aud` or a missing principal claim refuses the token. |
 | An operator command cannot reach PostgreSQL | Check the migration URL secret, the role names, and `SSL_CERT_FILE` for a private authority. |
 | A command refuses a path that exists | Some component of the path is a symbolic link. Name the real directory; on macOS pass `/private/tmp` rather than `/tmp`. |

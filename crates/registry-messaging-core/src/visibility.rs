@@ -62,7 +62,7 @@ mod tests {
                 allow_direct_content: false,
                 requests_per_minute: 1,
                 burst: 1,
-                daily_limit: None,
+                maximum_messages_per_day: None,
             },
         }
     }

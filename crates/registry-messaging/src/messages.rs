@@ -18,7 +18,7 @@
 //! same key with the same canonical request replays the stored status and
 //! receipt; the same key with another request is refused with
 //! `idempotency.key-reused`, whatever the key's age; the same request under
-//! a key whose receipt is older than `retention.submissionReceiptDays` is
+//! a key whose receipt is older than `retention.submissionReceiptRetentionDays` is
 //! refused with `idempotency.expired`. A replay is authorized and rendered again against
 //! the active package before its receipt is answered.
 //!
@@ -1104,7 +1104,7 @@ impl MessageService {
             return replay(stored, submission).map(Some);
         }
         let window = Window::new(now, submission, &self.retention)?;
-        if let Some(limit) = caller.profile.daily_limit {
+        if let Some(limit) = caller.profile.maximum_messages_per_day {
             lock_daily_limit(&transaction, &caller.profile.id).await?;
             // A submission under the same key may have committed while this
             // one waited on the lock; it is replayed, never counted against.
@@ -1121,7 +1121,7 @@ impl MessageService {
             links: MessageLinks::for_message(&message_id.to_string()),
         })
         .map_err(|_| Refusal::Problem(ProblemCode::ServiceUnavailable))?;
-        let receipt_expires = now + days(self.retention.submission_receipt_days);
+        let receipt_expires = now + days(self.retention.submission_receipt_retention_days);
         let inserted = transaction
             .execute(
                 "INSERT INTO messaging_idempotency \
@@ -1264,7 +1264,7 @@ const fn days(count: u16) -> Duration {
     Duration::from_secs(count as u64 * SECONDS_PER_DAY)
 }
 
-/// The window a `dailyLimit` counts over.
+/// The window a `maximumMessagesPerDay` counts over.
 const DAILY_WINDOW: Duration = Duration::from_secs(SECONDS_PER_DAY);
 
 /// Take the transaction-scoped advisory lock `profile`'s daily count runs
@@ -1396,7 +1396,7 @@ impl Window {
     /// profile's expiry capped by that retention; `notBefore` must precede
     /// it. The cap keeps a message from waiting in the queue longer than
     /// its payload would be kept once it ends; the payload itself is erased
-    /// `payloadDays` after the message reaches a terminal state (see
+    /// `payloadRetentionDays` after the message reaches a terminal state (see
     /// [`crate::retention`]).
     fn new(
         now: SystemTime,
@@ -1404,7 +1404,7 @@ impl Window {
         retention: &RetentionConfig,
     ) -> Result<Self, Refusal> {
         let invalid = || Refusal::Problem(ProblemCode::RequestUnprocessable);
-        let payload = days(retention.payload_days);
+        let payload = days(retention.payload_retention_days);
         let latest = now + payload;
         let expires_at = match submission.expires_at {
             Some(expires_at) if expires_at <= now || expires_at > latest => return Err(invalid()),

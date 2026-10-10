@@ -35,17 +35,62 @@ const AUDIT_KEY_CANARY: &str = "audit-key-canary-012345678901234567890123456789"
 const EXPANDED_CANARY: &str = "runtime-expanded-canary";
 const STATIC_JWKS_ENV: &str = "BREG_RUNTIME_CONFIG_STATIC_JWKS";
 
-/// The document refusal with its message set aside, so a table can name it
-/// beside the refusals that carry none.
-const DOCUMENT: RuntimeConfigError = RuntimeConfigError::Document(String::new());
+/// A refusal with the shared reader's diagnostics set aside, so a table can
+/// name a reader refusal beside the refusals this runtime decides itself.
+/// The diagnostics are pinned by the tests that read them.
+#[derive(Debug, PartialEq, Eq)]
+enum Refusal {
+    Reader,
+    Runtime(RuntimeConfigError),
+}
 
-/// `error` with a document refusal's message set aside, for comparison with
-/// [`DOCUMENT`]. The message itself is pinned by the tests that read it.
-fn refusal(error: RuntimeConfigError) -> RuntimeConfigError {
-    match error {
-        RuntimeConfigError::Document(_) => DOCUMENT,
-        other => other,
+/// Any refusal the shared reader decided.
+const READER: Refusal = Refusal::Reader;
+
+impl PartialEq<RuntimeConfigError> for Refusal {
+    fn eq(&self, other: &RuntimeConfigError) -> bool {
+        matches!(self, Self::Runtime(error) if error == other)
     }
+}
+
+/// `error` with a reader refusal's diagnostics set aside, for comparison
+/// with [`READER`].
+fn refusal(error: RuntimeConfigError) -> Refusal {
+    match error {
+        RuntimeConfigError::Reader(_) => Refusal::Reader,
+        other => Refusal::Runtime(other),
+    }
+}
+
+/// The deciding diagnostic's code: the reader's, or the one rule the runtime
+/// decides itself.
+fn code_of(error: &RuntimeConfigError) -> String {
+    deciding(error).0
+}
+
+/// The deciding diagnostic's pointer.
+fn path_of(error: &RuntimeConfigError) -> String {
+    deciding(error).1
+}
+
+fn deciding(error: &RuntimeConfigError) -> (String, String) {
+    if let RuntimeConfigError::Reader(refusal) = error {
+        let deciding = refusal.deciding_diagnostic();
+        return (deciding.code.clone(), deciding.path.clone());
+    }
+    let [diagnostic] = <[_; 1]>::try_from(error.diagnostics(None))
+        .expect("a rule the runtime decides reports one diagnostic");
+    (diagnostic.code, diagnostic.path)
+}
+
+/// The deciding diagnostic's code and pointer of a refusal the shared reader
+/// decided.
+fn reader_refusal(error: &RuntimeConfigError) -> (&str, &str) {
+    let RuntimeConfigError::Reader(refusal) = error else {
+        panic!("the shared reader decides this refusal: {error:?}");
+    };
+    let deciding = refusal.deciding_diagnostic();
+    (&deciding.code, &deciding.path)
 }
 
 #[test]
@@ -453,46 +498,202 @@ fn strict_runtime_file_loads_and_constructs_existing_runtime_inputs() {
         .expect("cursor codec builds from protected file secret");
 }
 
+const MIGRATION_URL_REF_LINE: &str =
+    "  migrationUrlRef: secret:env/BREG_RUNTIME_CONFIG_MIGRATION_DATABASE_URL\n";
+
+fn pem_of(certificate: &rcgen::Certificate) -> String {
+    format!(
+        "-----BEGIN CERTIFICATE-----\n{}\n-----END CERTIFICATE-----\n",
+        base64::engine::general_purpose::STANDARD.encode(certificate.der().as_ref())
+    )
+}
+
+/// `valid_runtime` with `members` added to its `database` block.
+fn runtime_with_database_members(fixture: &RuntimeFixture, members: &str) -> String {
+    let runtime = valid_runtime(&fixture.secret_root, &fixture.package_root);
+    assert!(runtime.contains(MIGRATION_URL_REF_LINE));
+    runtime.replace(
+        MIGRATION_URL_REF_LINE,
+        &format!("{MIGRATION_URL_REF_LINE}{members}"),
+    )
+}
+
+#[test]
+fn database_trusted_root_applies_to_the_runtime_and_migration_connections() {
+    let _guard = environment_lock();
+    let fixture = RuntimeFixture::new();
+    let first = rcgen::generate_simple_self_signed(vec!["db.example".to_owned()])
+        .expect("test root generates");
+    let second = rcgen::generate_simple_self_signed(vec!["db.example".to_owned()])
+        .expect("test root generates");
+    fixture.write_secret(
+        "database-roots",
+        format!("{}{}", pem_of(&first.cert), pem_of(&second.cert)).as_bytes(),
+    );
+    let config_path = fixture.path("runtime.yaml");
+    fs::write(
+        &config_path,
+        runtime_with_database_members(
+            &fixture,
+            "  trustedRootCertificateRef: secret:file/database-roots\n",
+        ),
+    )
+    .expect("runtime config writes");
+    std::env::set_var("BREG_RUNTIME_CONFIG_DATABASE_URL", DATABASE_URL_CANARY);
+    std::env::set_var(
+        "BREG_RUNTIME_CONFIG_MIGRATION_DATABASE_URL",
+        MIGRATION_DATABASE_URL_CANARY,
+    );
+
+    let config = load_runtime_config(&config_path).expect("runtime config loads");
+
+    assert!(config.database().trusted_root_certificate_ref().is_some());
+    for connection in [
+        config.runtime_database_connection_config(),
+        config.migration_database_connection_config(),
+    ] {
+        let debug = format!("{:?}", connection.expect("connection configures"));
+        assert!(debug.contains("RequireCustomCa"), "{debug}");
+    }
+}
+
+#[test]
+fn database_trusted_root_refuses_a_secret_holding_no_pem_certificate() {
+    let _guard = environment_lock();
+    let fixture = RuntimeFixture::new();
+    fixture.write_secret("database-roots", b"not a certificate");
+    let config_path = fixture.path("runtime.yaml");
+    fs::write(
+        &config_path,
+        runtime_with_database_members(
+            &fixture,
+            "  trustedRootCertificateRef: secret:file/database-roots\n",
+        ),
+    )
+    .expect("runtime config writes");
+    std::env::set_var("BREG_RUNTIME_CONFIG_DATABASE_URL", DATABASE_URL_CANARY);
+    std::env::set_var(
+        "BREG_RUNTIME_CONFIG_MIGRATION_DATABASE_URL",
+        MIGRATION_DATABASE_URL_CANARY,
+    );
+
+    let config = load_runtime_config(&config_path).expect("runtime config loads");
+
+    assert_eq!(
+        config.runtime_database_connection_config().err(),
+        Some(RuntimeConfigError::InvalidDatabase)
+    );
+}
+
+#[test]
+fn database_without_a_trusted_root_reads_as_absent() {
+    let _guard = environment_lock();
+    let fixture = RuntimeFixture::new();
+    let config_path = fixture.path("runtime.yaml");
+    fs::write(
+        &config_path,
+        valid_runtime(&fixture.secret_root, &fixture.package_root),
+    )
+    .expect("runtime config writes");
+    std::env::set_var("BREG_RUNTIME_CONFIG_DATABASE_URL", DATABASE_URL_CANARY);
+    std::env::remove_var("BREG_RUNTIME_CONFIG_MIGRATION_DATABASE_URL");
+
+    let config = load_runtime_config(&config_path).expect("runtime config loads");
+
+    assert!(config.database().trusted_root_certificate_ref().is_none());
+}
+
+#[cfg(not(feature = "postgres-test"))]
+#[test]
+fn database_test_only_plaintext_is_refused_outside_test_builds_with_its_fix() {
+    let _guard = environment_lock();
+    let fixture = RuntimeFixture::new();
+    let config_path = fixture.path("runtime.yaml");
+    fs::write(
+        &config_path,
+        runtime_with_database_members(&fixture, "  testOnlyPlaintext: true\n"),
+    )
+    .expect("runtime config writes");
+
+    let error = load_runtime_config(&config_path).expect_err("plaintext is refused");
+
+    assert_eq!(error, RuntimeConfigError::PlaintextDatabase);
+    let [diagnostic] =
+        <[_; 1]>::try_from(error.diagnostics(None)).expect("the refusal reports one diagnostic");
+    assert_eq!(diagnostic.code, "breg.runtime.plaintext-database");
+    assert_eq!(diagnostic.path, "/database/testOnlyPlaintext");
+    assert!(
+        diagnostic.suggested_action.contains("testOnlyPlaintext"),
+        "the refusal names the fix"
+    );
+}
+
+#[cfg(feature = "postgres-test")]
+#[test]
+fn database_test_only_plaintext_connects_without_tls_in_test_builds() {
+    let _guard = environment_lock();
+    let fixture = RuntimeFixture::new();
+    let config_path = fixture.path("runtime.yaml");
+    fs::write(
+        &config_path,
+        runtime_with_database_members(&fixture, "  testOnlyPlaintext: true\n"),
+    )
+    .expect("runtime config writes");
+    std::env::set_var("BREG_RUNTIME_CONFIG_DATABASE_URL", DATABASE_URL_CANARY);
+    std::env::set_var(
+        "BREG_RUNTIME_CONFIG_MIGRATION_DATABASE_URL",
+        MIGRATION_DATABASE_URL_CANARY,
+    );
+
+    let config = load_runtime_config(&config_path).expect("runtime config loads");
+
+    for connection in [
+        config.runtime_database_connection_config(),
+        config.migration_database_connection_config(),
+    ] {
+        let debug = format!("{:?}", connection.expect("connection configures"));
+        assert!(debug.contains("TestOnlyPlaintext"), "{debug}");
+    }
+}
+
 #[test]
 fn runtime_document_identity_is_required_and_exact() {
     let fixture = RuntimeFixture::new();
     let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
 
+    let unsupported = parse_runtime_config_with_env(
+        &base.replace(
+            RUNTIME_CONFIG_API_VERSION,
+            "registry.registrystack.org/breg-runtime/v2",
+        ),
+        env_lookup,
+    )
+    .expect_err("unsupported apiVersion refused");
     assert_eq!(
-        parse_runtime_config_with_env(
-            &base.replace(
-                RUNTIME_CONFIG_API_VERSION,
-                "registry.registrystack.org/breg-runtime/v2"
-            ),
-            env_lookup
-        )
-        .expect_err("unsupported apiVersion refused"),
-        RuntimeConfigError::InvalidApiVersion
+        reader_refusal(&unsupported),
+        ("config.unsupported-api-version", "/apiVersion")
     );
-    assert_eq!(
-        parse_runtime_config_with_env(
-            &base.replace(RUNTIME_CONFIG_KIND, "RegistryProject"),
-            env_lookup
-        )
-        .expect_err("unsupported kind refused"),
-        RuntimeConfigError::InvalidKind
-    );
-    assert_eq!(
-        parse_runtime_config_with_env(
-            &base.replace(&format!("apiVersion: {RUNTIME_CONFIG_API_VERSION}\n"), ""),
-            env_lookup
-        )
-        .expect_err("missing apiVersion refused by the envelope"),
-        RuntimeConfigError::InvalidApiVersion
-    );
-    assert_eq!(
-        parse_runtime_config_with_env(
-            &base.replace(&format!("kind: {RUNTIME_CONFIG_KIND}\n"), ""),
-            env_lookup
-        )
-        .expect_err("missing kind refused by the envelope"),
-        RuntimeConfigError::InvalidKind
-    );
+    let wrong_kind = parse_runtime_config_with_env(
+        &base.replace(RUNTIME_CONFIG_KIND, "RegistryProject"),
+        env_lookup,
+    )
+    .expect_err("unsupported kind refused");
+    assert_eq!(reader_refusal(&wrong_kind), ("config.wrong-kind", "/kind"));
+    for (member, line) in [
+        (
+            "apiVersion",
+            format!("apiVersion: {RUNTIME_CONFIG_API_VERSION}\n"),
+        ),
+        ("kind", format!("kind: {RUNTIME_CONFIG_KIND}\n")),
+    ] {
+        let missing = parse_runtime_config_with_env(&base.replace(&line, ""), env_lookup)
+            .expect_err("a missing envelope member is refused");
+        assert_eq!(
+            reader_refusal(&missing),
+            ("config.missing-envelope", ""),
+            "{member}"
+        );
+    }
 }
 
 #[test]
@@ -559,20 +760,26 @@ fn audit_destination_defaults_to_a_rotated_file_and_refuses_incomplete_settings(
             base.replace(&path_line, "  destination: stdout\n  retainDays: 7\n"),
             "stdout refuses file retention",
         ),
-        (
-            base.replace(&path_line, &format!("{path_line}  rotateBytes: 1\n")),
-            "rotation is bounded",
-        ),
-        (
-            base.replace(&path_line, &format!("{path_line}  retainDays: 0\n")),
-            "retention is bounded",
-        ),
     ] {
         assert_eq!(
             parse_runtime_config_with_env(&document, env_lookup).expect_err(reason),
             RuntimeConfigError::InvalidAudit,
             "{reason}"
         );
+    }
+    for (document, pointer) in [
+        (
+            base.replace(&path_line, &format!("{path_line}  rotateBytes: 1\n")),
+            "/audit/rotateBytes",
+        ),
+        (
+            base.replace(&path_line, &format!("{path_line}  retainDays: 0\n")),
+            "/audit/retainDays",
+        ),
+    ] {
+        let error = parse_runtime_config_with_env(&document, env_lookup)
+            .expect_err("an audit bound is refused at decode");
+        assert_eq!(reader_refusal(&error), ("config.out-of-range", pointer));
     }
     assert_eq!(
         refusal(
@@ -582,7 +789,7 @@ fn audit_destination_defaults_to_a_rotated_file_and_refuses_incomplete_settings(
             )
             .expect_err("the destination set is closed")
         ),
-        DOCUMENT
+        READER
     );
     for retired in [
         "minimumRetentionDays: 400",
@@ -597,7 +804,7 @@ fn audit_destination_defaults_to_a_rotated_file_and_refuses_incomplete_settings(
                 )
                 .expect_err("the audit block beside the flattened key is closed")
             ),
-            DOCUMENT,
+            READER,
             "{retired}"
         );
     }
@@ -712,21 +919,21 @@ fn operational_defaults_materialize_without_defaulting_authority() {
     );
 
     for required_authority in [
-        ("identity:\n", DOCUMENT),
-        ("secretProviders:\n", DOCUMENT),
-        ("database:\n", DOCUMENT),
-        ("package:\n", DOCUMENT),
-        ("authentication:\n", DOCUMENT),
-        ("audit:\n", DOCUMENT),
-        ("cursor:\n", DOCUMENT),
+        ("identity:\n", READER),
+        ("secretProviders:\n", READER),
+        ("database:\n", READER),
+        ("package:\n", READER),
+        ("authentication:\n", READER),
+        ("audit:\n", READER),
+        ("cursor:\n", READER),
         (
             "  runtimeUrlRef: secret:env/BREG_RUNTIME_CONFIG_DATABASE_URL\n",
-            DOCUMENT,
+            READER,
         ),
-        ("  roles:\n", DOCUMENT),
-        ("    issuer: https://issuer.example\n", DOCUMENT),
-        ("  hashKeyRef: secret:file/audit-key\n", DOCUMENT),
-        ("  secretRef: secret:file/cursor-key\n", DOCUMENT),
+        ("  roles:\n", READER),
+        ("    issuer: https://issuer.example\n", READER),
+        ("  hashKeyRef: secret:file/audit-key\n", READER),
+        ("  secretRef: secret:file/cursor-key\n", READER),
     ] {
         let (line, expected) = required_authority;
         assert_eq!(
@@ -744,65 +951,66 @@ fn operational_defaults_materialize_without_defaulting_authority() {
 fn runtime_config_errors_expose_stable_value_free_metadata() {
     let cases = [
         (
-            RuntimeConfigError::InvalidApiVersion,
-            "runtime_config.invalid_api_version",
-            "/apiVersion",
-        ),
-        (
-            RuntimeConfigError::InvalidKind,
-            "runtime_config.invalid_kind",
-            "/kind",
-        ),
-        (
             RuntimeConfigError::InvalidDatabase,
-            "runtime_config.invalid_database",
+            "breg.runtime.invalid-database",
             "/database",
         ),
         (
             RuntimeConfigError::InvalidOidc,
-            "runtime_config.invalid_oidc",
+            "breg.runtime.invalid-oidc",
             "/authentication/oidc",
         ),
         (
             RuntimeConfigError::InvalidEventDestination,
-            "runtime_config.invalid_event_destination",
+            "breg.runtime.invalid-event-destination",
             "/eventDestinations",
         ),
-        (RuntimeConfigError::Secret, "runtime_config.secret", "/"),
+        (
+            RuntimeConfigError::PlaintextDatabase,
+            "breg.runtime.plaintext-database",
+            "/database/testOnlyPlaintext",
+        ),
+        (RuntimeConfigError::Secret, "breg.runtime.secret", ""),
         (
             RuntimeConfigError::PackageRootUnavailable,
-            "runtime_config.package_root_unavailable",
+            "breg.runtime.package-root-unavailable",
             "/package/root",
         ),
         (
             RuntimeConfigError::UnsafePackageRoot,
-            "runtime_config.unsafe_package_root",
+            "breg.runtime.unsafe-package-root",
             "/package/root",
         ),
         (
             RuntimeConfigError::SecretProviderRootUnavailable,
-            "runtime_config.secret_provider_root_unavailable",
+            "breg.runtime.secret-provider-root-unavailable",
             "/secretProviders/file/root",
         ),
         (
             RuntimeConfigError::UnsafeSecretProviderRoot,
-            "runtime_config.unsafe_secret_provider_root",
+            "breg.runtime.unsafe-secret-provider-root",
             "/secretProviders/file/root",
         ),
         (
             RuntimeConfigError::InvalidOidcLeeway,
-            "runtime_config.invalid_oidc_leeway",
+            "breg.runtime.invalid-oidc-leeway",
             "/authentication/oidc/leewayMilliseconds",
         ),
     ];
 
     for (error, code, path) in cases {
-        let metadata = error.metadata();
-        assert_eq!(error.code(), code);
-        assert_eq!(error.path(), path);
-        assert_eq!(metadata.code(), code);
-        assert_eq!(metadata.path(), path);
-        let rendered = format!("{error:?} {error} {metadata:?}");
+        let diagnostics = error.diagnostics(None);
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].code, code);
+        assert_eq!(diagnostics[0].path, path);
+        assert!(
+            !diagnostics[0].suggested_action.is_empty(),
+            "{code} names its fix"
+        );
+        let rendered = format!(
+            "{error:?} {error} {}",
+            error.render_human(Some(Path::new("runtime.yaml")))
+        );
         for canary in [
             DATABASE_URL_CANARY,
             MIGRATION_DATABASE_URL_CANARY,
@@ -831,12 +1039,13 @@ fn webhook_payload_retention_is_deployment_selected_and_capped_at_thirty_days() 
         );
     }
     for days in [0_u8, 31_u8] {
+        let error = parse_runtime_config(&format!(
+            "{base}\neventDelivery:\n  payloadRetentionDays: {days}\n"
+        ))
+        .expect_err("the horizon is bounded at decode");
         assert_eq!(
-            parse_runtime_config(&format!(
-                "{base}\neventDelivery:\n  payloadRetentionDays: {days}\n"
-            ))
-            .err(),
-            Some(RuntimeConfigError::InvalidBounds)
+            reader_refusal(&error),
+            ("config.out-of-range", "/eventDelivery/payloadRetentionDays")
         );
     }
 }
@@ -863,12 +1072,13 @@ fn idempotency_receipt_horizon_defaults_to_seven_days_and_is_capped_at_a_year() 
         assert_eq!(config.idempotency().receipt_retention_days(), days);
     }
     for days in [0_u16, 366_u16] {
+        let error = parse_runtime_config(&format!(
+            "{base}\nidempotency:\n  receiptRetentionDays: {days}\n"
+        ))
+        .expect_err("the horizon is bounded at decode");
         assert_eq!(
-            parse_runtime_config(&format!(
-                "{base}\nidempotency:\n  receiptRetentionDays: {days}\n"
-            ))
-            .err(),
-            Some(RuntimeConfigError::InvalidBounds)
+            reader_refusal(&error),
+            ("config.out-of-range", "/idempotency/receiptRetentionDays")
         );
     }
 }
@@ -913,22 +1123,22 @@ fn wasm_execution_budgets_default_below_the_structural_module_ceiling() {
 fn wasm_execution_budgets_refuse_out_of_range_values() {
     let fixture = RuntimeFixture::new();
     let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
-    for (module_bytes, memory_bytes) in [
-        (0_u64, 32 * 1024 * 1024_u64),
-        (1023, 32 * 1024 * 1024),
-        (5 * 1024 * 1024 + 1, 32 * 1024 * 1024),
-        (2 * 1024 * 1024, 0),
-        (2 * 1024 * 1024, 1024 * 1024 - 1),
-        (2 * 1024 * 1024, 1024 * 1024 * 1024 + 1),
+    let module = "/wasmExecution/maxModuleBytes";
+    let memory = "/wasmExecution/maxGuestMemoryBytes";
+    for (module_bytes, memory_bytes, pointer) in [
+        (0_u64, 32 * 1024 * 1024_u64, module),
+        (1023, 32 * 1024 * 1024, module),
+        (5 * 1024 * 1024 + 1, 32 * 1024 * 1024, module),
+        (2 * 1024 * 1024, 0, memory),
+        (2 * 1024 * 1024, 1024 * 1024 - 1, memory),
+        (2 * 1024 * 1024, 1024 * 1024 * 1024 + 1, memory),
     ] {
         let configured = format!(
             "{base}wasmExecution:\n  maxModuleBytes: {module_bytes}\n  maxGuestMemoryBytes: {memory_bytes}\n"
         );
-        let metadata = parse_runtime_config(&configured)
-            .expect_err("out-of-range WASM execution budget is refused")
-            .metadata();
-        assert_eq!(metadata.code(), "runtime_config.invalid_wasm_execution");
-        assert_eq!(metadata.path(), "/wasmExecution");
+        let error = parse_runtime_config(&configured)
+            .expect_err("out-of-range WASM execution budget is refused");
+        assert_eq!(reader_refusal(&error), ("config.out-of-range", pointer));
     }
 }
 
@@ -957,11 +1167,12 @@ fn wasm_execution_backend_refuses_unknown_values() {
     let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
     for backend in ["warp", "Pulley", "\"\""] {
         let configured = format!("{base}wasmExecution:\n  backend: {backend}\n");
-        let metadata = parse_runtime_config(&configured)
-            .expect_err("an unknown WASM execution backend is refused")
-            .metadata();
-        assert_eq!(metadata.code(), "runtime_config.invalid_wasm_execution");
-        assert_eq!(metadata.path(), "/wasmExecution");
+        let error = parse_runtime_config(&configured)
+            .expect_err("an unknown WASM execution backend is refused");
+        let diagnostics = error.diagnostics(None);
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].code, "breg.runtime.invalid-wasm-execution");
+        assert_eq!(diagnostics[0].path, "/wasmExecution");
     }
 }
 
@@ -975,7 +1186,7 @@ fn wasm_execution_section_refuses_unknown_members() {
             parse_runtime_config(&configured)
                 .expect_err("unknown WASM execution member is refused")
         ),
-        DOCUMENT
+        READER
     );
 }
 
@@ -995,17 +1206,75 @@ fn unknown_package_keys_are_refused_as_document_errors_without_their_value() {
         );
         let error = parse_runtime_config_with_env(&raw, env_lookup)
             .expect_err("an unknown package key is refused");
-        assert_eq!(refusal(error.clone()), DOCUMENT);
-        assert_eq!(error.code(), "runtime_config.document");
         let key = line.trim().split(':').next().expect("line names a key");
-        let message = error.to_string();
-        assert!(
-            message.contains(&format!("unknown field `{key}`")),
-            "{message}"
+        assert_eq!(
+            reader_refusal(&error),
+            ("config.unknown-key", format!("/package/{key}").as_str())
         );
+        let message = error.to_string();
+        assert!(message.contains(&format!("`{key}`")), "{message}");
         let value = line.split_once(": ").expect("line holds a value").1.trim();
         assert!(!message.contains(value), "{message}");
     }
+}
+
+/// The platform blocks are read through the shared-block recipe rather than
+/// serde `flatten`, so every unknown key inside one is reported, each at its
+/// own line and column, not only the first.
+#[test]
+fn two_unknown_keys_inside_each_shared_block_are_all_reported_with_positions() {
+    let fixture = RuntimeFixture::new();
+    let raw = valid_runtime(&fixture.secret_root, &fixture.package_root)
+        .replace(
+            &format!("  root: {}\n", fixture.package_root.display()),
+            &format!(
+                "  root: {}\n  rots: canary-a\n  expectedDigst: canary-b\n",
+                fixture.package_root.display()
+            ),
+        )
+        .replace(
+            "    issuer: https://issuer.example\n",
+            "    issuer: https://issuer.example\n    issuers: canary-c\n    audiences: canary-d\n",
+        )
+        .replace(
+            "  hashKeyRef: secret:file/audit-key\n",
+            "  hashKeyRef: secret:file/audit-key\n  hashKey: canary-e\n  paths: canary-f\n",
+        );
+    let error = parse_runtime_config_with_env(&raw, env_lookup)
+        .expect_err("unknown keys inside the shared blocks are refused");
+    reader_refusal(&error);
+    let line_of = |key: &str| {
+        raw.lines()
+            .position(|line| line.trim_start().starts_with(&format!("{key}: canary-")))
+            .map(|index| index + 1)
+            .expect("the fixture holds the key")
+    };
+    let reported: Vec<(String, String, Option<usize>, Option<usize>)> = error
+        .diagnostics(None)
+        .into_iter()
+        .map(|diagnostic| {
+            let source = diagnostic.source.expect("a reader diagnostic has a source");
+            (diagnostic.code, diagnostic.path, source.line, source.column)
+        })
+        .collect();
+    for (path, key, column) in [
+        ("/package/rots", "rots", 3),
+        ("/package/expectedDigst", "expectedDigst", 3),
+        ("/authentication/oidc/issuers", "issuers", 5),
+        ("/authentication/oidc/audiences", "audiences", 5),
+        ("/audit/hashKey", "hashKey", 3),
+        ("/audit/paths", "paths", 3),
+    ] {
+        let expected = (
+            "config.unknown-key".to_owned(),
+            path.to_owned(),
+            Some(line_of(key)),
+            Some(column),
+        );
+        assert!(reported.contains(&expected), "{expected:?} in {reported:?}");
+    }
+    let human = error.render_human(None);
+    assert!(!human.contains("canary-"), "{human}");
 }
 
 /// Substitution runs before the document is read, so an unknown key that
@@ -1027,18 +1296,17 @@ fn an_unknown_package_key_holding_a_set_variable_is_refused_without_the_substitu
     );
     let error = parse_runtime_config_with_env(&raw, lookup)
         .expect_err("an unknown package key is refused after substitution");
-    assert_eq!(error.code(), "runtime_config.document");
-    let message = error.to_string();
-    assert!(
-        message.contains("unknown field `trustAnchorPath`"),
-        "{message}"
+    assert_eq!(
+        reader_refusal(&error),
+        ("config.unknown-key", "/package/trustAnchorPath")
     );
+    let message = error.to_string();
+    assert!(message.contains("`trustAnchorPath`"), "{message}");
     assert!(!message.contains(EXPANDED_CANARY), "{message}");
 }
 
-/// An unknown key that holds an unset variable never reaches the document
-/// check: substitution refuses first, and that refusal names neither the key
-/// nor the variable.
+/// An unknown key that holds an unset variable is refused by substitution,
+/// which names the variable to set and never a value.
 #[test]
 fn an_unknown_package_key_holding_an_unset_variable_is_refused_as_an_expansion_error() {
     let fixture = RuntimeFixture::new();
@@ -1051,19 +1319,20 @@ fn an_unknown_package_key_holding_an_unset_variable_is_refused_as_an_expansion_e
     );
     let error = parse_runtime_config_with_env(&raw, env_lookup)
         .expect_err("an unset variable in an unknown package key is refused");
-    assert_eq!(error, RuntimeConfigError::EnvExpansion);
-    assert_eq!(error.code(), "runtime_config.env_expansion");
+    assert_eq!(
+        reader_refusal(&error),
+        ("config.substitution", "/package/trustAnchorPath")
+    );
     let message = error.to_string();
-    assert!(!message.contains("trustAnchorPath"), "{message}");
     assert!(
-        !message.contains("BREG_RUNTIME_CONFIG_UNSET_ANCHOR"),
+        message.contains("BREG_RUNTIME_CONFIG_UNSET_ANCHOR"),
         "{message}"
     );
 }
 
-/// Every document refusal keeps the `runtime_config.document` code and says
-/// which field it is about, and none repeats the value it refused, not even
-/// one substituted from the environment.
+/// Every reader refusal carries the reader's code and the JSON Pointer of the
+/// value it is about, and none repeats the value it refused, not even one
+/// substituted from the environment.
 #[test]
 fn a_document_refusal_names_its_field_and_never_echoes_the_refused_value() {
     let fixture = RuntimeFixture::new();
@@ -1076,35 +1345,35 @@ fn a_document_refusal_names_its_field_and_never_echoes_the_refused_value() {
         "  path: {}\n",
         fixture.path("audit").join("audit.jsonl").display()
     );
-    for (from, to, field, value) in [
+    for (from, to, (code, path), value) in [
         (
             "    maxSize: 4\n".to_owned(),
             "    maxSize: .nan\n".to_owned(),
-            "database.pool.maxSize",
+            ("yaml.ambiguous-number", "/database/pool/maxSize"),
             ".nan",
         ),
         (
             "  bind: 127.0.0.1:8080\n".to_owned(),
             "  bind: !canary runtime-tagged-canary\n".to_owned(),
-            "listener.bind",
+            ("yaml.tag", "/listener/bind"),
             "runtime-tagged-canary",
         ),
         (
             audit_path.clone(),
             format!("{audit_path}  destination: ${{BREG_RUNTIME_CONFIG_CANARY}}\n"),
-            "audit.destination",
+            ("config.unknown-variant", "/audit/destination"),
             EXPANDED_CANARY,
         ),
         (
             audit_path.clone(),
             format!("{audit_path}  rotateBytes: 18446744073709551615\n"),
-            "canonical JSON",
+            ("config.out-of-range", "/audit/rotateBytes"),
             "18446744073709551615",
         ),
         (
             "  maxAgeSeconds: 300\n".to_owned(),
             "  maxAgeSeconds: 300\n  runtimeMemberCanary: runtime-value-canary\n".to_owned(),
-            "cursor",
+            ("config.unknown-key", "/cursor/runtimeMemberCanary"),
             "runtime-value-canary",
         ),
     ] {
@@ -1112,19 +1381,14 @@ fn a_document_refusal_names_its_field_and_never_echoes_the_refused_value() {
         let raw = base.replace(&from, &to);
         let error = parse_runtime_config_with_env(&raw, lookup)
             .expect_err("a document the runtime cannot read is refused");
-        assert!(
-            matches!(error, RuntimeConfigError::Document(_)),
-            "{field}: {error:?}"
-        );
-        assert_eq!(error.code(), "runtime_config.document");
-        let message = error.to_string();
-        assert!(message.contains(field), "{field}: {message}");
-        assert!(!message.contains(value), "{field}: {message}");
+        assert_eq!(reader_refusal(&error), (code, path), "{error:?}");
+        let rendered = format!("{error:?} {error} {}", error.render_human(None));
+        assert!(!rendered.contains(value), "{path}: {rendered}");
     }
 }
 
 #[test]
-fn a_runtime_file_that_is_not_utf8_is_refused_as_a_document_naming_the_encoding() {
+fn a_runtime_file_that_is_not_utf8_is_refused_naming_the_encoding() {
     let fixture = RuntimeFixture::new();
     let config_path = fixture.path("runtime.yaml");
     let mut bytes = valid_runtime(&fixture.secret_root, &fixture.package_root).into_bytes();
@@ -1132,11 +1396,7 @@ fn a_runtime_file_that_is_not_utf8_is_refused_as_a_document_naming_the_encoding(
     fs::write(&config_path, bytes).expect("runtime config writes");
     let error = load_runtime_config_with_env(&config_path, env_lookup)
         .expect_err("a runtime file that is not UTF-8 is refused");
-    assert!(
-        matches!(error, RuntimeConfigError::Document(_)),
-        "{error:?}"
-    );
-    assert_eq!(error.code(), "runtime_config.document");
+    assert_eq!(reader_refusal(&error), ("yaml.not-utf8", ""));
     assert!(error.to_string().contains("UTF-8"), "{error}");
 }
 
@@ -1161,8 +1421,8 @@ fn an_instance_id_outside_the_event_source_grammar_is_refused_naming_the_key() {
             RuntimeConfigError::InvalidInstanceId,
             "{instance_id}"
         );
-        assert_eq!(error.code(), "runtime_config.invalid_instance_id");
-        assert_eq!(error.path(), "/identity/instanceId");
+        assert_eq!(code_of(&error), "breg.runtime.invalid-instance-id");
+        assert_eq!(path_of(&error), "/identity/instanceId");
         assert!(!error.to_string().contains(instance_id));
         assert!(error.to_string().contains("set identity.instanceId"));
     }
@@ -1189,8 +1449,14 @@ fn disagreeing_environment_identity_keys_are_refused_naming_both_keys() {
     let error = parse_runtime_config_with_env(&raw, env_lookup)
         .expect_err("disagreeing environment keys are refused");
     assert_eq!(error, RuntimeConfigError::EnvironmentIdentityConflict);
-    assert_eq!(error.code(), "runtime_config.environment_identity_conflict");
-    assert_eq!(error.path(), "/identity/databaseInitializationEnvironment");
+    assert_eq!(
+        code_of(&error),
+        "breg.runtime.environment-identity-conflict"
+    );
+    assert_eq!(
+        path_of(&error),
+        "/identity/databaseInitializationEnvironment"
+    );
     let message = error.to_string();
     assert!(message.contains("identity.environment"), "{message}");
     assert!(
@@ -1204,10 +1470,8 @@ fn governed_unknown_keys_are_refused_before_they_become_runtime() {
     let fixture = RuntimeFixture::new();
     let mut raw = valid_runtime(&fixture.secret_root, &fixture.package_root);
     raw.push_str("entities: []\n");
-    assert_eq!(
-        parse_runtime_config_with_env(&raw, env_lookup).expect_err("governed key refused"),
-        RuntimeConfigError::GovernedMember
-    );
+    let error = parse_runtime_config_with_env(&raw, env_lookup).expect_err("governed key refused");
+    assert_eq!(reader_refusal(&error), ("config.unknown-key", "/entities"));
 }
 
 #[test]
@@ -1233,18 +1497,18 @@ fn review_executors_are_strict_ordinary_self_http_bindings() {
                 "https://registry.example/registry-a/",
                 "http://registry.example/registry-a/",
             ),
-            RuntimeConfigError::InvalidBinding,
+            Refusal::Runtime(RuntimeConfigError::InvalidBinding),
         ),
         (
             valid.replace("    accessProfile: automatic-applier\n", ""),
-            DOCUMENT,
+            READER,
         ),
         (
             valid.replace(
                 "    accessProfile: automatic-applier\n",
                 "    accessProfile: automatic-applier\n    authority: internal\n",
             ),
-            DOCUMENT,
+            READER,
         ),
     ] {
         assert_eq!(
@@ -1305,7 +1569,7 @@ fn review_authorities_accept_one_refreshing_or_static_credential() {
             )
             .expect_err("a missing Casework profile is refused")
         ),
-        DOCUMENT
+        READER
     );
     for invalid in [
         refreshing.replace("    profile: producer\n", "    profile: ''\n"),
@@ -1362,10 +1626,14 @@ fn review_authority_recovery_days_match_the_casework_bound() {
     parse_runtime_config_with_env(&authority(3_650), env_lookup)
         .expect("the Casework recovery ceiling is accepted");
     for recovery_days in [0, 3_651] {
+        let error = parse_runtime_config_with_env(&authority(recovery_days), env_lookup)
+            .expect_err("a recovery window outside the Casework bound is refused");
         assert_eq!(
-            parse_runtime_config_with_env(&authority(recovery_days), env_lookup)
-                .expect_err("a recovery window outside the Casework bound is refused"),
-            RuntimeConfigError::InvalidBinding
+            reader_refusal(&error),
+            (
+                "config.out-of-range",
+                "/reviewAuthorities/casework-a/recoveryDays"
+            )
         );
     }
 }
@@ -1421,13 +1689,21 @@ fn metrics_listener_is_absent_by_default_and_optional() {
 fn metrics_listener_refuses_public_unspecified_and_ephemeral_bindings() {
     let fixture = RuntimeFixture::new();
     let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
+    for bind in ["localhost:9100", "127.0.0.1"] {
+        let configured = format!("{base}metricsListener:\n  bind: {bind}\n");
+        let error = parse_runtime_config_with_env(&configured, env_lookup)
+            .expect_err("a metrics binding that is not a numeric socket address is refused");
+        assert_eq!(
+            reader_refusal(&error),
+            ("config.invalid-value", "/metricsListener/bind"),
+            "binding {bind} refused"
+        );
+    }
     for bind in [
         "0.0.0.0:9100",
         "8.8.8.8:9100",
         "\"[::]:9100\"",
         "127.0.0.1:0",
-        "localhost:9100",
-        "127.0.0.1",
     ] {
         let configured = format!("{base}metricsListener:\n  bind: {bind}\n");
         let error = parse_runtime_config_with_env(&configured, env_lookup)
@@ -1437,11 +1713,8 @@ fn metrics_listener_refuses_public_unspecified_and_ephemeral_bindings() {
             RuntimeConfigError::InvalidMetricsListener,
             "binding {bind} refused"
         );
-        assert_eq!(error.metadata().path(), "/metricsListener");
-        assert_eq!(
-            error.metadata().code(),
-            "runtime_config.invalid_metrics_listener"
-        );
+        assert_eq!(path_of(&error), "/metricsListener");
+        assert_eq!(code_of(&error), "breg.runtime.invalid-metrics-listener");
     }
 }
 
@@ -1480,7 +1753,7 @@ fn metrics_listener_refuses_unknown_members() {
             parse_runtime_config_with_env(&configured, env_lookup)
                 .expect_err("unknown metrics member is refused")
         ),
-        DOCUMENT
+        READER
     );
 }
 
@@ -1492,20 +1765,44 @@ fn raw_database_urls_inline_secrets_and_plaintext_posture_are_refused() {
             "runtimeUrlRef: {}\n  migrationUrlRef: secret:env/BREG_RUNTIME_CONFIG_MIGRATION_DATABASE_URL\n  pool:",
             "postgresql://registry_runtime:raw-secret@db.example/registry"
         ),
-        "runtimeUrlRef: secret:env/lowercase\n  migrationUrlRef: secret:env/BREG_RUNTIME_CONFIG_MIGRATION_DATABASE_URL\n  pool:".to_owned(),
-        "runtimeUrlRef: secret:env/BREG_RUNTIME_CONFIG_DATABASE_URL\n  migrationUrlRef: secret:env/BREG_RUNTIME_CONFIG_MIGRATION_DATABASE_URL\n  plaintext: true\n  pool:".to_owned(),
-        "runtimeUrlRef: secret:env/BREG_RUNTIME_CONFIG_DATABASE_URL\n  migrationUrlRef: secret:env/BREG_RUNTIME_CONFIG_MIGRATION_DATABASE_URL\n  password: inline-secret\n  pool:".to_owned(),
+        "runtimeUrlRef: secret:env/lower_canary\n  migrationUrlRef: secret:env/BREG_RUNTIME_CONFIG_MIGRATION_DATABASE_URL\n  pool:".to_owned(),
     ] {
         let raw = valid_runtime(&fixture.secret_root, &fixture.package_root)
             .replace(
                 "runtimeUrlRef: secret:env/BREG_RUNTIME_CONFIG_DATABASE_URL\n  migrationUrlRef: secret:env/BREG_RUNTIME_CONFIG_MIGRATION_DATABASE_URL\n  pool:",
                 &replacement,
             );
-        assert_eq!(
-            parse_runtime_config_with_env(&raw, env_lookup)
-                .expect_err("unsafe database material refused"),
-            RuntimeConfigError::InvalidDatabase
+        let error = parse_runtime_config_with_env(&raw, env_lookup)
+            .expect_err("unsafe database material refused");
+        assert_eq!(error, RuntimeConfigError::InvalidDatabase);
+        let rendered = format!("{error:?} {error} {}", error.render_human(None));
+        assert!(!rendered.contains("raw-secret"), "{rendered}");
+        assert!(!rendered.contains("lower_canary"), "{rendered}");
+    }
+    for (member, line) in [
+        ("plaintext", "plaintext: true"),
+        ("password", "password: inline-secret"),
+        (
+            "url",
+            "url: postgresql://registry_runtime:raw-secret@db.example/registry",
+        ),
+    ] {
+        let raw = valid_runtime(&fixture.secret_root, &fixture.package_root).replace(
+            "  migrationUrlRef: secret:env/BREG_RUNTIME_CONFIG_MIGRATION_DATABASE_URL\n  pool:",
+            &format!(
+                "  migrationUrlRef: secret:env/BREG_RUNTIME_CONFIG_MIGRATION_DATABASE_URL\n  {line}\n  pool:"
+            ),
         );
+        let error = parse_runtime_config_with_env(&raw, env_lookup)
+            .expect_err("a removed database member is refused");
+        assert_eq!(
+            reader_refusal(&error),
+            ("config.removed-key", format!("/database/{member}").as_str())
+        );
+        let rendered = format!("{error:?} {error} {}", error.render_human(None));
+        assert!(rendered.contains("runtimeUrlRef"), "{rendered}");
+        assert!(!rendered.contains("raw-secret"), "{rendered}");
+        assert!(!rendered.contains("inline-secret"), "{rendered}");
     }
 }
 
@@ -1523,7 +1820,7 @@ fn old_single_database_url_ref_is_refused_by_strict_schema() {
             parse_runtime_config_with_env(&raw, env_lookup)
                 .expect_err("legacy single database URL ref is refused")
         ),
-        DOCUMENT
+        READER
     );
 }
 
@@ -1626,12 +1923,15 @@ fn one_role_may_serve_as_runtime_and_migration_role() {
 #[test]
 fn invalid_bounds_roles_paths_and_oidc_inputs_are_refused() {
     let fixture = RuntimeFixture::new();
+    let oversized_pool = valid_runtime(&fixture.secret_root, &fixture.package_root)
+        .replace("maxSize: 4", "maxSize: 129");
+    let error = parse_runtime_config_with_env(&oversized_pool, env_lookup)
+        .expect_err("the pool size is bounded");
+    assert_eq!(
+        reader_refusal(&error),
+        ("config.out-of-range", "/database/pool/maxSize")
+    );
     for (raw, expected) in [
-        (
-            valid_runtime(&fixture.secret_root, &fixture.package_root)
-                .replace("maxSize: 4", "maxSize: 129"),
-            RuntimeConfigError::InvalidBounds,
-        ),
         (
             valid_runtime(&fixture.secret_root, &fixture.package_root).replace(
                 "migration: registry_migration",
@@ -1659,6 +1959,66 @@ fn invalid_bounds_roles_paths_and_oidc_inputs_are_refused() {
             ),
             expected
         );
+    }
+}
+
+#[test]
+fn allowed_clients_is_written_as_unrestricted_or_as_a_list_of_at_least_one_client() {
+    let fixture = RuntimeFixture::new();
+    let baseline = valid_runtime(&fixture.secret_root, &fixture.package_root);
+    let written = |member: &str| {
+        let raw = baseline.replace("    allowedClients: [registry-client]\n", member);
+        assert_ne!(raw, baseline);
+        raw
+    };
+    let clients = |raw: &str| {
+        parse_runtime_config_with_env(raw, env_lookup)
+            .expect("the client decision is written")
+            .authentication()
+            .oidc()
+            .token_verifier_config()
+            .allowed_clients
+    };
+
+    assert_eq!(clients(&baseline), vec!["registry-client"]);
+    assert!(clients(&written("    allowedClients: unrestricted\n")).is_empty());
+
+    let error = parse_runtime_config_with_env(&written(""), env_lookup)
+        .expect_err("leaving the client decision out is refused");
+    assert_eq!(
+        reader_refusal(&error),
+        ("config.missing-key", "/authentication/oidc")
+    );
+    let RuntimeConfigError::Reader(reader) = &error else {
+        unreachable!("the shared reader decided this refusal");
+    };
+    assert!(reader.to_string().contains("allowedClients"), "{reader}");
+
+    for refused in [
+        "    allowedClients: []\n",
+        "    allowedClients: every-client\n",
+        "    allowedClients: \"*\"\n",
+    ] {
+        let error = parse_runtime_config_with_env(&written(refused), env_lookup)
+            .expect_err("an empty list or another word is not a client decision");
+        assert_eq!(
+            reader_refusal(&error),
+            (
+                "config.invalid-value",
+                "/authentication/oidc/allowedClients"
+            ),
+            "{refused}"
+        );
+        let RuntimeConfigError::Reader(reader) = &error else {
+            unreachable!("the shared reader decided this refusal");
+        };
+        let message = reader.to_string();
+        assert!(
+            message.contains("unrestricted, or a list of at least one OAuth client")
+                && message.contains("write unrestricted to accept every client"),
+            "{message}"
+        );
+        assert!(!message.contains("every-client"), "{message}");
     }
 }
 
@@ -1728,7 +2088,7 @@ fn invalid_assertion_issuer_shapes_are_refused() {
                 "      registry-client:\n",
                 "        - https://issuer-b.example\n",
             )),
-            DOCUMENT,
+            READER,
         ),
         (
             "duplicate issuer inside one client's list",
@@ -1738,7 +2098,7 @@ fn invalid_assertion_issuer_shapes_are_refused() {
                 "        - https://issuer-a.example\n",
                 "        - https://issuer-a.example\n",
             )),
-            RuntimeConfigError::InvalidOidc,
+            Refusal::Runtime(RuntimeConfigError::InvalidOidc),
         ),
         (
             "empty issuer string",
@@ -1747,7 +2107,7 @@ fn invalid_assertion_issuer_shapes_are_refused() {
                 "      registry-client:\n",
                 "        - \"\"\n",
             )),
-            RuntimeConfigError::InvalidOidc,
+            Refusal::Runtime(RuntimeConfigError::InvalidOidc),
         ),
         (
             "empty client key",
@@ -1756,7 +2116,7 @@ fn invalid_assertion_issuer_shapes_are_refused() {
                 "      \"\":\n",
                 "        - https://issuer-a.example\n",
             )),
-            RuntimeConfigError::InvalidOidc,
+            Refusal::Runtime(RuntimeConfigError::InvalidOidc),
         ),
         (
             "over-long client key",
@@ -1764,7 +2124,7 @@ fn invalid_assertion_issuer_shapes_are_refused() {
                 "    assertionIssuers:\n      {}:\n        - https://issuer-a.example\n",
                 "c".repeat(513)
             )),
-            RuntimeConfigError::InvalidOidc,
+            Refusal::Runtime(RuntimeConfigError::InvalidOidc),
         ),
         (
             "over-long issuer value",
@@ -1772,17 +2132,17 @@ fn invalid_assertion_issuer_shapes_are_refused() {
                 "    assertionIssuers:\n      registry-client:\n        - https://{}.example\n",
                 "i".repeat(513)
             )),
-            RuntimeConfigError::InvalidOidc,
+            Refusal::Runtime(RuntimeConfigError::InvalidOidc),
         ),
         (
             "too many client entries",
             insert(&too_many_clients),
-            RuntimeConfigError::InvalidOidc,
+            Refusal::Runtime(RuntimeConfigError::InvalidOidc),
         ),
         (
             "too many issuers for one client",
             insert(&too_many_issuers),
-            RuntimeConfigError::InvalidOidc,
+            Refusal::Runtime(RuntimeConfigError::InvalidOidc),
         ),
     ] {
         assert_eq!(
@@ -1794,6 +2154,44 @@ fn invalid_assertion_issuer_shapes_are_refused() {
             "{name}"
         );
     }
+
+    // CFG-EMPTY-2: assertionIssuers restricts which authority each client
+    // may exchange from, so an empty mapping is refused; omitting the member
+    // is how a file applies no assertion-issuer rule.
+    let error = parse_runtime_config_with_env(&insert("    assertionIssuers: {}\n"), env_lookup)
+        .expect_err("an empty assertion-issuer mapping is refused");
+    assert_eq!(
+        reader_refusal(&error),
+        (
+            "config.invalid-value",
+            "/authentication/oidc/assertionIssuers"
+        )
+    );
+    assert!(
+        error.render_human(None).contains("omit assertionIssuers"),
+        "the refusal names its fix"
+    );
+
+    // One client's list grants authorities, so `[]` grants none, as leaving
+    // the client out does.
+    let config = parse_runtime_config_with_env(
+        &insert(concat!(
+            "    assertionIssuers:\n",
+            "      registry-client: []\n",
+            "      other-client:\n",
+            "        - https://issuer-a.example\n",
+        )),
+        env_lookup,
+    )
+    .expect("an empty per-client list is accepted");
+    let verifier = config.authentication().oidc().token_verifier_config();
+    assert_eq!(
+        verifier
+            .assertion_issuers
+            .get("registry-client")
+            .map(Vec::len),
+        Some(0)
+    );
 }
 
 #[test]
@@ -1849,7 +2247,7 @@ fn authored_jwks_uri_override_is_refused() {
         refusal(
             parse_runtime_config_with_env(&raw, env_lookup).expect_err("JWKS override refused")
         ),
-        DOCUMENT
+        READER
     );
 }
 
@@ -2216,8 +2614,10 @@ fn a_substituted_value_cannot_inject_document_structure() {
     assert!(!rendered.contains("entities"));
 }
 
+/// A substituted value is bounded by the member that receives it, and its
+/// refusal never repeats it.
 #[test]
-fn substituted_runtime_document_stays_within_the_size_bound() {
+fn an_oversized_substituted_value_is_refused_by_its_member_without_echo() {
     let fixture = RuntimeFixture::new();
     let raw = valid_runtime(&fixture.secret_root, &fixture.package_root).replace(
         "instanceId: registry-primary",
@@ -2229,7 +2629,7 @@ fn substituted_runtime_document_stays_within_the_size_bound() {
     })
     .expect_err("oversized substitution refused");
 
-    assert_eq!(error, RuntimeConfigError::Bounds);
+    assert_eq!(error, RuntimeConfigError::InvalidBinding);
     let rendered = format!("{error:?} {error}");
     assert!(!rendered.contains("runtime-bound-canary"));
 }
@@ -2259,9 +2659,12 @@ fn a_substitution_inside_a_secret_reference_is_refused() {
     ] {
         let error = parse_runtime_config_with_env(&raw, lookup)
             .expect_err("a secret reference or provider takes no substitution");
-        assert_eq!(error, RuntimeConfigError::SubstitutionInReference);
-        assert_eq!(error.code(), "runtime_config.substitution_in_reference");
-        assert_eq!(error.path(), "/");
+        assert_eq!(code_of(&error), "config.substitution-not-allowed");
+        assert!(
+            ["/audit/hashKeyRef", "/secretProviders/file/root"].contains(&path_of(&error).as_str()),
+            "{}",
+            path_of(&error)
+        );
     }
 }
 
@@ -2289,7 +2692,7 @@ fn substituted_values_stay_strings() {
             )
             .expect_err("a substitution never becomes a number")
         ),
-        DOCUMENT
+        READER
     );
 }
 
@@ -2372,9 +2775,11 @@ fn runtime_config_file_must_not_be_a_symlink() {
     let link = fixture.path("runtime-link.yaml");
     symlink(&target, &link).expect("runtime config symlink creates");
 
+    let error =
+        load_runtime_config_with_env(&link, env_lookup).expect_err("symlinked runtime refused");
     assert_eq!(
-        load_runtime_config_with_env(&link, env_lookup).expect_err("symlinked runtime refused"),
-        RuntimeConfigError::UnsafeFile
+        reader_refusal(&error),
+        ("platform.runtime-config.unsafe-file", "")
     );
 }
 
@@ -2396,10 +2801,11 @@ fn runtime_config_path_components_must_not_be_symlinks() {
     symlink(&real_dir, &linked_dir).expect("runtime config ancestor symlink creates");
     let linked_config = linked_dir.join("runtime.yaml");
 
+    let error = load_runtime_config_with_env(&linked_config, env_lookup)
+        .expect_err("symlinked runtime ancestor refused");
     assert_eq!(
-        load_runtime_config_with_env(&linked_config, env_lookup)
-            .expect_err("symlinked runtime ancestor refused"),
-        RuntimeConfigError::UnsafeFile
+        reader_refusal(&error),
+        ("platform.runtime-config.unsafe-file", "")
     );
 }
 
@@ -2445,12 +2851,11 @@ fn a_missing_runtime_config_file_is_unavailable_rather_than_unsafe() {
         let error = load_runtime_config_with_env(&missing, env_lookup)
             .expect_err("a missing runtime configuration file is refused");
         assert_eq!(
-            error,
-            RuntimeConfigError::Unavailable,
+            reader_refusal(&error),
+            ("platform.runtime-config.unavailable", ""),
             "{}",
             missing.display()
         );
-        assert_eq!(error.code(), "runtime_config.unavailable");
     }
 }
 
@@ -2481,9 +2886,10 @@ fn an_unreadable_runtime_config_directory_is_unavailable_rather_than_unsafe() {
         // this test describes cannot be observed here.
         return;
     }
+    let error = result.expect_err("an unreadable runtime configuration directory is refused");
     assert_eq!(
-        result.expect_err("an unreadable runtime configuration directory is refused"),
-        RuntimeConfigError::Unavailable
+        reader_refusal(&error),
+        ("platform.runtime-config.unavailable", "")
     );
 }
 
@@ -2511,13 +2917,16 @@ fn missing_package_root_and_secret_root_are_reported_at_their_own_paths() {
         .expect_err("a missing file secret provider root is refused");
 
     assert_eq!(root_error, RuntimeConfigError::PackageRootUnavailable);
-    assert_eq!(root_error.path(), "/package/root");
-    assert_eq!(root_error.code(), "runtime_config.package_root_unavailable");
+    assert_eq!(path_of(&root_error), "/package/root");
+    assert_eq!(
+        code_of(&root_error),
+        "breg.runtime.package-root-unavailable"
+    );
     assert_eq!(
         secret_error,
         RuntimeConfigError::SecretProviderRootUnavailable
     );
-    assert_eq!(secret_error.path(), "/secretProviders/file/root");
+    assert_eq!(path_of(&secret_error), "/secretProviders/file/root");
 }
 
 /// The verifier applies leeway in whole seconds, so a sub-second value would be
@@ -2544,7 +2953,19 @@ fn oidc_leeway_must_be_whole_seconds_within_its_documented_range() {
             Duration::from_millis(accepted)
         );
     }
-    for refused in [1_u64, 500, 999, 1_500, 300_001] {
+    let error = parse_runtime_config_with_env(
+        &base.replace("leewayMilliseconds: 60000", "leewayMilliseconds: 301000"),
+        env_lookup,
+    )
+    .expect_err("a leeway above the documented range is refused at decode");
+    assert_eq!(
+        reader_refusal(&error),
+        (
+            "config.out-of-range",
+            "/authentication/oidc/leewayMilliseconds"
+        )
+    );
+    for refused in [1_u64, 500, 999, 1_500] {
         let error = parse_runtime_config_with_env(
             &base.replace(
                 "leewayMilliseconds: 60000",
@@ -2554,8 +2975,8 @@ fn oidc_leeway_must_be_whole_seconds_within_its_documented_range() {
         )
         .expect_err("a leeway the verifier cannot apply exactly is refused");
         assert_eq!(error, RuntimeConfigError::InvalidOidcLeeway, "{refused}");
-        assert_eq!(error.path(), "/authentication/oidc/leewayMilliseconds");
-        assert_eq!(error.code(), "runtime_config.invalid_oidc_leeway");
+        assert_eq!(path_of(&error), "/authentication/oidc/leewayMilliseconds");
+        assert_eq!(code_of(&error), "breg.runtime.invalid-oidc-leeway");
         let message = error.to_string();
         assert!(
             message.contains("whole number of seconds") && message.contains("300000"),
@@ -2583,7 +3004,7 @@ fn listener_trusted_proxy_is_refused_as_an_unknown_field() {
             parse_runtime_config_with_env(&with_trusted_proxy, env_lookup)
                 .expect_err("listener.trustedProxy is refused as an unknown field")
         ),
-        DOCUMENT
+        READER
     );
 }
 
@@ -2623,17 +3044,15 @@ fn event_destination_shape_is_strict_and_governed_webhooks_remain_refused() {
         assert_eq!(
             refusal(parse_runtime_config_with_env(&raw, env_lookup)
                 .expect_err("unknown event destination key refused")),
-            DOCUMENT
+            READER
         );
     }
 
     let mut governed = valid;
     governed.push_str("webhooks: []\n");
-    assert_eq!(
-        parse_runtime_config_with_env(&governed, env_lookup)
-            .expect_err("governed webhooks refused"),
-        RuntimeConfigError::GovernedMember
-    );
+    let error = parse_runtime_config_with_env(&governed, env_lookup)
+        .expect_err("governed webhooks refused");
+    assert_eq!(reader_refusal(&error), ("config.unknown-key", "/webhooks"));
 }
 
 #[test]
@@ -2672,15 +3091,16 @@ fn evidence_provider_logical_ids_are_not_governed_fields_and_bindings_stay_close
     ] {
         let error = parse_runtime_config_with_env(&raw, env_lookup)
             .expect_err("malformed or undeployed provider binding member is refused");
-        assert_eq!(refusal(error.clone()), DOCUMENT);
+        assert_eq!(refusal(error.clone()), READER);
         assert!(!format!("{error:?}: {error}").contains("canary"));
     }
     for member in ["hooks", "entities"] {
         let raw = format!("{valid}{member}: []\n");
+        let error = parse_runtime_config_with_env(&raw, env_lookup)
+            .expect_err("actual top-level governed members remain refused");
         assert_eq!(
-            parse_runtime_config_with_env(&raw, env_lookup)
-                .expect_err("actual top-level governed members remain refused"),
-            RuntimeConfigError::GovernedMember
+            reader_refusal(&error),
+            ("config.unknown-key", format!("/{member}").as_str())
         );
     }
 }
@@ -2730,20 +3150,6 @@ fn invalid_event_destination_ids_origins_paths_cidrs_refs_and_ceilings_are_refus
             "    allowedPrivateCidrs: [192.168.0.0/16, 10.0.0.0/8]\n",
         ),
         valid.replace(
-            "secret:file/event-hmac-key",
-            "secret:file/../event-hmac-key",
-        ),
-        valid.replace(
-            "attemptTimeoutMilliseconds: 4000",
-            "attemptTimeoutMilliseconds: 99",
-        ),
-        valid.replace(
-            "attemptTimeoutMilliseconds: 4000",
-            "attemptTimeoutMilliseconds: 10001",
-        ),
-        valid.replace("maximumAttempts: 4", "maximumAttempts: 0"),
-        valid.replace("maximumAttempts: 4", "maximumAttempts: 21"),
-        valid.replace(
             "    deliveryCeilings:\n",
             "    tls: {}\n    deliveryCeilings:\n",
         ),
@@ -2756,6 +3162,59 @@ fn invalid_event_destination_ids_origins_paths_cidrs_refs_and_ceilings_are_refus
         );
     }
 
+    // The delivery ceilings are bounded at decode, at the member.
+    let ceilings = "/eventDestinations/case-operations/deliveryCeilings";
+    for (from, to, member) in [
+        (
+            "attemptTimeoutMilliseconds: 4000",
+            "attemptTimeoutMilliseconds: 99",
+            "attemptTimeoutMilliseconds",
+        ),
+        (
+            "attemptTimeoutMilliseconds: 4000",
+            "attemptTimeoutMilliseconds: 10001",
+            "attemptTimeoutMilliseconds",
+        ),
+        (
+            "maximumAttempts: 4",
+            "maximumAttempts: 0",
+            "maximumAttempts",
+        ),
+        (
+            "maximumAttempts: 4",
+            "maximumAttempts: 21",
+            "maximumAttempts",
+        ),
+    ] {
+        let error = parse_runtime_config_with_env(&valid.replace(from, to), env_lookup)
+            .expect_err("an out-of-range delivery ceiling is refused");
+        let pointer = format!("{ceilings}/{member}");
+        assert_eq!(
+            reader_refusal(&error),
+            ("config.out-of-range", pointer.as_str())
+        );
+    }
+
+    // CFG-SEC-1: a key reference that is not an exact secret reference is
+    // refused by the shared reader at the member, never echoing it.
+    let error = parse_runtime_config_with_env(
+        &valid.replace(
+            "secret:file/event-hmac-key",
+            "secret:file/../event-hmac-key",
+        ),
+        env_lookup,
+    )
+    .expect_err("a traversing key reference is refused");
+    assert_eq!(
+        reader_refusal(&error),
+        (
+            "config.invalid-value",
+            "/eventDestinations/case-operations/hmacSha256KeyRef"
+        )
+    );
+    let rendered = format!("{error:?} {error} {}", error.render_human(None));
+    assert!(!rendered.contains("../event-hmac-key"), "{rendered}");
+
     for raw in [
         valid.replace("productionHttps", "privateServiceHttp"),
         valid.replace("dualStackStrict", "resolverDefault"),
@@ -2765,7 +3224,7 @@ fn invalid_event_destination_ids_origins_paths_cidrs_refs_and_ceilings_are_refus
                 parse_runtime_config_with_env(&raw, env_lookup)
                     .expect_err("non-closed event profile refused")
             ),
-            DOCUMENT
+            READER
         );
     }
 }
@@ -2792,7 +3251,7 @@ fn pinned_loopback_https_event_profile_is_absent_without_postgres_test() {
             parse_runtime_config_with_env(&raw, env_lookup)
                 .expect_err("test-only network profile is absent from production parsing")
         ),
-        DOCUMENT
+        READER
     );
 }
 
@@ -3490,8 +3949,8 @@ async fn attachment_storage_defaults_to_database_and_validates_operator_binding(
     let invalid = format!("{base}\nattachmentStorage:\n  kind: s3\n  endpoint: http://public.example\n  bucket: test-bucket\n  region: us-east-1\n  accessKeyIdRef: secret:file/access\n  secretAccessKeyRef: secret:file/key\n");
     let error = parse_runtime_config(&invalid).unwrap_err();
     assert_eq!(error, RuntimeConfigError::InvalidAttachmentStorage);
-    assert_eq!(error.path(), "/attachmentStorage");
-    assert_eq!(error.code(), "runtime_config.invalid_attachment_storage");
+    assert_eq!(path_of(&error), "/attachmentStorage");
+    assert_eq!(code_of(&error), "breg.runtime.invalid-attachment-storage");
     let valid = invalid.replace("http://public.example", "https://storage-canary.example");
     let config = parse_runtime_config(&valid).unwrap();
     assert!(!format!("{config:?}").contains("storage-canary"));
@@ -3521,10 +3980,10 @@ fn attachment_verification_defaults_off_and_validates_operator_binding() {
     let invalid = format!("{base}\nattachmentVerification:\n  kind: http\n  endpoint: http://public.example/verify\n  policyId: scanner-rules-v1\n  authorizationRef: secret:file/verifier-token\n");
     let error = parse_runtime_config(&invalid).unwrap_err();
     assert_eq!(error, RuntimeConfigError::InvalidAttachmentVerification);
-    assert_eq!(error.path(), "/attachmentVerification");
+    assert_eq!(path_of(&error), "/attachmentVerification");
     assert_eq!(
-        error.code(),
-        "runtime_config.invalid_attachment_verification"
+        code_of(&error),
+        "breg.runtime.invalid-attachment-verification"
     );
     fixture.write_secret("verifier-token", b"verifier-token-canary");
     let valid = invalid.replace("http://public.example", "https://verifier-canary.example");
@@ -3570,29 +4029,38 @@ fn field_encryption_is_absent_by_default_and_validates_operator_binding() {
     for invalid in [
         // A relative socket path never reaches a provider.
         format!("{base}\nfieldEncryption:\n  provider:\n    kind: transit\n    unixSocketPath: transit.sock\n    mount: transit\n    keyName: breg-field-dek\n"),
-        // The request timeout stays at or below the provider maximum.
-        format!("{base}\nfieldEncryption:\n  provider:\n    kind: transit\n    unixSocketPath: /run/transit/proxy.sock\n    mount: transit\n    keyName: breg-field-dek\n    timeoutMilliseconds: 30001\n"),
-        // A zero timeout is not a timeout.
-        format!("{base}\nfieldEncryption:\n  provider:\n    kind: transit\n    unixSocketPath: /run/transit/proxy.sock\n    mount: transit\n    keyName: breg-field-dek\n    timeoutMilliseconds: 0\n"),
         // The local data key must come from a secret file.
         format!("{base}\nfieldEncryption:\n  provider:\n    kind: localFile\n    dekRef: secret:env/BREG_FIELD_DEK\n"),
     ] {
         let error = parse_runtime_config(&invalid).unwrap_err();
         assert_eq!(error, RuntimeConfigError::InvalidFieldEncryption);
-        assert_eq!(error.path(), "/fieldEncryption");
-        assert_eq!(error.code(), "runtime_config.invalid_field_encryption");
+        assert_eq!(path_of(&error), "/fieldEncryption");
+        assert_eq!(code_of(&error), "breg.runtime.invalid-field-encryption");
+    }
+    // The request timeout stays above zero and at or below the provider
+    // maximum, refused at decode where the member is.
+    for timeout in ["0", "30001"] {
+        let invalid = format!("{base}\nfieldEncryption:\n  provider:\n    kind: transit\n    unixSocketPath: /run/transit/proxy.sock\n    mount: transit\n    keyName: breg-field-dek\n    timeoutMilliseconds: {timeout}\n");
+        let error = parse_runtime_config(&invalid).unwrap_err();
+        assert_eq!(
+            reader_refusal(&error),
+            (
+                "config.out-of-range",
+                "/fieldEncryption/provider/timeoutMilliseconds"
+            )
+        );
     }
     // An unknown provider kind never parses as a document at all, so it is
     // refused before field-encryption validation runs.
     let unknown_kind = format!("{base}\nfieldEncryption:\n  provider:\n    kind: kms\n");
     assert_eq!(
         refusal(parse_runtime_config(&unknown_kind).unwrap_err()),
-        DOCUMENT
+        READER
     );
 }
 
 #[test]
-fn an_audit_key_that_is_not_a_secret_reference_is_an_invalid_audit_binding() {
+fn an_audit_key_that_is_not_a_secret_reference_is_refused_at_the_reference() {
     let fixture = RuntimeFixture::new();
     let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
     for reference in ["audit-key", "secret:vault/audit-key", "\"\""] {
@@ -3600,9 +4068,11 @@ fn an_audit_key_that_is_not_a_secret_reference_is_an_invalid_audit_binding() {
             "  hashKeyRef: secret:file/audit-key\n",
             &format!("  hashKeyRef: {reference}\n"),
         );
+        let error = parse_runtime_config(&configured)
+            .expect_err("an audit key that is not a secret reference is refused");
         assert_eq!(
-            parse_runtime_config(&configured).err(),
-            Some(RuntimeConfigError::InvalidAudit),
+            reader_refusal(&error),
+            ("config.invalid-value", "/audit/hashKeyRef"),
             "{reference} is refused as the audit key"
         );
     }

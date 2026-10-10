@@ -1,0 +1,16 @@
+id: duplicate-key-in-flow-mapping
+rules: [CFG-YAML-2, CFG-DIAG-1]
+summary: A key repeated inside a flow mapping is refused at its second definition, naming the first.
+mutation:
+  append: |
+    conformanceFlow: {a: 1, a: 2}
+expect:
+  exit: 1
+  diagnostics:
+    - code: yaml.duplicate-key
+      path: /conformanceFlow/a
+      at: {line: 1, column: 25}
+      suggestedAction: Keep one definition of the key.
+      related:
+        - path: /conformanceFlow/a
+          at: {line: 1, column: 19}

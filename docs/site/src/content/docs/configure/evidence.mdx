@@ -72,9 +72,9 @@ evidencectl check "<editable-project>"
 evidencectl explain "<editable-project>"
 ```
 
-The offline check reports incomplete authoring as field-addressed findings and can still exit
-successfully. Add `--deny-findings` when any gap must refuse the command. Explain applies the same
-authoring validation, then reports its status, findings, revision, and inventory of questions,
+The offline check reports incomplete authoring as field-addressed warnings and can still exit
+successfully. Add `--deny-warnings` when any gap must refuse the command. Explain applies the same
+authoring validation, then reports its status, diagnostics, revision, and inventory of questions,
 sources, selectors, derivations, and local access without reading secrets or contacting a
 dependency.
 
@@ -384,7 +384,8 @@ Version 1 permits no reload, merge, mutation, governed-field override, or fallba
 runtime file: a project is either the exact bytes Evidence Gateway loaded at startup, or it is a different
 revision that requires a restart.
 
-Freeze the installed package and deployment target before validating or serving them:
+Freeze the installed package and deployment target before proving them on the target host or
+serving them:
 
 ```sh
 chmod -R a-w "<installed-package>" && chmod 444 "<deployment-target>/runtime.yaml"
@@ -397,7 +398,7 @@ Version 1 supports Unix targets only because these invariants rely on owner, mod
 link-count, and open-file-identity checks the platform provides
 (`products/evidence/contracts/runtime.schema.yaml`, `platform`). To edit the project again,
 make the change in the editable project, publish a new package, and freeze the new package before
-the next `evidence check`.
+the next `evidence check --require-runtime-dependencies`.
 
 ## Validating a project
 
@@ -409,12 +410,36 @@ evidence evaluate --runtime-config "<deployment-target>/runtime.yaml" \
   --fixture "fixtures/<cases>.yaml"
 ```
 
-`evidence check` loads, compiles, and validates the complete bundle and runtime file together:
-every selector, role, profile, authority, and source binding resolves, every script compiles
-against the frozen ABI, and mounted signing material passes its provider self-test, all without
-opening the audit destination or contacting a source. `evidence evaluate` replays one fixture file's synthetic
+`evidence check` reads the runtime file, verifies the package its `package.root` names, and
+loads, compiles, and validates the complete bundle and runtime file together: every selector,
+role, profile, authority, and source binding resolves, every script compiles against the frozen
+ABI, and each CA bundle a trust profile names parses. It reads no secret material, opens no audit
+destination, and contacts no source or other network service, so it runs the same on a laptop, in
+CI, and on the target host (`crates/registry-evidence/src/check.rs`). It does not stop at the first
+problem: it reports every problem it finds with its file, line, column, and a three-segment code
+such as `config.unknown-key` or `evidence.bundle.compile-refused`, and never repeats a configured
+value. `--format json` prints the same report as one document for a CI job, and `--deny-warnings`
+refuses a project that only drew warnings. It exits `0` when the project passed, `1` when it was
+refused, `2` on a usage error, and `3` when something it depends on could not be read
+(`crates/registry-evidence/src/main.rs`). `evidence evaluate` replays one fixture file's synthetic
 cases through the reviewed adapter, derivation, and output gate, with no source and no network
 involved.
+
+Whether the deployment can run is a property of the host, not of the configuration. On the target
+host, after freezing the package and the runtime file, add `--require-runtime-dependencies`:
+
+```sh
+evidence check --runtime-config "<deployment-target>/runtime.yaml" --require-runtime-dependencies
+```
+
+The flag also proves what serving needs: the deployment inputs are read-only, the secret material
+is present and owner-only, each bound extract is fresh, the audit destination is writable, the
+configured signer is ready, the source credentials resolve, and every access-token JWKS is
+reachable (`crates/registry-evidence/src/cli.rs`). A dependency the host cannot provide, such as a
+stale extract or an audit destination it cannot write, exits `3`; a deployment input the host
+holds wrongly, such as a writable runtime file, exits `1`. Add
+`--require-audit-under <absolute-directory>` to also prove the audit destination resolves inside
+the directory the deployment declares persistent.
 
 A fixture failure names the contract that broke and nothing else, so it says a case failed but not
 which stage it stopped at. Add `--explain` to print, for every case, the stages it reached and how

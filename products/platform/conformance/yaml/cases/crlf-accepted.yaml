@@ -1,0 +1,8 @@
+id: crlf-accepted
+rules: [CFG-YAML-6]
+summary: CRLF line endings are accepted.
+encoding:
+  lineEndings: crlf
+expect:
+  exit: 0
+  diagnostics: []

@@ -1,5 +1,6 @@
 {
-  "apiVersion": "registry.registrystack.org/breg-journeys/v1",
+  "apiVersion": "id.registrystack.org/formats/breg/journeys/v1",
+  "kind": "BRegJourneys",
   "journeys": [
     {
       "id": "attachment-draft-authoring",
@@ -16,7 +17,7 @@
             "purpose": "attachment-acceptance"
           },
           "request": {
-            "operation": "create",
+            "type": "create",
             "data": {
               "label": "Original label"
             }
@@ -42,10 +43,10 @@
             "purpose": "attachment-acceptance"
           },
           "request": {
-            "operation": "create",
+            "type": "create",
             "data": {
               "record": {
-                "recordRef": "record"
+                "recordCapture": "record"
               },
               "label": "Corrected label"
             }
@@ -71,8 +72,8 @@
             "purpose": "attachment-acceptance"
           },
           "request": {
-            "operation": "get",
-            "recordRef": "draft"
+            "type": "get",
+            "recordCapture": "draft"
           },
           "expect": {
             "outcome": "success",

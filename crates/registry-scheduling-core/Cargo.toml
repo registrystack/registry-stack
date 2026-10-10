@@ -11,14 +11,23 @@ publish = false
 [lints]
 workspace = true
 
+[features]
+schema = ["dep:schemars", "registry-platform-yaml/schema", "registry-platform-config/schema", "registry-platform-hooks/schema"]
+
 [dependencies]
 chrono = { workspace = true, features = ["serde"] }
+chrono-tz.workspace = true
 registry-platform-calendar.workspace = true
 registry-platform-canonical-json.workspace = true
+registry-platform-config.workspace = true
 registry-platform-hooks.workspace = true
+registry-platform-yaml.workspace = true
+schemars = { workspace = true, optional = true, features = ["chrono04"] }
 serde.workspace = true
 serde_json.workspace = true
-serde_norway.workspace = true
-serde_path_to_error.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+jsonschema.workspace = true
+serde_norway.workspace = true

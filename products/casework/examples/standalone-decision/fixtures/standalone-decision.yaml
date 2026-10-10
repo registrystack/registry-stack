@@ -1,6 +1,6 @@
-apiVersion: registry.registrystack.org/casework-fixture/v1alpha1
+apiVersion: id.registrystack.org/formats/casework/fixture/v1alpha1
 kind: CaseworkFixture
-name: standalone-decision-offline
+id: standalone-decision-offline
 review:
   kind: decision
   display:

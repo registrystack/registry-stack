@@ -58,4 +58,3 @@ fixtures:
     manifest: true
     expect: valid
     description: Minimal hypothetical person-schema fixture.
-generator_command: null

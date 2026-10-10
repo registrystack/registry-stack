@@ -68,12 +68,12 @@ accessProfiles:
     requiredPurposes: [history-maintenance]
     requiredScopes: [history-maintain]
     permissions:
-      - {entity: membership-record, operations: [create, get, list, patch, batch, snapshot], readableFields: [subject, group, valid-from, valid-to, source-reference], writableFields: [subject, group, valid-from, valid-to, source-reference], filterableFields: [subject, group, valid-from, valid-to], rowBoundaries: []}
+      - {entity: membership-record, operations: [create, get, list, patch, batch, snapshot], readableFields: [subject, group, valid-from, valid-to, source-reference], writableFields: [subject, group, valid-from, valid-to, source-reference], filterableFields: [subject, group, valid-from, valid-to], rowBoundaries: unrestricted}
   - id: eligibility-consumer
     principalClaim: registry_principal
     requiredPurposes: [eligibility-evaluation]
     requiredScopes: [eligibility-read]
     permissions:
-      - {entity: membership-record, operations: [list, snapshot], readableFields: [subject, group, valid-from, valid-to], filterableFields: [subject, group, valid-from, valid-to], rowBoundaries: []}
+      - {entity: membership-record, operations: [list, snapshot], readableFields: [subject, group, valid-from, valid-to], filterableFields: [subject, group, valid-from, valid-to], rowBoundaries: unrestricted}
 vocabularies:
   - {id: membership-group, values: [A, B]}

@@ -414,8 +414,9 @@ fn write_runtime(
     std::fs::write(
         project.join("messaging.yaml"),
         serde_norway::to_string(&json!({
-            "apiVersion": registry_messaging_core::MESSAGING_PACKAGE_API_VERSION,
-            "kind": registry_messaging_core::MESSAGING_PACKAGE_KIND,
+            "apiVersion": registry_messaging_core::MESSAGING_PROJECT_API_VERSION,
+            "kind": registry_messaging_core::MESSAGING_PROJECT_KIND,
+            "project": {"id": "operations", "version": "1"},
             "accessProfiles": [{
                 "id": "operations",
                 "principalClaim": "sub",

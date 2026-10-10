@@ -187,9 +187,9 @@ accessProfiles:
     requiredScopes: [registry:household:operate]
     requiredPurposes: [household-administration]
     permissions:
-      - {entity: person, operations: [get, list, patch], readableFields: [person-code, legal-name, family-name, date-of-birth, person-sex, residency-status, preferred-language], writableFields: [person-code, legal-name, family-name, date-of-birth, person-sex, residency-status, preferred-language], filterableFields: [person-code, person-sex, residency-status], sortableFields: [person-code], rowBoundaries: []}
+      - {entity: person, operations: [get, list, patch], readableFields: [person-code, legal-name, family-name, date-of-birth, person-sex, residency-status, preferred-language], writableFields: [person-code, legal-name, family-name, date-of-birth, person-sex, residency-status, preferred-language], filterableFields: [person-code, person-sex, residency-status], sortableFields: [person-code], rowBoundaries: unrestricted}
       - entity: household
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [create, get, lookup, list]
         readableFields: [household-code, local-household-number, household-name, administrative-area, household-type, contact-person, head-count, child-count, child-under-5-count, elderly-count, single-headed, woman-headed]
         writableFields: [household-code, local-household-number, household-name, administrative-area, household-type]
@@ -197,7 +197,7 @@ accessProfiles:
         sortableFields: [local-household-number, household-code, child-count]
         allowCount: true
         requestPresence:
-          - {requestType: register-household-contact-request, rowBoundaries: []}
+          - {requestType: register-household-contact-request, rowBoundaries: unrestricted}
         lookups:
           - {selector: by-local-reference, valueOrigin: request}
           - {selector: by-household-code, valueOrigin: request}
@@ -207,14 +207,14 @@ accessProfiles:
             filterableFields: [person-sex, residency-status]
             sortableFields: [person-code]
             allowCount: true
-      - {entity: group-membership, operations: [get, list, patch], readableFields: [person, household, relationship, valid-from, valid-to], writableFields: [person, household, relationship, valid-from, valid-to], filterableFields: [person, household, relationship, valid-from], rowBoundaries: []}
+      - {entity: group-membership, operations: [get, list, patch], readableFields: [person, household, relationship, valid-from, valid-to], writableFields: [person, household, relationship, valid-from, valid-to], filterableFields: [person, household, relationship, valid-from], rowBoundaries: unrestricted}
   - id: household-contact-submitter
     principalClaim: registry_principal
     requiredScopes: [registry:household-contact:submit]
     requiredPurposes: [household-contact-registration]
     permissions:
       - entity: register-household-contact-request
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [create, get, patch, submit_request, revise_request, cancel_request]
         readableFields: [household, person-code, legal-name, family-name, person-sex, residency-status, relationship, valid-from, reason]
         readableRequestFields: [reason, review_state]
@@ -226,7 +226,7 @@ accessProfiles:
     requiredPurposes: [household-contact-review]
     permissions:
       - entity: register-household-contact-request
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [get, list]
         readableFields: [household, person-code, legal-name, family-name, person-sex, residency-status, relationship, valid-from, reason]
         readableRequestFields: [reason, review_state]
@@ -236,14 +236,14 @@ accessProfiles:
     requiredPurposes: [household-contact-apply]
     permissions:
       - entity: register-household-contact-request
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [get, apply_request]
         readableFields: [household, person-code, legal-name, family-name, person-sex, residency-status, relationship, valid-from, reason]
         readableRequestFields: [reason, review_state]
         applyTargets:
-          - {entity: person, rowBoundaries: []}
-          - {entity: group-membership, rowBoundaries: []}
-          - {entity: household, rowBoundaries: []}
+          - {entity: person, rowBoundaries: unrestricted}
+          - {entity: group-membership, rowBoundaries: unrestricted}
+          - {entity: household, rowBoundaries: unrestricted}
   - id: household-viewer
     principalClaim: registry_principal
     requiredScopes: [registry:household:view]

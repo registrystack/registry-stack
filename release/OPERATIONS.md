@@ -764,8 +764,16 @@ boundary. The shared platform activation crate supplies the ledger behind
 Messaging, the old
 binaries apply the `messagingctl init` starter package, then submit scheduled
 email and SMS messages whose delivery window starts a day later, so no provider
-is contacted, and cancel one of them. After the upgrade the new binaries must
-report the same active package, serve every captured message view unchanged,
+is contacted, and cancel one of them. The rehearsal then upgrades the way an
+operator does: it applies the Messaging steps of the upgrade steps file to the
+project and the runtime file, performs the manual step
+`messaging-project-envelope`, builds the package again with the new
+`messagingctl package`, and points `package.root` at it. `messagingctl plan`
+must name the package the previous release activated as active and another
+package on disk, or the rehearsal does not apply. After `messagingctl apply`
+the ledger must name the package on disk as active, with the package the
+previous release activated as its predecessor. The new binaries must serve
+every captured message view unchanged
 and accept a new submission and a cancellation. Normally an idempotent
 resubmission must answer with its predecessor receipt. For v0.39.0 to v0.40.0,
 Messaging schema version 3 intentionally discards the pseudonym-scoped
@@ -773,18 +781,22 @@ idempotency records. The first post-upgrade use of an old key must create one
 fresh message and receipt, and the next identical submission must replay that
 new receipt. The exact predecessor migration is owned by
 `crates/registry-messaging/tests/postgres_migrate.rs::version_3_discards_pseudonym_scoped_records_and_the_runtime_scopes_keys_to_the_caller`.
-This exception applies only to schema version 3 and this release transition. A
-default run from a release that did not ship Messaging omits it and records the
-reason under `omitted` in the report;
+This exception applies only to schema version 3 and this release transition. An
+operator retention erase (`messagingctl retention erase-expired --apply`) run
+with the new binaries must add a `messaging.retention.requested` and a
+`messaging.retention.erased` record to the `messagingctl` audit stream, the
+companion file beside the runtime's, and both streams must keep every earlier
+record. A default run from a release that did not ship
+Messaging omits it and records the reason under `omitted` in the report;
 naming it with `--product messaging` from such a release is refused. Messaging
 publishes Linux amd64 binaries only, so a macOS rehearsal that downloads the
 previous release omits it the same way.
 
-The upgraded Casework and Evidence runtimes continue the audit files the
+The upgraded Casework, Evidence, and Messaging runtimes continue the audit files the
 previous release wrote, as the upgrade runbook has an operator do. The
 rehearsal counts the records in each stream before and after the upgrade. It
 fails when the stream was empty before the upgrade, or holds fewer records
-after it than before plus the number the upgraded runtime must write. That is a
+after it than before plus the number the upgraded binaries must write. That is a
 count, not a comparison of the earlier records. Every record in the Evidence
 stream must also be a valid current envelope. The Evidence target is packaged again with the new `evidencectl` and
 its configuration is carried forward unchanged.
@@ -1284,3 +1296,70 @@ Candidate promotion validity is seven days. The final candidate artifact and
 private candidate images are retained for eight days, leaving one day of
 cleanup margin without adding an operator step. Cleanup cannot target public
 package names.
+
+## Upgrade steps in the release note
+
+A release that changes an authored file or a runtime configuration lists, in
+its release note, each edit an operator makes by hand. These steps are manual
+edits: no released binary rewrites a project or a runtime configuration, and
+the engine reads only the state the immediately preceding release wrote.
+
+The steps have one source of truth,
+`release/notes/config-conventions/upgrade-steps.yaml`, read by
+`release/scripts/upgrade_steps.py`. A step is one of three kinds:
+
+- `edit`: a list of `expand-aliases`, `envelope`, `set`, `delete`, `rename`
+  and `replace-value` operations on the files matching its `file` glob under its
+  `root` (`project`, `target` or `runtime`). Applying it is deterministic.
+  A scalar no edit names keeps its text and quoting (`yes`, `10:30`, `010`,
+  an unquoted timestamp), and comments in an edited file are lost. The engine
+  refuses a YAML file holding a duplicate key, a merge key, an anchor or an
+  alias, naming the file and the line, because the readers of the new release
+  refuse them too.
+  `expand-aliases` takes no members and must be a step's first edit. A step
+  that lists it loads the file with anchors and aliases allowed, then writes
+  every alias out as a full, independent copy of its anchored value with no
+  anchor mark left, before its other edits run. A scalar in a copy keeps its
+  source text and quoting, and comments are lost as for any edit. A merge key
+  and a duplicate key are still refused, and a step without the edit still
+  refuses an anchor or an alias. Only a file the previous release's starter or
+  example wrote with an anchor needs it (the `breg-journeys` step).
+- `manual`: an instruction the engine reports and never applies, for edits
+  that need an operator decision or a recomputed value.
+- `unknown`: a breaking item whose edit is not yet derived. The engine refuses
+  it and names the file and the diagnostic.
+
+Every `BREAKING` heading in `release/notes/config-conventions/*.md` is followed
+by a line `<!-- upgrade: id, id -->` naming the steps that cover it, or the
+reserved word `already-wrong` (the old form was never accepted) or `no-file`
+(there is no file an operator could edit). `release/scripts/test_upgrade_steps.py`
+fails when a breaking item has no marker, when a marker names a missing step,
+when a step is cited by no item, and when a step is cited from another
+product's note. Run it with PyYAML:
+
+```sh
+uv run --no-project --with PyYAML==6.0.2 python3 -m unittest release/scripts/test_upgrade_steps.py
+```
+
+The upgrade rehearsal (`release/scripts/rehearse-upgrade.py`) applies the
+`edit` steps listed in `BREG_UPGRADE_STEPS`, `BREG_RUNTIME_UPGRADE_STEPS`,
+`CASEWORK_UPGRADE_STEPS`, `EVIDENCE_UPGRADE_STEPS`, `MESSAGING_UPGRADE_STEPS`
+and `MESSAGING_RUNTIME_UPGRADE_STEPS` to the project on disk
+after the previous release wrote state and before the new binaries run.
+The Messaging project steps change the package digest, so that leg also
+performs the manual step `messaging-project-envelope`, builds the package
+again, and applies it as the successor of the one the previous release
+activated.
+
+Every other `edit` step is listed in `UNIT_TESTED_ONLY_STEPS` in the same file,
+each with a one-line reason (no leg for the product, or the starter does not
+write the file). Such a step is proven only by the unit tests applying it to a
+sample document; no rehearsal has run it. A test in `test_upgrade_steps.py`
+fails when a catalog `edit` step is in neither a leg list nor
+`UNIT_TESTED_ONLY_STEPS`, when that list names a step that is not an `edit`
+step, or when a step is in both.
+
+To add a step, append an entry to the steps file, cite its id from the
+`BREAKING` item's marker, and, if the rehearsal's starter project carries the
+file, add the id to the product's list in `rehearse-upgrade.py`; otherwise add
+it to `UNIT_TESTED_ONLY_STEPS` with the reason.

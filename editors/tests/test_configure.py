@@ -58,7 +58,9 @@ class ConfigureTests(unittest.TestCase):
         settings = json.loads(settings_path.read_text())
         self.assertEqual(settings["editor.tabSize"], 4)
         schemas = settings["yaml.schemas"]
-        self.assertEqual(len(schemas), 3)
+        self.assertEqual(len(schemas), 7)
+        dev_clients_schema = (project / ".registry-stack-editor/schemas/dev-clients.v1alpha1.schema.json").as_uri()
+        self.assertEqual(schemas[dev_clients_schema], [str(project / "dev-clients.yaml")])
         project_schema = (project / ".registry-stack-editor/schemas/registry-project.schema.json").as_uri()
         self.assertEqual(schemas[project_schema], [str(project / "registry.yaml")])
         zed = json.loads((self.workspace / ".zed/settings.json").read_text())
@@ -80,6 +82,52 @@ class ConfigureTests(unittest.TestCase):
         }
         configure.configure("breg", project, self.workspace, None)
         self.assertEqual({path: path.read_bytes() for path in snapshots}, snapshots)
+
+    def test_breg_maps_every_runtime_file_and_the_publicschema_starters(self):
+        project = self.project(
+            "breg",
+            "registry.yaml",
+            "products/breg/fixtures/organization-membership-access/registry.yaml",
+        )
+        configure.configure("breg", project, self.workspace, None)
+        schemas = json.loads((self.workspace / ".vscode/settings.json").read_text())["yaml.schemas"]
+        managed = project / ".registry-stack-editor/schemas"
+        self.assertEqual(
+            schemas[(managed / "runtime.schema.json").as_uri()],
+            [
+                str(project / "runtime.yaml"),
+                str(project / "runtime-test.yaml"),
+                str(project / "runtime.example.yaml"),
+            ],
+        )
+        self.assertEqual(
+            schemas[(managed / "model-selection.v1alpha1.schema.json").as_uri()],
+            [str(project / "model/selection.yaml"), str(project / "publicschema/starters/*.yaml")],
+        )
+
+    def test_breg_maps_its_json_documents_to_json_schemas(self):
+        project = self.project(
+            "breg",
+            "registry.yaml",
+            "products/breg/fixtures/organization-membership-access/registry.yaml",
+        )
+        configure.configure("breg", project, self.workspace, None)
+        vscode = json.loads((self.workspace / ".vscode/settings.json").read_text())
+        zed = json.loads((self.workspace / ".zed/settings.json").read_text())
+        self.assertEqual(
+            zed["lsp"]["json-language-server"]["settings"]["json"]["schemas"], vscode["json.schemas"]
+        )
+        schemas = {entry["url"]: entry["fileMatch"] for entry in vscode["json.schemas"]}
+        for name, pattern in (
+            ("backup-binding.v1alpha1.schema.json", "*-binding.json"),
+            ("example-scenarios.v1alpha1.schema.json", "examples/scenarios.json"),
+        ):
+            with self.subTest(schema=name):
+                url = (project / ".registry-stack-editor/schemas" / name).as_uri()
+                self.assertEqual(schemas[url], [str(project / pattern)])
+        snapshot = (self.workspace / ".vscode/settings.json").read_bytes()
+        configure.configure("breg", project, self.workspace, None)
+        self.assertEqual((self.workspace / ".vscode/settings.json").read_bytes(), snapshot)
 
     def test_refuses_jsonc_before_writing_anything(self):
         project = self.project("casework", "casework.yaml")
@@ -112,22 +160,28 @@ class ConfigureTests(unittest.TestCase):
         configure.configure("evidence-oid4vci", oid, self.workspace, "issuer.yaml")
         marker = json.loads((oid / ".registry-stack-editor/project.json").read_text())
         self.assertEqual(marker, {"product": "evidence-oid4vci", "document": "issuer.yaml"})
-        self.assertEqual(len(json.loads((self.workspace / ".zed/tasks.json").read_text())), 1)
+        tasks = json.loads((self.workspace / ".zed/tasks.json").read_text())
+        self.assertEqual(len(tasks), 2)
+        self.assertEqual(tasks[1]["args"], ["check", "--config", str(oid / "issuer.yaml")])
 
-    def test_marker_only_setup_preserves_unrelated_jsonc(self):
-        project = self.project("wallet", "issuer.yaml")
-        originals = {}
-        for editor in ("vscode", "zed"):
-            for name in ("settings.json", "tasks.json"):
-                path = self.workspace / f".{editor}" / name
-                path.parent.mkdir(exist_ok=True)
-                content = '{ // preserved workspace comment\n}\n'
-                path.write_text(content)
-                originals[path] = content
-        configure.configure("evidence-oid4vci", project, self.workspace, "issuer.yaml")
-        self.assertEqual({path: path.read_text() for path in originals}, originals)
+    def test_oid_setup_maps_the_runtime_schema_to_the_named_document(self):
+        project = self.project(
+            "wallet", "wallet.yaml", "products/evidence/examples/oid4vci-runtime/runtime.yaml"
+        )
+        configure.configure("evidence-oid4vci", project, self.workspace, "wallet.yaml")
+        schema = (project / ".registry-stack-editor/schemas/oid4vci-runtime.schema.json")
+        self.assertEqual(
+            schema.read_bytes(),
+            (ROOT / "products/evidence/generated/oid4vci-runtime/oid4vci-runtime.schema.json").read_bytes(),
+        )
+        settings = json.loads((self.workspace / ".vscode/settings.json").read_text())
+        self.assertEqual(settings["yaml.schemas"], {schema.as_uri(): [str(project / "wallet.yaml")]})
+        zed = json.loads((self.workspace / ".zed/settings.json").read_text())
+        self.assertEqual(
+            zed["lsp"]["yaml-language-server"]["settings"]["yaml"]["schemas"], settings["yaml.schemas"]
+        )
         marker = json.loads((project / ".registry-stack-editor/project.json").read_text())
-        self.assertEqual(marker, {"product": "evidence-oid4vci", "document": "issuer.yaml"})
+        self.assertEqual(marker, {"product": "evidence-oid4vci", "document": "wallet.yaml"})
 
     def test_task_only_setup_preserves_unrelated_settings_jsonc(self):
         project = self.project("manifest", "metadata.yaml")
@@ -135,10 +189,33 @@ class ConfigureTests(unittest.TestCase):
         settings.parent.mkdir()
         content = '{ // preserved workspace comment\n}\n'
         settings.write_text(content)
-        configure.configure("manifest", project, self.workspace, "metadata.yaml")
+        with patch.dict(configure.SCHEMAS, {"manifest": ()}):
+            configure.configure("manifest", project, self.workspace, "metadata.yaml")
         self.assertEqual(settings.read_text(), content)
         tasks = json.loads((self.workspace / ".vscode/tasks.json").read_text())["tasks"]
         self.assertEqual(tasks[0]["command"], "registry-manifest")
+
+    def test_messaging_maps_each_authored_file_to_its_schema(self):
+        project = self.project("messaging", "messaging.yaml")
+        configure.configure("messaging", project, self.workspace, None)
+        schemas = json.loads((self.workspace / ".vscode/settings.json").read_text())["yaml.schemas"]
+        managed = project / ".registry-stack-editor/schemas"
+        self.assertEqual(
+            schemas,
+            {
+                (managed / "project.schema.json").as_uri(): [str(project / "messaging.yaml")],
+                (managed / "template.schema.json").as_uri(): [
+                    str(project / "templates/*/*/template.yaml")
+                ],
+                (managed / "provider.schema.json").as_uri(): [
+                    str(project / "providers/*/provider.yaml")
+                ],
+                (managed / "runtime.schema.json").as_uri(): [
+                    str(project / "runtime.yaml"),
+                    str(project / "runtime.example.yaml"),
+                ],
+            },
+        )
 
     def test_refuses_modified_managed_schema_and_task(self):
         project = self.project("messaging", "messaging.yaml")
@@ -182,17 +259,102 @@ class ConfigureTests(unittest.TestCase):
         configure.configure("casework", casework, self.workspace, None)
         configure.configure("breg", breg, self.workspace, None)
         settings = json.loads(settings_path.read_text())
-        self.assertEqual(len(settings["yaml.schemas"]), 5)
+        self.assertEqual(len(settings["yaml.schemas"]), 14)
+        breg_dev_clients = (breg / ".registry-stack-editor/schemas/dev-clients.v1alpha1.schema.json").as_uri()
+        self.assertEqual(settings["yaml.schemas"][breg_dev_clients], [str(breg / "dev-clients.yaml")])
         self.assertEqual(settings["yaml.schemas"][unrelated_uri], [str(self.workspace / "unrelated/registry.yaml")])
         tasks = json.loads((self.workspace / ".vscode/tasks.json").read_text())["tasks"]
         self.assertEqual(len(tasks), 2)
         self.assertEqual({task["command"] for task in tasks}, {"bregctl", "caseworkctl"})
+
+    def test_render_bundle_maps_its_manifest_label_tables_and_runtime(self):
+        bundle = self.project("render", "manifest.yaml", "products/render/bundles/receipt/manifest.yaml")
+        configure.configure("render", bundle, self.workspace, None)
+        schemas = json.loads((self.workspace / ".vscode/settings.json").read_text())["yaml.schemas"]
+        managed = bundle / ".registry-stack-editor/schemas"
+        self.assertEqual(
+            schemas,
+            {
+                (managed / "bundle.schema.json").as_uri(): [str(bundle / "manifest.yaml")],
+                (managed / "labels.schema.json").as_uri(): [str(bundle / "labels/*.yaml")],
+                (managed / "runtime.schema.json").as_uri(): [str(bundle / "runtime.yaml")],
+            },
+        )
+        self.assertEqual(
+            (managed / "labels.schema.json").read_bytes(),
+            (ROOT / "products/render/schemas/labels.schema.json").read_bytes(),
+        )
+
+    def test_manifest_maps_its_document_and_profile_descriptors(self):
+        project = self.project(
+            "manifest",
+            "catalog.metadata.yaml",
+            "products/manifest/profiles/example-benefits-sync/fixtures/metadata.yaml",
+        )
+        configure.configure("manifest", project, self.workspace, "catalog.metadata.yaml")
+        schemas = json.loads((self.workspace / ".vscode/settings.json").read_text())["yaml.schemas"]
+        managed = project / ".registry-stack-editor/schemas"
+        self.assertEqual(
+            schemas,
+            {
+                (managed / "metadata.schema.json").as_uri(): [str(project / "catalog.metadata.yaml")],
+                (managed / "profile.schema.json").as_uri(): [str(project / "**/profile.yaml")],
+            },
+        )
+        self.assertEqual(
+            (managed / "profile.schema.json").read_bytes(),
+            (ROOT / "products/manifest/schemas/profile.schema.json").read_bytes(),
+        )
+
+    def test_platform_maps_its_task_connection_file(self):
+        project = self.project(
+            "platform", "task-connection.yaml", "products/platform/examples/task-connection.yaml"
+        )
+        configure.configure("platform", project, self.workspace, None)
+        schemas = json.loads((self.workspace / ".vscode/settings.json").read_text())["yaml.schemas"]
+        managed = project / ".registry-stack-editor/schemas"
+        self.assertEqual(
+            schemas,
+            {(managed / "task-connection.schema.json").as_uri(): [str(project / "task-connection.yaml")]},
+        )
+        self.assertEqual(
+            (managed / "task-connection.schema.json").read_bytes(),
+            (ROOT / "products/platform/schemas/task-connection.schema.json").read_bytes(),
+        )
+        task = json.loads((self.workspace / ".vscode/tasks.json").read_text())["tasks"][0]
+        self.assertEqual(task["command"], "evidencectl")
+        self.assertEqual(task["options"]["cwd"], str(project))
+
+    def test_breg_services_map_their_runtime_schemas_beside_each_other(self):
+        services = {
+            "breg-mcp": ("gateway", "products/breg/generated/mcp-runtime/mcp-runtime.schema.json"),
+            "breg-review": ("review", "products/breg/generated/review-runtime/review-runtime.schema.json"),
+        }
+        projects = {}
+        for product, (name, _) in services.items():
+            example = f"products/breg/examples/{product.removeprefix('breg-')}-runtime/runtime.yaml"
+            projects[product] = self.project(name, "runtime.yaml", example)
+            configure.configure(product, projects[product], self.workspace, None)
+        settings = json.loads((self.workspace / ".vscode/settings.json").read_text())
+        tasks = json.loads((self.workspace / ".vscode/tasks.json").read_text())["tasks"]
+        self.assertEqual(len(settings["yaml.schemas"]), 2)
+        self.assertEqual({task["command"] for task in tasks}, set(services))
+        for product, (_, source) in services.items():
+            with self.subTest(product=product):
+                project = projects[product]
+                schema = project / ".registry-stack-editor/schemas" / Path(source).name
+                self.assertEqual(schema.read_bytes(), (ROOT / source).read_bytes())
+                self.assertEqual(settings["yaml.schemas"][schema.as_uri()], [str(project / "runtime.yaml")])
+        with self.assertRaisesRegex(configure.SetupError, "breg-mcp project needs runtime.yaml"):
+            configure.configure("breg-mcp", self.project("empty", "other.yaml"), self.workspace, None)
 
     def test_check_task_uses_product_cli_shape(self):
         project = self.workspace / "sample"
         document = project / "metadata.yaml"
         expected = {
             "breg": ["check", str(project)],
+            "breg-mcp": ["--runtime-config", str(project / "runtime.yaml"), "check"],
+            "breg-review": ["--runtime-config", str(project / "runtime.yaml"), "check"],
             "casework": ["check", str(project)],
             "scheduling": ["check", str(project)],
             "messaging": ["check", "--project", str(project)],
@@ -200,6 +362,9 @@ class ConfigureTests(unittest.TestCase):
             "manifest": ["validate", str(document)],
             "render": ["check", "--bundle", str(project)],
             "evidence": ["check", str(project)],
+            "platform": ["dev", "check", "task-connection.yaml"],
+            "evidence-oid4vci": ["check", "--config", str(document)],
+            "evidence-deployment": ["check", "--runtime-config", "runtime.yaml"],
         }
         for product, args in expected.items():
             with self.subTest(product=product):
@@ -207,7 +372,6 @@ class ConfigureTests(unittest.TestCase):
                 self.assertEqual(vscode["args"], args)
                 self.assertEqual(zed["args"], args)
                 self.assertEqual(zed["cwd"], str(project))
-        self.assertIsNone(configure.task_for("evidence-oid4vci", project, document))
 
     def test_hosting_cli_must_match_current_source_version(self):
         version = configure.workspace_version()
@@ -243,6 +407,89 @@ class ConfigureTests(unittest.TestCase):
             check=False,
         )
 
+    def test_evidence_maps_its_json_files_through_the_json_language_server(self):
+        evidence = self.project("evidence", "evidence-project.yaml")
+        with patch.object(configure, "matching_cli", return_value="/bin/evidencectl"):
+            with patch.object(configure.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)):
+                configure.configure("evidence", evidence, self.workspace, None)
+                configure.configure("evidence", evidence, self.workspace, None)
+        schemas = evidence / ".registry-stack-editor/schemas"
+        schema = schemas / "source-resolution.schema.json"
+        profile = schemas / "client-profile.schema.json"
+        expected = [
+            {
+                "fileMatch": [str(evidence / "*.resolutions.json"), str(evidence / "source-resolutions.json")],
+                "url": schema.as_uri(),
+            },
+            {
+                "fileMatch": [str(evidence / "client-profile.json"), str(evidence / "*.profile.json")],
+                "url": profile.as_uri(),
+            },
+        ]
+        vscode = json.loads((self.workspace / ".vscode/settings.json").read_text())
+        self.assertEqual(vscode["json.schemas"], expected)
+        zed = json.loads((self.workspace / ".zed/settings.json").read_text())
+        self.assertEqual(zed["lsp"]["json-language-server"]["settings"]["json"]["schemas"], expected)
+        # No JSON file match reaches the YAML server; it holds exactly the
+        # YAML mappings an Evidence project is given.
+        yaml_schemas = zed["lsp"]["yaml-language-server"]["settings"]["yaml"]["schemas"]
+        self.assertEqual(
+            yaml_schemas,
+            {
+                (schemas / "selector.schema.json").as_uri(): [str(evidence / "selectors/*.yaml")],
+                (schemas / "source.schema.json").as_uri(): [str(evidence / "sources/*.yaml")],
+                (schemas / "target-settings.schema.json").as_uri(): [str(evidence / "targets/*/settings.yaml")],
+            },
+        )
+        for matches in yaml_schemas.values():
+            for match in matches:
+                self.assertFalse(match.endswith(".json"), match)
+        self.assertTrue(schema.is_file())
+        self.assertTrue(profile.is_file())
+
+    def test_the_readme_names_every_file_evidence_deployment_maps(self):
+        readme = (ROOT / "editors/README.md").read_text()
+        for _, pattern in configure.SCHEMAS["evidence-deployment"]:
+            with self.subTest(pattern=pattern):
+                self.assertIn(f"`{pattern}`", readme)
+
+    def test_evidence_deployment_maps_runtime_bundle_and_codelists(self):
+        source = ROOT / "products/evidence/reference/request-adapter/deployment-projects/protected-read-evidence"
+        project = self.workspace / "Evidence deployment"
+        shutil.copytree(source, project)
+        configure.configure("evidence-deployment", project, self.workspace, None)
+        schemas = project / ".registry-stack-editor/schemas"
+        settings = json.loads((self.workspace / ".vscode/settings.json").read_text())
+        self.assertEqual(
+            settings["yaml.schemas"],
+            {
+                (schemas / "target-governance.schema.json").as_uri(): [str(project / "governance.yaml")],
+                (schemas / "runtime.schema.yaml").as_uri(): [str(project / "runtime.yaml")],
+                (schemas / "bundle.schema.yaml").as_uri(): [str(project / "bundle/evidence.yaml")],
+                (schemas / "codelist.schema.json").as_uri(): [str(project / "bundle/codelists/*.yaml")],
+                (schemas / "fixture.schema.json").as_uri(): [str(project / "bundle/fixtures/*.yaml")],
+                (schemas / "holder-bound-verification-policy.schema.yaml").as_uri(): [
+                    str(project / "holder-bound*.policy.yaml")
+                ],
+                (schemas / "verification-policy.schema.yaml").as_uri(): [
+                    str(project / "verification*.policy.yaml")
+                ],
+            },
+        )
+        self.assertEqual(
+            (schemas / "bundle.schema.yaml").read_bytes(),
+            (ROOT / "products/evidence/contracts/bundle.schema.yaml").read_bytes(),
+        )
+        task = json.loads((self.workspace / ".zed/tasks.json").read_text())[0]
+        self.assertEqual(task["command"], "evidence")
+        self.assertEqual(task["args"], ["check", "--runtime-config", "runtime.yaml"])
+        self.assertEqual(task["cwd"], str(project))
+
+    def test_evidence_deployment_needs_a_runtime_file(self):
+        project = self.project("evidence-deployment", "evidence.yaml")
+        with self.assertRaisesRegex(configure.SetupError, "evidence-deployment project needs runtime.yaml"):
+            configure.configure("evidence-deployment", project, self.workspace, None)
+
     def test_command_line_configures_real_scheduling_example_in_shared_workspace(self):
         source = ROOT / "products/scheduling/examples/standalone-exact-time"
         project = self.workspace / "Scheduling project"
@@ -270,6 +517,19 @@ class ConfigureTests(unittest.TestCase):
                 (project / ".registry-stack-editor/schemas/runtime.schema.json").as_uri()
             ],
             [str(project / "runtime.yaml"), str(project / "runtime.example.yaml")],
+        )
+        schemas = project / ".registry-stack-editor/schemas"
+        self.assertEqual(
+            settings["yaml.schemas"][(schemas / "project.schema.json").as_uri()],
+            [str(project / "scheduling.yaml")],
+        )
+        self.assertEqual(
+            settings["yaml.schemas"][(schemas / "records.schema.json").as_uri()],
+            [str(project / "records.yaml")],
+        )
+        self.assertEqual(
+            settings["yaml.schemas"][(schemas / "fixture.schema.json").as_uri()],
+            [str(project / "fixtures/*.yaml"), str(project / "fixtures/*.yml")],
         )
 
 

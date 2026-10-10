@@ -6,14 +6,14 @@ mod support;
 use registry_language_server::{ProductKind, ProjectIndex};
 use support::{file, EvidenceProject as Project};
 
-const RENDER: &str = r#"apiVersion: render.registrystack.org/v1alpha1
+const RENDER: &str = r#"apiVersion: id.registrystack.org/formats/render/bundle/v1alpha1
 kind: RenderBundle
 bundleVersion: 1
 documents:
   - id: receipt
     version: 1
-    entry: <|entry|>templates/missing.typ
-    schema: <|schema|>templates/schema.json
+    entryFile: <|entry|>templates/missing.typ
+    schemaFile: <|schema|>templates/schema.json
     labels: [<|locale|>missing]
 "#;
 
@@ -124,7 +124,7 @@ fn private_key_reference_does_not_enumerate_unrelated_key_roles() {
         ),
         file(
             "wallet.yaml",
-            "version: 1\ntokenClient:\n  privateKeyFile: <|key|>keys/missing.pem\n",
+            "apiVersion: id.registrystack.org/formats/evidence/oid4vci-runtime/v1alpha1\nkind: EvidenceOid4vciRuntimeConfig\ntokenClient:\n  privateKeyRef: secret:file/<|key|>keys/missing.pem\n",
         ),
         file("keys/token.pem", "SYNTHETIC_TOKEN_KEY_CANARY"),
         file("keys/issuer.pem", "SYNTHETIC_UNRELATED_KEY_CANARY"),

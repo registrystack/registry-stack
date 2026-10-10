@@ -1,8 +1,11 @@
-title: Carte bénéficiaire
-program: Programme de services publics
-name: Nom
-id: N° d'identification
-region: Région
-category: Catégorie
-valid: Valide jusqu'au
-call-center: "Appel : 80 00 12 12"
+apiVersion: id.registrystack.org/formats/render/labels/v1alpha1
+kind: RenderLabels
+labels:
+  title: Carte bénéficiaire
+  program: Programme de services publics
+  name: Nom
+  id: N° d'identification
+  region: Région
+  category: Catégorie
+  valid: Valide jusqu'au
+  call-center: "Appel : 80 00 12 12"

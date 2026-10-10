@@ -6,6 +6,7 @@
 compile_error!("registry-breg-mcp requires a Unix target for owner-only secret file guarantees");
 
 mod audit;
+pub mod check;
 #[doc(hidden)]
 pub mod cli;
 pub mod config;
@@ -20,6 +21,8 @@ mod mock_registry;
 mod outbound;
 mod problems;
 pub mod runtime;
+#[cfg(feature = "schema")]
+pub mod schema;
 mod server;
 mod tools;
 

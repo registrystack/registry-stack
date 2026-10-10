@@ -51,7 +51,7 @@ profiles. They cannot be declared by hand:
 A synthesized vocabulary exists only once it has values, so a project whose
 consent record uses `registry-consent-scopes` compiles only after some
 permission requires consent. Until then the compiler reports
-`consent.require.unused` and names the `requireConsent` line to add, or the
+`breg.consent.require-unused` and names the `requireConsent` line to add, or the
 `retiredConsentScopes` entry that keeps a former scope.
 
 At startup, every client that a recipient organization lists must also be in
@@ -147,7 +147,7 @@ Add `requireConsent` to a read permission:
       operations: [get, list]
       readableFields: [person-code, legal-name, district]
       allowCount: true
-      rowBoundaries: []
+      rowBoundaries: unrestricted
       requireConsent:
         - {record: person-consent-decision, on: id}
 ```
@@ -160,7 +160,7 @@ check must hold.
 
 A gated profile needs `actorKind`, `requesterClients` that a declared
 recipient organization lists, and `requiredPurposes` drawn from the consent
-record's purpose vocabulary. It cannot be anonymous.
+record's purpose vocabulary.
 
 ### The recipient feed
 
@@ -185,7 +185,7 @@ refuses it, and every `registry:consent-decisions:` claim, on each other
 surface that names a verified claim: a principal claim, another row boundary,
 an entity access requirement, a lookup `claimMapping`, an action target, an
 `applyTargets` grant, or a `requestPresence` grant. Each refusal is
-`consent.feed.claim`, so no authored selector reaches a consent record without
+`breg.consent.feed-claim`, so no authored selector reaches a consent record without
 the feed's decision bound. The
 compiler adds a second row boundary to the feed on the decision field, filled
 by the engine with the codes a recipient may learn: every give, and every
@@ -273,24 +273,24 @@ Enforced, and refused at compilation where the shape is configuration:
   count, snapshot including pinned snapshots, revisions, continuation
   cursors, and read paths rooted at a gated entity. A row without consent
   answers `404` exactly like an absent row.
-- Gated permissions are read-only (`consent.require.read_only`). Writes,
+- Gated permissions are read-only (`breg.consent.require-read-only`). Writes,
   actions, change requests, and request lifecycle grants use a separate
   profile.
 - Spatial bbox queries are refused on gated permissions
-  (`consent.require.spatial_unsupported`): they run under a separate database
+  (`breg.consent.require-spatial-unsupported`): they run under a separate database
   authority role that cannot evaluate consent.
-- Bulk data export is refused (`consent.require.export_unsupported`), and so
+- Bulk data export is refused (`breg.consent.require-export-unsupported`), and so
   is exporting a gated profile as an Evidence source
-  (`consent.require.evidence_source_unsupported`).
+  (`breg.consent.require-evidence-source-unsupported`).
 - A read path cannot reach a gated entity through an intermediate or target
-  step (`consent.require.read_path_target`). Use that entity's direct read
+  step (`breg.consent.require-read-path-target`). Use that entity's direct read
   route.
 - A refusal never reaches a recipient through the feed.
 
 Not enforced:
 
 - A profile without `requireConsent` bypasses consent entirely. `bregctl
-  check` reports `access.consent.ungated_client` for a profile that reads a
+  check` reports `breg.access.consent-ungated-client` for a profile that reads a
   gated entity's rows without consent while it admits any client, or while it
   shares a client with a gated profile. Give each gated profile's recipients
   their own clients, and give an ungated reader clients no gated profile

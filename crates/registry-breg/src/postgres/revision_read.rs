@@ -461,7 +461,6 @@ impl RevisionReadPlan {
             || request.maximum_records != expected_maximum
             || matches!(kind, CompiledRevisionKind::List) != request.revision.is_none()
             || request.revision.is_some_and(|revision| revision <= 0)
-            || profile.anonymous
             || !profile.revision_access
             || !profile.operations.contains(&Operation::Revisions)
             || !route

@@ -47,7 +47,9 @@ fn assert_envelope(stdout: &[u8], report: &Value, exit: ExitCode) {
         assert!(!diagnostics.is_empty(), "{text}");
         for diagnostic in diagnostics {
             assert_eq!(diagnostic["severity"], "error", "{text}");
-            for member in ["code", "artifact", "path", "message", "suggestedAction"] {
+            // The empty pointer names the document's root (CFG-DIAG-1).
+            assert!(diagnostic["path"].is_string(), "path: {text}");
+            for member in ["code", "artifact", "message", "suggestedAction"] {
                 assert!(
                     diagnostic[member]
                         .as_str()

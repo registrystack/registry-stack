@@ -1,0 +1,332 @@
+{
+  "$defs": {
+    "CardinalityExpectation": {
+      "additionalProperties": false,
+      "description": "How many times a field occurs in an entity. A field name occurs at most\nonce in an entity, so both bounds are 0 or 1, and `min` is at most `max`.",
+      "properties": {
+        "entity": {
+          "type": "string"
+        },
+        "field": {
+          "type": "string"
+        },
+        "max": {
+          "format": "uint32",
+          "maximum": 1,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "min": {
+          "format": "uint32",
+          "maximum": 1,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "entity",
+        "field",
+        "min",
+        "max"
+      ],
+      "type": "object"
+    },
+    "CheckSeverity": {
+      "description": "How serious a failed conformance check is.",
+      "enum": [
+        "error",
+        "warning"
+      ],
+      "type": "string"
+    },
+    "CodelistExpectation": {
+      "additionalProperties": false,
+      "description": "Codes a codelist holds.",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "required_codes": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "required_codes"
+      ],
+      "type": "object"
+    },
+    "ConceptExpectation": {
+      "additionalProperties": false,
+      "description": "A concept a claiming manifest's fields reference by IRI.",
+      "properties": {
+        "iri": {
+          "description": "The IRI, exactly as a field's `concepts` lists it.",
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "iri"
+      ],
+      "type": "object"
+    },
+    "ConformanceCheck": {
+      "additionalProperties": false,
+      "description": "A check the profile names. Descriptive: `validate-profiles` runs the\nexpectations above, not these entries.",
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "severity": {
+          "$ref": "#/$defs/CheckSeverity"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
+    "FixtureExpectation": {
+      "description": "The outcome a fixture demonstrates.",
+      "enum": [
+        "valid"
+      ],
+      "type": "string"
+    },
+    "IdentifierExpectation": {
+      "additionalProperties": false,
+      "description": "An identifier a claiming manifest's entity declares.",
+      "properties": {
+        "entity": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "entity",
+        "name",
+        "kind"
+      ],
+      "type": "object"
+    },
+    "InputArtifact": {
+      "additionalProperties": false,
+      "description": "An artifact the profile reads.",
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "media_type": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "type": "object"
+    },
+    "LocalId": {
+      "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+      "type": "string"
+    },
+    "ProfileFixture": {
+      "additionalProperties": false,
+      "description": "A metadata manifest that demonstrates the profile.",
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "expect": {
+          "$ref": "#/$defs/FixtureExpectation",
+          "description": "The outcome the fixture demonstrates. Descriptive."
+        },
+        "manifest": {
+          "description": "Whether the fixture is a metadata manifest. Descriptive.",
+          "type": "boolean"
+        },
+        "path": {
+          "description": "The fixture's path, relative to the descriptor's directory and inside\nit.",
+          "minLength": 1,
+          "not": {
+            "pattern": "^/|(^|/)\\.\\.(/|$)"
+          },
+          "type": "string"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "type": "object"
+    },
+    "ProfileIdentity": {
+      "additionalProperties": false,
+      "description": "The profile a descriptor describes.",
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "id": {
+          "$ref": "#/$defs/LocalId",
+          "description": "The profile id. It names the directory that holds the descriptor, and\na claiming manifest lists it under `profiles`."
+        },
+        "name": {
+          "type": "string"
+        },
+        "upstream_system": {
+          "type": "string"
+        },
+        "upstream_url": {
+          "$ref": "#/$defs/Url"
+        },
+        "version": {
+          "description": "The profile version a claiming manifest lists beside the id.",
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "version"
+      ],
+      "type": "object"
+    },
+    "ProfileSchemaVersion": {
+      "description": "The descriptor format version.",
+      "enum": [
+        "registry-manifest-profile/v1"
+      ],
+      "type": "string"
+    },
+    "UnsupportedMapping": {
+      "additionalProperties": false,
+      "description": "Upstream behavior the profile does not map.",
+      "properties": {
+        "reason": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "reason"
+      ],
+      "type": "object"
+    },
+    "Url": {
+      "description": "An absolute http or https URL with a host and no user information.",
+      "format": "uri",
+      "maxLength": 2048,
+      "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://[^/?#@]+([/?#].*)?$",
+      "type": "string"
+    }
+  },
+  "$id": "https://id.registrystack.org/schemas/manifest/profile/profile.v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "A profile descriptor: the portable expectations one application profile\nplaces on the metadata manifests that claim it, and the fixtures that\ndemonstrate them.",
+  "properties": {
+    "cardinality_expectations": {
+      "description": "How many times a field occurs in an entity of a claiming manifest.",
+      "items": {
+        "$ref": "#/$defs/CardinalityExpectation"
+      },
+      "type": "array"
+    },
+    "codelist_expectations": {
+      "description": "Codes a codelist of a claiming manifest must hold.",
+      "items": {
+        "$ref": "#/$defs/CodelistExpectation"
+      },
+      "type": "array"
+    },
+    "conformance_checks": {
+      "description": "The checks the profile names. At least one.",
+      "items": {
+        "$ref": "#/$defs/ConformanceCheck"
+      },
+      "minItems": 1,
+      "type": "array"
+    },
+    "fixtures": {
+      "description": "Metadata manifests that claim the profile and meet every expectation.\nAt least one.",
+      "items": {
+        "$ref": "#/$defs/ProfileFixture"
+      },
+      "minItems": 1,
+      "type": "array"
+    },
+    "optional_concepts": {
+      "description": "Concept IRIs a claiming manifest may reference. Documentation only.",
+      "items": {
+        "$ref": "#/$defs/ConceptExpectation"
+      },
+      "type": "array"
+    },
+    "profile": {
+      "$ref": "#/$defs/ProfileIdentity",
+      "description": "The profile this descriptor describes."
+    },
+    "required_concepts": {
+      "description": "Concept IRIs a claiming manifest's fields must reference.",
+      "items": {
+        "$ref": "#/$defs/ConceptExpectation"
+      },
+      "type": "array"
+    },
+    "required_identifiers": {
+      "description": "Identifiers a claiming manifest's entities must declare.",
+      "items": {
+        "$ref": "#/$defs/IdentifierExpectation"
+      },
+      "type": "array"
+    },
+    "schema_version": {
+      "$ref": "#/$defs/ProfileSchemaVersion",
+      "description": "The descriptor format version."
+    },
+    "supported_input_artifacts": {
+      "description": "The artifacts the profile reads. At least one.",
+      "items": {
+        "$ref": "#/$defs/InputArtifact"
+      },
+      "minItems": 1,
+      "type": "array"
+    },
+    "unsupported_mappings": {
+      "description": "Upstream behavior the profile deliberately does not map, and why.",
+      "items": {
+        "$ref": "#/$defs/UnsupportedMapping"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema_version",
+    "profile",
+    "supported_input_artifacts",
+    "conformance_checks",
+    "fixtures"
+  ],
+  "title": "Registry Manifest profile descriptor",
+  "type": "object"
+}

@@ -1,0 +1,7 @@
+apiVersion: id.registrystack.org/formats/fuzz/runtime/v1
+kind: FuzzRuntimeConfig
+listener:
+  port: 1
+listener:
+  port: 2
+flow: {a: 1, a: 2}

@@ -50,7 +50,7 @@ def main() -> None:
     (output / "invalid-pattern-report.json").write_text(invalid.stdout, encoding="utf-8")
     diagnostics = json.loads(invalid.stdout).get("diagnostics", [])
     if invalid.returncode == 0 or not any(
-        item.get("code") == "field.pattern.syntax_invalid"
+        item.get("code") == "breg.field.pattern-syntax-invalid"
         and item.get("path") == "entities[person].fields[identifier].pattern"
         for item in diagnostics
     ):

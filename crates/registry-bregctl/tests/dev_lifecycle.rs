@@ -1,3 +1,7 @@
+#![allow(
+    clippy::disallowed_methods,
+    reason = "tests read back the YAML the code under test wrote, or a published contract or fixture, to assert on it; they read no operator configuration"
+)]
 // SPDX-License-Identifier: Apache-2.0
 //! Installed-binary proof. Opt in after building breg and bregctl; Docker
 //! must be available. This creates and removes only its own synthetic database.
@@ -208,7 +212,7 @@ fn author_automatic_review_executor(project: &Path, authority_port: u16) {
         "readableFields":["code", "label"],
         "writableFields":["code", "label"],
         "requestVisibility":"owner",
-        "rowBoundaries":[]
+        "rowBoundaries":"unrestricted"
     }));
     definition["accessProfiles"]
         .as_array_mut()
@@ -224,8 +228,8 @@ fn author_automatic_review_executor(project: &Path, authority_port: u16) {
                 "entity":"record-change",
                 "operations":["get", "apply_request"],
                 "readableFields":["code", "label"],
-                "rowBoundaries":[],
-                "applyTargets":[{"entity":"automatic-record", "rowBoundaries":[]}],
+                "rowBoundaries":"unrestricted",
+                "applyTargets":[{"entity":"automatic-record", "rowBoundaries":"unrestricted"}],
                 "readableRequestFields":["review_state"]
             }]
         }));
@@ -488,19 +492,19 @@ fn installed_dev_accepts_request_lifecycle_delivery_ceiling_floors() {
     operator["permissions"].as_array_mut().unwrap().extend([
         json!({
             "entity": "restricted-change",
-            "rowBoundaries": [],
+            "rowBoundaries": "unrestricted",
             "operations": ["create", "get", "patch", "submit_request", "apply_request"],
             "readableFields": ["code", "label", "note"],
             "writableFields": ["code", "label", "note"],
-            "applyTargets": [{"entity":"record", "rowBoundaries":[]}]
+            "applyTargets": [{"entity":"record", "rowBoundaries":"unrestricted"}]
         }),
         json!({
             "entity": "public-change",
-            "rowBoundaries": [],
+            "rowBoundaries": "unrestricted",
             "operations": ["create", "get", "patch", "submit_request", "apply_request"],
             "readableFields": ["code", "label"],
             "writableFields": ["code", "label"],
-            "applyTargets": [{"entity":"record-group", "rowBoundaries":[]}]
+            "applyTargets": [{"entity":"record-group", "rowBoundaries":"unrestricted"}]
         }),
     ]);
     write(
@@ -509,124 +513,161 @@ fn installed_dev_accepts_request_lifecycle_delivery_ceiling_floors() {
     );
     write(
         &project.join("tests/journeys.yaml"),
-        br#"apiVersion: registry.registrystack.org/breg-journeys/v1
+        br#"apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
 journeys:
   - id: request-lifecycle-delivery-ceilings
     steps:
       - id: create-restricted-request
         entity: restricted-change
         accessProfile: operator
-        claims: &operator
+        claims:
           principal: generic-registry-operator
           scopes: [registry:generic:operate]
           purpose: registry-operations
         request:
-          operation: create
+          type: create
           data: {code: restricted-result, label: Restricted result, note: Internal projected note}
         expect: {outcome: success, status: 201}
         capture: restricted-request
       - id: patch-restricted-draft
         entity: restricted-change
         accessProfile: operator
-        claims: *operator
+        claims:
+          principal: generic-registry-operator
+          scopes: [registry:generic:operate]
+          purpose: registry-operations
         request:
-          operation: patch
-          recordRef: restricted-request
-          etagRef: restricted-request
+          type: patch
+          recordCapture: restricted-request
+          etagCapture: restricted-request
           changes: [{field: note, value: Updated internal projected note}]
         expect: {outcome: success, status: 200}
         capture: restricted-edited
       - id: stale-restricted-draft-etag-is-refused
         entity: restricted-change
         accessProfile: operator
-        claims: *operator
+        claims:
+          principal: generic-registry-operator
+          scopes: [registry:generic:operate]
+          purpose: registry-operations
         request:
-          operation: patch
-          recordRef: restricted-request
-          etagRef: restricted-request
+          type: patch
+          recordCapture: restricted-request
+          etagCapture: restricted-request
           changes: [{field: note, value: Must not be stored}]
         expect: {outcome: refusal, status: 412, problemCode: precondition.failed}
       - id: get-restricted-before-submit
         entity: restricted-change
         accessProfile: operator
-        claims: *operator
-        request: {operation: get, recordRef: restricted-edited}
+        claims:
+          principal: generic-registry-operator
+          scopes: [registry:generic:operate]
+          purpose: registry-operations
+        request: {type: get, recordCapture: restricted-edited}
         expect: {outcome: success, status: 200}
         capture: restricted-before-submit
       - id: submit-restricted-request
         entity: restricted-change
         accessProfile: operator
-        claims: *operator
-        request: {operation: submit_request, recordRef: restricted-before-submit, etagRef: restricted-before-submit}
+        claims:
+          principal: generic-registry-operator
+          scopes: [registry:generic:operate]
+          purpose: registry-operations
+        request: {type: submit-request, recordCapture: restricted-before-submit, etagCapture: restricted-before-submit}
         expect: {outcome: success, status: 200}
       - id: get-restricted-before-apply
         entity: restricted-change
         accessProfile: operator
-        claims: *operator
-        request: {operation: get, recordRef: restricted-request}
+        claims:
+          principal: generic-registry-operator
+          scopes: [registry:generic:operate]
+          purpose: registry-operations
+        request: {type: get, recordCapture: restricted-request}
         expect: {outcome: success, status: 200}
         capture: restricted-before-apply
       - id: apply-restricted-request
         entity: restricted-change
         accessProfile: operator
-        claims: *operator
+        claims:
+          principal: generic-registry-operator
+          scopes: [registry:generic:operate]
+          purpose: registry-operations
         request:
-          operation: apply_request
-          recordRef: restricted-before-apply
-          etagRef: restricted-before-apply
-          proposalVersionRef: restricted-before-apply
-          effectDigestRef: restricted-before-apply
+          type: apply-request
+          recordCapture: restricted-before-apply
+          etagCapture: restricted-before-apply
+          proposalVersionCapture: restricted-before-apply
+          effectDigestCapture: restricted-before-apply
         expect: {outcome: success, status: 200}
       - id: create-public-request
         entity: public-change
         accessProfile: operator
-        claims: *operator
+        claims:
+          principal: generic-registry-operator
+          scopes: [registry:generic:operate]
+          purpose: registry-operations
         request:
-          operation: create
+          type: create
           data: {code: public-result, label: Public result}
         expect: {outcome: success, status: 201}
         capture: public-request
       - id: patch-public-draft
         entity: public-change
         accessProfile: operator
-        claims: *operator
+        claims:
+          principal: generic-registry-operator
+          scopes: [registry:generic:operate]
+          purpose: registry-operations
         request:
-          operation: patch
-          recordRef: public-request
-          etagRef: public-request
+          type: patch
+          recordCapture: public-request
+          etagCapture: public-request
           changes: [{field: label, value: Updated public result}]
         expect: {outcome: success, status: 200}
         capture: public-edited
       - id: get-public-before-submit
         entity: public-change
         accessProfile: operator
-        claims: *operator
-        request: {operation: get, recordRef: public-edited}
+        claims:
+          principal: generic-registry-operator
+          scopes: [registry:generic:operate]
+          purpose: registry-operations
+        request: {type: get, recordCapture: public-edited}
         expect: {outcome: success, status: 200}
         capture: public-before-submit
       - id: submit-public-request
         entity: public-change
         accessProfile: operator
-        claims: *operator
-        request: {operation: submit_request, recordRef: public-before-submit, etagRef: public-before-submit}
+        claims:
+          principal: generic-registry-operator
+          scopes: [registry:generic:operate]
+          purpose: registry-operations
+        request: {type: submit-request, recordCapture: public-before-submit, etagCapture: public-before-submit}
         expect: {outcome: success, status: 200}
       - id: get-public-before-apply
         entity: public-change
         accessProfile: operator
-        claims: *operator
-        request: {operation: get, recordRef: public-request}
+        claims:
+          principal: generic-registry-operator
+          scopes: [registry:generic:operate]
+          purpose: registry-operations
+        request: {type: get, recordCapture: public-request}
         expect: {outcome: success, status: 200}
         capture: public-before-apply
       - id: apply-public-request
         entity: public-change
         accessProfile: operator
-        claims: *operator
+        claims:
+          principal: generic-registry-operator
+          scopes: [registry:generic:operate]
+          purpose: registry-operations
         request:
-          operation: apply_request
-          recordRef: public-before-apply
-          etagRef: public-before-apply
-          proposalVersionRef: public-before-apply
-          effectDigestRef: public-before-apply
+          type: apply-request
+          recordCapture: public-before-apply
+          etagCapture: public-before-apply
+          proposalVersionCapture: public-before-apply
+          effectDigestCapture: public-before-apply
         expect: {outcome: success, status: 200}
 "#,
     );
@@ -767,7 +808,8 @@ fn installed_dev_receives_retries_replays_and_retains_authored_events() {
     let clients = parent.join("clients.yaml");
     write(
         &clients,
-        br#"version: 1
+        br#"apiVersion: id.registrystack.org/formats/breg/dev-clients/v1alpha1
+kind: BRegDevClients
 clients:
   - id: operator
     accessProfiles: [operator]
@@ -1130,35 +1172,46 @@ fn installed_dev_switches_one_clients_claims_and_recovers_import_seed() {
     );
     write(
         &project.join("tests/journeys.yaml"),
-        br#"apiVersion: registry.registrystack.org/breg-journeys/v1
+        br#"apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
 journeys:
   - id: purpose-and-import
     steps:
       - id: import-reference
         entity: record-group
         accessProfile: operator
-        claims: &operator
+        claims:
           principal: fixture-officer
           actorKind: human
           requesterClient: officer
           scopes: [registry:generic:operate]
           purpose: registry-operations
         request:
-          operation: import
+          type: import
           items: [{code: journey-group, label: Journey reference}]
         expect: {outcome: success, status: 200}
       - id: list-reference
         entity: record-group
         accessProfile: operator
-        claims: *operator
-        request: {operation: list}
+        claims:
+          principal: fixture-officer
+          actorKind: human
+          requesterClient: officer
+          scopes: [registry:generic:operate]
+          purpose: registry-operations
+        request: {type: list}
         expect: {outcome: success, status: 200, count: 1}
       - id: create-record
         entity: record
         accessProfile: operator
-        claims: *operator
+        claims:
+          principal: fixture-officer
+          actorKind: human
+          requesterClient: officer
+          scopes: [registry:generic:operate]
+          purpose: registry-operations
         request:
-          operation: create
+          type: create
           data: {code: journey-record, label: Journey record, status: active}
         expect: {outcome: success, status: 201, fields: {code: journey-record, status: active}}
       - id: read-as-same-client
@@ -1171,14 +1224,15 @@ journeys:
           scopes: [registry:generic:read]
           purpose: registry-reporting
           directClaims: {registry_record_status: active}
-        request: {operation: list}
+        request: {type: list}
         expect: {outcome: success, status: 200, count: 1}
 "#,
     );
     let clients = parent.join("clients.yaml");
     write(
         &clients,
-        br#"version: 1
+        br#"apiVersion: id.registrystack.org/formats/breg/dev-clients/v1alpha1
+kind: BRegDevClients
 clients:
   - id: officer
     accessProfiles: [operator, record-reader]
@@ -1363,7 +1417,8 @@ fn installed_dev_preserves_edits_and_recovers_failed_start_without_reseeding() {
     let clients = parent.join("clients.yaml");
     write(
         &clients,
-        br#"version: 1
+        br#"apiVersion: id.registrystack.org/formats/breg/dev-clients/v1alpha1
+kind: BRegDevClients
 clients:
   - id: operator
     accessProfiles: [operator]
@@ -2159,6 +2214,147 @@ fn dev_start_port_refusals_name_the_port_flag_and_role_in_both_formats() {
             "a human refusal stays off stdout"
         );
     }
+}
+
+#[test]
+fn dev_start_prints_the_reader_diagnostics_for_a_refused_clients_file_in_both_formats() {
+    let binary = Path::new(env!("CARGO_BIN_EXE_bregctl"));
+    let temporary = tempfile::tempdir().expect("a temporary directory");
+    // `init` refuses a destination behind a symbolic link, and a platform's
+    // temporary root often is one.
+    let parent = fs::canonicalize(temporary.path()).expect("a canonical directory");
+    let project = parent.join("registry");
+    let initialized = plain_bregctl(binary, false, &["init", project.to_str().unwrap()]);
+    assert!(initialized.status.success(), "{initialized:?}");
+    let clients = project.join("dev-clients.yaml");
+    write(
+        &clients,
+        b"apiVersion: id.registrystack.org/formats/breg/dev-clients/v1alpha1
+kind: BRegDevClients
+clients:
+  - id: operator
+    accessProfiles: [operator]
+    scopes: [registry:generic:operate]
+    claims: {registry_principal: generic-registry-operator}
+    assertionKeyInputFile: /private/operator-key
+",
+    );
+    let start = ["dev", "start", project.to_str().unwrap()];
+
+    let json = plain_bregctl(binary, true, &start);
+    assert_eq!(json.status.code(), Some(1), "{json:?}");
+    assert!(json.stderr.is_empty(), "{json:?}");
+    let report: Value = serde_json::from_slice(&json.stdout).expect("a JSON refusal");
+    assert_eq!(report["ok"], false, "{report}");
+    assert_eq!(report["command"], "dev", "{report}");
+    let diagnostics = report["diagnostics"].as_array().expect("diagnostics");
+    assert_eq!(diagnostics.len(), 1, "{report}");
+    assert_eq!(diagnostics[0]["code"], "config.removed-key");
+    assert_eq!(diagnostics[0]["path"], "/clients/0/assertionKeyInputFile");
+    assert_eq!(diagnostics[0]["source"]["file"], clients.to_str().unwrap());
+    assert_eq!(diagnostics[0]["source"]["line"], 8);
+    assert!(
+        diagnostics[0]["suggestedAction"]
+            .as_str()
+            .is_some_and(|action| action.contains("assertionKeyRef")),
+        "{report}"
+    );
+
+    let human = plain_bregctl(binary, false, &start);
+    assert_eq!(human.status.code(), Some(1), "{human:?}");
+    assert!(human.stdout.is_empty(), "{human:?}");
+    let rendered = String::from_utf8(human.stderr).expect("refusal is UTF-8");
+    assert!(
+        rendered.starts_with("bregctl dev refused the development clients.\n"),
+        "{rendered}"
+    );
+    assert!(rendered.contains("config.removed-key"), "{rendered}");
+    assert!(rendered.contains("assertionKeyRef"), "{rendered}");
+    let machine = String::from_utf8_lossy(&json.stdout).into_owned();
+    for output in [&rendered, &machine] {
+        assert!(!output.contains("/private/operator-key"), "{output}");
+    }
+    assert!(
+        !project.join(".breg/dev").exists(),
+        "a refused clients file starts nothing"
+    );
+}
+
+#[test]
+fn examples_list_prints_the_reader_and_catalogue_diagnostics_in_both_formats() {
+    let binary = Path::new(env!("CARGO_BIN_EXE_bregctl"));
+    let temporary = tempfile::tempdir().expect("a temporary directory");
+    // `init` refuses a destination behind a symbolic link, and a platform's
+    // temporary root often is one.
+    let parent = fs::canonicalize(temporary.path()).expect("a canonical directory");
+    let project = parent.join("registry");
+    let initialized = plain_bregctl(binary, false, &["init", project.to_str().unwrap()]);
+    assert!(initialized.status.success(), "{initialized:?}");
+    fs::create_dir(project.join("examples")).expect("an examples directory");
+    let catalogue = project.join("examples/scenarios.json");
+    let list = ["examples", "list", project.to_str().unwrap()];
+    // A catalogue an earlier bregctl read, and one whose invoke step names
+    // no action or result: the first is refused by the reader, the second
+    // by the catalogue checks, and both at their positions. The reader names
+    // the removed `version` beside the missing header.
+    for (document, code, line, pointer, count) in [
+        (
+            "{\"version\": 1, \"scenarios\": []}\n",
+            "config.missing-envelope",
+            1,
+            "",
+            2,
+        ),
+        (
+            r#"{
+  "apiVersion": "id.registrystack.org/formats/breg/example-scenarios/v1alpha1",
+  "kind": "BRegExampleScenarios",
+  "scenarios": [
+    {
+      "id": "register-entries",
+      "description": "Register configured entries",
+      "input": "examples/inputs.json",
+      "steps": [
+        {"id": "register", "operation": "invoke", "entity": "entry", "client": "writer", "accessProfile": "writer", "input": "register", "capture": "entry"}
+      ]
+    }
+  ]
+}
+"#,
+            "breg.examples.step-members",
+            10,
+            "/scenarios/0/steps/0",
+            1,
+        ),
+    ] {
+        write(&catalogue, document.as_bytes());
+        let json = plain_bregctl(binary, true, &list);
+        assert_eq!(json.status.code(), Some(1), "{json:?}");
+        assert!(json.stderr.is_empty(), "{json:?}");
+        let report: Value = serde_json::from_slice(&json.stdout).expect("a JSON refusal");
+        assert_eq!(report["ok"], false, "{report}");
+        assert_eq!(report["command"], "examples", "{report}");
+        let diagnostics = report["diagnostics"].as_array().expect("diagnostics");
+        assert_eq!(diagnostics.len(), count, "{report}");
+        assert_eq!(diagnostics[0]["code"], code, "{report}");
+        assert_eq!(diagnostics[0]["path"], pointer, "{report}");
+        assert_eq!(
+            diagnostics[0]["source"]["file"],
+            catalogue.to_str().unwrap()
+        );
+        assert_eq!(diagnostics[0]["source"]["line"], line, "{report}");
+
+        let human = plain_bregctl(binary, false, &list);
+        assert_eq!(human.status.code(), Some(1), "{human:?}");
+        assert!(human.stdout.is_empty(), "{human:?}");
+        let rendered = String::from_utf8(human.stderr).expect("refusal is UTF-8");
+        assert!(
+            rendered.starts_with("bregctl examples refused the example scenarios.\n"),
+            "{rendered}"
+        );
+        assert!(rendered.contains(code), "{rendered}");
+    }
+    assert!(!project.join(".breg").exists(), "listing starts nothing");
 }
 
 #[test]

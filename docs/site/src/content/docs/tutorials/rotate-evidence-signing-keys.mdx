@@ -76,7 +76,8 @@ Every service JWK is an exact ES256 P-256 public JWK, and its `kid` is its deriv
 thumbprint. Evidence Gateway assembles its JSON Web Key Set (JWKS) from the active and published
 files. Do not publish a separate operator-built JWKS.
 
-Build a new candidate, run its fixtures, and run `evidence check` in the target execution context:
+Build a new candidate, run its fixtures, and run `evidence check --require-runtime-dependencies` in
+the target execution context:
 
 ```sh
 evidencectl package "<deployment-repository>/shared/evidence-project" \
@@ -84,7 +85,8 @@ evidencectl package "<deployment-repository>/shared/evidence-project" \
   --output "<new-package-directory>"
 evidencectl test "<deployment-repository>/shared/evidence-project" \
   --target "<deployment-repository>/environments/<environment>/evidence"
-evidence check --runtime-config "<deployment-repository>/environments/<environment>/evidence/runtime.yaml"
+evidence check --require-runtime-dependencies \
+  --runtime-config "<deployment-repository>/environments/<environment>/evidence/runtime.yaml"
 ```
 
 Give consumers the new public key, `kid`, provider identity, activation window, and overlap period

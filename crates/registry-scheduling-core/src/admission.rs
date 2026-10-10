@@ -155,10 +155,9 @@ pub struct WindowContext<'a> {
     pub snapshot: &'a LedgerSnapshot,
     pub policy_revision: u64,
     /// The channels the policy declares it serves. The channel vocabulary
-    /// itself is closed; a declaration narrows it to the served subset, and
+    /// itself is closed; the declaration narrows it to the served subset, and
     /// a request naming a channel outside either is refused before any
-    /// capacity is counted. An empty slice declares nothing beyond the
-    /// vocabulary.
+    /// capacity is counted. An empty slice serves no channel.
     pub channels: &'a [Channel],
     pub now: DateTime<Utc>,
 }
@@ -203,7 +202,7 @@ pub fn evaluate_exact_time_admission(
         exact.horizon_days,
     )?;
 
-    if request.party.recipients == 0 || request.party.recipients > exact.max_recipients {
+    if request.party.recipients == 0 || request.party.recipients > exact.maximum_recipients {
         return Err(AdmissionRefusal::PartyCapacityInadequate);
     }
     check_capabilities(offering, request)?;
@@ -385,12 +384,14 @@ pub fn evaluate_window_admission(
     check_duplicate(offering, request, snapshot, exclude, *now)?;
 
     if let Some(name) = &request.channel {
-        // The channel vocabulary is closed, and a policy that declares the
-        // channels it serves narrows it further. A name outside either once
-        // matched no subquota and drew from the window's total unconstrained,
-        // so it is refused before any capacity is counted.
+        // The channel vocabulary is closed, and the channels the policy
+        // declares narrow it to the served subset. A name outside either
+        // would match no subquota and draw from the window's total
+        // unconstrained, so it is refused before any capacity is counted. An
+        // empty declaration serves no channel: the reader refuses one, and
+        // this check fails closed if a policy ever arrives without it.
         let channel = Channel::from_name(name).ok_or(AdmissionRefusal::ChannelUnknown)?;
-        if !channels.is_empty() && !channels.contains(&channel) {
+        if !channels.contains(&channel) {
             return Err(AdmissionRefusal::ChannelUnknown);
         }
         if let Some(subquota) = window
@@ -580,7 +581,7 @@ mod tests {
                 horizon_days: 30,
                 pool: "update-stations".to_owned(),
                 start_increment_minutes: 30,
-                max_recipients: 1,
+                maximum_recipients: 1,
             },
         )
     }
@@ -1233,6 +1234,15 @@ mod tests {
         }
     }
 
+    /// Every channel the vocabulary holds, for contexts that test something
+    /// other than the channel declaration.
+    const ALL_CHANNELS: &[Channel] = &[
+        Channel::Public,
+        Channel::Assisted,
+        Channel::Urgent,
+        Channel::WalkIn,
+    ];
+
     fn window_request(recipients: u32, attendees: u32) -> AdmissionRequest {
         AdmissionRequest {
             offering: "household-morning".to_owned(),
@@ -1276,7 +1286,7 @@ mod tests {
             horizon_days: 60,
             snapshot: &snapshot,
             policy_revision: 1,
-            channels: &[],
+            channels: ALL_CHANNELS,
             now,
         };
         let admission =
@@ -1304,7 +1314,7 @@ mod tests {
             horizon_days: 60,
             snapshot: &snapshot,
             policy_revision: 1,
-            channels: &[],
+            channels: ALL_CHANNELS,
             now,
         };
         let result = evaluate_window_admission(&context, &window_request(2, 2), None);
@@ -1340,7 +1350,7 @@ mod tests {
             horizon_days: 60,
             snapshot: &snapshot,
             policy_revision: 1,
-            channels: &[],
+            channels: ALL_CHANNELS,
             now,
         };
         let missing = evaluate_window_admission(&context, &window_request(1, 1), None);
@@ -1367,7 +1377,7 @@ mod tests {
                 units: 2,
                 because: "A household of two shares one block.".to_owned(),
             }],
-            above_highest_band: crate::units::AboveHighestBand::Refuse,
+            above_highest_band: crate::units::AboveHighestBand::Refuse {},
             because: "Household sizing reviewed in 2026.".to_owned(),
         };
         let snapshot = LedgerSnapshot::default();
@@ -1382,7 +1392,7 @@ mod tests {
             horizon_days: 60,
             snapshot: &snapshot,
             policy_revision: 1,
-            channels: &[],
+            channels: ALL_CHANNELS,
             now,
         };
         // Four recipients are above the highest band: inadequate party.
@@ -1416,7 +1426,7 @@ mod tests {
             horizon_days: 60,
             snapshot: &snapshot,
             policy_revision: 1,
-            channels: &[],
+            channels: ALL_CHANNELS,
             now,
         };
         let result = evaluate_window_admission(&context, &window_request(1, 1), None);
@@ -1426,8 +1436,8 @@ mod tests {
         );
     }
 
-    /// COR-3 / D5(a): the channel vocabulary is closed, and a policy that
-    /// declares the channels it serves narrows it further. A spelling
+    /// COR-3 / D5(a): the channel vocabulary is closed, and the channels a
+    /// policy declares narrow it further. A spelling
     /// outside the vocabulary, or a vocabulary member the deployment does
     /// not serve, once matched no subquota and drew from the window's total
     /// unconstrained.
@@ -1450,7 +1460,7 @@ mod tests {
             horizon_days: 60,
             snapshot: &snapshot,
             policy_revision: 1,
-            channels: &[],
+            channels: ALL_CHANNELS,
             now,
         };
         // The vocabulary itself refuses a misspelled channel: "Public" is
@@ -1491,6 +1501,19 @@ mod tests {
                 .map(|refusal| refusal.public_code()),
             Some(ProblemCode::CapacityExhausted)
         );
+
+        // A declaration that serves no channel fails closed: every named
+        // channel is refused, never let loose on the window's total.
+        let unserved = WindowContext {
+            channels: &[],
+            ..context
+        };
+        assert_eq!(
+            evaluate_window_admission(&unserved, &window_request(1, 1), None)
+                .err()
+                .map(|refusal| refusal.public_code()),
+            Some(ProblemCode::RequestUnprocessable)
+        );
     }
 
     #[test]
@@ -1509,7 +1532,7 @@ mod tests {
             horizon_days: 60,
             snapshot: &snapshot,
             policy_revision: 1,
-            channels: &[],
+            channels: ALL_CHANNELS,
             now,
         };
         let stale_window = AdmissionRequest {
@@ -1546,7 +1569,7 @@ mod tests {
             horizon_days: 60,
             snapshot: &snapshot,
             policy_revision: 1,
-            channels: &[],
+            channels: ALL_CHANNELS,
             now: utc(4, 9, 0),
         };
         let request = AdmissionRequest {
@@ -1577,7 +1600,7 @@ mod tests {
             horizon_days: 60,
             snapshot: &snapshot,
             policy_revision: 1,
-            channels: &[],
+            channels: ALL_CHANNELS,
             now: utc(4, 9, 0),
         };
 

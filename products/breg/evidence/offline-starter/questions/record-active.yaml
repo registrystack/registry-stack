@@ -1,5 +1,8 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/evidence/question/question.v1alpha1.schema.json
 # A question: one fixed request a caller may make, and the one answer it may
 # get back. Everything a caller can ask of this deployment is a question file.
+apiVersion: id.registrystack.org/formats/evidence/question/v1alpha1
+kind: EvidenceQuestion
 
 # The identifier a caller names in a request, the sentence the question
 # answers, and the purpose the request must declare to be admitted.
@@ -22,7 +25,7 @@ source:
 # and the type it must have. The derivation may produce these and nothing else.
 answers:
   - concept: active
-    id: urn:example:concept:record-active:active
+    uri: urn:example:concept:record-active:active
     type: boolean
 
 # The bounded script that turns the extracted facts into those answers.

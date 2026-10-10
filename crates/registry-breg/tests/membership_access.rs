@@ -37,7 +37,7 @@ fn membership_boundaries_compile_for_distinct_registry_models() {
         assert!(!registry
             .findings()
             .iter()
-            .any(|finding| finding.code == "access.profile.unrestricted_collection"));
+            .any(|finding| finding.code == "breg.access.profile-unrestricted-collection"));
     }
 }
 
@@ -47,52 +47,47 @@ fn membership_boundaries_refuse_unenforced_authority_paths() {
         (
             "/accessProfiles/0/permissions/0/operations",
             json!(["get", "patch"]),
-            "access.membership.read_only",
+            "breg.access.membership-read-only",
         ),
         (
             "/accessProfiles/0/permissions/0/applyTargets",
-            json!([{"entity":"facility","rowBoundaries":[]}]),
-            "access.membership.read_only",
+            json!([{"entity":"facility","rowBoundaries":"unrestricted"}]),
+            "breg.access.membership-read-only",
         ),
         (
             "/accessProfiles/0/permissions/0/requestPresence",
-            json!([{"requestType":"request","rowBoundaries":[]}]),
-            "access.membership.read_only",
-        ),
-        (
-            "/accessProfiles/0/anonymous",
-            json!(true),
-            "access.membership.authentication",
+            json!([{"requestType":"request","rowBoundaries":"unrestricted"}]),
+            "breg.access.membership-read-only",
         ),
         (
             "/accessProfiles/0/requiredScopes",
             json!(["records:read"]),
-            "access.requirements.scope_missing",
+            "breg.access.requirements-scope-missing",
         ),
         (
             "/accessProfiles/0/permissions/0/membershipBoundaries/0/field",
             json!("label"),
-            "access.membership.key_type",
+            "breg.access.membership-key-type",
         ),
         (
             "/accessProfiles/0/permissions/0/membershipBoundaries/0/principalField",
             json!("active"),
-            "access.membership.principal_type",
+            "breg.access.membership-principal-type",
         ),
         (
             "/accessProfiles/0/permissions/0/membershipBoundaries/0/activeField",
             json!("principal"),
-            "access.membership.active_type",
+            "breg.access.membership-active-type",
         ),
         (
             "/accessProfiles/0/permissions/0/membershipBoundaries/0/membershipEntity",
             json!("facility"),
-            "access.membership.source_recursive",
+            "breg.access.membership-source-recursive",
         ),
         (
             "/entities/1/accessRequirements",
             json!({"rowBoundaries":[{"field":"principal","claim":"principal","operator":"equals"}]}),
-            "access.membership.source_row_requirement",
+            "breg.access.membership-source-row-requirement",
         ),
     ] {
         let mut value_source = source("facility");
@@ -119,7 +114,7 @@ fn membership_boundaries_refuse_unenforced_authority_paths() {
     assert!(failure
         .diagnostics()
         .iter()
-        .any(|diagnostic| diagnostic.code == "access.membership.read_path_target"));
+        .any(|diagnostic| diagnostic.code == "breg.access.membership-read-path-target"));
 
     let mut action = action_requirements::project();
     action["accessProfiles"][0]["permissions"][0]["membershipBoundaries"] =
@@ -129,5 +124,5 @@ fn membership_boundaries_refuse_unenforced_authority_paths() {
     assert!(failure
         .diagnostics()
         .iter()
-        .any(|diagnostic| diagnostic.code == "action.permission.entity_fields_forbidden"));
+        .any(|diagnostic| diagnostic.code == "breg.action.permission-entity-fields-forbidden"));
 }

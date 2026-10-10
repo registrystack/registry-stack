@@ -20,17 +20,14 @@ workspace = true
 
 [dependencies]
 anyhow.workspace = true
-chrono.workspace = true
-chrono-tz.workspace = true
 clap.workspace = true
 registry-platform-audit.workspace = true
 registry-platform-buildinfo.workspace = true
 registry-platform-config.workspace = true
+registry-platform-yaml.workspace = true
 registry-scheduling.workspace = true
 registry-scheduling-core.workspace = true
 serde.workspace = true
-serde_norway.workspace = true
-serde_path_to_error.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["rt"] }
@@ -42,6 +39,7 @@ uuid.workspace = true
 # already demand. Asking for it here instead would turn it on for every build
 # holding both crates, and the runtime's own database suite would then be
 # compiled and run by shards that have no server to offer it.
+chrono.workspace = true
 tokio-postgres.workspace = true
 
 [[test]]

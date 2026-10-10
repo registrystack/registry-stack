@@ -4,6 +4,8 @@
 
 #[path = "support/postgres_harness.rs"]
 mod postgres_harness;
+#[path = "support/source_bytes.rs"]
+mod source_bytes;
 
 use std::{collections::BTreeSet, fs, os::unix::fs::PermissionsExt as _, time::Duration};
 
@@ -43,7 +45,7 @@ use registry_breg::package::{
     CompiledRegistryChangeClass, CompiledRegistryChangeCode, CompiledRegistryMigrationBaseline,
     PackageBuildRequest, PackageEngineFeature, PackageLoadContext, PackageMigrationPlanInput,
     PackageModuleSource, PackageSourceFile, PreparedPackage, VerifiedPackage,
-    VerifiedPredecessorPackage,
+    VerifiedPredecessorPackage, RETIRED_PACKAGE_API_VERSION,
 };
 use registry_breg::postgres::{
     install_compiled_schema, managed_schema_fingerprint, rehearse_successor_migration,
@@ -67,7 +69,8 @@ const INSTANCE: &str = "migration-instance";
 const DATABASE: &str = "migration-database";
 const SOURCE_REVISION: &str = "migration-source-revision";
 const RECONCILE_OPERATOR_CANARY: &str = "operator secret must not enter reconciliation audit";
-const FIXTURE_JOURNEYS: &[u8] = br#"apiVersion: registry.registrystack.org/breg-journeys/v1
+const FIXTURE_JOURNEYS: &[u8] = br#"apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
 journeys:
   - id: asset-list
     steps:
@@ -75,7 +78,7 @@ journeys:
         entity: asset
         accessProfile: reader
         claims: {principal: package-reader}
-        request: {operation: list}
+        request: {type: list}
         expect: {outcome: success, status: 200, count: 0}
 "#;
 
@@ -775,10 +778,153 @@ async fn a_pre_caller_scoped_empty_successor_tombstones_audit_keyed_spent_keys()
     database.cleanup().await;
 }
 
+/// A database that runs a package published under the retired package
+/// apiVersion upgrades by rebuilding the same project with this release. The
+/// authored model and the engine capabilities are unchanged, yet the rebuilt
+/// package is apply work: the plan is not empty, and the apply records a
+/// metadata-only activation with no compiler statement over the exact catalog.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_retired_api_version_predecessor_upgrades_by_a_metadata_only_activation() {
+    let database = TestDatabase::create(1).await;
+    database
+        .admin
+        .batch_execute("CREATE EXTENSION btree_gist")
+        .await
+        .expect("administrator installs the required extension");
+
+    // The package loader refuses a path through a symbolic link, so the copy
+    // lives under the canonical temporary root.
+    let predecessor_root = tempfile::Builder::new()
+        .prefix("registry-retired-api-version-package-")
+        .tempdir_in(
+            std::env::temp_dir()
+                .canonicalize()
+                .expect("the temporary root canonicalizes"),
+        )
+        .expect("a temporary package root is created");
+    let predecessor = load_person_retired_api_version_package(predecessor_root.path());
+    assert!(predecessor.carries_retired_api_version());
+    let assets = person_registration_assets();
+    let project = person_registration_project(false);
+    let registry = compile_person_registration(&project, &assets);
+    assert_eq!(predecessor.package_id(), registry.registry_id());
+    let target_fingerprint = initial_fingerprint(&database, &registry).await;
+    let initial = prepare_and_load_person_registration(
+        &project,
+        &assets,
+        &target_fingerprint,
+        None,
+        PackageMigrationPlanInput::InitialCompiledDdl,
+    );
+    let mut active = apply(&database, &initial, ApplyPrecondition::InitialActivation)
+        .await
+        .expect("the current package establishes the fixture catalog");
+
+    let (migration, task) = database.connect_migration().await;
+    active.package_digest = predecessor.package_digest().to_owned();
+    migration
+        .execute(
+            "UPDATE registry_internal.registry_state
+                SET active_package_digest = $1
+              WHERE singleton",
+            &[&active.package_digest],
+        )
+        .await
+        .expect("the fixture records the predecessor identity");
+    migration
+        .execute(
+            "UPDATE registry_internal.registry_migrations
+                SET package_digest = $1
+              WHERE activation_id = $2::text::uuid",
+            &[&active.package_digest, &active.activation_id],
+        )
+        .await
+        .expect("the activation ledger names the predecessor package");
+    drop(migration);
+    task.abort();
+
+    let successor = prepare_and_load_person_registration(
+        &project,
+        &assets,
+        &target_fingerprint,
+        Some(predecessor.package_digest()),
+        PackageMigrationPlanInput::Successor {
+            prior_registry: Box::new(registry.clone()),
+        },
+    );
+    assert!(successor_plan_is_empty(&successor));
+    assert!(!successor_plan_is_empty_for_predecessor(
+        &successor,
+        &predecessor
+    ));
+
+    let history = predecessor.history_schema_descriptor();
+    let upgraded = apply_verified_package(
+        request(
+            &database,
+            &successor,
+            ApplyPrecondition::Successor { current: &active },
+        )
+        .with_predecessor_migration_baseline(predecessor.migration_baseline())
+        .with_predecessor_history_descriptor(&history)
+        .with_predecessor_engine_capabilities(&predecessor),
+    )
+    .await
+    .expect("the rebuilt package replaces the retired package");
+    assert_ready_target(&database, &upgraded).await;
+    let ledger = ledger_roles(&database).await;
+    let (_, _, migration_kind, predecessor_digest, _, _) =
+        ledger.last().expect("the upgrade is recorded");
+    assert_eq!(migration_kind, "metadata_only");
+    assert_eq!(
+        predecessor_digest.as_deref(),
+        Some(predecessor.package_digest())
+    );
+    verify_catalog_identity_for_catalog(
+        &database.admin,
+        &upgraded,
+        &ExpectedManagedCatalog::compiled(&registry),
+        &database.migration_role,
+        &database.runtime_role,
+    )
+    .await
+    .expect("the activated catalog is the exact current catalog");
+    database.cleanup().await;
+}
+
 /// The current frozen person-registration package as an engine that predates
 /// caller-scoped idempotency wrote it: the same bytes, with a manifest that
 /// declares only the statistical release store.
 fn load_person_pre_caller_scoped_package(root: &std::path::Path) -> VerifiedPredecessorPackage {
+    load_rewritten_person_package(root, |envelope| {
+        envelope["manifest"]["engineFeatures"] = serde_json::json!(["statistical_release_store"]);
+    })
+}
+
+/// The current frozen person-registration package as an engine that wrote the
+/// retired package apiVersion published it: the same manifest, under the
+/// retired header with no `kind`.
+fn load_person_retired_api_version_package(root: &std::path::Path) -> VerifiedPredecessorPackage {
+    load_rewritten_person_package(root, |envelope| {
+        let members = envelope
+            .as_object_mut()
+            .expect("the package envelope is an object");
+        members.insert(
+            "apiVersion".to_owned(),
+            serde_json::json!(RETIRED_PACKAGE_API_VERSION),
+        );
+        members
+            .remove("kind")
+            .expect("the current envelope names its kind");
+    })
+}
+
+/// Copies the frozen person-registration package, rewrites its envelope,
+/// reseals the sum file, and reads the result as a predecessor.
+fn load_rewritten_person_package(
+    root: &std::path::Path,
+    rewrite: impl FnOnce(&mut serde_json::Value),
+) -> VerifiedPredecessorPackage {
     let frozen = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/person-registration-rhai-package");
     copy_package_tree(&frozen, root);
@@ -786,7 +932,7 @@ fn load_person_pre_caller_scoped_package(root: &std::path::Path) -> VerifiedPred
     let mut envelope: serde_json::Value =
         serde_json::from_slice(&fs::read(&manifest_path).expect("the package manifest reads"))
             .expect("the package manifest parses");
-    envelope["manifest"]["engineFeatures"] = serde_json::json!(["statistical_release_store"]);
+    rewrite(&mut envelope);
     fs::write(
         &manifest_path,
         canonicalize_json(&envelope).expect("the rewritten envelope canonicalizes"),
@@ -807,7 +953,7 @@ fn load_person_pre_caller_scoped_package(root: &std::path::Path) -> VerifiedPred
     )
     .expect("the rewritten package closes");
     load_predecessor_package(root, &local_context())
-        .expect("the pre-caller-scoped package verifies as a predecessor")
+        .expect("the rewritten package verifies as a predecessor")
 }
 
 fn copy_package_tree(source: &std::path::Path, destination: &std::path::Path) {
@@ -979,7 +1125,7 @@ fn prepare_and_load_person_registration(
             schema_fingerprint: fingerprint.to_owned(),
             project: PackageSourceFile {
                 path: "source/registry.yaml".to_owned(),
-                bytes: serde_json::to_vec(project).expect("the project serializes"),
+                bytes: source_bytes::source_bytes(project),
             },
             modules: Vec::new(),
             fixture_journeys: PackageSourceFile {
@@ -6011,7 +6157,7 @@ fn module_bytes(variant: Variant) -> Vec<u8> {
         _ => "",
     };
     format!(
-        r#"{{"id":"core","version":"1","entities":[{{"id":"asset","primaryDataset":"migration-registry","route":"assets","mutationMode":"create_only","fields":[{{"id":"code","type":"string","maxLength":8,"classification":"internal"}},{{"id":"rank","type":"int64","classification":"internal"{rank_required}}}{legacy}{batch}{secret}],"accessProfiles":[{{"rowBoundaries": [], "id":"reader","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]}}]}}]}}"#
+        r#"{{"id":"core","version":"1","entities":[{{"id":"asset","primaryDataset":"migration-registry","route":"assets","mutationMode":"create_only","fields":[{{"id":"code","type":"string","maxLength":8,"classification":"internal"}},{{"id":"rank","type":"int64","classification":"internal"{rank_required}}}{legacy}{batch}{secret}],"accessProfiles":[{{"requiredScopes":"unrestricted","rowBoundaries":"unrestricted", "id":"reader","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]}}]}}]}}"#
     )
     .into_bytes()
 }
@@ -7091,7 +7237,6 @@ fn reviewed_source(request: ReviewedSourceRequest<'_>) -> ReviewedMigrationSourc
         postgres_major: 17,
         row_assertions,
         final_schema_fingerprint: final_fingerprint.to_owned(),
-        proofs: None,
     };
     let mut files = steps
         .into_iter()

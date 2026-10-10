@@ -1,0 +1,11 @@
+apiVersion: id.registrystack.org/formats/fuzz/runtime/v1
+kind: FuzzRuntimeConfig
+id: example
+version: "1"
+source:
+  type: ftp
+auth:
+  bearer: {tokenRef: a}
+  basic: {userRef: b}
+audience: {a: b}
+mode: loose

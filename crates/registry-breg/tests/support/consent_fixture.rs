@@ -10,7 +10,23 @@ pub const CONSENT_RECORD: usize = 4;
 
 pub fn source() -> Value {
     let authored = registry_breg::parse_project_yaml(PROJECT.as_bytes()).unwrap();
-    serde_json::to_value(authored).unwrap()
+    let mut value = serde_json::to_value(authored).unwrap();
+    remove_nulls(&mut value);
+    value
+}
+
+/// The serialized source writes an absent optional member as null, which an
+/// authored file never carries; removing it keeps the value a valid
+/// `registry.yaml` for the package build, which reads the source as authored.
+fn remove_nulls(value: &mut Value) {
+    match value {
+        Value::Object(members) => {
+            members.retain(|_, member| !member.is_null());
+            members.values_mut().for_each(remove_nulls);
+        }
+        Value::Array(items) => items.iter_mut().for_each(remove_nulls),
+        _ => {}
+    }
 }
 
 pub fn compile(value: &Value) -> Result<CompiledRegistry, registry_breg::CompileFailure> {
@@ -82,8 +98,8 @@ pub fn self_issued_project() -> Value {
             "action": "withdraw-consent", "operations": ["invoke"],
             "targets": [
                 {"entity": "consent-subject-link", "rowBoundaries": [{"field": "principal", "claim": "principal", "operator": "equals"}]},
-                {"entity": "person", "rowBoundaries": []},
-                {"entity": "consent-decision", "rowBoundaries": []}
+                {"entity": "person", "rowBoundaries": "unrestricted"},
+                {"entity": "consent-decision", "rowBoundaries": "unrestricted"}
             ],
             "results": ["decision"]
         }]

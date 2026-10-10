@@ -90,7 +90,9 @@ jobs:
             authcommon_parsers \
             sdjwt_holder_proof \
             sdjwt_issuance \
-            sqlite_statement
+            sqlite_statement \
+            yaml_decode \
+            yaml_reader
           do
             mkdir -p "fuzz/artifacts/${target}"
             cargo +nightly fuzz run --fuzz-dir fuzz --target x86_64-unknown-linux-gnu "${target}" -- \

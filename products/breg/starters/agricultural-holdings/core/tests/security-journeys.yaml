@@ -1,4 +1,5 @@
-apiVersion: registry.registrystack.org/breg-journeys/v1
+apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
 journeys:
   - id: starter-model-policy
     steps:
@@ -11,7 +12,7 @@ journeys:
             - starter:editor
           purpose: starter-learning
         request:
-          operation: create
+          type: create
           data:
             localIdentifier: SYNTHETIC-RIVER
             name: River Holding
@@ -28,7 +29,7 @@ journeys:
             - starter:editor
           purpose: starter-learning
         request:
-          operation: create
+          type: create
           data:
             localIdentifier: SYNTHETIC-LANDLESS
             name: Landless Cooperative Holding
@@ -45,7 +46,7 @@ journeys:
             - starter:editor
           purpose: starter-learning
         request:
-          operation: create
+          type: create
           data:
             localIdentifier: SYNTHETIC-COLLECTIVE
             name: Hill Collective Holding
@@ -62,7 +63,7 @@ journeys:
             - starter:editor
           purpose: starter-learning
         request:
-          operation: create
+          type: create
           data:
             localIdentifier: SYNTHETIC-ANA
             name: Ana Example
@@ -79,7 +80,7 @@ journeys:
             - starter:editor
           purpose: starter-learning
         request:
-          operation: create
+          type: create
           data:
             localIdentifier: SYNTHETIC-BO
             name: Bo Example
@@ -96,7 +97,7 @@ journeys:
             - starter:editor
           purpose: starter-learning
         request:
-          operation: create
+          type: create
           data:
             localIdentifier: SYNTHETIC-COOPERATIVE
             name: Example Agricultural Cooperative
@@ -113,7 +114,7 @@ journeys:
             - starter:editor
           purpose: starter-learning
         request:
-          operation: create
+          type: create
           data:
             localIdentifier: SYNTHETIC-GROUP
             name: Hill Growers Group
@@ -130,12 +131,12 @@ journeys:
             - starter:editor
           purpose: starter-learning
         request:
-          operation: create
+          type: create
           data:
             holderFarm:
-              recordRef: river
+              recordCapture: river
             holderPerson:
-              recordRef: ana
+              recordCapture: ana
             startDate: '2026-01-01'
         expect:
           outcome: success
@@ -150,12 +151,12 @@ journeys:
             - starter:editor
           purpose: starter-learning
         request:
-          operation: create
+          type: create
           data:
             holderFarm:
-              recordRef: river
+              recordCapture: river
             holderPerson:
-              recordRef: bo
+              recordCapture: bo
             startDate: '2026-01-01'
         expect:
           outcome: success
@@ -170,12 +171,12 @@ journeys:
             - starter:editor
           purpose: starter-learning
         request:
-          operation: create
+          type: create
           data:
             holderFarm:
-              recordRef: landless
+              recordCapture: landless
             holderOrganization:
-              recordRef: cooperative
+              recordCapture: cooperative
             startDate: '2026-01-01'
         expect:
           outcome: success
@@ -190,12 +191,12 @@ journeys:
             - starter:editor
           purpose: starter-learning
         request:
-          operation: create
+          type: create
           data:
             holderFarm:
-              recordRef: collective
+              recordCapture: collective
             holderGroup:
-              recordRef: group
+              recordCapture: group
             startDate: '2026-01-01'
         expect:
           outcome: success
@@ -210,7 +211,7 @@ journeys:
             - starter:editor
           purpose: starter-learning
         request:
-          operation: create
+          type: create
           data:
             localIdentifier: JOURNEY-FIRST-001
             name: Frist Record
@@ -226,7 +227,7 @@ journeys:
           scopes: []
           purpose: starter-learning
         request:
-          operation: create
+          type: create
           data:
             localIdentifier: DENIED-001
             name: Denied
@@ -242,8 +243,8 @@ journeys:
           scopes: []
           purpose: starter-learning
         request:
-          operation: get
-          recordRef: first-record
+          type: get
+          recordCapture: first-record
         expect:
           outcome: refusal
           status: 404
@@ -257,10 +258,10 @@ journeys:
             - starter:editor
           purpose: starter-learning
         request:
-          operation: create
+          type: create
           data:
             record:
-              recordRef: first-record
+              recordCapture: first-record
             name: First Record
             reason: Synthetic spelling correction
             supportingReference: SYNTHETIC-SUPPORT-001
@@ -276,8 +277,8 @@ journeys:
           scopes: []
           purpose: starter-learning
         request:
-          operation: get
-          recordRef: draft
+          type: get
+          recordCapture: draft
         expect:
           outcome: refusal
           status: 404
@@ -291,8 +292,8 @@ journeys:
             - starter:editor
           purpose: starter-learning
         request:
-          operation: get
-          recordRef: draft
+          type: get
+          recordCapture: draft
         expect:
           outcome: success
           status: 200
@@ -306,9 +307,9 @@ journeys:
             - starter:editor
           purpose: starter-learning
         request:
-          operation: submit_request
-          etagRef: before-submit
-          recordRef: before-submit
+          type: submit-request
+          etagCapture: before-submit
+          recordCapture: before-submit
         expect:
           outcome: success
           status: 200
@@ -321,8 +322,8 @@ journeys:
             - starter:reviewer
           purpose: starter-learning
         request:
-          operation: get
-          recordRef: draft
+          type: get
+          recordCapture: draft
         expect:
           outcome: success
           status: 200
@@ -336,8 +337,8 @@ journeys:
             - starter:reader
           purpose: starter-learning
         request:
-          operation: get
-          recordRef: first-record
+          type: get
+          recordCapture: first-record
         expect:
           outcome: success
           status: 200

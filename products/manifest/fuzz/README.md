@@ -7,15 +7,17 @@ checks.
 
 ## Targets
 
-- `metadata_manifest_yaml` exercises YAML deserialization into the real
-  `MetadataManifest` type, validation, digesting, compilation, and every
-  exported renderer that can be reached from a compiled manifest.
+- `metadata_manifest_yaml` exercises `read_metadata`, the shared reader path
+  `registry-manifest validate` uses into the real `MetadataManifest` type,
+  validation, digesting, compilation, and every exported renderer that can be
+  reached from a compiled manifest.
 - `rendered_artifact_json` exercises JSON parsing for rendered artifacts,
   canonical JSON hashing, metadata-manifest JSON deserialization, and
   `EvidencePackMetadata` policy-hash verification.
 
-The targets use exported `registry-manifest-core` types and functions directly.
-They do not declare local mirror structs for product types.
+The targets use exported `registry-manifest-cli` and `registry-manifest-core`
+types and functions directly. They do not declare local mirror structs for
+product types.
 
 ## Running locally
 

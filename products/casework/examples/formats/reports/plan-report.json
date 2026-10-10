@@ -1,0 +1,19 @@
+{
+  "ok": false,
+  "command": "plan",
+  "status": "domain-refusal",
+  "apiVersion": "registry.registrystack.org/caseworkctl/v1alpha3",
+  "diagnostics": [
+    {
+      "code": "platform.runtime-config.path",
+      "message": "the runtime configuration path must be absolute, without . or .. components",
+      "path": "",
+      "severity": "error",
+      "source": {
+        "file": "runtime.yaml"
+      },
+      "suggestedAction": "Give the absolute path of the runtime configuration file, without . or .. components."
+    }
+  ],
+  "kind": "PlanReport"
+}

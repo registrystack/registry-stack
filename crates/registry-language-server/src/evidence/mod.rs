@@ -545,7 +545,7 @@ mod tests {
             .map(|diagnostic| diagnostic.message.as_str())
             .collect::<Vec<_>>();
         assert!(
-            messages.contains(&"This question exceeds the 65536-byte limit the editor indexes"),
+            messages.contains(&"This question exceeds the 1048576-byte limit the editor indexes"),
             "{messages:?}"
         );
         assert!(
@@ -675,7 +675,7 @@ mod tests {
         assert_eq!(loaded.diagnostics.len(), 1);
         assert_eq!(
             loaded.diagnostics[0].code.as_deref(),
-            Some("evidence/project-ceiling")
+            Some("evidence.project.ceiling")
         );
         assert_eq!(loaded.diagnostics[0].message, PROJECT_CEILING_MESSAGE);
     }

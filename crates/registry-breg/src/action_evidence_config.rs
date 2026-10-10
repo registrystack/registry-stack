@@ -5,7 +5,8 @@ use crate::{
     action_evidence_client::{EvidenceActionClient, EvidenceProviderBinding},
     model::CompiledRegistry,
 };
-use registry_platform_config::SecretResolver;
+use registry_platform_config::{SecretReference, SecretResolver};
+use registry_platform_yaml::Url;
 use serde::Deserialize;
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -16,16 +17,26 @@ use std::{
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct EvidenceProviderConfig {
-    pub base_url: String,
+    /// The Evidence service's base URL. It is `https`; `http` is accepted
+    /// only for a loopback host, for local development.
+    pub base_url: Url,
     pub trust_binding_id: String,
     /// Compatibility path for a pre-issued token. Long-running providers
     /// should configure `privateKeyJwt` so expiry triggers a fresh exchange.
-    pub token_ref: Option<String>,
+    /// Exactly one of `tokenRef` and `privateKeyJwt` is written.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_ref: Option<SecretReference>,
+    /// The refreshing credential: a private-key JWT client exchange.
+    /// Exactly one of `tokenRef` and `privateKeyJwt` is written.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub private_key_jwt: Option<EvidencePrivateKeyJwtConfig>,
-    pub trusted_jwks_ref: String,
+    pub trusted_jwks_ref: SecretReference,
     #[serde(default)]
     pub revoked_key_ids: Vec<String>,
-    pub ca_bundle_ref: Option<String>,
+    /// PEM CA bundle for the Evidence service and its token endpoint.
+    /// Omitted, the platform's trusted roots verify them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ca_bundle_ref: Option<SecretReference>,
 }
 
 #[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
@@ -34,7 +45,7 @@ pub struct EvidenceProviderConfig {
 pub struct EvidencePrivateKeyJwtConfig {
     pub token_endpoint: String,
     pub client_id: String,
-    pub private_key_ref: String,
+    pub private_key_ref: SecretReference,
     pub assertion_audience: Option<String>,
     pub resource: Option<String>,
     #[serde(default)]
@@ -87,14 +98,14 @@ pub fn activate(
             .as_ref()
             .map(|reference| {
                 secrets
-                    .resolve(reference)
+                    .resolve_reference(reference)
                     .map(|secret| secret.expose_secret().to_vec())
                     .map_err(|_| Error::Secret)
             })
             .transpose()?;
         let token_provider = token_provider(binding, secrets, ca_bundle.as_deref())?;
         let keys = secrets
-            .resolve(&binding.trusted_jwks_ref)
+            .resolve_reference(&binding.trusted_jwks_ref)
             .map_err(|_| Error::Secret)?;
         let jwks = registry_platform_crypto::parse_json_strict(keys.expose_secret())
             .map_err(|_| Error::InvalidBinding)?;
@@ -102,6 +113,7 @@ pub fn activate(
         let mut config = registry_evidence_client::EvidenceClientConfig::new(
             binding
                 .base_url
+                .as_str()
                 .parse()
                 .map_err(|_| Error::InvalidBinding)?,
             token_provider,
@@ -150,7 +162,9 @@ fn token_provider(
     }
     let provider: Arc<dyn registry_evidence_client::TokenProvider> =
         if let Some(reference) = &binding.token_ref {
-            let token = secrets.resolve(reference).map_err(|_| Error::Secret)?;
+            let token = secrets
+                .resolve_reference(reference)
+                .map_err(|_| Error::Secret)?;
             let token = std::str::from_utf8(token.expose_secret()).map_err(|_| Error::Secret)?;
             Arc::new(
                 registry_evidence_client::StaticToken::new(token.to_owned())
@@ -166,7 +180,7 @@ fn token_provider(
                 .parse()
                 .map_err(|_| Error::InvalidBinding)?;
             let key = secrets
-                .resolve(&source.private_key_ref)
+                .resolve_reference(&source.private_key_ref)
                 .map_err(|_| Error::Secret)?;
             let key = std::str::from_utf8(key.expose_secret()).map_err(|_| Error::Secret)?;
             let key = registry_platform_crypto::PrivateJwk::parse(key)
@@ -251,11 +265,11 @@ mod tests {
             .unwrap()
             .is_some());
         let binding = EvidenceProviderConfig {
-            base_url: "https://invalid.example".into(),
+            base_url: Url::new("https://invalid.example").unwrap(),
             trust_binding_id: "unused".into(),
-            token_ref: Some("secret:file/missing".into()),
+            token_ref: Some(SecretReference::parse("secret:file/missing").unwrap()),
             private_key_jwt: None,
-            trusted_jwks_ref: "secret:file/missing".into(),
+            trusted_jwks_ref: SecretReference::parse("secret:file/missing").unwrap(),
             revoked_key_ids: vec![],
             ca_bundle_ref: None,
         };
@@ -295,11 +309,11 @@ mod tests {
         )
         .unwrap();
         let mut binding = EvidenceProviderConfig {
-            base_url: "https://evidence.example.org".into(),
+            base_url: Url::new("https://evidence.example.org").unwrap(),
             trust_binding_id: "reviewed".into(),
-            token_ref: Some("secret:file/token".into()),
+            token_ref: Some(SecretReference::parse("secret:file/token").unwrap()),
             private_key_jwt: None,
-            trusted_jwks_ref: "secret:file/unused".into(),
+            trusted_jwks_ref: SecretReference::parse("secret:file/unused").unwrap(),
             revoked_key_ids: vec![],
             ca_bundle_ref: None,
         };
@@ -307,7 +321,7 @@ mod tests {
         binding.private_key_jwt = Some(EvidencePrivateKeyJwtConfig {
             token_endpoint: "https://issuer.example.org/token".into(),
             client_id: "action-client".into(),
-            private_key_ref: "secret:file/key".into(),
+            private_key_ref: SecretReference::parse("secret:file/key").unwrap(),
             assertion_audience: Some("https://issuer.example.org".into()),
             resource: Some("https://evidence.example.org".into()),
             scopes: vec!["evidence.read".into()],
@@ -327,7 +341,7 @@ mod tests {
             )
         );
         write_secret("ca", &ca);
-        binding.ca_bundle_ref = Some("secret:file/ca".into());
+        binding.ca_bundle_ref = Some(SecretReference::parse("secret:file/ca").unwrap());
         let retained_ca = secrets.resolve("secret:file/ca").unwrap();
         write_secret("ca", "invalid replacement certificate");
         // A later file replacement must not change the already resolved bundle.
@@ -431,11 +445,11 @@ mod tests {
             Err(crate::runtime_config::RuntimeConfigError::InvalidBinding)
         ));
         let binding = EvidenceProviderConfig {
-            base_url: "https://evidence.example".into(),
+            base_url: Url::new("https://evidence.example").unwrap(),
             trust_binding_id: "reviewed".into(),
-            token_ref: Some("secret:file/missing".into()),
+            token_ref: Some(SecretReference::parse("secret:file/missing").unwrap()),
             private_key_jwt: None,
-            trusted_jwks_ref: "secret:file/missing".into(),
+            trusted_jwks_ref: SecretReference::parse("secret:file/missing").unwrap(),
             revoked_key_ids: vec![],
             ca_bundle_ref: None,
         };
@@ -469,8 +483,8 @@ mod tests {
         )
         .unwrap();
         let binding = EvidenceProviderConfig {
-            token_ref: Some("secret:file/token".into()),
-            trusted_jwks_ref: "secret:file/jwks".into(),
+            token_ref: Some(SecretReference::parse("secret:file/token").unwrap()),
+            trusted_jwks_ref: SecretReference::parse("secret:file/jwks").unwrap(),
             ..binding
         };
         assert!(activate(

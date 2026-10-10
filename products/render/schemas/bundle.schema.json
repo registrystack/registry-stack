@@ -1,0 +1,119 @@
+{
+  "$defs": {
+    "DocumentFile": {
+      "additionalProperties": false,
+      "description": "One document type as `manifest.yaml` writes it.",
+      "properties": {
+        "entryFile": {
+          "description": "Entry point relative to the bundle root: a `.typ` file inside the\nbundle.",
+          "not": {
+            "pattern": "^/|\\.\\."
+          },
+          "pattern": "\\.typ$",
+          "type": "string"
+        },
+        "id": {
+          "$ref": "#/$defs/LocalId",
+          "description": "Stable document identifier used in requests and routes."
+        },
+        "labels": {
+          "default": [],
+          "description": "Label tables the template receives, by locale: each names\n`labels/<locale>.yaml`.",
+          "items": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "pdfStandard": {
+          "$ref": "#/$defs/PdfStandardSpec",
+          "description": "PDF standard for this document; plain PDF when absent."
+        },
+        "schemaFile": {
+          "description": "JSON Schema (draft 2020-12) for the request data, relative to the\nbundle root: a `.json` file inside the bundle.",
+          "not": {
+            "pattern": "^/|\\.\\."
+          },
+          "pattern": "\\.json$",
+          "type": "string"
+        },
+        "version": {
+          "description": "The document's own version; printed on paper by templates that wish to.",
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "version",
+        "entryFile"
+      ],
+      "type": "object"
+    },
+    "LocalId": {
+      "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+      "type": "string"
+    },
+    "PdfStandardSpec": {
+      "description": "The PDF standard a document is rendered under. Mirrors the Typst CLI's\nspellings exactly so bundles and CLI examples agree.",
+      "enum": [
+        "1.4",
+        "1.5",
+        "1.6",
+        "1.7",
+        "2.0",
+        "a-1b",
+        "a-1a",
+        "a-2b",
+        "a-2u",
+        "a-2a",
+        "a-3b",
+        "a-3u",
+        "a-3a",
+        "a-4",
+        "a-4f",
+        "a-4e",
+        "ua-1"
+      ],
+      "type": "string"
+    }
+  },
+  "$id": "https://id.registrystack.org/schemas/render/bundle/bundle.v1alpha1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "`manifest.yaml`: the document types a bundle declares.",
+  "properties": {
+    "apiVersion": {
+      "const": "id.registrystack.org/formats/render/bundle/v1alpha1",
+      "type": "string"
+    },
+    "bundleVersion": {
+      "description": "Author-defined bundle version, monotonic per bundle.",
+      "format": "uint32",
+      "maximum": 4294967295,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "documents": {
+      "description": "The document types, each with an id unique in the bundle.",
+      "items": {
+        "$ref": "#/$defs/DocumentFile"
+      },
+      "type": "array"
+    },
+    "kind": {
+      "const": "RenderBundle",
+      "type": "string"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind",
+    "bundleVersion"
+  ],
+  "title": "Registry Render bundle manifest",
+  "type": "object"
+}

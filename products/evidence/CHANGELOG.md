@@ -2,6 +2,157 @@
 
 ## Unreleased
 
+### Evidence clients and OID4VCI
+
+- BREAKING: the `evidence-oid4vci` runtime file has an envelope
+  (`apiVersion`, `kind`) and a published schema, binds listeners with
+  `bind`, names the delivery client key as a secret reference
+  (`tokenClient.privateKeyRef`) where it was a file path, and states
+  `offers.authorizedClients` and `offers.requiredScopes`. `evidence-oid4vci
+  check` reports positioned, coded diagnostics, supports `--format json` and
+  `--deny-warnings`, and exits 0, 1, 2, or 3. Every change, its migration
+  step, and the old-message-to-code table are in
+  `release/notes/config-conventions/evidence.md`, section "Evidence clients
+  and OID4VCI".
+- BREAKING: `evidencectl check --file <path> --deny-warnings` is refused as
+  a usage error (exit 2). A single-file check reports no warnings, so the
+  flag silently did nothing. Drop `--deny-warnings` from `--file` invocations.
+- BREAKING: the Evidence client reads its profile and reviewed contracts
+  through the shared configuration reader. Their schemas are generated and
+  published under `id.registrystack.org`, replacing the hand-written
+  `client-profile.schema.yaml` and `client-contracts.schema.yaml`; `null`
+  members, contracts over 1 MiB, and control characters in `clientId` are
+  refused. The added `read_client_profile` and `read_reviewed_contracts`
+  return positioned, coded diagnostics. Migration steps and codes are in the
+  same release-note section.
+
+### Evidence authoring tools
+
+- BREAKING: `evidencectl source mock serve`, `generate`, and `check` no longer
+  accept the retired `--project` flag (use the positional project directory),
+  and `evidencectl client profile create` and `client contracts fetch` no
+  longer accept `--out` (use `--output`). See "Evidence tooling files" in
+  `release/notes/config-conventions/evidence.md`.
+- BREAKING: `evidencectl` no longer accepts the second spellings of arguments
+  that have a current one. `--project` is refused on `target explain`,
+  `dev stop`, `dev clean`, `source add`, `source suggest`, `source detach`,
+  `fixtures run`, and `tooling editor` (use the positional project directory);
+  `keygen` refuses `--out-dir`, `--public-out`, and `--out` (use
+  `--output-dir`, `--public-output`, and `--output`); `jwks` refuses `--out`
+  (use `--output`). The seed of a mock plan is bounded by the shared reader
+  and refused as `config.out-of-range`. See "Evidence tooling files" in
+  `release/notes/config-conventions/evidence.md`.
+- BREAKING: a file under `sources/` opens with `apiVersion`
+  (`id.registrystack.org/formats/evidence/source/v1alpha1`) and `kind`
+  (`EvidenceSource`), and a file under `selectors/` with
+  `id.registrystack.org/formats/evidence/selector/v1alpha1` and
+  `EvidenceSelector`. Both are read by the shared configuration reader, have a
+  generated schema mapped for editors, and lose the two lines before the
+  compile. A BReg export writes them. Migration: add the two lines at the top
+  of every such file; see "Evidence tooling files" in
+  `release/notes/config-conventions/evidence.md`.
+- `evidencectl` writes the mock plan and the access policy and client
+  documents with sequences indented beneath their keys, and reports a refused
+  `source mock` argument combination (`--http-addr`, `--path-parameter`) as a
+  diagnostic with an `evidence.mock.*` code and a fix sentence.
+- `evidencectl check --file <file>` checks one client profile, reviewed contracts
+  file, development state file, source-import baseline or journal, source
+  resolution file, or source export manifest offline, with the shared
+  diagnostics and exit codes 0, 1 and 3.
+- BREAKING: the resolution file `evidencectl source diff` and `evidencectl
+  source update` read through `--resolutions` opens with `apiVersion`
+  (`id.registrystack.org/formats/evidence/source-resolution/v1alpha1`) and
+  `kind` (`EvidenceSourceResolution`) in place of `formatVersion`, names each
+  resolution with `type` in place of `choice`, and is read by the shared
+  configuration reader. A resolution of `keep` or `adopt` takes no other
+  member. A generated JSON Schema ships with it. See "Evidence
+  tooling files" in `release/notes/config-conventions/evidence.md`.
+
+- BREAKING: the source-import baseline (`.evidence/source-imports/state.json`)
+  and transaction journal (`.evidence/source-imports/transaction.json`) open
+  with `apiVersion` and `kind` in place of `formatVersion`. `evidencectl source
+  import` refuses a file in the earlier shape with a message that names the
+  fix. See "Evidence tooling files" in
+  `release/notes/config-conventions/evidence.md`.
+
+- BREAKING: the session state `evidencectl dev` retains in
+  `.evidence/dev/state.json` opens with `apiVersion`
+  (`id.registrystack.org/formats/evidence/dev-state/v6`) and `kind`
+  (`EvidenceDevState`) in place of `schema`, and omits `caller`,
+  `issuerProject`, `issuerOwner`, and `failure` when unset where it wrote
+  `null`. `evidencectl` refuses state in the earlier shape with a message that
+  names the fix. Migration: see "Evidence tooling files" in
+  `release/notes/config-conventions/evidence.md`.
+
+- BREAKING: every `evidencectl --format json` report carries `apiVersion`
+  (`id.registrystack.org/formats/evidence/ctl-report/v1alpha1`) and `kind`
+  (`EvidenceCtlReport`) after `ok`, `command`, and `status`. A consumer that
+  compared a whole report for equality, or rejected unknown members, must
+  accept the two new members. The release note "Evidence tooling files" has
+  the migration step.
+
+- BREAKING: every authored YAML document
+  opens with `apiVersion` and `kind`, and is read by the shared configuration
+  reader: `${...}`, anchors, aliases, tags, unknown, duplicate, and null keys
+  are refused at their line and column. `evidencectl check --deny-findings`
+  is now `--deny-warnings`, its report lists `diagnostics` with
+  `severity: warning`, its codes follow `evidence.<area>.<condition>`, and
+  `--production` requires `--target`. `release/notes/config-conventions/evidence.md`
+  ("Evidence authoring tools") gives each migration and the full code table.
+- BREAKING: a question answer's concept URI is written `answers[].uri`, no
+  longer `answers[].id`; a file that keeps `id` under an answer is refused as
+  `config.removed-key`. Migration: rename the key in every
+  `questions/*.yaml`.
+- BREAKING: `evidencectl test` and `evidencectl fixtures run` read every
+  `fixtures/*.yaml` of an editable project through the shared configuration
+  reader before compiling or running anything, so a file the reader refuses
+  is reported with its own code, pointer, line, and column
+  (`yaml.anchor`, `config.wrong-kind`, `yaml.too-large`, and the rest) and no
+  `evidence` step runs against it; the generic `evidencectl.fixtures.failed`
+  stays for a run whose cases fail. A `fixtures/*.yaml` file that no question
+  references and that is not an `EvidenceFixture` is now refused. Migration:
+  move such a file out of `fixtures/`, or give it the fixture envelope.
+  `evidencectl test --deny-warnings` and `evidencectl fixtures run
+  --deny-warnings` are new and make a reader warning exit 1.
+
+### Evidence runtime
+
+- `evidence check --format json` and `evidence check-policy --format json`
+  carry `apiVersion` (`id.registrystack.org/formats/evidence/ctl-report/v1alpha1`)
+  and `kind` (`EvidenceCtlReport`) after `status`, as every `evidencectl`
+  report does. Two members are added and none moves, so this is not breaking
+  for a consumer that ignores unknown members.
+- BREAKING: plain `evidence check` is offline. It reads the runtime file,
+  verifies and compiles the package, reads each CA bundle, and checks the
+  bindings between them, and reads no secret material, file modes, extract
+  freshness, signer, audit destination, or network. Run
+  `evidence check --require-runtime-dependencies` on the target host for the
+  full proof. Exit codes: 0 clean, 1 refused, 2 usage, 3 an input could not
+  be read.
+- BREAKING: `evidence check` reports every problem in the shared diagnostic
+  shape with a three-segment code and a summary line, writes one JSON
+  document with `--format json`, and adds `--deny-warnings` and
+  `--environment`.
+- BREAKING: the bundle, the runtime file, code lists, fixtures, fact schemas,
+  and both verification policies are read by the shared configuration
+  reader: the shared YAML subset, unknown keys refused at their line and
+  column, `${...}` refused in the bundle, code lists, and policies, and every
+  bundle and runtime integer bounded.
+- BREAKING: `service.publicOrigin`, `publication.endpointUrl`, and each
+  `baseUrl` refuse userinfo, a scheme other than `http` or `https`, or more
+  than 2048 characters.
+- BREAKING: a fixture opens with
+  `apiVersion: id.registrystack.org/formats/evidence/fixture/v1alpha1` and
+  `kind: EvidenceFixture` in place of `fixture: <id>`.
+- BREAKING: `--runtime` and `REGISTRY_EVIDENCE_RUNTIME` exit 2 (usage).
+- `evidence check-policy` checks one verification or holder-bound
+  verification policy offline, as `verify` and `verify-presentation` read it.
+- The code list JSON Schema is generated from the reader types, and
+  `editors/configure.py` maps deployment-project files to their schemas.
+
+Migration steps and the diagnostic code table:
+`release/notes/config-conventions/evidence.md`, section "Evidence runtime".
+
 ## v0.39.0 - 2026-10-06
 
 - BREAKING: before 1.0, a release reads only the state its immediate

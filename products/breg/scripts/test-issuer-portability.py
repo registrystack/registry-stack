@@ -243,7 +243,8 @@ def journey(root: Path, bregctl: str, breg: str, docker: str,
             test_binaries: dict[str, str]) -> None:
     project = root / "stock-project"
     shutil.copytree(ROOT / "products/breg/acceptance/issuer-portability", project)
-    write(project / "dev-clients.yaml", """version: 1
+    write(project / "dev-clients.yaml", """apiVersion: id.registrystack.org/formats/breg/dev-clients/v1alpha1
+kind: BRegDevClients
 clients:
   - id: clerk-service
     accessProfiles: [clerk]
