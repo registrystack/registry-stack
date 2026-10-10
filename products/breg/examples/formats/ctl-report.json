@@ -4,7 +4,7 @@
   "ok": true,
   "command": "explain",
   "profile": "authoring",
-  "revision": "sha256:daf2a2faa3b9a35e00ff72a078e4d4dd4ed9bfdcd9df8b22a78030caad160599",
+  "revision": "sha256:8fd54acce17a6be2c8280c37c5f75d9365d589aec60dab87bc963dca9fc28dce",
   "findings": [],
   "explanation": {
     "actions": [],
