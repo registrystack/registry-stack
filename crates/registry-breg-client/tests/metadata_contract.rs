@@ -145,6 +145,31 @@ fn fixture() -> Value {
     })
 }
 
+fn statistical_dataset_fixture() -> Value {
+    json!({
+        "id": "licence-start-cohort",
+        "unit": "fishing-licence",
+        "periodKind": "flow",
+        "granularity": "year",
+        "firstPeriod": "2020",
+        "dimensions": [{
+            "field": "licence-status",
+            "vocabulary": "licence-status",
+            "codes": ["active", "suspended", "_U", "_T"]
+        }],
+        "definitionDigest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "operations": ["list_releases", "read_latest_release", "read_live", "read_release_version", "read_released_series"]
+    })
+}
+
+fn statistical_metadata(datasets: Value) -> Value {
+    let mut value = fixture();
+    value["entities"] = json!([]);
+    value["operations"] = json!([]);
+    value["statisticalDatasets"] = datasets;
+    value
+}
+
 fn lifecycle_schema(kind: &str) -> Value {
     match kind {
         "apply-request" => json!({
@@ -303,6 +328,154 @@ fn runtime_v1_promotes_only_exact_direct_create_and_patch_contracts() {
         error.kind(),
         BRegMetadataSelectionErrorKind::UnsupportedOperation
     );
+}
+
+#[test]
+fn runtime_v1_accepts_exact_statistical_discovery_without_promoting_record_authority() {
+    let value = statistical_metadata(json!([statistical_dataset_fixture()]));
+
+    let metadata = parse(&value);
+    assert!(metadata.operations().is_empty());
+
+    for (member, written) in [
+        ("futureAuthority", json!(true)),
+        ("operations", json!(["future_operation"])),
+        ("firstPeriod", json!("2020-01")),
+    ] {
+        let mut malformed = value.clone();
+        malformed["statisticalDatasets"][0][member] = written;
+        assert_eq!(
+            BRegMetadata::from_slice(&serde_json::to_vec(&malformed).unwrap())
+                .unwrap_err()
+                .kind(),
+            BRegMetadataErrorKind::Shape
+        );
+    }
+}
+
+#[test]
+fn statistical_discovery_calendar_domains_and_identifiers_are_exact() {
+    let boolean_dimension = json!({
+        "field": "active",
+        "vocabulary": "boolean",
+        "codes": ["true", "false", "_T"]
+    });
+    for (label, granularity, first_period, dimensions) in [
+        ("day", "day", "2025-01-01", json!([])),
+        (
+            "leap day",
+            "day",
+            "2024-02-29",
+            json!([boolean_dimension.clone()]),
+        ),
+        (
+            "month",
+            "month",
+            "2025-01",
+            json!([boolean_dimension.clone()]),
+        ),
+        (
+            "quarter",
+            "quarter",
+            "2025-Q1",
+            json!([boolean_dimension.clone()]),
+        ),
+        ("year", "year", "2025", json!([boolean_dimension.clone()])),
+    ] {
+        let mut dataset = statistical_dataset_fixture();
+        dataset["granularity"] = json!(granularity);
+        dataset["firstPeriod"] = json!(first_period);
+        dataset["dimensions"] = dimensions;
+        let metadata = BRegMetadata::from_slice(
+            &serde_json::to_vec(&statistical_metadata(json!([dataset]))).unwrap(),
+        )
+        .unwrap_or_else(|error| panic!("{label} metadata failed: {error:?}"));
+        assert!(metadata.operations().is_empty(), "{label}");
+    }
+
+    let mut malformed_calendar = statistical_dataset_fixture();
+    malformed_calendar["granularity"] = json!("day");
+    malformed_calendar["firstPeriod"] = json!("2023-02-29");
+    let mut terminal_day = statistical_dataset_fixture();
+    terminal_day["granularity"] = json!("day");
+    terminal_day["firstPeriod"] = json!("9999-12-31");
+    let mut terminal_month = statistical_dataset_fixture();
+    terminal_month["granularity"] = json!("month");
+    terminal_month["firstPeriod"] = json!("9999-12");
+    let mut terminal_quarter = statistical_dataset_fixture();
+    terminal_quarter["granularity"] = json!("quarter");
+    terminal_quarter["firstPeriod"] = json!("9999-Q4");
+    let mut terminal_year = statistical_dataset_fixture();
+    terminal_year["firstPeriod"] = json!("9999");
+
+    let duplicate_dataset = statistical_dataset_fixture();
+    let mut duplicate_dimension = statistical_dataset_fixture();
+    duplicate_dimension["dimensions"] =
+        json!([boolean_dimension.clone(), boolean_dimension.clone()]);
+    let mut duplicate_code = statistical_dataset_fixture();
+    duplicate_code["dimensions"] = json!([{
+        "field": "active",
+        "vocabulary": "boolean",
+        "codes": ["true", "true", "_T"]
+    }]);
+    let mut duplicate_operation = statistical_dataset_fixture();
+    duplicate_operation["operations"] = json!(["read_live", "read_live"]);
+
+    for (label, datasets, expected) in [
+        (
+            "malformed calendar",
+            json!([malformed_calendar]),
+            BRegMetadataErrorKind::Shape,
+        ),
+        (
+            "terminal day",
+            json!([terminal_day]),
+            BRegMetadataErrorKind::Shape,
+        ),
+        (
+            "terminal month",
+            json!([terminal_month]),
+            BRegMetadataErrorKind::Shape,
+        ),
+        (
+            "terminal quarter",
+            json!([terminal_quarter]),
+            BRegMetadataErrorKind::Shape,
+        ),
+        (
+            "terminal year",
+            json!([terminal_year]),
+            BRegMetadataErrorKind::Shape,
+        ),
+        (
+            "duplicate dataset",
+            json!([duplicate_dataset.clone(), duplicate_dataset]),
+            BRegMetadataErrorKind::DuplicateIdentifier,
+        ),
+        (
+            "duplicate dimension",
+            json!([duplicate_dimension]),
+            BRegMetadataErrorKind::DuplicateIdentifier,
+        ),
+        (
+            "duplicate code",
+            json!([duplicate_code]),
+            BRegMetadataErrorKind::DuplicateIdentifier,
+        ),
+        (
+            "duplicate operation",
+            json!([duplicate_operation]),
+            BRegMetadataErrorKind::DuplicateIdentifier,
+        ),
+    ] {
+        assert_eq!(
+            BRegMetadata::from_slice(&serde_json::to_vec(&statistical_metadata(datasets)).unwrap())
+                .unwrap_err()
+                .kind(),
+            expected,
+            "{label}"
+        );
+    }
 }
 
 /// A company carrying `capability`, with every field the capability names

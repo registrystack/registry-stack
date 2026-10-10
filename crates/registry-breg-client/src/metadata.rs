@@ -10,6 +10,7 @@ use std::fmt;
 use jsonschema::{Draft, JSONSchema};
 use serde::de::{self, Deserialize, Deserializer, MapAccess, SeqAccess, Visitor};
 use serde_json::{Map, Number, Value};
+use time::{Date, Month};
 use uuid::Uuid;
 
 /// Maximum accepted size of one Base Registry Engine runtime metadata document.
@@ -2876,6 +2877,11 @@ fn parse_metadata(value: Value) -> Result<BRegMetadata, BRegMetadataError> {
         .map(|value| parse_immediate_actions(value.clone()))
         .transpose()?
         .unwrap_or_default();
+    // Statistical discovery remains available through `registry_metadata`.
+    // It grants no record authority here, but its served shape stays strict.
+    if let Some(statistical_datasets) = root.remove("statisticalDatasets") {
+        validate_statistical_datasets(statistical_datasets)?;
+    }
     finish(root)?;
 
     ensure_unique(entities.iter().map(|entity| entity.id.as_str()))?;
@@ -2892,6 +2898,111 @@ fn parse_metadata(value: Value) -> Result<BRegMetadata, BRegMetadataError> {
         actions,
         immediate_actions,
         source_binding: None,
+    })
+}
+
+fn validate_statistical_datasets(value: Value) -> Result<(), BRegMetadataError> {
+    let datasets = array(value)?;
+    if datasets.is_empty() {
+        return Err(metadata_error(BRegMetadataErrorKind::Shape));
+    }
+    let mut identifiers = Vec::with_capacity(datasets.len());
+    for value in datasets {
+        let mut dataset = object(value)?;
+        identifiers.push(identifier(required(&mut dataset, "id")?)?);
+        identifier(required(&mut dataset, "unit")?)?;
+
+        match string(required(&mut dataset, "periodKind")?)?.as_str() {
+            "flow" | "stock" => {}
+            _ => return Err(metadata_error(BRegMetadataErrorKind::Shape)),
+        }
+        let granularity = string(required(&mut dataset, "granularity")?)?;
+        if !matches!(granularity.as_str(), "day" | "month" | "quarter" | "year") {
+            return Err(metadata_error(BRegMetadataErrorKind::Shape));
+        }
+        let first_period = bounded_short_text(required(&mut dataset, "firstPeriod")?)?;
+        if !valid_statistical_period(&first_period, &granularity) {
+            return Err(metadata_error(BRegMetadataErrorKind::Shape));
+        }
+
+        let dimensions = array(required(&mut dataset, "dimensions")?)?;
+        let mut dimension_fields = Vec::with_capacity(dimensions.len());
+        for value in dimensions {
+            let mut dimension = object(value)?;
+            dimension_fields.push(identifier(required(&mut dimension, "field")?)?);
+            identifier(required(&mut dimension, "vocabulary")?)?;
+            let codes = text_array(required(&mut dimension, "codes")?)?;
+            if codes.last().map(String::as_str) != Some("_T") {
+                return Err(metadata_error(BRegMetadataErrorKind::Shape));
+            }
+            ensure_unique(codes.iter().map(String::as_str))?;
+            finish(dimension)?;
+        }
+        ensure_unique(dimension_fields.iter().map(String::as_str))?;
+
+        let definition_digest = string(required(&mut dataset, "definitionDigest")?)?;
+        if !valid_revision(&definition_digest) {
+            return Err(metadata_error(BRegMetadataErrorKind::Revision));
+        }
+        let operations = identifier_array(required(&mut dataset, "operations")?)?;
+        if operations.is_empty()
+            || operations.iter().any(|operation| {
+                !matches!(
+                    operation.as_str(),
+                    "read_live"
+                        | "list_releases"
+                        | "read_released_series"
+                        | "read_latest_release"
+                        | "read_release_version"
+                        | "publish_release"
+                        | "withdraw_release"
+                )
+            })
+        {
+            return Err(metadata_error(BRegMetadataErrorKind::Shape));
+        }
+        ensure_unique(operations.iter().map(String::as_str))?;
+        finish(dataset)?;
+    }
+    ensure_unique(identifiers.iter().map(String::as_str))
+}
+
+fn valid_statistical_period(period: &str, granularity: &str) -> bool {
+    let bytes = period.as_bytes();
+    parse_ascii_decimal(bytes.get(..4).unwrap_or_default())
+        .filter(|year| (1..=9999).contains(year))
+        .is_some_and(|year| match granularity {
+            "year" if bytes.len() == 4 => year < 9999,
+            "quarter" if bytes.len() == 7 && bytes[4] == b'-' && bytes[5] == b'Q' => {
+                parse_ascii_decimal(&bytes[6..])
+                    .filter(|quarter| (1..=4).contains(quarter))
+                    .is_some_and(|quarter| year < 9999 || quarter < 4)
+            }
+            "month" if bytes.len() == 7 && bytes[4] == b'-' => parse_ascii_decimal(&bytes[5..])
+                .filter(|month| (1..=12).contains(month))
+                .is_some_and(|month| year < 9999 || month < 12),
+            "day" if bytes.len() == 10 && bytes[4] == b'-' && bytes[7] == b'-' => {
+                let month = parse_ascii_decimal(&bytes[5..7])
+                    .and_then(|month| u8::try_from(month).ok())
+                    .and_then(|month| Month::try_from(month).ok());
+                let day = parse_ascii_decimal(&bytes[8..]).and_then(|day| u8::try_from(day).ok());
+                match (month, day) {
+                    (Some(month), Some(day)) => {
+                        Date::from_calendar_date(year as i32, month, day).is_ok()
+                            && !(year == 9999 && month == Month::December && day == 31)
+                    }
+                    _ => false,
+                }
+            }
+            _ => false,
+        })
+}
+
+fn parse_ascii_decimal(bytes: &[u8]) -> Option<u32> {
+    (!bytes.is_empty() && bytes.iter().all(u8::is_ascii_digit)).then(|| {
+        bytes
+            .iter()
+            .fold(0_u32, |value, byte| value * 10 + u32::from(byte - b'0'))
     })
 }
 

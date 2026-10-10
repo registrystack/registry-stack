@@ -53,6 +53,20 @@ before(async () => {
       metadataVersion: '1',
       entities: [],
       operations: [],
+      statisticalDatasets: [{
+        id: 'licence-start-cohort',
+        unit: 'fishing-licence',
+        periodKind: 'flow',
+        granularity: 'year',
+        firstPeriod: '2020',
+        dimensions: [{
+          field: 'licence-status',
+          vocabulary: 'licence-status',
+          codes: ['active', 'suspended', '_U', '_T'],
+        }],
+        definitionDigest: `sha256:${'b'.repeat(64)}`,
+        operations: ['read_live'],
+      }],
     }));
     else if (request.url.endsWith(`/v1/records/companies/${MISSING_RECORD_ID}`)) {
       response.statusCode = 404;
@@ -189,6 +203,7 @@ test('a missing record fails with its own not-found kind', async () => {
 test('metadata selection failures use the public error envelope', async () => {
   const metadata = await new BaseRegistryClient({ baseUrl }).registryContract();
   assert.equal(metadata.etag, null);
+  assert.deepEqual(metadata.operations, [], 'statistical discovery adds no record authority');
   assert.throws(
     () => metadata.selectCreate('records.missing.create', 'writer'),
     (error) => error instanceof BaseRegistryClientError
