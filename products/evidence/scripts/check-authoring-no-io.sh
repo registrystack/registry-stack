@@ -188,7 +188,7 @@ lint_probe handles
 # workspace `target` directory, so ask it where rather than assuming the last.
 target_directory=$(
   cd -- "$repository_root"
-  cargo metadata --format-version 1 --no-deps |
+  cargo metadata --locked --format-version 1 --no-deps |
     python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])'
 ) || {
   printf 'cargo metadata did not report the target directory, so the engine probes cannot run.\n' >&2
