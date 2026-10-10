@@ -106,6 +106,23 @@ test('gates formats by the docset product that publishes them', async () => {
   }
 });
 
+test('publishes the three Coordinator formats with their owned check commands', async () => {
+  const document = await buildConfigurationFormats();
+  const coordinator = document.products.find((product) => product.id === 'coordinator');
+  assert.equal(coordinator.checkPage, 'reference/coordinator-configuration');
+  assert.deepEqual(coordinator.formats.map((format) => format.id), [
+    'coordinator/project', 'coordinator/runtime', 'coordinator/scenarios',
+  ]);
+  for (const format of coordinator.formats) {
+    const name = format.id.split('/')[1];
+    assert.equal(format.apiVersion, `id.registrystack.org/formats/coordinator/${name}/v1alpha1`);
+    assert.equal(format.check, name === 'runtime'
+      ? 'coordinatorctl check --runtime-config <file>'
+      : 'coordinatorctl check --project <project>');
+    assert.ok(format.schemaId);
+  }
+});
+
 test('links each product to pages that exist', () => {
   for (const product of PRODUCTS) {
     for (const reference of product.references) {

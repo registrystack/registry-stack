@@ -1,0 +1,95 @@
+---
+title: Registry Coordinator configuration reference
+description: Project, runtime, and offline scenario files for Registry Coordinator, with check commands and refusal recovery.
+status: draft
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: unreviewed
+doc_type: reference
+locale: en
+standards_referenced:
+  - json-schema
+---
+
+import ConfigurationFormatChecks from '../../../components/ConfigurationFormatChecks.astro';
+
+Check your Registry Coordinator project and deployment bindings before packaging a workflow.
+The three file formats use the shared [configuration conventions](../configuration-files/).
+Registry Coordinator supports controlled institutional pilots; each receiving product retains
+authorization and ownership of its effects.
+
+{/* Evidence: products/platform/config-formats.yaml;
+    products/coordinator/PILOT-CONTRACT.md;
+    crates/registry-coordinator/src/project_check.rs. */}
+
+## Files and boundaries
+
+`workflow.yaml` carries `CoordinatorProject`, with execution bounds, logical connections, and
+finite steps. Its `project` block names the workflow and version. `functionsFile` names `functions.rhai`,
+which supplies bounded pure mappings. Project checks validate the graph, function exports,
+argument references, and input and outcome schemas.
+
+`runtime.yaml` carries `CoordinatorRuntimeConfig`. It binds logical connections to product
+endpoints and authority, and declares deployment identities, state keys, audit custody, and
+secret providers. An offline check validates the configuration without resolving secret material,
+connecting to PostgreSQL, or contacting products.
+
+`scenarios.yaml` carries `CoordinatorScenarios`. Each case names its `id`, workflow input, typed
+fake replies, and expected execution result. `coordinatorctl test` replays these cases with a
+virtual clock; passing scenarios do not prove a live deployment or provider delivery.
+
+JSON Schema fragments and scenario payloads are foreign JSON trees: they can contain null values.
+Ordinary optional configuration members are omitted rather than written as null.
+
+{/* Evidence: crates/registry-coordinator/src/authoring.rs, CoordinatorProject;
+    crates/registry-coordinator/src/runtime.rs, RuntimeConfig;
+    crates/registry-coordinator/src/scenarios.rs, CoordinatorScenarios;
+    crates/registry-coordinator/src/project_check.rs;
+    crates/registry-platform-yaml/src/types.rs, ForeignValue. */}
+
+## Check commands
+
+The commands in this table come from the maintained format registry.
+
+<ConfigurationFormatChecks product="coordinator" />
+
+Check a project directory, including its optional runtime and scenario files:
+
+```sh
+coordinatorctl check --project ./my-follow-up --explain
+coordinatorctl test --project ./my-follow-up
+```
+
+The project check examines YAML files at the project root. It skips `.coordinator` state and
+reports an incomplete-check warning for other child directories. Optional companion files can
+be absent. A runtime-only check requires an absolute file path:
+
+```sh
+coordinatorctl check --runtime-config /absolute/path/runtime.yaml --deny-warnings
+```
+
+Without `--environment`, environment expressions defer value checks and produce warnings where
+validation is incomplete. Add `--environment` to check substituted values explicitly.
+`--deny-warnings` makes warnings fail the check. Add `--format json` for a structured report
+containing a diagnostics array. Refusal diagnostics identify the affected file or configuration
+path and suggest a repair. Source positions are included when the error can be tied to source text.
+
+When a check refuses a file, repair the indicated key or reference and run the same check again.
+Use the format registry's header and schema rather than an older authoring envelope. Keep logical
+connection names consistent between the project and runtime files. An accepted offline check does
+not activate a package or establish deployment readiness.
+
+{/* Evidence: crates/registry-coordinator/src/cli.rs;
+    crates/registry-coordinator/src/project_check.rs;
+    crates/registry-coordinator/src/definition.rs;
+    crates/registry-coordinator/tests/project_checking.rs;
+    crates/registry-coordinator/tests/cli_authoring.rs. */}
+
+## Owning contracts
+
+The maintained [Coordinator project guide](https://github.com/registrystack/registry-stack/blob/main/products/coordinator/README.md)
+describes authoring and packaging. The [deployment runbook](https://github.com/registrystack/registry-stack/blob/main/products/coordinator/DEPLOYMENT.md)
+describes installation, authenticated access, activation, operation, and recovery.
+The [pilot contract](https://github.com/registrystack/registry-stack/blob/main/products/coordinator/PILOT-CONTRACT.md)
+defines the supported product boundary.

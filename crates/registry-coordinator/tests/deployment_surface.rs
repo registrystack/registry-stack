@@ -180,7 +180,10 @@ fn oversized_authored_snapshot_cannot_write_a_successful_unloadable_package() {
         );
         panic!("package succeeded but its exact immutable snapshot cannot be loaded");
     }
-    assert_eq!(result.unwrap_err().code, "coordinator.definition.snapshot-limit");
+    assert_eq!(
+        result.unwrap_err().code,
+        "coordinator.definition.snapshot-limit"
+    );
     assert!(
         !output.exists(),
         "refused package must not leave an artifact"
