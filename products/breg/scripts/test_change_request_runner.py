@@ -21,6 +21,33 @@ exit 1
 """
 
 
+class ChangeRequestRuntimeBindingTests(unittest.TestCase):
+    def test_default_runtime_binds_the_declared_casework_authority(self) -> None:
+        import yaml
+
+        source = RUNNER.read_text(encoding="utf-8")
+        render = source[source.index("render_runtime_config() {"):
+                        source.index("\nwrite_credentials_from_project() {")]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = root / "runtime.yaml"
+            result = subprocess.run(
+                ["bash", "-c", render + '\n'
+                 'temporary_root=$1; mode=change-request; '
+                 'render_runtime_config "$2" example-database '
+                 'secret:file/runtime-url secret:file/migration-url '
+                 'example-instance migration_role runtime_role',
+                 "render-runtime", str(root), str(output)],
+                check=False, capture_output=True, text=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            runtime = yaml.safe_load(output.read_text(encoding="utf-8"))
+        binding = runtime.get("reviewAuthorities", {}).get("casework")
+        self.assertIsNotNone(binding, "default fixtures declare the casework authority")
+        self.assertEqual(binding["tokenRef"], "secret:file/review-authority-token")
+        self.assertEqual(binding["recoveryDays"], 91)
+
+
 class ChangeRequestRunnerInstalledModeTests(unittest.TestCase):
     # Proves --installed mode fails before it touches PostgreSQL or the
     # temp directory when breg or bregctl are missing from PATH. The stub

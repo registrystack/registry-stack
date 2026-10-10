@@ -3,6 +3,9 @@ set -euo pipefail
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 repository_root=$(cd -- "$script_dir/../../.." && pwd -P)
+# shellcheck source-path=SCRIPTDIR/../../..
+# shellcheck source=scripts/cargo-runtime-library-path.sh
+. "$repository_root/scripts/cargo-runtime-library-path.sh"
 bregctl=""
 breg=""
 cargo_target_dir=""
@@ -511,6 +514,18 @@ operationalTimeouts:
   migrationLockMilliseconds: 30000
   migrationStatementMilliseconds: 60000
 EOF_RUNTIME
+  if [[ "$mode" == "change-request" ]]; then
+    # The rehearsal retains pending review deliveries but runs no authority worker.
+    cat >>"$output" <<'EOF_REVIEW'
+reviewAuthorities:
+  casework:
+    endpoint: https://casework.example/reviews/
+    profile: registry-producer
+    producerId: fixture-registry
+    recoveryDays: 91
+    tokenRef: secret:file/review-authority-token
+EOF_REVIEW
+  fi
 }
 
 write_credentials_from_project() {
@@ -721,6 +736,9 @@ mkdir -p "$temporary_root/secrets" "$temporary_root/empty-package-root"
 chmod 700 "$temporary_root/secrets"
 printf '%s' '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef' >"$temporary_root/secrets/audit-key"
 printf '%s' 'abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789' >"$temporary_root/secrets/cursor-key"
+if [[ "$mode" == "change-request" ]]; then
+  printf '%s' 'fixture-review-token' >"$temporary_root/secrets/review-authority-token"
+fi
 
 suffix=$(python3 - <<'PY'
 import secrets
@@ -856,7 +874,7 @@ if [[ -n "$rhai_project" ]]; then
 fi
 
 if [[ "$installed" != true ]]; then
-  cargo build --manifest-path "$repository_root/Cargo.toml" --target-dir "$cargo_target_dir" --locked \
+  registry_cargo_build "$repository_root" --manifest-path "$repository_root/Cargo.toml" --target-dir "$cargo_target_dir" --locked \
     -p registry-bregctl \
     -p registry-breg \
     --features registry-breg/runtime >/dev/null

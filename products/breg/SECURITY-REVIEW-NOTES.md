@@ -2832,3 +2832,19 @@ The webhook refusal test covers failure variants and value absence, and the
 audit tests cover correlation and unknown fate. They do not enumerate every
 emitted code or audit word; the closed source mappings define that vocabulary.
 These references name proof obligations, not an execution claim.
+
+
+## Default reviewed-change example runtime
+
+The default change-request example runner binds the `casework` authority its
+placement and household fixtures declare. Its synthetic bearer token stays in
+the runner's private disposable secret directory. Schema tests retain pending
+review deliveries in the same transaction as submission and run no authority
+worker, so this binding sends no request to the example endpoint.
+
+`products/breg/scripts/test_change_request_runner.py` verifies the rendered
+binding. The default `test-change-request-examples.sh` journey exercises both
+reviewed fixtures and the person-name Rhai fixture against disposable TLS
+PostgreSQL. The runner uses the maintained Cargo runtime-library helper for
+source builds; installed mode retains its existing binary selection. No runtime
+authority, review policy, delivery, or audit rule changes.
