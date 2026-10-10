@@ -1,4 +1,6 @@
 {
+  "apiVersion": "id.registrystack.org/formats/evidence/verification-policy/v1",
+  "kind": "EvidenceVerificationPolicy",
   "expectedAssuranceProfile": "local",
   "issuedBy": "urn:example:issuer",
   "providedBy": "urn:example:provider",
@@ -19,7 +21,9 @@
       "handle": "status-holds",
       "concept": "urn:example:concept:status-holds",
       "required": true,
-      "form": {"type": "boolean"}
+      "form": {
+        "type": "boolean"
+      }
     }
   ],
   "revokedKeyIds": [],

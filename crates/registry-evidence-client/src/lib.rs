@@ -251,6 +251,8 @@ pub use registry_evidence_verifier::{
         EvidenceVerificationPolicyDocument, ExpectedFormDocument, ExpectedListDocument,
         ExpectedListFormDocument, ExpectedListItemFormDocument, ExpectedOutputDocument,
         ExpectedScalarFormDocument, ExpectedSubjectDocument, VerificationError,
+        VerificationPolicyApiVersion, VerificationPolicyKind, VERIFICATION_POLICY_API_VERSION,
+        VERIFICATION_POLICY_KIND,
     },
     AssuranceProfile,
 };

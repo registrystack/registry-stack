@@ -3425,7 +3425,7 @@ formats:
       apiVersion: id.registrystack.org/formats/evidence/verification-policy/v1
       kind: EvidenceVerificationPolicy
       checkedBy:
-        file: crates/registry-evidence/src/verification_policy.rs
+        file: crates/registry-evidence-verifier/src/verifier.rs
         symbol: VERIFICATION_POLICY_API_VERSION
     target:
       apiVersion: id.registrystack.org/formats/evidence/verification-policy/v1
@@ -3460,7 +3460,7 @@ formats:
       apiVersion: id.registrystack.org/formats/evidence/holder-bound-verification-policy/v1
       kind: EvidenceHolderBoundVerificationPolicy
       checkedBy:
-        file: crates/registry-evidence/src/verification_policy.rs
+        file: crates/registry-evidence-verifier/src/verifier.rs
         symbol: HOLDER_BOUND_POLICY_API_VERSION
     target:
       apiVersion: id.registrystack.org/formats/evidence/holder-bound-verification-policy/v1

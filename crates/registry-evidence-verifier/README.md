@@ -49,6 +49,19 @@ fn accept(
 `verify_flattened_jws_report` and `verify_sd_jwt_vc_report` are the same checks
 with cryptographic authenticity reported separately from current validity.
 
+A serialized verification policy is a complete document with `apiVersion`
+and `kind` first. Prepared requests, prepared batch policies, and retained
+verification contexts carry this same shape. Write a retained context's
+`verificationPolicy` directly to a policy file; no envelope needs to be
+added. Standalone CLI verification still requires independently pinned
+expected subject bindings. Reading a policy without its envelope or with
+the other verification mode's kind is refused.
+
+Rust struct literals for `EvidenceVerificationPolicyDocument` and
+`HolderBoundPresentationPolicyDocument` must supply the required typed
+`api_version` and `kind` fields. `Default::default()` selects each field's
+only supported value.
+
 ## Security Notes
 
 - Verification is fail-closed: an unexpected protected header member, a

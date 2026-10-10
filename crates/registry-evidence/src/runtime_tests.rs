@@ -2320,6 +2320,8 @@ fn local_procedure_policy_document(
     request_nonce: &str,
 ) -> EvidenceVerificationPolicyDocument {
     EvidenceVerificationPolicyDocument {
+        api_version: Default::default(),
+        kind: Default::default(),
         expected_assurance_profile: procedure.expected_assurance_profile,
         issued_by: procedure.issued_by.clone(),
         provided_by: procedure.provided_by.clone(),
@@ -7362,6 +7364,8 @@ fn verification_policy_stub(
         .find(|candidate| candidate.id == request.requirement)
         .expect("requirement is loaded");
     EvidenceVerificationPolicyDocument {
+        api_version: Default::default(),
+        kind: Default::default(),
         expected_assurance_profile: runtime.bundle().config.assurance_profile,
         issued_by: runtime.bundle().config.issuer.id.clone(),
         provided_by: runtime.bundle().config.service.provider_id.clone(),

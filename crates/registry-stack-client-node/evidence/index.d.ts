@@ -154,11 +154,8 @@ export declare class EvidenceClient {
 export declare class PreparedEvidenceRequest {
   /** The nonce this request carries. Retain it with the transaction record. */
   get requestNonce(): string
-  /**
-   * The closed verification policy, with the subject set as `prepare` left
-   * it.
-   */
-  get policyDocument(): any
+  /** The complete enveloped policy, with the subject set as `prepare` left it. */
+  get policyDocument(): { apiVersion: 'id.registrystack.org/formats/evidence/verification-policy/v1'; kind: 'EvidenceVerificationPolicy'; [field: string]: unknown }
   /**
    * `"acceptFirstUse"` or `{ pinned: [{ role, binding }, ...] }`, exactly as
    * this request was prepared.
@@ -178,7 +175,7 @@ export declare class PreparedEvidenceRequestBatch {
   /** Independently generated item nonces in request order. */
   get requestNonces(): Array<string>
   /** Independently closed policy documents in request order. */
-  get policyDocuments(): Array<any>
+  get policyDocuments(): Array<{ apiVersion: 'id.registrystack.org/formats/evidence/verification-policy/v1'; kind: 'EvidenceVerificationPolicy'; [field: string]: unknown }>
   /** Subject-verification stances in request order. */
   get subjectExpectations(): Array<any>
   /** Number of positional requests in this batch. */

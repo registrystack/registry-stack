@@ -32,23 +32,13 @@ use serde::{Deserialize, Serialize, Serializer};
 
 use registry_platform_config::contains_environment_expression;
 
-/// The apiVersion a Version 1 verification policy declares.
-pub const VERIFICATION_POLICY_API_VERSION: &str =
-    "id.registrystack.org/formats/evidence/verification-policy/v1";
+pub use registry_evidence_verifier::verifier::{
+    HOLDER_BOUND_POLICY_API_VERSION, HOLDER_BOUND_POLICY_KIND, VERIFICATION_POLICY_API_VERSION,
+    VERIFICATION_POLICY_KIND,
+};
 
-/// The kind a Version 1 verification policy declares.
-pub const VERIFICATION_POLICY_KIND: &str = "EvidenceVerificationPolicy";
-
-/// The apiVersion a holder-bound verification policy declares.
-pub const HOLDER_BOUND_POLICY_API_VERSION: &str =
-    "id.registrystack.org/formats/evidence/holder-bound-verification-policy/v1";
-
-/// The kind a holder-bound verification policy declares.
-pub const HOLDER_BOUND_POLICY_KIND: &str = "EvidenceHolderBoundVerificationPolicy";
-
-/// The Version 1 verification policy format. The file opens with the
-/// envelope; the shared reader checks it and hands the reader types the
-/// members beside it, so the verifier's document type carries no envelope.
+/// The Version 1 verification policy format. The shared reader validates the
+/// envelope before decoding the complete portable policy document.
 pub const VERIFICATION_POLICY_FORMAT: FormatSpec<'static> = FormatSpec {
     kind: VERIFICATION_POLICY_KIND,
     envelope: EnvelopeRule::ApiVersionKind {
@@ -223,6 +213,8 @@ fn read<F: PolicyFile, D: DeserializeOwned>(
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct VerificationPolicyFile {
+    api_version: registry_evidence_verifier::verifier::VerificationPolicyApiVersion,
+    kind: registry_evidence_verifier::verifier::VerificationPolicyKind,
     expected_assurance_profile: AssuranceProfile,
     issued_by: String,
     provided_by: String,
@@ -255,6 +247,8 @@ impl PolicyFile for VerificationPolicyFile {
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct HolderBoundPolicyFile {
+    api_version: registry_evidence_verifier::verifier::HolderBoundPolicyApiVersion,
+    kind: registry_evidence_verifier::verifier::HolderBoundPolicyKind,
     subject_binding: HolderBoundDeclaration,
     expected_assurance_profile: AssuranceProfile,
     issued_by: String,

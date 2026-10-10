@@ -508,6 +508,8 @@ fn profile() -> Value {
 fn relying_policy(holder: &FixtureKey) -> HolderBoundPresentationPolicy {
     let expected = holder_bound_evidence(0, &holder.holder_public_key());
     HolderBoundPresentationPolicyDocument {
+        api_version: Default::default(),
+        kind: Default::default(),
         subject_binding: HolderBoundDeclaration::HolderBound,
         expected_assurance_profile: expected.assurance_profile,
         issued_by: expected.issued_by,

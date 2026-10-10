@@ -138,6 +138,8 @@ fn fixture_evidence(issued_at: DateTime<Utc>, valid_until: DateTime<Utc>) -> Evi
 
 fn fixture_policy_document(evidence: &Evidence) -> EvidenceVerificationPolicyDocument {
     EvidenceVerificationPolicyDocument {
+        api_version: Default::default(),
+        kind: Default::default(),
         expected_assurance_profile: evidence.assurance_profile,
         issued_by: evidence.issued_by.clone(),
         provided_by: evidence.provided_by.clone(),
@@ -256,24 +258,10 @@ fn the_committed_policy_conforms_to_the_verification_policy_contract() {
         .compile(&contract)
         .expect("the verification policy contract compiles");
 
-    let mut policy: serde_json::Value = serde_json::from_slice(
+    let policy: serde_json::Value = serde_json::from_slice(
         &fs::read(fixtures_dir().join("policy.json")).expect("the policy fixture exists"),
     )
     .expect("the policy fixture parses");
-    // The contract describes the policy file, which opens with the envelope.
-    // The binding takes the members beside the envelope as an object, so the
-    // fixture is checked as the body of that file.
-    let body = policy.as_object_mut().expect("the policy is an object");
-    assert!(!body.contains_key("apiVersion") && !body.contains_key("kind"));
-    body.insert(
-        "apiVersion".to_owned(),
-        serde_json::json!("id.registrystack.org/formats/evidence/verification-policy/v1"),
-    );
-    body.insert(
-        "kind".to_owned(),
-        serde_json::json!("EvidenceVerificationPolicy"),
-    );
-
     let violations: Vec<String> = match validator.validate(&policy) {
         Ok(()) => Vec::new(),
         Err(errors) => errors

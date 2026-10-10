@@ -34,7 +34,7 @@ use std::{path::PathBuf, sync::Arc};
 // return type's own final path segment is literally named `Result`, so an
 // aliased name here would silently defeat that detection.
 use napi::{
-    bindgen_prelude::{Buffer, Env, PromiseRaw},
+    bindgen_prelude::{Buffer, Env, PromiseRaw, Unknown},
     Error as NapiError, Result,
 };
 use napi_derive::napi;
@@ -142,13 +142,14 @@ impl PreparedEvidenceRequest {
         })
     }
 
-    /// The closed verification policy, with the subject set as `prepare` left
-    /// it.
-    #[napi(getter)]
-    pub fn policy_document(&self) -> Result<serde_json::Value> {
+    /// The complete enveloped policy, with the subject set as `prepare` left it.
+    #[napi(
+        getter,
+        ts_return_type = "{ apiVersion: 'id.registrystack.org/formats/evidence/verification-policy/v1'; kind: 'EvidenceVerificationPolicy'; [field: string]: unknown }"
+    )]
+    pub fn policy_document(&self, env: Env) -> Result<Unknown<'_>> {
         catch_panic("reading the policy document", || {
-            serde_json::to_value(self.inner.policy_document())
-                .map_err(|error| to_napi_serialization_error("the policy document", error))
+            env.to_js_value(self.inner.policy_document())
         })
     }
 
@@ -191,21 +192,20 @@ impl PreparedEvidenceRequestBatch {
     }
 
     /// Independently closed policy documents in request order.
-    #[napi(getter)]
-    pub fn policy_documents(&self) -> Result<Vec<serde_json::Value>> {
+    #[napi(
+        getter,
+        ts_return_type = "Array<{ apiVersion: 'id.registrystack.org/formats/evidence/verification-policy/v1'; kind: 'EvidenceVerificationPolicy'; [field: string]: unknown }>"
+    )]
+    pub fn policy_documents(&self, env: Env) -> Result<Unknown<'_>> {
         catch_panic("reading the request batch policy documents", || {
-            (0..self.inner.count())
+            let policies: Vec<_> = (0..self.inner.count())
                 .map(|index| {
-                    serde_json::to_value(
-                        self.inner
-                            .policy_document(index)
-                            .expect("the index comes from the batch count"),
-                    )
-                    .map_err(|error| {
-                        to_napi_serialization_error("a request batch policy document", error)
-                    })
+                    self.inner
+                        .policy_document(index)
+                        .expect("the index comes from the batch count")
                 })
-                .collect()
+                .collect();
+            env.to_js_value(&policies)
         })
     }
 

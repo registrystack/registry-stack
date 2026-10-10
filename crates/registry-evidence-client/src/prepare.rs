@@ -298,6 +298,8 @@ impl PreparedEvidenceRequest {
             SubjectExpectations::AcceptFirstUse => Vec::new(),
         };
         let policy = EvidenceVerificationPolicyDocument {
+            api_version: Default::default(),
+            kind: Default::default(),
             expected_assurance_profile: spec.expected_assurance_profile,
             issued_by: spec.issued_by,
             provided_by: spec.provided_by,
@@ -1110,6 +1112,8 @@ mod tests {
         assert_eq!(
             policy,
             serde_json::json!({
+                "apiVersion": "id.registrystack.org/formats/evidence/verification-policy/v1",
+                "kind": "EvidenceVerificationPolicy",
                 "expectedAssuranceProfile": "local",
                 "issuedBy": "urn:example:client:issuer",
                 "providedBy": "urn:example:client:provider",
