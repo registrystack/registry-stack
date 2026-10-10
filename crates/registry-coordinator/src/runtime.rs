@@ -820,6 +820,7 @@ pub fn runtime_schema() -> Result<String> {
     }
     let clients = &mut access["properties"]["allowedClients"];
     clients.as_object_mut().unwrap().remove("default");
+    clients["description"] = json!("List one to sixty-four distinct admitted OAuth client IDs. Coordinator refuses omission, an empty list and unrestricted.");
     clients["type"] = json!("array");
     clients["minItems"] = json!(1);
     clients["maxItems"] = json!(64);
