@@ -104,6 +104,11 @@ jobs:
             echo "docs_sha256=$(jq -er .docs_sha256 "${RUNNER_TEMP}/resolved-docs-release.json")"
           } >> "${GITHUB_OUTPUT}"
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: "0.11.16"
+
       - name: Gate the released docset selector on the published release
         env:
           PUBLISHED_RELEASES: ${{ runner.temp }}/published-releases.json
@@ -121,7 +126,7 @@ jobs:
           # previous release while this job deploys the release it received
           # above, but only that newest candidate docset may be published
           # ahead of it. Any other newer published release was never promoted.
-          release/scripts/registry-release validate-docsets \
+          uv run --no-project --with PyYAML==6.0.2 python3 release/scripts/registry-release validate-docsets \
             --published-releases "${PUBLISHED_RELEASES}"
 
       - name: Authenticate public release and checksum inventory

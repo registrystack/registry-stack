@@ -576,7 +576,7 @@ SECURITY_WORKFLOW_GATES: dict[str, frozenset[str]] = {
         {"platform", "release_tool"}
     ),
     ".github/workflows/release.yml": frozenset(
-        {"release_source_proof", "release_tool"}
+        {"docs", "release_source_proof", "release_tool"}
     ),
     ".github/workflows/release-candidate.yml": frozenset(
         {"release_source_proof", "release_tool"}
@@ -1246,6 +1246,8 @@ def classify(
             "docker/README.md",
             # Files outside the site that a docs script test holds a published
             # page against, each named by the test that reads it.
+            # scripts/deployment-documentation-truth.test.mjs
+            "README.md",
             # scripts/evidence-production-build-docs.test.mjs
             "docker/compose/README.md",
             "docker/compose/docker-compose.yaml",

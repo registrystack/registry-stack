@@ -750,7 +750,7 @@ class GateInventoryTest(unittest.TestCase):
                 "Base Registry Engine WASM executor gate",
             ),
             (
-                "run: products/breg/scripts/check-contracts.sh",
+                "run: uv run --no-project --with PyYAML==6.0.2 products/breg/scripts/check-contracts.sh",
                 "run: true # Base Registry Engine contracts disabled",
                 "Base Registry Engine contract consistency",
             ),
@@ -948,7 +948,7 @@ class GateInventoryTest(unittest.TestCase):
                 "Scheduling contract gate",
             ),
             (
-                "run: products/scheduling/scripts/check-contracts.sh",
+                "run: uv run --no-project --with PyYAML==6.0.2 products/scheduling/scripts/check-contracts.sh",
                 "run: true # Scheduling contract reproduction disabled",
                 "Scheduling contract reproduction",
             ),
@@ -975,7 +975,7 @@ class GateInventoryTest(unittest.TestCase):
                 "Scheduling PostgreSQL 17 image pin",
             ),
             (
-                "run: products/scheduling/scripts/check-checkpoint.sh",
+                "run: uv run --no-project --with PyYAML==6.0.2 products/scheduling/scripts/check-checkpoint.sh",
                 "run: true # Scheduling checkpoint wrapper disabled",
                 "Scheduling product checkpoint wrapper",
             ),
@@ -1065,7 +1065,7 @@ class GateInventoryTest(unittest.TestCase):
                 "Messaging contract gate",
             ),
             (
-                "run: products/messaging/scripts/check-contracts.sh",
+                "run: uv run --no-project --with PyYAML==6.0.2 products/messaging/scripts/check-contracts.sh",
                 "Messaging contract reproduction",
             ),
             (
@@ -1077,7 +1077,7 @@ class GateInventoryTest(unittest.TestCase):
                 "Messaging PostgreSQL gate",
             ),
             (
-                "run: products/messaging/scripts/check-checkpoint.sh",
+                "run: uv run --no-project --with PyYAML==6.0.2 products/messaging/scripts/check-checkpoint.sh",
                 "Messaging product checkpoint wrapper",
             ),
             (
@@ -1697,7 +1697,7 @@ class GateInventoryTest(unittest.TestCase):
         )
         docs_pages_path = ".github/workflows/docs-pages.yml"
         policy_texts[docs_pages_path] = policy_texts[docs_pages_path].replace(
-            "          release/scripts/registry-release validate-docsets \\\n"
+            "          uv run --no-project --with PyYAML==6.0.2 python3 release/scripts/registry-release validate-docsets \\\n"
             '            --published-releases "${PUBLISHED_RELEASES}"\n',
             "          true # released docset selector gate disabled\n",
             1,
@@ -1712,7 +1712,7 @@ class GateInventoryTest(unittest.TestCase):
 
     def test_missing_release_docset_validation_is_reported(self) -> None:
         text = self.workflow.replace(
-            "release/scripts/registry-release validate-docsets",
+            "uv run --no-project --with PyYAML==6.0.2 python3 release/scripts/registry-release validate-docsets",
             "release/scripts/registry-release skip-docsets",
         )
         self.assertIn("Release docset validation", self.module.missing_gates(text))
@@ -1720,7 +1720,7 @@ class GateInventoryTest(unittest.TestCase):
     def test_release_manifest_validation_uses_only_the_maintained_manifest(
         self,
     ) -> None:
-        command = "release/scripts/registry-release validate-current"
+        command = "uv run --no-project --with PyYAML==6.0.2 python3 release/scripts/registry-release validate-current"
         self.assertIn(command, self.workflow)
         self.assertNotIn(
             "for manifest in release/manifests/registry-stack-*.yaml",

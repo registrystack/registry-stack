@@ -2810,14 +2810,15 @@ on:
                 self.assertEqual(entry["reference"], key_path_contract.reference)
 
     def test_docs_routing_matrix(self) -> None:
-        # The page manifest is a docs and archive input, while a repository
-        # document the site does not publish stays out of the docs job.
+        # The page manifest selects archives; deployment truth and evidence-link
+        # tests also read the root README and release publication workflow.
         cases = (
             (
                 "docs/site/src/data/repo-docs.yaml",
                 {"docs": True, "docs_archives": True, "rust": False},
             ),
-            ("README.md", {"docs": False, "rust": False}),
+            ("README.md", {"docs": True, "docs_archives": False, "rust": False}),
+            (".github/workflows/release.yml", {"docs": True, "rust": False}),
         )
 
         for path, expected in cases:
@@ -3426,6 +3427,74 @@ class PinnedYamlTestStepTest(unittest.TestCase):
                             uv_installed, "Install uv must come before this step"
                         )
         self.assertGreater(held, 0)
+
+
+class PinnedYamlGateStepTest(unittest.TestCase):
+    """YAML-reading gate entry points keep their declared gates and pinned parser."""
+
+    PINNED = "uv run --no-project --with PyYAML==6.0.2"
+    GATES = {
+        "ci.yml": (
+            ("evidence-contracts", "products/evidence/scripts/check-config-key-paths.sh", ""),
+            ("scheduling-contracts", "products/scheduling/scripts/check-contracts.sh", ""),
+            ("scheduling-postgres", "products/scheduling/scripts/check-checkpoint.sh", ""),
+            ("messaging-contracts", "products/messaging/scripts/check-contracts.sh", ""),
+            ("messaging-postgres", "products/messaging/scripts/check-checkpoint.sh", ""),
+            ("breg-contracts", "products/breg/scripts/check-contracts.sh", ""),
+            ("release-tool", "release/scripts/registry-release validate-current", "python3 "),
+            ("release-tool", "release/scripts/registry-release validate-docsets", "python3 "),
+            ("release-tool", "release/scripts/registry-release audit", "python3 "),
+            ("release-source-proof", "release/scripts/check-release-source-model.sh", ""),
+        ),
+        "docs-pages.yml": (
+            ("build", "release/scripts/registry-release validate-docsets", "python3 "),
+        ),
+        "release-candidate.yml": (
+            ("validate", "release/scripts/registry-release validate-source-commit", "python3 "),
+            ("validate", 'python3 - "${REQUEST_VERSION}" "${REQUEST_RELEASE_ID}"', ""),
+            ("validate", "release/scripts/registry-release validate ", "python3 "),
+            ("validate", "release/scripts/registry-release validate-docsets", "python3 "),
+            ("validate", "release/scripts/check-release-source-model.sh", ""),
+        ),
+        "release-repeatability.yml": (
+            ("rebuild", 'python3 - "source" "${TAG}"', ""),
+        ),
+        "release-rehearsal.yml": (
+            ("rehearse", "release/scripts/rehearse-release", ""),
+        ),
+    }
+
+    def test_yaml_gate_steps_use_the_pinned_parser_after_uv_setup(self) -> None:
+        for name, gates in self.GATES.items():
+            workflow = yaml.safe_load(Path(f".github/workflows/{name}").read_text())
+            for job_name, entry_point, interpreter in gates:
+                with self.subTest(workflow=name, job=job_name, gate=entry_point):
+                    steps = workflow["jobs"][job_name]["steps"]
+                    matches = [
+                        (index, step)
+                        for index, step in enumerate(steps)
+                        if entry_point
+                        in " ".join(step.get("run", "").replace("\\\n", " ").split())
+                    ]
+                    self.assertEqual(len(matches), 1)
+                    index, step = matches[0]
+                    command = " ".join(step["run"].replace("\\\n", " ").split())
+                    self.assertIn(f"{self.PINNED} {interpreter}{entry_point}", command)
+                    condition = (
+                        "matrix.lane == 'contracts'"
+                        if name == "ci.yml" and job_name == "breg-contracts"
+                        else None
+                    )
+                    self.assertEqual(
+                        step.get("if"), condition, "The gate condition must remain unchanged"
+                    )
+                    self.assertTrue(
+                        any(
+                            "astral-sh/setup-uv@" in before.get("uses", "")
+                            for before in steps[:index]
+                        ),
+                        "Install uv must come before this gate",
+                    )
 
 
 if __name__ == "__main__":
