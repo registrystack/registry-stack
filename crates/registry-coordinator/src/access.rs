@@ -203,6 +203,14 @@ impl AccessConfig {
                 ));
             }
         }
+        for (index, client) in self.clients.allowed_clients.iter().enumerate() {
+            if !seen.contains(client) {
+                errors.push(access_error(
+                    &format!("deployment.authentication.allowedClients.{index}"),
+                    "declare one explicit policy for each admitted client or remove the client from allowedClients",
+                ));
+            }
+        }
         errors
     }
     pub async fn authenticator(

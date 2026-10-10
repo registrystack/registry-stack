@@ -47,6 +47,47 @@ async fn serve_fixture(state: HttpState) -> (String, tokio::task::JoinHandle<()>
     });
     (origin, task)
 }
+async fn assert_status_audit(
+    http: &reqwest::Client,
+    origin: &str,
+    credential: &str,
+    run: &str,
+    audit_path: &std::path::Path,
+    expected_status: u16,
+    expected_outcome: &str,
+) {
+    let before = fs::read_to_string(audit_path).unwrap().lines().count();
+    let response = http
+        .get(format!("{origin}/v1/runs/{run}"))
+        .bearer_auth(credential)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), expected_status);
+    assert_eq!(response.headers()["cache-control"], "no-store");
+    let body: Value = response.json().await.unwrap();
+    if expected_status == 200 {
+        assert_eq!(body["runId"], run);
+        assert_eq!(body["workflowId"], "delayed-follow-up");
+    } else {
+        assert_eq!(body["code"], "run-absent");
+        assert!(body.get("runId").is_none());
+    }
+    let entries = fs::read_to_string(audit_path)
+        .unwrap()
+        .lines()
+        .skip(before)
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(entries.len(), 2, "one status request has one audit pair");
+    assert_eq!(entries[0]["phase"], "request");
+    assert_eq!(entries[1]["phase"], "response");
+    assert_eq!(entries[0]["correlation"], entries[1]["correlation"]);
+    for entry in &entries {
+        assert_eq!(entry["record"]["action"], "status");
+    }
+    assert_eq!(entries[1]["record"]["outcome"], expected_outcome);
+}
 async fn assert_authenticated_run_validation(
     http: &reqwest::Client,
     origin: &str,
@@ -907,6 +948,43 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
     assert_authenticated_run_validation(&http, &origin, &database, &namespace, &op, &a).await;
     let input = json!({"applicationId":"00000000-0000-4000-8000-000000000001","sendAfter":(Utc::now()+chrono::Duration::minutes(20)).to_rfc3339()});
     assert_bounded_readiness(&http, &origin, &database, &namespace).await;
+    let long_key = "x".repeat(257);
+    for key in [None, Some(""), Some(long_key.as_str())] {
+        for (credential, expected, code) in [
+            (None, 401, "access.unauthenticated"),
+            (Some(&op), 403, "access.denied"),
+            (Some(&a), 400, "start-key-invalid"),
+        ] {
+            let mut request = http
+                .post(format!("{origin}/v1/runs"))
+                .json(&json!({"flow":"delayed-follow-up","input":input}));
+            if let Some(key) = key {
+                request = request.header("Idempotency-Key", key);
+            }
+            if let Some(credential) = credential {
+                request = request.bearer_auth(credential);
+            }
+            let response = request.send().await.unwrap();
+            assert_eq!(response.status(), expected);
+            assert_eq!(response.headers()["cache-control"], "no-store");
+            assert_eq!(response.json::<Value>().await.unwrap()["code"], code);
+        }
+    }
+    let refused_counts = admin
+        .query_one(
+            &format!("SELECT (SELECT count(*) FROM {namespace}.runs), (SELECT count(*) FROM {namespace}.jobs)"),
+            &[],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        (
+            refused_counts.get::<_, i64>(0),
+            refused_counts.get::<_, i64>(1)
+        ),
+        (0, 0),
+        "malformed start keys create no admission or dispatch job"
+    );
     // A different config is initially compatible with an empty deployment.
     // Another old-config instance may admit work after this startup check.
     let mut drift = (*recovery_runtime).clone();
@@ -1014,13 +1092,13 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
         };
         use registry_platform_audit::{AuditProfile, AuditWriter};
         use std::{collections::BTreeMap, sync::Mutex};
-        struct RefuseAdmissionResponse(Arc<Mutex<Vec<Value>>>);
-        impl std::io::Write for RefuseAdmissionResponse {
+        struct RefuseAcceptedResponse(Arc<Mutex<Vec<Value>>>, &'static str);
+        impl std::io::Write for RefuseAcceptedResponse {
             fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
                 let entry: Value = serde_json::from_slice(bytes)?;
                 self.0.lock().unwrap().push(entry.clone());
                 if entry["phase"] == "response"
-                    && entry["record"]["action"] == "admit"
+                    && entry["record"]["action"] == self.1
                     && entry["record"]["outcome"] == "accepted"
                 {
                     return Err(std::io::Error::other("injected response audit outage"));
@@ -1048,8 +1126,9 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
                     database_id: "router-pilot-test".into(),
                     keys: StateKeys::new(1, BTreeMap::from([(1, state_key)]), admission_key)
                         .unwrap(),
-                    audit: AuditWriter::from_line_sink(Box::new(RefuseAdmissionResponse(
+                    audit: AuditWriter::from_line_sink(Box::new(RefuseAcceptedResponse(
                         attempts.clone(),
+                        "admit",
                     ))),
                     audit_profile: AuditProfile::production_from_secret_bytes(
                         zeroize::Zeroizing::new(fs::read(root_path.join("audit-key")).unwrap()),
@@ -1072,10 +1151,11 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
         })
         .await;
         let bearer = token("producer", "audit-owner", "coordinator:start");
+        let boundary_key = "k".repeat(256);
         let response = http
             .post(format!("{failing_origin}/v1/runs"))
             .bearer_auth(&bearer)
-            .header("Idempotency-Key", "audit-response-start")
+            .header("Idempotency-Key", &boundary_key)
             .json(&json!({"flow":"delayed-follow-up","input":input}))
             .timeout(std::time::Duration::from_secs(10))
             .send()
@@ -1107,7 +1187,7 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
         let replay = http
             .post(format!("{origin}/v1/runs"))
             .bearer_auth(&bearer)
-            .header("Idempotency-Key", "audit-response-start")
+            .header("Idempotency-Key", &boundary_key)
             .json(&json!({"flow":"delayed-follow-up","input":input}))
             .timeout(std::time::Duration::from_secs(10))
             .send()
@@ -1127,6 +1207,61 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
             count, 1,
             "same-key recovery must not create another admission"
         );
+        let status_attempts = Arc::new(Mutex::new(Vec::new()));
+        let failing_status = Arc::new(
+            Store::open(
+                runtime_url.as_str(),
+                &namespace,
+                StoreSecurity {
+                    database_id: "router-pilot-test".into(),
+                    keys: StateKeys::new(1, BTreeMap::from([(1, state_key)]), admission_key)
+                        .unwrap(),
+                    audit: AuditWriter::from_line_sink(Box::new(RefuseAcceptedResponse(
+                        status_attempts.clone(),
+                        "status",
+                    ))),
+                    audit_profile: AuditProfile::production_from_secret_bytes(
+                        zeroize::Zeroizing::new(fs::read(root_path.join("audit-key")).unwrap()),
+                    )
+                    .unwrap(),
+                },
+                None,
+            )
+            .await
+            .unwrap()
+            .with_package_digest(recovery_package.digest.clone()),
+        );
+        let (status_origin, status_task) = serve_fixture(HttpState {
+            recovery_only: false,
+            store: failing_status,
+            runtime: recovery_runtime.clone(),
+            package: recovery_package.clone(),
+            authenticator: recovery_authenticator.clone(),
+            adapters: recovery_adapters.clone(),
+        })
+        .await;
+        let response = http
+            .get(format!("{status_origin}/v1/runs/{persisted_id}"))
+            .bearer_auth(&bearer)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 503);
+        assert_eq!(response.headers()["cache-control"], "no-store");
+        let problem: Value = response.json().await.unwrap();
+        assert_eq!(problem["code"], "audit-response-unavailable");
+        assert!(problem.get("runId").is_none());
+        {
+            let entries = status_attempts.lock().unwrap();
+            assert_eq!(entries.len(), 2);
+            assert_eq!(entries[0]["phase"], "request");
+            assert_eq!(entries[1]["phase"], "response");
+            assert_eq!(entries[0]["correlation"], entries[1]["correlation"]);
+            assert_eq!(entries[1]["record"]["action"], "status");
+            assert_eq!(entries[1]["record"]["outcome"], "accepted");
+        }
+        status_task.abort();
+        let _ = status_task.await;
         let cancelled = http
             .post(format!("{origin}/v1/runs/{persisted_id}/cancel"))
             .bearer_auth(&op)
@@ -1178,6 +1313,54 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
     let body: Value = started.json().await.unwrap();
     assert_eq!(status, 200, "{body}");
     let id = body["runId"].as_str().unwrap();
+    let audit_path = root_path.join("audit.jsonl");
+    for (credential, run, expected, outcome) in [
+        (&a, id.to_string(), 200, "accepted"),
+        (&op, id.to_string(), 200, "accepted"),
+        (&b, id.to_string(), 404, "unknown"),
+        (&a, Uuid::new_v4().to_string(), 404, "unknown"),
+    ] {
+        assert_status_audit(
+            &http,
+            &origin,
+            credential,
+            &run,
+            &audit_path,
+            expected,
+            outcome,
+        )
+        .await;
+    }
+    let mut denied_flow_runtime = (*recovery_runtime).clone();
+    denied_flow_runtime
+        .deployment
+        .as_mut()
+        .unwrap()
+        .authentication
+        .policies[0]
+        .flows = vec!["other-flow".into()];
+    let denied_flow_authenticator = Arc::new(
+        denied_flow_runtime
+            .deployment
+            .as_ref()
+            .unwrap()
+            .authentication
+            .authenticator(&denied_flow_runtime.secret_providers, true)
+            .await
+            .unwrap(),
+    );
+    let (denied_origin, denied_task) = serve_fixture(HttpState {
+        recovery_only: false,
+        store: recovery_store.clone(),
+        runtime: recovery_runtime.clone(),
+        package: recovery_package.clone(),
+        authenticator: denied_flow_authenticator,
+        adapters: recovery_adapters.clone(),
+    })
+    .await;
+    assert_status_audit(&http, &denied_origin, &a, id, &audit_path, 404, "accepted").await;
+    denied_task.abort();
+    let _ = denied_task.await;
     // Authorization precedes semantic reason/retention validation. Each invalid
     // bounded request leaves the admitted run untouched and creates no hold.
     for reason in [

@@ -5,7 +5,7 @@ use crate::{
     deployment::{self, LoadedPackage},
     protocol::AdapterSet,
     runtime::RuntimeConfig,
-    store::Store,
+    store::{RunStatus, Store},
     PocError, Result,
 };
 use axum::{
@@ -368,7 +368,13 @@ async fn start(State(s): State<HttpState>, headers: HeaderMap, body: BoundedBody
         let key = headers
             .get("idempotency-key")
             .and_then(|v| v.to_str().ok())
-            .ok_or_else(|| PocError::new("start-key-invalid", "supply Idempotency-Key"))?;
+            .filter(|key| !key.is_empty() && key.len() <= 256)
+            .ok_or_else(|| {
+                PocError::new(
+                    "start-key-invalid",
+                    "supply Idempotency-Key within 1..=256 bytes",
+                )
+            })?;
         let binding = s
             .runtime
             .binding_digest_for(&s.package.definition.workflow)?;
@@ -397,7 +403,7 @@ async fn run_caller(
     headers: &HeaderMap,
     run: RunPath,
     action: Action,
-) -> Result<(Caller, Uuid)> {
+) -> Result<(Caller, RunStatus)> {
     let c = caller(s, headers).await?;
     c.authorize(action, None)?;
     let Path(run) =
@@ -413,7 +419,7 @@ async fn run_caller(
     let status = s.store.status_owned(run, &c.actor).await?;
     c.authorize(action, Some(&status.workflow_id))
         .map_err(|_| PocError::new("run-absent", "run was not found"))?;
-    Ok((c, run))
+    Ok((c, status))
 }
 fn answer(result: Result<Value>) -> Response {
     match result {
@@ -435,8 +441,8 @@ fn encode(value: impl serde::Serialize) -> Result<Value> {
 async fn status(State(s): State<HttpState>, headers: HeaderMap, run: RunPath) -> Response {
     answer(
         async {
-            let (c, run) = run_caller(&s, &headers, run, Action::Status).await?;
-            encode(s.store.status_owned(run, &c.actor).await?)
+            let (_, status) = run_caller(&s, &headers, run, Action::Status).await?;
+            encode(status)
         }
         .await,
     )
@@ -473,6 +479,7 @@ async fn inspect(State(s): State<HttpState>, headers: HeaderMap, run: RunPath) -
     answer(
         async {
             let (c, run) = run_caller(&s, &headers, run, Action::Inspect).await?;
+            let run = run.run_id;
             encode(
                 s.store
                     .inspect_runtime_owned(run, &s.runtime, &c.actor)
@@ -491,6 +498,7 @@ async fn retry(
     answer(
         async {
             let (c, run) = run_caller(&s, &headers, run, Action::RetrySame).await?;
+            let run = run.run_id;
             let reason: Reason = json_body(&headers, body).await?;
             s.store
                 .retry_same_owned(run, &binding(&s, run, &c).await?, &c.actor, &reason.reason)
@@ -509,6 +517,7 @@ async fn cancel(
     answer(
         async {
             let (c, run) = run_caller(&s, &headers, run, Action::Cancel).await?;
+            let run = run.run_id;
             let reason: Reason = json_body(&headers, body).await?;
             encode(s.store.cancel_owned(run, &c.actor, &reason.reason).await?)
         }
@@ -524,6 +533,7 @@ async fn reconcile(
     answer(
         async {
             let (c, run) = run_caller(&s, &headers, run, Action::Reconcile).await?;
+            let run = run.run_id;
             let reason: Reason = json_body(&headers, body).await?;
             encode(
                 s.store

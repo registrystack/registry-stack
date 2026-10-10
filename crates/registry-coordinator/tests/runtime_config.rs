@@ -136,6 +136,77 @@ fn admitted_clients_must_be_explicit_and_restricted() {
 }
 
 #[test]
+fn admitted_clients_require_exactly_one_policy() {
+    let mut document = yaml_value(SCHEDULING_RUNTIME).unwrap();
+    load(&document.to_string()).unwrap();
+    let authentication = &mut document["deployment"]["authentication"];
+    let client_index = authentication["allowedClients"].as_array().unwrap().len();
+    authentication["allowedClients"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!(CANARY));
+    let error = refused(&document.to_string());
+    assert_eq!(error.code, "coordinator.access.configuration");
+    assert_eq!(
+        error.field.as_deref(),
+        Some(format!("/deployment/authentication/allowedClients/{client_index}").as_str())
+    );
+    assert!(error
+        .suggested_action
+        .as_deref()
+        .unwrap()
+        .contains("one explicit policy"));
+    assert!(!error.to_string().contains(CANARY));
+    let diagnostic = error
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.path == error.field.as_deref().unwrap())
+        .unwrap();
+    assert!(diagnostic.source.as_ref().unwrap().line.is_some());
+
+    let authentication = &mut document["deployment"]["authentication"];
+    let mut policy = authentication["policies"][0].clone();
+    policy["clientId"] = json!(CANARY);
+    let policy_index = authentication["policies"].as_array().unwrap().len();
+    authentication["policies"]
+        .as_array_mut()
+        .unwrap()
+        .push(policy.clone());
+    load(&document.to_string()).unwrap();
+
+    let mut duplicate = document.clone();
+    duplicate["deployment"]["authentication"]["policies"]
+        .as_array_mut()
+        .unwrap()
+        .push(policy);
+    let error = refused(&duplicate.to_string());
+    assert_eq!(error.code, "coordinator.access.configuration");
+    assert_eq!(
+        error.field.as_deref(),
+        Some(
+            format!(
+                "/deployment/authentication/policies/{}/clientId",
+                policy_index + 1
+            )
+            .as_str()
+        )
+    );
+    assert!(!error.to_string().contains(CANARY));
+
+    document["deployment"]["authentication"]["allowedClients"]
+        .as_array_mut()
+        .unwrap()
+        .pop();
+    let error = refused(&document.to_string());
+    assert_eq!(error.code, "coordinator.access.configuration");
+    assert_eq!(
+        error.field.as_deref(),
+        Some(format!("/deployment/authentication/policies/{policy_index}/clientId").as_str())
+    );
+    assert!(!error.to_string().contains(CANARY));
+}
+
+#[test]
 fn state_key_versions_refuse_zero_before_resolving_secrets() {
     for (active, versions) in [(0, vec!["0"]), (1, vec!["0", "1"])] {
         let error = refused(&state_key_versions(active, &versions).to_string());
