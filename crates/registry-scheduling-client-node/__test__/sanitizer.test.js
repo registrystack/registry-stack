@@ -32,7 +32,13 @@ test('oversized object keys are refused before the native client sees the token'
 
     assert.throws(
       () => client.createHold('token-canary', 'key-1', { [oversizedKey]: null }),
-      (error) => error instanceof SchedulingClientError && error.kind === 'invalid-request',
+      (error) => {
+        assert.ok(error instanceof SchedulingClientError);
+        assert.equal(error.kind, 'invalid-request');
+        assert.equal(error.message, 'Scheduling client arguments are invalid');
+        assert.equal(error.outcomeUnknown, false);
+        return true;
+      },
     );
     assert.equal(holdCalls, 0);
   } finally {
