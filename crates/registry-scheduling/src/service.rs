@@ -69,10 +69,10 @@ pub const MAXIMUM_PAGE_LIMIT: usize = 200;
 /// a wider ask is served from the first 62 days and continues by cursor.
 const MAXIMUM_AVAILABILITY_SPAN_DAYS: i64 = 62;
 
-/// The remaining lifetime an entirely unconfigured deployment accepts on
-/// its legacy offline path. Configuring any status authority disables this
+/// The remaining lifetime a deployment with no status authority accepts on
+/// a grant it reads offline. Configuring any status authority disables this
 /// path for every source, including an unlisted one.
-const LEGACY_TASK_GRANT_REMAINING_SECONDS: u64 = 900;
+const OFFLINE_TASK_GRANT_REMAINING_SECONDS: u64 = 900;
 
 /// The audit reference class for a booking caller, hashed over the verified
 /// issuer and subject pair. History and audit carry this pseudonym, never the
@@ -104,8 +104,8 @@ pub struct Caller {
     pub credential_exp_unix: u64,
     /// The verified task grant, when the token carried one.
     pub grant: Option<GrantClaims>,
-    /// Subject claims copied only from the verified credential. Legacy task
-    /// tokens may omit them; a configured status registry then refuses the
+    /// Subject claims copied only from the verified credential. A task
+    /// token may omit them; a configured status registry then refuses the
     /// missing exact binding before a capacity transaction opens.
     pub task_grant_subjects: Option<std::collections::BTreeMap<String, Value>>,
 }
@@ -1394,7 +1394,7 @@ impl SchedulingService {
     /// request audit and capacity transaction. No database lock is held while
     /// the remote authority is called. A configured registry is authoritative
     /// for every source, so an unknown source is a refusal and never reaches
-    /// the bounded legacy path.
+    /// the bounded offline path.
     async fn require_current_task_grant(
         &self,
         caller: &Caller,
@@ -1415,7 +1415,7 @@ impl SchedulingService {
                     ServiceError::internal("the task-grant clock observation is not representable")
                 })?;
                 if grant.exp() > now
-                    && grant.exp().saturating_sub(now) <= LEGACY_TASK_GRANT_REMAINING_SECONDS
+                    && grant.exp().saturating_sub(now) <= OFFLINE_TASK_GRANT_REMAINING_SECONDS
                 {
                     Ok(())
                 } else {

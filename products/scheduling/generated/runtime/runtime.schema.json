@@ -693,7 +693,7 @@
     },
     "taskGrantStatus": {
       "default": [],
-      "description": "Fresh Casework status endpoints keyed by the original grant issuer.\nAn empty list preserves the bounded legacy path for grants with no\nmore than fifteen minutes left; any configured entry makes status\nmandatory for every commitment.",
+      "description": "Fresh Casework status endpoints keyed by the original grant issuer.\nWith an empty list, a commitment accepts a grant offline when it has\nno more than fifteen minutes left; any configured entry makes status\nmandatory for every commitment.",
       "items": {
         "$ref": "#/$defs/TaskGrantStatusConfig"
       },

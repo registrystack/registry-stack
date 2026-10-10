@@ -110,11 +110,11 @@ Scheduling checks the earlier of the verified access token deadline and the
 grant deadline against the transaction clock. A credential that expires after
 the status answer cannot take capacity through a delayed transaction.
 
-An entirely unconfigured deployment retains the legacy offline path only for
-a grant with no more than 900 seconds remaining at request entry. Configuring
-even one `taskGrantStatus` entry disables that fallback for every source,
-including an unlisted one. Because the token does not name its authorization
-mode, the final 15 minutes of an originally deferred grant can use the legacy
+A deployment with no `taskGrantStatus` entry accepts a grant offline, without
+asking its authority, only when the grant has no more than 900 seconds
+remaining at request entry. Configuring even one `taskGrantStatus` entry
+disables that path for every source, including an unlisted one. Because the token does not name its authorization
+mode, the final 15 minutes of an originally deferred grant can use the offline
 path if its deployment remains unconfigured. Configure status for every new
 deployment that accepts deferred grants.
 

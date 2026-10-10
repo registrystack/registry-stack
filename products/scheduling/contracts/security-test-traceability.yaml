@@ -27,7 +27,7 @@ entries:
     tests:
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: configured_task_status_is_fresh_for_a_capacity_commit_and_its_replay}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: inactive_mismatched_and_unavailable_task_status_commit_no_capacity}
-      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: unconfigured_status_accepts_only_the_legacy_remaining_lifetime}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: unconfigured_status_accepts_only_the_offline_remaining_lifetime}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_commitment_blocked_past_its_access_token_deadline_never_books}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_grant_that_lapses_before_the_commit_never_books}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_foreign_actor_does_not_learn_the_current_revision}
@@ -35,7 +35,7 @@ entries:
       - {path: crates/registry-platform-oidc/src/authorization_claims.rs, name: expiry_uses_earlier_token_or_grant_deadline_and_refuses_exact_deadline}
   - id: SCHEDULING-SEC-04
     tests:
-      - {path: crates/registry-scheduling/src/auth.rs, name: an_unconfigured_legacy_grant_need_not_carry_status_binding_members}
+      - {path: crates/registry-scheduling/src/auth.rs, name: an_unconfigured_offline_grant_need_not_carry_status_binding_members}
       - {path: crates/registry-scheduling/src/auth.rs, name: a_partial_grant_is_refused_as_invalid_claims}
       - {path: crates/registry-scheduling/src/auth.rs, name: a_complete_task_grant_is_extracted_and_bound_to_the_deployment}
       - {path: crates/registry-scheduling/src/auth.rs, name: a_read_without_the_reads_scope_is_a_profile_refusal_but_still_mutates}

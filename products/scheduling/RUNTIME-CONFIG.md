@@ -225,12 +225,13 @@ issuers or invalid endpoints, credentials, or secret references refuse startup.
 The positive answer is an observation rather than a distributed transaction:
 a withdrawal after the answer can race the in-flight Scheduling commit.
 
-When the list is absent or empty, Scheduling accepts only the legacy offline
-path: the grant must have no more than 900 seconds remaining at request entry.
+When the list is absent or empty, Scheduling accepts a grant offline, without
+asking its authority: the grant must have no more than 900 seconds remaining
+at request entry.
 Because the signed token does not identify whether its grant was originally
 immediate or deferred, the final 15 minutes of a deferred grant can use that
-path on an unconfigured deployment. Any configured entry disables the fallback
-for every source. After any status answer, the capacity transaction checks the
+path on an unconfigured deployment. Any configured entry disables the offline
+path for every source. After any status answer, the capacity transaction checks the
 earlier of the verified access token deadline and the grant deadline again
 after lock waits and immediately before commit. That earlier deadline bounds
 the status-to-commit race; it does not make revocation atomic across products.

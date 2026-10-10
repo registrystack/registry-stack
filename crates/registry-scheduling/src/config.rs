@@ -135,8 +135,8 @@ pub struct RuntimeConfig {
     pub database: DatabaseConfig,
     pub authentication: AuthenticationConfig,
     /// Fresh Casework status endpoints keyed by the original grant issuer.
-    /// An empty list preserves the bounded legacy path for grants with no
-    /// more than fifteen minutes left; any configured entry makes status
+    /// With an empty list, a commitment accepts a grant offline when it has
+    /// no more than fifteen minutes left; any configured entry makes status
     /// mandatory for every commitment.
     #[serde(default)]
     pub task_grant_status: Vec<TaskGrantStatusConfig>,

@@ -744,7 +744,7 @@ fn agent_token_with_grant_exp(grant_exp: i64) -> String {
     token(claims)
 }
 
-fn legacy_agent_token_without_status_binding() -> String {
+fn agent_token_without_status_binding() -> String {
     let mut grant = grant_claims();
     grant["registry_grant_id"] = json!("grant-1");
     grant
@@ -7258,15 +7258,15 @@ async fn configured_task_status_is_fresh_for_a_capacity_commit_and_its_replay() 
     assert_eq!(replay_status, StatusCode::CREATED, "{replay}");
     assert_eq!(replay["appointmentId"], first["appointmentId"]);
     let other = first_slot(&fx, OFFERING, 300, 440).await;
-    let (legacy_status, legacy_problem) = fx
+    let (unbound_status, unbound_problem) = fx
         .post(
             "/v1/appointments",
-            &legacy_agent_token_without_status_binding(),
+            &agent_token_without_status_binding(),
             "configured-requires-binding",
             json!({"hold": null, "admission": admission(&fx, OFFERING, other)}),
         )
         .await;
-    assert_eq!(legacy_status, StatusCode::FORBIDDEN, "{legacy_problem}");
+    assert_eq!(unbound_status, StatusCode::FORBIDDEN, "{unbound_problem}");
     let status_calls = authority
         .received_requests()
         .await
@@ -7354,7 +7354,7 @@ async fn inactive_mismatched_and_unavailable_task_status_commit_no_capacity() {
 }
 
 #[tokio::test]
-async fn unconfigured_status_accepts_only_the_legacy_remaining_lifetime() {
+async fn unconfigured_status_accepts_only_the_offline_remaining_lifetime() {
     let fx = fixture().await;
     let slot = first_slot(&fx, OFFERING, 90, 200).await;
     let long = agent_token_with_grant_exp(pinned_now().timestamp() + 901);

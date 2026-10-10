@@ -131,10 +131,10 @@ impl SchedulingAuthenticator {
         // Casework exchanges preserve approved subjects in the signed
         // `identity` object. Keep only an object-shaped value. The shared
         // binding validates its field and value bounds before any use. The
-        // entirely unconfigured legacy path did not require this member, so
-        // absence or an older shape remains a status-binding miss rather than
-        // changing bearer admission; a configured service fails that miss
-        // closed before capacity is touched.
+        // offline path of a deployment with no status authority does not
+        // require this member, so absence or another shape is a
+        // status-binding miss rather than a bearer refusal; a configured
+        // service fails that miss closed before capacity is touched.
         let task_grant_subjects = grant.as_ref().and_then(|_| {
             verified
                 .claims
@@ -475,7 +475,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_unconfigured_legacy_grant_need_not_carry_status_binding_members() {
+    async fn an_unconfigured_offline_grant_need_not_carry_status_binding_members() {
         let mut grant = grant_claims_value(AUDIENCE);
         grant["registry_grant_id"] = json!("grant-1");
         grant
@@ -486,7 +486,7 @@ mod tests {
         let caller = authenticator()
             .authenticate_mutate(&credential)
             .await
-            .expect("the legacy grant still reaches the service");
+            .expect("the grant without subjects reaches the service");
         assert!(caller.grant.is_some());
         assert!(caller.task_grant_subjects.is_none());
     }

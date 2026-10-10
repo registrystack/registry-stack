@@ -275,7 +275,7 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
 
     // Once a deployment configures any status authority, every commitment
     // must resolve through that exact registry. An unlisted source therefore
-    // fails closed instead of falling back to the legacy short-lived path.
+    // fails closed instead of falling back to the short-lived offline path.
     let task_grant_status = if config.task_grant_status.is_empty() {
         None
     } else {

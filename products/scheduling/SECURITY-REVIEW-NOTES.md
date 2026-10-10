@@ -45,8 +45,8 @@ audit entries. The threats this surface answers:
    and receipt replay. The outbound call completes before database locks are
    taken. Inside the transaction, the earlier of the verified access-token and
    grant deadlines is re-checked after every lock wait and immediately before
-   commit. An unconfigured runtime admits only the bounded legacy path for a
-   grant with at most 900 seconds left.
+   commit. An unconfigured runtime admits a grant offline only when it has at
+   most 900 seconds left.
 3. **A deployment is reached over a public interface by accident.** The
    listener must bind a private address or an explicitly declared
    container network; anything else refuses to start.
@@ -783,9 +783,9 @@ and commit by the short execution credential, even when the grant remains live
 for days. It does not create a distributed transaction: a withdrawal after a
 positive status answer can still race the in-flight local commit.
 
-An entirely unconfigured runtime accepts the legacy offline path only when the
+An entirely unconfigured runtime accepts a grant offline only when the
 grant has no more than 900 seconds remaining at request entry. Any configured
-status entry disables that fallback for all grants, including sources that are
+status entry disables that path for all grants, including sources that are
 not listed. New deployments that accept deferred grants must configure status.
 
 **Tests.** `configured_task_status_is_fresh_for_a_capacity_commit_and_its_replay`
@@ -793,8 +793,8 @@ proves that an initial capacity claim and its duplicate operation each obtain
 a fresh status while the ledger records one effect.
 `inactive_mismatched_and_unavailable_task_status_commit_no_capacity` covers
 closed refusals and authority outage.
-`unconfigured_status_accepts_only_the_legacy_remaining_lifetime` pins the
-900-second compatibility path, and
+`unconfigured_status_accepts_only_the_offline_remaining_lifetime` pins the
+900-second offline path, and
 `a_commitment_blocked_past_its_access_token_deadline_never_books` holds a real
 PostgreSQL capacity lock until the execution credential has expired. All are in
 `crates/registry-scheduling/tests/postgres_commitments.rs` and carry
@@ -803,7 +803,7 @@ SCHEDULING-SEC-03.
 **Accepted residual.** The signed token does not identify whether Casework
 issued the grant in immediate or deferred mode. On a deployment with no status
 configuration, the final 15 minutes of an originally deferred grant therefore
-qualify for the bounded legacy path. Operators who accept deferred grants close
+qualify for the bounded offline path. Operators who accept deferred grants close
 that residual by configuring at least one status authority, which makes status
 mandatory for every source.
 
