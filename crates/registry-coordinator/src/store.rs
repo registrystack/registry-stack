@@ -179,46 +179,31 @@ pub(crate) struct Payload {
     pub command: Option<FrozenCommand>,
 }
 
-/// Old commands remain readable without rewriting their protected bytes. A
-/// prepared command additionally carries opaque evidence owned by its client;
+/// The exact command frozen before dispatch. An operation that requires
+/// preparation additionally carries opaque evidence owned by its client;
 /// these bytes never contain credentials and never grant current authority.
 #[derive(Clone, Serialize, Deserialize)]
-#[serde(untagged)]
-pub(crate) enum FrozenCommand {
-    Prepared(PreparedCommand),
-    Legacy(CallRequest),
-}
-
-#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) struct PreparedCommand {
+pub(crate) struct FrozenCommand {
     request: CallRequest,
-    preparation: Vec<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    preparation: Option<Vec<u8>>,
 }
 
 impl FrozenCommand {
     pub(crate) fn new(request: CallRequest, preparation: Option<Vec<u8>>) -> Self {
-        match preparation {
-            Some(preparation) => Self::Prepared(PreparedCommand {
-                request,
-                preparation,
-            }),
-            None => Self::Legacy(request),
+        Self {
+            request,
+            preparation,
         }
     }
 
     pub(crate) fn request(&self) -> &CallRequest {
-        match self {
-            Self::Prepared(command) => &command.request,
-            Self::Legacy(request) => request,
-        }
+        &self.request
     }
 
     pub(crate) fn preparation(&self) -> Option<&[u8]> {
-        match self {
-            Self::Prepared(command) => Some(&command.preparation),
-            Self::Legacy(_) => None,
-        }
+        self.preparation.as_deref()
     }
 }
 
@@ -1633,5 +1618,36 @@ impl Store {
             .append(entry)
             .await
             .map_err(|_| DispatchError::Unavailable)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::protocol::Operation;
+
+    #[test]
+    fn a_frozen_command_has_one_stored_shape() {
+        let request = CallRequest {
+            connection: "records".into(),
+            operation: Operation::ReadRecord,
+            input: serde_json::json!({"recordId": "synthetic"}),
+            idempotency_key: None,
+        };
+        let bare = serde_json::to_value(&request).unwrap();
+        assert!(serde_json::from_value::<FrozenCommand>(bare.clone()).is_err());
+
+        let unprepared = serde_json::to_value(FrozenCommand::new(request.clone(), None)).unwrap();
+        assert_eq!(unprepared, serde_json::json!({"request": bare}));
+        let restored: FrozenCommand = serde_json::from_value(unprepared).unwrap();
+        assert!(restored.preparation().is_none());
+
+        let prepared = serde_json::to_value(FrozenCommand::new(request, Some(vec![1, 2]))).unwrap();
+        assert_eq!(
+            prepared,
+            serde_json::json!({"request": bare, "preparation": [1, 2]})
+        );
+        let restored: FrozenCommand = serde_json::from_value(prepared).unwrap();
+        assert_eq!(restored.preparation(), Some(&[1, 2][..]));
     }
 }

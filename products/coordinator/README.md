@@ -159,8 +159,8 @@ The operation schema derives from the catalog; regenerate the project schema.
 The worker, store and offline scenario state machine consume those declared
 capabilities. They do not need operation-specific execution branches. Snapshots
 pin exact semantics, so changing a descriptor or its version cannot silently
-reinterpret retained runs. Preserve the original descriptors for compatible
-restore, including the fixed legacy catalog. Add offline scenarios using typed
+reinterpret retained runs: a snapshot restores only while its pinned descriptors
+equal the catalog's. Add offline scenarios using typed
 replies and only the declared recovery capabilities; passing them does not prove
 a live product effect. Coordinator exports are not generated into a language SDK.
 
@@ -182,11 +182,11 @@ Existing immutable packages and admitted runs retain their original definition
 bytes and ABI. New project files use the documented `CoordinatorProject` format;
 an older `Workflow` authoring envelope is refused with migration guidance.
 
-Version 4 snapshots pin each used operation's capabilities. Existing version 3
-snapshots retain their original bytes and remain restorable with their original
-five-operation contract. Packaging commands are unchanged; a newly packaged
-definition with a changed digest needs a new workflow version if that ID and
-version already exists in retained history.
+A snapshot pins each used operation's capabilities under the one operation
+contract this build reads. A snapshot that names another contract, or omits
+those pins, is refused. A newly packaged definition with a changed digest needs
+a new workflow version if that ID and version already exists in retained
+history.
 
 Use [DEPLOYMENT.md](DEPLOYMENT.md) to provision OIDC clients, downstream bindings,
 state-key custody, PostgreSQL split roles and a private listener. Apply explicitly

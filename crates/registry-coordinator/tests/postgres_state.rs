@@ -1099,18 +1099,8 @@ async fn bounded_listing_and_inspection_use_durable_dispatch_metadata() {
 }
 
 #[tokio::test]
-async fn inspection_reports_read_capability_from_the_original_v3_snapshot() {
-    let mut h = harness().await;
-    let mut snapshot: Value = serde_json::from_str(&h.definition.snapshot().unwrap()).unwrap();
-    snapshot["adapterAbi"] = json!("coordinator/product-operations/v3");
-    snapshot
-        .as_object_mut()
-        .unwrap()
-        .remove("operationIdentities");
-    let snapshot =
-        String::from_utf8(registry_platform_canonical_json::canonicalize_json(&snapshot).unwrap())
-            .unwrap();
-    h.definition = Definition::from_snapshot(&snapshot).unwrap();
+async fn inspection_reports_read_capability_from_the_pinned_snapshot() {
+    let h = harness().await;
     let run = h.admit().await;
     let worker = Worker::new(h.store.clone(), Fake::new(vec![]));
     assert!(worker.tick().await.unwrap());
@@ -1125,7 +1115,6 @@ async fn inspection_reports_read_capability_from_the_original_v3_snapshot() {
         inspection.recovery.reason,
         Some(RetryBlockReason::NotRecoverable)
     );
-    assert_eq!(h.definition.snapshot().unwrap(), snapshot);
 }
 
 #[tokio::test]

@@ -79,11 +79,11 @@ An uncertain result remains unresolved by `reconcile`, because BReg has no read-
 An ordinary record read is not evidence that the original action succeeded.
 Task-bound operations retain their original approval deadlines across waits and retries.
 
-Version 4 execution snapshots pin the capabilities of each used operation.
-Existing version 3 snapshots retain their original bytes and five-operation contract during restore.
-Package commands remain unchanged, but a changed digest needs a new workflow version when the same ID and version exists in retained history.
+An execution snapshot pins the capabilities of each used operation under the one operation contract this build reads.
+A snapshot that names another contract, or omits those pins, is refused.
+A changed digest needs a new workflow version when the same ID and version exists in retained history.
 
-{/* Evidence: crates/registry-coordinator/src/operations.rs, CATALOG, LEGACY_CATALOG;
+{/* Evidence: crates/registry-coordinator/src/operations.rs, CATALOG;
     crates/registry-coordinator/src/breg_action.rs, prepare, execute;
     crates/registry-coordinator/src/runtime.rs, RuntimeConfig;
     crates/registry-coordinator/src/definition.rs, Definition;

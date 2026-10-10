@@ -68,16 +68,6 @@ impl OperationIdentity {
     pub fn matches_registered(&self) -> bool {
         descriptor(&self.id).is_some_and(|registered| registered.identity() == *self)
     }
-
-    /// The v3 snapshot ABI predates pinned descriptors and supports only these
-    /// original contracts. Keep this table unchanged when adding or versioning
-    /// operations; an old snapshot must not acquire newer binding behavior.
-    pub fn matches_legacy(&self) -> bool {
-        LEGACY_CATALOG
-            .iter()
-            .find(|descriptor| descriptor.id == self.id)
-            .is_some_and(|descriptor| descriptor.identity() == *self)
-    }
 }
 
 const fn read(id: &'static str, product: &'static str) -> OperationDescriptor {
@@ -115,20 +105,12 @@ const fn mutation(
     }
 }
 
-const LEGACY_CATALOG: [OperationDescriptor; 5] = [
+static CATALOG: &[OperationDescriptor] = &[
     read("read-record", "breg"),
     mutation("submit-message", "messaging", true, false),
     read("read-scheduling", "scheduling"),
     read("read-availability", "scheduling"),
     mutation("create-appointment", "scheduling", true, false),
-];
-
-static CATALOG: &[OperationDescriptor] = &[
-    LEGACY_CATALOG[0],
-    LEGACY_CATALOG[1],
-    LEGACY_CATALOG[2],
-    LEGACY_CATALOG[3],
-    LEGACY_CATALOG[4],
     mutation("invoke-breg-action", "breg", false, true),
     read("external-get", "external-http"),
     OperationDescriptor {
@@ -292,21 +274,6 @@ mod tests {
         assert!(identities()
             .iter()
             .all(OperationIdentity::matches_registered));
-    }
-
-    #[test]
-    fn legacy_snapshot_contracts_do_not_include_added_operations() {
-        for identity in LEGACY_CATALOG.iter().map(OperationDescriptor::identity) {
-            assert!(!identity.requires_preparation);
-            assert!(identity.matches_legacy());
-            assert!(identity.matches_registered());
-            let mut changed = identity;
-            changed.version += 1;
-            assert!(!changed.matches_legacy());
-        }
-        assert!(!Operation::InvokeBregAction.identity().matches_legacy());
-        assert!(!Operation::ExternalGet.identity().matches_legacy());
-        assert!(!Operation::EvaluateDecision.identity().matches_legacy());
     }
 
     #[test]

@@ -23,7 +23,6 @@ use crate::{
 
 const API_VERSION: &str = "registry.registrystack.org/coordinator/v1alpha1";
 const ADAPTER_ABI: &str = "coordinator/product-operations/v4";
-const LEGACY_ADAPTER_ABI: &str = "coordinator/product-operations/v3";
 const SCHEMA_ABI: &str = "coordinator/jsonschema-0.18/draft202012/formats-asserted+uuid/v1";
 const MAX_DOCUMENT_BYTES: usize = 1_048_576;
 /// Maximum canonical snapshot size, shared by authoring, restore and packaging.
@@ -119,8 +118,7 @@ struct Snapshot {
     adapter_abi: String,
     interpreter_abi: String,
     schema_abi: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    operation_identities: Option<Vec<OperationIdentity>>,
+    operation_identities: Vec<OperationIdentity>,
 }
 
 fn operation_identities(workflow: &Workflow) -> Vec<OperationIdentity> {
@@ -158,7 +156,7 @@ impl Definition {
             crate::authoring::positioned(&document, error.at(&path, "functions")).with_exit(exit)
         })?;
         Self::restore(Snapshot {
-            operation_identities: Some(operation_identities(&workflow)),
+            operation_identities: operation_identities(&workflow),
             workflow,
             source,
             adapter_abi: ADAPTER_ABI.into(),
@@ -179,18 +177,12 @@ impl Definition {
     }
 
     fn restore(frozen: Snapshot) -> Result<Self> {
-        let current_identities = operation_identities(&frozen.workflow);
-        let operations_match = match (frozen.adapter_abi.as_str(), &frozen.operation_identities) {
-            (ADAPTER_ABI, Some(pinned)) => {
-                *pinned == current_identities
-                    && pinned.iter().all(OperationIdentity::matches_registered)
-            }
-            (LEGACY_ADAPTER_ABI, None) => current_identities
+        if frozen.adapter_abi != ADAPTER_ABI
+            || frozen.operation_identities != operation_identities(&frozen.workflow)
+            || !frozen
+                .operation_identities
                 .iter()
-                .all(OperationIdentity::matches_legacy),
-            _ => false,
-        };
-        if !operations_match
+                .all(OperationIdentity::matches_registered)
             || frozen.interpreter_abi != INTERPRETER_ABI
             || frozen.schema_abi != SCHEMA_ABI
         {

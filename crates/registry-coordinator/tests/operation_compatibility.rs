@@ -14,28 +14,31 @@ fn canonical(value: &Value) -> String {
 }
 
 #[test]
-fn old_snapshots_keep_their_exact_bytes_and_only_original_operation_semantics() {
-    let mut legacy = snapshot();
-    legacy["adapterAbi"] = json!("coordinator/product-operations/v3");
-    legacy
-        .as_object_mut()
-        .unwrap()
-        .remove("operationIdentities");
-    let bytes = canonical(&legacy);
+fn snapshots_restore_their_exact_bytes_under_the_one_operation_contract() {
+    let original = snapshot();
+    let bytes = canonical(&original);
     let restored = Definition::from_snapshot(&bytes).unwrap();
     assert_eq!(restored.snapshot().unwrap(), bytes);
     assert_eq!(
         restored.explain().unwrap()["adapterAbi"],
-        "coordinator/product-operations/v3"
+        "coordinator/product-operations/v4"
     );
     assert_eq!(
         restored.digest,
         registry_platform_config::sha256_uri(bytes.as_bytes())
     );
 
-    legacy["workflow"]["steps"]["notify"]["call"]["operation"] = json!("invoke-breg-action");
-    legacy["workflow"]["steps"]["notify"]["call"]["connection"] = json!("applications");
-    assert!(Definition::from_snapshot(&canonical(&legacy)).is_err());
+    // No other operation contract is read, with or without pinned identities.
+    for abi in [
+        "coordinator/product-operations/v3",
+        "coordinator/product-operations/v5",
+    ] {
+        let mut other = original.clone();
+        other["adapterAbi"] = json!(abi);
+        assert!(Definition::from_snapshot(&canonical(&other)).is_err());
+        other.as_object_mut().unwrap().remove("operationIdentities");
+        assert!(Definition::from_snapshot(&canonical(&other)).is_err());
+    }
 }
 
 #[test]

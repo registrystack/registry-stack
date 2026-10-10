@@ -49,10 +49,10 @@ A workflow ID and version identify one definition throughout retained run
 history, including payload-erased tombstones. Apply refuses a changed definition
 under a previously used version; give that definition a new version.
 
-Version 4 snapshots pin the capabilities of every used operation. Version 3
-snapshots preserve their original bytes and five-operation semantics during
-restore. Existing package commands remain unchanged, but a changed definition
-digest may require a new authoring version under the same history rule.
+A snapshot pins the capabilities of every used operation under the one
+operation contract this build reads. A snapshot that names another contract, or
+omits those pins, is refused. A changed definition digest may require a new
+authoring version under the same history rule.
 
 Credentials are acquired when a call is attempted. A wait, retry or restart
 cannot extend a Casework approval deadline or change its principal, resource,
