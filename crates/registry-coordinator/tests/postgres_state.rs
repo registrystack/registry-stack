@@ -3622,8 +3622,8 @@ async fn incompatible_restored_lease_rolls_back_all_safe_transitions_and_review_
     }
 }
 
-#[path = "support/restore_schema_upgrade.rs"]
-mod restore_schema_upgrade;
+#[path = "support/store_revision.rs"]
+mod store_revision;
 
 #[path = "support/decision_evaluation.rs"]
 mod decision_evaluation;

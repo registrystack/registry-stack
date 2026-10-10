@@ -40,6 +40,8 @@ enum InspectionBinding<'a> {
 
 pub(crate) const SCHEMA_VERSION: i32 = 4;
 
+const NAMESPACE_MARKER: &str = "registry-coordinator/v2 protected-state";
+
 pub(crate) const AUDIT_SCHEMA: &str = "registry-coordinator/audit/v1";
 
 const JOIN: &str = "JOIN {schema}.runs AS run ON run.run_id = state.run_id JOIN {schema}.control AS control ON control.id";
@@ -393,30 +395,16 @@ impl Store {
             )
             .await
             .map_err(unavailable)?;
-        if let Some(row) = marker {
-            if row.get::<_, Option<String>>(0).as_deref()
-                != Some("registry-coordinator/v2 protected-state")
-            {
+        match marker {
+            Some(row) if row.get::<_, Option<String>>(0).as_deref() != Some(NAMESPACE_MARKER) => {
                 return Err(refused(
                     "namespace-occupied",
                     "choose an unused Coordinator namespace; existing data was not changed",
                 ));
             }
-        } else {
-            tx.batch_execute(&format!("CREATE SCHEMA {}; COMMENT ON SCHEMA {} IS 'registry-coordinator/v2 protected-state'", self.namespace,self.namespace)).await.map_err(unavailable)?;
+            Some(_) => {}
+            None => self.create_in(tx).await?,
         }
-        tx.batch_execute(&format!("CREATE TABLE IF NOT EXISTS {0}.control (
-            id boolean PRIMARY KEY CHECK(id), database_id text NOT NULL, schema_version integer NOT NULL CHECK(schema_version=4),
-            restore_hold boolean NOT NULL DEFAULT false, admissions_hold boolean NOT NULL DEFAULT false, restore_evidence_hash text, admission_recovery_hash text, active_package_digest text, admission_key_commitment text NOT NULL, state_key_commitments jsonb NOT NULL);
-            CREATE TABLE IF NOT EXISTS {0}.runs (
-            run_id uuid PRIMARY KEY, start_identity text UNIQUE NOT NULL, input_digest text NOT NULL, owner_hash text NOT NULL,
-            workflow_id text NOT NULL, workflow_version text NOT NULL, definition_digest text NOT NULL,
-            snapshot jsonb, input jsonb, outputs jsonb,
-            binding_digest text NOT NULL, step text NOT NULL, state text NOT NULL DEFAULT 'running',
-            outcome text, terminal_output jsonb, failure_code text, admitted_at timestamptz NOT NULL, deadline_at timestamptz NOT NULL,
-            cancel_requested boolean NOT NULL DEFAULT false, restore_review_required boolean NOT NULL DEFAULT false, completed_at timestamptz, payload_erased_at timestamptz);
-            CREATE TABLE IF NOT EXISTS {0}.admission_lock (id boolean PRIMARY KEY CHECK(id));
-            INSERT INTO {0}.admission_lock VALUES(true) ON CONFLICT DO NOTHING", self.namespace)).await.map_err(unavailable)?;
         // Activation, admission and replay all take this guard before control.
         tx.query_one(
             &format!(
@@ -427,17 +415,17 @@ impl Store {
         )
         .await
         .map_err(unavailable)?;
-        tx.execute(&format!("INSERT INTO {}.control(id,database_id,schema_version,admission_key_commitment,state_key_commitments) SELECT true,$1,4,$2,$3 WHERE NOT EXISTS(SELECT 1 FROM {}.control WHERE id) ON CONFLICT DO NOTHING",self.namespace,self.namespace), &[&self.security.database_id,&self.admission_key_marker(),&self.security.keys.custody_markers(&self.security.database_id)]).await.map_err(unavailable)?;
         let custody=tx.query_one(&format!("SELECT database_id,admission_key_commitment,state_key_commitments,schema_version FROM {}.control WHERE id FOR UPDATE",self.namespace),&[]).await.map_err(unavailable)?;
         if custody.get::<_, String>(0) != self.security.database_id
             || custody.get::<_, String>(1) != self.admission_key_marker()
         {
             return Err(refused("state-key-custody","preserve the deployment database identity and stable admission key; recover original custody before apply"));
         }
-        if ![2, 3, SCHEMA_VERSION].contains(&custody.get::<_, i32>(3)) {
+        // A store is created at one revision and is never changed in place.
+        if custody.get::<_, i32>(3) != SCHEMA_VERSION {
             return Err(refused(
                 "schema-version",
-                "apply with a Coordinator version supporting this database revision",
+                "this database records another Coordinator schema revision; apply to a new database, existing data was not changed",
             ));
         }
         self.security.keys.verify_custody(
@@ -457,21 +445,37 @@ impl Store {
         )
         .await
         .map_err(unavailable)?;
+        self.verify_transaction(tx).await.map_err(unavailable)?;
+        Ok(())
+    }
+
+    /// Create every relation of an unused namespace at the current revision.
+    async fn create_in(&self, tx: &Transaction<'_>) -> Result<()> {
+        tx.batch_execute(&format!("CREATE SCHEMA {0}; COMMENT ON SCHEMA {0} IS '{1}';
+            CREATE TABLE {0}.control (
+            id boolean PRIMARY KEY CHECK(id), database_id text NOT NULL, schema_version integer NOT NULL CHECK(schema_version={2}),
+            restore_hold boolean NOT NULL DEFAULT false, admissions_hold boolean NOT NULL DEFAULT false, restore_evidence_hash text, admission_recovery_hash text, active_package_digest text, admission_key_commitment text NOT NULL, state_key_commitments jsonb NOT NULL);
+            CREATE TABLE {0}.runs (
+            run_id uuid PRIMARY KEY, start_identity text UNIQUE NOT NULL, input_digest text NOT NULL, owner_hash text NOT NULL,
+            workflow_id text NOT NULL, workflow_version text NOT NULL, definition_digest text NOT NULL,
+            snapshot jsonb, input jsonb, outputs jsonb,
+            binding_digest text NOT NULL, step text NOT NULL, state text NOT NULL DEFAULT 'running',
+            outcome text, terminal_output jsonb, failure_code text, admitted_at timestamptz NOT NULL, deadline_at timestamptz NOT NULL,
+            cancel_requested boolean NOT NULL DEFAULT false, restore_review_required boolean NOT NULL DEFAULT false, completed_at timestamptz, payload_erased_at timestamptz);
+            CREATE TABLE {0}.admission_lock (id boolean PRIMARY KEY CHECK(id));
+            INSERT INTO {0}.admission_lock VALUES(true)", self.namespace, NAMESPACE_MARKER, SCHEMA_VERSION)).await.map_err(unavailable)?;
         for sql in self.table.create_statements() {
             tx.batch_execute(&sql).await.map_err(unavailable)?;
         }
-        tx.batch_execute(&format!("ALTER TABLE {0}.jobs ADD COLUMN IF NOT EXISTS command jsonb;
-            ALTER TABLE {0}.jobs ADD COLUMN IF NOT EXISTS uncertain boolean NOT NULL DEFAULT false;
-            ALTER TABLE {0}.jobs ADD COLUMN IF NOT EXISTS receipt_expired boolean NOT NULL DEFAULT false;
-            ALTER TABLE {0}.jobs ADD COLUMN IF NOT EXISTS pure boolean NOT NULL DEFAULT false;
-            ALTER TABLE {0}.jobs ADD COLUMN IF NOT EXISTS failure_code text", self.namespace)).await.map_err(unavailable)?;
-        // Only explicit apply changes stored spelling and installs this product's
-        // zero-attempt hold. Old workers must be stopped before the upgrade.
-        // No command, identity, lease, uncertainty or deadline is rewritten.
-        tx.batch_execute(&format!("ALTER TABLE {0}.jobs DROP CONSTRAINT jobs_shape;
-            ALTER TABLE {0}.jobs DROP CONSTRAINT jobs_state_values;
-            UPDATE {0}.jobs SET state='dead-lettered' WHERE state='dead_lettered';
-            ALTER TABLE {0}.jobs ADD CONSTRAINT jobs_state_values CHECK ({3});
+        // The job table admits one state beside the shared Dispatch shape: a
+        // dead-lettered hold of a step that prepared no command and made no attempt.
+        tx.batch_execute(&format!(
+            "ALTER TABLE {0}.jobs ADD COLUMN command jsonb,
+            ADD COLUMN uncertain boolean NOT NULL DEFAULT false,
+            ADD COLUMN receipt_expired boolean NOT NULL DEFAULT false,
+            ADD COLUMN pure boolean NOT NULL DEFAULT false,
+            ADD COLUMN failure_code text;
+            ALTER TABLE {0}.jobs DROP CONSTRAINT jobs_shape;
             ALTER TABLE {0}.jobs ADD CONSTRAINT jobs_shape CHECK (({1}) OR (
                 state='dead-lettered' AND attempt=0 AND command IS NULL
                 AND NOT uncertain AND NOT receipt_expired
@@ -479,12 +483,13 @@ impl Store {
                 AND lease_expires_at IS NULL AND lease_token IS NULL
                 AND delivered_at IS NULL AND expired_at IS NULL
                 AND dead_lettered_at IS NOT NULL
-                AND failure_code IS NOT DISTINCT FROM 'restore-pre-command-held'));
-            ALTER TABLE {0}.control DROP CONSTRAINT control_schema_version_check;
-            UPDATE {0}.control SET schema_version={2} WHERE id;
-            ALTER TABLE {0}.control ADD CONSTRAINT control_schema_version_check CHECK(schema_version={2})",
-            self.namespace, JobTable::shape_predicate(), SCHEMA_VERSION, JobTable::state_predicate())).await.map_err(unavailable)?;
-        self.verify_transaction(tx).await.map_err(unavailable)?;
+                AND failure_code IS NOT DISTINCT FROM 'restore-pre-command-held'))",
+            self.namespace,
+            JobTable::shape_predicate()
+        ))
+        .await
+        .map_err(unavailable)?;
+        tx.execute(&format!("INSERT INTO {}.control(id,database_id,schema_version,admission_key_commitment,state_key_commitments) VALUES(true,$1,{},$2,$3)",self.namespace,SCHEMA_VERSION), &[&self.security.database_id,&self.admission_key_marker(),&self.security.keys.custody_markers(&self.security.database_id)]).await.map_err(unavailable)?;
         Ok(())
     }
 

@@ -442,7 +442,7 @@ async fn assert_bounded_readiness(
         200
     );
 }
-async fn assert_legacy_schema_upgrade(
+async fn assert_other_revision_refused(
     admin: &tokio_postgres::Client,
     namespace: &str,
     migration: &registry_coordinator::store::Store,
@@ -453,54 +453,57 @@ async fn assert_legacy_schema_upgrade(
     let rows_sql = format!(
         "SELECT jsonb_build_object(
             'runs',(SELECT jsonb_agg(to_jsonb(r) ORDER BY run_id) FROM {namespace}.runs r),
-            'jobs',(SELECT jsonb_agg(to_jsonb(j) ORDER BY run_id,step) FROM {namespace}.jobs j))"
+            'jobs',(SELECT jsonb_agg(to_jsonb(j) ORDER BY run_id,step) FROM {namespace}.jobs j),
+            'ledger',(SELECT jsonb_agg(version ORDER BY version) FROM {namespace}.coordinator_migrations))"
     );
     let before: Value = admin.query_one(&rows_sql, &[]).await.unwrap().get(0);
     assert!(!before["runs"].as_array().unwrap().is_empty());
     assert!(!before["jobs"].as_array().unwrap().is_empty());
-    // Model the previously shipped pilot schema, including its core-only job
-    // shape. Explicit apply must preserve existing protected rows while
-    // installing revision 4; serving may not silently upgrade revision 2.
-    admin
-        .batch_execute(&format!(
-            "ALTER TABLE {namespace}.jobs DROP CONSTRAINT jobs_shape;
-            ALTER TABLE {namespace}.jobs DROP CONSTRAINT jobs_state_values;
-            UPDATE {namespace}.jobs SET state='dead_lettered' WHERE state='dead-lettered';
-            ALTER TABLE {namespace}.jobs ADD CONSTRAINT jobs_state_values CHECK (
-                state IN ('pending','leased','delivered','dead_lettered','expired','unknown','cancelled'));
-            ALTER TABLE {namespace}.jobs ADD CONSTRAINT jobs_shape CHECK ({});
-            ALTER TABLE {namespace}.control DROP CONSTRAINT control_schema_version_check;
-            UPDATE {namespace}.control SET schema_version=2 WHERE id;
-            ALTER TABLE {namespace}.control ADD CONSTRAINT control_schema_version_check CHECK(schema_version=2);
-            DELETE FROM {namespace}.coordinator_migrations WHERE version=3",
-            include_str!("fixtures/dispatch-revision-two-shape.sql")
-        ))
-        .await
-        .unwrap();
-    assert!(deployment::check(store, runtime, &package.digest)
-        .await
-        .is_err());
-    for _ in 0..2 {
-        deployment::apply(migration, runtime, package)
+    assert_eq!(before["ledger"], json!([4]));
+    // A store is created at one revision. Neither serving nor explicit apply
+    // changes a database that records another one, in control or in the ledger.
+    for (damage, repair, code) in [
+        (
+            format!(
+                "ALTER TABLE {namespace}.control DROP CONSTRAINT control_schema_version_check;
+                UPDATE {namespace}.control SET schema_version=3 WHERE id"
+            ),
+            format!(
+                "UPDATE {namespace}.control SET schema_version=4 WHERE id;
+                ALTER TABLE {namespace}.control ADD CONSTRAINT control_schema_version_check CHECK(schema_version=4)"
+            ),
+            "schema-version",
+        ),
+        (
+            format!("INSERT INTO {namespace}.coordinator_migrations VALUES(3)"),
+            format!("DELETE FROM {namespace}.coordinator_migrations WHERE version=3"),
+            "deployment.refused",
+        ),
+    ] {
+        admin.batch_execute(&damage).await.unwrap();
+        let damaged: Value = admin.query_one(&rows_sql, &[]).await.unwrap().get(0);
+        assert!(deployment::check(store, runtime, &package.digest)
             .await
-            .unwrap();
+            .is_err());
+        for _ in 0..2 {
+            let error = deployment::apply(migration, runtime, package)
+                .await
+                .unwrap_err();
+            assert_eq!(error.code, code);
+            assert!([Some(error.message.as_str()), error.suggested_action.as_deref()]
+                .into_iter()
+                .flatten()
+                .any(|text| text.contains("apply to a new database")));
+            let after: Value = admin.query_one(&rows_sql, &[]).await.unwrap().get(0);
+            assert_eq!(after, damaged, "a refused apply changes nothing");
+        }
+        admin.batch_execute(&repair).await.unwrap();
         deployment::check(store, runtime, &package.digest)
             .await
             .unwrap();
-        let after: Value = admin.query_one(&rows_sql, &[]).await.unwrap().get(0);
-        assert_eq!(after, before, "schema apply must preserve protected work");
-        assert_eq!(
-            admin
-                .query_one(
-                    &format!("SELECT schema_version FROM {namespace}.control WHERE id"),
-                    &[],
-                )
-                .await
-                .unwrap()
-                .get::<_, i32>(0),
-            4
-        );
     }
+    let after: Value = admin.query_one(&rows_sql, &[]).await.unwrap().get(0);
+    assert_eq!(after, before);
 }
 // Listener polling is cheap, but readiness performs the complete database and
 // audit checks. Its deadline is the overall budget, not a 200ms health-probe
@@ -828,12 +831,12 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
     );
     status_doc["deployment"]["package"] = doc["deployment"]["package"].clone();
     fs::write(&status_path, serde_norway::to_string(&status_doc).unwrap()).unwrap();
-    // A newer ledger, stale effective table grants, and forbidden control
-    // write authority all refuse status while plan still reports observation.
+    // A ledger holding another revision, stale effective table grants, and forbidden
+    // control write authority all refuse status while plan still reports observation.
     for (damage, repair) in [
         (
-            format!("INSERT INTO {namespace}.coordinator_migrations VALUES(4)"),
-            format!("DELETE FROM {namespace}.coordinator_migrations WHERE version=4"),
+            format!("INSERT INTO {namespace}.coordinator_migrations VALUES(5)"),
+            format!("DELETE FROM {namespace}.coordinator_migrations WHERE version=5"),
         ),
         (
             format!("REVOKE SELECT ON {namespace}.jobs FROM {role}"),
@@ -1761,7 +1764,7 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
         .await
         .unwrap();
     admin.execute(&format!("UPDATE {namespace}.runs SET cancel_requested=false,state='failed',restore_review_required=false WHERE run_id=$1"), &[&run_id]).await.unwrap();
-    assert_legacy_schema_upgrade(
+    assert_other_revision_refused(
         &admin,
         &namespace,
         &migration,

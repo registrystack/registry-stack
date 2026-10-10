@@ -386,6 +386,10 @@ fn tls(
             .map_err(|_| fail("install database TLS roots"))
     }
 }
+/// The migration ledger of a store holds exactly its one schema revision.
+const LEDGER: [i64; 1] = [crate::store::SCHEMA_VERSION as i64];
+const OTHER_REVISION: &str =
+    "this database records another Coordinator schema revision; apply to a new database";
 fn layout() -> Result<Layout> {
     Layout::new(
         "coordinator",
@@ -425,11 +429,25 @@ pub async fn check(
         .map_err(|_| {
             fail("run coordinatorctl plan/apply with the correct database identity and package")
         })?;
-    let schema = activation::schema_state(&client, &l, &[2, 3])
+    let schema = activation::schema_state(&client, &l, &LEDGER)
         .await
         .map_err(|_| fail("restore the migration ledger"))?;
-    if schema.applied != vec![2, 3] || !schema.pending.is_empty() {
-        return Err(fail("apply the supported schema version before serving"));
+    if schema.applied.is_empty() {
+        return Err(fail("run coordinatorctl apply before serving"));
+    }
+    let recorded: i32 = client
+        .query_one(
+            &format!(
+                "SELECT schema_version FROM {}.control WHERE id",
+                runtime.namespace
+            ),
+            &[],
+        )
+        .await
+        .map_err(|_| fail("restore the deployment control record"))?
+        .get(0);
+    if schema.applied != LEDGER || recorded != crate::store::SCHEMA_VERSION {
+        return Err(fail(OTHER_REVISION));
     }
     let role = activation::observe_role(&client, &l, None, &extras(&runtime.namespace))
         .await
@@ -479,7 +497,7 @@ pub async fn plan(
     let active = activation::active_activation(&client, &l)
         .await
         .map_err(|_| fail("restore the activation ledger"))?;
-    let schema = activation::schema_state(&client, &l, &[2, 3])
+    let schema = activation::schema_state(&client, &l, &LEDGER)
         .await
         .map_err(|_| fail("restore the migration ledger"))?;
     Ok(
@@ -533,7 +551,13 @@ pub async fn apply(
     {
         return Err(fail("remove default TRIGGER grants to the runtime role"));
     }
-    tx.batch_execute("CREATE TABLE IF NOT EXISTS coordinator_migrations(version bigint PRIMARY KEY); INSERT INTO coordinator_migrations VALUES(2),(3) ON CONFLICT DO NOTHING; CREATE TABLE IF NOT EXISTS coordinator_activations(activation_id uuid PRIMARY KEY,apply_order bigint UNIQUE NOT NULL,package_digest text NOT NULL,predecessor_package_digest text,database_id text NOT NULL,plan_kind text NOT NULL,applied_at timestamptz NOT NULL,operator_reference_hash text,backup_references text[] NOT NULL,role_mode text NOT NULL,runtime_role text NOT NULL)").await.map_err(|_|fail("restore activation schema"))?;
+    tx.batch_execute(&format!("CREATE TABLE IF NOT EXISTS coordinator_migrations(version bigint PRIMARY KEY); INSERT INTO coordinator_migrations VALUES({}) ON CONFLICT DO NOTHING; CREATE TABLE IF NOT EXISTS coordinator_activations(activation_id uuid PRIMARY KEY,apply_order bigint UNIQUE NOT NULL,package_digest text NOT NULL,predecessor_package_digest text,database_id text NOT NULL,plan_kind text NOT NULL,applied_at timestamptz NOT NULL,operator_reference_hash text,backup_references text[] NOT NULL,role_mode text NOT NULL,runtime_role text NOT NULL)", LEDGER[0])).await.map_err(|_|fail("restore activation schema"))?;
+    let schema = activation::schema_state(&tx, &l, &LEDGER)
+        .await
+        .map_err(|_| fail("restore the migration ledger"))?;
+    if schema.applied != LEDGER {
+        return Err(fail(OTHER_REVISION));
+    }
     let prior = activation::active_activation(&tx, &l)
         .await
         .map_err(|_| fail("restore ledger"))?;

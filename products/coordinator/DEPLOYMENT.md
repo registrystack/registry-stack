@@ -99,14 +99,10 @@ named. Write `allowedClients` as a nonempty list of exact client IDs;
 Coordinator refuses omission, an empty list and `unrestricted`. Each listed
 client also needs its explicit action and workflow policy.
 
-Before applying an existing Coordinator database from schema revision 2 or 3,
-stop its old workers. Explicit apply upgrades it to revision 4 and changes the
-stored Dispatch state `dead_lettered` to `dead-lettered`. It preserves command
-bytes, admission identity, approval and workflow deadlines, uncertainty, and
-lease fields. Runtime startup refuses the older revision until apply succeeds;
-the upgrade does not recover unknown effects or release a restore hold. This
-Coordinator migration is not an in-place upgrade path for other products'
-older configuration or databases.
+`coordinatorctl apply` creates the Coordinator store at one schema revision and
+never changes an existing store in place. Apply and runtime startup both refuse
+a database that records another revision and leave it unchanged; apply to a new
+database instead.
 
 For `invoke-breg-action`, configure a Base Registry Engine (BReg) connection with
 an ordinary service `authorization` and an explicitly permitted `profile`. Do not configure
@@ -436,12 +432,7 @@ lease. It preserves the original command and deadline, invalidates stale worker
 completions, and starts no work. Prepared mutating commands left pending after
 a definite retryable response are also held as failed work for an explicit
 `retry-same` or cancellation, with their original command, key and deadline.
-Schema revision 3 introduced these command-free holds without inventing an
-attempt. The current schema revision 4 also adopts the shared Dispatch state
-spelling. Stop old workers and explicitly run `coordinatorctl apply` to upgrade
-revision 2 or 3 before serving; runtime startup does not migrate them. Apply
-preserves stored identities, protected payloads and hold state. Earlier
-Coordinator executables refuse the upgraded control revision.
+A command-free hold is stored without inventing an attempt.
 
 Pending calls that have not prepared a command, and pending waits or local
 steps also become held failed work. Attestation and

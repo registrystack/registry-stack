@@ -106,17 +106,9 @@ impl JobTable {
         format!("{}.{}", self.schema, self.table)
     }
 
-    /// The accepted stored states used by [`Self::create_statements`].
-    /// Product migrations reuse this predicate when changing stored spellings.
-    #[must_use]
-    pub fn state_predicate() -> &'static str {
-        "state IN ('pending', 'leased', 'delivered', 'dead-lettered',
-                   'expired', 'unknown', 'cancelled')"
-    }
-
-    /// The unchanged core job-state predicate used by [`Self::create_statements`].
-    /// Product migrations may compose a narrowly governed state extension with
-    /// this predicate without copying or weakening the core's default shape.
+    /// The core job-state predicate used by [`Self::create_statements`]. A
+    /// consumer may compose a narrowly governed state extension with this
+    /// predicate without copying or weakening the core's default shape.
     #[must_use]
     pub fn shape_predicate() -> &'static str {
         "(state = 'pending'
@@ -193,7 +185,6 @@ impl JobTable {
             part_column: part,
         } = self;
         let shape = Self::shape_predicate();
-        let states = Self::state_predicate();
         vec![
             format!(
                 "CREATE TABLE IF NOT EXISTS {schema}.{table} (
@@ -203,7 +194,8 @@ impl JobTable {
                  generation bigint NOT NULL CHECK (generation > 0),
                  state text NOT NULL
                      CONSTRAINT {table}_state_values CHECK (
-                         {states}
+                         state IN ('pending', 'leased', 'delivered', 'dead-lettered',
+                                   'expired', 'unknown', 'cancelled')
                      ),
                  attempt smallint NOT NULL CHECK (attempt >= 0),
                  next_attempt_at timestamptz,
