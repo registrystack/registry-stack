@@ -18,7 +18,7 @@ bindings.
 ## Usage
 
 ```js
-const { discovery, evidence, breg, casework, messaging, scheduling, coordinator } = require('@registrystack/client');
+const { discovery, evidence, breg, casework, messaging, scheduling } = require('@registrystack/client');
 
 const registry = new breg.BaseRegistryClient({
   baseUrl: 'https://registry.example.invalid/',
@@ -32,6 +32,26 @@ const messages = new messaging.MessagingClient({
 const appointments = new scheduling.SchedulingClient({
   baseUrl: 'https://scheduling.example.invalid/',
 });
+```
+
+Coordinator is not part of published version selection yet. Maintainers can
+assemble and install an explicit local candidate instead:
+
+```sh
+python3 release/scripts/assemble-registry-client-packages.py \
+  --output-dir <candidate-dir> \
+  --artifacts node \
+  --include-coordinator
+npm install \
+  <candidate-dir>/registrystack-client-<platform>-<version>.tgz \
+  <candidate-dir>/registrystack-client-<version>.tgz
+```
+
+That candidate exposes the additional namespace:
+
+```js
+const { coordinator } = require('@registrystack/client');
+
 const workflows = new coordinator.CoordinatorClient({
   baseUrl: 'https://coordinator.example.invalid/',
 });

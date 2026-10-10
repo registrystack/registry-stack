@@ -18,7 +18,7 @@ that every checkout or release ships it.
 | `registry-coordinator-client` / `registry-coordinator-client-node` | Canonical Rust and thin Node contract for controlled pilot admission, progress, inspection and original-receipt reconciliation; no Python binding in this slice |
 | `registry-evidence-verifier` | Evidence response formats, payload contract, and relying-party verification |
 | BReg, Casework, Discovery, Evidence, Messaging, and Scheduling `-client-node` / `-client-py` crates | Thin napi-rs / PyO3 bindings and language conversion over the Rust decisions |
-| `registry-stack-client` | Curated Rust facade for BReg, Casework, Discovery, Evidence, Messaging, and Scheduling, with separate product, record, and auth modules |
+| `registry-stack-client` | Curated Rust facade for BReg, Casework, Coordinator, Discovery, Evidence, Messaging, and Scheduling, with separate product, record, and auth modules |
 | `registry-stack-client-node` | Public `@registrystack/client` facade and platform package definitions |
 | `registry-stack-client-py` | Public `registry-stack-client` Python metadata and `registry_client` facade, assembled with all native bindings |
 | `registry-record` | Neutral Registry Record DTOs and strict envelope decoding, without product authorization semantics |
@@ -127,9 +127,10 @@ tree. `build:debug` builds the addon without writing the committed `index.js`
 or `index.d.ts`, and `check:types` generates both into ignored `.check` files and
 requires them to match the committed ones byte for byte. When a napi-rs CLI bump
 changes that output, `check:types` fails. Run `npm ci && npm run build` in each
-of the six `-client-node` directories, which rewrites both files with the
-pinned CLI (Discovery's loader normalizer included), and commit every
-`index.js` and `index.d.ts` together with the bump.
+of the six published `-client-node` directories and, for an explicit
+Coordinator-enabled candidate, `registry-coordinator-client-node`. This
+rewrites both files with the pinned CLI (Discovery's loader normalizer
+included); commit every `index.js` and `index.d.ts` together with the bump.
 
 For Python bindings, run from the changed `-client-py` directory, replacing
 `<product>` with `breg`, `casework`, `discovery`, `evidence`, `messaging`, or
@@ -160,13 +161,16 @@ registry_prepare_cargo_runtime "$PWD" --locked -p registry-<product>-client-node
 (cd crates/registry-<product>-client-py && python3 -m unittest discover -s tests/python -v)
 ```
 
-In checkouts containing the unified Node.js and Python packages, those packages
-are generated from the BReg, Casework, Discovery, Evidence, Messaging, and
-Scheduling bindings. Published packages include Messaging from v0.38.0 and
+In checkouts containing the unified Node.js and Python packages, their default
+published inventory is generated from the BReg, Casework, Discovery, Evidence,
+Messaging, and Scheduling bindings. An explicit local Node candidate can add
+the Coordinator binding with `--include-coordinator`; Python has no Coordinator
+binding in this slice. Published packages include Messaging from v0.38.0 and
 Scheduling from v0.40.0; earlier release assembly preserves its
 version-selected inventory. Source CI uses the explicit local
 `--include-messaging` and `--include-scheduling` overrides when assembling the
-current six bindings.
+current six published bindings, and Coordinator candidate checks pass
+`--include-coordinator` separately.
 When changing that assembly,
 confirm the facade directories, `sync-registry-client-node.py`, and
 `test_assemble_registry_client_wheel.py` are present, then run from the monorepo
