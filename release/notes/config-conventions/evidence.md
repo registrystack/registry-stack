@@ -637,7 +637,7 @@ unchanged.
 | `deployment artifact closure is invalid: ...` | `evidence.bundle.unknown-file` |
 | `deployment exceeds a Version 1 size bound` | `evidence.bundle.too-large` |
 | `deployment configuration is invalid: ...` | `evidence.bundle.invalid-configuration` |
-| `deployment artifact is invalid: ...` | `evidence.bundle.invalid-artifact`; for a code list `evidence.codelist.invalid-size`, `evidence.codelist.output-not-allowed`; for a fixture `evidence.fixture.not-synthetic`, `evidence.fixture.missing-cases`, `evidence.fixture.invalid-case-count`, `evidence.fixture.invalid-case`, `evidence.fixture.invalid-case-id`, `evidence.fixture.unresolved-not-declared`, `evidence.fixture.incomplete-coverage`; for a CA bundle `evidence.runtime.invalid-ca-bundle` |
+| `deployment artifact is invalid: ...` | `evidence.bundle.invalid-artifact`; for a code list `evidence.codelist.invalid-size`, `evidence.codelist.output-not-allowed`; for a fixture `evidence.fixture.not-synthetic`, `evidence.fixture.missing-cases`, `evidence.fixture.invalid-case-count`, `evidence.fixture.invalid-case`, `evidence.fixture.invalid-case-id`, `evidence.fixture.unresolved-not-declared`, `evidence.fixture.invalid-unresolved-marker`, `evidence.fixture.incomplete-coverage`; for a CA bundle `evidence.runtime.invalid-ca-bundle` |
 | `deployment artifact is invalid: runtime signer kind does not match the bundle assurance profile` | `evidence.runtime.signer-assurance-mismatch` |
 | `deployment artifact is invalid: a bundle secret reference names a provider ...` | `evidence.runtime.secret-provider-not-enabled` |
 | `deployment artifact is invalid: the local signing key reference must be distinct ...` | `evidence.runtime.signing-key-shared` |
