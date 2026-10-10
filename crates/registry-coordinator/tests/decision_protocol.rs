@@ -154,6 +154,9 @@ async fn openai_matches_names_instead_of_positions_and_preserves_refusal() {
         .mount(&server)
         .await;
     let value = success(client.call_prepared(&input, &prepared).await);
+    assert_eq!(value["requestedModel"], "fixture-alias");
+    assert_eq!(value["returnedModel"], "fixture-resolved-model");
+    assert_eq!(value["usage"], openai_reply()["usage"]);
     assert_eq!(value["answers"]["restricted"], json!({"type":"refusal"}));
     assert_eq!(
         value["answers"]["damaged"],
@@ -162,6 +165,100 @@ async fn openai_matches_names_instead_of_positions_and_preserves_refusal() {
     assert_eq!(value["answers"]["severity"]["score"], 1.1);
     assert_eq!(value["answers"]["severity"]["nativeConfidence"], 0.55);
     assert_eq!(value["usage"]["total_tokens"], 42);
+}
+
+#[tokio::test]
+async fn openai_requires_complete_response_metadata_before_advancing() {
+    let server = MockServer::start().await;
+    let client = connection(&config(&server.uri(), "openai-decisions"));
+    let input = openai_input();
+    let prepared = client.prepare(&input).unwrap_or_else(|_| panic!("prepare"));
+    let mut cases = Vec::new();
+    for pointer in [
+        "/answers",
+        "/model",
+        "/usage",
+        "/usage/input_tokens",
+        "/usage/input_tokens_details",
+        "/usage/input_tokens_details/cache_write_tokens",
+        "/usage/input_tokens_details/cached_tokens",
+        "/usage/output_tokens",
+        "/usage/output_tokens_details",
+        "/usage/output_tokens_details/reasoning_tokens",
+        "/usage/total_tokens",
+    ] {
+        let mut missing = openai_reply();
+        let (parent, member) = pointer.rsplit_once('/').unwrap();
+        missing
+            .pointer_mut(parent)
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .remove(member);
+        cases.push(missing);
+        let mut null = openai_reply();
+        *null.pointer_mut(pointer).unwrap() = Value::Null;
+        cases.push(null);
+    }
+    for (pointer, value) in [
+        ("/model", json!(true)),
+        ("/model", json!(" ")),
+        ("/usage", json!([])),
+        ("/usage/input_tokens", json!(-1)),
+        ("/usage/input_tokens_details/cached_tokens", json!(0.5)),
+        ("/usage/output_tokens_details/reasoning_tokens", json!("0")),
+        ("/usage/total_tokens", json!(false)),
+    ] {
+        let mut malformed = openai_reply();
+        *malformed.pointer_mut(pointer).unwrap() = value;
+        cases.push(malformed);
+    }
+    for response in cases {
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(response))
+            .expect(1)
+            .mount(&server)
+            .await;
+        assert!(
+            matches!(client.call_prepared(&input, &prepared).await, CallOutcome::Uncertain { code } if code == "decision-invalid-response")
+        );
+        server.verify().await;
+        server.reset().await;
+    }
+}
+
+#[tokio::test]
+async fn openai_rate_limit_hints_do_not_enable_replay_after_dispatch() {
+    let server = MockServer::start().await;
+    let client = connection(&config(&server.uri(), "openai-decisions"));
+    let input = openai_input();
+    let prepared = client.prepare(&input).unwrap_or_else(|_| panic!("prepare"));
+    for (kind, code) in [
+        ("rate_limit_error", "slow_down"),
+        ("rate_limit_error", "rate_limit_exceeded"),
+        ("insufficient_quota", "credit_balance_exhausted"),
+        ("insufficient_quota", "organization_spend_limit_exceeded"),
+        ("insufficient_quota", "project_spend_limit_exceeded"),
+        ("insufficient_quota", "organization_usage_limit_exceeded"),
+    ] {
+        Mock::given(method("POST"))
+            .and(path("/v1/decisions"))
+            .and(body_bytes(prepared.clone()))
+            .respond_with(
+                ResponseTemplate::new(429)
+                    .insert_header("retry-after", "1")
+                    .set_body_json(json!({"error":{"type":kind,"code":code}})),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        assert!(
+            matches!(client.call_prepared(&input, &prepared).await, CallOutcome::Uncertain { code } if code == "decision-uncertain")
+        );
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
+        server.verify().await;
+        server.reset().await;
+    }
 }
 
 #[tokio::test]

@@ -362,6 +362,8 @@ impl DecisionConnection {
             return refused("decision-refused");
         }
         if !(200..300).contains(&status) {
+            // These profiles conservatively hold after dispatch, including
+            // rate-limit replies. Retry-After does not add a replay contract.
             return uncertain("decision-uncertain");
         }
         // Same closed media forms as Platform destination responses. That
@@ -545,8 +547,29 @@ fn normalize(
     evaluation: &Evaluation,
     response: Value,
 ) -> Option<Value> {
-    if protocol == DecisionProtocol::SystemOne
-        && (response.get("model").is_none() || response.get("usage").is_none())
+    let returned_model = response.get("model")?.as_str()?;
+    if returned_model.trim().is_empty() || ExternalId::new(returned_model).is_err() {
+        return None;
+    }
+    // Usage remains provider metadata, not an invented common cost or token
+    // contract. OpenAI documents these counters as required members of Usage.
+    let usage = response.get("usage")?;
+    if !usage.is_object()
+        || match protocol {
+            DecisionProtocol::SystemOne => ["input_tokens", "output_tokens"]
+                .iter()
+                .any(|key| usage.get(key).is_some_and(|value| value.as_u64().is_none())),
+            DecisionProtocol::OpenaiDecisions => [
+                "/input_tokens",
+                "/input_tokens_details/cache_write_tokens",
+                "/input_tokens_details/cached_tokens",
+                "/output_tokens",
+                "/output_tokens_details/reasoning_tokens",
+                "/total_tokens",
+            ]
+            .iter()
+            .any(|path| usage.pointer(path).and_then(Value::as_u64).is_none()),
+        }
     {
         return None;
     }
@@ -667,26 +690,9 @@ fn normalize(
             }
         }
     }
-    let mut result = json!({"protocol":protocol,"requestedModel":model,"answers":answers});
-    if let Some(returned) = response.get("model") {
-        let returned = returned.as_str()?;
-        if ExternalId::new(returned).is_err() {
-            return None;
-        }
-        result["returnedModel"] = Value::String(returned.to_owned());
-    }
-    // Usage is provider metadata, not an invented common cost or token contract.
-    if let Some(usage) = response.get("usage") {
-        if !usage.is_object()
-            || ["input_tokens", "output_tokens"]
-                .iter()
-                .any(|key| usage.get(key).is_some_and(|value| value.as_u64().is_none()))
-        {
-            return None;
-        }
-        result["usage"] = usage.clone();
-    }
-    Some(result)
+    Some(
+        json!({"protocol":protocol,"requestedModel":model,"returnedModel":returned_model,"answers":answers,"usage":usage}),
+    )
 }
 
 fn refused(code: &str) -> CallOutcome {

@@ -95,20 +95,33 @@ impl Store {
         action: &str,
         actor: &Actor,
         run: Option<Uuid>,
+        reason: Option<&str>,
     ) -> Result<AuditRequest> {
         let owner = self.owner(actor)?;
-        self.security.audit.begin(AUDIT_SCHEMA,Uuid::new_v4().to_string(),
-            json!({"action":action,"actorRef":self.reference("actor-v1",&owner),"runRef":run.map(|r|self.reference("run-v1",&r.to_string()))}),
-            json!({"action":action,"outcome":"unknown"})).await.map_err(|_|refused("audit-unavailable","durable audit is unavailable"))
+        let mut record = json!({"action":action,"actorRef":self.reference("actor-v1",&owner),"runRef":run.map(|r|self.reference("run-v1",&r.to_string()))});
+        if let Some(reason) = reason {
+            record["reasonRef"] = json!(self.reference("reason-v1", reason));
+        }
+        self.security
+            .audit
+            .begin(
+                AUDIT_SCHEMA,
+                Uuid::new_v4().to_string(),
+                record,
+                json!({"action":action,"outcome":"unknown"}),
+            )
+            .await
+            .map_err(|_| refused("audit-unavailable", "durable audit is unavailable"))
     }
     async fn audited<T>(
         &self,
         action: &str,
         actor: &Actor,
         run: Option<Uuid>,
+        reason: Option<&str>,
         work: impl Future<Output = Result<T>>,
     ) -> Result<T> {
-        let request = self.audit_begin(action, actor, run).await?;
+        let request = self.audit_begin(action, actor, run, reason).await?;
         let result = work.await;
         request.finish(json!({"action":action,"outcome":if result.is_ok(){"accepted"}else{"unknown"}})).await.map_err(|_|refused("audit-response-unavailable","the operation may have completed; recover its original identity before trying again"))?;
         result
@@ -121,7 +134,7 @@ impl Store {
         key: &str,
         binding: &str,
     ) -> Result<Uuid> {
-        self.audited("admit", actor, None, async {
+        self.audited("admit", actor, None, None, async {
             self.admit(definition, input, &self.owner(actor)?, key, binding)
                 .await
         })
@@ -136,7 +149,7 @@ impl Store {
         binding: &str,
         runtime: &crate::runtime::RuntimeConfig,
     ) -> Result<Uuid> {
-        self.audited("admit", actor, None, async {
+        self.audited("admit", actor, None, None, async {
             self.admit_bound(
                 definition,
                 input,
@@ -151,7 +164,7 @@ impl Store {
     }
 
     pub async fn status_owned(&self, run: Uuid, actor: &Actor) -> Result<RunStatus> {
-        self.audited("status", actor, Some(run), async {
+        self.audited("status", actor, Some(run), None, async {
             let mut client = self.client().await.map_err(unavailable)?;
             let tx = client.transaction().await.map_err(unavailable)?;
             self.authorize_run(&tx, run, actor).await?;
@@ -167,7 +180,7 @@ impl Store {
         .await
     }
     pub async fn definition_owned(&self, run: Uuid, actor: &Actor) -> Result<Definition> {
-        self.audited("definition-read", actor, Some(run), async {
+        self.audited("definition-read", actor, Some(run), None, async {
             let mut client = self.client().await.map_err(unavailable)?;
             let tx = client.transaction().await.map_err(unavailable)?;
             self.authorize_run(&tx, run, actor).await?;
@@ -203,7 +216,7 @@ impl Store {
         actor: &Actor,
         allowed_flows: &[String],
     ) -> Result<Vec<RunStatus>> {
-        self.audited("list",actor,None,async {
+        self.audited("list",actor,None, None,async {
             if !(1..=100).contains(&limit){return Err(refused("list-limit-invalid","choose a run list limit between 1 and 100"));}
             if allowed_flows.len()>64 || allowed_flows.iter().any(|flow|flow.is_empty() || flow.len()>128){return Err(refused("list-flow-invalid","choose at most 64 bounded nonempty workflow identities"));}
             let mut client=self.client().await.map_err(unavailable)?;
@@ -219,7 +232,7 @@ impl Store {
         binding: &str,
         actor: &Actor,
     ) -> Result<RunInspection> {
-        self.audited("inspect", actor, Some(run), async {
+        self.audited("inspect", actor, Some(run), None, async {
             let mut client = self.client().await.map_err(unavailable)?;
             let tx = client.transaction().await.map_err(unavailable)?;
             self.authorize_run(&tx, run, actor).await?;
@@ -233,7 +246,7 @@ impl Store {
         runtime: &crate::runtime::RuntimeConfig,
         actor: &Actor,
     ) -> Result<RunInspection> {
-        self.audited("inspect", actor, Some(run), async {
+        self.audited("inspect", actor, Some(run), None, async {
             let mut client = self.client().await.map_err(unavailable)?;
             let tx = client.transaction().await.map_err(unavailable)?;
             self.authorize_run(&tx, run, actor).await?;
@@ -250,7 +263,7 @@ impl Store {
         reason: &str,
     ) -> Result<()> {
         Self::reason(reason)?;
-        self.audited("retry-same", actor, Some(run), async {
+        self.audited("retry-same", actor, Some(run), Some(reason), async {
             let mut client = self.client().await.map_err(unavailable)?;
             let tx = client.transaction().await.map_err(unavailable)?;
             self.authorize_run(&tx, run, actor).await?;
@@ -264,7 +277,7 @@ impl Store {
     /// authoritative receipt is observed. Cancellation never undoes a product effect.
     pub async fn cancel_owned(&self, run: Uuid, actor: &Actor, reason: &str) -> Result<RunStatus> {
         Self::reason(reason)?;
-        self.audited("cancel",actor,Some(run),async {
+        self.audited("cancel",actor,Some(run), Some(reason),async {
             let mut client=self.client().await.map_err(unavailable)?;
             let tx=client.transaction().await.map_err(unavailable)?;
             self.authorize_run(&tx,run,actor).await?;
@@ -291,7 +304,7 @@ impl Store {
         adapters: &dyn AdapterSet,
     ) -> Result<RunInspection> {
         Self::reason(reason)?;
-        self.audited("reconcile",actor,Some(run),async {
+        self.audited("reconcile",actor,Some(run), Some(reason),async {
             let mut client=self.client().await.map_err(unavailable)?;
             let tx=client.transaction().await.map_err(unavailable)?;
             self.authorize_run(&tx,run,actor).await?;
@@ -462,7 +475,7 @@ impl Store {
     pub async fn set_restore_hold(&self, actor: &Actor, reason: &str) -> Result<()> {
         Self::operator(actor)?;
         Self::reason(reason)?;
-        self.audited("restore-hold", actor, None, async {
+        self.audited("restore-hold", actor, None, Some(reason), async {
             let mut client = self.client().await.map_err(unavailable)?;
             let tx = client.transaction().await.map_err(unavailable)?;
             self.verify_transaction(&tx).await.map_err(unavailable)?;
@@ -485,7 +498,7 @@ impl Store {
     pub async fn release_restore_hold(&self, actor: &Actor, evidence: &str) -> Result<()> {
         Self::operator(actor)?;
         Self::reason(evidence)?;
-        self.audited("release-restore-hold",actor,None,async {
+        self.audited("release-restore-hold",actor,None, Some(evidence),async {
             let mut client=self.client().await.map_err(unavailable)?;let tx=client.transaction().await.map_err(unavailable)?;
             self.verify_transaction(&tx).await.map_err(unavailable)?;
             // Serialize release with restore/cancellation I/O fences. No replay
@@ -511,7 +524,7 @@ impl Store {
         if !execution_history_complete || !prior_deployment_fenced {
             return Err(refused("restore-review-required","recover complete execution history and fence the prior deployment before clearing review"));
         }
-        self.audited("complete-execution-recovery",actor,None,async {
+        self.audited("complete-execution-recovery",actor,None, Some(recovery_reference),async {
             let mut client=self.client().await.map_err(unavailable)?;let tx=client.transaction().await.map_err(unavailable)?;
             self.verify_transaction(&tx).await.map_err(unavailable)?;
             let held:bool=tx.query_one(&format!("SELECT restore_hold FROM {}.control WHERE id FOR UPDATE",self.namespace),&[]).await.map_err(unavailable)?.get(0);
@@ -770,7 +783,7 @@ impl Store {
                 "complete admission history and fence the prior deployment before enabling starts",
             ));
         }
-        self.audited("release-admission-hold",actor,None,async {
+        self.audited("release-admission-hold",actor,None, Some(recovery_reference),async {
             let mut client=self.client().await.map_err(unavailable)?;let tx=client.transaction().await.map_err(unavailable)?;
             self.verify_transaction(&tx).await.map_err(unavailable)?;
             let row=tx.query_one(&format!("SELECT restore_hold FROM {}.control WHERE id FOR UPDATE",self.namespace),&[]).await.map_err(unavailable)?;
@@ -787,7 +800,7 @@ impl Store {
         actor: &Actor,
     ) -> Result<u64> {
         Self::operator(actor)?;
-        self.audited("retention",actor,None,async {
+        self.audited("retention",actor,None, None,async {
             if !(1..=100).contains(&limit)||before>Utc::now(){return Err(refused("retention-invalid","choose a past cutoff and a limit between 1 and 100"));}
             let mut client=self.client().await.map_err(unavailable)?;let tx=client.transaction().await.map_err(unavailable)?;
             self.verify_transaction(&tx).await.map_err(unavailable)?;
