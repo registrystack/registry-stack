@@ -93,6 +93,21 @@ logical `connections`. Add the `deployment` block shown in
 issuer and caller policy. The example contains references only. Provision each
 secret separately through its enabled shared provider.
 
+The shared `jwksSource` block selects its variant with `type`, for example
+`type: discovery`. An older `kind` member is refused with its replacement
+named. Write `allowedClients` as a nonempty list of exact client IDs;
+Coordinator refuses omission, an empty list and `unrestricted`. Each listed
+client also needs its explicit action and workflow policy.
+
+Before applying an existing Coordinator database from schema revision 2 or 3,
+stop its old workers. Explicit apply upgrades it to revision 4 and changes the
+stored Dispatch state `dead_lettered` to `dead-lettered`. It preserves command
+bytes, admission identity, approval and workflow deadlines, uncertainty, and
+lease fields. Runtime startup refuses the older revision until apply succeeds;
+the upgrade does not recover unknown effects or release a restore hold. This
+Coordinator migration is not an in-place upgrade path for other products'
+older configuration or databases.
+
 For `invoke-breg-action`, configure a Base Registry Engine (BReg) connection with
 an ordinary service `authorization` and an explicitly permitted `profile`. Do not configure
 `authorization.taskAuthority` on that connection: this operation accepts no

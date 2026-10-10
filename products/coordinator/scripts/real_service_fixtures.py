@@ -44,7 +44,7 @@ def _permission(entity, operations, fields, *, writable=False, request=False):
     if writable:
         result["writableFields"] = fields
     if request:
-        result["readableRequestFields"] = ["reason", "review_state"]
+        result["readableRequestFields"] = ["reason", "review-state"]
     return result
 
 
@@ -55,7 +55,7 @@ def _profile(name, kind, client, permissions, *, purpose=True):
         "actorKind": kind,
         "requesterClients": [client],
         "requiredScopes": ["records:get"],
-        "permissions": permissions,
+        "permissions": {"entities": permissions},
     }
     if purpose:
         profile["requiredPurposes"] = ["review"]
@@ -92,9 +92,9 @@ def write_breg(root, urls):
         "classification": "internal",
         "changeControl": {"requiredFor": ["patch"]},
         "fields": [
-            {"id": "tenant", "type": "string", "minLength": 1, "maxLength": 64,
+            {"id": "tenant", "type": "string", "minimumLength": 1, "maximumLength": 64,
              "required": True, "classification": "internal"},
-            {"id": "email", "type": "string", "minLength": 1, "maxLength": 254,
+            {"id": "email", "type": "string", "minimumLength": 1, "maximumLength": 254,
              "required": True, "classification": "internal"},
             {"id": "notice-allowed", "type": "boolean", "required": True,
              "classification": "internal"},
@@ -109,26 +109,26 @@ def write_breg(root, urls):
         "mutationMode": "mutable",
         "classification": "internal",
         "fields": [
-            {"id": "tenant", "type": "string", "minLength": 1, "maxLength": 64,
+            {"id": "tenant", "type": "string", "minimumLength": 1, "maximumLength": 64,
              "required": True, "classification": "internal"},
             {"id": "record", "type": "reference", "target": "application",
              "required": True, "classification": "internal"},
-            {"id": "proposed-email", "type": "string", "minLength": 1,
-             "maxLength": 254, "required": True, "classification": "internal"},
-            {"id": "reason", "type": "text", "maxLength": 1000,
+            {"id": "proposed-email", "type": "string", "minimumLength": 1,
+             "maximumLength": 254, "required": True, "classification": "internal"},
+            {"id": "reason", "type": "text", "maximumLength": 1000,
              "required": True, "classification": "internal"},
         ],
         "changeRequest": {
             "effects": [{"target": {"fromField": "record"}, "operation": "patch",
                          "set": {"email": {"fromField": "proposed-email"}}}],
-            "review": {"mode": "none"},
+            "review": {"type": "none"},
         },
     }
     profiles = [
         _profile("seeder", "service", "seed-client", [
             _permission("application", ["create", "get", "list"], APPLICATION_FIELDS,
                         writable=True),
-            _permission("application-change", ["create", "get", "list", "submit_request"],
+            _permission("application-change", ["create", "get", "list", "submit-request"],
                         REQUEST_FIELDS, writable=True, request=True),
         ]),
         _profile("follow-up-reader", "service", "application-reader", [
@@ -148,14 +148,14 @@ def write_breg(root, urls):
     profiles[-1]["taskGrant"] = {"sourceIssuer": AUTHORITY}
     # The request compiler requires an explicit complete application ceiling.
     # This seed-service profile is not used by the external-review journey.
-    apply = _permission("application-change", ["get", "apply_request"], REQUEST_FIELDS,
+    apply = _permission("application-change", ["get", "apply-request"], REQUEST_FIELDS,
                         request=True)
     apply["applyTargets"] = [{"entity": "application", "rowBoundaries": BOUNDARY}]
     profiles.append(_profile("applier", "service", "seed-client", [apply]))
     _write(root / "registry.yaml", {
-        "apiVersion": "registry.registrystack.org/v1alpha1",
-        "kind": "RegistryProject",
-        "registry": {"id": SOURCE, "version": "1", "defaultLanguage": "en",
+        "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
+        "kind": "BRegProject",
+        "project": {"id": SOURCE, "version": "1", "defaultLanguage": "en",
                      "canonicalBaseIri": "https://synthetic.example.invalid/coordinator"},
         "package": {"sourceRevision": "coordinator-synthetic-1"},
         "entities": [applications, request],
@@ -256,9 +256,18 @@ def write_casework(root, urls, resource, agent_subject):
         }]},
         "subjects": {"tenant_claim": "tenant"},
     }
+    booking_template = {
+        **template, "id": "book-appointment", "label": "Deferred synthetic appointment",
+        "authorizationMode": "deferred", "lifetimeSeconds": 3600, "resource": SCHEDULING_RESOURCE,
+        "scopes": ["scheduling:read", "scheduling:commit"],
+        "bounds": {"type": "scheduling", "permissions": [{
+            "service": "application-review", "location": "pilot-desk",
+            "actions": ["appointment.create"],
+        }]},
+    }
     _write(root / "casework.yaml", {
-        "apiVersion": "registry.registrystack.org/casework/v1alpha1",
-        "kind": "CaseworkProject", "casework": {"id": "coordinator-casework", "version": "1"},
+        "apiVersion": "id.registrystack.org/formats/casework/project/v1alpha1",
+        "kind": "CaseworkProject", "project": {"id": "coordinator-casework", "version": "1"},
         "accessProfiles": [
             {"id": "staff", "principalClaim": "casework_principal", "requiredScopes": ["casework:staff"], "role": "staff"},
             {"id": "supervisor", "principalClaim": "casework_principal", "requiredScopes": ["casework:supervisor"], "role": "supervisor"},
@@ -284,13 +293,9 @@ def write_casework(root, urls, resource, agent_subject):
         "taskTemplates": [
             {**template, "id": "read-record", "lifetimeSeconds": 60},
             {**template, "id": "read-record-short", "lifetimeSeconds": 5},
-            {**template, "id": "book-appointment", "label": "Deferred synthetic appointment",
-             "authorizationMode": "deferred", "lifetimeSeconds": 3600, "resource": SCHEDULING_RESOURCE,
-             "scopes": ["scheduling:read", "scheduling:commit"],
-             "bounds": {"type": "scheduling", "permissions": [{
-                 "service": "application-review", "location": "pilot-desk",
-                 "actions": ["appointment.create"],
-             }]}},
+            booking_template,
+            {**booking_template, "id": "book-appointment-expiry-control",
+             "label": "Synthetic expired approval control", "lifetimeSeconds": 5},
         ],
     })
     webhook = root.resolve() / "source-webhook"
@@ -404,6 +409,7 @@ def write_scheduling(root, day):
         "openings": [{"id": "pilot-opening", "location": "pilot-desk", "holidaySet": "pilot-holidays", "weekdays": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"],
             "startTime": "09:00", "endTime": "17:00", "effectiveFrom": day, "effectiveUntil": day,
             "because": "One finite synthetic supply day."}],
+        "channels": ["public", "assisted"],
         "holdPolicy": {"ttlMinutes": 5, "maximumPerCaller": 1, "because": "Synthetic fixture bound."},
     })
     _write(root / "records.yaml", {

@@ -197,7 +197,8 @@ class LostResponseProxy:
                     claims = json.loads(base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)))
                     proxy.commands.append({"key": self.headers.get("Idempotency-Key"),
                         "bodyHash": hashlib.sha256(body or b"").hexdigest(), "responseStatus": response.status,
-                        "issuedAt": claims.get("iat"), "subject": claims.get("sub"),
+                        "issuedAt": claims.get("iat"), "accessTokenExpiresAt": claims.get("exp"),
+                        "subject": claims.get("sub"),
                         "issuer": claims.get("iss"), "audience": claims.get("aud"), "clientId": claims.get("client_id"),
                         "scopes": claims.get("scope", "").split(),
                         "boundsHash": hashlib.sha256(json.dumps(claims.get("registry_grant_bounds"), sort_keys=True, separators=(",", ":")).encode()).hexdigest(),
@@ -431,9 +432,9 @@ class Journey:
         explanation = self.ctl("bregctl", "explain", "change-requests", owner)
         request = next(item for item in explanation["explanation"]["requests"] if item["requestEntity"] == "application-change")
         private(casework / "sources/source.json", {
-            "apiVersion":"registry.registrystack.org/casework-source-description/v1alpha1",
-            "kind":"BRegCaseworkSourceDescription", "sourceId":SOURCE, "authority":"none",
-            "origin":"bregctl explain change-requests", "sourceRevision":explanation["revision"], "request":request})
+            "apiVersion":"id.registrystack.org/formats/casework/breg-source-description/v1alpha1",
+            "kind":"CaseworkBregSourceDescription", "sourceId":SOURCE, "authority":"none",
+            "origin":"bregctl explain change-requests", "sourceRevision":explanation["revision"], "requests":[request]})
         self.ctl("caseworkctl", "check", casework)
         self.sessions.append(("caseworkctl", casework))
         self.casework_start(casework, owner)
@@ -447,7 +448,7 @@ class Journey:
                                                 "proposedEmail":"updated@example.invalid","reason":"Synthetic review"})
         path = self.urls["breg"] + f"/v1/records/application-changes/{change}?accessProfile=seeder"
         record = http("GET", path, seed)
-        action = next(a for a in record["data"]["request"]["actions"] if a["operation"] == "submit_request")
+        action = next(a for a in record["data"]["request"]["actions"] if a["operation"] == "submit-request")
         http("POST", urllib.parse.urljoin(self.urls["breg"], action["href"]), seed, {},
              {"Idempotency-Key":str(uuid.uuid4()), "If-Match":action["ifMatch"]})
         record = http("GET", path, seed)
@@ -523,7 +524,7 @@ class Journey:
             "authentication": {"oidc": {"issuer": self.urls["issuer"], "audience": SCHEDULING_RESOURCE,
                 "scopeClaim": "scope", "readsScope": "scheduling:read", "allowedClients": ["task-agent", "scheduling-reader"],
                 "assertionIssuers": {"task-agent": [AUTHORITY]},
-                "jwksSource": {"kind": "static", "documentRef": "secret:file/jwks"}}},
+                "jwksSource": {"type": "static", "documentRef": "secret:file/jwks"}}},
             "taskGrantStatus": [{"sourceIssuer": AUTHORITY, "baseUrl": self.urls["casework"],
                 "tokenEndpoint": status["tokenEndpoint"], "clientAssertionAudience": status["clientAssertionAudience"],
                 "clientId": Path(status["clientIdFile"]).read_text().strip(),
@@ -592,7 +593,7 @@ class Journey:
             "package": {"root": str(package), "expectedDigest": packaged["packageDigest"]},
             "listener": {"bind": f"127.0.0.1:{port}", "tlsTermination": "development-loopback"},
             "authentication": {"issuer": self.urls["issuer"], "audience": COORDINATOR_RESOURCE,
-                "scopeClaim": "scope", "jwksSource": {"kind": "static", "documentRef": "secret:file/jwks"},
+                "scopeClaim": "scope", "jwksSource": {"type": "static", "documentRef": "secret:file/jwks"},
                 "allowedClients": ["coordinator-producer"], "policies": [{"clientId": "coordinator-producer",
                     "requiredScopes": ["coordinator:start", "coordinator:operate"], "flows": ["deferred-appointment"],
                     "actions": ["start", "status", "inspect", "reconcile", "retry-same", "cancel", "doctor"], "operator": True}]},
@@ -617,6 +618,8 @@ class Journey:
         message_proxy = LostResponseProxy(messaging_url, "/v1/messages")
         self.proxies.extend([booking_proxy, message_proxy])
         runtime, url, worker = self.coordinator_deployment(owner, resource, agent, booking_proxy.url, message_proxy.url)
+        expired_grant = approve("book-appointment-expiry-control")
+        assert expired_grant["authorizationMode"] == "deferred"
         grant = approve("book-appointment")
         assert grant["authorizationMode"] == "deferred"
         if self.authority_preflight:
@@ -665,6 +668,7 @@ class Journey:
         assert len({item["bodyHash"] for item in booking_proxy.commands}) == 1
         assert len({item["key"] for item in message_proxy.commands}) == 1
         assert len({item["bodyHash"] for item in message_proxy.commands}) == 1
+        assert len(booking_proxy.commands) == len(message_proxy.commands) == 1, "receipt recovery must not resubmit effects"
         command = booking_proxy.commands[0]
         assert command["grantId"] == grant["id"] and command["grantExpiresAt"] == grant["expiresAt"]
         assert command["subject"] == agent and command["issuer"] == self.urls["issuer"]
@@ -672,6 +676,9 @@ class Journey:
         assert set(command["scopes"]) == {"scheduling:read", "scheduling:commit"}
         assert command["boundsHash"] == hashlib.sha256(json.dumps(grant["bounds"], sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         assert command["issuedAt"] >= dt.datetime.fromisoformat(due).timestamp() - 1, "booking credential must be issued after restart"
+        assert command["issuedAt"] < command["accessTokenExpiresAt"] <= grant["expiresAt"], "fresh credentials cannot extend the original approval"
+        approval_refusals = self.approval_refusals(owner, url, data, grant, expired_grant,
+                                                  booking_proxy, message_proxy)
         messages = self.ctl("messagingctl", "messages", "list", "--runtime-config", messaging_runtime)
         assert len(messages["messages"]) == 1
         assert messages["messages"][0]["id"] == result["run"]["output"]["messageId"]
@@ -698,6 +705,7 @@ class Journey:
         proof = {"proofBoundary": "native_postgres_and_services" if self.wait_seconds >= 901 else "short_smoke_only",
             "actualApprovalElapsedSeconds": elapsed, "configuredWaitSeconds": self.wait_seconds, "authorityPreflight": self.authority_preflight,
             "workerRestart": True, "freshBookingIssuedAt": command["issuedAt"], "originalGrantDeadline": grant["expiresAt"],
+            "freshBookingExpiresAt": command["accessTokenExpiresAt"], "approvalRefusals": approval_refusals,
             "bookingAuthority": {key: command[key] for key in ("issuer", "subject", "clientId", "audience", "scopes", "boundsHash")},
             "appointments": len(appointments["items"]), "acceptedMessages": len(messages["messages"]),
             "bookingResponseLost": True, "messageResponseLost": True, "readOnlyReconciliations": reconciled,
@@ -710,6 +718,38 @@ class Journey:
             "reviewRequiredAfterSourceChanges": True}
         private(self.root / "native-deferred-proof.json", proof)
         print("Deferred appointment and accepted notice recovered original receipts after response loss.", flush=True)
+
+    def approval_refusals(self, owner, url, positive_input, grant, expired_grant,
+                         booking_proxy, message_proxy):
+        # These are actual Casework approvals and native Coordinator requests.
+        # The short-lived approval is distinct from the positive journey's grant.
+        while time.time() <= expired_grant["expiresAt"]:
+            time.sleep(0.1)
+        controls = [
+            ("expired-original-approval", {"id": expired_grant["id"], "expiresAt": expired_grant["expiresAt"]}),
+            ("unknown-approval", {"id": str(uuid.uuid4()), "expiresAt": grant["expiresAt"]}),
+            ("mismatched-original-deadline", {"id": grant["id"], "expiresAt": grant["expiresAt"] + 1}),
+        ]
+        before = (len(booking_proxy.commands), len(message_proxy.commands))
+        results = []
+        for label, reference in controls:
+            data = {**positive_input, "bookAfter": stamp(-1), "grant": reference}
+            run = self.start(owner, url, label, data)
+            outcome, reconciled = self.drive(owner, url, run)
+            assert outcome["run"]["state"] == "failed", "invalid approval must definitely refuse"
+            assert outcome["run"]["step"] == "book"
+            assert outcome["run"]["failureCode"] == "credential-refused"
+            assert not outcome["run"].get("uncertain") and not reconciled
+            assert (len(booking_proxy.commands), len(message_proxy.commands)) == before, "invalid approval cannot reach an effect"
+            results.append({"control": label, "grantId": reference["id"],
+                "suppliedApprovalDeadline": reference["expiresAt"],
+                "originalApprovalDeadline": expired_grant["expiresAt"] if label == "expired-original-approval" else grant["expiresAt"],
+                "state": outcome["run"]["state"], "step": outcome["run"]["step"],
+                "failureCode": outcome["run"]["failureCode"], "additionalProductMutations": 0,
+                "reconciliations": reconciled})
+        private(self.root / "native-approval-refusals.json", results)
+        print("Expired, unknown, and mismatched approvals refused without product effects.", flush=True)
+        return results
 
     def messaging_service(self, owner):
         project = write_messaging(self.root / "messaging")
@@ -756,7 +796,7 @@ class Journey:
             "secretProviders":{"file":{"root":str(secret)}},
             "database":{"runtimeUrlRef":"secret:file/database","migrationUrlRef":"secret:file/database","testOnlyPlaintext":True},
             "authentication":{"oidc":{"issuer":self.urls["issuer"],"audience":"urn:example:messaging",
-                "scopeClaim":"scope","allowedClients":["case-system"],"jwksSource":{"kind":"static","documentRef":"secret:file/jwks"}}},
+                "scopeClaim":"scope","allowedClients":["case-system"],"jwksSource":{"type":"static","documentRef":"secret:file/jwks"}}},
             "audit":{"destination":"file","path":str(self.root / "audit/messaging.ndjson"),"hashKeyRef":"secret:file/audit-key"}})
         self.ctl("messagingctl", "apply", "--runtime-config", runtime)
         with open(self.root / "logs/messaging.log", "wb") as log:

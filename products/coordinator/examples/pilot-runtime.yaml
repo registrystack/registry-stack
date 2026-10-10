@@ -43,7 +43,7 @@ deployment:
     issuer: https://issuer.example.org
     audience: urn:example:coordinator
     jwksSource:
-      kind: discovery
+      type: discovery
     allowedClients: [institution-producer, institution-operator]
     policies:
       - clientId: institution-producer
