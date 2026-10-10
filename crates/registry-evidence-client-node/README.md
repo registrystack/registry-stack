@@ -117,6 +117,14 @@ Any malformed envelope or invalid available member refuses the whole batch,
 never a partial result. The exported `EvidenceRequestBatchSpec` and
 `EvidenceRequestBatchItemSpec` TypeScript types describe the input.
 
+A serialized verification policy is a complete document with `apiVersion`
+and `kind` first. Prepared requests, prepared batch policies, and retained
+verification contexts carry this same shape. Write a retained context's
+`verificationPolicy` directly to a policy file; no envelope needs to be
+added. Standalone CLI verification still requires independently pinned
+expected subject bindings. Reading a policy without its envelope or with
+the other verification mode's kind is refused.
+
 ## Design notes
 
 ### Error mapping

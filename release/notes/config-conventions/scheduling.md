@@ -5,6 +5,10 @@ step that migrates a file or a script. Registry Scheduling is experimental, so
 each normalization lands in this release rather than with the move of the
 promised formats to stable. The Scheduling `CHANGELOG.md` points here.
 
+v0.40.0 does not upgrade v0.39.0 state in place; apply to a new database.
+Fresh installation creates the current schema directly. No schema step
+converts or discards rows an earlier release wrote.
+
 The HTTP contract does not change. The public policy view, the appointment
 and hold documents, and the Rust, Node.js, and Python clients keep
 `maxRecipients`, `minutesBefore`, and `schedulingId`.
@@ -13,6 +17,15 @@ This fragment describes the final v0.40.0 interface. An `Old` or `Before`
 example is a v0.39.0 file, request, response, or value to replace. Reauthor the
 files, build the package with v0.40.0, and apply it to a new database;
 v0.40.0 supports no in-place upgrade of a v0.39.0 Scheduling database.
+
+## BREAKING: every runtime file input uses `--runtime-config`
+
+In v0.39.0, `schedulingctl records apply RUNTIME_CONFIG RECORDS` and
+`schedulingctl intents RUNTIME_CONFIG` took the runtime file positionally.
+In v0.40.0 use `schedulingctl records apply --runtime-config FILE RECORDS`
+and `schedulingctl intents --runtime-config FILE`. Replace the positional
+runtime argument with the flag in scripts; there is no positional fallback.
+Relative paths remain accepted.
 
 ## BREAKING: the authored files are read by the shared configuration reader
 

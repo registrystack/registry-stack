@@ -403,6 +403,42 @@ mod tests {
     }
 
     #[test]
+    fn retained_context_carries_a_complete_policy_document() {
+        let fixture = signed_evidence();
+        let client = client(&fixture);
+        let prepared = client
+            .prepare(spec(SubjectExpectations::AcceptFirstUse))
+            .expect("request prepares");
+        let context = serde_json::to_value(client.retain_verification(&prepared))
+            .expect("context serializes");
+        assert_eq!(
+            context["schema"],
+            "registry.evidence-client.retained-verification/v1"
+        );
+        assert_eq!(
+            context["verificationPolicy"],
+            serde_json::to_value(prepared.policy_document()).expect("policy serializes")
+        );
+        assert_eq!(
+            context["verificationPolicy"]["apiVersion"],
+            "id.registrystack.org/formats/evidence/verification-policy/v1"
+        );
+        assert_eq!(
+            context["verificationPolicy"]["kind"],
+            "EvidenceVerificationPolicy"
+        );
+        for member in ["apiVersion", "kind"] {
+            let mut missing = context.clone();
+            missing["verificationPolicy"]
+                .as_object_mut()
+                .expect("policy object")
+                .remove(member);
+            let bytes = serde_json::to_vec(&missing).expect("context serializes");
+            assert!(RetainedEvidenceVerification::from_slice(&bytes).is_err());
+        }
+    }
+
+    #[test]
     fn retained_jws_context_round_trips_and_verifies_offline() {
         let fixture = signed_evidence();
         let client = client(&fixture);

@@ -2049,7 +2049,7 @@ fn only_a_database_without_the_package_activated_classifies_a_doctor_refusal_as_
             "the database records no activated package",
         ),
         (
-            "startup.package.not_active",
+            "startup.package.not-active",
             "the database has not activated the package at package.root",
         ),
     ] {

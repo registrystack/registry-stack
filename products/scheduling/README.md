@@ -74,7 +74,7 @@ Then activate the package, apply the live environment records, and start:
 ```sh
 schedulingctl plan --runtime-config "$PWD/runtime.yaml"
 schedulingctl apply --runtime-config "$PWD/runtime.yaml" --operator-reference CHG-1234
-schedulingctl records apply "$PWD/runtime.yaml" "$PWD/records.yaml"
+schedulingctl records apply --runtime-config "$PWD/runtime.yaml" "$PWD/records.yaml"
 scheduling --runtime-config "$PWD/runtime.yaml" serve
 ```
 
@@ -145,9 +145,8 @@ TRIGGER`, `REVOKE CREATE ON SCHEMA`, or `DROP TRIGGER` then a rerun of the
 refused command. `serve` also refuses a split runtime role missing a grant
 apply issues, naming `schedulingctl apply`. A `serve` that finds a schema older than the one its
 binary carries refuses at the readiness check rather than serving against it,
-so an upgrade runs `schedulingctl apply` once before it restarts the new
-runtime; a database from before the ledger is adopted by that first apply,
-which also backfills the retained policy document. Availability cursors last
+so pending schema versions require `schedulingctl apply` before restart.
+v0.40.0 does not upgrade v0.39.0 state in place; apply to a new database. Availability cursors last
 at most 15 minutes; callers should deduplicate entries by their start when a
 policy, records, or runtime change overlaps an in-flight listing.
 `records apply` is the one attributable operator write of a deployment's

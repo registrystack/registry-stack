@@ -3075,7 +3075,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/tools/migration-descriptor.v1alpha1.schema.json",
-        "sha256": "f00ec5eb3c6b9361c072cbc8eb343a82f4d2d6fb641964556c0427a412b60009",
+        "sha256": "dcf46154f0c67123960c68ea04323e14069a9ce439e330ff8f59fb334e6384ac",
         "mediaType": "application/schema+json"
       }
     },
@@ -3917,11 +3917,11 @@
       "description": "Evidence code list JSON Schema.",
       "source": {
         "path": "crates/registry-evidence/src/schema.rs",
-        "sha256": "c406675d46af2f130ebf4e05967b338eecb488e54b088c63af8e7188c317eaa9"
+        "sha256": "55634dc50eccff1bd4f7d616070ad4550b5a85e27a728a8420df16b18c4153c0"
       },
       "artifact": {
         "path": "products/evidence/generated/codelist/codelist.schema.json",
-        "sha256": "53057f50d071b88b8cb6187cca3a8ac43a6ef70d3756261678b8b099ec65e43b",
+        "sha256": "b131ade304b8fa1e4afbf5ab8be445d72f8117d75cf996a00d9d20d774575ea1",
         "mediaType": "application/schema+json"
       }
     },
@@ -3935,7 +3935,7 @@
       "description": "Evidence fixture JSON Schema.",
       "source": {
         "path": "crates/registry-evidence/src/schema.rs",
-        "sha256": "c406675d46af2f130ebf4e05967b338eecb488e54b088c63af8e7188c317eaa9"
+        "sha256": "55634dc50eccff1bd4f7d616070ad4550b5a85e27a728a8420df16b18c4153c0"
       },
       "artifact": {
         "path": "products/evidence/generated/fixture/fixture.schema.json",

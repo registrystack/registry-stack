@@ -56,7 +56,7 @@ const BREG_SEC_13_QUANTITY_CANARY: &str = "4242";
 const BREG_SEC_13_PROFILE_CANARY: &str = "breg-sec-13-access-profile-canary";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn real_postgres_idempotency_response_bound_matches_clean_and_upgraded_schema() {
+async fn real_postgres_idempotency_response_bound_holds_after_fresh_install_and_reinstall() {
     const EXPECTED_MAX_STORED_RESPONSE_BYTES: usize = 3 * 1024 * 1024;
 
     let database = TestDatabase::create(1).await;
@@ -67,35 +67,12 @@ async fn real_postgres_idempotency_response_bound_matches_clean_and_upgraded_sch
     assert_idempotency_response_body_bound(&migration, "clean", EXPECTED_MAX_STORED_RESPONSE_BYTES)
         .await;
 
-    migration
-        .batch_execute(
-            "ALTER TABLE registry_internal.registry_idempotency
-                 DROP CONSTRAINT registry_idempotency_response_body_bounds;
-             ALTER TABLE registry_internal.registry_idempotency
-                 ADD CONSTRAINT registry_idempotency_response_body_bounds CHECK (
-                     response_body IS NULL OR
-                     (octet_length(response_body) > 0 AND octet_length(response_body) <= 2097152)
-                 )",
-        )
-        .await
-        .expect("test restores the legacy 2 MiB response constraint");
-    assert!(
-        insert_idempotency_response(
-            &migration,
-            "legacy-over-two-mib",
-            &json_body_with_size(2 * 1024 * 1024 + 1),
-        )
-        .await
-        .is_err(),
-        "the legacy fixture must reject a response above 2 MiB"
-    );
-
     install_mutation_schema(&migration, &database.runtime_role)
         .await
-        .expect("mutation schema reconciles the legacy response constraint");
+        .expect("current mutation schema reinstalls");
     assert_idempotency_response_body_bound(
         &migration,
-        "upgraded",
+        "reinstalled",
         EXPECTED_MAX_STORED_RESPONSE_BYTES,
     )
     .await;
@@ -133,7 +110,7 @@ async fn assert_idempotency_response_body_bound(
             &[&maximum_key],
         )
         .await
-        .expect("accepted boundary fixture is removed before constraint replacement");
+        .expect("accepted boundary fixture is removed");
 }
 
 async fn insert_idempotency_response(
@@ -155,11 +132,9 @@ async fn insert_idempotency_response(
         .await
 }
 
-/// The predecessor's idempotency table admits no release receipt, and
-/// `CREATE TABLE IF NOT EXISTS` leaves its constraints in place, so schema
-/// install replaces the result kind and result shape constraints.
+/// Fresh storage admits a release receipt only with its record identity.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn real_postgres_idempotency_release_kind_installs_on_the_predecessor_schema() {
+async fn real_postgres_idempotency_release_receipts_require_their_record_identity() {
     let database = TestDatabase::create(1).await;
     let (migration, migration_task) = database.connect_migration().await;
     install_mutation_schema(&migration, &database.runtime_role)
@@ -169,66 +144,19 @@ async fn real_postgres_idempotency_release_kind_installs_on_the_predecessor_sche
         .await
         .expect("a clean schema admits a release receipt");
 
-    migration
-        .batch_execute(
-            "DELETE FROM registry_internal.registry_idempotency;
-             ALTER TABLE registry_internal.registry_idempotency
-                 DROP CONSTRAINT registry_idempotency_result_kind_values,
-                 DROP CONSTRAINT registry_idempotency_result_shape;
-             ALTER TABLE registry_internal.registry_idempotency
-                 ADD CONSTRAINT registry_idempotency_result_kind_values
-                     CHECK (result_kind IN ('record', 'batch', 'application', 'immediate_action', 'erased')),
-                 ADD CONSTRAINT registry_idempotency_result_shape CHECK (
-                     (result_kind = 'record' AND record_reference IS NOT NULL
-                         AND record_revision IS NOT NULL AND result_count IS NULL
-                         AND proposal_version IS NULL)
-                     OR
-                     (result_kind = 'batch' AND record_reference IS NULL
-                         AND record_revision IS NULL AND result_count IS NOT NULL
-                         AND proposal_version IS NULL)
-                     OR
-                     (result_kind = 'application' AND record_reference IS NOT NULL
-                         AND record_revision IS NOT NULL AND result_count IS NOT NULL
-                         AND result_count BETWEEN 1 AND 16
-                         AND proposal_version IS NOT NULL)
-                     OR
-                     (result_kind = 'immediate_action' AND record_reference IS NULL
-                         AND record_revision IS NULL AND result_count IS NOT NULL
-                         AND proposal_version IS NULL)
-                     OR
-                     (result_kind = 'erased' AND record_reference IS NULL
-                         AND record_revision IS NULL AND result_count IS NULL
-                         AND proposal_version IS NULL)
-                 )",
-        )
-        .await
-        .expect("test restores the predecessor's result kind and shape constraints");
-    assert!(
-        insert_idempotency_release(&migration, "predecessor-release")
-            .await
-            .is_err(),
-        "the predecessor fixture must refuse a release receipt"
-    );
-
-    install_mutation_schema(&migration, &database.runtime_role)
-        .await
-        .expect("mutation schema replaces the predecessor's result constraints");
-    insert_idempotency_release(&migration, "upgraded-release")
-        .await
-        .expect("an upgraded schema admits a release receipt");
     assert!(
         migration
             .execute(
                 "INSERT INTO registry_internal.registry_idempotency (
                      key_reference, binding_reference, result_kind,
                      response_status, response_body, response_headers, caller_issuer, caller_subject, key_scope, idempotency_key, receipt_expires_at
-                 ) VALUES ('upgraded-release-without-record', 'binding', 'release', 200, '{}', '',
-                           'urn:test:issuer', 'test-subject', 'mutation', 'upgraded-release-without-record', transaction_timestamp() + interval '7 days')",
+                 ) VALUES ('release-without-record', 'binding', 'release', 200, '{}', '',
+                           'urn:test:issuer', 'test-subject', 'mutation', 'release-without-record', transaction_timestamp() + interval '7 days')",
                 &[],
             )
             .await
             .is_err(),
-        "an upgraded schema still refuses a release receipt without its record reference"
+        "fresh storage refuses a release receipt without its record reference"
     );
 
     migration_task.abort();
@@ -5181,323 +5109,5 @@ async fn real_postgres_receipt_sweep_clears_the_raw_caller_of_every_expired_spen
         effect_counts(committed)
     );
     drop(client);
-    database.cleanup().await;
-}
-
-/// Upgrading from the table shape that keyed rows by an audit-key HMAC keeps
-/// every spent row as a tombstone no caller can find, since none carries the
-/// caller its key belongs to, and leaves the caller-scoped shape in place for
-/// the next write. One migration converts every shape the earlier engine
-/// could leave: a held response of each result kind, a held response request
-/// retention already erased (`erased_at` set, no body), and a key whose
-/// record history erasure turned it into the `erased` kind while keeping its
-/// erased body.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn real_postgres_upgrade_from_the_audit_keyed_idempotency_shape_tombstones_spent_rows() {
-    let database = TestDatabase::create(1).await;
-    let (migration, migration_task) = database.connect_migration().await;
-    install_mutation_schema(&migration, &database.runtime_role)
-        .await
-        .expect("clean mutation schema installs");
-    migration
-        .batch_execute(
-            "ALTER TABLE registry_internal.registry_idempotency
-                 DROP CONSTRAINT registry_idempotency_caller_shape,
-                 DROP CONSTRAINT registry_idempotency_erasure_shape;
-             DROP INDEX registry_internal.registry_idempotency_caller_key;
-             ALTER TABLE registry_internal.registry_idempotency
-                 DROP COLUMN caller_issuer,
-                 DROP COLUMN caller_subject,
-                 DROP COLUMN key_scope,
-                 DROP COLUMN idempotency_key,
-                 DROP COLUMN receipt_expires_at,
-                 DROP COLUMN receipt_dropped_at;
-             ALTER TABLE registry_internal.registry_idempotency
-                 ADD CONSTRAINT registry_idempotency_erasure_shape
-                     CHECK ((response_body IS NULL) = (erased_at IS NOT NULL));
-             INSERT INTO registry_internal.registry_idempotency
-                 (key_reference, binding_reference, result_kind, record_reference,
-                  record_revision, result_count, proposal_version, response_status,
-                  response_body, response_headers, created_at, erased_at)
-             VALUES
-                 ('hmac-sha256:application-erased', 'hmac-sha256:application-erased-binding',
-                  'application', 'sha256:request', 2, 1, 1,
-                  200, NULL, '\\x0000',
-                  transaction_timestamp() - interval '3 days',
-                  transaction_timestamp() - interval '1 day'),
-                 ('hmac-sha256:batch', 'hmac-sha256:batch-binding', 'batch', NULL,
-                  NULL, 2, NULL,
-                  200, '{\"results\":[]}', '\\x0000',
-                  transaction_timestamp() - interval '2 days', NULL),
-                 ('hmac-sha256:history-erased', 'hmac-sha256:history-erased-binding',
-                  'erased', NULL, NULL, NULL, NULL,
-                  200, '{\"erased\":true}', '\\x0000',
-                  transaction_timestamp() - interval '30 days', NULL),
-                 ('hmac-sha256:held', 'hmac-sha256:held-binding', 'immediate_action', NULL,
-                  NULL, 0, NULL,
-                  200, '{}', '\\x0000',
-                  transaction_timestamp(), NULL),
-                 ('hmac-sha256:record', 'hmac-sha256:record-binding', 'record', 'sha256:record',
-                  3, NULL, NULL,
-                  201, '{\"id\":\"record\"}', '\\x000101',
-                  transaction_timestamp() - interval '400 days', NULL),
-                 ('hmac-sha256:release', 'hmac-sha256:release-binding', 'release',
-                  'sha256:release', 1, NULL, NULL,
-                  201, '{\"version\":1}', '\\x0000',
-                  transaction_timestamp() - interval '1 hour', NULL);",
-        )
-        .await
-        .expect("the audit-keyed table shape is restored with every spent-row shape");
-
-    for attempt in ["upgrade", "reinstall"] {
-        install_mutation_schema(&migration, &database.runtime_role)
-            .await
-            .unwrap_or_else(|_| panic!("{attempt} of the caller-scoped shape succeeds"));
-    }
-    let remaining = database
-        .admin
-        .query(
-            "SELECT key_reference, binding_reference, result_kind, record_reference,
-                    record_revision, result_count, proposal_version, response_status,
-                    caller_issuer, caller_subject, key_scope, idempotency_key,
-                    response_body IS NULL, response_headers,
-                    receipt_dropped_at IS NOT NULL,
-                    receipt_expires_at = created_at + interval '1 microsecond',
-                    erased_at IS NOT NULL
-               FROM registry_internal.registry_idempotency
-              ORDER BY key_reference COLLATE \"C\"",
-            &[],
-        )
-        .await
-        .expect("administrator can read spent keys");
-    type Kept = (
-        &'static str,
-        &'static str,
-        Option<&'static str>,
-        Option<i64>,
-        Option<i16>,
-        Option<i64>,
-        i16,
-        bool,
-    );
-    // Key suffix, result kind, record reference, record revision, result
-    // count, proposal version, response status, and whether request
-    // retention had erased the held response: everything the earlier row
-    // carried that the tombstone keeps.
-    let expected: [Kept; 6] = [
-        (
-            "application-erased",
-            "application",
-            Some("sha256:request"),
-            Some(2),
-            Some(1),
-            Some(1),
-            200,
-            true,
-        ),
-        ("batch", "batch", None, None, Some(2), None, 200, false),
-        (
-            "held",
-            "immediate_action",
-            None,
-            None,
-            Some(0),
-            None,
-            200,
-            false,
-        ),
-        (
-            "history-erased",
-            "erased",
-            None,
-            None,
-            None,
-            None,
-            200,
-            false,
-        ),
-        (
-            "record",
-            "record",
-            Some("sha256:record"),
-            Some(3),
-            None,
-            None,
-            201,
-            false,
-        ),
-        (
-            "release",
-            "release",
-            Some("sha256:release"),
-            Some(1),
-            None,
-            None,
-            201,
-            false,
-        ),
-    ];
-    assert_eq!(
-        remaining.len(),
-        expected.len(),
-        "the upgrade keeps every audit-keyed spent row"
-    );
-    for (row, (suffix, kind, record, revision, count, proposal, status, erased)) in
-        remaining.iter().zip(expected)
-    {
-        let key = format!("hmac-sha256:{suffix}");
-        assert_eq!(row.get::<_, String>(0), key);
-        assert_eq!(row.get::<_, String>(1), format!("{key}-binding"), "{key}");
-        assert_eq!(row.get::<_, String>(2), kind, "{key}");
-        assert_eq!(row.get::<_, Option<String>>(3).as_deref(), record, "{key}");
-        assert_eq!(row.get::<_, Option<i64>>(4), revision, "{key}");
-        assert_eq!(row.get::<_, Option<i16>>(5), count, "{key}");
-        assert_eq!(row.get::<_, Option<i64>>(6), proposal, "{key}");
-        assert_eq!(row.get::<_, i16>(7), status, "{key}");
-        assert_eq!(
-            row.get::<_, Option<String>>(8),
-            None,
-            "{key}: no issuer is kept"
-        );
-        assert_eq!(
-            row.get::<_, Option<String>>(9),
-            None,
-            "{key}: no subject is kept"
-        );
-        assert_eq!(row.get::<_, String>(10), "mutation", "{key}");
-        assert_eq!(
-            row.get::<_, Option<String>>(11),
-            None,
-            "{key}: no key is kept"
-        );
-        assert!(row.get::<_, bool>(12), "{key}: no held response survives");
-        assert_eq!(
-            row.get::<_, Vec<u8>>(13),
-            vec![0, 0],
-            "{key}: no held header survives"
-        );
-        assert!(row.get::<_, bool>(14), "{key}: the receipt is dropped");
-        assert!(
-            row.get::<_, bool>(15),
-            "{key}: the receipt expired at its commit"
-        );
-        assert_eq!(
-            row.get::<_, bool>(16),
-            erased,
-            "{key}: the erasure time is kept"
-        );
-    }
-    let constraints = database
-        .admin
-        .query(
-            "SELECT conname::text, convalidated
-               FROM pg_catalog.pg_constraint
-              WHERE conrelid = 'registry_internal.registry_idempotency'::regclass
-                AND conname IN ('registry_idempotency_caller_shape',
-                                'registry_idempotency_erasure_shape',
-                                'registry_idempotency_result_shape',
-                                'registry_idempotency_result_kind_values')
-              ORDER BY conname",
-            &[],
-        )
-        .await
-        .expect("administrator can read the spent-key constraints");
-    assert_eq!(
-        constraints
-            .iter()
-            .map(|row| (row.get::<_, String>(0), row.get::<_, bool>(1)))
-            .collect::<Vec<_>>(),
-        [
-            "registry_idempotency_caller_shape",
-            "registry_idempotency_erasure_shape",
-            "registry_idempotency_result_kind_values",
-            "registry_idempotency_result_shape",
-        ]
-        .map(|name| (name.to_owned(), true)),
-        "every converted row satisfies the caller-scoped constraints"
-    );
-    let caller_index_is_unique = database
-        .admin
-        .query_one(
-            "SELECT indisunique AND indisvalid
-               FROM pg_catalog.pg_index
-              WHERE indexrelid = 'registry_internal.registry_idempotency_caller_key'::regclass",
-            &[],
-        )
-        .await
-        .expect("administrator can read the caller index")
-        .get::<_, bool>(0);
-    assert!(
-        caller_index_is_unique,
-        "the converted rows hold the unique caller index"
-    );
-    let refused = migration
-        .batch_execute(
-            "INSERT INTO registry_internal.registry_idempotency
-                 (key_reference, binding_reference, result_kind, result_count,
-                  response_status, response_body, response_headers)
-             VALUES ('sha256:unscoped', 'sha256:unscoped-binding', 'immediate_action', 0,
-                     200, '{}', '\\x0000')",
-        )
-        .await;
-    assert!(
-        refused.is_err(),
-        "a spent key without its caller scope is refused"
-    );
-    // The raw caller and key are present together exactly while the receipt
-    // is, and absent together once it is dropped.
-    for (label, issuer, subject, key, dropped, accepted) in [
-        ("cleared", None, None, None::<&str>, true, true),
-        ("cleared-held", None, None, None, false, false),
-        (
-            "dropped-with-caller",
-            Some("https://issuer.example"),
-            Some("subject"),
-            Some("key"),
-            true,
-            false,
-        ),
-        (
-            "partly-cleared",
-            Some("https://issuer.example"),
-            None,
-            None,
-            true,
-            false,
-        ),
-        (
-            "keyless",
-            Some("https://issuer.example"),
-            Some("subject"),
-            None,
-            true,
-            false,
-        ),
-    ] {
-        let body = (!dropped).then_some("{}".as_bytes());
-        let inserted = migration
-            .execute(
-                "INSERT INTO registry_internal.registry_idempotency
-                     (key_reference, binding_reference, result_kind, result_count,
-                      response_status, response_body, response_headers,
-                      caller_issuer, caller_subject, key_scope, idempotency_key,
-                      receipt_expires_at, receipt_dropped_at)
-                 VALUES ($1, 'sha256:shape-binding', 'immediate_action', 0,
-                         200, $2, '\\x0000', $3, $4, 'mutation', $5,
-                         transaction_timestamp() + interval '1 day',
-                         CASE WHEN $6 THEN transaction_timestamp() END)",
-                &[
-                    &format!("sha256:{label}"),
-                    &body,
-                    &issuer,
-                    &subject,
-                    &key,
-                    &dropped,
-                ],
-            )
-            .await;
-        assert_eq!(inserted.is_ok(), accepted, "{label}: {inserted:?}");
-    }
-    migration_task.abort();
     database.cleanup().await;
 }

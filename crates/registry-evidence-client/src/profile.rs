@@ -14,10 +14,7 @@ use registry_platform_httputil::{is_cloud_metadata_ip, valid_resource_uri};
 use registry_platform_yaml::MAXIMUM_DOCUMENT_BYTES;
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    error::EvidenceClientError, prepare::MAXIMUM_IDENTIFIER_BYTES, EvidenceResponseFormat,
-    JwksDocument,
-};
+use crate::{error::EvidenceClientError, EvidenceResponseFormat, JwksDocument};
 
 /// The `apiVersion` a client profile declares.
 pub const EVIDENCE_CLIENT_PROFILE_API_VERSION: &str =
@@ -41,6 +38,7 @@ const MAXIMUM_REVIEWED_CONTRACTS_BYTES: u64 = MAXIMUM_DOCUMENT_BYTES as u64;
 // reported from these paths.
 const PROFILE_SOURCE_NAME: &str = "client-profile";
 const CONTRACTS_SOURCE_NAME: &str = "client-contracts";
+pub(crate) const MAXIMUM_URI_IDENTITY_CHARS: usize = 512;
 const MAXIMUM_PROFILE_REFERENCE_BYTES: usize = 4096;
 const MAXIMUM_ENVIRONMENT_VARIABLE_BYTES: usize = 128;
 
@@ -264,7 +262,7 @@ fn is_ipv6_unicast_link_local(ip: Ipv6Addr) -> bool {
 
 fn valid_expected_identity(value: &str) -> bool {
     !value.is_empty()
-        && value.len() <= MAXIMUM_IDENTIFIER_BYTES
+        && value.chars().count() <= MAXIMUM_URI_IDENTITY_CHARS
         && url::Url::parse(value).is_ok_and(|url| !url.scheme().is_empty())
 }
 
@@ -777,7 +775,7 @@ mod tests {
             ExpectedServiceProfile {
                 issuer: Some(format!(
                     "urn:{}",
-                    "a".repeat(MAXIMUM_IDENTIFIER_BYTES + 1 - "urn:".len())
+                    "a".repeat(MAXIMUM_URI_IDENTITY_CHARS + 1 - "urn:".len())
                 )),
                 ..ExpectedServiceProfile::default()
             },

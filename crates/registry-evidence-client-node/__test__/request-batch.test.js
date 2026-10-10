@@ -140,6 +140,11 @@ test('a live two-item request batch has the exact wire shape and verifies in ord
     assert.equal(prepared.requestNonces.length, 2);
     assert.notEqual(prepared.requestNonces[0], prepared.requestNonces[1]);
     assert.equal(prepared.policyDocuments.length, 2);
+    for (const policy of prepared.policyDocuments) {
+      assert.equal(policy.apiVersion, 'id.registrystack.org/formats/evidence/verification-policy/v1');
+      assert.equal(policy.kind, 'EvidenceVerificationPolicy');
+      assert.deepEqual(Object.keys(policy).slice(0, 2), ['apiVersion', 'kind']);
+    }
     assert.deepEqual(prepared.subjectExpectations, ['acceptFirstUse', 'acceptFirstUse']);
 
     const raw = await client.sendBatch(prepared);

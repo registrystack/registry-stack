@@ -69,7 +69,7 @@ pub enum Command {
     /// or runtime dependencies: startup proves them, and so does this command
     /// on the target host with --require-runtime-dependencies.
     Check {
-        /// The closed operator runtime file that binds the governed package.
+        /// Runtime configuration file.
         #[arg(long = "runtime-config", value_name = "FILE")]
         runtime_config: PathBuf,
         /// Emit the selected command's report in this format.
@@ -136,7 +136,7 @@ pub enum Command {
     },
     /// Evaluate one bundle-owned fixture without source or credential access.
     Evaluate {
-        /// The closed operator runtime file that binds the governed package.
+        /// Runtime configuration file.
         #[arg(long = "runtime-config", value_name = "FILE")]
         runtime_config: PathBuf,
         /// Bundle-relative fixture path referenced by exactly one requirement.
@@ -196,7 +196,7 @@ pub enum Command {
     },
     /// Start the native Evidence Gateway HTTP service.
     Serve {
-        /// The closed operator runtime file that binds the governed package.
+        /// Runtime configuration file.
         #[arg(long = "runtime-config", value_name = "FILE")]
         runtime_config: PathBuf,
     },
@@ -255,7 +255,7 @@ pub enum Command {
     /// Internal local-adopter seam for bearer-free relying-procedure closure.
     #[command(hide = true)]
     PrepareLocalRelyingProcedure {
-        /// The closed operator runtime file that binds the governed package.
+        /// Runtime configuration file.
         #[arg(long = "runtime-config", value_name = "FILE")]
         runtime_config: PathBuf,
         /// Owner-only JSON draft containing the request shape and audience.
@@ -265,7 +265,7 @@ pub enum Command {
     /// Internal stopped-service audit inspection seam.
     #[command(hide = true)]
     LocalAuditLastOperation {
-        /// The closed operator runtime file that binds the governed package.
+        /// Runtime configuration file.
         #[arg(long = "runtime-config", value_name = "FILE")]
         runtime_config: PathBuf,
     },

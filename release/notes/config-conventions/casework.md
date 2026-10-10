@@ -3,6 +3,10 @@
 Every Registry Casework change the configuration conventions make, with the
 step that migrates a file or a script. The Casework `CHANGELOG.md` points here.
 
+v0.40.0 does not upgrade v0.39.0 state in place; apply to a new database.
+Fresh installation creates the current schema directly. No schema step
+converts or discards rows an earlier release wrote.
+
 This fragment describes the final v0.40.0 interface. An `Old` or `Before`
 example is a v0.39.0 file, request, response, or value to replace. Reauthor the
 files, build the package with v0.40.0, and apply it to a new database;

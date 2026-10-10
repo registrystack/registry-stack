@@ -106,6 +106,10 @@ class RequestBatchTest(unittest.TestCase):
         self.assertEqual(len(prepared.request_nonces), 2)
         self.assertEqual(len(set(prepared.request_nonces)), 2)
         self.assertEqual(len(prepared.policy_documents), 2)
+        for policy in prepared.policy_documents:
+            self.assertEqual(policy["apiVersion"], "id.registrystack.org/formats/evidence/verification-policy/v1")
+            self.assertEqual(policy["kind"], "EvidenceVerificationPolicy")
+            self.assertEqual(list(policy)[:2], ["apiVersion", "kind"])
         self.assertEqual(
             prepared.subject_expectations,
             ["accept_first_use", "accept_first_use"],

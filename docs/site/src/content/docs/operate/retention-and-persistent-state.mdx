@@ -152,11 +152,13 @@ that holds no old segments; do not point the new runtime at the old chained file
 
 ## Upgrade Casework and Scheduling audit
 
-Before upgrading from the PostgreSQL audit-outbox releases, stop new traffic and keep the previous
-runtime running until its publisher has delivered every pending audit row. Casework migration 17
-and Scheduling migration 8 refuse to drop an outbox that still contains unpublished rows, and
-`caseworkctl plan` and `schedulingctl plan` report that refusal before an apply. Check the pending
-count with your database tooling:
+v0.40.0 does not upgrade v0.39.0 state in place; apply to a new database.
+Fresh installation creates the current schema without converting or discarding earlier audit rows.
+`plan` and `apply` retain their unpublished-audit refusals and leave earlier outboxes untouched.
+
+If you retain an earlier PostgreSQL audit-outbox deployment, stop new traffic and keep its runtime
+running until its publisher has delivered every pending audit row. For an earlier database that
+has one of these outbox tables, check the pending count with your database tooling:
 
 ```sql
 -- Casework database
@@ -165,17 +167,18 @@ SELECT count(*) FROM casework_audit_outbox WHERE published_at IS NULL;
 SELECT count(*) FROM scheduling_audit_outbox WHERE published_at IS NULL;
 ```
 
-When the applicable count reaches zero, stop the old runtime, archive its audit file and sealed
-segments, and configure a fresh file path for the new runtime. Run `caseworkctl apply` or
-`schedulingctl apply` with the new release and the deployment's runtime configuration. If apply
-reports unpublished audit records, restart the previous release to finish publishing and retry;
-do not delete pending rows to bypass the refusal. Preserve the old archive outside the new
-writer's retention directory.
+When the applicable count reaches zero, stop the old runtime and archive its audit file, sealed
+segments, and audit key outside the new writer's retention directory. Keep the earlier database
+with the release that wrote it until its work and accountability records are exported. Do not
+delete pending rows to bypass a refusal.
+
+Configure a fresh audit file path and a new database for the new runtime. Run `caseworkctl apply`
+or `schedulingctl apply` with this release's runtime configuration pointing at that new database.
 
 The new release writes directly to the shared per-process writer. Its audit entries are not
 chained. Collect the service files and operator companion files, and use append-only storage for
-tamper evidence. See [Casework upgrade steps](../casework/#upgrade-from-a-release-that-chained-the-audit-file)
-for the Casework procedure and command options.
+tamper evidence. See [earlier database and audit state](../casework/#earlier-database-and-audit-state)
+for the Casework state and audit boundary.
 
 {/* Evidence: crates/registry-casework/src/store.rs;
     crates/registry-scheduling/src/store.rs;

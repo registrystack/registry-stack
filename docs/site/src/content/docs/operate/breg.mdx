@@ -226,7 +226,7 @@ fit in the connections PostgreSQL leaves for ordinary roles: `max_connections` m
 `superuser_reserved_connections` minus `reserved_connections`. At startup `breg` logs, and
 `bregctl doctor` reports, the numbers it compared under `postgres.connections.budget`. When one
 replica's pool alone may take more than half of the usable connections, the advisory is the
-`postgres.connections.pool_over_half` warning instead. The check sees one replica; add the others
+`postgres.connections.pool-over-half` warning instead. The check sees one replica; add the others
 yourself.
 
 **Find sessions by name.** Runtime sessions report `breg` as their `application_name` and operator
@@ -275,7 +275,7 @@ CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
 ```
 
 Base Registry Engine's catalog checks accept the extension either way, but the
-`postgres.pg_stat_statements.unavailable` advisory only stops once the preload above actually took
+`postgres.pg-stat-statements.unavailable` advisory only stops once the preload above actually took
 effect. PostgreSQL lets `CREATE EXTENSION` succeed without `shared_preload_libraries`, then refuses
 every query against the view, so skipping the restart leaves `doctor` advising, with a message
 naming the module as installed but not loaded. It also keeps advising while
@@ -783,7 +783,7 @@ PostgreSQL advisories:
     superuserReservedConnections  3
     reservedConnections           0
     usableConnections             97
-  information  postgres.pg_stat_statements.unavailable
+  information  postgres.pg-stat-statements.unavailable
     pg_stat_statements is not installed in this database, so per-statement timings are
     unavailable when diagnosing load
 ```
@@ -820,7 +820,7 @@ PostgreSQL advisories:
       }
     },
     {
-      "code": "postgres.pg_stat_statements.unavailable",
+      "code": "postgres.pg-stat-statements.unavailable",
       "severity": "information",
       "message": "pg_stat_statements is not installed in this database, so per-statement timings are unavailable when diagnosing load",
       "observed": {}
@@ -941,14 +941,14 @@ for it afterwards is refused. It does not contact the authority, so cancel the r
 well if it still exists.
 
 Both refuse a withdrawn proposal, a review whose result is already recorded, and any other state
-with `review_recovery.submission.ineligible`, whose message names the reason, state, and code.
+with `review-recovery.submission.ineligible`, whose message names the reason, state, and code.
 `resubmit` also refuses once request retention erased the review request (`request-erased`), or
 when the request no longer awaits review for that proposal version (`proposal-not-submitted`).
 
 Each operation writes an audit `request` entry to the `bregctl` companion audit file before it
 changes the submission, and its `response` after the change commits. An audit destination that
 refuses the request entry stops the operation before it changes anything. One that refuses the
-response after the commit is reported as `review_recovery.recovery.unaudited`: the recovery took
+response after the commit is reported as `review-recovery.recovery.unaudited`: the recovery took
 effect, so read the submission's state before retrying.
 
 Retain the project sources, module locks, generated files, test receipt, and runtime
@@ -1319,19 +1319,19 @@ See [publish a statistical series](../../configure/breg-statistics/) and the [AP
 | `test` refuses the runtime file | Compare it with the serving file: same identity, schema-test database references, and an empty package root. |
 | A secret reference is refused | The file under the secret root must be a regular file owned by the running user, with mode `0400` or `0600`, one link, and no symbolic link, and its name must follow the naming rule in [Create the secret files](#create-the-secret-files). |
 | `package` refuses the receipt | The receipt binds sources, baseline, and fingerprint. Rerun `test` for the exact candidate. |
-| `doctor` reports `startup.instance_claim.mismatch` | The database is a copy the registry's instance claim does not name, as after a logical restore. Adopt it once the original is stopped for good, as [back up and restore the database](../breg-changes/#back-up-and-restore-the-database) describes. |
+| `doctor` reports `startup.instance-claim.mismatch` | The database is a copy the registry's instance claim does not name, as after a logical restore. Adopt it once the original is stopped for good, as [back up and restore the database](../breg-changes/#back-up-and-restore-the-database) describes. |
 | `doctor` reports `startup.database.uninitialized` | No package was ever activated in this database. Run `plan`, then `apply --initial`, as [Activate and serve](#activate-and-serve) shows. |
 | `doctor` reports `startup.database.unrecognized` | The database holds registry state this release does not recognise, such as state an earlier release wrote. v0.40.0 does not upgrade v0.39.0 state in place: build the package with this release and apply it to a new database. Where a release does read the state of its predecessor, it reads only that state: upgrade one release at a time, as [Upgrade and retire](../advanced/upgrade-and-retire/) describes. |
-| `doctor` reports `startup.database.identity_mismatch` | The database records another database id than `identity.databaseId`. Point the database URLs at the database the file names, or correct `identity.databaseId`. |
-| `doctor` reports `startup.package.not_active` | The ledger names another package as active than the one at `package.root`. Run `bregctl status` to see the active digest, then set `package.root` to that package, or `plan` and `apply` the package you meant to serve. |
-| `doctor` reports `startup.runtime_role.can_write` | In split role mode the runtime role can write the activation ledger or the registry state, for example through a grant, an ownership, a membership, or a trigger no compiled migration creates. Run `bregctl plan --package DIR`: its refusal names the object and the statement that removes it, such as `DROP TRIGGER`. |
-| `doctor` reports `startup.runtime_role.grants_missing` | The runtime role lacks a grant the active package gives it, as after `REASSIGN OWNED`. Run `bregctl apply --package DIR` with the active package to reissue the grants. |
-| `doctor` reports `startup.role_mode.changed` | The ledger records a split role activation, but the runtime file names one role for both. Restore the separate runtime role, or `plan` and `apply` the active package under one role, which records a `role-change` activation. |
-| `plan` or `apply` reports `apply.successor.roles_differ` | The runtime file names other database roles than the active activation serves with, and only a role change retires the recorded runtime role. Run `plan` and `apply` with the active package under the new roles, which records a `role-change` activation, then apply the successor. |
+| `doctor` reports `startup.database.identity-mismatch` | The database records another database id than `identity.databaseId`. Point the database URLs at the database the file names, or correct `identity.databaseId`. |
+| `doctor` reports `startup.package.not-active` | The ledger names another package as active than the one at `package.root`. Run `bregctl status` to see the active digest, then set `package.root` to that package, or `plan` and `apply` the package you meant to serve. |
+| `doctor` reports `startup.runtime-role.can-write` | In split role mode the runtime role can write the activation ledger or the registry state, for example through a grant, an ownership, a membership, or a trigger no compiled migration creates. Run `bregctl plan --package DIR`: its refusal names the object and the statement that removes it, such as `DROP TRIGGER`. |
+| `doctor` reports `startup.runtime-role.grants-missing` | The runtime role lacks a grant the active package gives it, as after `REASSIGN OWNED`. Run `bregctl apply --package DIR` with the active package to reissue the grants. |
+| `doctor` reports `startup.role-mode.changed` | The ledger records a split role activation, but the runtime file names one role for both. Restore the separate runtime role, or `plan` and `apply` the active package under one role, which records a `role-change` activation. |
+| `plan` or `apply` reports `apply.successor.roles-differ` | The runtime file names other database roles than the active activation serves with, and only a role change retires the recorded runtime role. Run `plan` and `apply` with the active package under the new roles, which records a `role-change` activation, then apply the successor. |
 | `doctor` reports `startup.oidc.refused` | Check the issuer, discovery reachability or the static JWKS document, the algorithm, and the leeway bound. |
 | `doctor` reports `startup.package.refused` with `the package compiler derivation failed` after an engine upgrade | The upgraded compiler derives a different schema from the active package, for example a new reference index. Build and apply a successor package with the upgraded `bregctl` before starting the upgraded `breg`, as [Change an active registry](../breg-changes/#test-and-package-the-successor) describes. `diff --runtime-config` reads the active package, and `test` and `package` accept its directory through `--baseline-package`; `verify` refuses it until the successor is active. |
-| `doctor` or startup warns `postgres.connections.pool_over_half` | Lower `database.pool.maximumConnections` or raise `max_connections` until every replica, operator command, and monitoring session fits; see [Set a PostgreSQL baseline](#set-a-postgresql-baseline). |
-| `doctor` or startup warns `postgres.autovacuum.off` or `postgres.track_counts.off` | Turn the setting back on in the server configuration and reload PostgreSQL, then run `ANALYZE` in the registry database so planner statistics catch up. |
+| `doctor` or startup warns `postgres.connections.pool-over-half` | Lower `database.pool.maximumConnections` or raise `max_connections` until every replica, operator command, and monitoring session fits; see [Set a PostgreSQL baseline](#set-a-postgresql-baseline). |
+| `doctor` or startup warns `postgres.autovacuum.off` or `postgres.track-counts.off` | Turn the setting back on in the server configuration and reload PostgreSQL, then run `ANALYZE` in the registry database so planner statistics catch up. |
 | The runtime file is refused with `breg.runtime.invalid-metrics-listener` | `metricsListener.bind` must be a loopback or private address with a non-zero port, distinct from `listener.bind`. |
 | Every token is refused | Compare the token's header and claims with the token table; a list-valued `aud` or a missing principal claim refuses the token. |
 | An operator command cannot reach PostgreSQL | Check the migration URL secret, the role names, and `SSL_CERT_FILE` for a private authority. |

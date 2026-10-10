@@ -87,8 +87,8 @@ pub fn command() -> Command {
         .arg(
             Arg::new("runtime-config")
                 .long("runtime-config")
-                .value_name("FILE")
-                .help("Absolute path to the runtime configuration file.")
+                .value_name("ABSOLUTE_FILE")
+                .help("Runtime configuration file")
                 .required(true),
         )
         .subcommand_required(true)

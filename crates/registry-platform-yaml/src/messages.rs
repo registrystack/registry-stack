@@ -1216,7 +1216,7 @@ pub(crate) const EXPECT_EXTERNAL_ID: &str =
 pub(crate) const EXPECT_DIGEST: &str =
     "a digest written `sha256:` followed by 64 lowercase hex digits";
 pub(crate) const EXPECT_URL: &str =
-    "an absolute http or https URL with a host, no user information, no whitespace or control character, and at most 2048 characters";
+    "an absolute http or https URL with its written host, no user information, no backslash, whitespace or control character, and at most 2048 characters";
 pub(crate) const EXPECT_DATA_LITERAL: &str = "null, a boolean, a number, or text";
 
 pub(crate) const TYPE_RULES: &[TypeRule] = &[
@@ -1234,7 +1234,7 @@ pub(crate) const TYPE_RULES: &[TypeRule] = &[
     },
     TypeRule {
         expected: EXPECT_URL,
-        action: "Write an absolute URL starting with `https://` or `http://`, without user information, spaces, tabs, or line breaks.",
+        action: "Write an absolute URL starting with `https://` or `http://`, with an ASCII or punycode host or an IPv6 literal, without user information, backslashes, spaces, tabs, or line breaks.",
     },
     TypeRule {
         expected: EXPECT_DATA_LITERAL,

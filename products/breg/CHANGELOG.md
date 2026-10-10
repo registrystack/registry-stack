@@ -2,6 +2,36 @@
 
 ## Unreleased
 
+- The reviewed migration descriptor schema lists only the three change classes
+  its semantic checker accepts. It refuses `compatible-additive` and
+  `unsupported`, matching the existing `breg.migration.change-class` refusal;
+  compiled package classifications remain unchanged.
+
+v0.40.0 does not upgrade v0.39.0 state in place; apply to a new database.
+Fresh installation creates the current schema directly, without conversion
+or discard of earlier rows.
+
+- BREAKING: `bregctl` report `artifact`, `suggestedAction`, and baseline
+  assurance words use kebab-case, such as `registry-project`,
+  `correct-authoring-source`, and `runtime-bound`. Update report consumers;
+  the selected artifact, corrective action, and assurance level are unchanged.
+- BREAKING: `bregctl` operation and usage diagnostic codes use kebab-case
+  segments, including closed codes copied from clients or planners. For
+  example, `verify.runtime_config.path_invalid` becomes
+  `verify.runtime-config.path-invalid`. Update code comparisons. HTTP Problem
+  codes and decoded error classifications are unchanged.
+- BREAKING: the migration ledger and `bregctl` status/reconcile reports write
+  `compiled-additive` and `metadata-only`, where they wrote
+  `compiled_additive` and `metadata_only`. The fresh ledger's constraints use
+  these words; stored rows are not converted. Use a fresh database.
+- BREAKING: the seven statistical operation names use kebab-case in generated
+  OpenAPI, registry metadata, `/v1/registry`, and audit `operationId` values.
+  For example, `read_live` becomes `read-live` and `publish_release` becomes
+  `publish-release`. Rebuild packages and update metadata and audit consumers.
+
+- Runtime file flags use the help text "Runtime configuration file" and
+  show `ABSOLUTE_FILE` wherever an absolute input path is required.
+
 - BREAKING: the Rust, Node.js, and Python clients write eight error words in
   kebab-case (CFG-NAME-2): kind `invalid-request` (was `invalid_request`);
   the `protocol` codes `header-bounds`, `trace-context`, and `media-type`
@@ -127,8 +157,8 @@
   --baseline-package`, and `bregctl diff` do not read a deployed package the
   previous release built as a baseline. It carries the retired package
   `apiVersion` and the retired spellings, and is refused before its sources
-  are read, with `package.baseline.retired_api_version` or
-  `diff.baseline.retired_api_version`, and `bregctl plan` and `bregctl
+  are read, with `package.baseline.retired-api-version` or
+  `diff.baseline.retired-api-version`, and `bregctl plan` and `bregctl
   apply` refuse the package as a predecessor. A history descriptor a database
   retained under the earlier bound names is refused when it is read. Build
   the package with this release and apply it to a new database.

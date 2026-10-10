@@ -87,7 +87,11 @@ change it.
 - `DatabaseConfig`: `runtimeUrlRef`, `migrationUrlRef`, and an optional
   `trustedRootCertificateRef`.
 - `JwksSource`: `type: discovery` (the default) with no other member,
-  `type: uri` with `uri`, or `type: static` with `documentRef`.
+  `type: uri` with checked `Url` member `uri`, or `type: static` with `documentRef`.
+- `OidcIssuerConfig`: a checked `Url` issuer, audience, and `JwksSource`.
+  The issuer text stays exactly as written for token comparison. Rust callers
+  constructing either URL field use `registry_platform_yaml::Url::new`; the
+  product's HTTPS and supervised loopback rules still apply afterward.
 - `PackageConfig`: an absolute `root` and an optional `expectedDigest` pin.
 - `ListenerConfig` and `PrivateListenerConfig`: `bind` as `host:port` with an
   IP address host, and for private listeners the declared TLS termination and

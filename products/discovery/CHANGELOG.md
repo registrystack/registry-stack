@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Runtime file flags use the help text "Runtime configuration file" and
+  show `ABSOLUTE_FILE` wherever an absolute input path is required.
+
 - BREAKING: the Node.js and Python bindings carry the transport kind
   `response-too-large` (was `response_too_large`), the word the shared HTTP
   primitives now write (CFG-NAME-2). Migration: compare against the new

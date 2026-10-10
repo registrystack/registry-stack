@@ -404,6 +404,9 @@ pub struct ReviewedMigrationDescriptor {
     #[serde(deserialize_with = "members::local_id")]
     #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
+    // Package comparison keeps the compiled class representation; semantic
+    // descriptor validation below refuses the two non-reviewed classes.
+    #[cfg_attr(feature = "schema", schemars(with = "ReviewedMigrationChangeClass"))]
     pub change_class: CompiledRegistryChangeClass,
     pub covers: Vec<ReviewedChangeCover>,
     pub recovery: ReviewedMigrationRecovery,
@@ -463,6 +466,17 @@ enveloped_document!(
     MIGRATION_DESCRIPTOR_API_VERSION,
     MIGRATION_DESCRIPTOR_KIND
 );
+
+/// The descriptor's schema vocabulary mirrors `descriptor_problems`, while
+/// compiled package changes retain their broader internal classification.
+#[cfg(feature = "schema")]
+#[derive(schemars::JsonSchema)]
+#[schemars(rename_all = "kebab-case")]
+pub enum ReviewedMigrationChangeClass {
+    DataBackfillRequired,
+    AccessOrDisclosureChange,
+    DestructiveOrIrreversible,
+}
 
 /// The JSON Schema of the descriptor members the reader decodes. The header
 /// is checked and removed before decoding, so the publisher adds it.

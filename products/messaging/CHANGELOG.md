@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+v0.40.0 does not upgrade v0.39.0 state in place; apply to a new database.
+Fresh installation creates the current schema directly, without conversion
+or discard of earlier rows.
+
+- Runtime file flags use the help text "Runtime configuration file" and
+  show `ABSOLUTE_FILE` wherever an absolute input path is required.
+
 - BREAKING: the Node.js and Python clients write five error words in
   kebab-case (CFG-NAME-2): kind `invalid-request` (was `invalid_request`);
   the protocol failures `header-bounds`, `trace-context`, and `media-type`

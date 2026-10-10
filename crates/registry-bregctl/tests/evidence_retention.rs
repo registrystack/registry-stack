@@ -34,7 +34,7 @@ fn invalid_runtime_configuration_reports_evidence_retention_recovery_without_val
     assert_ne!(status, std::process::ExitCode::SUCCESS);
     assert!(stderr.is_empty());
     let output = String::from_utf8(stdout).unwrap();
-    for value in [PATH_CANARY, CONFIG_CANARY, "request_retention"] {
+    for value in [PATH_CANARY, CONFIG_CANARY, "request-retention"] {
         assert!(!output.contains(value));
     }
     let report: Value = serde_json::from_str(&output).unwrap();
@@ -42,11 +42,11 @@ fn invalid_runtime_configuration_reports_evidence_retention_recovery_without_val
     assert_eq!(report["command"], "evidence-retention erase-expired");
     assert_eq!(report["diagnostics"].as_array().unwrap().len(), 1);
     let diagnostic = &report["diagnostics"][0];
-    assert_eq!(diagnostic["code"], "evidence_retention.unavailable");
+    assert_eq!(diagnostic["code"], "evidence-retention.unavailable");
     assert_eq!(diagnostic["path"], "evidenceRetention");
-    assert_eq!(diagnostic["artifact"], "evidence_retention_operation");
+    assert_eq!(diagnostic["artifact"], "evidence-retention-operation");
     assert_eq!(
         diagnostic["suggestedAction"],
-        "verify_evidence_retention_operation"
+        "verify-evidence-retention-operation"
     );
 }

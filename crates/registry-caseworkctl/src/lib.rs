@@ -13,7 +13,7 @@ pub mod schema;
 mod source_add;
 
 use anyhow::{Context, Result};
-use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
+use clap::{ArgGroup, Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use registry_casework::{AttemptSettlementError, RuntimeConfigError, StoreError};
 use registry_casework_core::{
     AttemptSettlement, AttemptSettlementOutcome, AttemptUncertainMarking, ConfigLoadError,
@@ -164,10 +164,7 @@ struct CheckArgs {
     /// bregctl binary of the same release that verifies the package.
     #[arg(long, env = "BREGCTL_BIN", default_value = "bregctl")]
     bregctl_bin: PathBuf,
-    /// Runtime file to check offline against PROJECT, as `casework serve`
-    /// reads it, with no package, database, network, or secret material
-    /// (`package.root` is not read; `casework serve` verifies the package at
-    /// startup).
+    /// Runtime configuration file.
     #[arg(long, value_name = "FILE")]
     runtime_config: Option<PathBuf>,
     /// Fill `${NAME}` expressions in the runtime file from the process
@@ -179,8 +176,8 @@ struct CheckArgs {
 
 #[derive(Debug, Args)]
 struct DoctorArgs {
-    /// Absolute runtime configuration selecting the package and startup bindings.
-    #[arg(long, value_name = "FILE")]
+    /// Runtime configuration file.
+    #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
 }
 
@@ -195,15 +192,16 @@ struct SimulateArgs {
 }
 
 #[derive(Debug, Args)]
+#[command(group(ArgGroup::new("package_output").required(true).multiple(false).args(["output", "dry_run"])))]
 struct PackageArgs {
     /// Authored Casework project directory.
     #[arg(value_name = "PROJECT")]
     project: PathBuf,
     /// New directory for the verified policy package. Required unless --dry-run.
-    #[arg(long, value_name = "DIRECTORY", required_unless_present = "dry_run")]
+    #[arg(long, value_name = "DIRECTORY")]
     output: Option<PathBuf>,
     /// Report the same packageDigest and files a package would produce, without writing one.
-    #[arg(long, conflicts_with = "output", required_unless_present = "output")]
+    #[arg(long)]
     dry_run: bool,
     /// Free-text revision recorded in the package's REVISION file and covered by its digest.
     #[arg(long, value_name = "TEXT")]
@@ -215,15 +213,15 @@ struct OperatorArgs {
     /// Authored Casework project directory.
     #[arg(value_name = "PROJECT")]
     project: PathBuf,
-    /// Runtime configuration file; defaults to runtime.yaml in the project.
+    /// Runtime configuration file.
     #[arg(long, value_name = "FILE")]
     runtime_config: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]
 struct ActivationArgs {
-    /// Absolute runtime configuration selecting the package and the database.
-    #[arg(long, value_name = "FILE")]
+    /// Runtime configuration file.
+    #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
 }
 

@@ -745,14 +745,10 @@ workflow.
 Scheduling state is not rehearsed: `PRODUCTS` in the script names no
 Scheduling leg.
 
-BReg's ingestion run install discards every run in a run table that carries no
-verified creator identity, and cascades the loss to each run's chunks and
-chunk-to-record receipt links rather than inventing an owner; records committed
-by those chunks remain. Only a database written before `v0.40.0` has that
-shape, and no rehearsal starts from one. The rehearsal starts no ingestion run
-on the starting side, so its row comparison stays active for every populated
-BReg table. That install step is owned by
-`crates/registry-breg/tests/postgres_ingestion_runs.rs::the_upgrade_discards_runs_stored_without_a_verified_creator`.
+v0.40.0 does not upgrade v0.39.0 state in place; apply to a new database.
+Fresh installations create the current verified-creator and caller-scoped
+replay structures directly, without conversion or discard of earlier rows.
+The rehearsal keeps its row comparison active for every populated BReg table.
 
 Messaging joins the rehearsal from `v0.38.0`, which is earlier than the floor.
 `MESSAGING_FIRST_RELEASE` in `release/scripts/release_roster.py` owns that
@@ -771,12 +767,6 @@ binaries must serve
 every captured message view unchanged
 and accept a new submission and a cancellation. An idempotent
 resubmission must answer with the receipt the starting release stored.
-Messaging schema version 3 discards the pseudonym-scoped idempotency records of
-a database written before it. When a rehearsal applies that version, the first
-use of an earlier key must create one fresh message and receipt, and the next
-identical submission must replay that new receipt; with the floor at `v0.40.0`
-no rehearsal applies it. That migration is owned by
-`crates/registry-messaging/tests/postgres_migrate.rs::version_3_discards_pseudonym_scoped_records_and_the_runtime_scopes_keys_to_the_caller`.
 An operator retention erase (`messagingctl retention erase-expired --apply`) run
 with the new binaries must add a `messaging.retention.requested` and a
 `messaging.retention.erased` record to the `messagingctl` audit stream, the
@@ -796,13 +786,10 @@ count, not a comparison of the earlier records. Every record in the Evidence
 stream must also be a valid current envelope. The Evidence target is packaged again with the new `evidencectl` and
 its configuration is carried forward unchanged.
 
-Every table remains subject to the row-preservation rule. The script keeps one
-empty-table allowance, for `public.messaging_idempotency` when Messaging
-applies schema version 3; with the floor at `v0.40.0` no rehearsal applies that
-version. The allowance must remain keyed to schema version 3. When the
-rehearsal reports any other row loss, fix the migration so that it refuses with
-an error naming what it would lose, or keeps the rows. Do not accept the loss or
-narrow the comparison to make the run pass.
+Every table remains subject to the row-preservation rule, with no empty-table
+allowance. When the rehearsal reports row loss, fix the migration so that it
+refuses with an error naming what it would lose, or keeps the rows. Do not
+accept the loss or narrow the comparison to make the run pass.
 
 This control guards against a release that loses or stops serving state its
 predecessor wrote. The release operator owns it for each release. Remove it

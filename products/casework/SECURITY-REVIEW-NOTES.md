@@ -398,6 +398,19 @@ family (review_http).
 - The inbox still refuses a whole page with `work-item.proposal-changed` when
   the source's binding generation moved; only single-item reads changed.
 
+### Checked issuer and JWKS URLs
+
+The configured issuer and explicit JWKS URI use the shared checked `Url`
+before authentication is constructed, refusing backslashes and host text the
+URL parser rewrites with value-free `config.invalid-value` at the member.
+ASCII DNS case differences, punycode and IPv6 literals remain accepted; issuer
+comparison stays textual. Existing HTTPS policy and supervised development
+loopback permission are unchanged. The shared
+`issuer_and_jwks_uri_are_checked_urls_when_read` test pins the new refusals and
+ordinary inputs. Casework's `the_oidc_issuer_and_clients_are_the_shared_blocks`
+in `crates/registry-casework/src/config.rs` pins the remote HTTP refusal at
+`/authentication/oidc/issuer`.
+
 ### PostgreSQL support floor
 
 Activation and startup require PostgreSQL 17 or newer. The shared activation
@@ -554,9 +567,8 @@ stores the outcome code in the existing accountability row. The label and
 policy identity come only from the request's retained immutable policy
 snapshot, so a policy replacement cannot reinterpret an earlier selection.
 No submitted context or structured result is read to resolve it. Approval has
-no selected outcome. Migration backfills a legacy outcome only from an
-existing unexpired decision row. A legacy non-approval selection already
-erased at upgrade omits the receipt rather than imply approval.
+no selected outcome. Fresh installation creates the outcome column directly;
+no earlier selection is reconstructed during installation.
 
 This remains the explicit audited Supervisor read, with current Supervisor
 membership and service of the recorded queue. Both audit acceptance gates and
@@ -593,3 +605,97 @@ absence, author versus prior holder, current scope, source concealment, bounded
 continuation and minimal disclosure. Client regressions cover response scope,
 order, receipt interpretation and native query validation. These references do
 not assert that a live database or listener test has executed.
+
+## Fresh schema and retained decisions
+
+Threat and enforcement: Installation must not reinterpret retained decisions or replay responses. The creation statements write the final kebab-case values and the current task invalidation function directly. Protocol-word rewrites, legacy decision-outcome backfill, experimental hosted tables, and obsolete audit-outbox creation and removal are absent. Named refusals for populated hosted work and unpublished audit remain. No live decision, replay, ownership, or audit rule changes.
+
+Verification: `tests/review_migration_postgres.rs::fresh_database_migrates_through_unified_reviews` and `tests/activation_postgres.rs::plan_reports_the_destructive_migration_refusals_apply_meets`. Schema-only dumps of separate fresh
+installations are compared before and after, with no ledger data.
+
+Residual: v0.40.0 does not upgrade v0.39.0 state in place; apply to a new
+database. No compatibility reader or migration of earlier state is provided.
+
+
+## Execution leases use the database clock
+
+Threat: A host-written execution deadline can disagree with PostgreSQL's
+clock, leaving a finished attempt live or shortening an active lease. Even a
+database transaction timestamp sampled before an item-row lock wait can
+consume the 30-second margin between the 330-second lease and the 300-second
+source-action timeout before execution begins.
+
+Enforcement: `reserve_attempt_for_execution` in
+`crates/registry-casework/src/store.rs` writes its initial 330-second lease
+with PostgreSQL `clock_timestamp()` at the INSERT after the item-row lock.
+`finish_attempt` releases the lease with PostgreSQL `now()`, the transaction
+clock. Recovery acquisition, execution fencing, and operator settlement
+continue to use the database transaction clock. The execution token, caller
+binding, state checks, locking, audit acceptance gates, and 330-second
+lease duration are unchanged.
+
+Verification: `reservation_waiting_on_item_lock_starts_a_full_execution_lease_after_unblock`
+in `crates/registry-casework/tests/postgres_transactions.rs` holds the item
+row lock for two seconds after observing the blocked reservation, then checks
+the committed deadline against database time immediately before unlock. The
+pre-fix run failed at its lease assertion. The existing
+`reserving_an_attempt_sets_a_live_lease_on_the_database_clock` and
+`finishing_an_attempt_releases_its_lease_on_the_database_clock` tests observe
+the wall-clock reservation and transaction-clock release respectively while
+returning ordinary PostgreSQL time. They check a bounded finite reservation,
+refusal to recover a live lease, and immediate recovery after release through
+an ordinary pool. They require no machine clock offset. The transaction suite
+also covers live-lease settlement refusals, caller-scoped recovery, settlement
+state checks, and audit failures.
+
+Residual: PostgreSQL is the lease clock authority; reservation uses its wall
+clock and release and recovery use its transaction clock. The initial 330
+seconds start at the INSERT, so a delay between that INSERT and commit still
+consumes some of the 30-second execution margin. This change adds no clock
+synchronization service and does not change host-written history timestamps
+or pagination lifetimes.
+
+## Retained decision and client refusal vocabulary
+
+A persisted decision must read as the decision that was made, and an
+accountability response must not pair a receipt with another action or time.
+`review_decision_receipt` in `crates/registry-casework/src/review.rs` reads the
+stored word `changes-requested` as `ChangesRequested`, with its selected
+outcome. The underscore spelling is refused rather than converted. Approval
+still has no selected outcome.
+
+The accountability read in `crates/registry-casework-client/src/client.rs`
+checks the event identity, valid receipt, exact retained action and equal
+decision time. Its enum-to-action comparison also uses `changes-requested`.
+Current Supervisor membership, service of the recorded queue, retention and
+audit acceptance remain authoritative. This spelling change grants no access
+to a receipt or submitted content.
+
+The Node and Python client mappings in their respective `src/lib.rs` expose
+kebab-case failure words, including `invalid-request`, `header-bounds`,
+`trace-context`, and `media-type`, from the same Rust failure variants. Shared
+transport words come from `TransportKind::kind`. Response validation,
+retryability and unknown-outcome reporting are unchanged. Callers branching
+on these words must use the current vocabulary; no alias is supplied.
+
+Proof obligations:
+
+- `crates/registry-casework-client/tests/http_boundary.rs`:
+  `accountability_receipts_must_match_the_retained_action_and_time` accepts
+  matching `changes-requested`, refuses its underscore spelling, and refuses
+  mismatched action and time.
+- `crates/registry-casework/tests/review_postgres.rs`:
+  `subject_clock_pauses_and_continues_across_review_rounds` reads a persisted
+  ChangesRequested receipt and checks its serialized `changes-requested` word.
+- `crates/registry-casework-client-node/src/lib.rs`:
+  `protocol_failures_use_the_public_snake_case_vocabulary` asserts the current
+  `header-bounds`, `trace-context`, `media-type` and other protocol words.
+- `crates/registry-casework-client-py/src/lib.rs`:
+  `an_answer_the_binding_cannot_convert_is_a_protocol_failure_with_an_unknown_outcome`
+  checks the protocol category, unknown outcome and fixed value-free message.
+- `crates/registry-platform-httputil/src/client/mod.rs`:
+  `every_transport_failure_reports_its_own_kebab_case_kind`.
+
+The Python test does not enumerate every protocol word; the closed mapping
+defines those words. These references do not assert that a native binding,
+listener or live database test has executed.

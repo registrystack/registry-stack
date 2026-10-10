@@ -143,11 +143,9 @@ fn jwks_source_has_three_types_and_defaults_to_discovery() {
     for (uri, loopback) in [
         ("http://issuer.example.test/jwks", true),
         ("http://127.0.0.1:1/jwks", false),
-        ("https://user:pass@issuer.example.test/jwks", false),
-        ("not a url", false),
     ] {
         let source = JwksSource::Uri {
-            uri: uri.to_owned(),
+            uri: Url::new(uri).unwrap(),
         };
         let error = source
             .check("authentication.oidc.jwksSource", loopback)
@@ -155,10 +153,56 @@ fn jwks_source_has_three_types_and_defaults_to_discovery() {
         assert_eq!(error.field(), "authentication.oidc.jwksSource.uri");
     }
     JwksSource::Uri {
-        uri: "http://127.0.0.1:1/jwks".to_owned(),
+        uri: Url::new("http://127.0.0.1:1/jwks").unwrap(),
     }
     .check("authentication.oidc.jwksSource", true)
     .expect("supervised loopback");
+    for uri in ["https://user:pass@issuer.example.test/jwks", "not a url"] {
+        let report =
+            read_block::<JwksSource>(&serde_json::json!({"type": "uri", "uri": uri}).to_string())
+                .expect_err("invalid URL is refused before key source policy");
+        assert_eq!(report.diagnostics()[0].path, "/uri");
+    }
+}
+
+#[test]
+fn issuer_and_jwks_uri_are_checked_urls_when_read() {
+    for text in [
+        "https://issuer.example/a\\b".to_owned(),
+        "https://iss\u{200b}uer.example".to_owned(),
+        "https://issuer\u{3002}example".to_owned(),
+        format!("https://issuer.example/{}", "x".repeat(2048)),
+        " https://issuer.example".to_owned(),
+    ] {
+        let uri = serde_json::json!({"type": "uri", "uri": text}).to_string();
+        let report = read_block::<JwksSource>(&uri).expect_err("typed JWKS URL");
+        assert_eq!(report.diagnostics()[0].path, "/uri");
+        assert_eq!(report.diagnostics()[0].code, "config.invalid-value");
+        assert!(!report.to_string().contains(&text));
+        let issuer = serde_json::json!({"issuer": text, "audience": "api"}).to_string();
+        let report = read_block::<OidcIssuerConfig>(&issuer).expect_err("typed issuer URL");
+        assert_eq!(report.diagnostics()[0].path, "/issuer");
+        assert_eq!(report.diagnostics()[0].code, "config.invalid-value");
+        assert!(!report.to_string().contains(&text));
+    }
+    for text in [
+        "https://Issuer.Example/realms/pilot",
+        "https://xn--caf-dma.example/realms/pilot",
+        "https://[2001:db8::1]/realms/pilot",
+    ] {
+        let source: JwksSource =
+            read_block(&serde_json::json!({"type": "uri", "uri": text}).to_string())
+                .expect("ordinary JWKS URL");
+        source
+            .check("authentication.oidc.jwksSource", false)
+            .unwrap();
+        assert_eq!(source.uri(), Some(text));
+        let issuer: OidcIssuerConfig =
+            read_block(&serde_json::json!({"issuer": text, "audience": "api"}).to_string())
+                .expect("ordinary issuer URL");
+        issuer.check("authentication.oidc", false).unwrap();
+        assert_eq!(issuer.issuer.as_str(), text);
+    }
 }
 
 #[test]
@@ -408,7 +452,7 @@ fn the_oidc_issuer_embeds_beside_product_members() {
          jwksSource: {type: uri, uri: https://issuer.example.test/jwks}\ntokenTypes: [at+jwt]",
     )
     .expect("embedded issuer parses");
-    assert_eq!(oidc.issuer.issuer, "https://issuer.example.test");
+    assert_eq!(oidc.issuer.issuer.as_str(), "https://issuer.example.test");
     assert_eq!(oidc.issuer.audience, "urn:example:api");
     assert_eq!(
         oidc.issuer.jwks_source.uri(),
@@ -445,7 +489,7 @@ fn the_oidc_issuer_embeds_beside_product_members() {
 
 fn issuer(issuer: &str, audience: &str, jwks_source: JwksSource) -> OidcIssuerConfig {
     OidcIssuerConfig {
-        issuer: issuer.to_owned(),
+        issuer: Url::new(issuer).unwrap(),
         audience: audience.to_owned(),
         jwks_source,
     }
@@ -478,24 +522,10 @@ fn the_oidc_issuer_is_an_https_url_and_the_audience_is_bounded_text() {
         ),
         (
             issuer(
-                "https://user:pass@issuer.example.test",
-                "api",
-                JwksSource::default(),
-            ),
-            false,
-            "authentication.oidc.issuer",
-        ),
-        (
-            issuer(
                 "https://issuer.example.test#fragment",
                 "api",
                 JwksSource::default(),
             ),
-            false,
-            "authentication.oidc.issuer",
-        ),
-        (
-            issuer("issuer.example.test", "api", JwksSource::default()),
             false,
             "authentication.oidc.issuer",
         ),
@@ -523,7 +553,7 @@ fn the_oidc_issuer_is_an_https_url_and_the_audience_is_bounded_text() {
                 "https://issuer.example.test",
                 "api",
                 JwksSource::Uri {
-                    uri: "http://keys.example.test/jwks".to_owned(),
+                    uri: Url::new("http://keys.example.test/jwks").unwrap(),
                 },
             ),
             false,
@@ -535,6 +565,17 @@ fn the_oidc_issuer_is_an_https_url_and_the_audience_is_bounded_text() {
             .expect_err("refused issuer");
         assert_eq!(error.field(), expected_field, "{error}");
         assert!(!error.to_string().contains("user:pass"), "{error}");
+    }
+    for text in [
+        "https://user:pass@issuer.example.test",
+        "issuer.example.test",
+    ] {
+        let report = read_block::<OidcIssuerConfig>(
+            &serde_json::json!({"issuer": text, "audience": "api"}).to_string(),
+        )
+        .expect_err("invalid URL is refused before issuer policy");
+        assert_eq!(report.diagnostics()[0].path, "/issuer");
+        assert!(!report.to_string().contains("user:pass"));
     }
 }
 

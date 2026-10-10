@@ -418,7 +418,7 @@ bregctl verify --runtime-config "$PWD/tutorial-work/candidate/runtime.yaml"
 
 ```text
 Verified the package against the runtime it is bound to.
-  assurance            runtime_bound
+  assurance            runtime-bound
   package digest       sha256:e2aaf71126ca9b59ad210a6051edae8c0862155fff78666e7080b087ffeb0919
   registry id          generic-registry
   registry version     0.1.0
@@ -433,7 +433,7 @@ Verified the package against the runtime it is bound to.
   generated artifacts  14
 ```
 
-`runtime_bound` means the check read the runtime configuration the runtime reads at startup,
+`runtime-bound` means the check read the runtime configuration the runtime reads at startup,
 recomputed every file digest against `SHA256SUMS`, and re-derived every generated artifact from the
 package's own source. It opens no database: reading the database is what `plan` does, in the next
 section.
@@ -568,15 +568,15 @@ bregctl plan --runtime-config "$PWD/tutorial-work/candidate/staging-on-productio
   --package "$PWD/tutorial-work/candidate/build-1/package"
 ```
 
-Both exit with status 1 and change nothing. The first reports `apply.package.already_active`: the
+Both exit with status 1 and change nothing. The first reports `apply.package.already-active`: the
 package is already active, so a deploy job runs `plan` and applies only when it reports `pending`
-`true`. The second reports `apply.database.identity_mismatch`: the production database recorded
+`true`. The second reports `apply.database.identity-mismatch`: the production database recorded
 `generic-registry-production-db`, and the file names `generic-registry-staging-db`. Two more refusals
 hold once you promote a successor: an older package, or one that does not name the active package as
 its predecessor, is refused with `apply.package.refused`, and a backup binding recorded for another
-database is refused with `apply.backup_evidence.refused`.
+database is refused with `apply.backup-evidence.refused`.
 
-{/* Evidence: crates/registry-breg/src/migration.rs, verify_successor_package_binding(), AlreadyActive, DatabaseMismatch; crates/registry-bregctl/src/lib.rs, apply.package.already_active, apply.database.identity_mismatch, apply.backup_evidence.refused. */}
+{/* Evidence: crates/registry-breg/src/migration.rs, verify_successor_package_binding(), AlreadyActive, DatabaseMismatch; crates/registry-bregctl/src/lib.rs, apply.package.already-active, apply.database.identity-mismatch, apply.backup-evidence.refused. */}
 
 ### Promote a reviewed successor
 
@@ -618,7 +618,7 @@ Deploy a registry.
 
 A project reviewed under the production profile; a schema-test receipt from its journeys, run against
 PostgreSQL 17 over TLS with tokens from a static JWKS; and a package whose digest covers every file
-it holds, which `bregctl verify` accepts with `runtime_bound` assurance under the runtime
+it holds, which `bregctl verify` accepts with `runtime-bound` assurance under the runtime
 configuration you wrote. You then promoted that one package to a staging and a production
 database: `plan` checked each before `apply` changed it, `status` read what each activation
 ledger recorded, and both runtimes served the same registry revision. The databases were
@@ -633,10 +633,10 @@ disposable, and the successor step is the one you repeat for every later build.
 | `bregctl test` reports `test.step.failed` and `the fixture authority reference was refused` | The token bound to that step does not carry the claims the step declares, or it has expired. The message names the step by index, `journeys[0].steps[3]`. Check the binding in `credentials.yaml`, and reissue both tokens with `issue-token.sh` if the run started more than an hour after you issued them. |
 | `bregctl package` reports `package.output.refused` | `--output` already holds a build. `package` never publishes into a used directory, so name a new one, such as `build-2`. |
 | `bregctl verify` reports `breg.runtime.environment-identity-conflict` | `identity.environment` and `identity.databaseInitializationEnvironment` in `runtime.yaml` differ. Set both to the same environment. |
-| `verify.package.integrity_refused` and `does not match its SHA256SUMS` | A file in the package changed after `package` published it; the message names each changed file. Rebuild with `bregctl package` into a new directory and deploy the whole directory. |
-| `verify.package.integrity_refused` and `package.expectedDigest is` | The pin names a different package than the one at `package.root`. Deploy the pinned package or update `package.expectedDigest`. |
+| `verify.package.integrity-refused` and `does not match its SHA256SUMS` | A file in the package changed after `package` published it; the message names each changed file. Rebuild with `bregctl package` into a new directory and deploy the whole directory. |
+| `verify.package.integrity-refused` and `package.expectedDigest is` | The pin names a different package than the one at `package.root`. Deploy the pinned package or update `package.expectedDigest`. |
 | The readiness loop never ends | A runtime refused to start. Read `staging.log` or `production.log` for the refusal code, stop the other runtime with `kill`, and rerun the block once the cause is fixed. |
-| `breg` logs `startup.package.not_active` | `package.root` in that runtime file names a package the database has not activated. Point it at `build-1/package`, or plan and apply the package it names. |
+| `breg` logs `startup.package.not-active` | `package.root` in that runtime file names a package the database has not activated. Point it at `build-1/package`, or plan and apply the package it names. |
 | `curl` fails with `401` | The operator token expired an hour after you issued it. Reissue it with `issue-token.sh`, rewrite `operator-header`, and query again. |
 | `openssl` rejects `-rawin` or `-algorithm ED25519` | The `openssl` on `PATH` is LibreSSL. Install OpenSSL 3 and put it first on `PATH`. |
 

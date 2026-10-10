@@ -38,7 +38,7 @@ be served.
 
 A package change removes nothing from history either. A successor that drops a field or an entity
 leaves the removed values in every revision snapshot recorded before it, and `bregctl diff`
-reports each such removal as `diff.history.removed_values_retained`. `history erase` is the only
+reports each such removal as `diff.history.removed-values-retained`. `history erase` is the only
 command that removes them, and it removes whole revisions of one record, not one field.
 
 Every command on this page reads the runtime file and connects to PostgreSQL directly with the
@@ -107,7 +107,7 @@ package: `bregctl apply` accepts a successor when the only gap in coverage is a 
 database's dedicated history-erasure coverage table. Erasing baseline data, or any gap without
 that committed coverage record, still refuses every successor package until `history rebaseline`
 restores coverage. Audit-file retention does not change this decision. The
-refusal is `apply.history.coverage_incomplete`, and it leaves maintenance state unchanged, so
+refusal is `apply.history.coverage-incomplete`, and it leaves maintenance state unchanged, so
 apply the same package again once the rebaseline completes.
 
 {/* Evidence: crates/registry-breg/src/history_erasure.rs;
@@ -177,7 +177,7 @@ maintenance window:
   timeout must also cover the page whose records hold the most retained revisions; the rehearsal
   shows whether it does.
 
-`history.rebaseline.live_rows.unverified` reports one live row that its journal head does not
+`history.rebaseline.live-rows.unverified` reports one live row that its journal head does not
 reproduce, and names neither the entity nor the record, because operator refusals here carry no
 values. It stops at the first entity whose live rows and journal heads do not line up, and inside
 an entity at the first record identifier whose values differ, so a run that gets further has
@@ -231,7 +231,7 @@ bregctl --format json request-retention erase \
   --request-id "<requestId>" --proposal-version 3
 ```
 
-The erasure reports the same counts as the dry run. A refusal, `request_retention.operation.refused`,
+The erasure reports the same counts as the dry run. A refusal, `request-retention.operation.refused`,
 names the cause without values: the entity's retention mode is `retain`, or the version is pinned.
 Erasing record history does not erase these rows, and erasing these rows does not touch record
 history.
@@ -416,7 +416,7 @@ the same way.
 `request-retention erase` deletes the external attachment objects before it records its response,
 which states how many objects still wait for deletion; when that deletion pass itself fails, the
 count is `null` and the command reports the failure. If the erasure committed but its response
-entry could not be written, the command reports `request_retention.erasure.unaudited`: the detail is
+entry could not be written, the command reports `request-retention.erasure.unaudited`: the detail is
 gone, so restore the audit destination and reconcile the erased request against the database. An
 event delivery's attempt is recorded inside the transaction that leases it, before its request
 leaves. If that lease transaction does not commit, no request leaves and the attempt is answered
@@ -493,12 +493,12 @@ outside the new writer's retention directory.
 | --- | --- |
 | A saved snapshot returns `503 source.unavailable` | Retained history no longer covers it, after an erasure or an incompatible successor. Take a fresh reference. |
 | A fresh snapshot reference is refused after an erasure | Coverage ends before the erased commit. Run `history rebaseline` to cover the current state again; earlier references stay unavailable. Reads and writes of every entity wait while it runs; see [the outage note](#restore-snapshot-coverage-after-an-erasure). |
-| `history rebaseline` reports `history.rebaseline.live_rows.unverified` | A live row and its journal head disagree, and the refusal names no record. Read the revisions of the records you suspect, or compare live rows with their journal heads under the migration role. |
+| `history rebaseline` reports `history.rebaseline.live-rows.unverified` | A live row and its journal head disagree, and the refusal names no record. Read the revisions of the records you suspect, or compare live rows with their journal heads under the migration role. |
 | `history erase` reports `history.erase.acknowledgement.required` | The command was run without `--acknowledge-irreversible`. Confirm the record and the revision boundary, then run it again with the flag. Nothing was read or erased. |
-| `history.erase.request_file.refused` or `history.rebaseline.request_file.refused` | The request file must be an absolute path to an owner-only regular file, not a symbolic link, holding the documented fields and nothing else. |
-| `history erase`, `history rebaseline`, or `field-encryption erase-history` reports `history.erase.in_progress`, `history.rebaseline.in_progress`, or `field_encryption.erase_history.in_progress` | Another session held the migration lock past the lock timeout: an apply, an adoption, a `migration reconcile`, or other registry maintenance is running. Wait for it to finish, then run the same command again. An erasure or a rebaseline changed nothing; `erase-history` keeps the records it already erased and can be run again. |
-| `request-retention`, `evidence-retention erase-expired`, or `idempotency-retention erase-expired` reports `request_retention.in_progress`, `evidence_retention.in_progress`, or `idempotency_retention.in_progress` | Another session held the migration lock past the lock timeout: an apply, an adoption, a `migration reconcile`, or other registry maintenance is running. Wait for it to finish, then run the same command again. An Evidence erasure erased nothing, and an idempotency drop dropped nothing. A request-detail erasure that committed before its external-deletion retry waited stays erased; `request-retention dry-run` shows whether it did. |
-| `request-retention`, `evidence-retention erase-expired`, or `idempotency-retention erase-expired` reports `request_retention.package.refused`, `evidence_retention.package.refused`, or `idempotency_retention.package.refused` | The package at `package.root` is not the one `package.expectedDigest` pins; the message names both digests. Deploy the pinned package or update the pin. Nothing was erased. |
+| `history.erase.request-file.refused` or `history.rebaseline.request-file.refused` | The request file must be an absolute path to an owner-only regular file, not a symbolic link, holding the documented fields and nothing else. |
+| `history erase`, `history rebaseline`, or `field-encryption erase-history` reports `history.erase.in-progress`, `history.rebaseline.in-progress`, or `field-encryption.erase-history.in-progress` | Another session held the migration lock past the lock timeout: an apply, an adoption, a `migration reconcile`, or other registry maintenance is running. Wait for it to finish, then run the same command again. An erasure or a rebaseline changed nothing; `erase-history` keeps the records it already erased and can be run again. |
+| `request-retention`, `evidence-retention erase-expired`, or `idempotency-retention erase-expired` reports `request-retention.in-progress`, `evidence-retention.in-progress`, or `idempotency-retention.in-progress` | Another session held the migration lock past the lock timeout: an apply, an adoption, a `migration reconcile`, or other registry maintenance is running. Wait for it to finish, then run the same command again. An Evidence erasure erased nothing, and an idempotency drop dropped nothing. A request-detail erasure that committed before its external-deletion retry waited stays erased; `request-retention dry-run` shows whether it did. |
+| `request-retention`, `evidence-retention erase-expired`, or `idempotency-retention erase-expired` reports `request-retention.package.refused`, `evidence-retention.package.refused`, or `idempotency-retention.package.refused` | The package at `package.root` is not the one `package.expectedDigest` pins; the message names both digests. Deploy the pinned package or update the pin. Nothing was erased. |
 | `request-retention erase` is refused | The request entity's retention mode is `retain`, or the version is pinned. Run the dry run for the exact version first. |
 | `evidence-retention erase-expired` removes nothing | No retained assertion has passed its 24-hour window yet, or the cutoff precedes every expiry. The count is the whole report. |
 | A retry answers `410 idempotency.expired` | The key was spent by a successful write whose receipt horizon has passed. The write committed; read the record or its history instead of retrying, and send a fresh key only for a new write. |

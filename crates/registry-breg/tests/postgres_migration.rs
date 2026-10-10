@@ -42,9 +42,9 @@ use registry_breg::migration_reconcile::{
 use registry_breg::package::{
     compiled_registry_change_set, load_package, load_predecessor_package, prepare_package,
     prepare_package_with_project_assets, CompiledRegistryChangeClass, CompiledRegistryChangeCode,
-    CompiledRegistryMigrationBaseline, PackageBuildRequest, PackageEngineFeature,
-    PackageLoadContext, PackageMigrationPlanInput, PackageModuleSource, PackageSourceFile,
-    PreparedPackage, VerifiedPackage, VerifiedPredecessorPackage,
+    CompiledRegistryMigrationBaseline, PackageBuildRequest, PackageLoadContext,
+    PackageMigrationPlanInput, PackageModuleSource, PackageSourceFile, PreparedPackage,
+    VerifiedPackage, VerifiedPredecessorPackage,
 };
 use registry_breg::postgres::{
     install_compiled_schema, managed_schema_fingerprint, rehearse_successor_migration,
@@ -279,197 +279,6 @@ async fn activate_before_subject_access_log(
     drop(migration);
     task.abort();
     (prior, fingerprint, active, old_package)
-}
-
-/// A package built before caller-scoped idempotency declares only the
-/// statistical release store, and its engine found spent keys by an
-/// audit-keyed digest. The current compiler's rebuild has no authored model
-/// delta, yet installing the caller-keyed shape is real apply work: the plan is
-/// not empty, and the apply keeps the spent keys the earlier engine wrote as
-/// tombstones no caller can find, with their held responses removed.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_pre_caller_scoped_empty_successor_tombstones_audit_keyed_spent_keys() {
-    let database = TestDatabase::create(1).await;
-    database
-        .admin
-        .batch_execute("CREATE EXTENSION btree_gist")
-        .await
-        .expect("administrator installs the required extension");
-
-    // The package loader refuses a path through a symbolic link, so the copy
-    // lives under the canonical temporary root.
-    let predecessor_root = tempfile::Builder::new()
-        .prefix("registry-pre-caller-scoped-package-")
-        .tempdir_in(
-            std::env::temp_dir()
-                .canonicalize()
-                .expect("the temporary root canonicalizes"),
-        )
-        .expect("a temporary package root is created");
-    let predecessor = load_person_pre_caller_scoped_package(predecessor_root.path());
-    assert!(predecessor
-        .engine_features()
-        .contains(&PackageEngineFeature::StatisticalReleaseStore));
-    assert!(!predecessor
-        .engine_features()
-        .contains(&PackageEngineFeature::CallerScopedIdempotency));
-    let assets = person_registration_assets();
-    let project = person_registration_project(false);
-    let registry = compile_person_registration(&project, &assets);
-    assert_eq!(predecessor.package_id(), registry.registry_id());
-    let target_fingerprint = initial_fingerprint(&database, &registry).await;
-    let initial = prepare_and_load_person_registration(
-        &project,
-        &assets,
-        &target_fingerprint,
-        None,
-        PackageMigrationPlanInput::InitialCompiledDdl,
-    );
-    let mut active = apply(&database, &initial, ApplyPrecondition::InitialActivation)
-        .await
-        .expect("the current package establishes the fixture catalog");
-
-    let (migration, task) = database.connect_migration().await;
-    migration
-        .batch_execute(
-            "ALTER TABLE registry_internal.registry_idempotency
-                 DROP CONSTRAINT registry_idempotency_caller_shape,
-                 DROP CONSTRAINT registry_idempotency_erasure_shape;
-             DROP INDEX registry_internal.registry_idempotency_caller_key;
-             ALTER TABLE registry_internal.registry_idempotency
-                 DROP COLUMN caller_issuer,
-                 DROP COLUMN caller_subject,
-                 DROP COLUMN key_scope,
-                 DROP COLUMN idempotency_key,
-                 DROP COLUMN receipt_expires_at,
-                 DROP COLUMN receipt_dropped_at;
-             ALTER TABLE registry_internal.registry_idempotency
-                 ADD CONSTRAINT registry_idempotency_erasure_shape
-                     CHECK ((response_body IS NULL) = (erased_at IS NOT NULL));
-             INSERT INTO registry_internal.registry_idempotency
-                 (key_reference, binding_reference, result_kind, result_count,
-                  response_status, response_body, response_headers)
-             VALUES
-                 ('hmac-sha256:held', 'hmac-sha256:held-binding', 'immediate_action', 0,
-                  200, '{}', '\\x0000');",
-        )
-        .await
-        .expect("the fixture restores the audit-keyed spent-key shape with a held row");
-    let legacy_catalog = ExpectedManagedCatalog::compiled(&registry);
-    let legacy_fingerprint =
-        managed_schema_fingerprint(&migration, &database.runtime_role, &legacy_catalog)
-            .await
-            .expect("the audit-keyed catalog fingerprints against its closed shape");
-    active.package_digest = predecessor.package_digest().to_owned();
-    active.schema_fingerprint = legacy_fingerprint;
-    migration
-        .execute(
-            "UPDATE registry_internal.registry_state
-                SET active_package_digest = $1, schema_fingerprint = $2
-              WHERE singleton",
-            &[&active.package_digest, &active.schema_fingerprint],
-        )
-        .await
-        .expect("the fixture records the predecessor identity");
-    migration
-        .execute(
-            "UPDATE registry_internal.registry_migrations
-                SET package_digest = $1
-              WHERE activation_id = $2::text::uuid",
-            &[&active.package_digest, &active.activation_id],
-        )
-        .await
-        .expect("the activation ledger names the predecessor package");
-    drop(migration);
-    task.abort();
-
-    let successor = prepare_and_load_person_registration(
-        &project,
-        &assets,
-        &target_fingerprint,
-        Some(predecessor.package_digest()),
-        PackageMigrationPlanInput::Successor {
-            prior_registry: Box::new(registry.clone()),
-        },
-    );
-    assert!(successor_plan_is_empty(&successor));
-    assert!(!successor_plan_is_empty_for_predecessor(
-        &successor,
-        &predecessor
-    ));
-
-    let history = predecessor.history_schema_descriptor();
-    let upgraded = apply_verified_package(
-        request(
-            &database,
-            &successor,
-            ApplyPrecondition::Successor { current: &active },
-        )
-        .with_predecessor_migration_baseline(predecessor.migration_baseline())
-        .with_predecessor_history_descriptor(&history)
-        .with_predecessor_engine_capabilities(&predecessor),
-    )
-    .await
-    .expect("the verified caller-scoped capability transition applies");
-    assert_ready_target(&database, &upgraded).await;
-    let row = database
-        .admin
-        .query_one(
-            "SELECT (SELECT count(*) FROM registry_internal.registry_idempotency),
-                    EXISTS (
-                        SELECT 1 FROM information_schema.columns
-                         WHERE table_schema = 'registry_internal'
-                           AND table_name = 'registry_idempotency'
-                           AND column_name = 'caller_issuer'
-                    )",
-            &[],
-        )
-        .await
-        .expect("administrator reads the spent-key table");
-    assert_eq!(
-        row.get::<_, i64>(0),
-        1,
-        "the upgrade keeps audit-keyed spent keys"
-    );
-    assert!(
-        row.get::<_, bool>(1),
-        "the upgrade installs the caller shape"
-    );
-    let tombstone = database
-        .admin
-        .query_one(
-            "SELECT caller_issuer IS NULL AND caller_subject IS NULL
-                        AND idempotency_key IS NULL,
-                    key_scope, response_body IS NULL, receipt_dropped_at IS NOT NULL
-               FROM registry_internal.registry_idempotency
-              WHERE key_reference = 'hmac-sha256:held'",
-            &[],
-        )
-        .await
-        .expect("administrator reads the converted spent key");
-    assert!(tombstone.get::<_, bool>(0), "no raw caller or key is kept");
-    assert_eq!(tombstone.get::<_, String>(1), "mutation");
-    assert!(tombstone.get::<_, bool>(2), "no held response survives");
-    assert!(tombstone.get::<_, bool>(3), "the receipt is dropped");
-    verify_catalog_identity_for_catalog(
-        &database.admin,
-        &upgraded,
-        &ExpectedManagedCatalog::compiled(&registry),
-        &database.migration_role,
-        &database.runtime_role,
-    )
-    .await
-    .expect("the activated catalog is the exact current catalog");
-    database.cleanup().await;
-}
-
-/// The current frozen person-registration package as an engine that predates
-/// caller-scoped idempotency wrote it: the same bytes, with a manifest that
-/// declares only the statistical release store.
-fn load_person_pre_caller_scoped_package(root: &std::path::Path) -> VerifiedPredecessorPackage {
-    load_rewritten_person_package(root, |envelope| {
-        envelope["manifest"]["engineFeatures"] = serde_json::json!(["statistical_release_store"]);
-    })
 }
 
 /// Copies the frozen person-registration package, rewrites its envelope,
@@ -2017,7 +1826,7 @@ async fn real_postgres_each_activation_is_one_ledger_row_in_apply_order() {
             None,
             initial.registry().revision(),
             "initial",
-            "compiled_additive",
+            "compiled-additive",
         ),
         (
             successor_activation,
@@ -2806,7 +2615,7 @@ async fn real_postgres_a_role_change_reapply_of_the_active_package_is_its_own_ac
             (
                 initial.activation_id.clone(),
                 "initial".to_owned(),
-                "compiled_additive".to_owned(),
+                "compiled-additive".to_owned(),
                 None,
                 "split".to_owned(),
                 database.runtime_role.as_str().to_owned(),
@@ -2814,7 +2623,7 @@ async fn real_postgres_a_role_change_reapply_of_the_active_package_is_its_own_ac
             (
                 single.activation_id.clone(),
                 "successor".to_owned(),
-                "metadata_only".to_owned(),
+                "metadata-only".to_owned(),
                 Some(digest.clone()),
                 "single".to_owned(),
                 database.migration_role.as_str().to_owned(),
@@ -2822,7 +2631,7 @@ async fn real_postgres_a_role_change_reapply_of_the_active_package_is_its_own_ac
             (
                 split.activation_id.clone(),
                 "successor".to_owned(),
-                "metadata_only".to_owned(),
+                "metadata-only".to_owned(),
                 Some(digest),
                 "split".to_owned(),
                 database.runtime_role.as_str().to_owned(),
@@ -3891,7 +3700,7 @@ async fn downgrade_to_pre_ledger_kernel(database: &TestDatabase) {
                  outcome text NOT NULL
              );
              INSERT INTO registry_internal.registry_migrations
-                 VALUES ('pre-ledger-revision', NULL, 1, 'compiled_additive', 'applied');
+                 VALUES ('pre-ledger-revision', NULL, 1, 'compiled-additive', 'applied');
              CREATE TABLE registry_internal.registry_migration_steps (
                  target_package_revision text NOT NULL,
                  step_id text NOT NULL,

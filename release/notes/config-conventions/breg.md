@@ -2,6 +2,10 @@
 
 ## BReg authored formats
 
+v0.40.0 does not upgrade v0.39.0 state in place; apply to a new database.
+Fresh installation creates the current schema directly. No schema step
+converts or discards rows an earlier release wrote.
+
 This section covers the formats an adopter and an operator write for the
 Base Registry Engine: `registry.yaml`, `module.yaml`, `runtime.yaml`, and the
 package a `bregctl package` run seals around them.
@@ -1996,9 +2000,8 @@ releases), and `read-releases` (read released documents).
 The three words are new and are written in kebab-case (CFG-NAME-2), as the
 fifteen entity and action operations are: "every enumerated word is written
 in kebab-case" below gives `submit-request` and the three other words that
-changed. The operation names the API returns for a dataset in `/v1/registry`
-and in the OpenAPI document (`read_live`, `list_releases`, `publish_release`,
-and the rest) are unchanged.
+changed. The seven operation names the API returns for a dataset also use kebab-case;
+"statistical operation names use kebab-case" below lists the changes.
 
 ```yaml
 accessProfiles:
@@ -3363,30 +3366,6 @@ Member names are unchanged: an effect still writes `fromField` and
 `valid_from`, `valid_to`, and `actor_reference` are unchanged, and so is the
 value of `$orderby`.
 
-One set of words the engine writes is an exception and keeps its spelling in
-this release: the seven statistical dataset operation names (`read_live`,
-`list_releases`, `read_released_series`, `read_latest_release`,
-`read_release_version`, `publish_release`, and `withdraw_release`), which the
-API returns in `x-registry-statisticalOperation` and as the last segment of a
-statistics `operationId` in the OpenAPI document, and under
-`statisticalDatasets` in the registry metadata document
-(`metadata/registry.json`, and `/v1/registry`).
-
-The reports `bregctl` builds itself are a second exception in this release:
-in the `--format json` output of every command other than `bregctl check`,
-and in the usage-error report of any command, `bregctl check` included, each
-entry of `diagnostics[]` and of `findings[]` names its `artifact` and its
-`suggestedAction` with a snake_case identifier (`registry_project` with
-`correct_authoring_source`, `baseline_package` with `verify_package_path`),
-also where the entry is about the registry project, and the operation and
-usage codes that the diagnostic code item above leaves unchanged, such as
-`verify.package.retired_api_version`, `diff.baseline.retired_api_version`,
-and `data.<command>.package.refused`, keep their snake_case segments. The
-exception stops where one of those commands carries the shared reader's
-diagnostics for a tool file unchanged, as `bregctl init` does for a refused
-model selection: those entries have the shared shape, with the kind of the
-file as `artifact` and a sentence as `suggestedAction`.
-
 To migrate, write each word of the first table in kebab-case in
 `registry.yaml` and in each module file, run `bregctl project lock` because a
 module digest covers the words, and build the package again. A package built
@@ -3398,6 +3377,66 @@ package is applied to a new database with `bregctl apply`. A client reads the
 metadata document only from a registry of the same release, and a task grant
 or a Casework source that names an operation of the registry names it in
 kebab-case.
+
+### BREAKING: tooling report words use kebab-case
+
+In every `bregctl --format json` report, a diagnostic or finding that the
+command builds names its `artifact` and `suggestedAction` in kebab-case:
+`registry-project` and `correct-authoring-source`, for example, replace
+`registry_project` and `correct_authoring_source`. Usage-error reports follow
+the same rule, including those from `bregctl check`. A shared reader diagnostic
+keeps the file kind as its `artifact` and the corrective sentence as its
+`suggestedAction`.
+
+The baseline assurance written by `verify`, `diff`, and `migration explain`
+is `runtime-bound` or `integrity-only`, where it was `runtime_bound` or
+`integrity_only`, in JSON and human output. Update report consumers to compare
+the new words. No assurance level or failure classification changes.
+
+### BREAKING: tooling operation diagnostic codes use kebab segments
+
+Operation and usage diagnostic codes in `bregctl` reports replace each
+underscore with a hyphen, preserving the dot-separated areas. For example,
+`verify.runtime_config.path_invalid` becomes
+`verify.runtime-config.path-invalid`, `apply.package.already_active` becomes
+`apply.package.already-active`, and `field_encryption.preflight` becomes
+`field-encryption.preflight`. Update scripts and dashboards that match the
+codes. The condition, severity, path, and corrective action stay the same.
+
+A report also applies this spelling to a closed diagnostic copied from a
+client or planner. The registry's HTTP Problem vocabulary and the client's
+decoded Problem variants keep their existing wire contract. File diagnostics
+already using the shared reader's spelling are unchanged.
+
+### BREAKING: stored migration kinds use kebab-case
+
+The migration ledger stores `compiled-additive` and `metadata-only`, where it
+stored `compiled_additive` and `metadata_only`; `reviewed` is unchanged.
+`bregctl status` and `migration reconcile` report the same new words in
+`planKind`. The constraints of a fresh ledger accept the new spellings only.
+No row is converted and no activation or reviewed-migration rule changes.
+Use a fresh database for this release, and update ledger/report consumers.
+
+### BREAKING: statistical operation names use kebab-case
+
+| Was | Is |
+|---|---|
+| `read_live` | `read-live` |
+| `list_releases` | `list-releases` |
+| `read_released_series` | `read-released-series` |
+| `read_latest_release` | `read-latest-release` |
+| `read_release_version` | `read-release-version` |
+| `publish_release` | `publish-release` |
+| `withdraw_release` | `withdraw-release` |
+
+These words appear in `x-registry-statisticalOperation`, the last segment of
+statistics `operationId` in OpenAPI, and dataset operations in
+`metadata/registry.json` and `/v1/registry`. Audit `operationId` values use the
+same new words. The dotted operation identifiers follow the same kebab-case
+last-segment convention as `actions.<action>.target-conditions` in the same
+OpenAPI document. Routes, access grants, release decisions, and Rust field and
+variant names do not change. Rebuild the package and update metadata, OpenAPI,
+and audit consumers that compare these words.
 
 ### BREAKING: an identifier outside the grammar is refused where the file is read
 

@@ -371,15 +371,11 @@ def install_asset(asset: Path, binary: str, destination: Path) -> None:
             output.chmod(0o755)
 
 
-def row_count_losses(before: dict[str, int], after: dict[str, int], *,
-                     emptied: frozenset[str] | set[str] = frozenset()) -> list[str]:
-    """Name every table that disappeared or lost rows, except a table in
-    `emptied`, one an applied schema version empties by design."""
+def row_count_losses(before: dict[str, int], after: dict[str, int]) -> list[str]:
+    """Name every table that disappeared or lost rows."""
 
     losses = []
     for table, count in sorted(before.items()):
-        if table in emptied and table in after:
-            continue
         if table not in after:
             losses.append(f"{table} disappeared (held {count} rows)")
         elif after[table] < count:
@@ -976,7 +972,7 @@ BREG_CREDENTIALS_ENVELOPE = {
 }
 BREG_ENVIRONMENT = "staging"
 BREG_INSTANCE_ID = "upgrade-rehearsal-instance"
-BREG_EMPTY_PLAN = "apply.package.empty_plan"
+BREG_EMPTY_PLAN = "apply.package.empty-plan"
 
 
 def instance_claim(side: Side, runtime: Path) -> dict[str, Any] | None:
@@ -1310,14 +1306,7 @@ def rehearse_breg(work: Path, keys: Keys, postgres: Postgres, old: Side, new: Si
         predecessor_activation = "successor"
         package = upgraded
     breg.write_runtime(breg.runtime, "registry", package, breg.port)
-    # Count rows before the upgraded runtime writes: its own records would
-    # refill a table the upgrade emptied. The caller-scoped spent-key install
-    # keeps earlier spent keys as tombstones. The ingestion run install is the
-    # exception: over a v0.39.0 run table, which names no verified creator, it
-    # deletes every stored run, and the cascade empties
-    # registry_ingestion_run_chunks and registry_ingestion_run_chunk_records.
-    # `breg.seed` starts no ingestion run, so those tables hold no rows to
-    # lose and every table is held to its count.
+    # Count rows before the upgraded runtime can obscure a loss with its writes.
     losses = row_count_losses(before_counts, postgres.row_counts("registry"))
     claim_after = instance_claim(new, breg.runtime)
     upgraded_views = serve("breg-upgraded.log")
@@ -1648,14 +1637,9 @@ MESSAGING_RETENTION_ERASED = "messaging.retention.erased"
 # The records the upgraded binaries append to each audit stream in
 # `rehearse_messaging`, at the least. The runtime writes its start record, and
 # a request record and an outcome record each for the idempotent resubmission,
-# the cancellation, and the new submission; a key the upgrade freed sends once
-# more and adds two. `messagingctl` writes the retention erase run's requested
+# the cancellation, and the new submission. `messagingctl` writes the retention erase run's requested
 # and erased records.
 MESSAGING_UPGRADED_AUDIT_RECORDS = {MESSAGING_AUDIT: 7, MESSAGING_OPERATOR_AUDIT: 2}
-# The table each Messaging schema version empties by design. Version 3
-# discards the idempotency records keyed by the caller's audit pseudonym, so
-# every key spent before it can be used again.
-MESSAGING_EMPTYING_SCHEMA_VERSIONS = {3: MESSAGING_IDEMPOTENCY}
 
 
 class Messaging:
@@ -1762,26 +1746,22 @@ class Messaging:
             views[f"message/{message_id}"] = body
         return views
 
-    def upgrade(self, side: Side, activated: str | None) -> tuple[list[str], set[str]]:
+    def upgrade(self, side: Side, activated: str | None) -> list[str]:
         """Check the runtime file and plan with `side` over the package the
         previous release activated. When that plan only has schema versions
         pending, apply them with the migration credential, the upgrade step
         the Messaging changelog names, and plan again. Returns what keeps the
         settled plan from naming the previous release's activation with
-        nothing left to change, and the tables the applied schema versions
-        empty by design."""
+        nothing left to change."""
         config = ["--runtime-config", str(self.runtime)]
         side.run("messagingctl", "check", *config)
         planned = side.run_json("messagingctl", "--format", "json", "plan", *config)
-        emptied: set[str] = set()
         pending = planned.get("pendingSchemaVersions")
         if pending and activated and (
                 planned.get("activeDigest") == planned.get("packageDigest") == activated):
             side.run("messagingctl", "apply", *config)
-            emptied = {MESSAGING_EMPTYING_SCHEMA_VERSIONS[version] for version in pending
-                       if version in MESSAGING_EMPTYING_SCHEMA_VERSIONS}
             planned = side.run_json("messagingctl", "--format", "json", "plan", *config)
-        return ledger_digest_differences(activated, planned), emptied
+        return ledger_digest_differences(activated, planned)
 
 
 def rehearse_messaging(work: Path, keys: Keys, postgres: Postgres, old: Side, new: Side,
@@ -1815,20 +1795,13 @@ def rehearse_messaging(work: Path, keys: Keys, postgres: Postgres, old: Side, ne
     # release wrote. The ledger must still name that package as active: a plan
     # that reports a change once any pending schema versions are applied means
     # the upgrade lost the activation.
-    differences, emptied = messaging.upgrade(new, activated)
-    losses = row_count_losses(before_counts, postgres.row_counts("messaging"),
-                              emptied=emptied)
+    differences = messaging.upgrade(new, activated)
+    losses = row_count_losses(before_counts, postgres.row_counts("messaging"))
     service = Service(new, "messaging", [*runtime, "serve"], work / "messaging-new.log", ready)
     try:
         after_views = messaging.views(message_ids)
         differences += view_differences(before_views, after_views)
         key, body, receipt = submitted[1]
-        if MESSAGING_IDEMPOTENCY in emptied:
-            # The upgrade freed every spent key, so this one sends once more
-            # and its new receipt is the one a retry must answer.
-            receipt = messaging.submit(key, body)
-            if receipt.get("id") in message_ids:
-                differences.append("a key the upgrade freed answered a discarded receipt")
         if messaging.submit(key, body) != receipt:
             differences.append("an idempotent resubmission no longer answers its "
                                "stored receipt")
@@ -1853,8 +1826,7 @@ def rehearse_messaging(work: Path, keys: Keys, postgres: Postgres, old: Side, ne
         product = "Messaging operator" if stream == MESSAGING_OPERATOR_AUDIT else "Messaging"
         losses += audit_stream_losses(product, records_before[stream], records_after[stream],
                                       written)
-    losses += row_count_losses(before_counts, postgres.row_counts("messaging"),
-                               emptied=emptied)
+    losses += row_count_losses(before_counts, postgres.row_counts("messaging"))
 
     report["messaging"] = {
         "messages": len(message_ids),

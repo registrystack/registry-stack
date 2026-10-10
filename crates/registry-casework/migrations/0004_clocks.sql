@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS casework_clock_occurrences (
     scope text NOT NULL CHECK (scope IN ('subject','activity')),
     scope_key text NOT NULL,
     item_id uuid REFERENCES casework_items(item_id),
-    state text NOT NULL CHECK (state IN ('running','paused','completed','cancelled','verification_pending','source_facts_missing')),
+    state text NOT NULL CHECK (state IN ('running','paused','completed','cancelled','verification-pending','source-facts-missing')),
     policy_digest text NOT NULL CHECK (policy_digest LIKE 'sha256:%'),
     current_calculation_generation bigint NOT NULL CHECK (current_calculation_generation >= 0),
     recompute_generation bigint NOT NULL DEFAULT 0 CHECK (recompute_generation >= 0),
@@ -35,7 +35,7 @@ CREATE TABLE IF NOT EXISTS casework_clock_occurrences (
 );
 CREATE INDEX IF NOT EXISTS casework_clock_occurrences_due_idx
     ON casework_clock_occurrences(next_action_at, clock_occurrence_id)
-    WHERE state IN ('running','verification_pending') AND next_action_at IS NOT NULL;
+    WHERE state IN ('running','verification-pending') AND next_action_at IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS casework_clock_calculations (
     clock_occurrence_id uuid NOT NULL REFERENCES casework_clock_occurrences(clock_occurrence_id),

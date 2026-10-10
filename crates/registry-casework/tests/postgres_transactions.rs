@@ -1015,7 +1015,7 @@ async fn repeated_migration_is_a_ledger_no_op_and_never_drops_the_occurrence_ind
     let (store, client, schema) = isolated_schema("migrate").await;
     store.migrate().await.expect("first migration");
     let applied = applied_versions(&client).await;
-    assert_eq!(applied, (1..=25).collect::<Vec<i64>>());
+    assert_eq!(applied, (1..=21).collect::<Vec<i64>>());
     let index = occurrence_index(&client, &schema).await;
     assert!(index.1, "the occurrence identity index is unique");
 
@@ -1260,7 +1260,7 @@ async fn migration_16_releases_superseded_identities_in_a_database_that_holds_th
 
     assert_eq!(
         applied_versions(&client).await,
-        (1..=25).collect::<Vec<_>>()
+        (1..=21).collect::<Vec<_>>()
     );
     let second_a = observe_open_in_generation(&store, "binding-a").await;
     let states: Vec<(uuid::Uuid, String)> = items_by_state(&client)
@@ -1291,201 +1291,8 @@ async fn migration_16_releases_superseded_identities_in_a_database_that_holds_th
     );
 }
 
-/// The state constraint `casework_items` held before migration 22, which
-/// admitted the two waiting states in their snake_case spelling.
-const STATE_CHECK_BEFORE_MIGRATION_22: &str = "ALTER TABLE casework_items ADD CONSTRAINT casework_items_state_check CHECK (state IN \
-     ('open','claimed','waiting_applicant','waiting_application','synchronizing','completed','superseded','cancelled'));";
-
-fn stored_template(item_states: [&str; 3]) -> serde_json::Value {
-    serde_json::json!({
-        "id":"summary", "version":"1", "label":"Prepare summary",
-        "eligibleTeams":["team"], "eligibleProfiles":["staff"], "source":"source-cycle",
-        "itemKinds":["request-a"], "itemStates": item_states,
-        "agent":{"issuer":"https://issuer.test", "subject":"agent"},
-        "client":"agent-client", "resource":"urn:test:breg", "scopes":["records:get"],
-        "purpose":"prepare-summary", "bounds":{"type":"breg", "permissions":[{"collection":"records", "operations":["get"]}]},
-        "subjects":{"subject_reference":"subject-reference"}, "lifetimeSeconds":900
-    })
-}
-
-async fn stored_states(client: &tokio_postgres::Client, items: &[uuid::Uuid]) -> Vec<String> {
-    let mut states = Vec::new();
-    for item in items {
-        states.push(
-            client
-                .query_one("SELECT state FROM casework_items WHERE item_id=$1", &[item])
-                .await
-                .expect("read the stored state")
-                .get(0),
-        );
-    }
-    states
-}
-
-#[tokio::test]
-async fn migration_22_respells_the_waiting_states_the_previous_release_stored() {
-    let previous = ["claimed", "waiting_applicant", "waiting_application"];
-    let current = ["claimed", "waiting-applicant", "waiting-application"];
-    let (store, client, _schema) = isolated_schema("occurrence_state_spelling").await;
-    store.migrate().await.expect("establish current schema");
-    store
-        .register_source_generation("source-cycle", "binding-cycle")
-        .await
-        .expect("bind the source generation");
-    let mut items = Vec::new();
-    for (subject, state) in [
-        ("subject-applicant", OccurrenceState::WaitingApplicant),
-        ("subject-application", OccurrenceState::WaitingApplication),
-        ("subject-open", OccurrenceState::Open),
-    ] {
-        items.push(
-            store
-                .apply_observation(
-                    &observation_for_subject(subject, 1, "proposal-1", state),
-                    "default",
-                    None,
-                )
-                .await
-                .expect("the observation applies")
-                .expect("the observation opens an item")
-                .item_id,
-        );
-    }
-    let [applicant, application, open] = items[..] else {
-        panic!("three items were observed");
-    };
-
-    // Return the schema and every row to what the previous release wrote: the
-    // waiting states in snake_case in the item column, in the stored task
-    // template, and in a live grant's record. A retained replay response never
-    // holds one: claim and release answer only with open or claimed.
-    client
-        .batch_execute(&format!(
-            "DELETE FROM casework_schema_migrations WHERE version=22; \
-             ALTER TABLE casework_items DROP CONSTRAINT casework_items_state_check; \
-             UPDATE casework_items SET state=replace(state,'-','_') WHERE state LIKE 'waiting-%'; \
-             {STATE_CHECK_BEFORE_MIGRATION_22} \
-             INSERT INTO casework_teams(team_id,revision) VALUES('team',1); \
-             INSERT INTO casework_memberships(team_id,issuer,subject,membership_kind) VALUES('team','https://issuer.test','human','staff'); \
-             INSERT INTO casework_queue_service(queue_id,team_id,revision) VALUES('default','team',1);"
-        ))
-        .await
-        .expect("simulate the schema and rows before migration 22");
-    client
-        .execute(
-            "UPDATE casework_items SET holder_issuer='https://issuer.test',holder_subject='human' WHERE item_id=$1",
-            &[&applicant],
-        )
-        .await
-        .expect("the approver holds the waiting item");
-    client
-        .execute(
-            "INSERT INTO casework_task_templates(template_id,template_version,document,active) VALUES('summary','1',$1,true)",
-            &[&stored_template(previous)],
-        )
-        .await
-        .expect("store the template as the previous release serialized it");
-    let grant = uuid::Uuid::new_v4();
-    client
-        .execute(
-            "INSERT INTO casework_task_grants(grant_id,item_id,approver_issuer,approver_subject,approver_profile,approver_role,idempotency_key,request_hash,record,approved_at,expires_at) \
-             SELECT $1,item_id,'https://issuer.test','human','staff','staff','key','synthetic-hash', \
-                    jsonb_build_object('template',$2::jsonb,'proposal',jsonb_build_object('version',binding->'version','integrity',binding->'integrity','generation',binding->'generation')), \
-                    now(),now()+interval '900 seconds' \
-             FROM casework_items WHERE item_id=$3",
-            &[&grant, &stored_template(previous), &applicant],
-        )
-        .await
-        .expect("store a live grant as the previous release serialized it");
-    let ids = [applicant, application, open];
-    assert_eq!(
-        stored_states(&client, &ids).await,
-        ["waiting_applicant", "waiting_application", "open"]
-    );
-
-    store
-        .migrate()
-        .await
-        .expect("migration 22 applies over rows in the previous spelling");
-
-    assert_eq!(
-        applied_versions(&client).await,
-        (1..=25).collect::<Vec<_>>()
-    );
-    assert_eq!(
-        stored_states(&client, &ids).await,
-        ["waiting-applicant", "waiting-application", "open"]
-    );
-    // The runtime reads the migrated rows.
-    assert_eq!(
-        store.item(applicant).await.expect("read the item").state,
-        OccurrenceState::WaitingApplicant
-    );
-    assert_eq!(
-        store.item(application).await.expect("read the item").state,
-        OccurrenceState::WaitingApplication
-    );
-    assert_eq!(
-        store.item(open).await.expect("read the item").state,
-        OccurrenceState::Open
-    );
-    let document: serde_json::Value = client
-        .query_one(
-            "SELECT document FROM casework_task_templates WHERE template_id='summary' AND template_version='1'",
-            &[],
-        )
-        .await
-        .expect("read the stored template")
-        .get(0);
-    assert_eq!(document, stored_template(current));
-    let template: registry_casework_core::TaskTemplate =
-        serde_json::from_value(document).expect("the migrated template is read");
-    assert_eq!(
-        serde_json::to_value(&template).expect("serialize the template"),
-        stored_template(current),
-        "a package naming the same version in the current spelling matches the stored document"
-    );
-    // The grant keeps its authority: its record was respelled with the
-    // template and the item, so it still matches both. A directory change
-    // re-evaluates every live grant.
-    client
-        .batch_execute("UPDATE casework_meta SET directory_revision=directory_revision+1")
-        .await
-        .expect("re-evaluate live grants");
-    let row = client
-        .query_one(
-            "SELECT g.invalidated_at IS NULL, g.record->'template', \
-                    EXISTS(SELECT 1 FROM casework_task_templates t WHERE t.active AND t.document=g.record->'template') \
-             FROM casework_task_grants g WHERE g.grant_id=$1",
-            &[&grant],
-        )
-        .await
-        .expect("read the grant");
-    assert!(
-        row.get::<_, bool>(0),
-        "the live grant survives the migration"
-    );
-    assert_eq!(row.get::<_, serde_json::Value>(1), stored_template(current));
-    assert!(
-        row.get::<_, bool>(2),
-        "the grant still names the active template"
-    );
-    let refused = client
-        .execute(
-            "UPDATE casework_items SET state='waiting_applicant' WHERE item_id=$1",
-            &[&application],
-        )
-        .await
-        .expect_err("the previous spelling is no longer a state");
-    assert_eq!(
-        refused.as_db_error().and_then(|error| error.constraint()),
-        Some("casework_items_state_check")
-    );
-}
-
-/// The schema Casework v0.32.0 migrated to: versions 1 through 14, the last
-/// release whose ledger still held the hosted-item tables migration 15 drops.
-const V0_32_MIGRATIONS: [&str; 14] = [
+/// Source-item tables used to exercise named refusals for earlier objects.
+const SOURCE_ITEM_MIGRATIONS: [&str; 14] = [
     include_str!("../migrations/0001_casework.sql"),
     include_str!("../migrations/0002_hosted_casework.sql"),
     include_str!("../migrations/0003_assignment.sql"),
@@ -1502,7 +1309,7 @@ const V0_32_MIGRATIONS: [&str; 14] = [
     include_str!("../migrations/0014_task_grants.sql"),
 ];
 
-async fn establish_v0_32_schema(client: &tokio_postgres::Client) {
+async fn establish_source_schema_with_earlier_tables(client: &tokio_postgres::Client) {
     client
         .batch_execute(
             "CREATE TABLE casework_schema_migrations (\
@@ -1511,9 +1318,15 @@ async fn establish_v0_32_schema(client: &tokio_postgres::Client) {
         )
         .await
         .expect("create the migration ledger");
-    for (version, migration) in (1_i64..).zip(V0_32_MIGRATIONS) {
+    for (version, migration) in (1_i64..).zip(SOURCE_ITEM_MIGRATIONS) {
         apply_fixture_migration(client, version, migration).await;
     }
+    client.batch_execute(
+        "CREATE TABLE casework_hosted_items(item_id uuid PRIMARY KEY,kind_id text,kind_version text,kind_policy_digest text,kind_policy jsonb,queue_id text,state text,holder_issuer text,holder_subject text,revision bigint,created_at timestamptz,updated_at timestamptz);
+         CREATE TABLE casework_hosted_actor_references(actor_ref text,issuer text,subject text);
+         CREATE TABLE casework_hosted_accountability(event_id uuid,item_id uuid,actor_ref text,actor_issuer text,actor_subject text,profile_id text,queue_id text,outcome text,occurred_at timestamptz,retained_until timestamptz);
+         CREATE TABLE casework_audit_outbox(event_id uuid PRIMARY KEY,audit_record jsonb NOT NULL,published_at timestamptz);"
+    ).await.expect("isolated earlier objects for refusal tests");
 }
 
 async fn apply_fixture_migration(client: &tokio_postgres::Client, version: i64, migration: &str) {
@@ -1541,7 +1354,7 @@ async fn row_count(client: &tokio_postgres::Client, table: &str) -> i64 {
 #[tokio::test]
 async fn migration_refuses_to_drop_retained_hosted_work_and_writes_nothing() {
     let (store, client, _schema) = isolated_schema("hosted_work_upgrade").await;
-    establish_v0_32_schema(&client).await;
+    establish_source_schema_with_earlier_tables(&client).await;
     // One claimed hosted item still in flight, and the accountability record
     // an earlier decision retains for a year.
     client
@@ -1598,9 +1411,9 @@ async fn migration_refuses_to_drop_retained_hosted_work_and_writes_nothing() {
 }
 
 #[tokio::test]
-async fn migration_refuses_to_drop_unpublished_audit_and_drops_a_drained_outbox() {
+async fn migration_refuses_unpublished_audit_and_preserves_a_drained_outbox() {
     let (store, client, _schema) = isolated_schema("audit_outbox_upgrade").await;
-    establish_v0_32_schema(&client).await;
+    establish_source_schema_with_earlier_tables(&client).await;
     apply_fixture_migration(
         &client,
         15,
@@ -1647,49 +1460,26 @@ async fn migration_refuses_to_drop_unpublished_audit_and_drops_a_drained_outbox(
         .batch_execute("UPDATE casework_audit_outbox SET published_at=now()")
         .await
         .expect("the earlier release publishes the record");
-    store.migrate().await.expect("a drained outbox is dropped");
+    store
+        .migrate()
+        .await
+        .expect("a drained outbox is preserved");
     assert_eq!(
         applied_versions(&client).await,
-        (1..=25).collect::<Vec<_>>()
+        (1..=21).collect::<Vec<_>>()
     );
     let dropped: bool = client
         .query_one("SELECT to_regclass('casework_audit_outbox') IS NULL", &[])
         .await
         .expect("inspect the audit outbox")
         .get(0);
-    assert!(dropped, "the database holds no audit state");
-}
-
-#[tokio::test]
-async fn migration_replaces_empty_hosted_tables_through_the_ledger_head() {
-    let (store, client, _schema) = isolated_schema("hosted_empty_upgrade").await;
-    establish_v0_32_schema(&client).await;
-
-    store
-        .migrate()
-        .await
-        .expect("empty hosted tables hold nothing to drop");
-
-    assert_eq!(
-        applied_versions(&client).await,
-        (1..=25).collect::<Vec<_>>()
-    );
-    let hosted_tables_remaining: bool = client
-        .query_one(
-            "SELECT to_regclass('casework_hosted_items') IS NOT NULL",
-            &[],
-        )
-        .await
-        .expect("inspect the hosted schema")
-        .get(0);
-    assert!(!hosted_tables_remaining);
-    store.ready().await.expect("the migrated schema is current");
+    assert!(!dropped, "installation never discards earlier audit state");
 }
 
 #[tokio::test]
 async fn migration_locks_hosted_work_before_counting_it_for_the_drop() {
     let (store, client, schema) = isolated_schema("hosted_work_lock").await;
-    establish_v0_32_schema(&client).await;
+    establish_source_schema_with_earlier_tables(&client).await;
 
     // Hold the table a concurrent writer would insert into, so the migration
     // must wait right where it takes its own lock on hosted work, if it takes
@@ -1739,7 +1529,7 @@ async fn migration_locks_hosted_work_before_counting_it_for_the_drop() {
         .expect("migration completes once the blocker releases the table");
     assert_eq!(
         applied_versions(&client).await,
-        (1..=25).collect::<Vec<_>>()
+        (1..=21).collect::<Vec<_>>()
     );
 }
 
@@ -1760,7 +1550,7 @@ async fn migration_13_adds_sync_claim_indexes_to_an_existing_schema() {
 
     assert_eq!(
         applied_versions(&client).await,
-        (1..=25).collect::<Vec<_>>()
+        (1..=21).collect::<Vec<_>>()
     );
     let indexes: Vec<String> = client
         .query(
@@ -1811,7 +1601,7 @@ async fn migration_20_adds_review_discovery_indexes_to_an_existing_schema() {
         .expect("apply review discovery indexes");
     assert_eq!(
         applied_versions(&client).await,
-        (1..=25).collect::<Vec<_>>()
+        (1..=21).collect::<Vec<_>>()
     );
     let indexes = review_discovery_indexes(&client, &schema).await;
     assert_eq!(
@@ -1830,7 +1620,7 @@ async fn migration_20_adds_review_discovery_indexes_to_an_existing_schema() {
     store.migrate().await.expect("repeat the migration");
     assert_eq!(
         applied_versions(&client).await,
-        (1..=25).collect::<Vec<_>>()
+        (1..=21).collect::<Vec<_>>()
     );
     assert_eq!(
         review_discovery_indexes(&client, &schema).await,
@@ -1862,14 +1652,14 @@ async fn readiness_rejects_an_unmigrated_schema() {
             store.ready().await,
             Err(StoreError::SchemaNotCurrent {
                 applied: None,
-                required: 25
+                required: 21
             })
         ),
         "a schema without the migration ledger must fail readiness"
     );
     assert_eq!(
         store.ready().await.unwrap_err().to_string(),
-        "the Casework database schema is not current: no migration has been applied, and this binary requires version 25; run `caseworkctl plan --runtime-config FILE` then `caseworkctl apply --runtime-config FILE`"
+        "the Casework database schema is not current: no migration has been applied, and this binary requires version 21; run `caseworkctl plan --runtime-config FILE` then `caseworkctl apply --runtime-config FILE`"
     );
 }
 
@@ -1892,8 +1682,8 @@ async fn readiness_rejects_a_partial_schema_missing_review_tables() {
         matches!(
             store.ready().await,
             Err(StoreError::SchemaNotCurrent {
-                applied: Some(25),
-                required: 25
+                applied: Some(21),
+                required: 21
             })
         ),
         "a partial migration ledger must fail readiness"
@@ -1924,15 +1714,15 @@ async fn readiness_rejects_an_unsupported_migration_version() {
         matches!(
             refusal,
             StoreError::SchemaNewer {
-                found: 26,
-                supported: 25
+                found: 22,
+                supported: 21
             }
         ),
         "a newer schema is not reported as corrupt data: {refusal:?}"
     );
     assert_eq!(
         refusal.to_string(),
-        "the Casework database schema version 26 is newer than this binary supports (25); run a casework release that supports it"
+        "the Casework database schema version 22 is newer than this binary supports (21); run a casework release that supports it"
     );
 }
 
@@ -1961,8 +1751,8 @@ async fn migration_refuses_a_schema_newer_than_this_binary_and_writes_nothing() 
         matches!(
             refusal,
             StoreError::SchemaNewer {
-                found: 26,
-                supported: 25
+                found: 22,
+                supported: 21
             }
         ),
         "{refusal:?}"
@@ -2198,6 +1988,279 @@ async fn open_item_fixture(prefix: &str) -> OpenItemFixture {
         item_id: item.item_id,
         revision: item.revision,
     }
+}
+
+/// Observe transaction and wall clock reads without changing their values.
+/// The trigger also checks finite reservation and release times.
+async fn store_with_observed_database_clock(client: &tokio_postgres::Client) -> PostgresStore {
+    let schema: String = client
+        .query_one("SELECT current_schema()", &[])
+        .await
+        .expect("the isolated fixture schema")
+        .get(0);
+    client
+        .batch_execute(
+            "CREATE FUNCTION now() RETURNS timestamptz LANGUAGE plpgsql STABLE AS $$
+             BEGIN
+                 PERFORM pg_catalog.set_config('casework_test.clock_read', 'transaction', true);
+                 RETURN pg_catalog.now();
+             END $$;
+             CREATE FUNCTION clock_timestamp() RETURNS timestamptz LANGUAGE plpgsql VOLATILE AS $$
+             BEGIN
+                 PERFORM pg_catalog.set_config('casework_test.clock_read', 'wall', true);
+                 RETURN pg_catalog.clock_timestamp();
+             END $$;
+             CREATE FUNCTION require_database_clock_for_lease() RETURNS trigger
+             LANGUAGE plpgsql AS $$
+             DECLARE expected_deadline timestamptz;
+             BEGIN
+                 IF TG_OP='INSERT' THEN
+                     IF pg_catalog.current_setting('casework_test.clock_read', true)
+                         IS DISTINCT FROM 'wall' THEN
+                         RAISE EXCEPTION 'reservation did not read the database wall clock';
+                     END IF;
+                     expected_deadline := pg_catalog.clock_timestamp()+interval '330 seconds';
+                     IF NEW.execution_lease_until < expected_deadline-interval '1 second'
+                         OR NEW.execution_lease_until > expected_deadline THEN
+                         RAISE EXCEPTION 'reservation did not retain a full execution lease';
+                     END IF;
+                 ELSIF NEW.state IS DISTINCT FROM OLD.state THEN
+                     IF pg_catalog.current_setting('casework_test.clock_read', true)
+                         IS DISTINCT FROM 'transaction' THEN
+                         RAISE EXCEPTION 'settlement did not read the database clock';
+                     END IF;
+                     expected_deadline := pg_catalog.now();
+                     IF NEW.execution_lease_until IS DISTINCT FROM expected_deadline THEN
+                         RAISE EXCEPTION 'settlement did not release the execution lease';
+                     END IF;
+                 END IF;
+                 RETURN NEW;
+             END $$;
+             CREATE TRIGGER require_database_clock_for_lease
+                 BEFORE INSERT OR UPDATE OF execution_lease_until ON casework_attempts
+                 FOR EACH ROW EXECUTE FUNCTION require_database_clock_for_lease();",
+        )
+        .await
+        .expect("observe the clock for this fixture's lease writes");
+    let base = env::var("CASEWORK_TEST_DATABASE_URL").expect("disposable database URL");
+    let separator = if base.contains('?') { '&' } else { '?' };
+    // Explicit catalog placement lets this pool observe now(); the returned
+    // time remains pg_catalog.now(), and other pools keep their normal path.
+    let scoped = format!("{base}{separator}options=-csearch_path%3D{schema}%2Cpg_catalog");
+    let secret = format!("CASEWORK_CLOCK_{}", uuid::Uuid::new_v4().simple()).to_ascii_uppercase();
+    env::set_var(&secret, scoped);
+    let secrets = SecretResolver::new([SecretProvider::Environment], "/private/tmp")
+        .expect("test secret resolver");
+    let config = DatabaseConfig {
+        runtime_url_ref: format!("secret:env/{secret}"),
+        migration_url_ref: format!("secret:env/{secret}"),
+        trusted_root_certificate_ref: None,
+        test_only_plaintext: true,
+    };
+    PostgresStore::connect_migration(&config, &secrets)
+        .expect("pool that observes the database clock")
+        .with_audit(registry_casework::CaseworkAudit::capture().0)
+}
+
+#[tokio::test]
+async fn reserving_an_attempt_sets_a_live_lease_on_the_database_clock() {
+    let fixture = open_item_fixture("attempt_reservation_clock").await;
+    let claimed = fixture
+        .store
+        .claim(
+            &fixture.holder,
+            fixture.item_id,
+            fixture.revision,
+            "claim-clock",
+        )
+        .await
+        .expect("holder claims the item");
+    let store = store_with_observed_database_clock(&fixture.client).await;
+    let prepared = PreparedSourceAttempt {
+        source_binding: claimed.binding.clone(),
+        recovery_evidence: RecoveryEvidence::new(b"clock recovery capsule".to_vec())
+            .expect("bounded evidence"),
+    };
+    let (attempt, _) = store
+        .reserve_attempt_for_execution(
+            &fixture.holder,
+            claimed.item_id,
+            claimed.revision,
+            "reviewer",
+            OperationName::parse("approve").expect("approve operation"),
+            None,
+            &[],
+            "decision-clock",
+            "sha256:request-clock",
+            &prepared,
+        )
+        .await
+        .expect("reserve with a 330-second lease on the database clock");
+    let live: bool = fixture
+        .client
+        .query_one(
+            "SELECT execution_lease_until>pg_catalog.now()
+                 AND execution_lease_until<=pg_catalog.now()+interval '330 seconds'
+             FROM casework_attempts WHERE attempt_id=$1",
+            &[&attempt.attempt_id],
+        )
+        .await
+        .expect("read the reservation on the ordinary database clock")
+        .get(0);
+    assert!(live, "the ordinary database clock sees a finite live lease");
+    assert!(matches!(
+        fixture
+            .store
+            .acquire_recovery_execution(&fixture.holder, attempt.attempt_id)
+            .await,
+        Err(StoreError::AttemptPending)
+    ));
+}
+
+#[tokio::test]
+async fn reservation_waiting_on_item_lock_starts_a_full_execution_lease_after_unblock() {
+    let fixture = open_item_fixture("attempt_reservation_lock_clock").await;
+    let claimed = fixture
+        .store
+        .claim(
+            &fixture.holder,
+            fixture.item_id,
+            fixture.revision,
+            "claim-lock-clock",
+        )
+        .await
+        .expect("holder claims the item");
+    let mut locker = connect_scoped(&fixture.schema).await;
+    let lock = locker.transaction().await.expect("begin item lock");
+    lock.query_one(
+        "SELECT item_id FROM casework_items WHERE item_id=$1 FOR UPDATE",
+        &[&claimed.item_id],
+    )
+    .await
+    .expect("hold item lock");
+    let locker_pid: i32 = lock
+        .query_one("SELECT pg_backend_pid()", &[])
+        .await
+        .expect("lock holder pid")
+        .get(0);
+
+    let store = fixture.store.clone();
+    let holder = fixture.holder.clone();
+    let prepared = PreparedSourceAttempt {
+        source_binding: claimed.binding.clone(),
+        recovery_evidence: RecoveryEvidence::new(b"lock clock capsule".to_vec())
+            .expect("bounded evidence"),
+    };
+    let reservation = tokio::spawn(async move {
+        store
+            .reserve_attempt_for_execution(
+                &holder,
+                claimed.item_id,
+                claimed.revision,
+                "reviewer",
+                OperationName::parse("approve").expect("approve operation"),
+                None,
+                &[],
+                "decision-lock-clock",
+                "sha256:request-lock-clock",
+                &prepared,
+            )
+            .await
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let waiting: i64 = fixture
+            .client
+            .query_one(
+                "SELECT count(*) FROM pg_stat_activity WHERE $1=ANY(pg_blocking_pids(pid))",
+                &[&locker_pid],
+            )
+            .await
+            .expect("read blocked reservation")
+            .get(0);
+        if waiting > 0 {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "reservation did not wait"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    // Two seconds is enough to distinguish a transaction-start deadline from
+    // one sampled after the lock, without waiting for the 330-second lease.
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    let released_at: chrono::DateTime<chrono::Utc> = lock
+        .query_one("SELECT pg_catalog.clock_timestamp()", &[])
+        .await
+        .expect("database time before unlock")
+        .get(0);
+    lock.commit().await.expect("release item lock");
+    let (attempt, _) = tokio::time::timeout(std::time::Duration::from_secs(10), reservation)
+        .await
+        .expect("reservation completes after unlock")
+        .expect("reservation task completed")
+        .expect("reservation succeeds");
+    let full_after_unlock: bool = fixture
+        .client
+        .query_one(
+            "SELECT execution_lease_until >= $2::timestamptz + interval '329 seconds' \
+             FROM casework_attempts WHERE attempt_id=$1",
+            &[&attempt.attempt_id, &released_at],
+        )
+        .await
+        .expect("read committed lease")
+        .get(0);
+    assert!(full_after_unlock, "lock wait consumed the execution lease");
+}
+
+#[tokio::test]
+async fn finishing_an_attempt_releases_its_lease_on_the_database_clock() {
+    let fixture = settlement_fixture("attempt_finish_clock", false).await;
+    let store = store_with_observed_database_clock(&fixture.client).await;
+    store
+        .mark_attempt_uncertain(&fixture.holder, fixture.attempt_id, fixture.execution_token)
+        .await
+        .expect("uncertainty releases the execution lease on the database clock");
+    let recovery_token = fixture
+        .store
+        .acquire_recovery_execution(&fixture.holder, fixture.attempt_id)
+        .await
+        .expect("the ordinary database clock immediately acquires the released lease");
+    store
+        .complete_attempt(
+            &fixture.holder,
+            fixture.attempt_id,
+            recovery_token,
+            &SourceReceipt {
+                source_revision: "2".to_owned(),
+                resulting_state: "approved".to_owned(),
+                binding: fixture
+                    .store
+                    .item(fixture.item_id)
+                    .await
+                    .expect("item")
+                    .binding,
+                actor_reference: None,
+                metadata: BTreeMap::new(),
+            },
+        )
+        .await
+        .expect("completion releases the execution lease on the database clock");
+    let released: bool = fixture
+        .client
+        .query_one(
+            "SELECT execution_lease_until<=pg_catalog.now()
+             FROM casework_attempts WHERE attempt_id=$1",
+            &[&fixture.attempt_id],
+        )
+        .await
+        .expect("read the completed lease on the ordinary database clock")
+        .get(0);
+    assert!(
+        released,
+        "the completed lease is expired on the database clock"
+    );
 }
 
 async fn settlement_fixture(prefix: &str, mark_uncertain: bool) -> SettlementFixture {

@@ -218,7 +218,7 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     ("Base Registry Engine WASM executor gate", "breg-wasm:"),
     (
         "Base Registry Engine contract consistency",
-        "run: products/breg/scripts/check-contracts.sh",
+        "run: uv run --no-project --with PyYAML==6.0.2 products/breg/scripts/check-contracts.sh",
     ),
     (
         "BReg client contract consistency",
@@ -369,7 +369,7 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     ),
     (
         "Scheduling contract reproduction",
-        "run: products/scheduling/scripts/check-contracts.sh",
+        "run: uv run --no-project --with PyYAML==6.0.2 products/scheduling/scripts/check-contracts.sh",
     ),
     (
         # The schema drift tests need no database, so they run in the
@@ -393,7 +393,7 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     ),
     (
         "Scheduling product checkpoint wrapper",
-        "run: products/scheduling/scripts/check-checkpoint.sh",
+        "run: uv run --no-project --with PyYAML==6.0.2 products/scheduling/scripts/check-checkpoint.sh",
     ),
     (
         "Scheduling HTTP contract drift check",
@@ -441,7 +441,7 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     ),
     (
         "Messaging contract reproduction",
-        "run: products/messaging/scripts/check-contracts.sh",
+        "run: uv run --no-project --with PyYAML==6.0.2 products/messaging/scripts/check-contracts.sh",
     ),
     (
         "Messaging PostgreSQL path filter",
@@ -459,7 +459,7 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     ),
     (
         "Messaging product checkpoint wrapper",
-        "run: products/messaging/scripts/check-checkpoint.sh",
+        "run: uv run --no-project --with PyYAML==6.0.2 products/messaging/scripts/check-checkpoint.sh",
     ),
     (
         "Messaging dependency-direction guard",
@@ -610,13 +610,19 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     ),
     (
         "Release manifest validation",
-        "release/scripts/registry-release validate-current",
+        "uv run --no-project --with PyYAML==6.0.2 python3 release/scripts/registry-release validate-current",
     ),
-    ("Release docset validation", "release/scripts/registry-release validate-docsets"),
-    ("Release import audit", "release/scripts/registry-release audit"),
+    (
+        "Release docset validation",
+        "uv run --no-project --with PyYAML==6.0.2 python3 release/scripts/registry-release validate-docsets",
+    ),
+    (
+        "Release import audit",
+        "uv run --no-project --with PyYAML==6.0.2 python3 release/scripts/registry-release audit",
+    ),
     (
         "Release source model",
-        "run: release/scripts/check-release-source-model.sh",
+        "run: uv run --no-project --with PyYAML==6.0.2 release/scripts/check-release-source-model.sh",
     ),
     (
         "Release source model tests",
@@ -717,7 +723,7 @@ REQUIRED_SECURITY_WORKFLOW_SELECTIONS: dict[str, frozenset[str]] = {
         {"platform", "release_tool"}
     ),
     ".github/workflows/release.yml": frozenset(
-        {"release_source_proof", "release_tool"}
+        {"docs", "release_source_proof", "release_tool"}
     ),
     ".github/workflows/release-candidate.yml": frozenset(
         {"release_source_proof", "release_tool"}
@@ -952,7 +958,7 @@ REQUIRED_RELEASE_SECURITY_GATES = (
         (
             "name: Resolve latest published docs release",
             "name: Gate the released docset selector on the published release",
-            "release/scripts/registry-release validate-docsets \\",
+            "uv run --no-project --with PyYAML==6.0.2 python3 release/scripts/registry-release validate-docsets \\",
             '--published-releases "${PUBLISHED_RELEASES}"',
         ),
     ),
@@ -964,7 +970,7 @@ REQUIRED_RELEASE_SECURITY_GATES = (
             "name: Exercise future-tag release paths on Ubuntu",
             "runs-on: ubuntu-24.04",
             "name: Rehearse prepared release without publishing",
-            "release/scripts/rehearse-release",
+            "uv run --no-project --with PyYAML==6.0.2 release/scripts/rehearse-release",
             "--base-ref origin/main",
         ),
     ),

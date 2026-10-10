@@ -54,16 +54,16 @@ fn review_recovery_commands_share_one_value_free_refusal() {
         assert_eq!(report["command"], format!("review-recovery {operation}"));
         assert_eq!(
             report["diagnostics"][0]["code"],
-            "review_recovery.operation.refused"
+            "review-recovery.operation.refused"
         );
         assert_eq!(report["diagnostics"][0]["path"], "reviewRecovery");
         assert_eq!(
             report["diagnostics"][0]["artifact"],
-            "review_recovery_operation"
+            "review-recovery-operation"
         );
         assert_eq!(
             report["diagnostics"][0]["suggestedAction"],
-            "verify_review_recovery_operation"
+            "verify-review-recovery-operation"
         );
     }
 }

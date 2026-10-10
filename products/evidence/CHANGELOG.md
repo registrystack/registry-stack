@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- BREAKING: `evidence-oid4vci check`, `inspect`, and `serve` take
+  `--runtime-config FILE` instead of `--config FILE`, and
+  `EVIDENCE_OID4VCI_RUNTIME_CONFIG` instead of `EVIDENCE_OID4VCI_CONFIG`.
+  Replace the flag and variable in scripts and deployment configuration.
+  Neither old spelling is accepted.
+
 ### Protocol words
 
 - BREAKING: four transport and token words the Node.js and Python clients
@@ -108,9 +114,16 @@
   inside is refused with `config.invalid-value` at `/uri`; it was accepted and
   kept as written while the URI parser read it without the character. An
   identifier of at most 512 characters that takes more than 512 bytes is now
-  read; a `bucketScheme` that cites one is still held to 512 bytes.
+  read; a `bucketScheme` that cites one uses the same character bound.
   Migration: remove the character from the identifier, regenerate
   `SHA256SUMS`, and re-pin `configurationRevision`.
+- BREAKING: bundle URI validation and client profile URI identities count
+  at most 512 Unicode characters, matching the frozen Version 1 `uri` schema.
+  Code list versions count 1 through 128 characters and refuse control
+  characters, also stated in their authoring schema. Valid multibyte values
+  within those bounds are accepted; frozen schemas and request preparation
+  bounds are unchanged. Migration: remove controls from versions, regenerate
+  `SHA256SUMS`, and update package and configuration pins.
 - BREAKING: the policy files `evidence verify --policy` and `evidence
   verify-presentation --policy` read open with `apiVersion` and `kind`
   (`id.registrystack.org/formats/evidence/verification-policy/v1` with
@@ -118,8 +131,19 @@
   `id.registrystack.org/formats/evidence/holder-bound-verification-policy/v1`
   with `EvidenceHolderBoundVerificationPolicy`). A file without them is
   refused as `config.missing-envelope`. Migration: add the two lines at the
-  top of every retained policy file. The policy object the clients take is
-  unchanged.
+  top of every retained policy file. Rust, Node.js, and Python prepared
+  requests and batches now return the complete enveloped policy document;
+  retained contexts carry that same document under `verificationPolicy`.
+  Prepare fresh retained contexts with the updated client. With independently
+  pinned subject expectations, write `verificationPolicy` directly to a
+  standalone CLI policy file. A first-use draft retains its existing empty
+  `expectedSubjects` and is not a standalone CLI policy. The retained schema
+  marker remains `registry.evidence-client.retained-verification/v1`; contexts
+  with an unenveloped policy are refused. Rust struct literals for
+  `EvidenceVerificationPolicyDocument` and `HolderBoundPresentationPolicyDocument`
+  must supply typed `api_version` and `kind` fields; `Default::default()`
+  selects each field's only supported value. Prepare options and verification
+  decisions are unchanged.
 - BREAKING: in the bundle, a request's `timeoutMilliseconds` is
   `attemptTimeoutMilliseconds`, and `concurrencyLimit` on a request and on a
   source connection is `maximumConcurrency`. The old keys are refused as

@@ -87,7 +87,7 @@ async fn authenticate(input: ProbeInput) -> Result<bool, ()> {
         BTreeMap::from([(input.client.clone(), vec![input.assertion_issuer.clone()])]);
     let oidc = OidcConfig {
         provider: OidcIssuerConfig {
-            issuer: input.issuer.clone(),
+            issuer: registry_platform_yaml::Url::new(input.issuer.clone()).map_err(|_| ())?,
             audience: input.audience.clone(),
             jwks_source: JwksSource::Discovery {},
         },

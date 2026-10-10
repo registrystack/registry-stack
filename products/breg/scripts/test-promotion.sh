@@ -760,7 +760,7 @@ for environment in staging production; do
 done
 
 checkpoint "refusing a backup binding that names another environment's database"
-expect_refusal "$temporary_root/apply-production-foreign-backup.json" apply.backup_evidence.refused \
+expect_refusal "$temporary_root/apply-production-foreign-backup.json" apply.backup-evidence.refused \
   apply --runtime-config "$temporary_root/runtime-production-1.yaml" --package "$package_2" \
   --backup "$backup_binding_path=$temporary_root/backups/staging-binding.json"
 
@@ -844,9 +844,9 @@ sed -e "s#secret:file/staging-runtime-url#secret:file/production-runtime-url#" \
   -e "s#secret:file/staging-migration-url#secret:file/production-migration-url#" \
   "$temporary_root/runtime-staging-2.yaml" >"$temporary_root/runtime-staging-on-production.yaml"
 before=$(catalog_digest "$production_database")
-expect_refusal "$temporary_root/plan-staging-on-production.json" apply.database.identity_mismatch \
+expect_refusal "$temporary_root/plan-staging-on-production.json" apply.database.identity-mismatch \
   plan --runtime-config "$temporary_root/runtime-staging-on-production.yaml" --package "$temporary_root/deploy-staging/package-2"
-expect_refusal "$temporary_root/apply-staging-on-production.json" apply.database.identity_mismatch \
+expect_refusal "$temporary_root/apply-staging-on-production.json" apply.database.identity-mismatch \
   apply --runtime-config "$temporary_root/runtime-staging-on-production.yaml" --package "$temporary_root/deploy-staging/package-2"
 expect_startup_refusal "$temporary_root/runtime-staging-on-production.yaml" \
   "$temporary_root/server-staging-on-production.log" 'records a different database id than identity.databaseId'

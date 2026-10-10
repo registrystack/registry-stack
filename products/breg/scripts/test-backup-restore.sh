@@ -869,7 +869,7 @@ if restored["claim"] != original["claim"]:
 if restored["live"]["databaseOid"] == original["live"]["databaseOid"]:
     raise SystemExit("the restored copy has the original's database object identifier")
 PY
-expect_refusal "$temporary_root/doctor-restored-before.json" startup.instance_claim.mismatch \
+expect_refusal "$temporary_root/doctor-restored-before.json" startup.instance-claim.mismatch \
   doctor --runtime-config "$restored_config"
 expect_startup_refusal "$restored_config" "$temporary_root/server-restored-refused.log" \
   'the Registry database is not the instance its claim names'
@@ -881,7 +881,7 @@ authorities = json.load(open(sys.argv[1], encoding="utf-8"))["authorities"]
 if [(item["authorityId"], item["status"]) for item in authorities] != [(sys.argv[2], "open")]:
     raise SystemExit(f"the backup did not bring back the authority closed after it: {authorities}")
 PY
-expect_refusal "$temporary_root/adopt-unacknowledged.json" instance_claim.acknowledgement.required \
+expect_refusal "$temporary_root/adopt-unacknowledged.json" instance-claim.acknowledgement.required \
   instance-claim adopt --runtime-config "$restored_config"
 
 checkpoint "adopting the restored copy"
@@ -926,7 +926,7 @@ if backup_point != restored:
 PY
 checkpoint "refusing a restored runtime file that renames the instance while deliveries are pending"
 render_runtime_config "$temporary_root/runtime-restored-renamed.yaml" restored "$instance_id-restored"
-expect_refusal "$temporary_root/doctor-restored-renamed.json" startup.instance_id.pending_deliveries \
+expect_refusal "$temporary_root/doctor-restored-renamed.json" startup.instance-id.pending-deliveries \
   doctor --runtime-config "$temporary_root/runtime-restored-renamed.yaml"
 run_json "$temporary_root/doctor-restored-after.json" doctor --runtime-config "$restored_config"
 assert_json_ok "$temporary_root/doctor-restored-after.json" doctor

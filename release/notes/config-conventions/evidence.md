@@ -4,6 +4,14 @@ This fragment describes the final v0.40.0 interface. An `Old` or `Before`
 example is an earlier file, request, response, or value to replace; every
 current example and diagnostic below uses the final v0.40.0 spelling.
 
+## BREAKING: wallet delivery names its runtime file with `--runtime-config`
+
+In v0.39.0, `evidence-oid4vci check`, `inspect`, and `serve` took `--config`
+or `EVIDENCE_OID4VCI_CONFIG`. In v0.40.0 they take `--runtime-config FILE`
+or `EVIDENCE_OID4VCI_RUNTIME_CONFIG`, with no alias for either old name.
+Replace the flag and variable in scripts, service definitions, and deployment
+configuration. Relative paths remain accepted.
+
 ## Evidence clients and OID4VCI
 
 Every change the configuration conventions make to the `evidence-oid4vci`
@@ -113,7 +121,7 @@ reference and resolved by the shared secret providers when `serve` or
   log `the secret reference configured at <member path> could not be resolved: <reason>`
   when it fails, naming the member and never the reference or the key. Migration: a
   deployment step that relied on `check` to prove the key file was readable
-  runs `evidence-oid4vci inspect --config <file>` instead, which resolves the
+  runs `evidence-oid4vci inspect --runtime-config <file>` instead, which resolves the
   key and reads the Evidence metadata.
 
 ### BREAKING: offer restrictions are stated, not defaulted
@@ -175,7 +183,7 @@ position.
 
 ### BREAKING: `evidence-oid4vci check` reports in the shared diagnostic shape
 
-- `check --config <file>` prints every problem it finds in a pass, each on standard error as
+- `check --runtime-config FILE` prints every problem it finds in a pass, each on standard error as
   `error[CODE] FILE:LINE:COLUMN /json/pointer` followed by the message and a
   `next:` line, then a count of errors and warnings. The old command logged
   one JSON tracing line naming the first problem. Migration: a script that
@@ -637,7 +645,7 @@ unchanged.
 | `deployment artifact closure is invalid: ...` | `evidence.bundle.unknown-file` |
 | `deployment exceeds a Version 1 size bound` | `evidence.bundle.too-large` |
 | `deployment configuration is invalid: ...` | `evidence.bundle.invalid-configuration` |
-| `deployment artifact is invalid: ...` | `evidence.bundle.invalid-artifact`; for a code list `evidence.codelist.invalid-size`, `evidence.codelist.output-not-allowed`; for a fixture `evidence.fixture.not-synthetic`, `evidence.fixture.missing-cases`, `evidence.fixture.invalid-case-count`, `evidence.fixture.invalid-case`, `evidence.fixture.invalid-case-id`, `evidence.fixture.unresolved-not-declared`, `evidence.fixture.incomplete-coverage`; for a CA bundle `evidence.runtime.invalid-ca-bundle` |
+| `deployment artifact is invalid: ...` | `evidence.bundle.invalid-artifact`; for a code list `evidence.codelist.invalid-size`, `evidence.codelist.output-not-allowed`; for a fixture `evidence.fixture.not-synthetic`, `evidence.fixture.missing-cases`, `evidence.fixture.invalid-case-count`, `evidence.fixture.invalid-case`, `evidence.fixture.invalid-case-id`, `evidence.fixture.unresolved-not-declared`, `evidence.fixture.invalid-unresolved-marker`, `evidence.fixture.incomplete-coverage`; for a CA bundle `evidence.runtime.invalid-ca-bundle` |
 | `deployment artifact is invalid: runtime signer kind does not match the bundle assurance profile` | `evidence.runtime.signer-assurance-mismatch` |
 | `deployment artifact is invalid: a bundle secret reference names a provider ...` | `evidence.runtime.secret-provider-not-enabled` |
 | `deployment artifact is invalid: the local signing key reference must be distinct ...` | `evidence.runtime.signing-key-shared` |
@@ -953,11 +961,25 @@ character, so no member that cites a code list changes.
 The limit of 512 is counted in characters, as the schema states it with
 `maxLength`. It was counted in bytes, so an identifier written outside ASCII
 was refused before it reached 512 characters. A `bucketScheme` that cites a
-code list by its identifier is still held to 512 bytes.
+code list by its identifier is held to the same 512-character bound.
 
 Migration: remove the character from the identifier, then regenerate the
 package `SHA256SUMS`, update `package.expectedDigest` where the runtime file
 pins it, and re-pin `configurationRevision`.
+
+### BREAKING: URI and code list version bounds count characters
+
+Bundle URI validation and client profile URI identities now count Unicode
+characters, matching the frozen Version 1 `uri` schema's `maxLength: 512`.
+A URI of at most 512 characters that takes more than 512 bytes is accepted;
+513 characters are refused. Code list versions likewise count 1 through 128
+characters and now refuse control characters. Their authoring schema states
+that refusal. The frozen Version 1 schemas are unchanged.
+
+Migration: remove control characters from code list versions, then regenerate
+package `SHA256SUMS`, update `package.expectedDigest` where pinned, and re-pin
+`configurationRevision`. No spelling change is needed for a valid multibyte
+URI or version. Request preparation retains its existing identifier bounds.
 
 ### BREAKING: the two verification policy files have an envelope
 
@@ -973,9 +995,22 @@ the other kind as `config.wrong-kind`; the two verify commands report their
 closed `malformed` class, as before. Migration: add the two lines at the top
 of every retained policy file. No other member moves.
 
-The envelope belongs to the file. The policy object a relying party passes to
-the Rust, Node.js, and Python clients is the members beside the envelope, as
-before, and carries neither `apiVersion` nor `kind`.
+The Rust, Node.js, and Python clients return the same complete document in a
+prepared request's `policyDocument` (`policy_document` in Python), in each
+prepared batch policy, and under `verificationPolicy` in a retained context.
+Each document writes `apiVersion` and `kind` first. A retained context keeps
+its `registry.evidence-client.retained-verification/v1` schema marker and
+refuses a policy without the envelope. Prepare a fresh context with the
+updated client. With independently pinned subject expectations, write its
+`verificationPolicy` directly to a standalone CLI policy file. A first-use
+draft retains its existing empty `expectedSubjects` and is not a standalone
+CLI policy. Applications supply prepare options as before, and verification
+decisions do not change.
+
+Rust callers constructing `EvidenceVerificationPolicyDocument` or
+`HolderBoundPresentationPolicyDocument` with a struct literal must supply the
+required typed `api_version` and `kind` fields. `Default::default()` selects
+each field's only supported value.
 
 ### BREAKING: a request's bounds are `attemptTimeoutMilliseconds` and `maximumConcurrency`
 

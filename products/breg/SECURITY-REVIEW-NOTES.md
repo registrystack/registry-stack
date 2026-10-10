@@ -60,7 +60,7 @@ state, and the instance claim.
    re-hashed before the digest is trusted. `package.expectedDigest` in the
    runtime file is an optional pin: when set, a package with another digest
    is refused before any database connection. Re-applying the active package
-   is refused as already active (`apply.package.already_active`, naming
+   is refused as already active (`apply.package.already-active`, naming
    `bregctl status`); an older package, a package that skips the active one,
    or another registry's package is refused as `apply.package.refused`, with
    the roll-forward remedy. Tests:
@@ -125,7 +125,7 @@ state, and the instance claim.
    reassignment that strips them is repaired by the next apply; split startup
    refuses missing grants, naming `bregctl apply`. A change of runtime role or
    role mode over the active package is recorded as its own successor
-   activation (`metadata_only`, a fresh activation id), and apply revokes
+   activation (`metadata-only`, a fresh activation id), and apply revokes
    every privilege of a runtime role the activation stops serving with. A
    one-role runtime file is refused against a database last activated for a
    separate runtime role. In either mode, a runtime role with superuser,
@@ -429,7 +429,7 @@ as the claim on its next apply (BREG-SEC-117).
 - Startup and every readiness probe compare the claim with the live
   database: the system identifier when both expose it, the database oid
   alone otherwise. A mismatch refuses startup and answers readiness 503 with
-  `startup.instance_claim.mismatch`.
+  `startup.instance-claim.mismatch`.
 - The runtime role holds `SELECT` only on the claim.
 - The claim lives in `registry_state`. An activation records the claim, in
   the transaction that commits its ledger row, only when the state row
@@ -591,7 +591,7 @@ candidate does not declare (release provenance).
   manifest does not record which engine release built it, and the managed
   catalog includes tables the engine owns, so a predecessor built by an
   earlier release always drifts. A drift is reported as
-  `migration.rehearsal.baseline_fingerprint_drift`, with the recorded and the
+  `migration.rehearsal.baseline-fingerprint-drift`, with the recorded and the
   measured fingerprints, and it does not stop `test`. Activation is still
   protected by the other checks. A predecessor schema that the current
   compiler cannot install is refused. The rehearsed migration must reach the
@@ -1207,8 +1207,8 @@ still be refused by an audit destination it never uses.
   shorter statement timeout (`57014`) to `MigrationLockHeld`; every other
   failure keeps its existing refusal. `refusal_before_maintenance` keeps it
   apart from `DatabaseUnavailable`, so `apply` and `plan` still change
-  nothing and report `apply.database.in_progress`, with a sentence that names
-  the held lock and the `retry_after_migration_lock_releases` suggested
+  nothing and report `apply.database.in-progress`, with a sentence that names
+  the held lock and the `retry-after-migration-lock-releases` suggested
   action. An unreachable database keeps `apply.database.unavailable`.
 - The lock-free assessment preflight is safe because it authorizes nothing.
   It reads one committed snapshot of the state row and binds the configured
@@ -1220,7 +1220,7 @@ still be refused by an audit destination it never uses.
   under the lock was already the only fence.
 - `--execute` keeps the locked preflight unchanged. A lock held there, or at
   the reconciliation's own acquisition, refuses as
-  `migration.reconcile.outcome.in_progress` and changes nothing; an
+  `migration.reconcile.outcome.in-progress` and changes nothing; an
   assessment reports `in_progress` as its outcome.
 - An assessment holds only the keyed audit profile it validates the operator
   reference under. `--execute` opens the companion audit writer after the
@@ -1228,15 +1228,15 @@ still be refused by an audit destination it never uses.
   `migration.reconcile.audit.unavailable` when it cannot.
 - `history erase`, `history rebaseline`, `field-encryption preflight`, and
   `field-encryption erase-history` keep the locked preflight and report a
-  held lock as `<prefix>.active_registry.in_progress`.
+  held lock as `<prefix>.active-registry.in-progress`.
 - The history maintenance transactions take the exclusive lock through
   `lock_registry` in `crates/registry-breg/src/history_maintenance.rs`, which
   reads the lock wait with the same `lock_wait_ended` rule as
   `acquire_inner`. A held lock there refuses as `MigrationLockHeld` before the
   transaction changes anything, and `bregctl` reports it as
-  `history.erase.in_progress`, `history.rebaseline.in_progress`, or
-  `field_encryption.erase_history.in_progress` with the
-  `retry_after_migration_lock_releases` suggested action. Its request entry is
+  `history.erase.in-progress`, `history.rebaseline.in-progress`, or
+  `field-encryption.erase-history.in-progress` with the
+  `retry-after-migration-lock-releases` suggested action. Its request entry is
   answered `unfinished`, as for any other refusal. An `erase-history` run
   refused part way keeps the records it already erased, each in its own
   committed transaction, and can be run again. `field-encryption preflight`
@@ -1245,14 +1245,14 @@ still be refused by an audit destination it never uses.
   maintenance, and instance claim adoption take the exclusive lock through
   the same `lock_registry`. A held lock refuses as `MigrationLockHeld` before
   their transaction changes anything, and `bregctl` reports it as
-  `evidence_retention.in_progress`, `request_retention.in_progress`,
-  `import_authority.in_progress`, or `instance_claim.in_progress` with the
+  `evidence-retention.in-progress`, `request-retention.in-progress`,
+  `import-authority.in-progress`, or `instance-claim.in-progress` with the
   same suggested action. The Evidence erasure, the request-detail erasure,
   and the adoption answer their request entry `failed`, as for an outage;
   import authority maintenance records only committed transitions, so a
   refusal records nothing. A request-detail erasure that committed keeps its
   `committed` response when the external-deletion retry after it meets the
-  held lock, and the command still reports `request_retention.in_progress`.
+  held lock, and the command still reports `request-retention.in-progress`.
 
 ### Tests
 
@@ -1283,7 +1283,7 @@ assertion in `failed_resume_and_ddl_timeout_are_fail_closed_on_real_postgres`.
 `execution_refuses_a_held_migration_lock_as_in_progress`.
 `products/breg/scripts/test-adopter-workflow.sh` holds the advisory lock from
 a second session and proves assessment answers `in_progress` while
-`--execute` refuses and `apply` refuses with `apply.database.in_progress`
+`--execute` refuses and `apply` refuses with `apply.database.in-progress`
 and the wait-and-retry action, then proves assessment answers with a
 read-only audit directory while `--execute` refuses. Each test the change
 adds was written first and failed, or did not compile, against the code
@@ -1331,8 +1331,8 @@ damaged package.
 - The comparison runs right after the target package is verified and before
   `DatabaseAccess::resolve`, so a mismatch resolves no database secret,
   opens no connection, takes no lock, and writes no audit entry. Both
-  commands refuse with `apply.package.digest_mismatch` and the
-  `rerun_plan_on_intended_package` suggested action. The message names the
+  commands refuse with `apply.package.digest-mismatch` and the
+  `rerun-plan-on-intended-package` suggested action. The message names the
   expected and the found digest; both are package identities, not secrets.
 - Without the flag, behaviour is unchanged. The activation audit entry
   (`ActivationAttempt::begin` in `crates/registry-breg/src/migration.rs`)
@@ -1380,7 +1380,7 @@ statement timeouts its descriptor declares (`rehearse_assertions` and
 `rehearse_reviewed_steps` in `crates/registry-breg/src/postgres/rehearsal.rs`),
 retires the rehearsal receipt's `proofs` member
 (`MigrationRehearsalReceipt` in `crates/registry-breg/src/migration_plan.rs`),
-and names both schema fingerprints in `migration.review.fingerprint_mismatch`,
+and names both schema fingerprints in `migration.review.fingerprint-mismatch`,
 measured with `bregctl test --fingerprint-only`
 (`measure` in `crates/registry-bregctl/src/test_lifecycle.rs`). It touches the
 evidence a reviewed migration carries into a package, not activation:
@@ -1772,11 +1772,10 @@ and release provenance (the release image and the upgrade rehearsal).
   stored value is `WorkflowError::InvalidRestoredState`, which the API
   reports as the generic service-unavailable problem. No row is read past the
   refusal and the response names no stored value.
-- Schema install is `CREATE ... IF NOT EXISTS` plus the steps a database
-  v0.38.0 can serve still needs. One of them is the dead-letter reason: v0.38.0
-  introduced the column and its constraint and tolerates a delivery-state
-  table without them, so install still adds both to such a table. Installing
-  over an installed schema changes nothing.
+- Schema install creates current columns and constraints directly. The
+  webhook dead-letter reason is defined in fresh creation; installation
+  does not add it to an earlier table. Reinstalling current storage changes
+  nothing.
 - The retired package flags are no longer defined, so the argument parser
   refuses them as unknown arguments with exit status 2 before any file or
   database is read. Dev state is read strictly: a version other than the
@@ -1831,7 +1830,7 @@ and release provenance (the release image and the upgrade rehearsal).
    `scheduling-postgres` job of `.github/workflows/ci.yml` does, failing
    unless at least one of them passes:
    `installing_over_an_installed_schema_changes_nothing`,
-   `installing_over_a_table_without_dead_letter_reasons_adds_them`.
+   `installing_fresh_delivery_storage_twice_keeps_dead_letter_reasons`.
 2. `crates/registry-breg/src/request_workflow.rs`:
    `unknown_stored_request_states_are_invalid`.
 3. `crates/registry-bregctl/tests/cli.rs`:
@@ -2000,8 +1999,7 @@ and adds the operator command `bregctl idempotency-retention erase-expired`
 may replay a held response), data minimization (raw caller identifiers are
 persisted until the operator drops the receipt, and cleared then), audit
 integrity (what rotating `audit.hashKeyRef` changes), and deployment defaults
-(a seven-day horizon and an upgrade that turns earlier spent keys into
-tombstones no caller can find). The invariants are BREG-SEC-162 through
+(a seven-day horizon and caller-scoped receipt storage on fresh installation). The invariants are BREG-SEC-162 through
 BREG-SEC-166.
 
 ### Threat
@@ -2088,30 +2086,9 @@ BREG-SEC-166.
   (`breg-idempotency-retention-audit/v1`) is accepted before the transaction
   opens and the response records the count; a commit that returned an error
   is read back on a fresh connection before the outcome is recorded.
-- **Upgrade.** The engine feature `caller_scoped_idempotency` makes a
-  rebuilt v0.39.0 package an engine-capability successor, so the apply runs
-  the schema install. When `registry_idempotency` lacks the caller columns,
-  the install adds them and converts every existing row into a tombstone.
-  The conversion deletes no row and empties no table; the same install
-  discards stored ingestion runs, as the BREG-SEC-167 notes below record. A
-  tombstone keeps its
-  `key_reference` (the earlier audit-keyed `hmac-sha256:` digest), binding,
-  result kind, result references, erasure time, and commit time. It is
-  written already dropped: no raw issuer, subject, or key, the `mutation`
-  scope, a null held response body and an empty set of headers,
-  `receipt_dropped_at` at the upgrade time, and a horizon that ends one
-  microsecond after its commit. `registry_immediate_action_results`,
-  `registry_immediate_action_applications`,
-  `registry_action_evidence_uses`, and
-  `registry_request_idempotency_links` keep every row. The stored action
-  results are what keep a revision an engine before v0.39.0 journaled under
-  a compiled effect identifier readable in history; emptying them made that
-  read answer `503 source.unavailable`. No caller reaches a tombstone: lookup
-  is by a `sha256:` key reference, which never equals an `hmac-sha256:` one,
-  and a tombstone has no raw caller for the unique index to match. The kept
-  request idempotency links are read only by request retention, which counts
-  and erases held bodies a tombstone no longer has, and by the replay check
-  of a key that was found, which a tombstone never is.
+- **Installation.** Fresh creation defines the caller-scoped columns and
+  constraints directly. It converts no audit-keyed spent row. The generic
+  successor capability mechanism remains available for later releases.
 
 ### Data minimization
 
@@ -2142,22 +2119,7 @@ tombstones and leaves the spent row.
   one 409, and another caller's identical key executes as its own),
   `real_postgres_receipt_sweep_clears_the_raw_caller_of_every_expired_spent_key`
   (a held and an erased receipt are both cleared and both stay spent: the
-  held key's exact retry answers 410 and the erased key's 409), and
-  `real_postgres_upgrade_from_the_audit_keyed_idempotency_shape_tombstones_spent_rows`
-  (tombstones carry no raw caller, and the table check refuses a cleared row
-  that is still held, a partly cleared row, a dropped row that keeps its raw
-  caller, and a keyless row).
-- `tests/postgres_migration.rs`:
-  `a_pre_caller_scoped_empty_successor_tombstones_audit_keyed_spent_keys`
-  applies a package without the engine feature, restores the old table
-  shape with a held row, and proves the successor apply keeps it as a
-  tombstone without its held response and verifies the catalog.
-- `tests/postgres_immediate_actions.rs`:
-  `the_caller_scoped_idempotency_upgrade_keeps_legacy_action_revisions_readable`
-  restores the old table shape under a committed immediate action whose
-  revision carries the compiled effect identifier, installs the caller
-  shape, and proves the revision still reads, every spent key, application,
-  and action result is kept, and the exact retry runs as a fresh request.
+  held key's exact retry answers 410 and the erased key's 409).
 - `src/idempotency.rs`:
   `a_policy_refuses_every_issuer_the_engine_reserves`.
 - `tests/postgres_batch.rs` proves over HTTP that another principal's batch
@@ -2170,12 +2132,11 @@ tombstones and leaves the spent row.
 
 ### Accepted residuals
 
-- **The upgrade forgets which caller spent each key.** A tombstone is never
-  found again, so a request committed before the upgrade and retried after
-  it executes again, and a hook delivery in flight across the upgrade can
-  apply its proposal again. Nobody runs Base Registry Engine in production
-  yet, so no earlier key is carried over. Entity uniqueness constraints still
-  refuse a duplicate create where the project declares them.
+- **Earlier spent keys do not carry into a fresh database.** v0.40.0 does
+  not upgrade v0.39.0 state in place; apply to a new database. Resolve
+  uncertain writes and stop earlier hook workers before moving callers.
+  Entity uniqueness constraints refuse a duplicate create where the project
+  declares them.
 - **Issuer or principal mapping changes re-scope keys.** A retry across a
   change of `authentication.oidc.issuer` or of the principal claim is another
   caller's fresh request. The operator guide says to resolve uncertain writes
@@ -2200,8 +2161,8 @@ verified caller (#1930; `crates/registry-breg/src/ingestion_store.rs`,
 `crates/registry-breg/src/postgres/mutation.rs`). It touches authorization
 (who may list, read, continue, recover, or cancel a run), data minimization
 (the raw issuer and principal are persisted on the run row), audit integrity
-(what rotating `audit.hashKeyRef` changes), and deployment defaults (an
-upgrade that discards stored runs). The invariant is BREG-SEC-167.
+(what rotating `audit.hashKeyRef` changes), and fresh storage defaults.
+The invariant is BREG-SEC-167.
 
 ### Threat
 
@@ -2233,16 +2194,8 @@ upgrade that discards stored runs). The invariant is BREG-SEC-167.
   `created_principal_reference` stays on the run and on its audit records as
   the creator's pseudonym; rotating the key changes it for later audit
   records only.
-- **Upgrade.** `ingestion_store::install` runs on every schema install,
-  including an engine-capability successor apply. When the run table lacks
-  `created_issuer`, it deletes every stored run, which cascades to
-  `registry_ingestion_run_chunks` and `registry_ingestion_run_chunk_records`,
-  and adds both columns `NOT NULL`. A run stored before names no verified
-  creator, so none is guessed. Committed records and revisions stay, and an
-  import authority keeps the volume its runs consumed, because that count
-  lives on the authority row. The server-derived chunk idempotency keys the
-  discarded runs spent stay spent; a new run has a new run id and so new
-  keys.
+- **Installation.** `ingestion_store::install` creates the verified creator
+  columns directly and converts or discards no stored run.
 
 ### Data minimization
 
@@ -2263,11 +2216,6 @@ against it; that reader already sees the raw principal beside it.
   one, recovers and replays its committed chunk, completes it, and cancels
   the other, while another principal lists none and gets 404 on read,
   receipt, chunk, and cancel without a write;
-  `the_upgrade_discards_runs_stored_without_a_verified_creator` restores the
-  run table without the creator columns under a run with a committed chunk,
-  reinstalls, and proves the run, its chunks, and its receipt links are gone,
-  the committed record stays, both columns are `NOT NULL`, and a new run is
-  stored with its creator and listed; and
   `run_access_is_creator_scoped_and_possession_grants_nothing`.
 - `src/ingestion_store.rs`: `a_run_without_its_verified_creator_is_refused`.
 - `src/postgres/mutation.rs`:
@@ -2276,11 +2224,6 @@ against it; that reader already sees the raw principal beside it.
 
 ### Accepted residuals
 
-- **The upgrade discards stored runs.** An import interrupted across the
-  upgrade cannot resume its run; its committed records stay, and the
-  operator imports only the uncommitted remainder under a fresh checkpoint
-  path, as after a closed import authority. Nobody runs Base Registry Engine
-  in production yet.
 - **Issuer or principal mapping changes re-scope runs.** After a change of
   `authentication.oidc.issuer` or of the principal claim, an open run belongs
   to no current caller; finish or cancel open runs before such a change.
@@ -2378,8 +2321,9 @@ unknown key inside a platform block (`package`, `authentication.oidc`,
 Every `*Ref` member of `runtime.yaml` is decoded as the shared
 `SecretReference`, and the URLs a runtime calls or compares (`listener.publicOrigin`,
 an Evidence provider's `baseUrl`, the task-grant status `baseUrl` and
-`sourceIssuer`) as the shared `Url`. It touches secret reference handling,
-outbound endpoints, and the value-free reporting of operator configuration.
+`sourceIssuer`, and the OIDC issuer and explicit JWKS URI) as the shared `Url`.
+It touches secret reference handling, outbound endpoints, and the value-free
+reporting of operator configuration.
 
 ### Threat
 
@@ -2419,6 +2363,17 @@ tell which value to fix.
   `$ref: SecretReference`, each URL `$ref: Url`, and an optional reference,
   path, or retention member publishes no `default: null` and says what
   omitting it means.
+
+The shared issuer and explicit JWKS URI now refuse backslashes and host text
+that the URL parser rewrites, with value-free `config.invalid-value` at the
+member. Ordinary ASCII DNS case differences, punycode and IPv6 literals remain
+accepted. Issuer comparison stays textual, and the existing HTTPS and
+loopback rules still run after decode. The shared
+`issuer_and_jwks_uri_are_checked_urls_when_read` test pins those refusals and
+ordinary inputs. Base Registry Engine's `oidc_issuer_and_audience_follow_the_shared_issuer_block`
+and `jwks_source_uri_kind_skips_discovery_under_the_shared_rules` in
+`crates/registry-breg/tests/runtime_config.rs` pin the retained policy and
+member-level typed refusals.
 
 ### Tests
 
@@ -2488,6 +2443,11 @@ unchanged, so no security invariant row changes.
   age bound (`maximumAgeSeconds`, at most 31 days), prior package digest and
   schema fingerprint, database identity, and backup digest checks run as
   before, and so does every descriptor shape and step check.
+- **Decoded change words.** Change classes, change codes, target kinds,
+  recovery words, and step variants are written in kebab-case. Classification
+  and coverage compare decoded variants and typed covers, never their written
+  strings. No variant, classification rule, or cover rule changes. A word in
+  its previous spelling does not decode and is refused at its member.
 - **Value-free refusals.** Reader diagnostics name the key and the expected
   shape, never the value; `bregctl` prints them unchanged under one sentence
   naming the document.
@@ -2496,6 +2456,7 @@ unchanged, so no security invariant row changes.
 
 `crates/registry-breg/tests/migration_plan.rs`:
 `reviewed_migration_documents_refuse_their_previous_spellings_at_each_key`,
+`reviewed_descriptor_refuses_the_snake_case_spelling_of_each_enumerated_word`,
 `reviewed_descriptor_reformatted_by_hand_keeps_its_rehearsal_binding`, and
 `reviewed_package_whose_receipt_carries_the_retired_proofs_is_refused`.
 `crates/registry-breg/src/migration.rs`:
@@ -2681,3 +2642,226 @@ project compiles to different access than before.
 - **A package is rebuilt.** A package holds the project as written, so its
   digest changes while its registry revision does not. This release already
   refuses every package an earlier release built.
+
+## Fresh storage and caller replay
+
+Threat and enforcement: The installer must not invent an owner, free a spent key, or discard accountability. Fresh creation defines the verified ingestion creator and caller-scoped receipt columns directly. Installation contains no conversion of audit-keyed rows and no discard of creatorless runs. Request reasons, revision erasure bounds, review-result bounds, and field-encryption receipt checks are defined at creation; shared webhook installation does not repair an earlier table. Replay lookup, receipt retention, creator concealment, action-result provenance, and audit ordering are unchanged. Generic verified successors remain available for releases from v0.40.0 onward.
+
+Verification: `tests/postgres_ingestion_runs.rs::an_audit_key_rotation_keeps_every_run_with_its_verified_creator` and `tests/postgres_mutation.rs::real_postgres_exact_retry_after_audit_key_rotation_replays_and_never_reexecutes`. Schema-only dumps of separate fresh
+installations are compared before and after, with no ledger data.
+
+Residual: v0.40.0 does not upgrade v0.39.0 state in place; apply to a new
+database. No compatibility reader or migration of earlier state is provided.
+
+## Tooling and statistics vocabulary
+
+The CLI report words, migration-ledger kinds, and statistical operation names
+use kebab-case. This changes what report, metadata, OpenAPI, and audit
+consumers compare. It changes no authorization grant, verification result,
+activation authority, or release decision.
+
+### Threat
+
+A renamed word must not select a different error recovery, bypass a migration
+constraint, grant access to another statistical route, or misidentify a
+statistical operation in its audit entry. A code copied from an HTTP client
+must keep the decoded failure's classification and recovery advice.
+
+### Enforcement and defaults
+
+- `DiagnosticArtifact`, `SuggestedAction`, and `BaselineAssurance` keep the
+  same Rust variants. Serde changes their written spelling only. Operation
+  diagnostics retain their condition, severity, path, and corrective action.
+  `tool_diagnostic` applies the CLI spelling to a borrowed closed diagnostic;
+  the client's decoded Problem variant and the HTTP Problem vocabulary are
+  unchanged. No variant or classification rule changes.
+- Migration kinds are selected through `MigrationKind` variants. Its writer
+  and the fresh ledger's CHECK constraints use `compiled-additive`,
+  `metadata-only`, and `reviewed`. No row is converted. Statement checksums,
+  review closure, role grants, and activation audit requirements are unchanged.
+- Statistical routes retain the `Kind` variants and the existing compiled
+  access grants. Their operation names are written in kebab-case in generated
+  metadata and OpenAPI and in audit `operationId`. Dataset selection, HTTP
+  method, publication, withdrawal, and replay rules are unchanged.
+
+### Tests
+
+- `crates/registry-bregctl/src/lib.rs`:
+  `diagnostic_and_assurance_words_use_the_public_kebab_case_contract`,
+  `baseline_assurance_words_use_the_public_kebab_case_contract`, and
+  `runtime_path_refusal_uses_a_kebab_case_operation_code` check the written
+  report contract; `statistics_http_failures_preserve_actionable_cli_diagnostics`
+  sends the existing HTTP Problem vocabulary through the client and checks
+  the CLI condition and recovery.
+- `crates/registry-breg/src/postgres/migration_ledger.rs`:
+  `stored_migration_kind_words_use_kebab_case` checks each stored kind.
+  `crates/registry-breg/tests/postgres_migration.rs` checks fresh activation
+  ledger rows and checksum constraints against real PostgreSQL.
+- `crates/registry-breg/tests/compiler_statistics.rs`:
+  `generated_artifacts_cover_the_effective_model_metadata_and_seven_routes`
+  checks all seven metadata/OpenAPI operation names and operation identifiers.
+  `crates/registry-breg/tests/postgres_statistics_http.rs`:
+  `statistical_http_full_journey_preserves_visibility_release_and_withdrawal_rules`
+  checks the real routes, visibility, release decisions, and audit operation
+  names.
+
+### Accepted residuals
+
+Report and audit consumers that compare the old spellings must update with
+this release. The engine does not accept both spellings or convert retained
+rows. State from earlier releases is refused; install fresh.
+
+## Module task-grant issuers and provenance sets
+
+### Threat
+
+An ill-shaped issuer identity or a repeated provenance requirement makes an
+authored access profile ambiguous before it reaches authorization checks.
+
+### Enforcement and defaults
+
+- `TaskGrantSource` in `crates/registry-breg/src/contract.rs` reads a module
+  profile's `taskGrant.sourceIssuer` through `members::url_text`, with the
+  shared `Url` schema. An issuer outside that URL grammar is refused at its
+  member. The issuer remains a comparison identity, not a fetch instruction.
+- `provenanceFields` uses `members::unique_items` and the `UniqueSet` schema
+  in project and module profiles. Distinct fields retain their declared
+  order; a repetition is refused as `config.duplicate-item` at the repeated
+  element rather than silently collapsed.
+- These reader checks leave issuer matching and provenance enforcement for
+  accepted profiles unchanged. The issuer refusal diagnostic never repeats
+  the supplied issuer.
+
+### Tests
+
+`crates/registry-breg/tests/compiler_contract.rs`:
+`a_module_profile_task_grant_issuer_is_read_as_a_url` refuses a URN issuer at
+the source member without echoing it, and
+`provenance_fields_are_read_as_a_set_in_a_project_and_a_module` accepts
+distinct fields and refuses repetitions in both authored forms.
+
+### Accepted residuals
+
+The operator rewrites a refused declaration; no alias, deduplication, or
+issuer discovery is supplied. These checks grant no task authority.
+
+## JWKS source discriminator in runtime and MCP configuration
+
+### Threat
+
+A retired discriminator must not be ignored or interpreted as a default key
+source in authentication configuration.
+
+### Enforcement and defaults
+
+The shared runtime loader names
+`authentication.oidc.jwksSource.kind` as a removed key, with `type` as its
+replacement. The MCP configuration loader does the same for
+`resourceServer.jwksSource.kind`. Both refuse it as `config.removed-key` at
+its own pointer before token processing. There is no alternate reader for
+the retired member. Trusted key sources, signature checks, audience checks,
+and client admission are unchanged for accepted configuration.
+
+### Tests
+
+- `crates/registry-breg/tests/runtime_config.rs`:
+  `the_issuer_key_source_names_its_variant_in_a_type_member`.
+- `crates/registry-breg-mcp/src/config.rs`:
+  `each_removed_key_is_refused_with_its_replacement`.
+- `crates/registry-platform-config/src/blocks_tests.rs`:
+  `a_jwks_source_tagged_by_kind_is_refused`, and `loader_tests.rs`:
+  `the_shared_removed_jwks_source_kind_key_names_type`.
+
+### Accepted residuals
+
+Operators must write the discriminator as `type`; the diagnostic names that
+fix without repeating the configured value.
+
+## Client refusal and webhook audit vocabulary
+
+### Threat
+
+A receiver or audit consumer branching on a retired failure word may miss a
+refusal or misclassify a delivery. Vocabulary changes must preserve the
+closed failure variants and the audit identity that relates an attempt to
+its terminal result.
+
+### Enforcement and defaults
+
+- Node and Python bindings project the same closed Rust failure variants
+  using kebab-case words, including `invalid-request`, `header-bounds`,
+  `trace-context`, and `media-type`. The mapping is in
+  `crates/registry-breg-client-node/src/lib.rs` and
+  `crates/registry-breg-client-py/src/lib.rs`. Shared transport words come
+  from `TransportKind::kind`; retryability, unknown-outcome reporting and
+  response validation are unchanged.
+- `BRegWebhookVerificationError::code` in
+  `crates/registry-breg-client/src/webhook.rs` returns `missing-header`,
+  `malformed-signature`, `signature-mismatch`, or `unsupported-version`.
+  Signature verification and value-free failure messages are unchanged.
+- `webhook_outcome_name` and `webhook_disposition_name` in
+  `crates/registry-breg/src/audit.rs` write kebab-case words, such as
+  `attempt-started`, `http-non-success`, `retry-pending`, and `dead-lettered`,
+  under the existing `breg-webhook-audit/v2` schema. Dispatch still uses
+  typed variants. Request/response pairing, attempt correlation, separate
+  discard correlation and treatment of an interrupted delivery of unknown
+  fate are unchanged.
+
+### Tests
+
+- `crates/registry-breg-client/tests/webhook.rs`:
+  `fixed_vector_verifies_and_returns_exact_delivery` and
+  `refusal_codes_are_closed_and_value_free` cover successful verification,
+  the four refused variants and absence of supplied values from errors.
+- `crates/registry-breg-client-node/__test__/immediate-actions.test.js`:
+  `metadata-selected immediate action conditions and invocations use exact caller input`
+  asserts `invalid-request`;
+  `an immediate action recovers after a lost response from persisted bytes and the same key`
+  asserts the transport kind and unknown outcome.
+- `crates/registry-platform-httputil/src/client/mod.rs`:
+  `every_transport_failure_reports_its_own_kebab_case_kind`.
+- `crates/registry-breg/src/audit.rs`:
+  `webhook_attempt_and_terminal_share_the_attempt_identity`,
+  `webhook_discard_is_answered_under_a_phase_scoped_identity`, and
+  `an_interrupted_terminal_of_unknown_fate_is_recorded_only_as_unknown`.
+
+### Accepted residuals
+
+Consumers must match the current words; no spelling conversion is provided.
+The webhook refusal test covers failure variants and value absence, and the
+audit tests cover correlation and unknown fate. They do not enumerate every
+emitted code or audit word; the closed source mappings define that vocabulary.
+These references name proof obligations, not an execution claim.
+
+
+## Default reviewed-change example runtime
+
+The default change-request example runner binds the `casework` authority its
+placement and household fixtures declare. Its synthetic bearer token stays in
+the runner's private disposable secret directory. Schema tests retain pending
+review deliveries in the same transaction as submission and run no authority
+worker, so this binding sends no request to the example endpoint.
+
+`products/breg/scripts/test_change_request_runner.py` verifies the rendered
+binding. The default `test-change-request-examples.sh` journey exercises both
+reviewed fixtures and the person-name Rhai fixture against disposable TLS
+PostgreSQL. The runner uses the maintained Cargo runtime-library helper for
+source builds; installed mode retains its existing binary selection. No runtime
+authority, review policy, delivery, or audit rule changes.
+
+## Shipped database transport refusal
+
+Threat: an operator copies `database.testOnlyPlaintext: true` from a disposable
+test fixture into a shipped runtime configuration and silently loses database
+TLS. The existing configuration guard refuses that member's true value in
+builds without `postgres-test`, before opening a database connection. The
+release binary build uses the default features plus `runtime`; it does not enable
+`postgres-test`.
+
+`database_test_only_plaintext_is_refused_outside_test_builds_with_its_fix` in `crates/registry-breg/tests/runtime_config.rs`
+executes the actual native runtime process and requires the product's
+`breg.runtime.plaintext-database` refusal and `testOnlyPlaintext` recovery
+field. This regression is excluded from `postgres-test` builds so a permissive
+test binary cannot satisfy the shipped-feature proof. The runtime guard and
+release build feature selection are unchanged; the existing default-feature
+test suite owns this check.

@@ -168,6 +168,47 @@ pub struct EvidenceVerificationPolicy {
     clock_skew: Duration,
 }
 
+/// The apiVersion every audience-scoped verification policy declares.
+pub const VERIFICATION_POLICY_API_VERSION: &str =
+    "id.registrystack.org/formats/evidence/verification-policy/v1";
+/// The kind every audience-scoped verification policy declares.
+pub const VERIFICATION_POLICY_KIND: &str = "EvidenceVerificationPolicy";
+/// The apiVersion every holder-bound verification policy declares.
+pub const HOLDER_BOUND_POLICY_API_VERSION: &str =
+    "id.registrystack.org/formats/evidence/holder-bound-verification-policy/v1";
+/// The kind every holder-bound verification policy declares.
+pub const HOLDER_BOUND_POLICY_KIND: &str = "EvidenceHolderBoundVerificationPolicy";
+
+/// The required audience-scoped policy format version.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub enum VerificationPolicyApiVersion {
+    #[default]
+    #[serde(rename = "id.registrystack.org/formats/evidence/verification-policy/v1")]
+    V1,
+}
+
+/// The required audience-scoped policy document kind.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub enum VerificationPolicyKind {
+    #[default]
+    EvidenceVerificationPolicy,
+}
+
+/// The required holder-bound policy format version.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub enum HolderBoundPolicyApiVersion {
+    #[default]
+    #[serde(rename = "id.registrystack.org/formats/evidence/holder-bound-verification-policy/v1")]
+    V1,
+}
+
+/// The required holder-bound policy document kind.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub enum HolderBoundPolicyKind {
+    #[default]
+    EvidenceHolderBoundVerificationPolicy,
+}
+
 /// Closed wire document for independently retained verification expectations.
 ///
 /// The runtime-facing policy keeps an explicit verification instant and Rust
@@ -180,6 +221,8 @@ pub struct EvidenceVerificationPolicy {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EvidenceVerificationPolicyDocument {
+    pub api_version: VerificationPolicyApiVersion,
+    pub kind: VerificationPolicyKind,
     pub expected_assurance_profile: AssuranceProfile,
     pub issued_by: String,
     pub provided_by: String,
@@ -294,6 +337,8 @@ pub struct HolderBoundPresentationPolicy {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HolderBoundPresentationPolicyDocument {
+    pub api_version: HolderBoundPolicyApiVersion,
+    pub kind: HolderBoundPolicyKind,
     pub subject_binding: HolderBoundDeclaration,
     pub expected_assurance_profile: AssuranceProfile,
     pub issued_by: String,
@@ -3031,6 +3076,8 @@ mod tests {
     #[test]
     fn policy_document_debug_never_carries_a_subject_binding_through_derive() {
         let policy = EvidenceVerificationPolicyDocument {
+            api_version: Default::default(),
+            kind: Default::default(),
             expected_assurance_profile: AssuranceProfile::EvidenceGrade,
             issued_by: "urn:example:issuer".to_string(),
             provided_by: "urn:example:provider".to_string(),
@@ -3060,6 +3107,8 @@ mod tests {
         clock_skew_seconds: u64,
     ) -> EvidenceVerificationPolicyDocument {
         EvidenceVerificationPolicyDocument {
+            api_version: Default::default(),
+            kind: Default::default(),
             expected_assurance_profile: AssuranceProfile::EvidenceGrade,
             issued_by: "urn:example:issuer".to_string(),
             provided_by: "urn:example:provider".to_string(),
@@ -3169,6 +3218,61 @@ mod tests {
             MAXIMUM_CLOCK_SKEW_SECONDS + 1,
         ));
         assert!(message.contains("clockSkewSeconds"), "{message}");
+    }
+
+    #[test]
+    fn verification_policy_document_requires_its_envelope() {
+        let document = policy_document_with_time_bounds(3_600, 0);
+        let bytes = serde_json::to_string(&document).expect("policy serializes");
+        assert!(bytes.starts_with("{\"apiVersion\":\"id.registrystack.org/formats/evidence/verification-policy/v1\",\"kind\":\"EvidenceVerificationPolicy\","));
+        let value = serde_json::to_value(document).expect("policy serializes");
+        for member in ["apiVersion", "kind"] {
+            let mut missing = value.clone();
+            missing
+                .as_object_mut()
+                .expect("policy object")
+                .remove(member);
+            assert!(serde_json::from_value::<EvidenceVerificationPolicyDocument>(missing).is_err());
+        }
+        let mut wrong_kind = value.clone();
+        wrong_kind["kind"] = serde_json::json!("EvidenceHolderBoundVerificationPolicy");
+        assert!(serde_json::from_value::<EvidenceVerificationPolicyDocument>(wrong_kind).is_err());
+        let mut wrong_version = value;
+        wrong_version["apiVersion"] = serde_json::json!(
+            "id.registrystack.org/formats/evidence/holder-bound-verification-policy/v1"
+        );
+        assert!(
+            serde_json::from_value::<EvidenceVerificationPolicyDocument>(wrong_version).is_err()
+        );
+    }
+
+    #[test]
+    fn holder_bound_policy_document_requires_its_envelope() {
+        let document = holder_bound_policy_document();
+        let bytes = serde_json::to_string(&document).expect("policy serializes");
+        assert!(bytes.starts_with("{\"apiVersion\":\"id.registrystack.org/formats/evidence/holder-bound-verification-policy/v1\",\"kind\":\"EvidenceHolderBoundVerificationPolicy\","));
+        let value = serde_json::to_value(document).expect("policy serializes");
+        for member in ["apiVersion", "kind"] {
+            let mut missing = value.clone();
+            missing
+                .as_object_mut()
+                .expect("policy object")
+                .remove(member);
+            assert!(
+                serde_json::from_value::<HolderBoundPresentationPolicyDocument>(missing).is_err()
+            );
+        }
+        let mut wrong_kind = value.clone();
+        wrong_kind["kind"] = serde_json::json!("EvidenceVerificationPolicy");
+        assert!(
+            serde_json::from_value::<HolderBoundPresentationPolicyDocument>(wrong_kind).is_err()
+        );
+        let mut wrong_version = value;
+        wrong_version["apiVersion"] =
+            serde_json::json!("id.registrystack.org/formats/evidence/verification-policy/v1");
+        assert!(
+            serde_json::from_value::<HolderBoundPresentationPolicyDocument>(wrong_version).is_err()
+        );
     }
 
     #[test]
@@ -4730,6 +4834,8 @@ mod tests {
     fn holder_bound_policy_document() -> HolderBoundPresentationPolicyDocument {
         let evidence = holder_bound_evidence();
         HolderBoundPresentationPolicyDocument {
+            api_version: Default::default(),
+            kind: Default::default(),
             subject_binding: HolderBoundDeclaration::HolderBound,
             expected_assurance_profile: evidence.assurance_profile,
             issued_by: evidence.issued_by.clone(),
@@ -5335,6 +5441,8 @@ mod tests {
                 .map(String::as_str)
                 .collect::<BTreeSet<_>>(),
             BTreeSet::from([
+                "apiVersion",
+                "kind",
                 "subjectBinding",
                 "expectedAssuranceProfile",
                 "issuedBy",

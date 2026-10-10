@@ -39,8 +39,8 @@ impl std::error::Error for DoctorOperationalDiagnostic {}
 #[derive(Debug, Args)]
 #[command(group(ArgGroup::new("selection").multiple(false).args(["runtime_config", "project"])))]
 pub(crate) struct DoctorArgs {
-    /// Absolute Evidence Gateway runtime configuration file to inspect.
-    #[arg(long, value_name = "FILE")]
+    /// Runtime configuration file.
+    #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: Option<PathBuf>,
     /// Also prove that the audit destination resolves below this persistent root.
     #[arg(long, value_name = "ABSOLUTE_DIRECTORY", requires = "runtime_config")]

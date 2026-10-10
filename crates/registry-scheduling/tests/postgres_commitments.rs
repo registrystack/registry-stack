@@ -430,7 +430,7 @@ async fn fixture_publishing_with_hook_url(
 fn authenticator() -> SchedulingAuthenticator {
     let oidc = OidcConfig {
         provider: OidcIssuerConfig {
-            issuer: ISSUER.to_owned(),
+            issuer: registry_platform_yaml::Url::new(ISSUER).expect("valid issuer URL"),
             audience: AUDIENCE.to_owned(),
             jwks_source: JwksSource::Discovery {},
         },
@@ -7821,12 +7821,10 @@ async fn a_reschedule_suppresses_the_obsolete_reminder_and_mints_its_replacement
     );
 }
 
-/// Schema version 8 drops the audit outbox the earlier release published
-/// from, and refuses while that outbox still holds a record its publisher
-/// had not reached: dropping it would lose an accountability record nothing
-/// else holds.
+/// An earlier audit outbox with unpublished records remains a named refusal.
+/// Installation never deletes the outbox, including after it is drained.
 #[tokio::test]
-async fn migration_refuses_to_drop_unpublished_audit_and_drops_a_drained_outbox() {
+async fn migration_refuses_unpublished_audit_and_preserves_a_drained_outbox() {
     let fx = fixture().await;
     // The schema head of the release that published audit from an outbox,
     // holding one record its publisher has not reached.
@@ -7871,14 +7869,17 @@ async fn migration_refuses_to_drop_unpublished_audit_and_drops_a_drained_outbox(
     fx.store
         .migrate()
         .await
-        .expect("a drained outbox is dropped");
+        .expect("a drained outbox is preserved");
     let dropped: bool = fx
         .admin
         .query_one("SELECT to_regclass('scheduling_audit_outbox') IS NULL", &[])
         .await
         .expect("inspect the audit outbox")
         .get(0);
-    assert!(dropped, "the database holds no audit state");
+    assert!(
+        !dropped,
+        "installation does not discard earlier audit state"
+    );
     fx.store
         .ready()
         .await
@@ -8342,4 +8343,71 @@ async fn a_database_an_earlier_release_wrote_is_refused_by_name() {
         assert!(text.contains("new database"), "{text}");
         assert!(!text.contains("registry-updates"), "{text}");
     }
+}
+
+#[tokio::test]
+async fn a_retained_policy_with_obsolete_windows_is_not_reinterpreted() {
+    let fx = fixture().await;
+    let mut document = serde_json::to_value(read_policy(POLICY).expect("current policy"))
+        .expect("serialize current policy");
+    document
+        .as_object_mut()
+        .unwrap()
+        .insert("windows".to_owned(), json!([]));
+    fx.admin
+        .execute(
+            "UPDATE scheduling_policy_revisions SET policy_document=$1",
+            &[&document],
+        )
+        .await
+        .expect("retain an obsolete policy member");
+    let mut replacement = read_policy(POLICY).expect("current policy");
+    replacement.project.version = "2".to_owned();
+    let digest = replacement.policy_digest();
+    let pool_ids: Vec<String> = replacement
+        .offerings
+        .iter()
+        .filter_map(|offering| offering.exact_time.as_ref().map(|exact| exact.pool.clone()))
+        .collect();
+    let refusal = fx
+        .store
+        .apply_policy(SCHEDULING_ID, &digest, &pool_ids, &replacement)
+        .await
+        .expect_err("an obsolete member is not silently discarded");
+    assert!(matches!(refusal, StoreError::Corrupt));
+}
+
+#[tokio::test]
+async fn reapplying_a_policy_does_not_reconstruct_a_missing_retained_document() {
+    let fx = fixture().await;
+    fx.admin
+        .batch_execute("UPDATE scheduling_policy_revisions SET policy_document=NULL")
+        .await
+        .expect("simulate a missing retained document");
+    let policy = read_policy(POLICY).expect("current policy");
+    let digest = policy.policy_digest();
+    let pool_ids: Vec<String> = policy
+        .offerings
+        .iter()
+        .filter_map(|offering| offering.exact_time.as_ref().map(|exact| exact.pool.clone()))
+        .collect();
+    let before = fx.store.scheduling_meta().await.expect("current identity");
+    fx.store
+        .apply_policy(SCHEDULING_ID, &digest, &pool_ids, &policy)
+        .await
+        .expect("the same policy keeps its revision");
+    assert_eq!(fx.store.scheduling_meta().await.unwrap(), before);
+    let missing: bool = fx
+        .admin
+        .query_one(
+            "SELECT bool_and(policy_document IS NULL) FROM scheduling_policy_revisions",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert!(
+        missing,
+        "publication must not reconstruct an earlier stored document"
+    );
 }

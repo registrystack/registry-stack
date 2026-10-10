@@ -77,6 +77,9 @@ class HolderKeysTest(unittest.TestCase):
         spec = fixtures.request_spec()
         spec["holder_keys"] = HOLDER_KEYS
         prepared = client().prepare(spec)
+        self.assertEqual(prepared.policy_document["apiVersion"], "id.registrystack.org/formats/evidence/verification-policy/v1")
+        self.assertEqual(prepared.policy_document["kind"], "EvidenceVerificationPolicy")
+        self.assertEqual(list(prepared.policy_document)[:2], ["apiVersion", "kind"])
         policy = json.dumps(prepared.policy_document)
         for key in HOLDER_KEYS:
             self.assertNotIn(key["x"], policy)

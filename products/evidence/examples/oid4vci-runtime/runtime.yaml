@@ -1,7 +1,7 @@
 # yaml-language-server: $schema=https://id.registrystack.org/schemas/evidence/oid4vci-runtime/oid4vci-runtime.v1alpha1.schema.json
 # A minimal Evidence OID4VCI delivery runtime configuration: the file
-# `evidence-oid4vci serve --config` and `inspect --config` read, and
-# `evidence-oid4vci check --config` checks offline. Replace every origin with
+# `evidence-oid4vci serve --runtime-config` and `inspect --runtime-config` read, and
+# `evidence-oid4vci check --runtime-config` checks offline. Replace every origin with
 # this deployment's own, and place the delivery client's private JWK at
 # secretProviders.file.root, named as tokenClient.privateKeyRef names it.
 apiVersion: id.registrystack.org/formats/evidence/oid4vci-runtime/v1alpha1
