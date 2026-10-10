@@ -160,6 +160,11 @@ impl DispatchTransport for Worker {
                 }))
             }
             Step::Call { call, next, .. } => {
+                // A recovery race or stale queue state cannot turn unknown
+                // inference completion into a second provider evaluation.
+                if job.job.uncertain && !call.operation.can_retry_after_unknown() {
+                    return Ok(failed("evaluation-uncertain", true));
+                }
                 let command = if let Some(command) = &payload.command {
                     command.clone()
                 } else {
@@ -178,7 +183,8 @@ impl DispatchTransport for Worker {
                     };
                     let preparation = if request.operation.requires_preparation() {
                         // Preparation may read current metadata and target conditions,
-                        // but must never mutate a product. A crash here can prepare
+                        // but must never dispatch a mutation or model evaluation.
+                        // A crash here can prepare
                         // again because no external effect has been dispatched.
                         if !self
                             .store
@@ -234,7 +240,7 @@ impl DispatchTransport for Worker {
                 }
                 if !self
                     .store
-                    .before_io(job, request.operation.is_mutating())
+                    .before_io(job, request.operation.has_dispatch_risk())
                     .await
                     .map_err(|_| DispatchError::Unavailable)?
                 {
@@ -243,7 +249,7 @@ impl DispatchTransport for Worker {
                 let Some(budget) = job.remaining_budget(std::time::SystemTime::now()) else {
                     return Ok(failed(
                         "attempt-timeout",
-                        request.operation.is_mutating() || job.job.uncertain,
+                        request.operation.has_dispatch_risk() || job.job.uncertain,
                     ));
                 };
                 let result = tokio::time::timeout(
@@ -253,7 +259,7 @@ impl DispatchTransport for Worker {
                 .await;
                 let result = match result {
                     Ok(result) => result,
-                    Err(_) if request.operation.is_mutating() => CallOutcome::Uncertain {
+                    Err(_) if request.operation.has_dispatch_risk() => CallOutcome::Uncertain {
                         code: "attempt-timeout".to_owned(),
                     },
                     Err(_) => CallOutcome::Retryable {

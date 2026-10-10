@@ -49,6 +49,7 @@ enum Connection {
         tokens: Arc<PrivateKeyJwt>,
     },
     External(Box<crate::external_http::ExternalHttpConnection>),
+    Decision(Box<crate::decision::DecisionConnection>),
 }
 
 struct SchedulingConnection {
@@ -257,6 +258,12 @@ impl HttpAdapters {
             let connection = crate::external_http::ExternalHttpConnection::new(binding, provider)?;
             connections.insert(name.clone(), Connection::External(Box::new(connection)));
         }
+        let decision_secrets = Arc::new(secrets);
+        for (name, binding) in &config.decision_connections {
+            let connection =
+                crate::decision::DecisionConnection::new(binding, Arc::clone(&decision_secrets))?;
+            connections.insert(name.clone(), Connection::Decision(Box::new(connection)));
+        }
         let digest = config.binding_digest()?;
         Ok(Self {
             connections,
@@ -417,6 +424,14 @@ impl AdapterSet for HttpAdapters {
         &self,
         request: &CallRequest,
     ) -> std::result::Result<Option<Vec<u8>>, CallOutcome> {
+        if request.operation == Operation::EvaluateDecision {
+            return match self.connections.get(&request.connection) {
+                Some(Connection::Decision(connection)) if request.idempotency_key.is_none() => {
+                    connection.prepare(&request.input).map(Some)
+                }
+                _ => Err(refused("operation-unbound")),
+            };
+        }
         if request.operation == Operation::InvokeBregAction {
             return match self.connections.get(&request.connection) {
                 Some(Connection::Breg {
@@ -431,6 +446,16 @@ impl AdapterSet for HttpAdapters {
     }
 
     async fn call_prepared(&self, request: &CallRequest, prepared: Option<&[u8]>) -> CallOutcome {
+        if request.operation == Operation::EvaluateDecision {
+            return match (self.connections.get(&request.connection), prepared) {
+                (Some(Connection::Decision(connection)), Some(bytes))
+                    if request.idempotency_key.is_none() =>
+                {
+                    connection.call_prepared(&request.input, bytes).await
+                }
+                _ => refused("operation-unbound"),
+            };
+        }
         if request.operation == Operation::InvokeBregAction {
             return match (self.connections.get(&request.connection), prepared) {
                 (

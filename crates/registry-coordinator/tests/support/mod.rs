@@ -70,6 +70,7 @@ pub fn config(
         scopes: vec![scope.to_owned()],
     };
     RuntimeConfig {
+        decision_connections: BTreeMap::new(),
         external_http_connections: BTreeMap::new(),
         deployment: None,
         secret_providers: SecretProvidersConfig {

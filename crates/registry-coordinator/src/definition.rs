@@ -268,7 +268,7 @@ impl Definition {
                 item["mapping"] = serde_json::json!({"function":mapping.function,"arguments":arguments,"arity":mapping.arguments.len()});
             }
             match step {
-                Step::Call {call,..} => {item["connection"]=serde_json::json!(call.connection);item["operation"]=serde_json::json!(call.operation);item["product"]=serde_json::json!(call.operation.product());item["mutating"]=serde_json::json!(call.operation.is_mutating());item["recovery"]=serde_json::json!(call.operation.recovery());},
+                Step::Call {call,..} => {item["connection"]=serde_json::json!(call.connection);item["operation"]=serde_json::json!(call.operation);item["product"]=serde_json::json!(call.operation.product());item["mutating"]=serde_json::json!(call.operation.is_mutating());item["effect"]=serde_json::json!(call.operation.descriptor().effect);item["recovery"]=serde_json::json!(call.operation.recovery());},
                 Step::Choose {cases,..} => item["cases"]=serde_json::json!(cases),
                 Step::Finish {finish,..} => item["outcome"]=serde_json::json!(finish),
                 _ => {}
@@ -281,7 +281,7 @@ impl Definition {
             "connections":self.workflow.connections,"outcomes":self.workflow.outcomes.keys().collect::<Vec<_>>(),"steps":steps,
             "limits":crate::functions::limits(),"interpreterAbi":self.frozen.interpreter_abi,"schemaAbi":self.frozen.schema_abi,"adapterAbi":self.frozen.adapter_abi,
             "networkAccess":false,"databaseAccess":false,"secretResolution":false,
-            "recovery":"A run restores this exact snapshot. retry-same preserves a frozen command and cannot adopt edited mappings."}),
+            "recovery":"A run restores this exact snapshot. retry-same preserves a frozen command and cannot adopt edited mappings or repeat an uncertain hold-after-dispatch evaluation."}),
         )
     }
 

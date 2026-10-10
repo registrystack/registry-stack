@@ -174,3 +174,66 @@ fn both_example_deployments_check_without_resolving_credentials() {
             .unwrap();
     }
 }
+
+#[test]
+fn decision_scenarios_allow_only_proven_non_dispatch_retries() {
+    let root = tempfile::tempdir().unwrap();
+    let source = example("external-directory");
+    std::fs::write(
+        root.path().join("workflow.yaml"),
+        std::fs::read_to_string(source.join("workflow.yaml"))
+            .unwrap()
+            .replace("directory: external-http", "directory: decision")
+            .replace("operation: external-get", "operation: evaluate-decision"),
+    )
+    .unwrap();
+    std::fs::copy(
+        source.join("functions.rhai"),
+        root.path().join("functions.rhai"),
+    )
+    .unwrap();
+    let definition = Definition::load(root.path()).unwrap();
+    let (_, mut document) = fixture("external-directory");
+    let case = &mut document.cases[0];
+    case.recovery.insert("lookup".into(), Recovery::RetrySame);
+    case.replies.get_mut("lookup").unwrap().insert(
+        0,
+        Reply::Retryable {
+            retryable: "decision-unavailable".into(),
+        },
+    );
+    let report = scenarios::run(&definition, case).unwrap();
+    assert_eq!(report.call_attempts["lookup"], 2);
+    assert_eq!(report.frozen_commands, 1);
+    case.replies.get_mut("lookup").unwrap()[0] = Reply::Uncertain {
+        uncertain: "decision-uncertain".into(),
+    };
+    assert_eq!(
+        scenarios::run(&definition, case).err().unwrap().code,
+        "scenario.recovery"
+    );
+    case.recovery.insert("lookup".into(), Recovery::Reconcile);
+    assert_eq!(
+        scenarios::run(&definition, case).err().unwrap().code,
+        "scenario.recovery"
+    );
+    case.recovery.clear();
+    case.replies.get_mut("lookup").unwrap().truncate(1);
+    case.replies.get_mut("lookup").unwrap()[0] = Reply::ReceiptExpired {
+        receipt_expired: true,
+    };
+    assert_eq!(
+        scenarios::run(&definition, case).err().unwrap().code,
+        "scenario.reply"
+    );
+    case.replies.get_mut("lookup").unwrap()[0] = Reply::Uncertain {
+        uncertain: "decision-uncertain".into(),
+    };
+    case.expect.path = vec!["lookup".into()];
+    case.expect.state = "uncertain".into();
+    case.expect.outcome = None;
+    case.expect.output = None;
+    let report = scenarios::run(&definition, case).unwrap();
+    assert_eq!(report.state, "uncertain");
+    assert_eq!(report.call_attempts["lookup"], 1);
+}

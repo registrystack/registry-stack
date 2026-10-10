@@ -300,8 +300,8 @@ impl Store {
             if row.get::<_,String>(6)!=binding || row.get::<_,String>(4)=="leased" && row.get::<_,Option<bool>>(7).unwrap_or(true){return Err(refused("reconcile-refused","preserve the original binding and wait for the active lease to settle"));}
             let sealed:Option<Value>=row.get(2);
             let command:FrozenCommand=self.open_value(run,"command",&step,sealed.as_ref().ok_or_else(||refused("reconcile-refused","the run has no prepared product command"))?)?;
-            if !command.request().operation.is_mutating(){return Err(refused("reconcile-refused","use same-command retry for a read operation"));}
-            if !command.request().operation.supports_read_receipt(){return Err(refused("reconciliation-unavailable","this operation has no authoritative receipt lookup; inspect its same-command retry capability and original authority before recovery"));}
+            if command.request().operation.is_read(){return Err(refused("reconcile-refused","use same-command retry for a read operation"));}
+            if !command.request().operation.supports_read_receipt(){return Err(refused("reconciliation-unavailable","this operation has no authoritative original-result lookup; inspect its declared recovery capability or cancel the held run"));}
             let snapshot:String=self.open_value(run,"snapshot","",&row.get::<_,Value>(1))?;
             let definition=Definition::from_snapshot(&snapshot)?;
             let outputs:BTreeMap<String,Value>=self.open_value(run,"outputs","",&row.get::<_,Value>(5))?;
@@ -488,10 +488,10 @@ impl Store {
         self.audited("release-restore-hold",actor,None,async {
             let mut client=self.client().await.map_err(unavailable)?;let tx=client.transaction().await.map_err(unavailable)?;
             self.verify_transaction(&tx).await.map_err(unavailable)?;
-            // Unknown or in-flight operations must be observed first. No automatic
-            // replay is triggered by releasing this deployment-wide fence.
-            let unresolved:bool=tx.query_one(&format!("SELECT EXISTS(SELECT 1 FROM {0}.jobs WHERE uncertain OR state IN ('leased','unknown')) OR EXISTS(SELECT 1 FROM {0}.runs WHERE restore_review_required)",self.namespace),&[]).await.map_err(unavailable)?.get(0);
-            if unresolved {return Err(refused("restore-unresolved","wait for active leases, complete fenced execution recovery for safe expired leases, and reconcile uncertain mutations before releasing the restore hold"));}
+            // Serialize release with restore/cancellation I/O fences. No replay
+            // is triggered by releasing this deployment-wide hold.
+            tx.query_one(&format!("SELECT id FROM {}.control WHERE id FOR UPDATE",self.namespace),&[]).await.map_err(unavailable)?;
+            if self.restore_has_unresolved_work(&tx).await? {return Err(refused("restore-unresolved","wait for active leases, complete fenced execution recovery for safe expired leases or cancelled evaluations, and reconcile uncertain mutations before releasing the restore hold"));}
             tx.execute(&format!("UPDATE {}.control SET restore_hold=false,restore_evidence_hash=$1 WHERE id AND restore_hold",self.namespace),&[&self.reference("restore-evidence-v1",evidence)]).await.map_err(unavailable)?;
             tx.commit().await.map_err(unavailable)
         }).await
@@ -517,6 +517,7 @@ impl Store {
             let held:bool=tx.query_one(&format!("SELECT restore_hold FROM {}.control WHERE id FOR UPDATE",self.namespace),&[]).await.map_err(unavailable)?.get(0);
             if !held{return Err(refused("restore-hold-required","enter recovery hold before attesting recovered execution history"));}
             self.hold_attested_recovery_work(&tx).await?;
+            self.review_cancelled_evaluations(&tx).await?;
             // Keep review on work that can still change after this attestation.
             // In particular, a live worker may return a definite retryable
             // mutation later; its prepared Pending command must be held by a
@@ -525,6 +526,101 @@ impl Store {
             tx.execute(&format!("UPDATE {}.control SET restore_evidence_hash=$1 WHERE id",self.namespace),&[&self.reference("execution-recovery-v1",recovery_reference)]).await.map_err(unavailable)?;
             tx.commit().await.map_err(unavailable)
         }).await
+    }
+
+    /// Cancellation abandons future use of an evaluation, not its unknown
+    /// provider completion. Only the original current prepared evaluation can
+    /// qualify; protected evidence and the spent start identity remain retained.
+    async fn cancelled_evaluation_abandoned(
+        &self,
+        tx: &Transaction<'_>,
+        run: Uuid,
+        step: &str,
+        require_reviewed: bool,
+    ) -> Result<bool> {
+        let row = tx.query_opt(&format!("SELECT r.snapshot,j.command,j.state,j.lease_expires_at>clock_timestamp(),r.cancel_requested,r.restore_review_required,j.uncertain FROM {0}.jobs j JOIN {0}.runs r ON r.run_id=j.run_id AND r.step=j.step WHERE j.run_id=$1 AND j.step=$2 FOR UPDATE OF j,r",self.namespace),&[&run,&step]).await.map_err(unavailable)?;
+        let Some(row) = row else { return Ok(false) };
+        if !row.get::<_, bool>(4)
+            || require_reviewed && row.get::<_, bool>(5)
+            || !row.get::<_, bool>(6)
+        {
+            return Ok(false);
+        }
+        match row.get::<_, String>(2).as_str() {
+            "unknown" | "dead_lettered" | "expired" | "delivered" => {}
+            "leased" if !row.get::<_, Option<bool>>(3).unwrap_or(true) => {}
+            _ => return Ok(false),
+        }
+        let snapshot: Option<Value> = row.get(0);
+        let command: Option<Value> = row.get(1);
+        let (Some(snapshot), Some(command)) = (snapshot, command) else {
+            return Ok(false);
+        };
+        let snapshot: String = self.open_value(run, "snapshot", "", &snapshot)?;
+        let definition = Definition::from_snapshot(&snapshot)?;
+        let command: FrozenCommand = self.open_value(run, "command", step, &command)?;
+        let Some(Step::Call { call, .. }) = definition.workflow.steps.get(step) else {
+            return Ok(false);
+        };
+        Ok(call.operation.is_evaluation()
+            && !call.operation.can_retry_after_unknown()
+            && command.request().operation == call.operation
+            && command.request().connection == call.connection
+            && command.request().idempotency_key.is_none()
+            && command.preparation().is_some_and(|bytes| !bytes.is_empty()))
+    }
+
+    async fn review_cancelled_evaluations(&self, tx: &Transaction<'_>) -> Result<()> {
+        let mut after = Uuid::nil();
+        loop {
+            let rows = tx.query(&format!("SELECT r.run_id,r.step FROM {0}.runs r JOIN {0}.jobs j ON j.run_id=r.run_id AND j.step=r.step WHERE r.run_id>$1 AND r.cancel_requested AND r.restore_review_required AND j.uncertain ORDER BY r.run_id LIMIT 100",self.namespace),&[&after]).await.map_err(unavailable)?;
+            if rows.is_empty() {
+                break;
+            }
+            for row in rows {
+                let run: Uuid = row.get(0);
+                let step: String = row.get(1);
+                if self
+                    .cancelled_evaluation_abandoned(tx, run, &step, false)
+                    .await?
+                {
+                    tx.execute(
+                        &format!(
+                            "UPDATE {}.runs SET restore_review_required=false WHERE run_id=$1",
+                            self.namespace
+                        ),
+                        &[&run],
+                    )
+                    .await
+                    .map_err(unavailable)?;
+                }
+                after = run;
+            }
+        }
+        Ok(())
+    }
+
+    async fn restore_has_unresolved_work(&self, tx: &Transaction<'_>) -> Result<bool> {
+        let mut after = Uuid::nil();
+        let mut after_step = String::new();
+        loop {
+            let rows = tx.query(&format!("SELECT j.run_id,j.step FROM {0}.jobs j JOIN {0}.runs r ON r.run_id=j.run_id WHERE (j.run_id,j.step)>($1,$2) AND (j.uncertain OR j.state IN ('leased','unknown') OR r.restore_review_required) ORDER BY j.run_id,j.step LIMIT 100",self.namespace),&[&after,&after_step]).await.map_err(unavailable)?;
+            if rows.is_empty() {
+                return Ok(false);
+            }
+            for row in rows {
+                let run: Uuid = row.get(0);
+                let step: String = row.get(1);
+                if !self
+                    .cancelled_evaluation_abandoned(tx, run, &step, true)
+                    .await?
+                {
+                    return Ok(true);
+                }
+                after = run;
+                after_step = step;
+            }
+        }
     }
 
     // Dispatch's public claim also leases new work, and its private lapse path
@@ -586,11 +682,12 @@ impl Store {
                         {
                             return Err(invalid());
                         }
-                        // The worker freezes before recording mutation intent.
+                        // The worker freezes before recording remote dispatch intent.
                         // Under complete authoritative history and fencing,
-                        // an absent command is still pre-I/O, even for a mutation.
+                        // an absent command is still pre-I/O, even for a mutation
+                        // or model evaluation.
                         if pending {
-                            command.is_none() || call.operation.is_mutating()
+                            command.is_none() || call.operation.has_dispatch_risk()
                         } else {
                             call.operation.is_read() || command.is_none()
                         }

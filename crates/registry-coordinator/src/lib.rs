@@ -4,6 +4,7 @@
 pub mod adapters;
 pub mod authoring;
 pub mod breg_action;
+pub mod decision;
 pub mod definition;
 pub mod error;
 pub mod external_http;

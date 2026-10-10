@@ -11,6 +11,7 @@ use crate::protocol::RecoverySemantics;
 pub enum EffectKind {
     Read,
     Mutation,
+    Evaluation,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -130,6 +131,16 @@ static CATALOG: &[OperationDescriptor] = &[
     LEGACY_CATALOG[4],
     mutation("invoke-breg-action", "breg", false, true),
     read("external-get", "external-http"),
+    OperationDescriptor {
+        id: "evaluate-decision",
+        version: 1,
+        product: "decision",
+        effect: EffectKind::Evaluation,
+        key_requirement: KeyRequirement::None,
+        requires_preparation: true,
+        recovery: RecoverySemantics::HoldAfterDispatch,
+        read_receipt: false,
+    },
 ];
 
 pub fn descriptors() -> &'static [OperationDescriptor] {
@@ -157,6 +168,11 @@ pub fn failure_code(code: &str) -> Option<&'static str> {
         "external-redirect" => Some("external-redirect"),
         "external-invalid-response" => Some("external-invalid-response"),
         "external-unavailable" => Some("external-unavailable"),
+        "decision-invalid-command" => Some("decision-invalid-command"),
+        "decision-invalid-response" => Some("decision-invalid-response"),
+        "decision-unavailable" => Some("decision-unavailable"),
+        "decision-uncertain" => Some("decision-uncertain"),
+        "decision-refused" => Some("decision-refused"),
         _ => None,
     }
 }
@@ -176,6 +192,7 @@ mod tests {
             (Operation::CreateAppointment, "create-appointment"),
             (Operation::InvokeBregAction, "invoke-breg-action"),
             (Operation::ExternalGet, "external-get"),
+            (Operation::EvaluateDecision, "evaluate-decision"),
         ] {
             let encoded = serde_json::to_value(operation).unwrap();
             assert_eq!(encoded, name);
@@ -225,6 +242,14 @@ mod tests {
         assert!(Operation::ExternalGet.is_read());
         assert!(!Operation::ExternalGet.requires_key());
         assert!(!Operation::ExternalGet.requires_preparation());
+        assert!(Operation::EvaluateDecision.is_evaluation());
+        assert!(!Operation::EvaluateDecision.is_mutating());
+        assert!(!Operation::EvaluateDecision.is_read());
+        assert!(Operation::EvaluateDecision.has_dispatch_risk());
+        assert!(!Operation::EvaluateDecision.can_retry_after_unknown());
+        assert!(!Operation::EvaluateDecision.requires_key());
+        assert!(Operation::EvaluateDecision.requires_preparation());
+        assert!(!Operation::EvaluateDecision.supports_read_receipt());
     }
 
     #[test]
@@ -281,6 +306,7 @@ mod tests {
         }
         assert!(!Operation::InvokeBregAction.identity().matches_legacy());
         assert!(!Operation::ExternalGet.identity().matches_legacy());
+        assert!(!Operation::EvaluateDecision.identity().matches_legacy());
     }
 
     #[test]

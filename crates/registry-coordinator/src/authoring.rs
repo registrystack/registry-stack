@@ -55,6 +55,7 @@ enum Product {
     Messaging,
     Scheduling,
     ExternalHttp,
+    Decision,
 }
 
 impl Product {
@@ -64,6 +65,7 @@ impl Product {
             Self::Messaging => "messaging",
             Self::Scheduling => "scheduling",
             Self::ExternalHttp => "external-http",
+            Self::Decision => "decision",
         }
     }
 }

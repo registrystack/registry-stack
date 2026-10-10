@@ -97,6 +97,7 @@ pub struct RunStatus {
     pub next_due_at: Option<DateTime<Utc>>,
     pub uncertain: bool,
     pub restore_review_required: bool,
+    pub cancel_requested: bool,
 }
 
 /// Bounded durable step state from Dispatch, without prepared request contents.
@@ -128,6 +129,7 @@ pub enum RetryBlockReason {
     RestoreHold,
     RestoreReviewRequired,
     PayloadErased,
+    EvaluationUncertain,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -715,7 +717,7 @@ impl Store {
     }
 
     fn status_select(&self) -> String {
-        format!("SELECT r.workflow_id,r.workflow_version,r.definition_digest,r.binding_digest,r.step,CASE WHEN r.restore_review_required THEN 'attention' WHEN r.cancel_requested THEN r.state WHEN r.state='finished' THEN 'finished' WHEN j.state IN ('pending','leased') THEN 'running' WHEN j.state='unknown' THEN 'attention' WHEN j.state='expired' THEN 'expired' WHEN j.state='dead_lettered' THEN 'failed' ELSE r.state END,r.outcome,r.failure_code,r.admitted_at,r.deadline_at,j.next_attempt_at,j.uncertain,r.terminal_output,r.run_id,r.restore_review_required FROM {}.runs r JOIN {}.jobs j ON j.run_id=r.run_id AND j.step=r.step", self.namespace, self.namespace)
+        format!("SELECT r.workflow_id,r.workflow_version,r.definition_digest,r.binding_digest,r.step,CASE WHEN r.restore_review_required THEN 'attention' WHEN r.cancel_requested THEN r.state WHEN r.state='finished' THEN 'finished' WHEN j.state IN ('pending','leased') THEN 'running' WHEN j.state='unknown' THEN 'attention' WHEN j.state='expired' THEN 'expired' WHEN j.state='dead_lettered' THEN 'failed' ELSE r.state END,r.outcome,r.failure_code,r.admitted_at,r.deadline_at,j.next_attempt_at,j.uncertain,r.terminal_output,r.run_id,r.restore_review_required,r.cancel_requested FROM {}.runs r JOIN {}.jobs j ON j.run_id=r.run_id AND j.step=r.step", self.namespace, self.namespace)
     }
 
     pub async fn status(&self, run: Uuid) -> Result<RunStatus> {
@@ -867,6 +869,12 @@ impl Store {
             Some(RetryBlockReason::RestoreHold)
         } else if definition.is_none() {
             Some(RetryBlockReason::SnapshotIncompatible)
+        } else if status.uncertain
+            && operation.as_ref().is_some_and(|operation| {
+                operation.recovery == crate::protocol::RecoverySemantics::HoldAfterDispatch
+            })
+        {
+            Some(RetryBlockReason::EvaluationUncertain)
         } else if !matches!(
             row.get::<_, String>(1).as_str(),
             "unknown" | "dead_lettered"
@@ -900,7 +908,7 @@ impl Store {
         let row = tx
             .query_one(
                 &format!(
-                    "SELECT j.receipt_expired,j.generation,r.snapshot FROM {}.jobs j JOIN {}.runs r ON r.run_id=j.run_id WHERE j.run_id=$1 AND j.step=$2",
+                    "SELECT j.receipt_expired,j.generation,r.snapshot,j.uncertain FROM {}.jobs j JOIN {}.runs r ON r.run_id=j.run_id WHERE j.run_id=$1 AND j.step=$2",
                     self.namespace,self.namespace
                 ),
                 &[&run, &status.step],
@@ -922,7 +930,12 @@ impl Store {
                 refused("payload-erased", "only the spent-key tombstone is retained")
             })?,
         )?;
-        Definition::from_snapshot(&snapshot).map_err(|_| refused("definition-incompatible", "this binary cannot safely interpret the pinned run snapshot; retain its compatible worker"))?;
+        let definition = Definition::from_snapshot(&snapshot).map_err(|_| refused("definition-incompatible", "this binary cannot safely interpret the pinned run snapshot; retain its compatible worker"))?;
+        if row.get::<_, bool>(3)
+            && matches!(definition.workflow.steps.get(&status.step), Some(Step::Call {call, ..}) if !call.operation.can_retry_after_unknown())
+        {
+            return Err(refused("evaluation-uncertain", "the evaluation may have completed remotely; preserve its original request and inspect or cancel the held run without reevaluating"));
+        }
         let generation: i64 = row.get(1);
         tx.commit().await.map_err(unavailable)?;
         let mut replay_store = self.clone();
@@ -1034,7 +1047,7 @@ impl Store {
         {
             return Ok(false);
         }
-        let mutation = matches!(definition.workflow.steps.get(step),Some(Step::Call{call,..}) if call.operation.is_mutating());
+        let dispatch_risk = matches!(definition.workflow.steps.get(step),Some(Step::Call{call,..}) if call.operation.has_dispatch_risk());
         let mut outputs = payload.outputs;
         if let Some(value) = &detail.output {
             outputs.insert(step.to_owned(), value.clone());
@@ -1077,7 +1090,7 @@ impl Store {
         } else {
             detail.next.as_deref().unwrap_or(step)
         };
-        let state = if cancelled && mutation {
+        let state = if cancelled && dispatch_risk {
             "cancelled-after-effect"
         } else if cancelled {
             "cancelled"
@@ -1126,7 +1139,11 @@ impl Store {
         Ok(mapping_failed)
     }
 
-    pub(crate) async fn before_io(&self, job: &LeasedJob<Job>, mutation: bool) -> Result<bool> {
+    pub(crate) async fn before_io(
+        &self,
+        job: &LeasedJob<Job>,
+        dispatch_risk: bool,
+    ) -> Result<bool> {
         let mut client = self.client().await.map_err(unavailable)?;
         let tx = client.transaction().await.map_err(unavailable)?;
         self.verify_transaction(&tx).await.map_err(unavailable)?;
@@ -1147,7 +1164,7 @@ impl Store {
         if row.get::<_, bool>(0) || !row.get::<_, bool>(1) {
             return Ok(false);
         }
-        if mutation {
+        if dispatch_risk {
             tx.execute(
                 &format!(
                     "UPDATE {}.jobs SET uncertain=true WHERE run_id=$1 AND step=$2",
@@ -1180,6 +1197,7 @@ impl Store {
             next_due_at: row.get(10),
             uncertain: row.get(11),
             restore_review_required: row.get(14),
+            cancel_requested: row.get(15),
             output: row
                 .get::<_, Option<Value>>(12)
                 .as_ref()
@@ -1324,7 +1342,7 @@ impl DispatchStore for Store {
         &self,
         row: &Row,
         first: usize,
-        _: &JobKey,
+        key: &JobKey,
         action: TargetAction,
     ) -> std::result::Result<Option<Job>, DispatchError> {
         let job = decode(row, first)?;
@@ -1339,6 +1357,18 @@ impl DispatchStore for Store {
             .is_some_and(|binding| binding != &job.binding_digest)
         {
             return Ok(None);
+        }
+        // Enforce capability under Dispatch's replay fence, not just inspection.
+        if matches!(action, TargetAction::Replay) && job.uncertain {
+            let payload = self
+                .payload(key.id(), key.part(), &job)
+                .map_err(|_| DispatchError::Unavailable)?;
+            let definition = Definition::from_snapshot(&payload.snapshot)
+                .map_err(|_| DispatchError::Unavailable)?;
+            if matches!(definition.workflow.steps.get(key.part()), Some(Step::Call {call, ..}) if !call.operation.can_retry_after_unknown())
+            {
+                return Ok(None);
+            }
         }
         if matches!(action, TargetAction::Replay)
             && (job.cancel_requested

@@ -487,7 +487,7 @@ pub fn run(definition: &Definition, scenario: &Scenario) -> Result<ScenarioRepor
                 // Keep this value for every recovery reply: mapping evaluation and
                 // authority selection never run again for a prepared mutation.
                 let frozen = serde_json::to_vec(&command).map_err(|_| error("scenario.command"))?;
-                if command.operation.is_mutating() {
+                if command.operation.has_dispatch_risk() {
                     report.frozen_commands += 1;
                 }
                 let replies = scenario
@@ -498,7 +498,15 @@ pub fn run(definition: &Definition, scenario: &Scenario) -> Result<ScenarioRepor
                 let mut prior_unknown = false;
                 let mut success = None;
                 for (index, reply) in replies.iter().enumerate() {
+                    if command.operation.is_evaluation()
+                        && matches!(reply, Reply::ReceiptExpired { .. })
+                    {
+                        return Err(error("scenario.reply"));
+                    }
                     if index > 0 && recovery.is_none() {
+                        return Err(error("scenario.recovery"));
+                    }
+                    if index > 0 && prior_unknown && !command.operation.can_retry_after_unknown() {
                         return Err(error("scenario.recovery"));
                     }
                     // Receipt observation can resolve an unknown mutation,

@@ -281,3 +281,172 @@ async fn exited_workers_preserve_timer_and_recover_original_real_messaging_comma
     messaging.stop().await;
     issuer.stop().await;
 }
+
+#[derive(Clone)]
+struct DecisionProvider {
+    calls: Arc<Mutex<usize>>,
+    observed: Arc<tokio::sync::Notify>,
+    lose_response: bool,
+}
+async fn decide(
+    State(provider): State<DecisionProvider>,
+    request: Request<Body>,
+) -> Response<Body> {
+    assert!(request.headers().get("idempotency-key").is_none());
+    let bytes = to_bytes(request.into_body(), 65_536).await.unwrap();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(body["model"], "fixture-model");
+    *provider.calls.lock().unwrap() += 1;
+    provider.observed.notify_one();
+    if provider.lose_response {
+        // The remote computation is observed, but its result never reaches the
+        // worker before the test terminates that OS process.
+        std::future::pending::<()>().await;
+    }
+    Response::builder()
+        .status(200)
+        .header("content-type", "application/json")
+        .body(Body::from(json!({
+            "model":"fixture-model-1",
+            "answers":{"route":{"type":"choice","choice":"a","confidence":0.8,"probabilities":{"a":0.9,"b":0.1}}},
+            "usage":{"input_tokens":1,"output_tokens":0}
+        }).to_string()))
+        .unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn exited_decision_workers_hold_unknown_results_and_reuse_completed_results() {
+    let issuer = issuer().await;
+    for lose_response in [true, false] {
+        let provider = DecisionProvider {
+            calls: Arc::new(Mutex::new(0)),
+            observed: Arc::new(tokio::sync::Notify::new()),
+            lose_response,
+        };
+        let (base, task) = serve(
+            Router::new()
+                .route("/v1/systemone", post(decide))
+                .with_state(provider.clone()),
+        )
+        .await;
+        let root = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
+        let runtime = root.path().join("runtime.yaml");
+        let mut value = serde_json::to_value(config(root.path(), &issuer, &base, &base)).unwrap();
+        value["connections"] = json!({});
+        value["decisionConnections"] = json!({"assessor":{
+            "protocol":"system-one","baseUrl":base,"model":"fixture-model",
+            "authorization":{"local":{}}
+        }});
+        let config = serde_json::from_value(value).unwrap();
+        support::write_runtime(&runtime, &config);
+        let project = root.path().join("workflow");
+        std::fs::create_dir(&project).unwrap();
+        std::fs::write(
+            project.join("workflow.yaml"),
+            r#"
+apiVersion: id.registrystack.org/formats/coordinator/project/v1alpha1
+kind: CoordinatorProject
+project: {id: process-decision, version: '1'}
+input: {type: object}
+connections: {assessor: decision}
+functionsFile: functions.rhai
+deadlineSeconds: 3600
+start: evaluate
+steps:
+  evaluate:
+    type: call
+    connection: assessor
+    operation: evaluate-decision
+    input: {function: decision_request, arguments: [{type: input}]}
+    next: wait
+  wait:
+    type: wait-until
+    waitUntil: {function: timer, arguments: [{type: input}]}
+    next: done
+  done:
+    type: finish
+    outcome: assessed
+    output: {function: decision_result, arguments: [{type: step, step: evaluate}]}
+outcomes: {assessed: {type: object}}
+"#,
+        )
+        .unwrap();
+        std::fs::write(project.join("functions.rhai"), r#"
+fn decision_request(input) {
+    #{ state: #{ synthetic: true }, questions: #{ route: #{ type: "choice", instructions: "Assess supplied facts", criteria: #{ a: "Proceed", b: "Review" } } } }
+}
+fn timer(input) { input.at }
+fn decision_result(result) { result }
+"#).unwrap();
+        let input = root.path().join("input.json");
+        let due = (chrono::Utc::now() + chrono::Duration::seconds(5)).to_rfc3339();
+        std::fs::write(&input, json!({"at":due}).to_string()).unwrap();
+        let key = root.path().join("start-key");
+        std::fs::write(&key, "decision-start-key").unwrap();
+        cli(&runtime, &["init-db"]);
+        let run = cli(
+            &runtime,
+            &[
+                "start",
+                "--project",
+                project.to_str().unwrap(),
+                "--input",
+                input.to_str().unwrap(),
+                "--producer",
+                "decision-service",
+                "--key-file",
+                key.to_str().unwrap(),
+            ],
+        )["runId"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let mut first = Process::worker(&runtime);
+        tokio::time::timeout(Duration::from_secs(15), provider.observed.notified())
+            .await
+            .expect("provider observed evaluation");
+        if !lose_response {
+            let stop = Instant::now() + Duration::from_secs(15);
+            loop {
+                let status = cli(&runtime, &["status", "--run", &run]);
+                if status["step"] == "wait" {
+                    break;
+                }
+                assert!(
+                    Instant::now() < stop,
+                    "evaluation result was not checkpointed"
+                );
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        }
+        first.terminate();
+        let mut second = Process::worker(&runtime);
+        if lose_response {
+            let held = status_until(&runtime, &run, "attention").await;
+            assert_eq!(held["uncertain"], true);
+            let retry = Command::new(env!("CARGO_BIN_EXE_coordinator-test-worker"))
+                .args(["--runtime-config"])
+                .arg(&runtime)
+                .args(["retry-same", "--run", &run])
+                .output()
+                .unwrap();
+            assert!(
+                !retry.status.success(),
+                "uncertain decision must not be reissued"
+            );
+            assert!(String::from_utf8_lossy(&retry.stderr).contains("evaluation-uncertain"));
+        } else {
+            let completed = status_until(&runtime, &run, "finished").await;
+            assert_eq!(completed["output"]["returnedModel"], "fixture-model-1");
+            assert_eq!(completed["output"]["answers"]["route"]["choice"], "a");
+        }
+        second.terminate();
+        assert_eq!(
+            *provider.calls.lock().unwrap(),
+            1,
+            "restart must not repeat inference"
+        );
+        task.abort();
+    }
+    issuer.stop().await;
+}

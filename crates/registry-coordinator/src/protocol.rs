@@ -10,13 +10,16 @@ use serde_json::Value;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Operation(&'static str);
 
-/// Recovery is an explicit same-command send or an authoritative read.
+/// Recovery distinguishes repeatable calls from evaluations that cannot be repeated.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum RecoverySemantics {
     ReadAgain,
     SameCommandAndReceipt,
     SameCommand,
+    /// Completion may be billable and nondeterministic. An ambiguous dispatch
+    /// stays held; identical request bytes cannot establish a safe resend.
+    HoldAfterDispatch,
 }
 
 #[allow(non_upper_case_globals)]
@@ -29,6 +32,7 @@ impl Operation {
     pub const CreateAppointment: Self = Self("create-appointment");
     pub const InvokeBregAction: Self = Self("invoke-breg-action");
     pub const ExternalGet: Self = Self("external-get");
+    pub const EvaluateDecision: Self = Self("evaluate-decision");
 
     pub fn parse(identifier: &str) -> Option<Self> {
         crate::operations::descriptor(identifier).map(|descriptor| Self(descriptor.id))
@@ -55,7 +59,20 @@ impl Operation {
     }
 
     pub fn is_read(self) -> bool {
-        !self.is_mutating()
+        self.descriptor().effect == crate::operations::EffectKind::Read
+    }
+
+    pub fn is_evaluation(self) -> bool {
+        self.descriptor().effect == crate::operations::EffectKind::Evaluation
+    }
+
+    /// These calls can complete remotely before a local result is committed.
+    pub fn has_dispatch_risk(self) -> bool {
+        self.is_mutating() || self.is_evaluation()
+    }
+
+    pub fn can_retry_after_unknown(self) -> bool {
+        self.recovery() != RecoverySemantics::HoldAfterDispatch
     }
 
     pub fn requires_key(self) -> bool {
@@ -112,7 +129,7 @@ pub enum ReconciliationOutcome {
     Unresolved { code: String },
 }
 
-/// Prepared operation. Mutation requests are persisted before dispatch.
+/// Prepared operation. Exact requests are persisted before dispatch.
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CallRequest {
@@ -125,9 +142,17 @@ pub struct CallRequest {
 /// Bounded categories. Never carry a remote error body or credential here.
 pub enum CallOutcome {
     Success(Value),
-    Retryable { code: String },
-    Refused { code: String },
-    Uncertain { code: String },
+    /// The adapter knows this attempt did not execute remotely. For evaluation,
+    /// a possibly dispatched request must return Uncertain instead.
+    Retryable {
+        code: String,
+    },
+    Refused {
+        code: String,
+    },
+    Uncertain {
+        code: String,
+    },
     ReceiptExpired,
 }
 
@@ -144,7 +169,8 @@ pub trait AdapterSet: Send + Sync {
     async fn call(&self, request: &CallRequest) -> CallOutcome;
 
     /// Prepare inert exact-request evidence before dispatch. Preparation may
-    /// perform bounded authority reads, but must never perform a mutation.
+    /// perform bounded authority reads, but must never dispatch a mutation or
+    /// a model evaluation.
     /// The host checks authority/deadlines and persists these bytes before send.
     async fn prepare(&self, _request: &CallRequest) -> Result<Option<Vec<u8>>, CallOutcome> {
         Ok(None)

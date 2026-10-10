@@ -218,6 +218,15 @@ pub struct RuntimeConfig {
     )]
     #[cfg_attr(feature = "schema", schemars(with = "BTreeMap<registry_platform_yaml::LocalId, crate::external_http::ExternalHttpConfig>", extend("maxProperties" = 16)))]
     pub external_http_connections: BTreeMap<String, crate::external_http::ExternalHttpConfig>,
+    /// Omitted means decision evaluation is unavailable. Logical names share
+    /// the product and external HTTP connection namespace.
+    #[serde(
+        default,
+        skip_serializing_if = "BTreeMap::is_empty",
+        deserialize_with = "decision_connection_keys"
+    )]
+    #[cfg_attr(feature = "schema", schemars(with = "BTreeMap<registry_platform_yaml::LocalId, crate::decision::DecisionConfig>", extend("maxProperties" = 16)))]
+    pub decision_connections: BTreeMap<String, crate::decision::DecisionConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deployment: Option<crate::deployment::DeploymentConfig>,
 }
@@ -319,12 +328,13 @@ impl RuntimeConfig {
                 "use a coordinator_ namespace with lowercase letters, digits or underscores",
             ));
         }
-        if self.connections.len() + self.external_http_connections.len() == 0
-            || self.connections.len() + self.external_http_connections.len() > 16
-        {
+        let connection_count = self.connections.len()
+            + self.external_http_connections.len()
+            + self.decision_connections.len();
+        if connection_count == 0 || connection_count > 16 {
             errors.push(config_error(
                 "connections",
-                "declare between one and sixteen product or external HTTP connections",
+                "declare between one and sixteen product, external HTTP or decision connections",
             ));
         }
         if let Some(deployment) = &self.deployment {
@@ -484,11 +494,50 @@ impl RuntimeConfig {
                 ));
             }
         }
+        for (name, binding) in &self.decision_connections {
+            let field = format!("decisionConnections.{name}");
+            if name.parse::<registry_platform_yaml::LocalId>().is_err()
+                || self.connections.contains_key(name)
+                || self.external_http_connections.contains_key(name)
+            {
+                errors.push(config_error(
+                    &field,
+                    "use a valid logical connection name not already declared in another connection map",
+                ));
+            }
+            errors.extend(binding.findings(&field));
+            if let Some(reference) = binding.token_ref() {
+                let member = format!("{field}.authorization.bearer.tokenRef");
+                if self
+                    .secret_providers
+                    .check_reference(&member, reference.as_str())
+                    .is_err()
+                {
+                    errors.push(config_error(
+                        &member,
+                        "enable the shared secret provider named by the decision credential reference",
+                    ));
+                }
+            }
+        }
         errors
     }
 
     pub fn validate_workflow(&self, workflow: &crate::definition::Workflow) -> Result<()> {
         for (name, product) in &workflow.connections {
+            if product == "decision" {
+                if !self.decision_connections.contains_key(name) {
+                    return Err(PocError::new(
+                        "workflow-binding",
+                        "the declared workflow connection has no matching decision binding",
+                    )
+                    .at("runtime.yaml", format!("decisionConnections.{name}"))
+                    .suggest(format!(
+                        "Configure decisionConnections.{name} in runtime.yaml using the workflow's logical connection name.",
+                    )));
+                }
+                continue;
+            }
             if product == "external-http" {
                 if !self.external_http_connections.contains_key(name) {
                     return Err(PocError::new(
@@ -510,7 +559,7 @@ impl RuntimeConfig {
                     return Err(config_error(
                         "connections",
                         "use a supported workflow product",
-                    ))
+                    ));
                 }
             };
             if !self
@@ -567,6 +616,7 @@ impl RuntimeConfig {
             self.connections
                 .keys()
                 .chain(self.external_http_connections.keys())
+                .chain(self.decision_connections.keys())
                 .map(String::as_str),
         )
     }
@@ -581,6 +631,21 @@ impl RuntimeConfig {
         self.validate()?;
         let mut identities = BTreeMap::new();
         for name in names {
+            if let Some(binding) = self.decision_connections.get(name) {
+                let mut identity = serde_json::to_value(binding).map_err(|_| {
+                    config_error("decisionConnections", "correct the decision binding model")
+                })?;
+                if let Some(bearer) = identity["authorization"]
+                    .get_mut("bearer")
+                    .and_then(serde_json::Value::as_object_mut)
+                {
+                    bearer.remove("tokenRef");
+                }
+                identity["product"] = json!("decision");
+                identity["abi"] = json!("coordinator-decision/v1");
+                identities.insert(name, identity);
+                continue;
+            }
             if let Some(binding) = self.external_http_connections.get(name) {
                 let mut identity = serde_json::to_value(binding).map_err(|_| {
                     config_error(
@@ -712,14 +777,18 @@ pub fn runtime_schema() -> Result<String> {
     )
     .map_err(|_| config_error("", "restore the identifier schema generator"))?;
     schema["properties"]["connections"] = json!({"type":"object", "default":{}, "maxProperties":16,
-        "description":"Omitted means no product bindings; at least one product or external HTTP connection is required.",
+        "description":"Omitted means no product bindings; at least one product, external HTTP or decision connection is required.",
         "propertyNames":{"$ref":"#/$defs/LocalId"}, "additionalProperties":{"$ref":"#/$defs/ConnectionConfig"}});
     schema["properties"]["externalHttpConnections"] = json!({"type":"object", "default":{}, "maxProperties":16,
         "description":"Omitted means external HTTP is unavailable. Names must be distinct from product connections.",
         "propertyNames":{"$ref":"#/$defs/LocalId"}, "additionalProperties":{"$ref":"#/$defs/ExternalHttpConfig"}});
+    schema["properties"]["decisionConnections"] = json!({"type":"object", "default":{}, "maxProperties":16,
+        "description":"Omitted means decision evaluation is unavailable. Names must be distinct from product and external HTTP connections.",
+        "propertyNames":{"$ref":"#/$defs/LocalId"}, "additionalProperties":{"$ref":"#/$defs/DecisionConfig"}});
     schema["allOf"] = json!([{"anyOf":[
         {"required":["connections"],"properties":{"connections":{"minProperties":1}}},
-        {"required":["externalHttpConnections"],"properties":{"externalHttpConnections":{"minProperties":1}}}
+        {"required":["externalHttpConnections"],"properties":{"externalHttpConnections":{"minProperties":1}}},
+        {"required":["decisionConnections"],"properties":{"decisionConnections":{"minProperties":1}}}
     ]}]);
     schema["properties"]["database"] = json!({"allOf":[
         {"$ref":"#/$defs/DatabaseConfig"},
@@ -809,6 +878,17 @@ fn external_connection_keys<'de, D: Deserializer<'de>>(
     d: D,
 ) -> std::result::Result<BTreeMap<String, crate::external_http::ExternalHttpConfig>, D::Error> {
     BTreeMap::<registry_platform_yaml::LocalId, crate::external_http::ExternalHttpConfig>::deserialize(d).map(|map| map.into_iter().map(|(key, value)| (key.into_string(), value)).collect())
+}
+
+fn decision_connection_keys<'de, D: Deserializer<'de>>(
+    d: D,
+) -> std::result::Result<BTreeMap<String, crate::decision::DecisionConfig>, D::Error> {
+    BTreeMap::<registry_platform_yaml::LocalId, crate::decision::DecisionConfig>::deserialize(d)
+        .map(|map| {
+            map.into_iter()
+                .map(|(key, value)| (key.into_string(), value))
+                .collect()
+        })
 }
 
 fn connection_keys<'de, D: Deserializer<'de>>(
