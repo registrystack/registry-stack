@@ -6,7 +6,7 @@
       "properties": {
         "allowedClients": {
           "$ref": "#/$defs/OidcAllowedClients",
-          "description": "The OAuth clients whose access tokens are admitted: `unrestricted` to\nadmit a token from every client the issuer verifies, or a list of at\nleast one distinct client. A runtime decides whether `unrestricted`\nis acceptable in production.",
+          "description": "List one to sixty-four distinct admitted OAuth client IDs. Coordinator refuses omission, an empty list and unrestricted.",
           "items": {
             "$ref": "#/$defs/ExternalId",
             "maxLength": 128
