@@ -4,8 +4,8 @@
 use crate::{PocError, Result};
 use registry_breg_client::BRegRecordOptions;
 use registry_platform_config::{
-    DatabaseConfig, RemovedKey, RuntimeConfigLoader, RuntimeEnvelope, RuntimeFileCheck,
-    SecretProvider, SecretProvidersConfig, SecretReference,
+    DatabaseConfig, RuntimeConfigLoader, RuntimeEnvelope, RuntimeFileCheck, SecretProvider,
+    SecretProvidersConfig, SecretReference,
 };
 use registry_platform_httputil::{
     valid_resource_uri, valid_scope_token, validate_requested_scopes, ServiceBaseUrl,
@@ -18,11 +18,6 @@ use zeroize::Zeroizing;
 
 pub const API_VERSION: &str = "id.registrystack.org/formats/coordinator/runtime/v1alpha1";
 pub const KIND: &str = "CoordinatorRuntimeConfig";
-
-const REMOVED_KEYS: &[RemovedKey] = &[RemovedKey {
-    path: "deployment.authentication.jwksSource.kind",
-    replacement: "Write `deployment.authentication.jwksSource.type` with the same value.",
-}];
 
 #[derive(Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -243,7 +238,6 @@ impl RuntimeConfig {
             api_version: API_VERSION,
             kind: KIND,
         })
-        .removed_keys(REMOVED_KEYS)
     }
 
     /// Serialize the complete configuration envelope without resolving credentials.

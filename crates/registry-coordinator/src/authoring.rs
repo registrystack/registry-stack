@@ -6,7 +6,7 @@ use std::{collections::BTreeMap, path::Path};
 use registry_platform_config::AuthoredExpressions;
 use registry_platform_yaml::{
     ApiVersion, BoundedU32, Document, EnvelopeRule, Expect, ForeignValue, FormatSpec, LocalId,
-    ProjectIdentity, Reader, RetiredApiVersion, Severity,
+    ProjectIdentity, Reader, Severity,
 };
 use serde::Deserialize;
 
@@ -24,10 +24,7 @@ const FORMAT: FormatSpec<'static> = FormatSpec {
     kind: KIND,
     envelope: EnvelopeRule::ApiVersionKind {
         api_versions: &[ApiVersion::current(API_VERSION)],
-        retired_api_versions: &[RetiredApiVersion {
-            api_version: "registry.registrystack.org/coordinator/v1alpha1",
-            replacement: "Use CoordinatorProject with project identity, deadlineSeconds, functionsFile, typed steps and explicit argument references.",
-        }],
+        retired_api_versions: &[],
     },
     removed_keys: &[],
 };

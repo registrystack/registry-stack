@@ -67,7 +67,7 @@ fn state_key_versions(active: u32, versions: &[&str]) -> Value {
 }
 
 #[test]
-fn removed_jwks_tag_names_the_shared_type_replacement_without_values() {
+fn a_jwks_source_tagged_with_another_member_is_refused_without_values() {
     let mut document = yaml_value(SCHEDULING_RUNTIME).unwrap();
     let jwks = document["deployment"]["authentication"]["jwksSource"]
         .as_object_mut()
@@ -75,17 +75,18 @@ fn removed_jwks_tag_names_the_shared_type_replacement_without_values() {
     jwks.remove("type");
     jwks.insert("kind".into(), json!(CANARY));
     let error = refused(&document.to_string());
-    let removed = error
+    let missing = error
         .diagnostics
         .iter()
-        .find(|diagnostic| diagnostic.code == "config.removed-key")
-        .expect("the removed member names its replacement beside the missing type");
-    assert_eq!(removed.path, "/deployment/authentication/jwksSource/kind");
-    assert!(removed
-        .suggested_action
-        .contains("deployment.authentication.jwksSource.type"));
+        .find(|diagnostic| diagnostic.code == "config.missing-key")
+        .expect("the source is refused for its missing type");
+    assert_eq!(missing.path, "/deployment/authentication/jwksSource");
+    assert!(error
+        .diagnostics
+        .iter()
+        .all(|diagnostic| diagnostic.code != "config.removed-key"));
     assert!(!error.to_string().contains(CANARY));
-    assert!(removed.source.as_ref().unwrap().line.is_some());
+    assert!(missing.source.as_ref().unwrap().line.is_some());
 }
 
 #[test]

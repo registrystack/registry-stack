@@ -177,10 +177,9 @@ keys and audit custody remain in runtime configuration. Compatible new packages
 serve new admissions while previously admitted runs keep their original snapshots
 and command identities. A new version cannot reinterpret a repeated start key.
 
-The authored configuration conventions do not rewrite stored execution snapshots.
-Existing immutable packages and admitted runs retain their original definition
-bytes and ABI. New project files use the documented `CoordinatorProject` format;
-an older `Workflow` authoring envelope is refused with migration guidance.
+Project files use the documented `CoordinatorProject` format. Packaging never
+rewrites a stored execution snapshot: an immutable package and an admitted run
+retain their exact definition bytes.
 
 A snapshot pins each used operation's capabilities under the one operation
 contract this build reads. A snapshot that names another contract, or omits

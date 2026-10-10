@@ -94,8 +94,7 @@ issuer and caller policy. The example contains references only. Provision each
 secret separately through its enabled shared provider.
 
 The shared `jwksSource` block selects its variant with `type`, for example
-`type: discovery`. An older `kind` member is refused with its replacement
-named. Write `allowedClients` as a nonempty list of exact client IDs;
+`type: discovery`. Write `allowedClients` as a nonempty list of exact client IDs;
 Coordinator refuses omission, an empty list and `unrestricted`. Each listed
 client also needs its explicit action and workflow policy.
 
