@@ -19,7 +19,8 @@ const MAX_LOOKUP_VALUES: usize = 16;
 const MAX_SELECTED_FIELDS: usize = 128;
 const MAX_IDENTIFIER_BYTES: usize = 128;
 const MAX_ROUTE_IDENTIFIER_BYTES: usize = 64;
-const MAX_SKIPTOKEN_BYTES: usize = 4096;
+// Mirrors BReg's v3 cursor envelope, including unpadded Base64URL expansion.
+pub(crate) const MAX_SKIPTOKEN_BYTES: usize = 10_978;
 const MAX_TOP: u32 = 100;
 const MAX_BBOX_PARAMETER_BYTES: usize = 256;
 

@@ -50,6 +50,7 @@ enum Mode {
     DuplicateEtag,
     CollectionEtag,
     MismatchedContinuation,
+    CursorBytes(usize),
     WrongMedia,
     DuplicateMedia,
     TraceMissing,
@@ -171,6 +172,15 @@ fn happy_response(request: &CapturedRequest, mode: Mode) -> Response<Body> {
     } else {
         json!({"data": record(), "meta": meta()})
     };
+    if collection {
+        if let Mode::CursorBytes(bytes) = mode {
+            document["pageInfo"]["nextCursor"] = if request.uri.contains("$skiptoken=") {
+                Value::Null
+            } else {
+                Value::String("A".repeat(bytes))
+            };
+        }
+    }
     if collection
         && matches!(mode, Mode::MismatchedContinuation)
         && request.uri.contains("$skiptoken=")
@@ -556,6 +566,63 @@ async fn invalid_breg_record_identifiers_are_rejected_before_authentication_or_i
     ));
     assert_eq!(provider.0.load(Ordering::SeqCst), 0);
     assert!(captured.lock().expect("captured requests").is_empty());
+}
+
+#[tokio::test]
+async fn issued_cursor_envelope_bound_survives_typed_http_continuation() {
+    // The filtered read regression returned 4,720 bytes; the v3 codec can issue
+    // up to 10,978. Both must survive response decoding and request construction.
+    for bytes in [4_720, 10_978] {
+        let provider = Arc::new(CountingToken(AtomicUsize::new(0)));
+        let (client, captured) =
+            test_client(Mode::CursorBytes(bytes), Some(provider.clone()), 32 * 1024).await;
+        let request = BRegListRequest::default()
+            .options(json_ld_options())
+            .filter("status eq 'active'")
+            .expect("filter")
+            .top(1)
+            .expect("small page")
+            .count(true);
+        let first = client
+            .list_records("companies", &request)
+            .await
+            .expect("first page");
+        let continuation = first.value.continuation.expect("issued continuation");
+        assert_eq!(continuation.projection().skiptoken.len(), bytes);
+        let last = client
+            .continue_list(&continuation)
+            .await
+            .expect("continuation page");
+        assert!(last.value.continuation.is_none());
+        assert_eq!(provider.0.load(Ordering::SeqCst), 2);
+        let captured = captured.lock().expect("captured requests");
+        assert_eq!(captured.len(), 2);
+        let (_, query) = captured[1].uri.split_once('?').expect("continuation query");
+        let pairs = url::form_urlencoded::parse(query.as_bytes()).collect::<Vec<_>>();
+        assert_eq!(pairs.len(), 2);
+        assert_eq!(pairs[0].0, "accessProfile");
+        assert_eq!(pairs[0].1, "public");
+        assert_eq!(pairs[1].0, "$skiptoken");
+        assert_eq!(pairs[1].1.len(), bytes);
+        assert_eq!(captured[1].accept.as_deref(), Some("application/ld+json"));
+    }
+}
+
+#[tokio::test]
+async fn response_cursor_above_the_codec_envelope_is_refused() {
+    let (client, captured) = test_client(Mode::CursorBytes(10_979), None, 32 * 1024).await;
+    let error = client
+        .list_records("companies", &BRegListRequest::default())
+        .await
+        .expect_err("oversized cursor is refused");
+    assert!(matches!(
+        error,
+        BaseRegistryClientError::Protocol {
+            failure: BRegProtocolFailure::Body,
+            ..
+        }
+    ));
+    assert_eq!(captured.lock().expect("captured requests").len(), 1);
 }
 
 #[tokio::test]

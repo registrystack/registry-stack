@@ -335,7 +335,7 @@ pub(crate) fn decode_collection(value: Value) -> Result<BRegGeoJsonFeatureCollec
         Value::Null => None,
         Value::String(value)
             if !value.is_empty()
-                && value.len() <= 4096
+                && value.len() <= crate::query::MAX_SKIPTOKEN_BYTES
                 && !value.bytes().any(|byte| byte.is_ascii_control()) =>
         {
             Some(value)
@@ -495,6 +495,25 @@ mod tests {
             }),
         ] {
             assert!(decode_collection(invalid).is_err());
+        }
+    }
+
+    #[test]
+    fn collection_cursor_accepts_only_the_bounded_codec_envelope() {
+        let document = |token: String| {
+            json!({
+                "type": "FeatureCollection", "features": [], "numberReturned": 0,
+                "registry": {"pageInfo": {"nextCursor": token}}
+            })
+        };
+        let maximum = "A".repeat(crate::query::MAX_SKIPTOKEN_BYTES);
+        assert!(decode_collection(document(maximum)).is_ok());
+        for invalid in [
+            "A".repeat(crate::query::MAX_SKIPTOKEN_BYTES + 1),
+            "token\n".to_owned(),
+            String::new(),
+        ] {
+            assert!(decode_collection(document(invalid)).is_err());
         }
     }
 

@@ -144,7 +144,7 @@ async fn api(
                             "name": "cursor",
                             "in": "query",
                             "required": false,
-                            "schema": {"type": "string", "maxLength": strict_query::MAX_OPAQUE_VALUE_BYTES},
+                            "schema": {"type": "string", "maxLength": strict_query::MAX_CURSOR_TOKEN_BYTES},
                         },
                         {
                             "name": "f",
@@ -617,7 +617,7 @@ fn parse_items_query(raw: Option<&str>) -> Result<GisItemsQuery, QueryParseError
             }
             "cursor" => {
                 if value.is_empty()
-                    || value.len() > strict_query::MAX_OPAQUE_VALUE_BYTES
+                    || value.len() > strict_query::MAX_CURSOR_TOKEN_BYTES
                     || value.bytes().any(|byte| byte.is_ascii_control())
                 {
                     return Err(QueryParseError::Invalid);
@@ -805,6 +805,22 @@ mod tests {
     }
 
     #[test]
+    fn gis_cursor_uses_the_codec_envelope_bound() {
+        let token = "a".repeat(strict_query::MAX_CURSOR_TOKEN_BYTES);
+        let query = parse_items_query(Some(&format!("cursor={token}")))
+            .expect("maximum cursor fits the GIS query budget");
+        assert_eq!(query.cursor.as_ref().map(String::len), Some(token.len()));
+        for raw in [
+            format!("cursor={token}a"),
+            format!("cursor={token}&limit=1"),
+            "cursor=token%0A".to_owned(),
+            "cursor=".to_owned(),
+        ] {
+            assert!(parse_items_query(Some(&raw)).is_err());
+        }
+    }
+
+    #[test]
     fn metadata_queries_only_accept_honest_json_format() {
         assert_eq!(parse_metadata_query(None), Ok(()));
         assert_eq!(parse_metadata_query(Some("f=json")), Ok(()));
@@ -872,6 +888,18 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let body: Value = serde_json::from_str(&response_body_string(response).await).unwrap();
         assert_eq!(body["openapi"], "3.0.0");
+        let parameters = body["paths"]["/v1/gis/collections/service-site.map-reader/items"]["get"]
+            ["parameters"]
+            .as_array()
+            .expect("GIS item query parameters");
+        let cursor = parameters
+            .iter()
+            .find(|parameter| parameter["name"] == "cursor")
+            .expect("GIS continuation parameter");
+        assert_eq!(
+            cursor["schema"]["maxLength"],
+            strict_query::MAX_CURSOR_TOKEN_BYTES
+        );
         let geometry = &body["components"]["schemas"]["Feature"]["properties"]["geometry"];
         assert_eq!(geometry["type"], "object");
         assert_eq!(geometry["nullable"], true);

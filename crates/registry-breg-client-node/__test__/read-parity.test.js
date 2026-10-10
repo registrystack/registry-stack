@@ -97,3 +97,32 @@ test('specialized read methods keep routes, cursors, snapshots, exact JSON and o
     await new Promise(resolve => server.close(resolve));
   }
 });
+
+test('exact JSON reads preserve and follow the largest server cursor envelope', async () => {
+  const cursor = 'A'.repeat(10_978);
+  const requests = [];
+  const server = http.createServer((request, response) => {
+    requests.push(request.url);
+    const continuation = request.url.includes('$skiptoken=');
+    respond(response, 'application/json', {
+      items: [record],
+      pageInfo: { nextCursor: continuation ? null : cursor },
+      meta,
+    }, true);
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const client = new BaseRegistryClient({
+      baseUrl: `http://127.0.0.1:${server.address().port}`,
+      maxResponseBytes: 32 * 1024,
+    });
+    const first = await client.listRecordsJson('companies', { top: 1, count: true });
+    assert.equal(first.continuation.skiptoken.length, cursor.length);
+    const last = await client.continueListJson(first.continuation);
+    assert.equal(last.continuation, undefined);
+    assert.equal(requests.length, 2);
+    assert.match(requests[1], /\$skiptoken=/);
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+  }
+});

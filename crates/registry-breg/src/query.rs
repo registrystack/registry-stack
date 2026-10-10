@@ -18,6 +18,9 @@ pub const MAX_SELECTED_FIELDS: usize = 128;
 pub const MAX_IDENTIFIER_BYTES: usize = 128;
 pub const MAX_LITERAL_BYTES: usize = 1024;
 pub const MAX_OPAQUE_VALUE_BYTES: usize = 4096;
+/// Maximum v3 cursor: unpadded Base64URL of 8 KiB plaintext, a version byte,
+/// a 24-byte nonce and a 16-byte authentication tag. Snapshot bounds are separate.
+pub const MAX_CURSOR_TOKEN_BYTES: usize = 10_978;
 pub const MAX_TOP: u32 = 100;
 pub const MAX_BBOX_PARAMETER_BYTES: usize = 256;
 
@@ -699,7 +702,8 @@ where
         match key {
             "snapshot" => {
                 ensure_absent(snapshot.is_none()).map_err(located)?;
-                snapshot = Some(parse_opaque_value(value).map_err(located)?);
+                snapshot =
+                    Some(parse_opaque_value(value, MAX_OPAQUE_VALUE_BYTES).map_err(located)?);
             }
             "validAt" => {
                 ensure_absent(valid_at.is_none()).map_err(located)?;
@@ -778,7 +782,7 @@ impl QueryBuilder {
             }
             "$skiptoken" => {
                 ensure_absent(self.skiptoken.is_none())?;
-                self.skiptoken = Some(parse_opaque_value(value)?);
+                self.skiptoken = Some(parse_opaque_value(value, MAX_CURSOR_TOKEN_BYTES)?);
             }
             "fields" | "filter" | "sort" | "pageSize" | "cursor" | "$skip" | "$apply"
             | "$expand" | "$batch" => return Err(QueryParseError::DisallowedOption),
@@ -1295,9 +1299,9 @@ fn parse_bounded_scalar(value: &str) -> Result<String, QueryParseError> {
     Ok(value.to_owned())
 }
 
-fn parse_opaque_value(value: &str) -> Result<String, QueryParseError> {
+fn parse_opaque_value(value: &str, maximum_bytes: usize) -> Result<String, QueryParseError> {
     if value.is_empty()
-        || value.len() > MAX_OPAQUE_VALUE_BYTES
+        || value.len() > maximum_bytes
         || value.bytes().any(|byte| byte.is_ascii_control())
     {
         return Err(QueryParseError::InvalidValue);
@@ -2114,7 +2118,15 @@ mod tests {
             Err(QueryParseError::PayloadTooLarge)
         );
 
-        let large_token = "a".repeat(MAX_OPAQUE_VALUE_BYTES + 1);
+        let token = "a".repeat(MAX_CURSOR_TOKEN_BYTES);
+        assert!(parse_read_query([("$skiptoken", token.as_str())]).is_ok());
+        assert!(parse_snapshot_query([("$skiptoken", token.as_str())]).is_ok());
+        assert!(parse_snapshot_query([("snapshot", "a".repeat(MAX_OPAQUE_VALUE_BYTES))]).is_ok());
+        assert_eq!(
+            parse_snapshot_query([("snapshot", token.as_str())]),
+            Err(QueryParseError::InvalidValue)
+        );
+        let large_token = "a".repeat(MAX_CURSOR_TOKEN_BYTES + 1);
         assert_eq!(
             parse_read_query([("$skiptoken", large_token.as_str())]),
             Err(QueryParseError::InvalidValue)

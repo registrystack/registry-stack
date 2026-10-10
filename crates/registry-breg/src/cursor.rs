@@ -24,7 +24,7 @@ const KEY_BYTES: usize = 32;
 const NONCE_BYTES: usize = 24;
 const TAG_BYTES: usize = 16;
 const MAX_PAYLOAD_BYTES: usize = 8 * 1024;
-const MAX_TOKEN_BYTES: usize = (1 + NONCE_BYTES + MAX_PAYLOAD_BYTES + TAG_BYTES) * 2;
+const MAX_TOKEN_BYTES: usize = ((1 + NONCE_BYTES + MAX_PAYLOAD_BYTES + TAG_BYTES) * 4).div_ceil(3);
 const MAX_AGE_SECONDS: u64 = 86_400;
 const CURSOR_AAD: &[u8] = b"breg-cursor-v3";
 const AEAD_LABEL: &[u8] = b"breg-cursor-aead-key-v3";
@@ -655,6 +655,41 @@ mod tests {
             assert!(!envelope_text.contains("alpha"));
             assert_eq!(codec.decode(token, 1_001).expect("cursor decodes"), payload);
         }
+    }
+
+    #[test]
+    fn largest_issued_cursor_is_accepted_by_the_read_query_and_client() {
+        let codec = codec();
+        let mut payload = payload();
+        payload.continuation.sort_value = Some(String::new());
+        let fixed_bytes = serde_json::to_vec(&payload)
+            .expect("payload serializes")
+            .len();
+        payload.continuation.sort_value = Some("a".repeat(MAX_PAYLOAD_BYTES - fixed_bytes));
+        assert_eq!(
+            serde_json::to_vec(&payload)
+                .expect("payload serializes")
+                .len(),
+            MAX_PAYLOAD_BYTES
+        );
+        let token = codec.encode(&payload).expect("maximum payload encodes");
+        assert_eq!(token.len(), 10_978);
+        assert_eq!(token.len(), MAX_TOKEN_BYTES);
+        assert_eq!(token.len(), crate::query::MAX_CURSOR_TOKEN_BYTES);
+        assert!(codec.decode(&token, 1_001).is_ok());
+        assert!(crate::query::parse_read_query([("$skiptoken", token.as_str())]).is_ok());
+        assert!(registry_breg_client::BRegContinuation::try_from_projection(
+            registry_breg_client::BRegContinuationProjection {
+                route: "assets".to_owned(),
+                skiptoken: token,
+                format: registry_breg_client::BRegRecordFormat::Json,
+                access_profile: Some("operator".to_owned()),
+                registry_identifier: "registry".to_owned(),
+                dataset_identifier: "dataset".to_owned(),
+                entity_type_identifier: "asset".to_owned(),
+            }
+        )
+        .is_ok());
     }
 
     #[test]

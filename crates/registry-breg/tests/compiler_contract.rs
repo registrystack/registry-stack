@@ -6756,6 +6756,31 @@ fn compiled_query_inventory_is_profile_scoped_bounded_and_temporal() {
         page_size["schema"],
         json!({"type": "integer", "minimum": 1, "maximum": 100})
     );
+    for path in [
+        "/v1/records/placements",
+        "/v1/records/placements:current",
+        "/v1/records/placements:as-of",
+    ] {
+        let operation = &openapi["paths"][path]["get"];
+        let cursor_parameter = operation["parameters"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|parameter| parameter["name"] == "$skiptoken")
+            .expect("continuation query parameter is rendered");
+        assert_eq!(
+            cursor_parameter["schema"]["maxLength"],
+            registry_breg::query::MAX_CURSOR_TOKEN_BYTES
+        );
+        for media in ["application/json", "application/ld+json"] {
+            let response_cursor = &operation["responses"]["200"]["content"][media]["schema"]
+                ["properties"]["pageInfo"]["properties"]["nextCursor"];
+            assert_eq!(
+                response_cursor["maxLength"],
+                registry_breg::query::MAX_CURSOR_TOKEN_BYTES
+            );
+        }
+    }
     assert!(compiled.ddl().statements.iter().any(|statement| {
         statement.id == "entity.asset-placement.constraint.temporal-order"
             && statement.sql.contains(" IS NULL OR ")

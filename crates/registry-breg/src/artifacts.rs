@@ -2787,7 +2787,7 @@ fn read_query_parameters(
             "$skiptoken",
             false,
             false,
-            json!({"type": "string", "maxLength": crate::query::MAX_OPAQUE_VALUE_BYTES}),
+            json!({"type": "string", "maxLength": crate::query::MAX_CURSOR_TOKEN_BYTES}),
             "Opaque continuation cursor for the next page.",
         ),
     ];
@@ -3518,7 +3518,7 @@ fn collection_response_schema(
                 "additionalProperties": false,
                 "required": ["nextCursor"],
                 "properties": {
-                    "nextCursor": {"type": ["string", "null"], "maxLength": crate::query::MAX_OPAQUE_VALUE_BYTES}
+                    "nextCursor": {"type": ["string", "null"], "maxLength": crate::query::MAX_CURSOR_TOKEN_BYTES}
                 }
             }),
         ),
