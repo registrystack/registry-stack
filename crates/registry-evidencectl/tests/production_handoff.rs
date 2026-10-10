@@ -56,7 +56,7 @@ const RELATIONSHIP_REQUIREMENT: &str = "urn:example:requirements:parent-relation
 const RELATIONSHIP_CONCEPT: &str = "urn:example:concepts:relationship-confirmed";
 
 #[test]
-#[ignore = "exact gate: starts real binaries plus local HTTPS issuer and source"]
+#[ignore = "needs current authoring/target fixtures; opt-in requires real Evidence, local HTTPS issuer and source"]
 fn production_candidate_handoff_reaches_verified_assertion_and_audit() {
     let fixture = Fixture::new();
     let evidence = evidence_binary();
@@ -276,7 +276,7 @@ fn production_candidate_handoff_reaches_verified_assertion_and_audit() {
 }
 
 #[test]
-#[ignore = "exact gate: runs the real production packager and sibling Evidence package check"]
+#[ignore = "needs current authoring/target fixtures; opt-in requires exact-source Evidence package check"]
 fn production_package_accepts_the_real_package_check_digest() {
     let fixture = Fixture::new();
     let evidence = evidence_binary();
@@ -285,14 +285,14 @@ fn production_package_accepts_the_real_package_check_digest() {
     fixture.stage_target();
     fixture.authorize_four_shapes();
 
-    let output = fixture.build(evidence);
+    let output = fixture.package(evidence);
     let revision = package_digest(&output);
     assert!(revision.starts_with("sha256:"));
     assert!(fixture.candidate.join("evidence.yaml").is_file());
 }
 
 #[test]
-#[ignore = "exact gate: runs the real authoring compiler and sibling Evidence bundle check"]
+#[ignore = "needs current authoring/target fixtures; opt-in requires exact-source Evidence bundle check"]
 fn offline_production_check_closes_without_target_host_mounts() {
     let fixture = Fixture::new();
     let evidence = evidence_binary();
@@ -335,7 +335,7 @@ fn offline_production_check_closes_without_target_host_mounts() {
 }
 
 #[test]
-#[ignore = "exact gate: runs the real project-only compiler and sibling Evidence bundle check"]
+#[ignore = "needs current authoring fixtures; opt-in requires exact-source Evidence bundle check"]
 fn offline_project_check_needs_no_disposable_signing_state() {
     let fixture = Fixture::new();
     let evidence = evidence_binary();
@@ -391,7 +391,7 @@ fn offline_project_check_needs_no_disposable_signing_state() {
 }
 
 #[test]
-#[ignore = "exact gate: runs complete explain through the compiler and bundle schema"]
+#[ignore = "needs current authoring fixtures and report assertions; opt-in requires real compiler and bundle schema"]
 fn explain_refuses_unknown_source_members_without_disclosing_values() {
     const CANARY: &str = "SOURCE_SECRET_CANARY";
     let fixture = Fixture::new();
@@ -430,7 +430,7 @@ fn explain_refuses_unknown_source_members_without_disclosing_values() {
 }
 
 #[test]
-#[ignore = "exact gate: runs the real offline checker under an ordinary process umask"]
+#[ignore = "needs current authoring/target fixtures and a shell-safe Mac loader; opt-in requires real offline checker"]
 fn offline_check_makes_private_staging_under_umask_022() {
     let fixture = Fixture::new();
     let evidence = evidence_binary();
@@ -462,7 +462,7 @@ fn offline_check_makes_private_staging_under_umask_022() {
 }
 
 #[test]
-#[ignore = "exact gate: runs the real evidence-grade authoring compiler"]
+#[ignore = "needs current authoring/target fixtures and report assertions; opt-in requires real compiler"]
 fn explicit_evidence_grade_target_applies_its_own_strict_source_rules() {
     let fixture = Fixture::new();
     let evidence = evidence_binary();
@@ -514,7 +514,7 @@ fn explicit_evidence_grade_target_applies_its_own_strict_source_rules() {
 }
 
 #[test]
-#[ignore = "exact gate: runs the real production builder across all four authoring shapes"]
+#[ignore = "needs current authoring/target fixtures; opt-in requires real compiler across all four shapes"]
 fn production_build_checks_and_evaluates_every_neutral_authoring_shape() {
     let fixture = Fixture::new();
     let evidence = evidence_binary();
@@ -524,7 +524,7 @@ fn production_build_checks_and_evaluates_every_neutral_authoring_shape() {
     let _transit = fixture.start_transit();
     fixture.authorize_four_shapes();
 
-    let output = fixture.build(evidence);
+    let output = fixture.package(evidence);
     let revision = package_digest(&output);
     fixture.provision_target_secrets();
     let checked_revision = check_package(
@@ -594,7 +594,7 @@ fn production_build_checks_and_evaluates_every_neutral_authoring_shape() {
 }
 
 #[test]
-#[ignore = "exact gate: starts and stops real local Evidence and the pinned issuer before production build"]
+#[ignore = "needs current authoring/target fixtures; opt-in requires real Evidence and pinned issuer"]
 fn public_lifecycle_keeps_local_dev_state_out_of_the_production_candidate() {
     let fixture = Fixture::new();
     let evidence = evidence_binary();
@@ -683,7 +683,7 @@ fn public_lifecycle_keeps_local_dev_state_out_of_the_production_candidate() {
 
     let local_source_token =
         fs::read(fixture.project.join("secrets/source-token")).expect("local source token");
-    let build = fixture.build(evidence);
+    let build = fixture.package(evidence);
     package_digest(&build);
     assert_eq!(
         snapshot_files(&dev_root),
@@ -1727,21 +1727,6 @@ authorityProfiles:
 "#
         ));
         fs::write(path, governance).expect("four-shape deployment governance");
-    }
-
-    fn build(&self, evidence: &Path) -> Output {
-        let output = evidencectl()
-            .arg("build")
-            .arg("--project")
-            .arg(&self.project)
-            .arg("--target")
-            .arg(&self.target)
-            .arg("--output")
-            .arg(&self.candidate)
-            .env("EVIDENCE_BIN", evidence)
-            .output()
-            .expect("build starts");
-        assert_success(output, "production build")
     }
 
     fn package(&self, evidence: &Path) -> Output {
