@@ -68,7 +68,18 @@ function cloneJson(value, budget, depth, kind) {
   if (budget.active.has(value)) throw normalized({}, kind);
   budget.active.add(value);
   try {
-    if (array) return value.map((member) => cloneJson(member, budget, depth + 1, kind));
+    if (array) {
+      if (value.length > MAX_JSON_NODES - budget.nodes) throw normalized({}, kind);
+      const keys = Reflect.ownKeys(value);
+      if (keys.length !== value.length + 1) throw normalized({}, kind);
+      const result = new Array(value.length);
+      for (let index = 0; index < value.length; index += 1) {
+        const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+        if (!descriptor || !Object.hasOwn(descriptor, 'value')) throw normalized({}, kind);
+        result[index] = cloneJson(descriptor.value, budget, depth + 1, kind);
+      }
+      return result;
+    }
     const result = Object.create(null);
     for (const key of Reflect.ownKeys(value)) {
       if (typeof key !== 'string') throw normalized({}, kind);
