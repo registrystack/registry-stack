@@ -21,7 +21,11 @@ Add `taskTemplates` to the Casework project. Each template declares:
   `{type: scheduling, permissions: [{service: ..., location: ...,
   actions: [...]}]}`.
 - `subjects`, mapping token identity keys to governed source logical fields.
-- `lifetimeSeconds`, no more than 900 seconds.
+- `lifetimeSeconds`, an explicit approved duration. Omitted `authorizationMode`
+  means `immediate`, with a 900-second ceiling. Opt in with
+  `authorizationMode: deferred` for a duration of at most 604800 seconds
+  (seven days). Seven days is an initial hard ceiling, not a default duration.
+  The preview shows this mode and duration before approval.
 
 Scopes are immutable approved authorization, not inferred from product operations.
 The assertion includes those scopes, and stock token exchange only accepts a
@@ -74,7 +78,8 @@ unaffected.
 
 `statusClients` maps each resource server's service client to one exact resource
 audience. These clients use `casework:grants:status`. Configure the matching
-BREG [`taskGrantStatus`](../breg/TASK_GRANTS.md) entry for governed writes.
+Base Registry Engine (BReg) [`taskGrantStatus`](../breg/TASK_GRANTS.md) entry for
+governed writes.
 
 ## Preview and approve
 
@@ -118,12 +123,59 @@ Revocation does not require holding the task or reading its source.
 Resource servers call `GET /v1/task-grants/{grantId}/status`; inactive status
 returns no grant detail. Machine callers cannot substitute resources or subjects.
 
-Holder eligibility loss, retired templates, and definitive proposal or subject
-changes permanently invalidate grants. Temporary source failure refuses the
-current request without permanent invalidation. A mutable source revision alone
-does not change frozen proposal identity.
+Retained work-item grants use the existing transactional item and directory
+triggers: definitive holder/state/proposal loss invalidates the grant and records
+history even without a status observation. Benign revision changes do not.
+Retired templates and observed definitive subject changes also invalidate grants.
+Deferred review grants pin an assignment generation: release, reassignment, queue movement, absence-cover
+change, decision, and completion change it in the same task transaction. A
+release followed by reclaim cannot revive the approval even if no status check
+observed the intervening release. Immediate review grants keep the exact
+ordinary task revision; deferred review grants allow draft revision changes
+while the assignment, subject, proposal, and disclosed facts stay unchanged.
+Temporary source failure refuses the current request without permanent
+invalidation. A mutable source revision alone does not change frozen proposal
+identity.
 
 Offline reads may continue until the earlier access-token or grant deadline.
-BREG checks fresh status before new writes, later approval, and application.
-There is no distributed transaction between that check and the resource commit.
-Task-bound deferred wallet offers are refused.
+BReg checks fresh status before new writes, later approval, and application.
+Scheduling deployments using deferred work configure `taskGrantStatus` and
+check fresh exact status before every capacity command and receipt replay.
+With no status registry, Scheduling permits only authorization with at most
+900 seconds remaining; the final fifteen minutes of a deferred grant can also
+use this legacy offline path, with that bounded stale-authority window.
+A configured registry never falls back when status is unavailable or inactive.
+There is no distributed transaction between a status observation and a resource
+commit. Scheduling also rechecks the earlier execution-token and grant expiry
+under its capacity locks, so waiting for a lock cannot carry an expired execution
+credential into a later commit.
+Evidence wallet-delivery deferred offers carrying a task grant remain refused.
+
+## Resume deferred work
+
+Retain the grant ID, original deadline, and the owning product's logical
+operation/idempotency key. After waiting or restarting, authenticate as the
+same agent and construct a fresh exchange provider using the original grant
+reference and deadline. An assertion refresh is neither a new authorization
+nor a new operation. Expiry or cancellation requires an explicit new decision;
+there is no fallback to standing service authority.
+
+This mode retains the current holder's continuing authority. It does not
+survive release, reassignment, or completion of the review task. Keep that task
+active while the approved deferred work waits, then complete it when the
+workflow no longer needs the authorization. An institutional decision that
+survives task completion requires a separately designed policy.
+
+The grant limits allowed operations, resources, principal, purpose, subject
+facts, and deadline. It does not promise one business effect. Each resource
+server owns its atomic business limits and duplicate rules; preserve the same
+operation key across refresh and restart to recover the same effect. A new key
+names a new logical operation, still inside the approved bounds.
+
+Source proposal version, digest/integrity, binding generation, and exact
+subject facts are material. Unrelated source revision churn is not. Temporary
+source/status failure refuses the current attempt and can be retried; an
+observed definitive change invalidates permanently. Review directory eligibility
+is checked at observation, so removing and restoring a membership between
+observations is not a historical revocation signal. Use explicit revocation
+when authority must stay withdrawn.

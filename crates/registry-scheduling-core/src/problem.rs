@@ -40,6 +40,7 @@ pub const PRECONDITION_FAILED_PROBLEM: &str = "precondition.failed";
 pub const PRECONDITION_REQUIRED_PROBLEM: &str = "precondition.required";
 pub const PREREQUISITE_MISSING_PROBLEM: &str = "prerequisite.missing";
 pub const PROFILE_NOT_AUTHORIZED_PROBLEM: &str = "profile.not-authorized";
+pub const RECEIPT_UNRESOLVED_PROBLEM: &str = "receipt.unresolved";
 pub const REQUEST_BODY_TOO_LARGE_PROBLEM: &str = "request.body-too-large";
 pub const REQUEST_INVALID_PROBLEM: &str = "request.invalid";
 pub const REQUEST_METHOD_NOT_ALLOWED_PROBLEM: &str = "request.method-not-allowed";
@@ -76,6 +77,7 @@ pub enum ProblemCode {
     PreconditionRequired,
     PrerequisiteMissing,
     ProfileNotAuthorized,
+    ReceiptUnresolved,
     RequestBodyTooLarge,
     RequestInvalid,
     RequestMethodNotAllowed,
@@ -113,6 +115,7 @@ impl ProblemCode {
         Self::PreconditionRequired,
         Self::PrerequisiteMissing,
         Self::ProfileNotAuthorized,
+        Self::ReceiptUnresolved,
         Self::RequestBodyTooLarge,
         Self::RequestInvalid,
         Self::RequestMethodNotAllowed,
@@ -150,6 +153,7 @@ impl ProblemCode {
             Self::PreconditionRequired => PRECONDITION_REQUIRED_PROBLEM,
             Self::PrerequisiteMissing => PREREQUISITE_MISSING_PROBLEM,
             Self::ProfileNotAuthorized => PROFILE_NOT_AUTHORIZED_PROBLEM,
+            Self::ReceiptUnresolved => RECEIPT_UNRESOLVED_PROBLEM,
             Self::RequestBodyTooLarge => REQUEST_BODY_TOO_LARGE_PROBLEM,
             Self::RequestInvalid => REQUEST_INVALID_PROBLEM,
             Self::RequestMethodNotAllowed => REQUEST_METHOD_NOT_ALLOWED_PROBLEM,
@@ -194,6 +198,7 @@ impl ProblemCode {
             Self::OperationNotAuthorized | Self::ProfileNotAuthorized => 403,
             Self::RequestNotFound => 404,
             Self::RequestMethodNotAllowed => 405,
+            Self::ReceiptUnresolved => 409,
             Self::RequestBodyTooLarge => 413,
             Self::RequestUnsupportedMediaType => 415,
             Self::BookingDuplicateActive
@@ -245,6 +250,7 @@ impl ProblemCode {
             Self::PreconditionRequired => "Precondition required",
             Self::PrerequisiteMissing => "Prerequisite missing",
             Self::ProfileNotAuthorized => "Profile not authorized",
+            Self::ReceiptUnresolved => "Original receipt unresolved",
             Self::RequestBodyTooLarge => "Payload too large",
             Self::RequestInvalid => "Request invalid",
             Self::RequestMethodNotAllowed => "Method not allowed",
@@ -326,6 +332,7 @@ impl ProblemCode {
             Self::ProfileNotAuthorized => {
                 "The selected Scheduling profile does not authorize this request."
             }
+            Self::ReceiptUnresolved => "No retained success receipt matches this caller, key, and original request. The original outcome remains unknown; this is not evidence that no effect occurred.",
             Self::RequestBodyTooLarge => "The request body exceeds the accepted size.",
             Self::RequestInvalid => "The request could not be read as a Scheduling request.",
             Self::RequestMethodNotAllowed => "The route exists but not for this method.",
@@ -361,7 +368,7 @@ mod tests {
 
     #[test]
     fn the_vocabulary_is_complete_and_closed() {
-        assert_eq!(ProblemCode::ALL.len(), 32);
+        assert_eq!(ProblemCode::ALL.len(), 33);
         for code in ProblemCode::ALL {
             assert_eq!(ProblemCode::from_code(code.code()), Some(*code));
         }

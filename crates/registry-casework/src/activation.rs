@@ -43,7 +43,7 @@ pub use registry_platform_activation::{
 /// The triggers the Casework migrations create, as table, trigger, and the
 /// function in the Casework schema it executes. Any other trigger on a
 /// Casework table is stray authority in a split-role deployment.
-const MIGRATION_TRIGGERS: [KnownTrigger; 2] = [
+const MIGRATION_TRIGGERS: [KnownTrigger; 3] = [
     KnownTrigger {
         relation: "casework_meta",
         trigger: "casework_task_directory_changed",
@@ -53,6 +53,11 @@ const MIGRATION_TRIGGERS: [KnownTrigger; 2] = [
         relation: "casework_items",
         trigger: "casework_task_item_changed",
         function: "casework_task_item_changed",
+    },
+    KnownTrigger {
+        relation: "casework_review_tasks",
+        trigger: "casework_review_assignment_generation",
+        function: "casework_review_assignment_generation",
     },
 ];
 

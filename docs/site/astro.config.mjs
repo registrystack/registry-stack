@@ -694,6 +694,7 @@ export default defineConfig({
             { label: 'Errors and status codes', slug: 'reference/errors' },
             { label: 'Environment variables', slug: 'reference/environment-variables' },
             { label: 'Configuration files', slug: 'reference/configuration-files' },
+            { label: 'Coordinator configuration', slug: 'reference/coordinator-configuration' },
             { label: 'API overview', slug: 'reference/apis' },
             { label: 'evidencectl workflows', slug: 'reference/evidencectl' },
             ...cliReferenceSidebar(undefined, { omit: omittedCliBinaries(selectedDocset) }),

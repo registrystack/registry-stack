@@ -1,0 +1,63 @@
+# Synthetic bounded directory replies. No endpoint or credential is contacted.
+apiVersion: id.registrystack.org/formats/coordinator/scenarios/v1alpha1
+kind: CoordinatorScenarios
+cases:
+- id: office-found
+  admittedAt: '2026-10-10T09:00:00Z'
+  input: {district: north}
+  replies:
+    lookup:
+    - type: success
+      value: {status: 200, body: {items: [{id: north-office}]}}
+  expect:
+    path: [lookup, result, found]
+    state: completed
+    outcome: {type: named, value: office-found}
+    output: {officeId: north-office}
+- id: directory-entry-not-found
+  admittedAt: '2026-10-10T09:00:00Z'
+  input: {district: north}
+  replies:
+    lookup:
+    - type: success
+      value: {status: 404, body: null}
+  expect:
+    path: [lookup, result, missing]
+    state: completed
+    outcome: {type: named, value: no-directory-entry}
+    output: null
+- id: empty-directory-result
+  admittedAt: '2026-10-10T09:00:00Z'
+  input: {district: north}
+  replies:
+    lookup:
+    - type: success
+      value: {status: 200, body: {items: []}}
+  expect:
+    path: [lookup, result, missing]
+    state: completed
+    outcome: {type: named, value: no-directory-entry}
+    output: null
+- id: directory-reports-unavailable
+  admittedAt: '2026-10-10T09:00:00Z'
+  input: {district: north}
+  replies:
+    lookup:
+    - type: success
+      value: {status: 503, body: null}
+  expect:
+    path: [lookup, result, unavailable]
+    state: completed
+    outcome: {type: named, value: directory-unavailable}
+    output: null
+- id: directory-transport-unavailable
+  admittedAt: '2026-10-10T09:00:00Z'
+  input: {district: north}
+  replies:
+    lookup:
+    - type: retryable
+      code: external-unavailable
+  expect:
+    path: [lookup]
+    state: retryable
+    outcome: {type: none}

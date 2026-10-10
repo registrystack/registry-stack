@@ -109,6 +109,7 @@ export type MessagingProblemCode =
   | 'profile.not-authorized'
   | 'quota.exceeded'
   | 'rate-limit.exceeded'
+  | 'receipt.unresolved'
   | 'request.body-too-large'
   | 'request.invalid'
   | 'request.method-not-allowed'
@@ -156,6 +157,8 @@ export class MessagingClient {
   health(): Promise<MessagingOutcome<null>>
   ready(): Promise<MessagingOutcome<null>>
   submit(token: string, idempotencyKey: string, request: SubmitMessageRequest): Promise<MessagingOutcome<MessageReceipt>>
+  /** Observe the original success using the same body/key and current token; never resend or mutate. */
+  messageReceipt(token: string, idempotencyKey: string, request: SubmitMessageRequest): Promise<MessagingOutcome<MessageReceipt>>
   message(token: string, messageId: MessageId): Promise<MessagingOutcome<MessageView>>
   cancel(token: string, messageId: MessageId): Promise<MessagingOutcome<MessageView>>
   preview(token: string, templateId: string, version: string, request: TemplatePreviewRequest): Promise<MessagingOutcome<TemplatePreview>>

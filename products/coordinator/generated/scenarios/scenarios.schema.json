@@ -1,0 +1,260 @@
+{
+  "$defs": {
+    "AuthoredExpectation": {
+      "additionalProperties": false,
+      "properties": {
+        "outcome": {
+          "$ref": "#/$defs/ExpectedOutcome"
+        },
+        "output": {
+          "default": null,
+          "x-registry-foreign": "json"
+        },
+        "path": {
+          "items": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "state": {
+          "$ref": "#/$defs/ExpectedState"
+        },
+        "workflowElapsedSeconds": {
+          "format": "uint32",
+          "maximum": 31536000,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "path",
+        "state"
+      ],
+      "type": "object"
+    },
+    "AuthoredReply": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "success",
+              "type": "string"
+            },
+            "value": {
+              "x-registry-foreign": "json"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "$ref": "#/$defs/LocalId"
+            },
+            "type": {
+              "const": "retryable",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "code"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "$ref": "#/$defs/LocalId"
+            },
+            "type": {
+              "const": "refused",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "code"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "$ref": "#/$defs/LocalId"
+            },
+            "type": {
+              "const": "uncertain",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "code"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "receipt-expired",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "AuthoredScenario": {
+      "additionalProperties": false,
+      "properties": {
+        "admittedAt": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "expect": {
+          "$ref": "#/$defs/AuthoredExpectation"
+        },
+        "id": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "input": {
+          "x-registry-foreign": "json"
+        },
+        "recovery": {
+          "additionalProperties": {
+            "$ref": "#/$defs/Recovery"
+          },
+          "maxProperties": 64,
+          "propertyNames": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "type": "object"
+        },
+        "replies": {
+          "additionalProperties": {
+            "items": {
+              "$ref": "#/$defs/AuthoredReply"
+            },
+            "maxItems": 8,
+            "minItems": 1,
+            "type": "array"
+          },
+          "maxProperties": 64,
+          "propertyNames": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "id",
+        "admittedAt",
+        "input",
+        "replies",
+        "expect"
+      ],
+      "type": "object"
+    },
+    "ExpectedOutcome": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "named",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/LocalId"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "none",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ExpectedState": {
+      "enum": [
+        "completed",
+        "refused",
+        "retryable",
+        "uncertain",
+        "deadline-exceeded"
+      ],
+      "type": "string"
+    },
+    "LocalId": {
+      "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+      "type": "string"
+    },
+    "Recovery": {
+      "enum": [
+        "retry-same",
+        "reconcile"
+      ],
+      "type": "string"
+    }
+  },
+  "$id": "https://id.registrystack.org/schemas/coordinator/scenarios/scenarios.v1alpha1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The authored format is separate from the stable offline execution types.",
+  "properties": {
+    "apiVersion": {
+      "const": "id.registrystack.org/formats/coordinator/scenarios/v1alpha1",
+      "type": "string"
+    },
+    "cases": {
+      "items": {
+        "$ref": "#/$defs/AuthoredScenario"
+      },
+      "maxItems": 64,
+      "minItems": 1,
+      "type": "array"
+    },
+    "kind": {
+      "const": "CoordinatorScenarios",
+      "type": "string"
+    }
+  },
+  "required": [
+    "cases",
+    "apiVersion",
+    "kind"
+  ],
+  "title": "CoordinatorScenarios",
+  "type": "object"
+}

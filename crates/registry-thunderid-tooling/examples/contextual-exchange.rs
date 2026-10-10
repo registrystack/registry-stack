@@ -219,11 +219,13 @@ fn description(
                     TokenExchangeClient {
                         assertion_resource_server_id: AUTHORITY_ID.into(),
                         assertion_scope: BOOTSTRAP_SCOPE.into(),
+                        ordinary_resource_permissions: Vec::new(),
                     }
                 } else {
                     TokenExchangeClient {
                         assertion_resource_server_id: "0197aaaa-0000-7000-8000-0000000000b1".into(),
                         assertion_scope: TARGET_SCOPE.into(),
+                        ordinary_resource_permissions: Vec::new(),
                     }
                 }),
             }

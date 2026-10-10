@@ -5,6 +5,13 @@ loader for the operator `runtime.yaml`, the configuration blocks every runtime
 spells the same way, and the `secret:` reference resolver. Each product still
 owns and validates the rest of its configuration contract.
 
+Secret consumers use `SecretResolver::resolve_reference` for bounded values
+without NUL bytes. Cryptographic consumers use `resolve_binary_reference` for
+opaque key files, which preserves every byte, including zero bytes. Both paths
+apply the same provider allowlist, owner-only regular-file checks, size bounds,
+redacted diagnostics, and zeroization. The consumer validates its key format and
+length; the resolver does not decode, trim, or reinterpret file contents.
+
 ## Loader
 
 `RuntimeConfigLoader` reads one runtime configuration file named by an

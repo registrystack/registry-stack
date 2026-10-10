@@ -1753,7 +1753,7 @@
       "description": "The bearer credential is missing, invalid, or expired. Sign in again.",
       "source": {
         "path": "crates/registry-messaging-core/src/problem.rs",
-        "sha256": "debf21ffbfc35916067d15f4cee489e502876297a74924035fe96f38475cb98c"
+        "sha256": "b2c08b13660c7bc99e9865575be322dae315474f708180031d14702ad62acdb7"
       },
       "problem": {
         "code": "authentication.refused",
@@ -1772,7 +1772,7 @@
       "description": "The callback was verified, but the provider's receipt script could not read a delivery report from it.",
       "source": {
         "path": "crates/registry-messaging-core/src/problem.rs",
-        "sha256": "debf21ffbfc35916067d15f4cee489e502876297a74924035fe96f38475cb98c"
+        "sha256": "b2c08b13660c7bc99e9865575be322dae315474f708180031d14702ad62acdb7"
       },
       "problem": {
         "code": "callback.unreadable",
@@ -1791,7 +1791,7 @@
       "description": "The callback did not verify for a provider this deployment accepts callbacks from.",
       "source": {
         "path": "crates/registry-messaging-core/src/problem.rs",
-        "sha256": "debf21ffbfc35916067d15f4cee489e502876297a74924035fe96f38475cb98c"
+        "sha256": "b2c08b13660c7bc99e9865575be322dae315474f708180031d14702ad62acdb7"
       },
       "problem": {
         "code": "callback.unverified",
@@ -1810,7 +1810,7 @@
       "description": "The content does not have the parts the channel requires, or the template's channel differs from the sender profile's.",
       "source": {
         "path": "crates/registry-messaging-core/src/problem.rs",
-        "sha256": "debf21ffbfc35916067d15f4cee489e502876297a74924035fe96f38475cb98c"
+        "sha256": "b2c08b13660c7bc99e9865575be322dae315474f708180031d14702ad62acdb7"
       },
       "problem": {
         "code": "content.invalid",
@@ -1829,7 +1829,7 @@
       "description": "A content part exceeds the size the channel accepts. Shorten the content or the data.",
       "source": {
         "path": "crates/registry-messaging-core/src/problem.rs",
-        "sha256": "debf21ffbfc35916067d15f4cee489e502876297a74924035fe96f38475cb98c"
+        "sha256": "b2c08b13660c7bc99e9865575be322dae315474f708180031d14702ad62acdb7"
       },
       "problem": {
         "code": "content.too-large",
@@ -1848,7 +1848,7 @@
       "description": "The SMS text needs more segments than the sender profile allows. Shorten the text or the data.",
       "source": {
         "path": "crates/registry-messaging-core/src/problem.rs",
-        "sha256": "debf21ffbfc35916067d15f4cee489e502876297a74924035fe96f38475cb98c"
+        "sha256": "b2c08b13660c7bc99e9865575be322dae315474f708180031d14702ad62acdb7"
       },
       "problem": {
         "code": "content.too-many-segments",
@@ -1867,7 +1867,7 @@
       "description": "The stored response for this idempotency key has expired. Reconcile the original submission before choosing a new key.",
       "source": {
         "path": "crates/registry-messaging-core/src/problem.rs",
-        "sha256": "debf21ffbfc35916067d15f4cee489e502876297a74924035fe96f38475cb98c"
+        "sha256": "b2c08b13660c7bc99e9865575be322dae315474f708180031d14702ad62acdb7"
       },
       "problem": {
         "code": "idempotency.expired",
@@ -1886,7 +1886,7 @@
       "description": "This idempotency key was used for a different request.",
       "source": {
         "path": "crates/registry-messaging-core/src/problem.rs",
-        "sha256": "debf21ffbfc35916067d15f4cee489e502876297a74924035fe96f38475cb98c"
+        "sha256": "b2c08b13660c7bc99e9865575be322dae315474f708180031d14702ad62acdb7"
       },
       "problem": {
         "code": "idempotency.key-reused",
@@ -1905,7 +1905,7 @@
       "description": "The message is being sent or has been handed to the provider, so it can no longer be cancelled.",
       "source": {
         "path": "crates/registry-messaging-core/src/problem.rs",
-        "sha256": "debf21ffbfc35916067d15f4cee489e502876297a74924035fe96f38475cb98c"
+        "sha256": "b2c08b13660c7bc99e9865575be322dae315474f708180031d14702ad62acdb7"
       },
       "problem": {
         "code": "message.dispatch-started",
@@ -1924,7 +1924,7 @@
       "description": "No message with this identifier is visible to the caller.",
       "source": {
         "path": "crates/registry-messaging-core/src/problem.rs",
-        "sha256": "debf21ffbfc35916067d15f4cee489e502876297a74924035fe96f38475cb98c"
+        "sha256": "b2c08b13660c7bc99e9865575be322dae315474f708180031d14702ad62acdb7"
       },
       "problem": {
         "code": "message.not-visible",
@@ -1943,7 +1943,7 @@
       "description": "The message has reached a final state, so it can no longer be cancelled.",
       "source": {
         "path": "crates/registry-messaging-core/src/problem.rs",
-        "sha256": "debf21ffbfc35916067d15f4cee489e502876297a74924035fe96f38475cb98c"
+        "sha256": "b2c08b13660c7bc99e9865575be322dae315474f708180031d14702ad62acdb7"
       },
       "problem": {
         "code": "message.terminal",
@@ -1962,7 +1962,7 @@
       "description": "Your Messaging access profile does not allow this operation.",
       "source": {
         "path": "crates/registry-messaging-core/src/problem.rs",
-        "sha256": "debf21ffbfc35916067d15f4cee489e502876297a74924035fe96f38475cb98c"
+        "sha256": "b2c08b13660c7bc99e9865575be322dae315474f708180031d14702ad62acdb7"
       },
       "problem": {
         "code": "operation.not-authorized",
@@ -1981,7 +1981,7 @@
       "description": "No Messaging access profile authorizes this caller for this request.",
       "source": {
         "path": "crates/registry-messaging-core/src/problem.rs",
-        "sha256": "debf21ffbfc35916067d15f4cee489e502876297a74924035fe96f38475cb98c"
+        "sha256": "b2c08b13660c7bc99e9865575be322dae315474f708180031d14702ad62acdb7"
       },
       "problem": {
         "code": "profile.not-authorized",
@@ -2000,7 +2000,7 @@
       "description": "Your Messaging access profile has accepted its daily limit of messages. Try again after the time in Retry-After.",
       "source": {
         "path": "crates/registry-messaging-core/src/problem.rs",
-        "sha256": "debf21ffbfc35916067d15f4cee489e502876297a74924035fe96f38475cb98c"
+        "sha256": "b2c08b13660c7bc99e9865575be322dae315474f708180031d14702ad62acdb7"
       },
       "problem": {
         "code": "quota.exceeded",
@@ -2019,12 +2019,31 @@
       "description": "The request rate accepted from this caller is exceeded. Try again after the time in Retry-After.",
       "source": {
         "path": "crates/registry-messaging-core/src/problem.rs",
-        "sha256": "debf21ffbfc35916067d15f4cee489e502876297a74924035fe96f38475cb98c"
+        "sha256": "b2c08b13660c7bc99e9865575be322dae315474f708180031d14702ad62acdb7"
       },
       "problem": {
         "code": "rate-limit.exceeded",
         "httpStatuses": [
           429
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-messaging/receipt/unresolved",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "messaging",
+      "title": "Original receipt unresolved",
+      "description": "No retained success receipt matches this caller, key, and original request. The original outcome remains unknown; this is not evidence that no effect occurred.",
+      "source": {
+        "path": "crates/registry-messaging-core/src/problem.rs",
+        "sha256": "b2c08b13660c7bc99e9865575be322dae315474f708180031d14702ad62acdb7"
+      },
+      "problem": {
+        "code": "receipt.unresolved",
+        "httpStatuses": [
+          409
         ]
       }
     },
@@ -2038,7 +2057,7 @@
       "description": "The request body exceeds the accepted size.",
       "source": {
         "path": "crates/registry-messaging-core/src/problem.rs",
-        "sha256": "debf21ffbfc35916067d15f4cee489e502876297a74924035fe96f38475cb98c"
+        "sha256": "b2c08b13660c7bc99e9865575be322dae315474f708180031d14702ad62acdb7"
       },
       "problem": {
         "code": "request.body-too-large",
@@ -2057,7 +2076,7 @@
       "description": "The request could not be read as a Messaging request.",
       "source": {
         "path": "crates/registry-messaging-core/src/problem.rs",
-        "sha256": "debf21ffbfc35916067d15f4cee489e502876297a74924035fe96f38475cb98c"
+        "sha256": "b2c08b13660c7bc99e9865575be322dae315474f708180031d14702ad62acdb7"
       },
       "problem": {
         "code": "request.invalid",
@@ -2076,7 +2095,7 @@
       "description": "The route exists but not for this method.",
       "source": {
         "path": "crates/registry-messaging-core/src/problem.rs",
-        "sha256": "debf21ffbfc35916067d15f4cee489e502876297a74924035fe96f38475cb98c"
+        "sha256": "b2c08b13660c7bc99e9865575be322dae315474f708180031d14702ad62acdb7"
       },
       "problem": {
         "code": "request.method-not-allowed",
@@ -2095,7 +2114,7 @@
       "description": "The requested route does not exist.",
       "source": {
         "path": "crates/registry-messaging-core/src/problem.rs",
-        "sha256": "debf21ffbfc35916067d15f4cee489e502876297a74924035fe96f38475cb98c"
+        "sha256": "b2c08b13660c7bc99e9865575be322dae315474f708180031d14702ad62acdb7"
       },
       "problem": {
         "code": "request.not-found",
@@ -2114,7 +2133,7 @@
       "description": "The request body could not be processed.",
       "source": {
         "path": "crates/registry-messaging-core/src/problem.rs",
-        "sha256": "debf21ffbfc35916067d15f4cee489e502876297a74924035fe96f38475cb98c"
+        "sha256": "b2c08b13660c7bc99e9865575be322dae315474f708180031d14702ad62acdb7"
       },
       "problem": {
         "code": "request.unprocessable",
@@ -2133,7 +2152,7 @@
       "description": "The request body is not JSON.",
       "source": {
         "path": "crates/registry-messaging-core/src/problem.rs",
-        "sha256": "debf21ffbfc35916067d15f4cee489e502876297a74924035fe96f38475cb98c"
+        "sha256": "b2c08b13660c7bc99e9865575be322dae315474f708180031d14702ad62acdb7"
       },
       "problem": {
         "code": "request.unsupported-media-type",
@@ -2152,7 +2171,7 @@
       "description": "Messaging is unavailable. Try again after the service recovers.",
       "source": {
         "path": "crates/registry-messaging-core/src/problem.rs",
-        "sha256": "debf21ffbfc35916067d15f4cee489e502876297a74924035fe96f38475cb98c"
+        "sha256": "b2c08b13660c7bc99e9865575be322dae315474f708180031d14702ad62acdb7"
       },
       "problem": {
         "code": "service.unavailable",
@@ -2171,7 +2190,7 @@
       "description": "The data does not match the template's data schema.",
       "source": {
         "path": "crates/registry-messaging-core/src/problem.rs",
-        "sha256": "debf21ffbfc35916067d15f4cee489e502876297a74924035fe96f38475cb98c"
+        "sha256": "b2c08b13660c7bc99e9865575be322dae315474f708180031d14702ad62acdb7"
       },
       "problem": {
         "code": "template.data-invalid",
@@ -2190,7 +2209,7 @@
       "description": "The template version has no content in the requested locale. Choose one of its declared locales.",
       "source": {
         "path": "crates/registry-messaging-core/src/problem.rs",
-        "sha256": "debf21ffbfc35916067d15f4cee489e502876297a74924035fe96f38475cb98c"
+        "sha256": "b2c08b13660c7bc99e9865575be322dae315474f708180031d14702ad62acdb7"
       },
       "problem": {
         "code": "template.locale-unavailable",
@@ -2209,7 +2228,7 @@
       "description": "No template with this identifier and version is available to the caller.",
       "source": {
         "path": "crates/registry-messaging-core/src/problem.rs",
-        "sha256": "debf21ffbfc35916067d15f4cee489e502876297a74924035fe96f38475cb98c"
+        "sha256": "b2c08b13660c7bc99e9865575be322dae315474f708180031d14702ad62acdb7"
       },
       "problem": {
         "code": "template.not-found",
@@ -2228,7 +2247,7 @@
       "description": "The template could not be rendered with this data within the rendering limits.",
       "source": {
         "path": "crates/registry-messaging-core/src/problem.rs",
-        "sha256": "debf21ffbfc35916067d15f4cee489e502876297a74924035fe96f38475cb98c"
+        "sha256": "b2c08b13660c7bc99e9865575be322dae315474f708180031d14702ad62acdb7"
       },
       "problem": {
         "code": "template.render-refused",
@@ -2247,7 +2266,7 @@
       "description": "The bearer credential is missing, invalid, or expired. Sign in again.",
       "source": {
         "path": "crates/registry-scheduling-core/src/problem.rs",
-        "sha256": "5ce5a4507c1e778ece0e58a44f59976ba543df23a12d484e9cd381b50cf97d68"
+        "sha256": "12f4afc02a4396f0111b84b58cfa2a28d7112e14e7e9b80ea1809b4a03905e54"
       },
       "problem": {
         "code": "authentication.refused",
@@ -2266,7 +2285,7 @@
       "description": "An active booking already holds this party's duplicate key. Cancel it, or wait until it has passed, before booking again.",
       "source": {
         "path": "crates/registry-scheduling-core/src/problem.rs",
-        "sha256": "5ce5a4507c1e778ece0e58a44f59976ba543df23a12d484e9cd381b50cf97d68"
+        "sha256": "12f4afc02a4396f0111b84b58cfa2a28d7112e14e7e9b80ea1809b4a03905e54"
       },
       "problem": {
         "code": "booking.duplicate-active",
@@ -2285,7 +2304,7 @@
       "description": "The cancellation cutoff for this appointment has passed, so it can no longer be cancelled.",
       "source": {
         "path": "crates/registry-scheduling-core/src/problem.rs",
-        "sha256": "5ce5a4507c1e778ece0e58a44f59976ba543df23a12d484e9cd381b50cf97d68"
+        "sha256": "12f4afc02a4396f0111b84b58cfa2a28d7112e14e7e9b80ea1809b4a03905e54"
       },
       "problem": {
         "code": "cancellation.cutoff-passed",
@@ -2304,7 +2323,7 @@
       "description": "The party or backing supply does not carry every capability this offering requires.",
       "source": {
         "path": "crates/registry-scheduling-core/src/problem.rs",
-        "sha256": "5ce5a4507c1e778ece0e58a44f59976ba543df23a12d484e9cd381b50cf97d68"
+        "sha256": "12f4afc02a4396f0111b84b58cfa2a28d7112e14e7e9b80ea1809b4a03905e54"
       },
       "problem": {
         "code": "capability.unmatched",
@@ -2323,7 +2342,7 @@
       "description": "The supply is fully committed for the requested interval. Choose another time.",
       "source": {
         "path": "crates/registry-scheduling-core/src/problem.rs",
-        "sha256": "5ce5a4507c1e778ece0e58a44f59976ba543df23a12d484e9cd381b50cf97d68"
+        "sha256": "12f4afc02a4396f0111b84b58cfa2a28d7112e14e7e9b80ea1809b4a03905e54"
       },
       "problem": {
         "code": "capacity.exhausted",
@@ -2342,7 +2361,7 @@
       "description": "This cursor has expired. Start again without a cursor and deduplicate entries by id.",
       "source": {
         "path": "crates/registry-scheduling-core/src/problem.rs",
-        "sha256": "5ce5a4507c1e778ece0e58a44f59976ba543df23a12d484e9cd381b50cf97d68"
+        "sha256": "12f4afc02a4396f0111b84b58cfa2a28d7112e14e7e9b80ea1809b4a03905e54"
       },
       "problem": {
         "code": "cursor.expired",
@@ -2361,7 +2380,7 @@
       "description": "The cursor is invalid for this request.",
       "source": {
         "path": "crates/registry-scheduling-core/src/problem.rs",
-        "sha256": "5ce5a4507c1e778ece0e58a44f59976ba543df23a12d484e9cd381b50cf97d68"
+        "sha256": "12f4afc02a4396f0111b84b58cfa2a28d7112e14e7e9b80ea1809b4a03905e54"
       },
       "problem": {
         "code": "cursor.invalid",
@@ -2380,7 +2399,7 @@
       "description": "A required eligibility check could not run. Retry; do not treat this as permission.",
       "source": {
         "path": "crates/registry-scheduling-core/src/problem.rs",
-        "sha256": "5ce5a4507c1e778ece0e58a44f59976ba543df23a12d484e9cd381b50cf97d68"
+        "sha256": "12f4afc02a4396f0111b84b58cfa2a28d7112e14e7e9b80ea1809b4a03905e54"
       },
       "problem": {
         "code": "eligibility.unavailable",
@@ -2399,7 +2418,7 @@
       "description": "The hold expired before confirmation. Its capacity is bookable again; start a new request.",
       "source": {
         "path": "crates/registry-scheduling-core/src/problem.rs",
-        "sha256": "5ce5a4507c1e778ece0e58a44f59976ba543df23a12d484e9cd381b50cf97d68"
+        "sha256": "12f4afc02a4396f0111b84b58cfa2a28d7112e14e7e9b80ea1809b4a03905e54"
       },
       "problem": {
         "code": "hold.expired",
@@ -2418,7 +2437,7 @@
       "description": "The claim is not an active hold. It may already be confirmed or released.",
       "source": {
         "path": "crates/registry-scheduling-core/src/problem.rs",
-        "sha256": "5ce5a4507c1e778ece0e58a44f59976ba543df23a12d484e9cd381b50cf97d68"
+        "sha256": "12f4afc02a4396f0111b84b58cfa2a28d7112e14e7e9b80ea1809b4a03905e54"
       },
       "problem": {
         "code": "hold.released",
@@ -2437,7 +2456,7 @@
       "description": "A required lifecycle hook could not run, so the request was refused rather than half-applied.",
       "source": {
         "path": "crates/registry-scheduling-core/src/problem.rs",
-        "sha256": "5ce5a4507c1e778ece0e58a44f59976ba543df23a12d484e9cd381b50cf97d68"
+        "sha256": "12f4afc02a4396f0111b84b58cfa2a28d7112e14e7e9b80ea1809b4a03905e54"
       },
       "problem": {
         "code": "hook.unavailable",
@@ -2456,7 +2475,7 @@
       "description": "The requested start is earlier than the lead time allows or further ahead than the horizon allows.",
       "source": {
         "path": "crates/registry-scheduling-core/src/problem.rs",
-        "sha256": "5ce5a4507c1e778ece0e58a44f59976ba543df23a12d484e9cd381b50cf97d68"
+        "sha256": "12f4afc02a4396f0111b84b58cfa2a28d7112e14e7e9b80ea1809b4a03905e54"
       },
       "problem": {
         "code": "horizon.outside",
@@ -2475,7 +2494,7 @@
       "description": "The stored response for this idempotency key has expired. For an appointment command, read the appointment by its external reference or its identifier to learn the original outcome before choosing a new key. A hold cannot be read and expires on its own, so start a new request.",
       "source": {
         "path": "crates/registry-scheduling-core/src/problem.rs",
-        "sha256": "5ce5a4507c1e778ece0e58a44f59976ba543df23a12d484e9cd381b50cf97d68"
+        "sha256": "12f4afc02a4396f0111b84b58cfa2a28d7112e14e7e9b80ea1809b4a03905e54"
       },
       "problem": {
         "code": "idempotency.expired",
@@ -2494,7 +2513,7 @@
       "description": "This idempotency key was used for a different request.",
       "source": {
         "path": "crates/registry-scheduling-core/src/problem.rs",
-        "sha256": "5ce5a4507c1e778ece0e58a44f59976ba543df23a12d484e9cd381b50cf97d68"
+        "sha256": "12f4afc02a4396f0111b84b58cfa2a28d7112e14e7e9b80ea1809b4a03905e54"
       },
       "problem": {
         "code": "idempotency.key-reused",
@@ -2513,7 +2532,7 @@
       "description": "A closure covers the requested start. Choose a start outside the closure.",
       "source": {
         "path": "crates/registry-scheduling-core/src/problem.rs",
-        "sha256": "5ce5a4507c1e778ece0e58a44f59976ba543df23a12d484e9cd381b50cf97d68"
+        "sha256": "12f4afc02a4396f0111b84b58cfa2a28d7112e14e7e9b80ea1809b4a03905e54"
       },
       "problem": {
         "code": "location.closed",
@@ -2532,7 +2551,7 @@
       "description": "Your current Scheduling authority does not allow this operation.",
       "source": {
         "path": "crates/registry-scheduling-core/src/problem.rs",
-        "sha256": "5ce5a4507c1e778ece0e58a44f59976ba543df23a12d484e9cd381b50cf97d68"
+        "sha256": "12f4afc02a4396f0111b84b58cfa2a28d7112e14e7e9b80ea1809b4a03905e54"
       },
       "problem": {
         "code": "operation.not-authorized",
@@ -2551,7 +2570,7 @@
       "description": "The party is larger than this offering can ever serve, or its size falls outside the published units.",
       "source": {
         "path": "crates/registry-scheduling-core/src/problem.rs",
-        "sha256": "5ce5a4507c1e778ece0e58a44f59976ba543df23a12d484e9cd381b50cf97d68"
+        "sha256": "12f4afc02a4396f0111b84b58cfa2a28d7112e14e7e9b80ea1809b4a03905e54"
       },
       "problem": {
         "code": "party.capacity-inadequate",
@@ -2570,7 +2589,7 @@
       "description": "The policy revision changed before the request committed. Reload the catalogue and try again with the current revision.",
       "source": {
         "path": "crates/registry-scheduling-core/src/problem.rs",
-        "sha256": "5ce5a4507c1e778ece0e58a44f59976ba543df23a12d484e9cd381b50cf97d68"
+        "sha256": "12f4afc02a4396f0111b84b58cfa2a28d7112e14e7e9b80ea1809b4a03905e54"
       },
       "problem": {
         "code": "policy.changed",
@@ -2589,7 +2608,7 @@
       "description": "The appointment changed since you loaded it. Reload and try again.",
       "source": {
         "path": "crates/registry-scheduling-core/src/problem.rs",
-        "sha256": "5ce5a4507c1e778ece0e58a44f59976ba543df23a12d484e9cd381b50cf97d68"
+        "sha256": "12f4afc02a4396f0111b84b58cfa2a28d7112e14e7e9b80ea1809b4a03905e54"
       },
       "problem": {
         "code": "precondition.failed",
@@ -2608,7 +2627,7 @@
       "description": "This mutation requires the revision you loaded, or the duplicate key this offering keys on.",
       "source": {
         "path": "crates/registry-scheduling-core/src/problem.rs",
-        "sha256": "5ce5a4507c1e778ece0e58a44f59976ba543df23a12d484e9cd381b50cf97d68"
+        "sha256": "12f4afc02a4396f0111b84b58cfa2a28d7112e14e7e9b80ea1809b4a03905e54"
       },
       "problem": {
         "code": "precondition.required",
@@ -2627,7 +2646,7 @@
       "description": "The party is missing a prerequisite this offering requires.",
       "source": {
         "path": "crates/registry-scheduling-core/src/problem.rs",
-        "sha256": "5ce5a4507c1e778ece0e58a44f59976ba543df23a12d484e9cd381b50cf97d68"
+        "sha256": "12f4afc02a4396f0111b84b58cfa2a28d7112e14e7e9b80ea1809b4a03905e54"
       },
       "problem": {
         "code": "prerequisite.missing",
@@ -2646,12 +2665,31 @@
       "description": "The selected Scheduling profile does not authorize this request.",
       "source": {
         "path": "crates/registry-scheduling-core/src/problem.rs",
-        "sha256": "5ce5a4507c1e778ece0e58a44f59976ba543df23a12d484e9cd381b50cf97d68"
+        "sha256": "12f4afc02a4396f0111b84b58cfa2a28d7112e14e7e9b80ea1809b4a03905e54"
       },
       "problem": {
         "code": "profile.not-authorized",
         "httpStatuses": [
           403
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-scheduling/receipt/unresolved",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "scheduling",
+      "title": "Original receipt unresolved",
+      "description": "No retained success receipt matches this caller, key, and original request. The original outcome remains unknown; this is not evidence that no effect occurred.",
+      "source": {
+        "path": "crates/registry-scheduling-core/src/problem.rs",
+        "sha256": "12f4afc02a4396f0111b84b58cfa2a28d7112e14e7e9b80ea1809b4a03905e54"
+      },
+      "problem": {
+        "code": "receipt.unresolved",
+        "httpStatuses": [
+          409
         ]
       }
     },
@@ -2665,7 +2703,7 @@
       "description": "The request body exceeds the accepted size.",
       "source": {
         "path": "crates/registry-scheduling-core/src/problem.rs",
-        "sha256": "5ce5a4507c1e778ece0e58a44f59976ba543df23a12d484e9cd381b50cf97d68"
+        "sha256": "12f4afc02a4396f0111b84b58cfa2a28d7112e14e7e9b80ea1809b4a03905e54"
       },
       "problem": {
         "code": "request.body-too-large",
@@ -2684,7 +2722,7 @@
       "description": "The request could not be read as a Scheduling request.",
       "source": {
         "path": "crates/registry-scheduling-core/src/problem.rs",
-        "sha256": "5ce5a4507c1e778ece0e58a44f59976ba543df23a12d484e9cd381b50cf97d68"
+        "sha256": "12f4afc02a4396f0111b84b58cfa2a28d7112e14e7e9b80ea1809b4a03905e54"
       },
       "problem": {
         "code": "request.invalid",
@@ -2703,7 +2741,7 @@
       "description": "The route exists but not for this method.",
       "source": {
         "path": "crates/registry-scheduling-core/src/problem.rs",
-        "sha256": "5ce5a4507c1e778ece0e58a44f59976ba543df23a12d484e9cd381b50cf97d68"
+        "sha256": "12f4afc02a4396f0111b84b58cfa2a28d7112e14e7e9b80ea1809b4a03905e54"
       },
       "problem": {
         "code": "request.method-not-allowed",
@@ -2722,7 +2760,7 @@
       "description": "The requested route does not exist.",
       "source": {
         "path": "crates/registry-scheduling-core/src/problem.rs",
-        "sha256": "5ce5a4507c1e778ece0e58a44f59976ba543df23a12d484e9cd381b50cf97d68"
+        "sha256": "12f4afc02a4396f0111b84b58cfa2a28d7112e14e7e9b80ea1809b4a03905e54"
       },
       "problem": {
         "code": "request.not-found",
@@ -2741,7 +2779,7 @@
       "description": "The request body could not be processed.",
       "source": {
         "path": "crates/registry-scheduling-core/src/problem.rs",
-        "sha256": "5ce5a4507c1e778ece0e58a44f59976ba543df23a12d484e9cd381b50cf97d68"
+        "sha256": "12f4afc02a4396f0111b84b58cfa2a28d7112e14e7e9b80ea1809b4a03905e54"
       },
       "problem": {
         "code": "request.unprocessable",
@@ -2760,7 +2798,7 @@
       "description": "The request body is not JSON.",
       "source": {
         "path": "crates/registry-scheduling-core/src/problem.rs",
-        "sha256": "5ce5a4507c1e778ece0e58a44f59976ba543df23a12d484e9cd381b50cf97d68"
+        "sha256": "12f4afc02a4396f0111b84b58cfa2a28d7112e14e7e9b80ea1809b4a03905e54"
       },
       "problem": {
         "code": "request.unsupported-media-type",
@@ -2779,7 +2817,7 @@
       "description": "Every capable member is unavailable for this interval.",
       "source": {
         "path": "crates/registry-scheduling-core/src/problem.rs",
-        "sha256": "5ce5a4507c1e778ece0e58a44f59976ba543df23a12d484e9cd381b50cf97d68"
+        "sha256": "12f4afc02a4396f0111b84b58cfa2a28d7112e14e7e9b80ea1809b4a03905e54"
       },
       "problem": {
         "code": "resource.unavailable",
@@ -2798,7 +2836,7 @@
       "description": "The window revision changed before the request committed. Reload the catalogue and try again.",
       "source": {
         "path": "crates/registry-scheduling-core/src/problem.rs",
-        "sha256": "5ce5a4507c1e778ece0e58a44f59976ba543df23a12d484e9cd381b50cf97d68"
+        "sha256": "12f4afc02a4396f0111b84b58cfa2a28d7112e14e7e9b80ea1809b4a03905e54"
       },
       "problem": {
         "code": "revision.mismatch",
@@ -2817,7 +2855,7 @@
       "description": "No published schedule serves that start. Choose a start on the published grid.",
       "source": {
         "path": "crates/registry-scheduling-core/src/problem.rs",
-        "sha256": "5ce5a4507c1e778ece0e58a44f59976ba543df23a12d484e9cd381b50cf97d68"
+        "sha256": "12f4afc02a4396f0111b84b58cfa2a28d7112e14e7e9b80ea1809b4a03905e54"
       },
       "problem": {
         "code": "schedule.unpublished",
@@ -2836,7 +2874,7 @@
       "description": "Scheduling storage is unavailable. Try again after the service recovers.",
       "source": {
         "path": "crates/registry-scheduling-core/src/problem.rs",
-        "sha256": "5ce5a4507c1e778ece0e58a44f59976ba543df23a12d484e9cd381b50cf97d68"
+        "sha256": "12f4afc02a4396f0111b84b58cfa2a28d7112e14e7e9b80ea1809b4a03905e54"
       },
       "problem": {
         "code": "service.unavailable",
@@ -2967,7 +3005,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/tools/dev-clients.v1alpha1.schema.json",
-        "sha256": "7297f9422103c181860246c27f2405cb84eca1233bef0db51880f0c5aab07f6d",
+        "sha256": "adb8142a11170557da653a37cfb97f9b279b51dab701228176beb959234f98e7",
         "mediaType": "application/schema+json"
       }
     },
@@ -3219,7 +3257,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/runtime/runtime.schema.json",
-        "sha256": "b36da90e5baa9d092fc9c103fb02a2546eb44c82106928abd6903bda5918cf00",
+        "sha256": "366ad8cd001dc2b7cffc4af1fae9e6253f65e18c0c3aed1b06496376da0e62df",
         "mediaType": "application/schema+json"
       }
     },
@@ -3579,7 +3617,7 @@
       },
       "artifact": {
         "path": "products/casework/generated/project/project.schema.json",
-        "sha256": "9b2d01d49afcb08a0115dcaabd44b908b3cc00b7bd725b3acd840b23e8486491",
+        "sha256": "dd933fa4b9f2cc498a66484c8cfcfca7350f278d0944599286015a992a4a4026",
         "mediaType": "application/schema+json"
       }
     },
@@ -3724,6 +3762,60 @@
       "artifact": {
         "path": "products/casework/contracts/cli/UsageReport.schema.json",
         "sha256": "a6eb9aafd148d5821028f1b0132c0cecdf9eed76cc27fb3a9888c07605d84b37",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/schemas/coordinator/project/project.v1alpha1.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "coordinator",
+      "title": "CoordinatorProject",
+      "description": "Registry Coordinator portable project authoring JSON Schema.",
+      "source": {
+        "path": "crates/registry-coordinator/src/authoring.rs",
+        "sha256": "00943e91d1a6f3d796f02610163f2ea84f3ef5164764b989247cedba73ef9ed6"
+      },
+      "artifact": {
+        "path": "products/coordinator/generated/project/project.schema.json",
+        "sha256": "e18c0fa2ebc76f0ed101f1bcef913ae1182fabdc476d3177a51178d79730f01e",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/schemas/coordinator/runtime/runtime.v1alpha1.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "coordinator",
+      "title": "RuntimeConfig",
+      "description": "Registry Coordinator runtime configuration JSON Schema.",
+      "source": {
+        "path": "crates/registry-coordinator/src/runtime.rs",
+        "sha256": "74cb8ca1a80692a3ccec711ff814592930a71d04a7553c9eb9ccdd05b5650e04"
+      },
+      "artifact": {
+        "path": "products/coordinator/generated/runtime/runtime.schema.json",
+        "sha256": "56dadec62e34da375cb271a3324585e5d260c42f1a5ec966ae9b5d44589fbc11",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/schemas/coordinator/scenarios/scenarios.v1alpha1.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "coordinator",
+      "title": "CoordinatorScenarios",
+      "description": "Registry Coordinator deterministic scenario authoring JSON Schema.",
+      "source": {
+        "path": "crates/registry-coordinator/src/scenarios.rs",
+        "sha256": "21a1404f6a3fb87a9bbace674516cbde8261c7d4a50c84c016dd97a7704edfd6"
+      },
+      "artifact": {
+        "path": "products/coordinator/generated/scenarios/scenarios.schema.json",
+        "sha256": "53617d2000cb9d89c60f46ab35e2ab969afba6d53be9a9b57b22b11563595b98",
         "mediaType": "application/schema+json"
       }
     },
@@ -4371,7 +4463,7 @@
       },
       "artifact": {
         "path": "products/scheduling/generated/fixture/fixture.schema.json",
-        "sha256": "968ec77a589957cfcd70eb6d4c2f906bf1285308f295c80af295673f51c36572",
+        "sha256": "ea3e5db017d1c733bbbc9d5aed6ad5f5e760649379d6ba1a993c48e17e02e3a2",
         "mediaType": "application/schema+json"
       }
     },
@@ -4425,7 +4517,7 @@
       },
       "artifact": {
         "path": "products/scheduling/generated/runtime/runtime.schema.json",
-        "sha256": "edc71f314f89757b83815bf7133130d988b17dd64ac1643f2ade89b417a1fde9",
+        "sha256": "9236ddd995dcf84d85afaeb92aa78cea530c312491b7f7995418f1938ee258f8",
         "mediaType": "application/schema+json"
       }
     },

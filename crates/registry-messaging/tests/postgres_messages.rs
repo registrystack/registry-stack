@@ -1492,3 +1492,186 @@ async fn a_settlement_whose_outcome_record_is_refused_is_applied_and_unconfirmed
     );
     assert_eq!(harness.state(message_id).await, "delivered");
 }
+
+#[tokio::test]
+async fn original_receipt_reads_preserve_ownership_request_expiry_and_product_state() {
+    let harness = Harness::start().await;
+    let body = email_submission();
+    let key = "original-receipt-canary-key";
+    let (status, original) = harness.submit(&sender_token(), key, &body).await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    let id = Uuid::parse_str(original["id"].as_str().unwrap()).unwrap();
+    let before = harness
+        .count("SELECT count(*) FROM messaging_messages")
+        .await;
+    async fn lookup(h: &Harness, bearer: &str, key: &str, body: &Value) -> (StatusCode, Value) {
+        h.send(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/messages/receipt")
+                .header("authorization", format!("Bearer {bearer}"))
+                .header("content-type", "application/json")
+                .header("idempotency-key", key)
+                .body(Body::from(serde_json::to_vec(body).unwrap()))
+                .unwrap(),
+        )
+        .await
+    }
+    let answer = lookup(&harness, &sender_token(), key, &body).await;
+    assert_eq!(answer, (StatusCode::OK, original));
+    let mut changed = body.clone();
+    changed["data"]["name"] = json!("receipt-sensitive-canary");
+    for (bearer, command_key, request) in [
+        (sender_token_for(OTHER_SENDER_PRINCIPAL), key, body.clone()),
+        (sender_token(), "unseen-receipt-key", body.clone()),
+        (sender_token(), key, changed),
+    ] {
+        assert_problem(
+            &lookup(&harness, &bearer, command_key, &request).await,
+            StatusCode::CONFLICT,
+            "receipt.unresolved",
+        );
+    }
+    harness.isolated.admin.execute("UPDATE messaging_idempotency SET expires_at=transaction_timestamp()-interval '1 second' WHERE message_id=$1", &[&id]).await.unwrap();
+    assert_problem(
+        &lookup(&harness, &sender_token(), key, &body).await,
+        StatusCode::CONFLICT,
+        "receipt.unresolved",
+    );
+    assert_eq!(
+        harness
+            .count("SELECT count(*) FROM messaging_messages")
+            .await,
+        before
+    );
+    assert_eq!(
+        harness
+            .count("SELECT count(*) FROM messaging_idempotency")
+            .await,
+        1
+    );
+    assert_eq!(harness.state(id).await, "pending");
+    let audit = serde_json::to_string(&harness.audit_responses().await).unwrap();
+    assert!(!audit.contains("receipt-sensitive-canary"));
+    assert!(!audit.contains(key));
+}
+
+#[tokio::test]
+async fn original_receipt_reads_neither_spend_nor_require_submission_budget() {
+    let harness = Harness::start().await;
+    let body = email_submission();
+    let sender = sender_token();
+    let key = "receipt-before-rate-limit";
+    let (status, original) = harness.submit(&sender, key, &body).await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    let profiles = AccessProfiles::new(
+        harness
+            .package
+            .access_profiles()
+            .iter()
+            .cloned()
+            .map(|mut profile| {
+                profile.requests_per_minute = 1;
+                profile.burst = 1;
+                profile
+            })
+            .collect(),
+    )
+    .unwrap();
+    let app = harness
+        .app_with_caller_limits(registry_messaging::limits::CallerLimits::new(&profiles).unwrap())
+        .await;
+    for after_submission in [false, true] {
+        if after_submission {
+            let (status, _, _) = submit_to(app.clone(), &sender, "one-budgeted-send", &body).await;
+            assert_eq!(status, StatusCode::ACCEPTED);
+        }
+        for _ in 0..3 {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/v1/messages/receipt")
+                        .header("authorization", format!("Bearer {sender}"))
+                        .header("content-type", "application/json")
+                        .header("idempotency-key", key)
+                        .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
+                .await
+                .unwrap();
+            assert_eq!(serde_json::from_slice::<Value>(&bytes).unwrap(), original);
+        }
+    }
+    let (status, _, problem) = submit_to(app, &sender, "send-over-budget", &body).await;
+    assert_problem(
+        &(status, problem),
+        StatusCode::TOO_MANY_REQUESTS,
+        "rate-limit.exceeded",
+    );
+    assert_eq!(
+        harness
+            .count("SELECT count(*) FROM messaging_messages")
+            .await,
+        2
+    );
+    assert_eq!(
+        harness
+            .count("SELECT count(*) FROM messaging_idempotency")
+            .await,
+        2
+    );
+}
+
+#[tokio::test]
+async fn original_receipt_disclosure_requires_both_audit_entries() {
+    let harness = Harness::start().await;
+    let body = email_submission();
+    let key = "audit-gated-original-receipt";
+    assert_eq!(
+        harness.submit(&sender_token(), key, &body).await.0,
+        StatusCode::ACCEPTED
+    );
+    for accepted_writes in [0, 1] {
+        let audit = test_audit(AuditWriter::from_line_sink(Box::new(
+            RefusingAuditSink::after(accepted_writes),
+        )));
+        let app = harness.app_with_audit(audit).await;
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/messages/receipt")
+                    .header("authorization", format!("Bearer {}", sender_token()))
+                    .header("content-type", "application/json")
+                    .header("idempotency-key", key)
+                    .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .unwrap();
+        let problem: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(problem["code"], "service.unavailable");
+    }
+    assert_eq!(
+        harness
+            .count("SELECT count(*) FROM messaging_messages")
+            .await,
+        1
+    );
+    assert_eq!(
+        harness
+            .count("SELECT count(*) FROM messaging_idempotency")
+            .await,
+        1
+    );
+}

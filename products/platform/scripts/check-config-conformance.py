@@ -108,6 +108,35 @@ class Row:
 
 ROWS: tuple[Row, ...] = (
     Row(
+        product="coordinator",
+        loader_sources=("crates/registry-coordinator/src",),
+        runtime_schema="products/coordinator/generated/runtime/runtime.schema.json",
+        shared_blocks=(
+            "DatabaseConfig",
+            "EnvironmentSecretProviderConfig",
+            "FileSecretProviderConfig",
+            "JwksSource",
+            "ListenerBind",
+            "ListenerNetworkExposure",
+            "PackageConfig",
+            "PrivateListenerConfig",
+            "SecretProvidersConfig",
+            "SecretReference",
+            "TlsTermination",
+        ),
+        reference_refusal=TestRef("crates/registry-coordinator/tests/runtime_config.rs", "runtime_secret_references_refuse_environment_substitution"),
+        authored_refusal=TestRef("crates/registry-coordinator/tests/authoring.rs", "authored_workflow_refuses_environment_substitution"),
+        digest_mismatch=TestRef("crates/registry-coordinator/tests/deployment_surface.rs", "immutable_package_closure_tamper_and_abi_are_checked"),
+        rust_blocks=(
+            RustBlock("crates/registry-coordinator/src/runtime.rs", "RuntimeConfig", "secret_providers", "SecretProvidersConfig"),
+            RustBlock("crates/registry-coordinator/src/runtime.rs", "RuntimeConfig", "database", "DatabaseConfig"),
+            RustBlock("crates/registry-coordinator/src/deployment.rs", "DeploymentConfig", "package", "PackageConfig"),
+            RustBlock("crates/registry-coordinator/src/deployment.rs", "DeploymentConfig", "listener", "PrivateListenerConfig"),
+            RustBlock("crates/registry-coordinator/src/access.rs", "AccessConfig", "issuer", "OidcIssuerConfig"),
+            RustBlock("crates/registry-coordinator/src/access.rs", "AccessConfig", "clients", "OidcClientsConfig"),
+        ),
+    ),
+    Row(
         product="render",
         loader_sources=("crates/registry-render/src",),
         runtime_schema="products/render/schemas/runtime.schema.json",
@@ -558,7 +587,7 @@ ROWS: tuple[Row, ...] = (
 
 EXPECTED_PRODUCTS = frozenset(
     {"render", "discovery", "evidence", "breg", "casework", "scheduling",
-     "messaging", "breg-mcp", "breg-review", "evidence-oid4vci"}
+     "messaging", "breg-mcp", "breg-review", "evidence-oid4vci", "coordinator"}
 )
 
 

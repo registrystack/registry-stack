@@ -405,15 +405,19 @@ decisions:
       the runtime process. A submission is charged after the role check and
       before the body is read, a replay included; past the burst it is
       refused with 429 rate-limit.exceeded and Retry-After, and a limiter
-      that cannot decide answers 503 service.unavailable.
+      that cannot decide answers 503 service.unavailable. Original receipt
+      observation does not consume or require this submission budget.
     reasoning: >-
       One replica is the supported topology, and the platform token bucket
       is the primitive Evidence already uses. Charging before the
       body keeps rendering behind the budget, and keying by the pseudonym
-      keeps the raw subject out of the limiter.
+      keeps the raw subject out of the limiter. Receipt observation neither
+      renders nor sends, and a caller that lost a submission response still
+      needs to recover its receipt after its send budget is exhausted.
     evidence:
       - {path: crates/registry-messaging/src/http.rs, name: a_caller_past_its_profile_rate_is_refused_with_the_wait_needed}
       - {path: crates/registry-messaging/src/limits.rs, name: callers_and_profiles_have_separate_budgets}
+      - {path: crates/registry-messaging/tests/postgres_messages.rs, name: original_receipt_reads_neither_spend_nor_require_submission_budget}
   - id: MESSAGING-DEC-21
     subject: A profile's daily limit is counted from its accepted messages
     decision: >-

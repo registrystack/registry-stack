@@ -357,3 +357,12 @@ formats:
     init: {command: "schedulingctl init --template standalone-exact-time {directory}", file: records.yaml}
   evidence/authoring-project:
     init: {command: "evidencectl init --profile local --transport sqlite-extract {directory}", file: evidence-project.yaml}
+
+  # Coordinator checks the staged three-file portable project. Its init output
+  # carries the same project and runtime envelopes the readers accept.
+  coordinator/project:
+    retiredApiVersions:
+      - registry.registrystack.org/coordinator/v1alpha1
+    init: {command: "coordinatorctl init --directory {directory}", file: workflow.yaml}
+  coordinator/runtime:
+    init: {command: "coordinatorctl init --directory {directory}", file: runtime.yaml}

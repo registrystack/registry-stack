@@ -5,7 +5,9 @@ use super::{private, State, DATABASE_ID, MAX_BYTES, MIGRATION_ROLE, RUNTIME_ROLE
 use anyhow::{bail, Context, Result};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use p256::ecdsa::SigningKey;
-use registry_breg::literal_text::{LiteralText, WRITE_THE_VALUE_OR_A_SECRET_REFERENCE};
+use registry_breg::literal_text::{
+    LiteralText, WRITE_THE_VALUE, WRITE_THE_VALUE_OR_A_SECRET_REFERENCE,
+};
 use registry_platform_config::{SecretProvidersConfig, SecretReference};
 use registry_platform_yaml::{
     ApiVersion, Diagnostic, Document, EnvelopeRule, Expect, FormatSpec, Reader, RemovedKey, Report,
@@ -213,6 +215,13 @@ pub(super) struct Clients {
         schemars(schema_with = "keyed_schema::<LocalId, LocalReviewExecutor>")
     )]
     pub review_executors: BTreeMap<String, LocalReviewExecutor>,
+    /// Exact Casework status services for compiled task-grant profiles.
+    #[serde(default, deserialize_with = "local_id_keys")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "keyed_schema::<LocalId, LocalTaskGrantStatus>")
+    )]
+    pub task_grant_status: BTreeMap<String, LocalTaskGrantStatus>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -288,6 +297,19 @@ pub(super) struct LocalReviewExecutor {
     pub access_profile: String,
     /// Logical client from this same closed file. Its retained issuer key is
     /// copied into the private runtime secret tree.
+    pub client: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct LocalTaskGrantStatus {
+    pub source_issuer: ExternalId,
+    #[serde(deserialize_with = "url")]
+    #[cfg_attr(feature = "schema", schemars(with = "Url"))]
+    pub base_url: String,
+    #[serde(deserialize_with = "local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "LocalId"))]
     pub client: String,
 }
 
@@ -441,6 +463,10 @@ pub(super) struct Client {
     #[serde(deserialize_with = "external_id_keys")]
     #[cfg_attr(feature = "schema", schemars(schema_with = "claims_schema"))]
     pub claims: BTreeMap<String, Value>,
+    /// Additional explicit permissions on declared resource audiences. These
+    /// do not change default token scopes or the exchange bootstrap scope.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub grants: Vec<LocalPermissionGrant>,
     /// Exact schema-test steps that use this claim variant. Runtime requests
     /// still select an authored access profile; this field only disambiguates
     /// credentials for maintained local journeys.
@@ -903,6 +929,39 @@ fn validate(clients: Clients, secrets: Secrets) -> Result<Clients> {
     if clients.review_authorities.len() > 8 {
         bail!("at most 8 local review authorities may be bound");
     }
+    if clients.task_grant_status.len() > 8 {
+        bail!("at most 8 local task-grant status services may be bound");
+    }
+    let mut task_sources = BTreeSet::new();
+    for (id, status) in &clients.task_grant_status {
+        let endpoint = reqwest::Url::parse(&status.base_url)
+            .context("local task-grant status baseUrl must be an exact loopback HTTP URL")?;
+        let client = clients
+            .clients
+            .iter()
+            .find(|client| client.id == status.client);
+        if !governed_identifier(id)
+            || !registry_platform_httputil::valid_resource_uri(&status.source_issuer)
+            || !task_sources.insert(&status.source_issuer)
+            || endpoint.scheme() != "http"
+            || endpoint.host_str() != Some("127.0.0.1")
+            || endpoint.port().is_none_or(|port| port == 0)
+            || !endpoint.username().is_empty()
+            || endpoint.password().is_some()
+            || endpoint.query().is_some()
+            || endpoint.fragment().is_some()
+            || registry_platform_httputil::client::ServiceBaseUrl::new(endpoint).is_err()
+            || client.is_none_or(|client| {
+                client.scopes != ["casework:grants:status"]
+                    || !client.access_profiles.is_empty()
+                    || client.allow_breg_access
+                    || client_token_claims(client).get("registry_actor_kind")
+                        != Some(&json!("service"))
+            })
+        {
+            bail!("local task-grant status services need unique source issuers, exact loopback endpoints, and declared service clients scoped only to casework:grants:status without BReg access");
+        }
+    }
     for (id, authority) in &clients.review_authorities {
         let endpoint = reqwest::Url::parse(&authority.endpoint)
             .context("local review authority endpoint must be an exact loopback HTTP URL")?;
@@ -1105,6 +1164,11 @@ fn validate(clients: Clients, secrets: Secrets) -> Result<Clients> {
             bail!("issuer client resource bindings need a declared client, audience, and resource scopes");
         }
     }
+    for client in &clients.clients {
+        if !client.grants.is_empty() && !valid_grants(&clients, &client.grants) {
+            bail!("machine client grants require distinct declared audiences and exact bounded resource scopes");
+        }
+    }
     let mut exchange_clients = BTreeSet::new();
     for id in &clients.issuer.exchange_clients {
         if !exchange_clients.insert(id)
@@ -1253,6 +1317,13 @@ pub(super) fn keypair(root: &Path) -> Result<Value> {
 pub(super) fn prepare(root: &Path, state: &State, clients: &Clients) -> Result<()> {
     if state.issuer_project.is_some() {
         validate_borrowed_issuer_composition(&clients.issuer)?;
+        if clients
+            .clients
+            .iter()
+            .any(|client| !client.grants.is_empty())
+        {
+            bail!("a borrowed issuer cannot declare owner-only machine client grants; declare them on the issuer owner");
+        }
     }
     for directory in [
         "credentials",
@@ -1430,6 +1501,19 @@ pub(super) fn prepare(root: &Path, state: &State, clients: &Clients) -> Result<(
             let bytes = Zeroizing::new(private::read(&source, maximum)?);
             private::create(&root.join("secrets").join(name), &bytes)?;
         }
+    }
+    for (id, status) in &clients.task_grant_status {
+        let source = root
+            .join("credentials")
+            .join(&status.client)
+            .join("assertion-key.jwk");
+        let key = Zeroizing::new(private::read(&source, 64 * 1024)?);
+        private::create(
+            &root
+                .join("secrets")
+                .join(format!("task-status-{id}-client-assertion-key")),
+            &key,
+        )?;
     }
     // The dev session's issuer is the pinned upstream ThunderID container,
     // rendered and provisioned through the shared tooling crate from these
@@ -1680,12 +1764,37 @@ pub(super) fn issuer_description(
             .context("a declared issuer client role is missing")?;
         role.permissions[0].0 = server.id.clone();
     }
+    for client in &clients.clients {
+        if client.grants.is_empty() {
+            continue;
+        }
+        let permissions = role_permissions(&description, state, &client.grants)?;
+        let agent = registry_thunderid_tooling::local::agent_id(&state.instance_id, &client.id);
+        let role = description
+            .roles
+            .iter_mut()
+            .find(|role| role.assigned_agents.contains(&agent))
+            .context("a declared issuer client role is missing")?;
+        for (resource, scopes) in permissions {
+            if let Some((_, existing)) = role.permissions.iter_mut().find(|(id, _)| *id == resource)
+            {
+                for scope in scopes {
+                    if !existing.contains(&scope) {
+                        existing.push(scope);
+                    }
+                }
+            } else {
+                role.permissions.push((resource, scopes));
+            }
+        }
+    }
     for id in &clients.issuer.exchange_clients {
         let client = clients
             .clients
             .iter()
             .find(|client| &client.id == id)
             .context("an exchange client is missing")?;
+        let ordinary_permissions = role_permissions(&description, state, &client.grants)?;
         let machine = description
             .machine_clients
             .iter_mut()
@@ -1699,6 +1808,10 @@ pub(super) fn issuer_description(
         machine.token_exchange = Some(TokenExchangeClient {
             assertion_resource_server_id: role.permissions[0].0.clone(),
             assertion_scope: client.scopes[0].clone(),
+            ordinary_resource_permissions: ordinary_permissions
+                .into_iter()
+                .filter(|(resource, _)| resource != &role.permissions[0].0)
+                .collect(),
         });
     }
     let mut purpose_clients = Vec::new();
@@ -1738,6 +1851,7 @@ pub(super) fn issuer_description(
             machine.token_exchange = Some(TokenExchangeClient {
                 assertion_resource_server_id: role.permissions[0].0.clone(),
                 assertion_scope: client.scopes[0].clone(),
+                ordinary_resource_permissions: Vec::new(),
             });
         }
         description
@@ -1935,36 +2049,60 @@ pub(super) fn assertion_issuers(
     Ok(authorities)
 }
 
+pub(super) fn local_principal_claim(compiled: &registry_breg::CompiledRegistry) -> Result<String> {
+    let inventory = registry_breg::authority::authority_inventory(compiled)
+        .context("local authority inventory is invalid")?;
+    match inventory.principal_claims.len() {
+        0 => Ok("registry_principal".to_owned()),
+        1 => Ok(inventory.principal_claims.into_iter().next().expect("one principal claim")),
+        _ => bail!("local access profiles must use one principal claim; mixed principal claims cannot share a runtime authority mapping"),
+    }
+}
+
 pub(super) fn runtime(root: &Path, state: &State, clients: &Clients, test: bool) -> Result<()> {
     let final_root = state.root();
     let prefix = if test { "test-" } else { "" };
-    let compiled = if state.webhook_port.is_some()
-        || !clients.event_destinations.is_empty()
-        || !clients.review_executors.is_empty()
-    {
-        Some(
-            crate::compile(&root.join("project"), crate::ProfileArg::Production, "dev")
-                .map_err(|_| anyhow::anyhow!("captured local project no longer compiles"))?,
-        )
-    } else {
-        None
-    };
+    let compiled = crate::compile(&root.join("project"), crate::ProfileArg::Production, "dev")
+        .map_err(|_| anyhow::anyhow!("captured local project no longer compiles"))?;
+    let principal = local_principal_claim(&compiled)?;
+    let journeys_path = root.join("project/tests/journeys.yaml");
+    if journeys_path.exists() {
+        let mut journeys = Reader::new(journeys_path.display().to_string())
+            .with_hook(&mut LiteralText {
+                remedy: WRITE_THE_VALUE,
+            })
+            .read(
+                &private::read(&journeys_path, MAX_BYTES)?,
+                &Expect::one(&registry_breg::fixtures::JOURNEYS_FORMAT),
+            )?
+            .to_json_value();
+        if super::has_local_subject_marker(&journeys) {
+            let owner = super::borrowed_owner(state)?;
+            let issuer_instance = owner.as_ref().map_or(state.instance_id.as_str(), |owner| {
+                owner.instance_id.as_str()
+            });
+            super::resolve_local_subject_markers(
+                &mut journeys,
+                clients,
+                &compiled,
+                issuer_instance,
+            )?;
+            private::replace(
+                &journeys_path,
+                serde_norway::to_string(&journeys)?.as_bytes(),
+            )?;
+        }
+    }
     let destinations = if state.webhook_port.is_some() || !clients.event_destinations.is_empty() {
-        let compiled = compiled
-            .as_ref()
-            .context("event bindings require a compiled local project")?;
         if let Some(port) = state.webhook_port {
-            event_destinations(compiled, port)
+            event_destinations(&compiled, port)
         } else {
-            external_event_destinations(compiled, &clients.event_destinations)?
+            external_event_destinations(&compiled, &clients.event_destinations)?
         }
     } else {
         json!({})
     };
-    let review_executors = match compiled.as_ref() {
-        Some(compiled) => local_review_executors(state, clients, compiled)?,
-        None => BTreeMap::new(),
-    };
+    let review_executors = local_review_executors(state, clients, &compiled)?;
     // A browser application explicitly using this session's default BREG
     // audience is a local OAuth client. Other-resource apps remain outside
     // BREG admission; governed profiles and token scopes still authorize calls.
@@ -2007,7 +2145,7 @@ pub(super) fn runtime(root: &Path, state: &State, clients: &Clients, test: bool)
         "secretProviders":{"file":{"root":final_root.join("secrets")}},
         "database":{"runtimeUrlRef":format!("secret:file/{runtime_url}"),"migrationUrlRef":format!("secret:file/{prefix}migration-database-url"),"pool":{"maximumConnections":4},"roles":{"migration":MIGRATION_ROLE,"runtime":runtime_role}},
         "package":{"root":final_root.join(if test {"empty-package"}else{"build/package"})},
-        "authentication":{"oidc":{"issuer":state.issuer_origin(),"audience":state.audience(),"allowedAlgorithm":"RS256","accessTokenType":"at+jwt","scopeClaim":"scope","scopeSeparator":" ","allowedClients":allowed_clients,"assertionIssuers":&assertion_issuers,"maximumTokenLifetimeSeconds":300,"leewayMilliseconds":30000,"jwksSource":{"type":"static","documentRef":"secret:file/issuer-jwks"}},"authorityClaims":{"principal":"registry_principal","purpose":"registry_purpose"}},
+        "authentication":{"oidc":{"issuer":state.issuer_origin(),"audience":state.audience(),"allowedAlgorithm":"RS256","accessTokenType":"at+jwt","scopeClaim":"scope","scopeSeparator":" ","allowedClients":allowed_clients,"assertionIssuers":&assertion_issuers,"maximumTokenLifetimeSeconds":300,"leewayMilliseconds":30000,"jwksSource":{"type":"static","documentRef":"secret:file/issuer-jwks"}},"authorityClaims":{"principal":principal,"purpose":"registry_purpose"}},
         "audit":{"hashKeyRef":"secret:file/audit-key","destination":"file","path":final_root.join("audit").join(format!("{prefix}audit.jsonl"))},"cursor":{"secretRef":"secret:file/cursor-key"},"eventDestinations":destinations,
         "evidenceProviders":clients.evidence_providers.iter().map(|(id, provider)| (id.clone(), json!({
             "baseUrl":provider.base_url,
@@ -2026,7 +2164,8 @@ pub(super) fn runtime(root: &Path, state: &State, clients: &Clients, test: bool)
             "caBundleRef":provider.ca_bundle_ref.as_ref().map(|_| format!("secret:file/evidence-ca-{id}"))
         }))).collect::<BTreeMap<_,_>>(),
         "reviewAuthorities":local_review_authorities(state, clients),
-        "reviewExecutors":review_executors
+        "reviewExecutors":review_executors,
+        "taskGrantStatus":local_task_grant_status(state, clients)
     });
     // runtime.yaml writes an optional member by leaving it out (CFG-EMPTY-1),
     // and an empty assertionIssuers map is refused, so an absent setting is
@@ -2174,12 +2313,7 @@ fn local_review_authorities(state: &State, clients: &Clients) -> BTreeMap<String
                 .iter()
                 .find(|client| client.id == authority.client)
                 .expect("closed local review authority validation resolves its client");
-            let resource = clients
-                .issuer
-                .client_resources
-                .get(&authority.client)
-                .cloned()
-                .unwrap_or_else(|| state.audience());
+            let resource = client_resource(state, clients, &authority.client);
             let mut binding = json!({
                 "endpoint": authority.endpoint,
                 "profile": authority.profile,
@@ -2200,6 +2334,33 @@ fn local_review_authorities(state: &State, clients: &Clients) -> BTreeMap<String
                 binding["completionRecipient"] = json!(recipient);
             }
             (id.clone(), binding)
+        })
+        .collect()
+}
+
+pub(super) fn client_resource(state: &State, clients: &Clients, client: &str) -> String {
+    clients
+        .issuer
+        .client_resources
+        .get(client)
+        .cloned()
+        .unwrap_or_else(|| state.audience())
+}
+
+fn local_task_grant_status(state: &State, clients: &Clients) -> Vec<Value> {
+    clients
+        .task_grant_status
+        .iter()
+        .map(|(id, status)| {
+            json!({
+                "sourceIssuer": status.source_issuer,
+                "baseUrl": status.base_url,
+                "tokenEndpoint": format!("{}/oauth2/token", state.issuer_origin()),
+                "clientAssertionAudience": state.issuer_origin(),
+                "clientId": status.client,
+                "privateKeyRef": format!("secret:file/task-status-{id}-client-assertion-key"),
+                "caseworkResource": client_resource(state, clients, &status.client)
+            })
         })
         .collect()
 }

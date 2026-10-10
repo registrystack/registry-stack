@@ -410,6 +410,16 @@ async fn insert_review_task(database: &Client, task_id: Uuid, request_id: Uuid) 
 
 #[tokio::test]
 async fn migration_21_backfills_only_retained_legacy_decision_outcomes() {
+    migrate_retained_review_outcomes(20).await;
+}
+
+#[tokio::test]
+async fn migration_26_preserves_existing_retained_decision_outcomes() {
+    migrate_retained_review_outcomes(21).await;
+}
+
+async fn migrate_retained_review_outcomes(from_schema: i64) {
+    assert!((20..=21).contains(&from_schema));
     let mut fixture = TestSchema::create("review_outcome_backfill").await;
     apply_full_migration_sequence(&mut fixture.database).await;
     apply_migrations(
@@ -566,6 +576,27 @@ async fn migration_21_backfills_only_retained_legacy_decision_outcomes() {
         cases.push((name, event_id, task_id, outcome, expired, erased));
     }
 
+    if from_schema == 21 {
+        apply_migrations(
+            &mut fixture.database,
+            &[(
+                21,
+                include_str!("../migrations/0021_own_review_decisions.sql"),
+            )],
+        )
+        .await;
+    }
+    assert_eq!(
+        fixture
+            .database
+            .query_one("SELECT max(version) FROM casework_schema_migrations", &[])
+            .await
+            .unwrap()
+            .get::<_, i64>(0),
+        from_schema,
+        "exercise the actual predecessor ledger before the runtime upgrade"
+    );
+
     let secret_name =
         format!("CASEWORK_REVIEW_MIGRATION_{}", Uuid::new_v4().simple()).to_ascii_uppercase();
     env::set_var(&secret_name, &fixture.scoped_url);
@@ -628,7 +659,7 @@ async fn migration_21_backfills_only_retained_legacy_decision_outcomes() {
         .into_iter()
         .map(|row| row.get(0))
         .collect();
-    assert_eq!(versions, (1..=25).collect::<Vec<_>>());
+    assert_eq!(versions, (1..=26).collect::<Vec<_>>());
     drop(store);
     fixture.cleanup().await;
 }

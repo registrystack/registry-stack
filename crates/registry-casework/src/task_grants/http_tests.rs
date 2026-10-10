@@ -5,6 +5,7 @@ use axum::{
     http::{Request, StatusCode},
     Router,
 };
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
 use registry_casework_core::*;
 use registry_platform_config::{SecretProvider, SecretResolver};
@@ -105,8 +106,15 @@ impl SourceAdapter for Source {
         } else {
             "synthetic-person"
         };
+        let mut source_binding = binding();
+        if self.mode.load(Ordering::SeqCst) == 8 {
+            source_binding.source_revision = "unrelated-record-revision".into();
+        }
+        if self.mode.load(Ordering::SeqCst) == 9 {
+            source_binding.version = "materially-changed-proposal".into();
+        }
         Ok(TaskSubjectContext {
-            binding: binding(),
+            binding: source_binding,
             values: std::collections::BTreeMap::from([("person-reference".into(), json!(person))]),
         })
     }
@@ -195,7 +203,12 @@ async fn fixture_for_role(lifetime: u64, role: CaseworkRole) -> Fixture {
     std::env::remove_var(name);
     let template:TaskTemplate=serde_json::from_value(json!({"id":"summary","version":"1","label":"Prepare summary","eligibleTeams":["team"],"eligibleProfiles":[profile_id],"source":"source","itemKinds":["request"],"itemStates":["claimed"],"agent":{"issuer":ISSUER,"subject":"agent"},"client":"agent-client","resource":"urn:breg:test","purpose":"prepare-summary","scopes":["records:get"],"bounds":{"type":"breg","permissions":[{"collection":"people","operations":["get"]}]},"subjects":{"person_reference":"person-reference"},"lifetimeSeconds":lifetime})).unwrap();
     let review_template:TaskTemplate=serde_json::from_value(json!({"id":"review-summary","version":"1","label":"Prepare review summary","eligibleTeams":["team"],"eligibleProfiles":[profile_id],"source":"source","reviewKinds":["external-review"],"agent":{"issuer":ISSUER,"subject":"agent"},"client":"agent-client","resource":"urn:breg:test","purpose":"prepare-review-summary","scopes":["records:get"],"bounds":{"type":"breg","permissions":[{"collection":"people","operations":["get"]}]},"subjects":{"person_reference":"person-reference"},"lifetimeSeconds":lifetime})).unwrap();
-    let project:CaseworkProject=serde_json::from_value(json!({"apiVersion":CASEWORK_API_VERSION,"kind":CASEWORK_KIND,"project":{"id":"tasks","version":"1"},"accessProfiles":[{"id":profile_id,"principalClaim":"sub","requiredScopes":[scope],"role":profile_id},{"id":"producer","principalClaim":"sub","requiredScopes":["casework:producer"],"role":"requester"}],"queues":[{"id":"review","label":"Review"}],"sources":[{"id":"source","adapter":"test","description":"Test source","requests":[{"entity":"request","queue":"review"}]}],"reviewKinds":[{"id":"external-review","version":"1","purpose":"approval","contextStrategy":"source","stages":[{"id":"review","queue":"review","decidingProfiles":[profile_id],"requiredApprovals":1,"excludeInitiator":true,"excludePreviousStageReviewers":false}],"retention":{"terminalDays":30,"accountabilityDays":90},"displaySchema":{"type":"object","additionalProperties":false,"properties":{}},"outcomes":[]}],"reviewProducers":[{"id":"producer","profile":"producer","issuer":ISSUER,"subject":"producer","trustedInitiatorIssuer":ISSUER,"sourceNamespaces":["source"],"kinds":["external-review"],"recoveryDays":30}],"taskTemplates":[template,review_template]})).unwrap();
+    let mut project:CaseworkProject=serde_json::from_value(json!({"apiVersion":CASEWORK_API_VERSION,"kind":CASEWORK_KIND,"project":{"id":"tasks","version":"1"},"accessProfiles":[{"id":profile_id,"principalClaim":"sub","requiredScopes":[scope],"role":profile_id},{"id":"producer","principalClaim":"sub","requiredScopes":["casework:producer"],"role":"requester"}],"queues":[{"id":"review","label":"Review"}],"sources":[{"id":"source","adapter":"test","description":"Test source","requests":[{"entity":"request","queue":"review"}]}],"reviewKinds":[{"id":"external-review","version":"1","purpose":"approval","contextStrategy":"source","stages":[{"id":"review","queue":"review","decidingProfiles":[profile_id],"requiredApprovals":1,"excludeInitiator":true,"excludePreviousStageReviewers":false}],"retention":{"terminalDays":30,"accountabilityDays":90},"displaySchema":{"type":"object","additionalProperties":false,"properties":{}},"outcomes":[]}],"reviewProducers":[{"id":"producer","profile":"producer","issuer":ISSUER,"subject":"producer","trustedInitiatorIssuer":ISSUER,"sourceNamespaces":["source"],"kinds":["external-review"],"recoveryDays":30}],"taskTemplates":[template,review_template]})).unwrap();
+    if lifetime > TASK_GRANT_LIFETIME_SECONDS {
+        for template in &mut project.task_templates {
+            template.authorization_mode = TaskAuthorizationMode::Deferred;
+        }
+    }
     let template = project.task_templates[0].clone();
     store
         .activate_task_templates(&project.task_templates)
@@ -1690,6 +1703,7 @@ async fn review_task_grant_approval_recovers_a_lost_response_after_the_task_revi
         task_id: f.review_task,
         request_id,
         task_revision: 1,
+        assignment_generation: None,
         holder: actor.principal.clone(),
         template: template.clone(),
         template_digest: template_digest(&template).unwrap(),
@@ -1963,6 +1977,7 @@ async fn review_task_grant_database_bound_allows_postgres_jsonb_rendering_overhe
         task_id: f.review_task,
         request_id,
         task_revision: 1,
+        assignment_generation: None,
         holder: actor.principal.clone(),
         template: template.clone(),
         template_digest: template_digest(&template).unwrap(),
@@ -2147,6 +2162,418 @@ async fn status_cannot_outlive_grant_deadline_during_source_read() {
     assert_eq!(status, StatusCode::OK, "{result}");
     assert_eq!(result["active"], false);
     assert!(result.get("grant").is_none());
+    f.admin
+        .batch_execute(&format!("DROP SCHEMA {} CASCADE", f.schema))
+        .await
+        .unwrap();
+}
+
+/// Move the synthetic approval clock forward without a fifteen-minute sleep.
+/// Only fixture data is changed; production renewals cannot mutate these fields.
+async fn age_deferred_grant(f: &Fixture, id: Uuid, review: bool, seconds: i64) -> u64 {
+    let table = if review {
+        "casework_review_task_grants"
+    } else {
+        "casework_task_grants"
+    };
+    let db = f.store.client().await.unwrap();
+    let row = db.query_one(&format!(
+        "UPDATE {table} SET approved_at=approved_at-make_interval(secs=>($2::bigint)::double precision),
+         expires_at=expires_at-make_interval(secs=>($2::bigint)::double precision),
+         record=jsonb_set(jsonb_set(record,'{{approvedAt}}',to_jsonb((record->>'approvedAt')::bigint-$2::bigint)),
+         '{{expiresAt}}',to_jsonb((record->>'expiresAt')::bigint-$2::bigint))
+         WHERE grant_id=$1 RETURNING record"), &[&id, &seconds]).await.unwrap();
+    row.get::<_, Value>(0)["expiresAt"].as_u64().unwrap()
+}
+
+#[tokio::test]
+async fn deferred_grants_resume_after_fifteen_minutes_and_restart_without_widening_authority() {
+    let mut f = fixture(DEFERRED_TASK_GRANT_LIFETIME_SECONDS).await;
+    let human = token("human", "human-client", "human", "casework:staff");
+    let agent = token("agent", "agent-client", "agent", "casework:grants:assert");
+    for review in [false, true] {
+        let (path, template) = if review {
+            (
+                format!("/v1/review-tasks/{}/task-grants", f.review_task),
+                "review-summary",
+            )
+        } else {
+            (format!("/v1/work-items/{}/task-grants", f.item), "summary")
+        };
+        let approval = json!({"templateId":template,"templateVersion":"1"});
+        let (status, grant) = request(
+            &f,
+            "POST",
+            &path,
+            &human,
+            true,
+            Some(approval.clone()),
+            Some(template),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{grant}");
+        assert_eq!(grant["authorizationMode"], "deferred");
+        assert_eq!(
+            request(
+                &f,
+                "POST",
+                &path,
+                &human,
+                true,
+                Some(approval),
+                Some(template)
+            )
+            .await
+            .1,
+            grant
+        );
+        let id = Uuid::parse_str(grant["id"].as_str().unwrap()).unwrap();
+        let deadline = age_deferred_grant(&f, id, review, 901).await;
+        // A fresh service and fresh bootstrap simulate a caller/runtime restart;
+        // neither retained bearer token nor a second approval is used.
+        f.app = test_app(
+            &f.store,
+            &f.project,
+            f.mode.clone(),
+            f.read_started.clone(),
+            f.read_continue.clone(),
+        );
+        f.mode.store(8, Ordering::SeqCst); // Only unrelated source revision changed.
+        let assertion_path = format!("/v1/task-grants/{id}/assertion");
+        let (status, fresh) = request(&f, "POST", &assertion_path, &agent, false, None, None).await;
+        assert_eq!(status, StatusCode::OK, "{fresh}");
+        assert_eq!(fresh["grantExpiresAt"], deadline);
+        let now = u64::try_from(Utc::now().timestamp()).unwrap();
+        assert!(fresh["expiresAt"].as_u64().unwrap() <= now + 60);
+        let claims: Value = serde_json::from_slice(
+            &URL_SAFE_NO_PAD
+                .decode(
+                    fresh["assertion"]
+                        .as_str()
+                        .unwrap()
+                        .split('.')
+                        .nth(1)
+                        .unwrap(),
+                )
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(claims["registry_grant_exp"], deadline);
+        assert_eq!(claims["registry_grant_bounds"], grant["bounds"]);
+        assert_eq!(claims["sub"], grant["agent"]["subject"]);
+        let wrong_agent = token(
+            "different-principal",
+            "agent-client",
+            "agent",
+            "casework:grants:assert",
+        );
+        assert_eq!(
+            request(&f, "POST", &assertion_path, &wrong_agent, false, None, None)
+                .await
+                .0,
+            StatusCode::NOT_FOUND
+        );
+        f.mode.store(9, Ordering::SeqCst); // Exact proposal changed.
+        assert_eq!(
+            request(&f, "POST", &assertion_path, &agent, false, None, None)
+                .await
+                .0,
+            StatusCode::FORBIDDEN
+        );
+        f.mode.store(0, Ordering::SeqCst);
+        assert_eq!(
+            request(&f, "POST", &assertion_path, &agent, false, None, None)
+                .await
+                .0,
+            StatusCode::FORBIDDEN
+        );
+    }
+    f.admin
+        .batch_execute(&format!("DROP SCHEMA {} CASCADE", f.schema))
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn deferred_review_grants_ignore_drafts_but_never_revive_after_responsibility_changes() {
+    for change in [
+        "release_reclaim",
+        "assignment",
+        "queue",
+        "completion",
+        "generation_missing",
+    ] {
+        let f = fixture(DEFERRED_TASK_GRANT_LIFETIME_SECONDS).await;
+        let human = token("human", "human-client", "human", "casework:staff");
+        let agent = token("agent", "agent-client", "agent", "casework:grants:assert");
+        let grants = format!("/v1/review-tasks/{}/task-grants", f.review_task);
+        let (status, grant) = request(
+            &f,
+            "POST",
+            &grants,
+            &human,
+            true,
+            Some(json!({"templateId":"review-summary","templateVersion":"1"})),
+            Some(change),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{grant}");
+        let id = Uuid::parse_str(grant["id"].as_str().unwrap()).unwrap();
+        let assertion = format!("/v1/task-grants/{id}/assertion");
+        let db = f.store.client().await.unwrap();
+        let before: i64 = db
+            .query_one(
+                "SELECT assignment_generation FROM casework_review_tasks WHERE task_id=$1",
+                &[&f.review_task],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        // The trigger owns the counter even if a caller tries to overwrite it.
+        db.execute("UPDATE casework_review_tasks SET revision=revision+1,assignment_generation=99 WHERE task_id=$1",&[&f.review_task]).await.unwrap();
+        let after: i64 = db
+            .query_one(
+                "SELECT assignment_generation FROM casework_review_tasks WHERE task_id=$1",
+                &[&f.review_task],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(
+            before, after,
+            "ordinary draft revision keeps responsibility unchanged"
+        );
+        assert_eq!(
+            request(&f, "POST", &assertion, &agent, false, None, None)
+                .await
+                .0,
+            StatusCode::OK
+        );
+        match change {
+            "release_reclaim" => {
+                // No status/assertion observes the interim release. Returning
+                // to the same holder must still refuse the original approval.
+                db.execute("UPDATE casework_review_tasks SET state='open',holder_issuer=NULL,holder_subject=NULL,assignment_kind=NULL,assignment_owner_issuer=NULL,assignment_owner_subject=NULL,revision=revision+1 WHERE task_id=$1",&[&f.review_task]).await.unwrap();
+                db.execute("UPDATE casework_review_tasks SET state='claimed',holder_issuer=$2,holder_subject='human',assignment_kind='claim',assignment_owner_issuer=$2,assignment_owner_subject='human',revision=revision+1 WHERE task_id=$1",&[&f.review_task,&ISSUER]).await.unwrap();
+            }
+            "assignment" => {
+                db.execute("UPDATE casework_review_tasks SET holder_subject='other',revision=revision+1 WHERE task_id=$1",&[&f.review_task]).await.unwrap();
+                db.execute("UPDATE casework_review_tasks SET holder_subject='human',revision=revision+1 WHERE task_id=$1",&[&f.review_task]).await.unwrap();
+            }
+            "queue" => {
+                db.execute("UPDATE casework_review_tasks SET queue_id='another-queue',revision=revision+1 WHERE task_id=$1",&[&f.review_task]).await.unwrap();
+            }
+            "completion" => {
+                db.execute("UPDATE casework_review_tasks SET state='decided',settled_at=now(),revision=revision+1 WHERE task_id=$1",&[&f.review_task]).await.unwrap();
+            }
+            "generation_missing" => {
+                db.execute("UPDATE casework_review_task_grants SET record=record-'assignmentGeneration' WHERE grant_id=$1",&[&id]).await.unwrap();
+            }
+            _ => unreachable!(),
+        }
+        assert_eq!(
+            request(&f, "POST", &assertion, &agent, false, None, None)
+                .await
+                .0,
+            StatusCode::FORBIDDEN,
+            "{change}"
+        );
+        let row=db.query_one("SELECT invalidated_at IS NOT NULL FROM casework_review_task_grants WHERE grant_id=$1",&[&id]).await.unwrap();
+        assert!(row.get::<_, bool>(0), "{change} is permanently invalidated");
+        f.admin
+            .batch_execute(&format!("DROP SCHEMA {} CASCADE", f.schema))
+            .await
+            .unwrap();
+    }
+}
+
+#[tokio::test]
+async fn deferred_grants_expire_and_revoke_without_extending_the_approved_window() {
+    let f = fixture(3600).await;
+    let human = token("human", "human-client", "human", "casework:staff");
+    let agent = token("agent", "agent-client", "agent", "casework:grants:assert");
+    let path = format!("/v1/review-tasks/{}/task-grants", f.review_task);
+    for expire in [false, true] {
+        let key = if expire { "expired" } else { "revoked" };
+        let (status, grant) = request(
+            &f,
+            "POST",
+            &path,
+            &human,
+            true,
+            Some(json!({"templateId":"review-summary","templateVersion":"1"})),
+            Some(key),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{grant}");
+        let id = Uuid::parse_str(grant["id"].as_str().unwrap()).unwrap();
+        if expire {
+            age_deferred_grant(&f, id, true, 3601).await;
+        } else {
+            let revoke = format!("/v1/review-tasks/{}/task-grants/{id}/revoke", f.review_task);
+            assert_eq!(
+                request(&f, "POST", &revoke, &human, true, None, None)
+                    .await
+                    .0,
+                StatusCode::OK
+            );
+        }
+        assert_eq!(
+            request(
+                &f,
+                "POST",
+                &format!("/v1/task-grants/{id}/assertion"),
+                &agent,
+                false,
+                None,
+                None
+            )
+            .await
+            .0,
+            StatusCode::FORBIDDEN
+        );
+    }
+    f.admin
+        .batch_execute(&format!("DROP SCHEMA {} CASCADE", f.schema))
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn deferred_database_window_uses_elapsed_seconds_across_daylight_saving_changes() {
+    let f = fixture(DEFERRED_TASK_GRANT_LIFETIME_SECONDS).await;
+    let human = token("human", "human-client", "human", "casework:staff");
+    for review in [false, true] {
+        let (path, template, table) = if review {
+            (
+                format!("/v1/review-tasks/{}/task-grants", f.review_task),
+                "review-summary",
+                "casework_review_task_grants",
+            )
+        } else {
+            (
+                format!("/v1/work-items/{}/task-grants", f.item),
+                "summary",
+                "casework_task_grants",
+            )
+        };
+        let (status, grant) = request(
+            &f,
+            "POST",
+            &path,
+            &human,
+            true,
+            Some(json!({"templateId":template,"templateVersion":"1"})),
+            Some("elapsed-window"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{grant}");
+        let id = Uuid::parse_str(grant["id"].as_str().unwrap()).unwrap();
+        let mut db = f.store.client().await.unwrap();
+        let transaction = db.transaction().await.unwrap();
+        transaction
+            .batch_execute("SET LOCAL TIME ZONE 'America/New_York'")
+            .await
+            .unwrap();
+        // Check the database boundary alone using synthetic historical dates.
+        // Seven elapsed days cross spring's shorter and autumn's longer day.
+        for approved in ["2026-03-05T12:00:00Z", "2026-10-29T12:00:00Z"] {
+            let approved = DateTime::parse_from_rfc3339(approved)
+                .unwrap()
+                .with_timezone(&Utc);
+            let expires = approved + chrono::Duration::seconds(604800);
+            transaction
+                .execute(
+                    &format!("UPDATE {table} SET approved_at=$2,expires_at=$3 WHERE grant_id=$1"),
+                    &[&id, &approved, &expires],
+                )
+                .await
+                .unwrap();
+            transaction
+                .batch_execute("SAVEPOINT over_window")
+                .await
+                .unwrap();
+            let too_late = expires + chrono::Duration::seconds(1);
+            let refusal = transaction
+                .execute(
+                    &format!("UPDATE {table} SET expires_at=$2 WHERE grant_id=$1"),
+                    &[&id, &too_late],
+                )
+                .await
+                .unwrap_err();
+            assert_eq!(
+                refusal.code(),
+                Some(&tokio_postgres::error::SqlState::CHECK_VIOLATION)
+            );
+            transaction
+                .batch_execute("ROLLBACK TO SAVEPOINT over_window")
+                .await
+                .unwrap();
+        }
+        transaction.rollback().await.unwrap();
+    }
+    f.admin
+        .batch_execute(&format!("DROP SCHEMA {} CASCADE", f.schema))
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn deferred_work_item_grants_ignore_drafts_but_never_revive_after_release_and_reclaim() {
+    let f = fixture(DEFERRED_TASK_GRANT_LIFETIME_SECONDS).await;
+    let human = token("human", "human-client", "human", "casework:staff");
+    let agent = token("agent", "agent-client", "agent", "casework:grants:assert");
+    let path = format!("/v1/work-items/{}/task-grants", f.item);
+    let (status, grant) = request(
+        &f,
+        "POST",
+        &path,
+        &human,
+        true,
+        Some(json!({"templateId":"summary","templateVersion":"1"})),
+        Some("retained-deferred"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{grant}");
+    let id = Uuid::parse_str(grant["id"].as_str().unwrap()).unwrap();
+    let assertion = format!("/v1/task-grants/{id}/assertion");
+    let db = f.store.client().await.unwrap();
+    db.execute(
+        "UPDATE casework_items SET revision=revision+1 WHERE item_id=$1",
+        &[&f.item],
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        request(&f, "POST", &assertion, &agent, false, None, None)
+            .await
+            .0,
+        StatusCode::OK,
+        "a benign revision does not withdraw authority"
+    );
+    // Existing item triggers record definitive loss transactionally, even
+    // when no assertion/status query observes the release between updates.
+    db.execute("UPDATE casework_items SET state='open',holder_issuer=NULL,holder_subject=NULL,assignment_owner_issuer=NULL,assignment_owner_subject=NULL,revision=revision+1 WHERE item_id=$1", &[&f.item]).await.unwrap();
+    db.execute("UPDATE casework_items SET state='claimed',holder_issuer=$2,holder_subject='human',assignment_owner_issuer=$2,assignment_owner_subject='human',revision=revision+1 WHERE item_id=$1", &[&f.item,&ISSUER]).await.unwrap();
+    let row = db
+        .query_one(
+            "SELECT invalidated_at IS NOT NULL FROM casework_task_grants WHERE grant_id=$1",
+            &[&id],
+        )
+        .await
+        .unwrap();
+    assert!(
+        row.get::<_, bool>(0),
+        "the existing trigger durably withdrew the original approval"
+    );
+    assert_eq!(
+        request(&f, "POST", &assertion, &agent, false, None, None)
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
+    let events: i64 = db.query_one("SELECT count(*) FROM casework_history WHERE item_id=$1 AND kind='task-invalidated' AND detail->>'grantId'=$2", &[&f.item,&id.to_string()]).await.unwrap().get(0);
+    assert_eq!(events, 1, "one permanent invalidation history entry");
     f.admin
         .batch_execute(&format!("DROP SCHEMA {} CASCADE", f.schema))
         .await

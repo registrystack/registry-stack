@@ -1,0 +1,34 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/coordinator/runtime/runtime.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/coordinator/runtime/v1alpha1
+kind: CoordinatorRuntimeConfig
+secretProviders:
+  environment: {}
+  file:
+    root: /private/tmp/coordinator-decision-secrets
+database:
+  runtimeUrlRef: secret:env/COORDINATOR_TEST_DATABASE_URL
+  migrationUrlRef: secret:env/COORDINATOR_TEST_DATABASE_URL
+namespace: coordinator_decision_follow_up
+connections:
+  applications:
+    product: breg
+    baseUrl: https://registry.example.test
+    profile: coordinator-actions
+    authorization:
+      tokenEndpoint: https://identity.example.test/token
+      clientId: coordinator-actions
+      signingKeyRef: secret:file/client-key
+      resource: urn:example:registry
+      scopes: [registry:actions]
+decisionConnections:
+  assessor:
+    protocol: system-one
+    baseUrl: https://api.typesafe.ai
+    # Explicit alias: an existing run pins this text, not the provider's weights.
+    # Use a stable model release identifier when your provider offers one.
+    model: jev-latest
+    authorization:
+      bearer:
+        tokenRef: secret:env/COORDINATOR_DECISION_TOKEN
+        principal: institutional-decision-account
+    # Defaults: eight seconds; 65536 request and response bytes; no hidden retry.

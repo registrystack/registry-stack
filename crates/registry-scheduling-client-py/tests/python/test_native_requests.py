@@ -181,6 +181,19 @@ class _Handler(BaseHTTPRequestHandler):
         body = self.rfile.read(length).decode("utf-8")
         path, _ = self.observe(body)
         key = self.headers.get("idempotency-key")
+        if path == "/tenant/v1/appointments/receipt":
+            failures = {
+                "unresolved-key-canary": ("receipt.unresolved", 409, "Original receipt unresolved", "No retained success receipt matches this caller, key, and original request. The original outcome remains unknown; this is not evidence that no effect occurred."),
+                "denied-key-canary": ("operation.not-authorized", 403, "Operation not authorized", "server-detail-canary"),
+                "unavailable-key-canary": ("service.unavailable", 503, "Service unavailable", "server-detail-canary"),
+            }
+            failure = failures.get(self.headers.get("idempotency-key"))
+            if failure:
+                self.respond_problem(*failure)
+            else:
+                self.respond(200, APPOINTMENT)
+            return
+
         if key == REUSED_KEY:
             self.respond_problem(
                 "idempotency.key-reused",
@@ -512,6 +525,46 @@ class NativeRequestTests(unittest.TestCase):
             client.get_scheduling("one-call-token")
         self.assertEqual(raised.exception.kind, "transport")
         self.assertIsInstance(raised.exception.transport_kind, str)
+
+    def test_receipt_observation_preserves_the_original_request_key_and_current_token(self) -> None:
+        result = self.client.appointment_receipt("current-token", "original-key", {"admission": ADMISSION})
+        self.assertEqual(result, {"kind": "complete", "value": APPOINTMENT, "trace_id": TRACE_ID})
+        self.assertEqual(len(_Handler.observations), 1)
+        observed = _Handler.observations[0]
+        self.assertEqual(observed["method"], "POST")
+        self.assertEqual(observed["path"], "/tenant/v1/appointments/receipt")
+        self.assertEqual(observed["authorization"], "Bearer current-token")
+        self.assertEqual(observed["idempotency_key"], "original-key")
+        self.assertEqual(json.loads(observed["body"]), {"hold": None, "admission": ADMISSION_ON_THE_WIRE})
+
+    def test_receipt_observation_maps_unresolved_and_refused_without_retry_or_disclosure(self) -> None:
+        for key, code, status in [
+            ("unresolved-key-canary", "receipt.unresolved", 409),
+            ("denied-key-canary", "operation.not-authorized", 403),
+            ("unavailable-key-canary", "service.unavailable", 503),
+        ]:
+            with self.subTest(code=code):
+                _Handler.observations.clear()
+                with self.assertRaises(SchedulingClientError) as raised:
+                    self.client.appointment_receipt("token-canary", key, {"admission": ADMISSION})
+                error = raised.exception
+                self.assertEqual(error.kind, "problem")
+                self.assertEqual(error.code, code)
+                self.assertEqual(error.status, status)
+                self.assertEqual(error.trace_id, TRACE_ID)
+                self.assertEqual(error.outcome_unknown, status >= 500)
+                rendered = "\n".join((str(error), repr(error), repr(vars(error))))
+                for canary in [key, "token-canary", "server-detail-canary"]:
+                    self.assertNotIn(canary, rendered)
+                self.assertEqual(len(_Handler.observations), 1)
+                self.assertEqual(_Handler.observations[0]["path"], "/tenant/v1/appointments/receipt")
+
+    def test_receipt_observation_refuses_invalid_key_or_request_before_exchange(self) -> None:
+        for key, request in [("two words", {"admission": ADMISSION}), ("key", {"admission": ADMISSION, "extra": True})]:
+            with self.assertRaises(SchedulingClientError) as raised:
+                self.client.appointment_receipt("token", key, request)
+            self.assertEqual(raised.exception.kind, "invalid-request")
+        self.assertEqual(_Handler.observations, [])
 
 
 if __name__ == "__main__":

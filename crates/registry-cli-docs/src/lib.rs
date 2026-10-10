@@ -9,6 +9,8 @@ pub use registry_cli_reference::{
 /// Build reference data for the supported Registry Stack command lines.
 pub fn catalog() -> Catalog {
     let mut binaries = vec![
+        command_reference(registry_coordinator::service::command(), None, None),
+        command_reference(registry_coordinator::cli::command(), None, None),
         command_reference(registry_evidence::command(), None, None),
         command_reference(registry_evidence_oid4vci::command(), None, None),
         command_reference(registry_evidencectl::command(), None, None),
@@ -91,6 +93,8 @@ mod tests {
                 "bregctl",
                 "casework",
                 "caseworkctl",
+                "coordinator",
+                "coordinatorctl",
                 "evidence",
                 "evidence-oid4vci",
                 "evidencectl",
@@ -101,6 +105,32 @@ mod tests {
                 "schedulingctl",
             ]
         );
+    }
+
+    #[test]
+    fn coordinator_publishes_authoring_and_authenticated_recovery_commands() {
+        let catalog = catalog();
+        for invocation in [
+            "coordinatorctl check",
+            "coordinatorctl test",
+            "coordinatorctl package",
+            "coordinatorctl apply",
+            "coordinatorctl start",
+            "coordinatorctl reconcile",
+            "coordinatorctl complete-execution-recovery",
+            "coordinatorctl release-admission-hold",
+        ] {
+            assert!(!find_command(&catalog.binaries, invocation).usage.is_empty());
+        }
+        let service = find_command(&catalog.binaries, "coordinator");
+        assert!(service
+            .options
+            .iter()
+            .any(|option| option.display.starts_with("--runtime-config ")));
+        assert!(service
+            .options
+            .iter()
+            .any(|option| option.display == "--recovery-only"));
     }
 
     #[test]

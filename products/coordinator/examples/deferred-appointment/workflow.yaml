@@ -1,0 +1,93 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/coordinator/project/project.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/coordinator/project/v1alpha1
+kind: CoordinatorProject
+project:
+  id: deferred-appointment
+  version: "1"
+input:
+  type: object
+  additionalProperties: false
+  required: [applicationId, bookAfter, searchStart, searchEnd, grant]
+  properties:
+    applicationId: {type: string, format: uuid}
+    bookAfter: {type: string, format: date-time}
+    searchStart: {type: string, format: date-time}
+    searchEnd: {type: string, format: date-time}
+    grant:
+      type: object
+      additionalProperties: false
+      required: [id, expiresAt]
+      properties:
+        id: {type: string, format: uuid}
+        expiresAt: {type: integer, minimum: 1}
+connections:
+  applications: breg
+  catalogue: scheduling
+  bookings: scheduling
+  notices: messaging
+functionsFile: functions.rhai
+deadlineSeconds: 86400
+start: read-application
+steps:
+  read-application:
+    type: call
+    connection: applications
+    operation: read-record
+    input: {function: read_request, arguments: [{type: input}]}
+    next: eligibility
+  eligibility:
+    type: choose
+    choose: {function: appointment_route, arguments: [{type: step, step: read-application}]}
+    cases: {book: due, skip: skipped}
+  due:
+    type: wait-until
+    waitUntil: {function: book_after, arguments: [{type: input}]}
+    next: metadata
+  metadata:
+    type: call
+    connection: catalogue
+    operation: read-scheduling
+    input: {function: metadata_request, arguments: []}
+    next: availability
+  availability:
+    type: call
+    connection: catalogue
+    operation: read-availability
+    input: {function: availability_request, arguments: [{type: input}]}
+    next: capacity
+  capacity:
+    type: choose
+    choose: {function: capacity_route, arguments: [{type: step, step: availability}]}
+    cases: {available: book, unavailable: no-capacity}
+  book:
+    type: call
+    connection: bookings
+    operation: create-appointment
+    input: {function: booking_request, arguments: [{type: input}, {type: step, step: metadata}, {type: step, step: availability}]}
+    next: notify
+  notify:
+    type: call
+    connection: notices
+    operation: submit-message
+    input: {function: notice_request, arguments: [{type: input}, {type: step, step: read-application}, {type: step, step: book}]}
+    next: accepted
+  accepted:
+    type: finish
+    outcome: appointment-and-message-accepted
+    output: {function: accepted_result, arguments: [{type: step, step: book}, {type: step, step: notify}]}
+  skipped:
+    type: finish
+    outcome: no-current-eligibility
+  no-capacity:
+    type: finish
+    outcome: no-current-capacity
+outcomes:
+  appointment-and-message-accepted:
+    type: object
+    additionalProperties: false
+    required: [appointmentId, messageId]
+    properties:
+      appointmentId: {type: string}
+      messageId: {type: string, format: uuid}
+  no-current-eligibility: {type: "null"}
+  no-current-capacity: {type: "null"}

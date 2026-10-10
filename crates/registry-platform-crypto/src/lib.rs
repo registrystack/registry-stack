@@ -4,6 +4,7 @@
 pub mod delivery_signature;
 pub mod field_encryption;
 pub mod mac;
+pub mod sealed_value;
 #[cfg(feature = "transit")]
 pub mod transit_datakey;
 #[cfg(all(test, unix, feature = "transit"))]

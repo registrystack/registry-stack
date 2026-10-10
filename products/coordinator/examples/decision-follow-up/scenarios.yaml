@@ -1,0 +1,224 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/coordinator/scenarios/scenarios.v1alpha1.schema.json
+# Offline normalized replies. These cases do not measure model accuracy or run providers.
+# The per-question refusal case uses OpenAI; System One HTTP refusal stops the call.
+apiVersion: id.registrystack.org/formats/coordinator/scenarios/v1alpha1
+kind: CoordinatorScenarios
+cases:
+- id: recommendation-then-governed-action
+  admittedAt: '2026-10-10T09:00:00Z'
+  input:
+    applicationId: 00000000-0000-4000-8000-000000000001
+    summary: The submitted application is missing proof of address.
+  replies:
+    assess:
+    - type: success
+      value:
+        protocol: system-one
+        requestedModel: jev-latest
+        returnedModel: jev-fixture
+        answers:
+          action:
+            type: choice
+            choice: request-information
+            nativeConfidence: 0.91
+            probabilities:
+              request-information: 0.94
+              no-action: 0.02
+              review: 0.04
+        usage:
+          input_tokens: 12
+          output_tokens: 0
+    request-information:
+    - type: success
+      value:
+        action: request-information
+        applicationId: 00000000-0000-4000-8000-000000000002
+        results:
+          application:
+            entity: applications
+            recordId: 00000000-0000-4000-8000-000000000001
+            revision: 2
+  expect:
+    path:
+    - assess
+    - route
+    - request-information
+    - accepted
+    state: completed
+    outcome:
+      type: named
+      value: information-requested
+    output:
+      actionApplicationId: 00000000-0000-4000-8000-000000000002
+- id: no-action
+  admittedAt: '2026-10-10T09:00:00Z'
+  input:
+    applicationId: 00000000-0000-4000-8000-000000000001
+    summary: The submitted application is missing proof of address.
+  replies:
+    assess:
+    - type: success
+      value:
+        protocol: system-one
+        requestedModel: jev-latest
+        returnedModel: jev-fixture
+        answers:
+          action:
+            type: choice
+            choice: no-action
+            nativeConfidence: 0.91
+            probabilities:
+              request-information: 0.02
+              no-action: 0.94
+              review: 0.04
+        usage:
+          input_tokens: 12
+          output_tokens: 0
+  expect:
+    path:
+    - assess
+    - route
+    - skipped
+    state: completed
+    outcome:
+      type: named
+      value: no-action
+    output: null
+- id: low-confidence-needs-review
+  admittedAt: '2026-10-10T09:00:00Z'
+  input:
+    applicationId: 00000000-0000-4000-8000-000000000001
+    summary: The submitted application is missing proof of address.
+  replies:
+    assess:
+    - type: success
+      value:
+        protocol: system-one
+        requestedModel: jev-latest
+        returnedModel: jev-fixture
+        answers:
+          action:
+            type: choice
+            choice: request-information
+            nativeConfidence: 0.1
+            probabilities:
+              request-information: 0.4
+              no-action: 0.3
+              review: 0.3
+        usage:
+          input_tokens: 12
+          output_tokens: 0
+  expect:
+    path:
+    - assess
+    - route
+    - review
+    state: completed
+    outcome:
+      type: named
+      value: needs-review
+    output: null
+- id: model-refusal-needs-review
+  admittedAt: '2026-10-10T09:00:00Z'
+  input:
+    applicationId: 00000000-0000-4000-8000-000000000001
+    summary: The submitted application is missing proof of address.
+  replies:
+    assess:
+    - type: success
+      value:
+        protocol: openai-decisions
+        requestedModel: fixture-model
+        answers:
+          action:
+            type: refusal
+  expect:
+    path:
+    - assess
+    - route
+    - review
+    state: completed
+    outcome:
+      type: named
+      value: needs-review
+    output: null
+- id: recommendation-does-not-authorize-action
+  admittedAt: '2026-10-10T09:00:00Z'
+  input:
+    applicationId: 00000000-0000-4000-8000-000000000001
+    summary: The submitted application is missing proof of address.
+  replies:
+    assess:
+    - type: success
+      value:
+        protocol: system-one
+        requestedModel: jev-latest
+        returnedModel: jev-fixture
+        answers:
+          action:
+            type: choice
+            choice: request-information
+            nativeConfidence: 0.91
+            probabilities:
+              request-information: 0.94
+              no-action: 0.02
+              review: 0.04
+        usage:
+          input_tokens: 12
+          output_tokens: 0
+    request-information:
+    - type: refused
+      code: product-forbidden
+  expect:
+    path:
+    - assess
+    - route
+    - request-information
+    state: refused
+    outcome:
+      type: none
+- id: lost-decision-reply-stops-before-action
+  admittedAt: '2026-10-10T09:00:00Z'
+  input:
+    applicationId: 00000000-0000-4000-8000-000000000001
+    summary: The submitted application is missing proof of address.
+  replies:
+    assess:
+    - type: uncertain
+      code: transport-uncertain
+  expect:
+    path:
+    - assess
+    state: uncertain
+    outcome:
+      type: none
+- id: malformed-decision-reply-stops-before-action
+  admittedAt: '2026-10-10T09:00:00Z'
+  input:
+    applicationId: 00000000-0000-4000-8000-000000000001
+    summary: The submitted application is missing proof of address.
+  replies:
+    assess:
+    - type: uncertain
+      code: invalid-response
+  expect:
+    path:
+    - assess
+    state: uncertain
+    outcome:
+      type: none
+- id: unavailable-credential-does-not-submit
+  admittedAt: '2026-10-10T09:00:00Z'
+  input:
+    applicationId: 00000000-0000-4000-8000-000000000001
+    summary: The submitted application is missing proof of address.
+  replies:
+    assess:
+    - type: retryable
+      code: credential-unavailable
+  expect:
+    path:
+    - assess
+    state: retryable
+    outcome:
+      type: none

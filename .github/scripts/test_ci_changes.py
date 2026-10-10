@@ -314,7 +314,8 @@ class CiChangesTest(unittest.TestCase):
                 "needs.changes.outputs.scheduling_contracts == 'true'"
             ),
             "messaging-postgres": (
-                "needs.changes.outputs.messaging_postgres == 'true'"
+                "(needs.changes.outputs.messaging_postgres == 'true' || "
+                "needs.changes.outputs.coordinator == 'true')"
             ),
             "messaging-contracts": (
                 "needs.changes.outputs.messaging_contracts == 'true'"
@@ -622,6 +623,8 @@ class CiChangesTest(unittest.TestCase):
             "crates/registry-breg-review/src/config.rs",
             "crates/registry-platform-config/src/blocks.rs",
             "crates/registry-messaging/src/config.rs",
+            "crates/registry-coordinator/src/runtime.rs",
+            "products/coordinator/generated/runtime/runtime.schema.json",
             "products/messaging/generated/runtime/runtime.schema.json",
             "crates/registry-breg/src/runtime_config.rs",
             "crates/registry-render/src/manifest.rs",
@@ -1115,6 +1118,62 @@ class CiChangesTest(unittest.TestCase):
         unrelated = classify(self.workspace, ("crates/registry-scheduling/src/lib.rs",))
         self.assertFalse(unrelated["messaging_contracts"])
         self.assertFalse(unrelated["messaging_postgres"])
+
+    def test_coordinator_selects_its_runtime_cli_reference_and_postgres_proof(self) -> None:
+        for path in (
+            "crates/registry-coordinator/src/worker.rs",
+            "products/coordinator/examples/delayed-follow-up/workflow.yaml",
+            "products/coordinator/scripts/test-postgres.sh",
+        ):
+            with self.subTest(path=path):
+                outputs = classify(self.workspace, (path,))
+                self.assertEqual(outputs["rust_packages"], ["registry-cli-docs", "registry-coordinator"])
+                self.assertTrue(outputs["coordinator"])
+                self.assertFalse(outputs["messaging_postgres"])
+                self.assertEqual(
+                    outputs["rust_matrix"]["include"],
+                    [{"name": "developer-tools", "packages": ["registry-cli-docs", "registry-coordinator"], "all_features": False}],
+                )
+
+        for dependency in (
+            "registry-platform-dispatch",
+            "registry-platform-testing",
+            "registry-breg-client",
+            "registry-casework-client",
+            "registry-messaging-client",
+            "registry-scheduling-client",
+        ):
+            with self.subTest(dependency=dependency):
+                outputs = classify(self.workspace, (f"crates/{dependency}/src/lib.rs",))
+                self.assertTrue(outputs["coordinator"])
+
+    def test_coordinator_configuration_formats_run_the_existing_conformance_job(self) -> None:
+        for path in (
+            "products/coordinator/generated/project/project.schema.json",
+            "products/coordinator/generated/runtime/runtime.schema.json",
+            "products/coordinator/generated/scenarios/scenarios.schema.json",
+            "products/coordinator/scripts/check-schemas.sh",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(classify(self.workspace, (path,))["config_conformance"])
+        steps = self.workflow_jobs["config-conformance"]["steps"]
+        self.assertTrue(any(step.get("run") == "products/coordinator/scripts/check-schemas.sh" for step in steps))
+        self.assertIn("registry-coordinator", CONFIG_CHECK_PACKAGES)
+
+    def test_coordinator_postgres_proof_reuses_the_existing_database_job(self) -> None:
+        job = self.workflow_jobs["messaging-postgres"]
+        self.assertIn("needs.changes.outputs.coordinator == 'true'", job["if"])
+        proof = next(step for step in job["steps"] if step.get("run") == "products/coordinator/scripts/test-postgres.sh")
+        self.assertEqual(proof["if"], "needs.changes.outputs.coordinator == 'true'")
+        self.assertIn("COORDINATOR_TEST_DATABASE_URL", proof["env"])
+        self.assertIn("COORDINATOR_MESSAGING_TEST_DATABASE_URL", proof["env"])
+        self.assertNotEqual(proof["env"]["COORDINATOR_TEST_DATABASE_URL"], proof["env"]["COORDINATOR_MESSAGING_TEST_DATABASE_URL"])
+        script = Path("products/coordinator/scripts/test-postgres.sh").read_text()
+        self.assertRegex(script, r"cargo test --locked -p registry-coordinator[^\n]*--lib")
+        self.assertIn("--test messaging_integration", script)
+        self.assertIn("--test process_restart", script)
+        self.assertIn("--test deployment_postgres", script)
+        self.assertIn("cargo build --locked -p registry-messaging -p registry-messagingctl", script)
 
     def test_shared_review_protocol_selects_casework_and_breg_consumers(self) -> None:
         outputs = classify(
@@ -2969,13 +3028,14 @@ class LockfileSelectionTest(unittest.TestCase):
         self,
     ) -> None:
         # tree-sitter-yaml compiles C, so it is proven by the full sweep; its
-        # pure-Rust companion rhai reaches six members through normal edges.
+        # pure-Rust companion rhai reaches its consumers through normal edges.
         change = self.change(bump_lock_package(self.lock, "rhai", "1.26.2"))
         self.assertEqual(
             change.members,
             frozenset(
                 {
                     "registry-breg",
+                    "registry-coordinator",
                     "registry-evidence",
                     "registry-evidence-authoring",
                     "registry-evidencectl",

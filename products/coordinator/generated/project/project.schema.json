@@ -1,0 +1,300 @@
+{
+  "$defs": {
+    "Argument": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "input",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "step": {
+              "$ref": "#/$defs/LocalId"
+            },
+            "type": {
+              "const": "step",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "step"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "AuthoredMapping": {
+      "additionalProperties": false,
+      "properties": {
+        "arguments": {
+          "items": {
+            "$ref": "#/$defs/Argument"
+          },
+          "maxItems": 16,
+          "type": "array"
+        },
+        "function": {
+          "$ref": "#/$defs/LocalId"
+        }
+      },
+      "required": [
+        "function",
+        "arguments"
+      ],
+      "type": "object"
+    },
+    "AuthoredStep": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "next": {
+              "$ref": "#/$defs/LocalId"
+            },
+            "type": {
+              "const": "wait-until",
+              "type": "string"
+            },
+            "waitUntil": {
+              "$ref": "#/$defs/AuthoredMapping"
+            }
+          },
+          "required": [
+            "type",
+            "waitUntil",
+            "next"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "connection": {
+              "$ref": "#/$defs/LocalId"
+            },
+            "input": {
+              "$ref": "#/$defs/AuthoredMapping"
+            },
+            "next": {
+              "$ref": "#/$defs/LocalId"
+            },
+            "operation": {
+              "$ref": "#/$defs/Operation"
+            },
+            "type": {
+              "const": "call",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "connection",
+            "operation",
+            "input",
+            "next"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "cases": {
+              "additionalProperties": {
+                "$ref": "#/$defs/LocalId"
+              },
+              "maxProperties": 32,
+              "minProperties": 1,
+              "propertyNames": {
+                "$ref": "#/$defs/LocalId"
+              },
+              "type": "object"
+            },
+            "choose": {
+              "$ref": "#/$defs/AuthoredMapping"
+            },
+            "type": {
+              "const": "choose",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "choose",
+            "cases"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "outcome": {
+              "$ref": "#/$defs/LocalId"
+            },
+            "output": {
+              "$ref": "#/$defs/AuthoredMapping"
+            },
+            "type": {
+              "const": "finish",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "outcome"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "LocalId": {
+      "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+      "type": "string"
+    },
+    "Operation": {
+      "enum": [
+        "read-record",
+        "submit-message",
+        "read-scheduling",
+        "read-availability",
+        "create-appointment",
+        "invoke-breg-action",
+        "external-get",
+        "evaluate-decision"
+      ],
+      "type": "string"
+    },
+    "Product": {
+      "enum": [
+        "breg",
+        "messaging",
+        "scheduling",
+        "external-http",
+        "decision"
+      ],
+      "type": "string"
+    },
+    "ProjectIdentity": {
+      "additionalProperties": false,
+      "description": "The members that name a project (CFG-ENV-6): a project's `project` block\nholds these, and may add project-wide members of the product's own.\nSchema name `ProjectIdentity`.",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "version"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://id.registrystack.org/schemas/coordinator/project/project.v1alpha1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "apiVersion": {
+      "const": "id.registrystack.org/formats/coordinator/project/v1alpha1",
+      "type": "string"
+    },
+    "connections": {
+      "additionalProperties": {
+        "$ref": "#/$defs/Product"
+      },
+      "maxProperties": 16,
+      "minProperties": 0,
+      "propertyNames": {
+        "$ref": "#/$defs/LocalId"
+      },
+      "type": "object"
+    },
+    "deadlineSeconds": {
+      "format": "uint32",
+      "maximum": 31536000,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "functionsFile": {
+      "const": "functions.rhai",
+      "type": "string"
+    },
+    "input": {
+      "x-registry-foreign": "json-schema-2020-12"
+    },
+    "kind": {
+      "const": "CoordinatorProject",
+      "type": "string"
+    },
+    "outcomes": {
+      "additionalProperties": {
+        "x-registry-foreign": "json-schema-2020-12"
+      },
+      "maxProperties": 64,
+      "minProperties": 1,
+      "propertyNames": {
+        "$ref": "#/$defs/LocalId"
+      },
+      "type": "object"
+    },
+    "project": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/ProjectIdentity"
+        },
+        {
+          "properties": {
+            "version": {
+              "maxLength": 64,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_-]+$",
+              "type": "string"
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "start": {
+      "$ref": "#/$defs/LocalId"
+    },
+    "steps": {
+      "additionalProperties": {
+        "$ref": "#/$defs/AuthoredStep"
+      },
+      "maxProperties": 64,
+      "minProperties": 1,
+      "propertyNames": {
+        "$ref": "#/$defs/LocalId"
+      },
+      "type": "object"
+    }
+  },
+  "required": [
+    "project",
+    "input",
+    "connections",
+    "functionsFile",
+    "deadlineSeconds",
+    "start",
+    "steps",
+    "outcomes",
+    "apiVersion",
+    "kind"
+  ],
+  "title": "CoordinatorProject",
+  "type": "object"
+}

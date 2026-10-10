@@ -13,7 +13,7 @@ use std::ops::Deref;
 use serde::de::{self, Deserialize, Deserializer, Visitor};
 use serde::{Serialize, Serializer};
 
-use crate::de::{Invalid, BOUNDED, BOUNDED_EXPECTING, DATA_LITERAL};
+use crate::de::{Invalid, BOUNDED, BOUNDED_EXPECTING, DATA_LITERAL, FOREIGN_VALUE};
 use crate::messages::{
     TypeRule, EXPECT_DATA_LITERAL, EXPECT_DIGEST, EXPECT_EXTERNAL_ID, EXPECT_LOCAL_ID, EXPECT_URL,
     TYPE_RULES,
@@ -260,6 +260,45 @@ text_newtype!(Url);
 pub struct ProjectIdentity {
     pub id: LocalId,
     pub version: String,
+}
+
+/// A complete foreign JSON tree, decoded under its own value rules (CFG-EMBED-2).
+///
+/// Only this explicitly typed subtree accepts nested nulls. YAML syntax, duplicate
+/// keys, tags, aliases, document size and depth remain checked by the reader.
+/// The owning format marks a more specific foreign specification in its schema
+/// when this value holds, for example, a JSON Schema rather than a JSON payload.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct ForeignValue(pub serde_json::Value);
+
+impl ForeignValue {
+    pub fn into_value(self) -> serde_json::Value {
+        self.0
+    }
+
+    pub fn as_value(&self) -> &serde_json::Value {
+        &self.0
+    }
+}
+
+impl<'de> Deserialize<'de> for ForeignValue {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct ForeignVisitor;
+        impl<'de> Visitor<'de> for ForeignVisitor {
+            type Value = ForeignValue;
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("a foreign JSON value")
+            }
+            fn visit_newtype_struct<D: Deserializer<'de>>(
+                self,
+                deserializer: D,
+            ) -> Result<Self::Value, D::Error> {
+                serde_json::Value::deserialize(deserializer).map(ForeignValue)
+            }
+        }
+        deserializer.deserialize_newtype_struct(FOREIGN_VALUE, ForeignVisitor)
+    }
 }
 
 /// A record value a format compares: the one position where `null` is a
@@ -670,6 +709,20 @@ mod schema {
                 "pattern": URL_PATTERN,
                 "description": "An absolute http or https URL with a host, no user information, and no whitespace or control character.",
             })
+        }
+    }
+
+    impl JsonSchema for ForeignValue {
+        fn schema_name() -> Cow<'static, str> {
+            Cow::Borrowed("ForeignValue")
+        }
+
+        fn inline_schema() -> bool {
+            true
+        }
+
+        fn json_schema(_generator: &mut SchemaGenerator) -> Schema {
+            json_schema!({"x-registry-foreign": "json"})
         }
     }
 

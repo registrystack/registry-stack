@@ -34,6 +34,7 @@ use registry_platform_httputil::destination::{
     DestinationAuthorizationValue, DestinationBodyTemplate, DestinationMethod, DestinationProfile,
     FixedDestinationPolicy,
 };
+use registry_platform_oidc::task_grant::TaskGrantStatusRegistry;
 use thiserror::Error;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -272,6 +273,22 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
         None => None,
     };
 
+    // Once a deployment configures any status authority, every commitment
+    // must resolve through that exact registry. An unlisted source therefore
+    // fails closed instead of falling back to the legacy short-lived path.
+    let task_grant_status = if config.task_grant_status.is_empty() {
+        None
+    } else {
+        Some(Arc::new(
+            TaskGrantStatusRegistry::activate(
+                &config.task_grant_status,
+                &config.authentication.oidc.provider.audience,
+                &secrets,
+            )
+            .map_err(|_| RuntimeError::TaskGrantStatus)?,
+        ))
+    };
+
     let service = Arc::new(
         SchedulingService::new(
             store.clone(),
@@ -283,7 +300,8 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
             audit,
             config.retention.attempt_receipt_retention_days,
         )
-        .with_hooks(hooks),
+        .with_hooks(hooks)
+        .with_task_grant_status(task_grant_status),
     );
 
     let (worker_stopped, worker_stops) = mpsc::channel(WORKER_STOP_CAPACITY);
@@ -429,6 +447,8 @@ pub enum RuntimeError {
     Listen(#[from] std::io::Error),
     #[error("the Scheduling reminder destination is invalid: {0}")]
     Destination(String),
+    #[error("the Scheduling task-grant status configuration is invalid")]
+    TaskGrantStatus,
     #[error(transparent)]
     HookActivation(#[from] HookActivationError),
     #[error("the Scheduling retained hook delivery bindings are unavailable")]

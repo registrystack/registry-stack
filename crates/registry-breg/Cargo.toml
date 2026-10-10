@@ -276,6 +276,7 @@ schema = [
     "dep:schemars",
     "registry-platform-audit?/schema",
     "registry-platform-config/schema",
+    "registry-platform-oidc?/schema",
     "registry-platform-hooks/schema",
     "registry-platform-yaml/schema",
 ]

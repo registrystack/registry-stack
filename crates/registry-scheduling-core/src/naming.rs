@@ -101,6 +101,9 @@ pub const HOLDS_PATH: &str = "/v1/holds";
 /// Route confirming holds and creating appointments.
 pub const APPOINTMENTS_PATH: &str = "/v1/appointments";
 
+/// Read-only lookup of an original appointment command receipt.
+pub const APPOINTMENT_RECEIPT_PATH: &str = "/v1/appointments/receipt";
+
 /// Route listing backing resources.
 pub const RESOURCES_PATH: &str = "/v1/resources";
 

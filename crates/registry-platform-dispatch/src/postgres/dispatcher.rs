@@ -1083,6 +1083,12 @@ impl<S: DispatchStore> Dispatcher<S> {
             let _ = store.record_replay_audit(&refused, context).await;
             return Err(DispatchError::Unavailable);
         }
+        if store.write_replay(&transaction, &replay).await.is_err() {
+            let mut refused = replay;
+            refused.outcome = ReplayOutcome::Refused;
+            let _ = store.record_replay_audit(&refused, context).await;
+            return Err(DispatchError::Unavailable);
+        }
         let outcome = if transaction.commit().await.is_ok() {
             ReplayOutcome::Committed
         } else {

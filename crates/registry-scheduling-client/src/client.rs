@@ -16,10 +16,10 @@ use registry_scheduling_core::{
     AppointmentHistoryEntryDocument, AvailabilityEntry, CancelAppointmentRequest,
     CreateAppointmentRequest, ExplainDocument, ExternalReference, HoldDocument, LocationDocument,
     OfferingDocument, PageDocument, ProblemCode, RescheduleAppointmentRequest, ResourceDocument,
-    SchedulingServiceDocument, ServiceDocument, APPOINTMENTS_PATH, AVAILABILITY_EXPLAIN_PATH,
-    AVAILABILITY_PATH, CURSOR_QUERY_PARAMETER, HOLDS_PATH, IDEMPOTENCY_KEY_HEADER,
-    LIMIT_QUERY_PARAMETER, LOCATIONS_PATH, MAXIMUM_IDEMPOTENCY_KEY_BYTES, OFFERINGS_PATH,
-    RESOURCES_PATH, SCHEDULING_PATH, SERVICES_PATH,
+    SchedulingServiceDocument, ServiceDocument, APPOINTMENTS_PATH, APPOINTMENT_RECEIPT_PATH,
+    AVAILABILITY_EXPLAIN_PATH, AVAILABILITY_PATH, CURSOR_QUERY_PARAMETER, HOLDS_PATH,
+    IDEMPOTENCY_KEY_HEADER, LIMIT_QUERY_PARAMETER, LOCATIONS_PATH, MAXIMUM_IDEMPOTENCY_KEY_BYTES,
+    OFFERINGS_PATH, RESOURCES_PATH, SCHEDULING_PATH, SERVICES_PATH,
 };
 use reqwest::header::{HeaderName, HeaderValue, ACCEPT, AUTHORIZATION, CONTENT_TYPE};
 use reqwest::{RequestBuilder, Response, StatusCode, Url};
@@ -211,6 +211,31 @@ impl SchedulingClient {
             StatusCode::CREATED,
         )
         .await
+    }
+
+    /// Observe a retained original success without replaying a capacity command.
+    /// A missing, changed or expired receipt is unresolved, not proof of no effect.
+    pub async fn appointment_receipt(
+        &self,
+        auth: SchedulingAuth<'_>,
+        idempotency_key: &str,
+        body: &CreateAppointmentRequest,
+    ) -> Result<SchedulingComplete<AppointmentDocument>, SchedulingClientError> {
+        validate_idempotency_key(idempotency_key)?;
+        let request = self
+            .authorized(
+                self.http
+                    .post(self.url_from_constant(APPOINTMENT_RECEIPT_PATH)?)
+                    .json(body),
+                &auth,
+            )
+            .header(
+                HeaderName::from_static(IDEMPOTENCY_KEY_HEADER),
+                HeaderValue::from_str(idempotency_key).map_err(|_| {
+                    SchedulingClientError::invalid_request("the idempotency key is invalid")
+                })?,
+            );
+        self.send_json(request, StatusCode::OK).await
     }
 
     pub async fn get_appointment(

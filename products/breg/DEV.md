@@ -29,9 +29,13 @@ explicit seed creation succeed. Default loopback ports are BReg `8090`, issuer
 original ports and clients-file location. Conflicting ports are refused.
 
 The database runs the pinned image
-`postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675`,
+`public.ecr.aws/docker/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675`,
 or `postgis/postgis@sha256:01a6a70e41e6c4467c8f55f6063555ed72db2d6662cd0d571040d42eadaeb6f6`
-when the compiled schema requires PostGIS. The selection is retained with the
+when the compiled schema requires PostGIS. Public help names the canonical
+`postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675`
+identity; the implementation pulls the byte-identical Docker Official Images
+ECR mirror above. Retained owned containers accept either exact PostgreSQL
+reference at that digest. The selection is retained with the
 owned database. Spatial setup grants the migration role permission to SET the
 no-login bbox owner; the runtime role never receives that membership.
 Each supervised
@@ -72,6 +76,8 @@ runtime configuration and private credential file references. Keys and access
 tokens never appear in these reports. Use `bregctl dev export-client` to obtain
 the client ID, assertion key, issuer and token endpoint handoff; an OAuth client
 can obtain a fresh token with those fixed values. Keep token output owner-only.
+For a client mapped through `issuer.clientResources`, the export's `resource`
+and `audience` name that client's registered audience.
 
 ## Observe local events
 
@@ -257,6 +263,17 @@ use another client for the same profile by naming that exact step with
 `testBindings`. The closed binding contains both `journeyId` and `stepId`; stale,
 profile-mismatched, duplicate, or ambiguous bindings are refused before any
 service starts.
+
+The generated runtime derives its principal claim from the compiled access
+profiles. All authenticated profiles must use the same claim; mixed claims
+refuse. Existing `registry_principal` projects keep their mapping, and `sub`
+projects use the issuer's subject without adding or overriding token claims.
+For a native journey using a `sub` profile, declare
+`claims: {principal: "$localClientSubject", ...}`. This explicit fixture marker
+resolves to the selected local client's registered subject only in the private
+captured project. Exact `testBindings` select claim variants as usual. A borrowed
+issuer uses its owner's registration identity. Literal expected principals stay
+unchanged; the marker refuses under another principal claim or another field.
 
 Set `accessProfiles: []` for a machine client that carries only scopes or
 claims for another product, such as Casework. The empty list gives that client
@@ -480,19 +497,61 @@ retained session follow the normal source-change refusal and recovery rules.
 
 ## Compose one local issuer
 
+For a project with task-grant profiles, declare each Casework status service
+before the first start. The source issuer must match the profiles' `taskGrant`
+issuer. The status client has only the status scope, no BReg profile, and no
+`allowBregAccess`:
+
+```yaml
+clients:
+  - id: breg-status
+    accessProfiles: []
+    scopes: [casework:grants:status]
+    claims: {registry_actor_kind: service}
+taskGrantStatus:
+  casework:
+    sourceIssuer: https://casework.local.example
+    baseUrl: http://127.0.0.1:8092/
+    client: breg-status
+```
+
+Merge these entries into the existing versioned clients file. Up to eight
+bindings are supported, with unique source issuers and exact numeric loopback
+HTTP endpoints. The generated runtime uses the session issuer for token
+acquisition and client assertion audience, copies the client's assertion key
+into an owner-only secret file, and selects that client's declared
+`issuer.clientResources` audience or the session's default resource. Register
+the same client and resource in Casework's `taskAuthority.statusClients`.
+This binds the existing [task-grant status contract](TASK_GRANTS.md); it grants
+no access to source records and does not replace the governed task profile.
+
 One BREG dev session can own the issuer registrations for several local
 products. Its `dev-clients.yaml` declares the complete inventory before that
 issuer starts. Add other audiences and the exact client role mapping under
 `issuer`; the default BREG audience is the `resource` reported by the owner
-session. Extra resources carry no client permission until a client is mapped.
+session. Extra resources carry no client permission until a client is mapped
+or receives an explicit resource grant.
 
 ```yaml
+clients:
+  - id: task-agent
+    accessProfiles: []
+    scopes: [casework:grants:assert]
+    claims: {registry_actor_kind: service}
+    grants:
+      - audience: urn:registrystack:scheduling:local:appointments
+        scopes: [scheduling:read]
 issuer:
   resources:
     - audience: urn:registrystack:evidence:local:gateway
       scopes: [evidence:invoke]
+    - audience: urn:registrystack:casework:local:inbox
+      scopes: [casework:grants:assert]
+    - audience: urn:registrystack:scheduling:local:appointments
+      scopes: [scheduling:read]
   clientResources:
     evidence-reader: urn:registrystack:evidence:local:gateway
+    task-agent: urn:registrystack:casework:local:inbox
   exchangeIssuers:
     - id: casework
       issuer: https://casework.example.test
@@ -543,6 +602,22 @@ another resource does not. The app still needs a
 token with the governed profile's actual `scope` and principal/purpose claims
 to call BREG.
 
+Machine clients may also declare `grants` with the same audience/scopes format.
+Up to seven distinct audience grants are accepted, each with 1..32 distinct
+scopes declared by that resource. Omit `audience` for the owner's default BREG
+resource. Grants merge into that client's existing issuer role without adding
+duplicate resource permissions. They do not change its primary `scopes`, default
+token requests, exported `resource`, exchange bootstrap scope, or BREG admission.
+For example, the task agent above may request an ordinary `scheduling:read`
+token at the Scheduling resource using the same client and subject; committing
+an appointment still requires Scheduling's independently verified task grant.
+Unknown audiences, undeclared scopes and borrowed-client grant declarations
+are refused. Author these grants on the issuer owner before first start.
+For institutional exchange clients, extra ordinary grants may name only other
+resources; the primary resource retains its single exact bootstrap permission.
+The issuer tooling records those explicit extra permissions separately from
+the bootstrap bound, without creating task-grant claims or widening exchange.
+
 Start the owner first. Another BREG project can run
 `bregctl dev start ./registry-two --issuer-project ./issuer-owner` when the
 owner pre-registered that project's client IDs, exact scopes, and claims. The
@@ -553,7 +628,8 @@ owner is refused before the borrower starts.
 Declare additional issuer resources, exchange connections and clients, browser
 applications, and synthetic users on the owner. A borrower may list only
 `issuer.browserClients` from that issuer inventory; owner-only declarations in
-the borrower's clients file are refused before startup.
+the borrower's clients file, including machine-client `grants`, are refused
+before startup.
 A borrower answers on the owner's BREG audience, so it applies the owner's
 exchange-connection pairings: an exchanged token is refused unless the
 presenting client is registered against the assertion authority that signed it,

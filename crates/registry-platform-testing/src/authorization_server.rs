@@ -6,7 +6,8 @@
 //! metadata, a JWKS, the authorization-code grant with PKCE S256, the
 //! `client_credentials` grant authenticated by `private_key_jwt`, and RFC 8693
 //! token exchange. Its access tokens are RFC 9068 `at+jwt` tokens signed with
-//! the crate's Ed25519 fixture key, so [`TestAuthorizationServer::verifier_config`]
+//! the crate's Ed25519 fixture key by default, or a supplied signing key,
+//! so [`TestAuthorizationServer::verifier_config`]
 //! gives a `registry-platform-oidc` verifier that accepts them.
 //!
 //! It is test-only. Nobody signs in: `/authorize` takes the subject from the
@@ -35,7 +36,7 @@ use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use tokio::{net::TcpListener, sync::oneshot, task::JoinHandle};
 
-use crate::{fixtures, oidc_verifier_config, sign_ed25519_compact_jwt_with_key};
+use crate::{fixtures, oidc_verifier_config, sign_compact_jwt_with_key};
 
 const ACCESS_TOKEN_TYPE: &str = "urn:ietf:params:oauth:token-type:access_token";
 const TOKEN_EXCHANGE_GRANT_TYPE: &str = "urn:ietf:params:oauth:grant-type:token-exchange";
@@ -174,9 +175,18 @@ pub struct TestAuthorizationServerBuilder {
     clients: Vec<TestClient>,
     profile: ExchangeProfile,
     logged_in_subject: Option<String>,
+    signing_key: Option<PrivateJwk>,
 }
 
 impl TestAuthorizationServerBuilder {
+    /// Use this key for access and ID tokens, metadata, and JWKS. The key
+    /// must carry a `kid`; the default remains the Ed25519 fixture key.
+    #[must_use]
+    pub fn with_signing_key(mut self, key: PrivateJwk) -> Self {
+        self.signing_key = Some(key);
+        self
+    }
+
     #[must_use]
     pub fn client(mut self, client: TestClient) -> Self {
         self.clients.push(client);
@@ -202,7 +212,8 @@ impl TestAuthorizationServerBuilder {
     /// # Panics
     ///
     /// Panics when two clients share an identifier, a confidential client's
-    /// key carries no `kid`, or the port cannot be bound.
+    /// key or supplied issuer key carries no `kid`, the supplied signing
+    /// algorithm is unsupported, or the port cannot be bound.
     pub async fn start(self) -> TestAuthorizationServer {
         let mut clients = BTreeMap::new();
         for client in self.clients {
@@ -225,7 +236,17 @@ impl TestAuthorizationServerBuilder {
             .local_addr()
             .expect("the test authorization server local address is available");
         let issuer = format!("http://{addr}");
-        let (signing_key, public_key) = fixtures::ed25519_pair();
+        let signing_key = self
+            .signing_key
+            .unwrap_or_else(|| fixtures::ed25519_pair().0);
+        assert!(
+            signing_key.kid.is_some(),
+            "the test issuer signing key needs a kid"
+        );
+        signing_key
+            .algorithm()
+            .expect("the test issuer signing algorithm is supported");
+        let public_key = signing_key.public();
         let state = Arc::new(ServerState {
             issuer: issuer.clone(),
             signing_key,
@@ -316,6 +337,13 @@ impl TestAuthorizationServer {
         audiences: Vec<String>,
     ) -> registry_platform_oidc::TokenVerifierConfig {
         let mut config = oidc_verifier_config(self.state.issuer.clone(), audiences);
+        config.allowed_algorithms = vec![serde_json::from_value(json!(self
+            .state
+            .signing_key
+            .algorithm()
+            .expect("the signing key was checked")
+            .jwa_name()))
+        .expect("shared signing algorithm has a verifier algorithm")];
         config.allowed_typ = registry_platform_oidc::access_token_typ_set(ACCESS_TOKEN_TYP);
         config
     }
@@ -417,7 +445,7 @@ impl ServerState {
     }
 
     fn sign(&self, typ: &str, claims: Map<String, Value>) -> String {
-        sign_ed25519_compact_jwt_with_key(&self.signing_key, typ, self.kid(), Value::Object(claims))
+        sign_compact_jwt_with_key(&self.signing_key, typ, self.kid(), Value::Object(claims))
     }
 
     /// The claims every access token carries.
@@ -447,7 +475,7 @@ impl ServerState {
             let access = typ.eq_ignore_ascii_case(ACCESS_TOKEN_TYP)
                 || typ.eq_ignore_ascii_case("application/at+jwt");
             (access
-                && header.get("alg")?.as_str()? == "EdDSA"
+                && header.get("alg")?.as_str()? == self.signing_key.algorithm().ok()?.jwa_name()
                 && header.get("kid")?.as_str()? == self.kid())
             .then(|| self.public_key.clone())
         })?;
@@ -524,7 +552,7 @@ async fn metadata(State(state): State<Arc<ServerState>>) -> Json<Value> {
         "token_endpoint_auth_methods_supported": ["private_key_jwt", "none"],
         "token_endpoint_auth_signing_alg_values_supported": ["EdDSA", "ES256", "ES384", "RS256", "RS384"],
         "subject_types_supported": ["public"],
-        "id_token_signing_alg_values_supported": ["EdDSA"],
+        "id_token_signing_alg_values_supported": [state.signing_key.algorithm().expect("the signing key was checked").jwa_name()],
         "authorization_response_iss_parameter_supported": true,
     }))
 }

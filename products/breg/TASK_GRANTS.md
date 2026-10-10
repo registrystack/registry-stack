@@ -2,7 +2,8 @@
 
 A Casework task grant gives an institutional agent bounded authority under its
 own principal. It does not make the agent the human who approved the task.
-BREG verifies the exchanged access token and selected access profile, then
+Base Registry Engine (BReg) verifies the exchanged access token and selected
+access profile, then
 checks current Casework status before each new governed mutation. Task agents
 use change-request drafts and lifecycle operations; a task grant does not
 authorize direct changes to the target records, including imports. A task-grant profile cannot
@@ -11,7 +12,7 @@ hold `apply-request`: the compiler refuses it with
 
 The authored access profile selects `actorKind: agent`, exact
 `requesterClients`, `requiredPurposes`, and a `taskGrant` containing the exact
-`sourceIssuer`. The token must match that profile, BREG's configured audience,
+`sourceIssuer`. The token must match that profile, BReg's configured audience,
 and the compiled collection and operation bounds. A task token cannot fall back
 to a standing access profile. Ordinary profiles retain their own authority.
 A `taskGrant` is authored only in project `accessProfiles`; a module cannot
@@ -20,8 +21,8 @@ contribute a task-grant profile, and the compiler refuses one with
 
 An authored `permissions` entry is the Registry's governed ceiling for a
 profile. A delegated `taskGrant` is signed, short-lived authority for one task
-inside that ceiling. It never adds an operation or field. BREG requires the
-grant's complete BREG permission bounds to equal the profile's compiled
+inside that ceiling. It never adds an operation or field. BReg requires the
+grant's complete BReg permission bounds to equal the profile's compiled
 collections and operations. Wider, narrower, partial, and wrong-resource
 bounds are refused.
 
@@ -39,7 +40,7 @@ authentication:
 ```
 
 The access token keeps the citizen in `sub`. Its `act.sub` must equal the
-configured actor for the verified `azp` or `client_id`; BREG does not accept a
+configured actor for the verified `azp` or `client_id`; BReg does not accept a
 caller-supplied actor alias. `act` is exactly `{sub}` or exactly `{sub, iss}`,
 and `iss`, when present, must be a string equal to the verified token issuer;
 any other member, a different issuer, or a nested `act` refuses the token. A
@@ -73,7 +74,7 @@ and immediate actions to a separate profile the citizen uses directly.
 
 ## Configure current status
 
-Configure BREG's runtime with one entry for each original source issuer used by
+Configure BReg's runtime with one entry for each original source issuer used by
 its task profiles:
 
 ```yaml
@@ -87,9 +88,15 @@ taskGrantStatus:
     caseworkResource: urn:casework:case-management
 ```
 
+Runtime configuration parsing checks the status registry's nonsecret structure:
+at most 32 entries, distinct absolute source issuers, safe service and token URLs,
+non-empty client and assertion audience, and absolute resource identifiers.
+Parsing does not resolve status signer or CA material or contact its endpoints;
+startup repeats these checks and verifies the credential material.
+
 Register this client for client credentials with the exact Casework resource and
 `casework:grants:status` scope. Register the same client in Casework's status
-client mapping for this BREG resource. BREG supplies its configured OIDC audience
+client mapping for this BReg resource. BReg supplies its configured OIDC audience
 as that resource; neither a caller nor the grant chooses an outbound endpoint.
 `clientAssertionAudience` is required and must exactly match the audience the
 identity provider accepts for the signed client assertion. Stock ThunderID uses
@@ -99,7 +106,7 @@ Production endpoints use HTTPS; loopback HTTP is available for local development
 
 Startup refuses a task profile without its configured source-issuer mapping. A
 failed status request refuses the mutation. No positive status result
-is cached. BREG compares all retained authorization fields, including the
+is cached. BReg compares all retained authorization fields, including the
 original principal, client, resource, purpose, bounds, subjects, and deadline.
 
 ## Approval, retries, and expiry
@@ -120,21 +127,30 @@ or revoked task requires an explicit new authorized submission; refreshing an
 access token cannot extend the original grant deadline.
 
 Status refusal returns a failed precondition; status service failure returns
-unavailable. Human rejection and owner cancellation keep their existing
+unavailable. HTTP 401 or 403 from the status endpoint means its service
+credential was rejected and therefore returns unavailable; it does not establish
+that the task grant is inactive. A concealed or missing grant (HTTP 404) remains
+a failed precondition. Human rejection and owner cancellation keep their existing
 permissions. These actions do not require the old submitter grant to remain
 active. Read cursors and representation ETags do not incorporate grant IDs.
 
-The bounded status check runs while the proposal is locked. Casework revocation
-can still occur between that check and the local commit. BREG and Casework do
+The bounded status check uses the shared platform exact-status transport and
+runs while the proposal is locked. Its total ten-second bound includes obtaining
+the status service credential; positive status is never cached. BReg keeps its
+own persisted binding and BReg-only bounds validation. Deferred Casework grants
+use the same status contract and original deadline, without changing BReg's
+write or human approval permissions. Casework revocation
+can still occur between that check and the local commit. BReg and Casework do
 not share a distributed transaction. Proposal-detail erasure also removes its
 retained task subjects, under the existing operator retention boundary.
+
 ## Audit
 
 Terminal and refusal records for a request carrying a verified task grant include
 an `authorization` object using the shared authorization audit fields. Grant,
 principal, client and approver identifiers are keyed pseudonyms, scoped to the
 activation that serves the request. The object also records the source issuer and grant deadline.
-It contains no subjects, bounds values or purpose value. BREG continues
+It contains no subjects, bounds values or purpose value. BReg continues
 to record purpose presence separately. Later human review remains a separate
 actor, and the retained original grant continues to govern status checks.
 

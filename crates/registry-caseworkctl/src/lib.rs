@@ -745,7 +745,11 @@ fn classify_failure(kind: CommandKind, error: &anyhow::Error) -> (u8, Value) {
     {
         let (code, path, message, action) = failure.diagnostic();
         return (
-            OPERATIONAL_FAILURE_EXIT,
+            if failure.is_configuration_refusal() {
+                DOMAIN_REFUSAL_EXIT
+            } else {
+                OPERATIONAL_FAILURE_EXIT
+            },
             json!({
                 "severity":"error", "code":code, "artifact":"dev-session", "path":path,
                 "message":message, "suggestedAction":action
@@ -2462,6 +2466,61 @@ mod tests {
             diagnostic["suggestedAction"],
             "Restore access to the configured OIDC issuer or mounted JWKS, then retry."
         );
+    }
+
+    #[test]
+    fn early_dev_configuration_refusals_are_actionable_and_hide_private_causes() {
+        for (failure, code) in [
+            (
+                dev::DevFailure::IntegrationConfiguration {
+                    source: anyhow::anyhow!("private-preflight-canary").into(),
+                },
+                "caseworkctl.dev.integrations-invalid",
+            ),
+            (
+                dev::DevFailure::SharedClientRegistration {
+                    source: anyhow::anyhow!("private-preflight-canary").into(),
+                },
+                "caseworkctl.dev.shared-client-mismatch",
+            ),
+            (
+                dev::DevFailure::SharedTaskAuthority {
+                    source: anyhow::anyhow!("private-preflight-canary").into(),
+                },
+                "caseworkctl.dev.shared-task-authority-mismatch",
+            ),
+            (
+                dev::DevFailure::SourceBindingConfiguration {
+                    source: anyhow::anyhow!("private-preflight-canary").into(),
+                },
+                "caseworkctl.dev.source-binding-invalid",
+            ),
+            (
+                dev::DevFailure::BorrowedPrincipalConfiguration {
+                    source: anyhow::anyhow!("private-preflight-canary").into(),
+                },
+                "caseworkctl.dev.borrowed-principal-invalid",
+            ),
+        ] {
+            let error = anyhow::Error::new(failure).context("private-preflight-canary");
+            assert!(
+                format!("{error:#}").contains("private-preflight-canary"),
+                "private cause retained"
+            );
+            let (exit, diagnostic) = classify_failure(CommandKind::Operational, &error);
+            assert_eq!(exit, DOMAIN_REFUSAL_EXIT);
+            assert_eq!(diagnostic["code"], code);
+            assert_eq!(diagnostic["artifact"], "dev-session");
+            let path = diagnostic["path"].as_str().unwrap();
+            assert!(path.starts_with("dev-clients.yaml:/") || path.starts_with("casework.yaml:/"));
+            assert!(!diagnostic["suggestedAction"].as_str().unwrap().is_empty());
+            assert!(!diagnostic.to_string().contains("private-preflight-canary"));
+        }
+        let error = anyhow::anyhow!("private-network-canary");
+        let (exit, diagnostic) = classify_failure(CommandKind::Operational, &error);
+        assert_eq!(exit, OPERATIONAL_FAILURE_EXIT);
+        assert_eq!(diagnostic["code"], "caseworkctl.operational-failure");
+        assert!(!diagnostic.to_string().contains("private-network-canary"));
     }
 
     #[test]

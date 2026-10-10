@@ -83,7 +83,7 @@ RUNTIME_ROOT_NORMALIZATION = (
     '--date="@${SOURCE_DATE_EPOCH}" {} +'
 )
 DEBIAN_PREPARATION = (
-    "debian:trixie-slim@sha256:"
+    "public.ecr.aws/docker/library/debian:trixie-slim@sha256:"
     "a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a"
 )
 # This index carries libssl3t64 3.5.7-1~deb13u2 on both supported Linux

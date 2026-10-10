@@ -956,3 +956,30 @@ relations, including an empty database. Older servers refuse with an upgrade
 instruction before migrations or activation writes. The shared
 `postgres_version_floor_precedes_missing_ledger_observation` database test
 covers that entry point; unit tests pin the 16/17 version boundary.
+
+## Original receipt observation
+
+Threat: recovery submits a second effect after cancellation, expiry, or restore,
+or accepts a different caller's receipt as evidence of its original command.
+The receipt lookup uses current ordinary read authority, the original verified
+issuer and configured principal, the exact operation key, and the existing canonical request
+hash. It reads only retained successful receipts and never renders, writes business state,
+replays, or creates an attempt. Task lineage already stored with the original
+operation is preserved. A different standing identity gains no ownership.
+
+Missing, changed, erased, expired, and non-success receipts all answer the
+value-free `409 receipt.unresolved`. That response establishes no absence of
+effect. A durable audit request precedes the database lookup and its response
+precedes disclosure of the receipt. Payloads, keys, and raw identities never
+enter these audit records. The focused PostgreSQL receipt tests exercise
+ownership, exact-request refusal, retention, and unchanged product state.
+
+Receipt observation uses no submission rate budget because it neither renders
+nor sends. Exhausting that budget must not prevent recovery of an already
+accepted command. Authentication, bounded bodies, exact caller/request matching,
+retention, and audit gates still apply. The PostgreSQL test
+`original_receipt_reads_neither_spend_nor_require_submission_budget` reads the
+same stored receipt before and after the budget is exhausted and proves that
+the next submission is still rate limited.
+
+For an issuer/subject-bound pilot, configure the Messaging caller profile with `principalClaim: sub`. Other profiles retain the product’s existing configured principal ownership rule, and cannot substitute a different principal to observe an original receipt.

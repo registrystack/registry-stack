@@ -1,0 +1,118 @@
+[package]
+name = "registry-coordinator"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Durable coordination across Registry Stack products."
+publish = false
+
+[[bin]]
+name = "coordinator"
+path = "src/main.rs"
+
+[[bin]]
+name = "coordinatorctl"
+path = "src/ctl.rs"
+
+[[bin]]
+name = "coordinator-test-worker"
+path = "tests/support/worker_process.rs"
+required-features = ["postgres-test"]
+
+[lints]
+workspace = true
+
+[features]
+default = []
+# Database suites opt in locally; downstream services are separate executables.
+postgres-test = []
+schema = ["dep:schemars", "registry-platform-config/schema", "registry-platform-yaml/schema", "registry-platform-oidc/schema", "registry-platform-audit/schema"]
+
+[[example]]
+name = "runtime-schema"
+required-features = ["schema"]
+
+[[example]]
+name = "project-schema"
+required-features = ["schema"]
+
+[[example]]
+name = "scenario-schema"
+required-features = ["schema"]
+
+[[test]]
+name = "postgres_state"
+path = "tests/postgres_state.rs"
+required-features = ["postgres-test"]
+
+[[test]]
+name = "recovery_audit"
+path = "tests/recovery_audit.rs"
+required-features = ["postgres-test"]
+
+[[test]]
+name = "process_restart"
+path = "tests/process_restart.rs"
+required-features = ["postgres-test"]
+
+[[test]]
+name = "messaging_integration"
+path = "tests/messaging_integration.rs"
+required-features = ["postgres-test"]
+
+[[test]]
+name = "deployment_postgres"
+path = "tests/deployment_postgres.rs"
+required-features = ["postgres-test"]
+
+[dependencies]
+async-trait.workspace = true
+axum.workspace = true
+base64.workspace = true
+chrono = { workspace = true, features = ["serde"] }
+clap.workspace = true
+hex.workspace = true
+jsonschema.workspace = true
+registry-breg-client.workspace = true
+registry-casework-client.workspace = true
+registry-messaging-client.workspace = true
+registry-messaging-core.workspace = true
+registry-platform-activation.workspace = true
+registry-platform-audit.workspace = true
+registry-platform-oidc.workspace = true
+registry-platform-authcommon.workspace = true
+registry-platform-httpsec = { workspace = true, features = ["server"] }
+jsonwebtoken.workspace = true
+registry-platform-canonical-json.workspace = true
+registry-platform-config.workspace = true
+registry-platform-yaml.workspace = true
+registry-platform-crypto.workspace = true
+registry-platform-dispatch = { workspace = true, features = ["postgres"] }
+registry-platform-httputil.workspace = true
+registry-platform-script.workspace = true
+registry-scheduling-client.workspace = true
+registry-scheduling-core.workspace = true
+reqwest.workspace = true
+rustls.workspace = true
+rhai.workspace = true
+schemars = { workspace = true, optional = true }
+serde.workspace = true
+serde_json.workspace = true
+serde_path_to_error.workspace = true
+serde_norway.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-postgres.workspace = true
+tokio-postgres-rustls.workspace = true
+url = { workspace = true, features = ["serde"] }
+uuid = { workspace = true, features = ["serde"] }
+zeroize.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+registry-platform-testing = { workspace = true, features = ["test-utils", "test-authorization-server"] }
+tempfile.workspace = true
+wiremock.workspace = true

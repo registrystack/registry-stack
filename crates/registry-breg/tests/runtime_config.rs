@@ -4507,3 +4507,71 @@ fn an_audit_key_that_is_not_a_secret_reference_is_refused_at_the_reference() {
         );
     }
 }
+
+#[test]
+fn task_status_structural_bindings_are_refused_before_runtime_activation() {
+    let fixture = RuntimeFixture::new();
+    let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
+    let status = json!({
+        "sourceIssuer":"urn:casework:source",
+        "baseUrl":"https://unreachable-status.invalid",
+        "tokenEndpoint":"http://127.0.0.1:1/token",
+        "clientAssertionAudience":"urn:identity:test",
+        "clientId":"breg-task-status",
+        "privateKeyRef":"secret:file/missing-task-status-key",
+        "caseworkResource":"urn:casework:test",
+        "caBundleRef":"secret:file/missing-task-status-ca"
+    });
+    parse_runtime_config(&format!(
+        "{base}\ntaskGrantStatus: {}\n",
+        json!([status.clone()])
+    ))
+    .expect("nonsecret structural checking performs no secret/network I/O");
+    for (field, value) in [
+        ("sourceIssuer", "not-an-absolute-issuer"),
+        ("baseUrl", "http://public.test"),
+        ("tokenEndpoint", "https://user@identity.test/token"),
+        ("clientId", ""),
+        ("clientAssertionAudience", ""),
+        ("caseworkResource", "not-an-absolute-resource"),
+    ] {
+        let mut invalid = status.clone();
+        invalid[field] = json!(value);
+        let error =
+            parse_runtime_config(&format!("{base}\ntaskGrantStatus: {}\n", json!([invalid])))
+                .unwrap_err();
+        if field == "tokenEndpoint" || field == "clientId" || field == "clientAssertionAudience" {
+            let diagnostic = &error.diagnostics(None)[0];
+            assert_eq!(diagnostic.path, format!("/taskGrantStatus/0/{field}"));
+            assert_eq!(diagnostic.code, "config.invalid-value");
+        } else {
+            assert_eq!(error, RuntimeConfigError::InvalidTaskGrantStatus, "{field}");
+        }
+    }
+    for count in [2, 33] {
+        let entries: Vec<_> = (0..count)
+            .map(|index| {
+                let mut entry = status.clone();
+                if count == 33 {
+                    entry["sourceIssuer"] = json!(format!("urn:casework:source:{index}"));
+                }
+                entry
+            })
+            .collect();
+        assert_eq!(
+            parse_runtime_config(&format!("{base}\ntaskGrantStatus: {}\n", json!(entries)))
+                .unwrap_err(),
+            RuntimeConfigError::InvalidTaskGrantStatus
+        );
+    }
+    let mut invalid = status.clone();
+    invalid["caseworkResource"] = json!("not-an-absolute-resource");
+    let error = parse_runtime_config(&format!("{base}\ntaskGrantStatus: {}\n", json!([invalid])))
+        .unwrap_err();
+    let diagnostic = &error.diagnostics(None)[0];
+    assert_eq!(diagnostic.path, "/taskGrantStatus");
+    assert_eq!(diagnostic.code, "breg.runtime.invalid-task-grant-status");
+    assert!(error.to_string().contains("at most 32"));
+    assert!(!fixture.secret_root.join("missing-task-status-key").exists());
+    assert!(!fixture.secret_root.join("missing-task-status-ca").exists());
+}

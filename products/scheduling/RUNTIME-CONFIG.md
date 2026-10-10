@@ -169,6 +169,9 @@ admit every client the issuer verifies, including an application in the same
 realm that has nothing to do with booking, is a startup refusal in every mode
 (`scheduling.runtime.allowed-clients-required`), because a development file
 is copied toward production.
+The native Casework exchange example uses the issuer-compatible
+`scheduling:read` handle and therefore explicitly sets
+`readsScope: scheduling:read`; the compatibility default remains unchanged.
 
 `assertionIssuers` maps a client id to the assertion authorities that client may
 exchange a subject token from. A deployment that performs no token exchange
@@ -179,6 +182,58 @@ a client is listed, a token it exchanged is accepted only for one
 of that client's declared authorities, so an assertion minted by an unrelated
 authority the issuer happens to federate cannot become a booking credential
 here.
+
+`taskGrantStatus` is an optional top-level list of Casework task authorities.
+Configure it for every deployment that accepts deferred grants:
+
+```yaml
+taskGrantStatus:
+  - sourceIssuer: https://casework.example.test/task-authority
+    baseUrl: https://casework.example.test
+    tokenEndpoint: https://identity.example.test/realms/registry/protocol/openid-connect/token
+    clientAssertionAudience: https://identity.example.test/realms/registry
+    clientId: scheduling-task-status
+    privateKeyRef: secret:file/scheduling-task-status-private-jwk
+    caseworkResource: urn:example:casework
+    caBundleRef: secret:file/institution-root-ca
+```
+
+Offline runtime checks require at most 32 entries with distinct absolute
+`sourceIssuer` identifiers, safe service and token URLs, non-empty client and
+assertion audience, and an absolute Casework resource. They validate secret
+reference structure without resolving the private key or CA bundle or contacting
+an endpoint. Activation repeats the structural check and verifies key and CA
+contents.
+
+`sourceIssuer` must exactly equal the source issuer in the signed task grant.
+`baseUrl` selects that authority's HTTPS API. `tokenEndpoint`,
+`clientAssertionAudience`, `clientId`, and `privateKeyRef` configure the
+private-key JWT client credential used to obtain a token with the fixed
+`casework:grants:status` scope and `caseworkResource`. The private key is a JWK
+whose `kid` selects its registered public key. `caBundleRef` is optional and
+applies a private CA bundle to both outbound HTTPS connections.
+
+Once the list contains any entry, a fresh exact status answer is mandatory for
+every capacity commitment and idempotent receipt replay. The authority must
+return the signed grant's exact identity and bounds and say it is active. An
+inactive, mismatched, unlisted, or incompletely bound grant answers
+`operation.not-authorized`; an authority or credential outage, including an
+unusable authority response, answers `service.unavailable`. Positive answers are not cached. The full attempt is
+limited to ten seconds and completes before the capacity transaction opens, so
+no PostgreSQL capacity lock is held during the outbound call. Duplicate source
+issuers or invalid endpoints, credentials, or secret references refuse startup.
+The positive answer is an observation rather than a distributed transaction:
+a withdrawal after the answer can race the in-flight Scheduling commit.
+
+When the list is absent or empty, Scheduling accepts only the legacy offline
+path: the grant must have no more than 900 seconds remaining at request entry.
+Because the signed token does not identify whether its grant was originally
+immediate or deferred, the final 15 minutes of a deferred grant can use that
+path on an unconfigured deployment. Any configured entry disables the fallback
+for every source. After any status answer, the capacity transaction checks the
+earlier of the verified access token deadline and the grant deadline again
+after lock waits and immediately before commit. That earlier deadline bounds
+the status-to-commit race; it does not make revocation atomic across products.
 
 Scopes authorize reads only. Every commitment takes its authority from a task
 grant instead, which [TASK_GRANTS.md](TASK_GRANTS.md) documents.

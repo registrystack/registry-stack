@@ -4,7 +4,7 @@ This is the Registry Stack monorepo: registry-facing services over the data
 institutions already hold and the registries they do not hold yet. Pre-1.0;
 APIs and deployment contracts may change.
 
-Five independent runtime products are relevant:
+The maintained runtime products include:
 
 - **Base Registry Engine** compiles a declared registry project into a
   PostgreSQL-backed writable registry: schema, REST API, per-profile
@@ -20,6 +20,9 @@ Five independent runtime products are relevant:
 - **Registry Messaging** sends one message to one destination over one
   channel for an authorized caller, rendered from a reviewed template through
   an operator-configured provider, and reports what is known about delivery.
+- **Registry Coordinator** runs finite, durable plans across product APIs using
+  their maintained clients. Products retain effect ownership and authorization;
+  a workflow wait never renews an approval or creates downstream authority.
 
 The products compose without merging their boundaries. Evidence may use a Base
 Registry Engine route or another bounded HTTP endpoint as a fixed source and
@@ -70,6 +73,8 @@ The dependency runs one way only in production: no Evidence crate depends on
 
 | Area | Owns |
 |---|---|
+| `crates/registry-coordinator` | Optional Coordinator runtime and operator CLI, durable workflow state and client adapters |
+| `products/coordinator` | Coordinator deployment contract, authored examples, schemas and pilot verification |
 | `crates/registry-discovery` | Immutable Registry Discovery index runtime and the `discovery` binary |
 | `crates/registry-discovery-profile` | Closed provider-publication profile implemented by Evidence; published v1alpha1 resources retain their historical broader vocabulary |
 | `crates/registry-discovery-client` | Rust relying-party SDK for bounded search, resolution, and inert exact selections |

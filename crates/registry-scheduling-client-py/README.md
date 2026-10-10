@@ -63,3 +63,9 @@ reference or identifier before choosing a new key. A hold cannot be read and
 expires on its own, so start a new request.
 
 This crate is private and does not publish a standalone Python distribution.
+
+`appointment_receipt` observes a retained original success using the original request and
+caller-chosen key with a current token. It makes one receipt request, never
+replays the mutation and never retries. `receipt.unresolved` leaves the
+original effect unknown; a missing or expired receipt does not prove absence.
+The error's `outcome_unknown` describes this read, not the original effect.

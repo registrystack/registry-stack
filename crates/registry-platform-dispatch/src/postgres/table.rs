@@ -106,42 +106,20 @@ impl JobTable {
         format!("{}.{}", self.schema, self.table)
     }
 
-    /// The DDL for a job table with every column, check, and index the core
-    /// relies on, for a consumer that does not already own an equivalent
-    /// table. The consumer runs the statements in its own migration and may
-    /// add its own columns and foreign keys beside them.
+    /// The accepted stored states used by [`Self::create_statements`].
+    /// Product migrations reuse this predicate when changing stored spellings.
     #[must_use]
-    pub fn create_statements(&self) -> Vec<String> {
-        let Self {
-            schema,
-            table,
-            id_column: id,
-            part_column: part,
-        } = self;
-        vec![
-            format!(
-                "CREATE TABLE IF NOT EXISTS {schema}.{table} (
-                 {id} uuid NOT NULL,
-                 {part} text NOT NULL
-                     CHECK ({part} <> '' AND octet_length({part}) <= {MAX_JOB_PART_BYTES}),
-                 generation bigint NOT NULL CHECK (generation > 0),
-                 state text NOT NULL
-                     CONSTRAINT {table}_state_values CHECK (
-                         state IN ('pending', 'leased', 'delivered', 'dead-lettered',
-                                   'expired', 'unknown', 'cancelled')
-                     ),
-                 attempt smallint NOT NULL CHECK (attempt >= 0),
-                 next_attempt_at timestamptz,
-                 attempt_started_at timestamptz,
-                 lease_expires_at timestamptz,
-                 lease_token uuid,
-                 delivered_at timestamptz,
-                 dead_lettered_at timestamptz,
-                 expired_at timestamptz,
-                 updated_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
-                 PRIMARY KEY ({id}, {part}),
-                 CONSTRAINT {table}_shape CHECK (
-                     (state = 'pending'
+    pub fn state_predicate() -> &'static str {
+        "state IN ('pending', 'leased', 'delivered', 'dead-lettered',
+                   'expired', 'unknown', 'cancelled')"
+    }
+
+    /// The unchanged core job-state predicate used by [`Self::create_statements`].
+    /// Product migrations may compose a narrowly governed state extension with
+    /// this predicate without copying or weakening the core's default shape.
+    #[must_use]
+    pub fn shape_predicate() -> &'static str {
+        "(state = 'pending'
                          AND next_attempt_at IS NOT NULL
                          AND attempt_started_at IS NULL
                          AND lease_expires_at IS NULL
@@ -199,7 +177,46 @@ impl JobTable {
                          AND lease_token IS NULL
                          AND delivered_at IS NULL
                          AND dead_lettered_at IS NULL
-                         AND expired_at IS NULL)
+                         AND expired_at IS NULL)"
+    }
+
+    /// The DDL for a job table with every column, check, and index the core
+    /// relies on, for a consumer that does not already own an equivalent
+    /// table. The consumer runs the statements in its own migration and may
+    /// add its own columns and foreign keys beside them.
+    #[must_use]
+    pub fn create_statements(&self) -> Vec<String> {
+        let Self {
+            schema,
+            table,
+            id_column: id,
+            part_column: part,
+        } = self;
+        let shape = Self::shape_predicate();
+        let states = Self::state_predicate();
+        vec![
+            format!(
+                "CREATE TABLE IF NOT EXISTS {schema}.{table} (
+                 {id} uuid NOT NULL,
+                 {part} text NOT NULL
+                     CHECK ({part} <> '' AND octet_length({part}) <= {MAX_JOB_PART_BYTES}),
+                 generation bigint NOT NULL CHECK (generation > 0),
+                 state text NOT NULL
+                     CONSTRAINT {table}_state_values CHECK (
+                         {states}
+                     ),
+                 attempt smallint NOT NULL CHECK (attempt >= 0),
+                 next_attempt_at timestamptz,
+                 attempt_started_at timestamptz,
+                 lease_expires_at timestamptz,
+                 lease_token uuid,
+                 delivered_at timestamptz,
+                 dead_lettered_at timestamptz,
+                 expired_at timestamptz,
+                 updated_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
+                 PRIMARY KEY ({id}, {part}),
+                 CONSTRAINT {table}_shape CHECK (
+                     {shape}
                  )
              );"
             ),

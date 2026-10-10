@@ -810,8 +810,8 @@ class GateInventoryTest(unittest.TestCase):
                 "Casework PostgreSQL gate",
             ),
             (
-                "postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675",
-                "postgres:17.11",
+                "public.ecr.aws/docker/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675",
+                "public.ecr.aws/docker/library/postgres:17.11",
                 "Casework PostgreSQL 17 image pin",
             ),
             (
@@ -968,10 +968,10 @@ class GateInventoryTest(unittest.TestCase):
                 "Scheduling PostgreSQL gate",
             ),
             (
-                "image: postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675\n"
+                "image: public.ecr.aws/docker/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675\n"
                 "        env:\n"
                 "          POSTGRES_DB: scheduling",
-                "image: postgres:17.11\n        env:\n          POSTGRES_DB: scheduling",
+                "image: public.ecr.aws/docker/library/postgres:17.11\n        env:\n          POSTGRES_DB: scheduling",
                 "Scheduling PostgreSQL 17 image pin",
             ),
             (

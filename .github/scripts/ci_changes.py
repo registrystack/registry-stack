@@ -97,6 +97,7 @@ SHARDS = {
         "registry-evidencectl",
     ),
     "developer-tools": (
+        "registry-coordinator",
         "registry-thunderid-tooling",
         "registry-cli-docs",
         "registry-cli-reference",
@@ -121,6 +122,7 @@ STACK_CLIENT_PACKAGES = frozenset(SHARDS["stack-client"])
 CONFIG_CONFORMANCE_PACKAGES = frozenset(
     {
         "registry-platform-config",
+        "registry-coordinator",
         "registry-breg",
         "registry-breg-mcp",
         "registry-breg-review",
@@ -138,6 +140,7 @@ CONFIG_CONFORMANCE_PACKAGES = frozenset(
 # job builds; a change to one, or to anything it links, runs the corpus.
 CONFIG_CHECK_PACKAGES = frozenset(
     {
+        "registry-coordinator",
         "registry-breg-mcp",
         "registry-breg-review",
         "registry-bregctl",
@@ -399,6 +402,8 @@ CLI_REFERENCE_INPUTS = (
     ("crates/registry-render/src/cli.rs", "crates/registry-render/src/cli.rs"),
     # The check subcommand takes its --format values from this module.
     ("crates/registry-render/src/check.rs", "crates/registry-render/src/check.rs"),
+    ("crates/registry-coordinator/src/cli.rs", "crates/registry-coordinator/src/cli.rs"),
+    ("crates/registry-coordinator/src/service.rs", "crates/registry-coordinator/src/service.rs"),
 )
 CLI_REFERENCE_PATTERNS = tuple(pattern for pattern, _ in CLI_REFERENCE_INPUTS)
 
@@ -1096,6 +1101,8 @@ def classify(
                 seeds.update(SCHEDULING_PACKAGES)
             elif path.startswith("products/messaging/"):
                 seeds.update(MESSAGING_PACKAGES)
+            elif path.startswith("products/coordinator/"):
+                seeds.add("registry-coordinator")
             elif path.startswith("products/identifiers/"):
                 # Catalog-only tooling does not require the full Rust matrix.
                 pass
@@ -1446,6 +1453,7 @@ def classify(
         ) and bool(affected & (SCHEDULING_PACKAGES | {"registry-platform-dispatch"})),
         "messaging_contracts": bool(affected & MESSAGING_PACKAGES),
         "messaging_postgres": bool(affected & MESSAGING_PACKAGES),
+        "coordinator": "registry-coordinator" in affected,
         "release_tool": release_tool,
         "release_source_proof": release_source_proof,
         "docs": docs,

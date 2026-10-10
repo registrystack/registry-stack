@@ -825,6 +825,13 @@
       ],
       "type": "string"
     },
+    "TaskAuthorizationMode": {
+      "enum": [
+        "immediate",
+        "deferred"
+      ],
+      "type": "string"
+    },
     "TaskGrantBounds": {
       "description": "The product-specific authority a task grant carries, chosen by its `type`\nmember. The shared reader's union helper decodes it so every error inside\na variant keeps its position (CFG-SCHEMA-8); the wire form is unchanged.",
       "oneOf": [
@@ -908,9 +915,41 @@
     },
     "TaskTemplate": {
       "additionalProperties": false,
+      "allOf": [
+        {
+          "else": {
+            "properties": {
+              "lifetimeSeconds": {
+                "maximum": 900
+              }
+            }
+          },
+          "if": {
+            "properties": {
+              "authorizationMode": {
+                "const": "deferred"
+              }
+            },
+            "required": [
+              "authorizationMode"
+            ]
+          },
+          "then": {
+            "properties": {
+              "lifetimeSeconds": {
+                "maximum": 604800
+              }
+            }
+          }
+        }
+      ],
       "properties": {
         "agent": {
           "$ref": "#/$defs/TemplateAgent"
+        },
+        "authorizationMode": {
+          "$ref": "#/$defs/TaskAuthorizationMode",
+          "description": "Immediate authorizations last at most fifteen minutes. Deferred is an\nexplicit governed window of at most seven days; assertion TTL stays sixty seconds."
         },
         "bounds": {
           "$ref": "#/$defs/TaskGrantBounds"
@@ -955,7 +994,7 @@
         },
         "lifetimeSeconds": {
           "format": "uint64",
-          "maximum": 900,
+          "maximum": 604800,
           "minimum": 1,
           "type": "integer"
         },

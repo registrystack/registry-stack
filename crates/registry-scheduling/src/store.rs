@@ -2072,6 +2072,31 @@ impl PostgresStore {
         Ok(CommitOutcome::Cancelled(cancelled))
     }
 
+    /// Read a retained successful command receipt for the exact owning caller.
+    /// Absence, request mismatch and expiry all remain unresolved. This read
+    /// never opens a capacity transaction or creates an idempotency attempt.
+    pub async fn appointment_receipt(
+        &self,
+        issuer: &str,
+        subject: &str,
+        scope: &str,
+        key: &str,
+        request_hash: &str,
+        now: DateTime<Utc>,
+    ) -> Result<Option<Value>, StoreError> {
+        let client = self.client().await?;
+        let reference = attempt_key_reference(issuer, subject, scope, key);
+        let row = client
+            .query_opt(
+                "SELECT receipt FROM scheduling_attempts WHERE key_reference=$1 \
+             AND request_hash=$2 AND state='completed' AND status_code IN (200,201) \
+             AND erased_at IS NULL AND expires_at>$3",
+                &[&reference, &request_hash, &now],
+            )
+            .await?;
+        Ok(row.and_then(|row| row.get(0)))
+    }
+
     /// Expire holds whose TTL has passed. Each expiry is a state change with
     /// its own history event, so the ledger never depends on the sweeper
     /// having run for capacity to be free: the snapshot query already

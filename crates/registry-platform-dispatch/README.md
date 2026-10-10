@@ -93,7 +93,10 @@ never sent. Claim, finish, replay, and cancellation run as owned tasks, so
 cancelling their caller does not strand a transition between its durable
 database state and its direct audit response. Consumer attempt rows, advisory
 locks, and other relational effects remain in the transaction through
-`write_attempt` and `write_transition`.
+`write_attempt`, `write_transition` and `write_replay`. The replay hook runs
+after the core resets a terminal job, before the same transaction commits.
+Its default is a no-op; consumers may preserve their own scheduling or relational
+state there. A refusal rolls back the reset and consumer writes together.
 
 The store owns audit correlation. Each invocation must receive a fresh
 correlation while its request and response keep the same value. An attempt can

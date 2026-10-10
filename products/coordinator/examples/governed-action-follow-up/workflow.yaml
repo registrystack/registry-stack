@@ -1,0 +1,57 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/coordinator/project/project.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/coordinator/project/v1alpha1
+kind: CoordinatorProject
+project:
+  id: governed-action-follow-up
+  version: "1"
+input:
+  type: object
+  additionalProperties: false
+  required: [applicationId]
+  properties:
+    applicationId: {type: string, format: uuid}
+connections:
+  applications: breg
+  notices: messaging
+functionsFile: functions.rhai
+deadlineSeconds: 300
+start: read-application
+steps:
+  read-application:
+    type: call
+    connection: applications
+    operation: read-record
+    input: {function: read_request, arguments: [{type: input}]}
+    next: needs-information
+  needs-information:
+    type: choose
+    choose: {function: information_route, arguments: [{type: step, step: read-application}]}
+    cases: {request: request-information, skip: skipped}
+  request-information:
+    type: call
+    connection: applications
+    operation: invoke-breg-action
+    input: {function: action_request, arguments: [{type: input}, {type: step, step: read-application}]}
+    next: notify
+  notify:
+    type: call
+    connection: notices
+    operation: submit-message
+    input: {function: notice_request, arguments: [{type: step, step: read-application}, {type: step, step: request-information}]}
+    next: accepted
+  accepted:
+    type: finish
+    outcome: action-and-notice-accepted
+    output: {function: accepted_result, arguments: [{type: step, step: request-information}, {type: step, step: notify}]}
+  skipped:
+    type: finish
+    outcome: no-information-request-needed
+outcomes:
+  action-and-notice-accepted:
+    type: object
+    additionalProperties: false
+    required: [actionApplicationId, messageId]
+    properties:
+      actionApplicationId: {type: string, format: uuid}
+      messageId: {type: string, format: uuid}
+  no-information-request-needed: {type: "null"}

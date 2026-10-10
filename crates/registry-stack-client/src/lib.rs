@@ -62,9 +62,9 @@ pub mod casework {
         SubjectClockAnchor, SubjectClockCompletion, SubjectClockPause, SubjectRef,
         SubmissionDigest, SupervisoryReviewTask, SupervisoryReviewTaskPage,
         SupervisoryReviewTaskQuery, SupervisoryReviewTaskState, TaskApprovalRequest,
-        TaskAssertionResponse, TaskGrantBounds, TaskGrantList, TaskGrantRevocation,
-        TaskGrantStatus, TaskGrantStatusDetails, TaskGrantView, TaskPermission,
-        TaskTemplatePreview, TaskTemplatePreviews, TeamRecord, Uuid, WorkItem,
+        TaskAssertionResponse, TaskAuthorizationMode, TaskGrantBounds, TaskGrantList,
+        TaskGrantRevocation, TaskGrantStatus, TaskGrantStatusDetails, TaskGrantView,
+        TaskPermission, TaskTemplatePreview, TaskTemplatePreviews, TeamRecord, Uuid, WorkItem,
         WorkItemHistoryQuery, WorkItemPage, WorkItemRouting, WorkingDaysAfter, WorkingDaysBefore,
         WorkingWeekday,
     };
@@ -79,7 +79,7 @@ pub mod messaging {
         SubmitMessageRequest, TemplatePreview, TemplatePreviewRequest, TemplateReference,
         TransportKind, HEALTH_PATH, IDEMPOTENCY_KEY_HEADER, MAXIMUM_IDEMPOTENCY_KEY_BYTES,
         MAXIMUM_RETRY_AFTER_SECONDS, MESSAGES_PATH, MESSAGE_CANCEL_PATH, MESSAGE_PATH,
-        MESSAGING_PROBLEM_TYPE_BASE, READY_PATH, TEMPLATE_PREVIEW_PATH,
+        MESSAGE_RECEIPT_PATH, MESSAGING_PROBLEM_TYPE_BASE, READY_PATH, TEMPLATE_PREVIEW_PATH,
     };
 }
 
@@ -93,10 +93,10 @@ pub mod scheduling {
         SchedulingClient, SchedulingClientConfig, SchedulingClientError, SchedulingComplete,
         SchedulingModeDocument, SchedulingProtocolFailure, SchedulingServiceDocument,
         ServiceDocument, TransportKind, WindowDocument, APPOINTMENTS_PATH,
-        AVAILABILITY_EXPLAIN_PATH, AVAILABILITY_PATH, CURSOR_QUERY_PARAMETER, HOLDS_PATH,
-        IDEMPOTENCY_KEY_HEADER, LIMIT_QUERY_PARAMETER, LOCATIONS_PATH,
-        MAXIMUM_IDEMPOTENCY_KEY_BYTES, OFFERINGS_PATH, RESOURCES_PATH, SCHEDULING_PATH,
-        SCHEDULING_PROBLEM_TYPE_BASE, SERVICES_PATH,
+        APPOINTMENT_RECEIPT_PATH, AVAILABILITY_EXPLAIN_PATH, AVAILABILITY_PATH,
+        CURSOR_QUERY_PARAMETER, HOLDS_PATH, IDEMPOTENCY_KEY_HEADER, LIMIT_QUERY_PARAMETER,
+        LOCATIONS_PATH, MAXIMUM_IDEMPOTENCY_KEY_BYTES, OFFERINGS_PATH, RESOURCES_PATH,
+        SCHEDULING_PATH, SCHEDULING_PROBLEM_TYPE_BASE, SERVICES_PATH,
     };
 }
 

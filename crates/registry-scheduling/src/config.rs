@@ -26,6 +26,7 @@ pub use registry_platform_config::{
     JwksSource, ListenerNetworkExposure, OidcClientsConfig, OidcIssuerConfig, PackageConfig,
     PrivateListenerConfig as ListenerConfig, SecretProvidersConfig, TlsTermination,
 };
+use registry_platform_oidc::task_grant::{TaskGrantStatusConfig, TaskGrantStatusRegistry};
 use registry_platform_oidc::{
     access_token_typ_set, fetch_discovery, parse_static_jwks, JwksFetcher, JwksFetcherConfig,
     OidcDiscoveryConfig, TokenVerifierConfig,
@@ -133,6 +134,12 @@ pub struct RuntimeConfig {
     pub secret_providers: SecretProvidersConfig,
     pub database: DatabaseConfig,
     pub authentication: AuthenticationConfig,
+    /// Fresh Casework status endpoints keyed by the original grant issuer.
+    /// An empty list preserves the bounded legacy path for grants with no
+    /// more than fifteen minutes left; any configured entry makes status
+    /// mandatory for every commitment.
+    #[serde(default)]
+    pub task_grant_status: Vec<TaskGrantStatusConfig>,
     pub audit: AuditConfig,
     #[serde(default)]
     pub destinations: DestinationsConfig,
@@ -674,6 +681,18 @@ impl RuntimeConfig {
                 document_ref,
             ));
         }
+        for (index, status) in self.task_grant_status.iter().enumerate() {
+            references.push((
+                format!("taskGrantStatus.{index}.privateKeyRef"),
+                status.private_key_ref.as_str(),
+            ));
+            if let Some(reference) = &status.ca_bundle_ref {
+                references.push((
+                    format!("taskGrantStatus.{index}.caBundleRef"),
+                    reference.as_str(),
+                ));
+            }
+        }
         if let Some(reference) = self
             .destinations
             .reminders
@@ -763,6 +782,17 @@ impl RuntimeConfig {
                 path: "authentication.oidc.explainScope",
                 reason: "must differ from authentication.oidc.readsScope",
             });
+        }
+    }
+
+    fn check_task_grant_status(&self, findings: &mut Vec<RuntimeConfigError>) {
+        if TaskGrantStatusRegistry::validate_configuration(
+            &self.task_grant_status,
+            &self.authentication.oidc.provider.audience,
+        )
+        .is_err()
+        {
+            findings.push(RuntimeConfigError::InvalidTaskGrantStatus);
         }
     }
 
@@ -894,6 +924,7 @@ const FILE_RULES: &[FileRule] = &[
     RuntimeConfig::check_secret_references,
     RuntimeConfig::check_listeners,
     RuntimeConfig::check_oidc,
+    RuntimeConfig::check_task_grant_status,
     RuntimeConfig::check_database,
     RuntimeConfig::check_destinations,
 ];
@@ -1097,6 +1128,7 @@ fn reads_deferred_value(
 ) -> bool {
     let reads: &[&str] = match finding {
         RuntimeConfigError::InvalidListener => &["/listener"],
+        RuntimeConfigError::InvalidTaskGrantStatus => &["/authentication/oidc/audience"],
         RuntimeConfigError::Block(error) if error.field().starts_with("authentication.oidc.") => {
             &["/listener/tlsTermination"]
         }
@@ -1128,10 +1160,15 @@ fn stand_in_for(pointer: &str) -> &'static str {
         ["package", "expectedDigest"] => {
             "sha256:0000000000000000000000000000000000000000000000000000000000000000"
         }
-        ["authentication", "oidc", "issuer"]
+        ["taskGrantStatus", _, "baseUrl"]
+        | ["taskGrantStatus", _, "tokenEndpoint"]
+        | ["authentication", "oidc", "issuer"]
         | ["authentication", "oidc", "jwksSource", "uri"]
         | ["destinations", "reminders", "url"]
         | ["destinations", "hooks", _, "url"] => "https://deferred.invalid",
+        ["taskGrantStatus", _, "sourceIssuer"]
+        | ["taskGrantStatus", _, "caseworkResource"]
+        | ["taskGrantStatus", _, "clientAssertionAudience"] => "urn:deferred:status",
         _ => DEFAULT_STAND_IN,
     }
 }
@@ -1200,6 +1237,8 @@ pub enum RuntimeConfigError {
         "authentication.oidc.allowedClients must name every client the deployment admits; unrestricted would admit every client the issuer verifies"
     )]
     AllowedClientsRequired,
+    #[error("taskGrantStatus must bind at most 32 unique absolute source issuers, safe service/token URLs, non-empty client and assertion audience, and an absolute Casework resource")]
+    InvalidTaskGrantStatus,
     #[error(
         "database.runtimeUrlRef and database.migrationUrlRef must be non-empty secret references"
     )]
@@ -1252,6 +1291,7 @@ impl RuntimeConfigError {
             Self::InvalidDestinationUrl { path, .. } => path,
             Self::Oidc => "authentication.oidc",
             Self::AllowedClientsRequired => "authentication.oidc.allowedClients",
+            Self::InvalidTaskGrantStatus => "taskGrantStatus",
             Self::OidcJwksSecret(_) => "authentication.oidc.jwksSource.documentRef",
             Self::InvalidListener => "listener.bind",
             Self::InvalidDatabaseReference => "database",
@@ -1310,6 +1350,7 @@ impl RuntimeConfigError {
             Self::InvalidListener => "scheduling.runtime.invalid-listener",
             Self::InvalidOidcClaim { .. } => "scheduling.runtime.invalid-oidc-claim",
             Self::AllowedClientsRequired => "scheduling.runtime.allowed-clients-required",
+            Self::InvalidTaskGrantStatus => "scheduling.runtime.invalid-task-grant-status",
             Self::InvalidDatabaseReference => "scheduling.runtime.invalid-database-reference",
             Self::InvalidAuditDestination(_) => "scheduling.runtime.invalid-audit",
             Self::InvalidDestinationUrl { .. } => "scheduling.runtime.invalid-destination-url",
@@ -1355,6 +1396,9 @@ impl RuntimeConfigError {
             }
             Self::InvalidOidcClaim { .. } => {
                 "Name a non-empty value, with explainScope distinct from readsScope, or remove the member to use its default."
+            }
+            Self::InvalidTaskGrantStatus => {
+                "Configure at most 32 distinct absolute source issuers with safe service/token URLs, non-empty client and assertion audience, and an absolute Casework resource, then retry."
             }
             Self::AllowedClientsRequired => {
                 "List every client identifier this deployment admits in authentication.oidc.allowedClients, then retry."
@@ -1724,6 +1768,198 @@ holdPolicy:
         assert!(config.destinations.hooks.is_empty());
         let policy = config.load_policy().expect("policy loads").policy;
         assert_eq!(&*policy.project.id, "registry-updates");
+    }
+
+    #[test]
+    fn offline_check_refuses_task_status_structures_before_activation() {
+        let root = canonical_tempdir();
+        let package = root.path().join("package");
+        write_policy(&package);
+        let status = serde_json::json!({
+            "sourceIssuer":"https://casework.example.test/task-authority",
+            "baseUrl":"https://casework.example.test",
+            "tokenEndpoint":"https://identity.example.test/oauth2/token",
+            "clientAssertionAudience":"https://identity.example.test",
+            "clientId":"scheduling-task-status",
+            "privateKeyRef":"secret:file/missing-status-key",
+            "caseworkResource":"urn:example:casework",
+            "caBundleRef":"secret:file/missing-root-ca"
+        });
+        for (field, value) in [
+            ("sourceIssuer", "relative-issuer"),
+            ("sourceIssuer", "https://user@casework.test"),
+            ("sourceIssuer", "https://casework.test/#fragment"),
+            ("baseUrl", "not-a-url"),
+            ("baseUrl", "http://casework.test"),
+            ("baseUrl", "https://user@casework.test"),
+            ("baseUrl", "https://casework.test/#fragment"),
+            ("tokenEndpoint", "not-a-url"),
+            ("tokenEndpoint", "http://identity.test/token"),
+            ("tokenEndpoint", "https://user@identity.test/token"),
+            ("tokenEndpoint", "https://identity.test/token#fragment"),
+            ("clientId", ""),
+            ("clientId", "  "),
+            ("clientAssertionAudience", ""),
+            ("caseworkResource", "relative-resource"),
+        ] {
+            let mut entry = status.clone();
+            entry[field] = serde_json::json!(value);
+            let mut document = operator_value(&package, "development-loopback");
+            document["taskGrantStatus"] = serde_json::json!([entry]);
+            let error = RuntimeConfig::load(write_operator(root.path(), document))
+                .expect_err(&format!("offline check must refuse {field}"));
+            assert!(error.pointer().starts_with("/taskGrantStatus"), "{error:?}");
+            if !value.trim().is_empty() {
+                assert!(
+                    !error.to_string().contains(value),
+                    "diagnostic must not echo refused configuration"
+                );
+            }
+        }
+        for count in [2, 33] {
+            let mut document = operator_value(&package, "development-loopback");
+            let entries: Vec<_> = (0..count)
+                .map(|index| {
+                    let mut entry = status.clone();
+                    if count == 33 {
+                        entry["sourceIssuer"] =
+                            serde_json::json!(format!("urn:casework:source:{index}"));
+                    }
+                    entry
+                })
+                .collect();
+            document["taskGrantStatus"] = serde_json::json!(entries);
+            assert_eq!(
+                RuntimeConfig::load(write_operator(root.path(), document))
+                    .unwrap_err()
+                    .pointer(),
+                "/taskGrantStatus"
+            );
+        }
+        assert!(
+            !root.path().join("secrets").exists(),
+            "offline checks never resolve the missing signer or CA"
+        );
+    }
+
+    #[test]
+    fn offline_check_accepts_bounded_status_registry_without_secrets_or_network() {
+        let root = canonical_tempdir();
+        let package = root.path().join("package");
+        write_policy(&package);
+        let mut document = operator_value(&package, "development-loopback");
+        document["taskGrantStatus"] = serde_json::json!((0..32)
+            .map(|index| serde_json::json!({
+                "sourceIssuer":format!("urn:casework:source:{index}"),
+                "baseUrl":"https://nonexistent-status.invalid/path",
+                "tokenEndpoint":"http://127.0.0.1:1/oauth2/token",
+                "clientAssertionAudience":"urn:identity:test",
+                "clientId":"scheduling-task-status",
+                "privateKeyRef":"secret:file/missing-status-key",
+                "caseworkResource":"urn:example:casework",
+                "caBundleRef":"secret:file/missing-root-ca"
+            }))
+            .collect::<Vec<_>>());
+        let config = RuntimeConfig::load(write_operator(root.path(), document)).unwrap();
+        assert_eq!(config.task_grant_status.len(), 32);
+        assert!(!root.path().join("secrets").exists());
+    }
+
+    #[test]
+    fn cfg_check_1_status_structure_is_positioned_without_package_or_secrets() {
+        let root = canonical_tempdir();
+        let mut document =
+            operator_value(&root.path().join("missing-package"), "development-loopback");
+        document["taskGrantStatus"] = serde_json::json!([{
+            "sourceIssuer": "relative-issuer",
+            "baseUrl": "https://status.invalid",
+            "tokenEndpoint": "https://identity.invalid/token",
+            "clientAssertionAudience": "urn:identity:test",
+            "clientId": "status-client",
+            "privateKeyRef": "secret:file/missing-status-key",
+            "caseworkResource": "urn:casework:test"
+        }]);
+        let path = write_operator(root.path(), document);
+        let check = check_runtime(&path, None, false);
+        assert!(!check.unavailable);
+        let [diagnostic] = check.diagnostics.as_slice() else {
+            panic!("one positioned status finding: {:?}", check.diagnostics);
+        };
+        assert_eq!(
+            diagnostic.code,
+            "scheduling.runtime.invalid-task-grant-status"
+        );
+        assert_eq!(diagnostic.path, "/taskGrantStatus");
+        assert!(diagnostic.source.as_ref().unwrap().line.is_some());
+        assert!(!diagnostic.message.contains("relative-issuer"));
+        assert!(!root.path().join("missing-package").exists());
+        assert!(!root.path().join("secrets").exists());
+    }
+
+    #[test]
+    fn cfg_check_1_deferred_status_values_leave_unrelated_rules_checked() {
+        let root = canonical_tempdir();
+        let mut document =
+            operator_value(&root.path().join("missing-package"), "development-loopback");
+        document["identity"]["databaseId"] = serde_json::json!(" padded ");
+        document["taskGrantStatus"] = serde_json::json!([{
+            "sourceIssuer": "${SCHEDULING_STATUS_CHECK_UNSET_SOURCE}",
+            "baseUrl": "${SCHEDULING_STATUS_CHECK_UNSET_BASE}",
+            "tokenEndpoint": "${SCHEDULING_STATUS_CHECK_UNSET_TOKEN}",
+            "clientAssertionAudience": "${SCHEDULING_STATUS_CHECK_UNSET_AUDIENCE}",
+            "clientId": "status-client",
+            "privateKeyRef": "secret:file/missing-status-key",
+            "caseworkResource": "${SCHEDULING_STATUS_CHECK_UNSET_RESOURCE}"
+        }]);
+        let path = write_operator(root.path(), document);
+        let check = check_runtime(&path, None, false);
+        let found: Vec<_> = check
+            .diagnostics
+            .iter()
+            .map(|d| (d.code.as_str(), d.path.as_str()))
+            .collect();
+        assert_eq!(
+            found,
+            [(
+                "scheduling.runtime.invalid-database-id",
+                "/identity/databaseId"
+            )]
+        );
+        assert!(!root.path().join("secrets").exists());
+    }
+
+    #[test]
+    fn a_task_grant_status_authority_loads_with_literal_secret_references() {
+        let root = canonical_tempdir();
+        let package = root.path().join("package");
+        write_policy(&package);
+        let mut document = operator_value(&package, "development-loopback");
+        document["taskGrantStatus"] = serde_json::json!([{
+            "sourceIssuer": "https://casework.example.test/task-authority",
+            "baseUrl": "https://casework.example.test",
+            "tokenEndpoint": "https://identity.example.test/oauth2/token",
+            "clientAssertionAudience": "https://identity.example.test",
+            "clientId": "scheduling-task-status",
+            "privateKeyRef": "secret:file/task-status-private-jwk",
+            "caseworkResource": "urn:example:casework",
+            "caBundleRef": "secret:file/institution-root-ca"
+        }]);
+        let config = RuntimeConfig::load(write_operator(root.path(), document))
+            .expect("the status authority configuration is accepted");
+        assert_eq!(config.task_grant_status.len(), 1);
+        let status = &config.task_grant_status[0];
+        assert_eq!(
+            status.source_issuer.as_str(),
+            "https://casework.example.test/task-authority"
+        );
+        assert_eq!(
+            status.private_key_ref.as_str(),
+            "secret:file/task-status-private-jwk"
+        );
+        assert_eq!(
+            status.ca_bundle_ref.as_ref().map(SecretReference::as_str),
+            Some("secret:file/institution-root-ca")
+        );
     }
 
     #[test]

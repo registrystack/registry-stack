@@ -99,6 +99,15 @@ export const PRODUCTS = [
     ],
   },
   {
+    id: 'coordinator',
+    title: 'Registry Coordinator',
+    docsetProduct: null,
+    checkPage: 'reference/coordinator-configuration',
+    references: [
+      { label: 'Registry Coordinator configuration reference', page: 'reference/coordinator-configuration' },
+    ],
+  },
+  {
     id: 'platform',
     title: 'Registry Platform',
     docsetProduct: null,

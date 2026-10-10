@@ -113,6 +113,7 @@ for (const [method, jsonIndexes] of [
   ['health', []],
   ['ready', []],
   ['submit', [2]],
+  ['messageReceipt', [2]],
   ['message', []],
   ['cancel', []],
   ['preview', [3]],

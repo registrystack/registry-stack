@@ -1,0 +1,915 @@
+{
+  "$defs": {
+    "AccessConfig": {
+      "additionalProperties": false,
+      "description": "The OIDC issuer a runtime accepts access tokens from: the exact `iss`\nvalue, the `aud` value a token must carry, and where the issuer's signing\nkeys come from, written under `authentication.oidc` beside the product's\nown token rules.",
+      "properties": {
+        "allowedClients": {
+          "$ref": "#/$defs/OidcAllowedClients",
+          "description": "List one to sixty-four distinct admitted OAuth client IDs. Coordinator refuses omission, an empty list and unrestricted.",
+          "items": {
+            "$ref": "#/$defs/ExternalId",
+            "maxLength": 128
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "assertionIssuers": {
+          "additionalProperties": {
+            "items": {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 16,
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "description": "Assertion authorities each client may exchange a subject token from,\nkeyed by client identifier. Omitted, no assertion-issuer rule applies;\nwritten, it lists at least one client, each with at least one\nauthority. Once a client is listed, a token it exchanged is accepted\nonly for one of that client's declared authorities, and a client that\nis not listed may exchange from no authority.",
+          "maxProperties": 64,
+          "minProperties": 1,
+          "propertyNames": {
+            "$ref": "#/$defs/ExternalId",
+            "maxLength": 128
+          },
+          "type": "object"
+        },
+        "audience": {
+          "description": "The audience every accepted access token must carry in `aud`.",
+          "maxLength": 512,
+          "minLength": 1,
+          "type": "string"
+        },
+        "issuer": {
+          "$ref": "#/$defs/Url",
+          "description": "Exact issuer accepted in access-token `iss` claims, an absolute\n`https` URL."
+        },
+        "jwksSource": {
+          "$ref": "#/$defs/JwksSource",
+          "default": {
+            "type": "discovery"
+          },
+          "description": "Where the issuer's signing keys come from. Absent reads the issuer's\nOpenID Connect discovery document."
+        },
+        "policies": {
+          "items": {
+            "$ref": "#/$defs/ClientPolicy"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "type": "array"
+        },
+        "scopeClaim": {
+          "$ref": "#/$defs/ExternalId",
+          "default": "registry_scopes",
+          "maxLength": 128
+        }
+      },
+      "required": [
+        "issuer",
+        "audience",
+        "allowedClients",
+        "policies"
+      ],
+      "type": "object"
+    },
+    "Action": {
+      "enum": [
+        "start",
+        "status",
+        "inspect",
+        "retry-same",
+        "cancel",
+        "reconcile",
+        "doctor",
+        "restore-hold",
+        "release-restore-hold",
+        "release-admission-hold",
+        "complete-execution-recovery",
+        "retain"
+      ],
+      "type": "string"
+    },
+    "AuthorizationConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "clientAssertionAudience": {
+          "$ref": "#/$defs/ExternalId"
+        },
+        "clientId": {
+          "$ref": "#/$defs/ExternalId",
+          "maxLength": 256
+        },
+        "resource": {
+          "$ref": "#/$defs/ExternalId"
+        },
+        "scopes": {
+          "items": {
+            "$ref": "#/$defs/ExternalId"
+          },
+          "maxItems": 32,
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "signingKeyRef": {
+          "$ref": "#/$defs/SecretReference"
+        },
+        "taskAuthority": {
+          "$ref": "#/$defs/TaskAuthorityConfig"
+        },
+        "tokenEndpoint": {
+          "$ref": "#/$defs/Url"
+        }
+      },
+      "required": [
+        "tokenEndpoint",
+        "clientId",
+        "signingKeyRef",
+        "resource",
+        "scopes"
+      ],
+      "type": "object"
+    },
+    "ClientPolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "actions": {
+          "items": {
+            "$ref": "#/$defs/Action"
+          },
+          "maxItems": 12,
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "clientId": {
+          "$ref": "#/$defs/ExternalId",
+          "maxLength": 128
+        },
+        "flows": {
+          "items": {
+            "$ref": "#/$defs/ExternalId",
+            "maxLength": 64,
+            "pattern": "^[A-Za-z0-9_-]+$"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "operator": {
+          "default": false,
+          "type": "boolean"
+        },
+        "requiredScopes": {
+          "items": {
+            "$ref": "#/$defs/ExternalId"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "clientId",
+        "requiredScopes",
+        "flows",
+        "actions"
+      ],
+      "type": "object"
+    },
+    "ConnectionConfig": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "else": {
+            "not": {
+              "required": [
+                "observationAuthorization"
+              ]
+            }
+          },
+          "if": {
+            "properties": {
+              "authorization": {
+                "properties": {
+                  "taskAuthority": {
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "taskAuthority"
+                ]
+              },
+              "product": {
+                "const": "scheduling"
+              }
+            },
+            "required": [
+              "product",
+              "authorization"
+            ]
+          },
+          "then": {
+            "properties": {
+              "observationAuthorization": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "observationAuthorization"
+            ]
+          }
+        }
+      ],
+      "properties": {
+        "authorization": {
+          "$ref": "#/$defs/AuthorizationConfig"
+        },
+        "baseUrl": {
+          "$ref": "#/$defs/Url"
+        },
+        "observationAuthorization": {
+          "$ref": "#/$defs/AuthorizationConfig",
+          "description": "Required for Scheduling connections with taskAuthority. Uses ordinary\nread scopes under the original receipt owner, without taskAuthority."
+        },
+        "product": {
+          "$ref": "#/$defs/Product"
+        },
+        "profile": {
+          "$ref": "#/$defs/ExternalId"
+        }
+      },
+      "required": [
+        "product",
+        "baseUrl",
+        "authorization"
+      ],
+      "type": "object"
+    },
+    "DatabaseConfig": {
+      "additionalProperties": false,
+      "description": "The PostgreSQL connection a stateful runtime uses. Both URLs are secret\nreferences and may name the same secret.",
+      "properties": {
+        "migrationUrlRef": {
+          "$ref": "#/$defs/SecretReference",
+          "description": "Secret reference to the migration connection URL."
+        },
+        "runtimeUrlRef": {
+          "$ref": "#/$defs/SecretReference",
+          "description": "Secret reference to the least-privileged runtime connection URL."
+        },
+        "testOnlyPlaintext": {
+          "default": false,
+          "description": "Allow a plaintext connection. Refused outside test builds.",
+          "type": "boolean"
+        },
+        "trustedRootCertificateRef": {
+          "$ref": "#/$defs/SecretReference",
+          "description": "Secret reference to a PEM root certificate the connection trusts.\nAbsent, the connection trusts the platform's root certificates."
+        }
+      },
+      "required": [
+        "runtimeUrlRef",
+        "migrationUrlRef"
+      ],
+      "type": "object"
+    },
+    "DecisionAuthorization": {
+      "description": "Explicit service identity. Local authorization is limited to numeric loopback.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "bearer": {
+              "additionalProperties": false,
+              "properties": {
+                "principal": {
+                  "$ref": "#/$defs/ExternalId"
+                },
+                "tokenRef": {
+                  "$ref": "#/$defs/SecretReference"
+                }
+              },
+              "required": [
+                "tokenRef",
+                "principal"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "bearer"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "local": {
+              "additionalProperties": false,
+              "type": "object"
+            }
+          },
+          "required": [
+            "local"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "DecisionConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "attemptTimeoutMilliseconds": {
+          "default": 8000,
+          "format": "uint64",
+          "maximum": 8000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "authorization": {
+          "$ref": "#/$defs/DecisionAuthorization"
+        },
+        "baseUrl": {
+          "$ref": "#/$defs/Url",
+          "pattern": "^[^\\s\\\\]+$"
+        },
+        "maximumRequestBytes": {
+          "default": 65536,
+          "format": "uint64",
+          "maximum": 65536,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "maximumResponseBytes": {
+          "default": 65536,
+          "format": "uint64",
+          "maximum": 65536,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "model": {
+          "$ref": "#/$defs/ExternalId"
+        },
+        "protocol": {
+          "$ref": "#/$defs/DecisionProtocol"
+        }
+      },
+      "required": [
+        "protocol",
+        "baseUrl",
+        "model",
+        "authorization"
+      ],
+      "type": "object"
+    },
+    "DecisionProtocol": {
+      "enum": [
+        "system-one",
+        "openai-decisions"
+      ],
+      "type": "string"
+    },
+    "DeploymentConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "activeStateKey": {
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "admissionKeyRef": {
+          "$ref": "#/$defs/SecretReference"
+        },
+        "auditFile": {
+          "pattern": "^/+(?:(?:[^/.][^/]*|\\.(?:[^/.][^/]*|\\.[^/]+)?)/+)*(?:[^/.][^/]*|\\.(?:[^/.][^/]*|\\.[^/]+))$",
+          "type": "string"
+        },
+        "auditKeyRef": {
+          "$ref": "#/$defs/SecretReference"
+        },
+        "authentication": {
+          "$ref": "#/$defs/AccessConfig"
+        },
+        "databaseId": {
+          "$ref": "#/$defs/ExternalId",
+          "maxLength": 128
+        },
+        "listener": {
+          "$ref": "#/$defs/PrivateListenerConfig"
+        },
+        "package": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/PackageConfig"
+            },
+            {
+              "properties": {
+                "expectedDigest": {
+                  "$ref": "#/$defs/Digest"
+                }
+              },
+              "required": [
+                "expectedDigest"
+              ]
+            }
+          ],
+          "unevaluatedProperties": false
+        },
+        "runtimeRole": {
+          "maxLength": 63,
+          "pattern": "^[a-z_][a-z0-9_]{0,62}$",
+          "type": "string"
+        },
+        "stateKeys": {
+          "additionalProperties": false,
+          "maxProperties": 16,
+          "minProperties": 1,
+          "patternProperties": {
+            "^[^\\u0000-\\u001F\\u007F-\\u009F]+$": {
+              "$ref": "#/$defs/StateKeyConfig"
+            }
+          },
+          "propertyNames": {
+            "$ref": "#/$defs/ExternalId",
+            "maxLength": 10,
+            "pattern": "^[1-9][0-9]*$"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "databaseId",
+        "runtimeRole",
+        "package",
+        "listener",
+        "authentication",
+        "auditFile",
+        "auditKeyRef",
+        "activeStateKey",
+        "stateKeys",
+        "admissionKeyRef"
+      ],
+      "type": "object"
+    },
+    "Digest": {
+      "description": "A SHA-256 digest: `sha256:` followed by 64 lowercase hex digits.",
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "EnvironmentSecretProviderConfig": {
+      "additionalProperties": false,
+      "description": "The environment secret provider. It takes no settings.",
+      "type": "object"
+    },
+    "ExternalHttpConfig": {
+      "additionalProperties": false,
+      "description": "The reviewed directory contract and environment-specific destination.",
+      "properties": {
+        "attemptTimeoutMilliseconds": {
+          "default": 2000,
+          "format": "uint64",
+          "maximum": 2000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "authorization": {
+          "$ref": "#/$defs/AuthorizationConfig",
+          "description": "Omission makes the configured read public; it never inherits a caller token.",
+          "not": {
+            "required": [
+              "taskAuthority"
+            ]
+          }
+        },
+        "baseUrl": {
+          "$ref": "#/$defs/Url",
+          "pattern": "^[^\\s\\\\]+$"
+        },
+        "maximumResponseBytes": {
+          "default": 65536,
+          "format": "uint64",
+          "maximum": 65536,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "paths": {
+          "items": {
+            "$ref": "#/$defs/ExternalId"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "queryParameters": {
+          "description": "Omission permits no query parameters.",
+          "items": {
+            "$ref": "#/$defs/ExternalId"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "responseSchema": {
+          "description": "Local JSON Schema for the complete {status, body} response.",
+          "x-registry-foreign": "json-schema-2020-12"
+        }
+      },
+      "required": [
+        "baseUrl",
+        "paths",
+        "responseSchema"
+      ],
+      "type": "object"
+    },
+    "ExternalId": {
+      "description": "An identifier another system issues, written exactly as its issuer gives it.",
+      "maxLength": 512,
+      "minLength": 1,
+      "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
+      "type": "string"
+    },
+    "FileSecretProviderConfig": {
+      "additionalProperties": false,
+      "description": "The file secret provider.",
+      "properties": {
+        "root": {
+          "description": "Absolute directory holding one file per secret. Each file must be a\nregular file owned by the runtime user, mode 0400 or 0600, with exactly\none hard link.",
+          "pattern": "^/",
+          "type": "string"
+        }
+      },
+      "required": [
+        "root"
+      ],
+      "type": "object"
+    },
+    "JwksSource": {
+      "description": "Where a runtime obtains the OIDC issuer's signing keys.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Read `jwks_uri` from the issuer's OpenID Connect discovery document.",
+          "properties": {
+            "type": {
+              "const": "discovery",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Fetch the key set from this absolute `https` URI, skipping discovery.",
+          "properties": {
+            "type": {
+              "const": "uri",
+              "type": "string"
+            },
+            "uri": {
+              "$ref": "#/$defs/Url"
+            }
+          },
+          "required": [
+            "type",
+            "uri"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Read the key set from a secret, for deployments without network access\nto the issuer.",
+          "properties": {
+            "documentRef": {
+              "$ref": "#/$defs/SecretReference"
+            },
+            "type": {
+              "const": "static",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "documentRef"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ListenerBind": {
+      "description": "Socket address the runtime listens on, written host:port with an IP address host ([addr]:port for IPv6).",
+      "maxLength": 128,
+      "minLength": 1,
+      "type": "string"
+    },
+    "ListenerNetworkExposure": {
+      "description": "The operator-declared private network placement of an HTTP listener.",
+      "enum": [
+        "private-address",
+        "container-private"
+      ],
+      "type": "string"
+    },
+    "LocalId": {
+      "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+      "type": "string"
+    },
+    "OidcAllowedClients": {
+      "anyOf": [
+        {
+          "const": "unrestricted",
+          "description": "Admit a token from every client the issuer verifies.",
+          "type": "string"
+        },
+        {
+          "description": "Admit a token only from a listed client.",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        }
+      ],
+      "description": "How `allowedClients` is written (CFG-EMPTY-2): the keyword `unrestricted`,\nor a list of at least one client. An empty list is refused, because it\nreads as both \"none\" and \"any\"."
+    },
+    "PackageConfig": {
+      "additionalProperties": false,
+      "description": "The package a runtime serves: `root` is the absolute package directory,\nand `expectedDigest`, when set, pins the package digest the runtime must\nfind there. The package digest is the digest of the package's\n`SHA256SUMS` file; see [`crate::package`].",
+      "properties": {
+        "expectedDigest": {
+          "$ref": "#/$defs/Digest",
+          "description": "`sha256:` label of the package digest, the digest of the package's\n`SHA256SUMS` file. When set, the runtime refuses to start on any other\npackage."
+        },
+        "root": {
+          "description": "Absolute path of the package directory.",
+          "pattern": "^/",
+          "type": "string"
+        }
+      },
+      "required": [
+        "root"
+      ],
+      "type": "object"
+    },
+    "PrivateListenerConfig": {
+      "additionalProperties": false,
+      "description": "The listener of a runtime that declares its TLS termination and network\nexposure.",
+      "properties": {
+        "bind": {
+          "$ref": "#/$defs/ListenerBind"
+        },
+        "networkExposure": {
+          "$ref": "#/$defs/ListenerNetworkExposure",
+          "default": "private-address"
+        },
+        "tlsTermination": {
+          "$ref": "#/$defs/TlsTermination"
+        }
+      },
+      "required": [
+        "bind",
+        "tlsTermination"
+      ],
+      "type": "object"
+    },
+    "Product": {
+      "enum": [
+        "breg",
+        "messaging",
+        "scheduling"
+      ],
+      "type": "string"
+    },
+    "SecretProvidersConfig": {
+      "additionalProperties": false,
+      "anyOf": [
+        {
+          "properties": {
+            "file": {
+              "$ref": "#/$defs/FileSecretProviderConfig"
+            }
+          },
+          "required": [
+            "file"
+          ]
+        },
+        {
+          "properties": {
+            "environment": {
+              "$ref": "#/$defs/EnvironmentSecretProviderConfig"
+            }
+          },
+          "required": [
+            "environment"
+          ]
+        }
+      ],
+      "description": "The secret providers a runtime enables. A reference is resolved only by a\nprovider declared here: `secret:file/name` under `file.root`, and\n`secret:env/NAME` only when `environment: {}` is present.",
+      "properties": {
+        "environment": {
+          "$ref": "#/$defs/EnvironmentSecretProviderConfig",
+          "description": "Enables `secret:env/NAME` references, read from the process\nenvironment. Declared as an empty mapping: `environment: {}`."
+        },
+        "file": {
+          "$ref": "#/$defs/FileSecretProviderConfig",
+          "description": "Enables `secret:file/name` references, read from files under `root`."
+        }
+      },
+      "type": "object"
+    },
+    "SecretReference": {
+      "description": "An exact secret reference: secret:file/name, resolved under secretProviders.file.root, or secret:env/NAME, resolved only when secretProviders.environment is declared.",
+      "pattern": "^(?:secret:env/[A-Z][A-Z0-9_]{0,127}|secret:file/[a-z][a-z0-9._-]{0,127})$",
+      "type": "string"
+    },
+    "StateKeyConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "keyRef": {
+          "$ref": "#/$defs/SecretReference"
+        }
+      },
+      "required": [
+        "keyRef"
+      ],
+      "type": "object"
+    },
+    "TaskAuthorityConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "baseUrl": {
+          "$ref": "#/$defs/Url"
+        },
+        "bootstrapResource": {
+          "$ref": "#/$defs/ExternalId"
+        },
+        "exchangeAudience": {
+          "$ref": "#/$defs/ExternalId"
+        },
+        "issuer": {
+          "$ref": "#/$defs/ExternalId"
+        },
+        "subject": {
+          "$ref": "#/$defs/ExternalId"
+        }
+      },
+      "required": [
+        "baseUrl",
+        "issuer",
+        "subject",
+        "exchangeAudience",
+        "bootstrapResource"
+      ],
+      "type": "object"
+    },
+    "TlsTermination": {
+      "description": "Declares the trusted transport boundary for a runtime's plaintext HTTP\nlistener. Production listeners require operator-controlled upstream TLS\ntermination; direct plaintext is limited to the explicit loopback-only\ndevelopment mode.",
+      "enum": [
+        "operator-controlled-upstream",
+        "development-loopback"
+      ],
+      "type": "string"
+    },
+    "Url": {
+      "description": "An absolute http or https URL with a host, no user information, and no whitespace or control character.",
+      "format": "uri",
+      "maxLength": 2048,
+      "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://[^/?#@\\u0000-\\u0020\\u007F-\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]+([/?#][^\\u0000-\\u0020\\u007F-\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*)?$",
+      "type": "string"
+    }
+  },
+  "$id": "https://id.registrystack.org/schemas/coordinator/runtime/runtime.v1alpha1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "anyOf": [
+        {
+          "properties": {
+            "connections": {
+              "minProperties": 1
+            }
+          },
+          "required": [
+            "connections"
+          ]
+        },
+        {
+          "properties": {
+            "externalHttpConnections": {
+              "minProperties": 1
+            }
+          },
+          "required": [
+            "externalHttpConnections"
+          ]
+        },
+        {
+          "properties": {
+            "decisionConnections": {
+              "minProperties": 1
+            }
+          },
+          "required": [
+            "decisionConnections"
+          ]
+        }
+      ]
+    }
+  ],
+  "properties": {
+    "apiVersion": {
+      "const": "id.registrystack.org/formats/coordinator/runtime/v1alpha1",
+      "type": "string"
+    },
+    "connections": {
+      "additionalProperties": {
+        "$ref": "#/$defs/ConnectionConfig"
+      },
+      "default": {},
+      "description": "Omitted means no product bindings; at least one product, external HTTP or decision connection is required.",
+      "maxProperties": 16,
+      "propertyNames": {
+        "$ref": "#/$defs/LocalId"
+      },
+      "type": "object"
+    },
+    "database": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/DatabaseConfig"
+        },
+        {
+          "properties": {
+            "testOnlyPlaintext": {
+              "const": false
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "decisionConnections": {
+      "additionalProperties": {
+        "$ref": "#/$defs/DecisionConfig"
+      },
+      "default": {},
+      "description": "Omitted means decision evaluation is unavailable. Names must be distinct from product and external HTTP connections.",
+      "maxProperties": 16,
+      "propertyNames": {
+        "$ref": "#/$defs/LocalId"
+      },
+      "type": "object"
+    },
+    "deployment": {
+      "$ref": "#/$defs/DeploymentConfig"
+    },
+    "externalHttpConnections": {
+      "additionalProperties": {
+        "$ref": "#/$defs/ExternalHttpConfig"
+      },
+      "default": {},
+      "description": "Omitted means external HTTP is unavailable. Names must be distinct from product connections.",
+      "maxProperties": 16,
+      "propertyNames": {
+        "$ref": "#/$defs/LocalId"
+      },
+      "type": "object"
+    },
+    "kind": {
+      "const": "CoordinatorRuntimeConfig",
+      "type": "string"
+    },
+    "namespace": {
+      "maxLength": 60,
+      "pattern": "^coordinator_[a-z0-9_]*$",
+      "type": "string"
+    },
+    "secretProviders": {
+      "$ref": "#/$defs/SecretProvidersConfig"
+    }
+  },
+  "required": [
+    "secretProviders",
+    "database",
+    "namespace",
+    "apiVersion",
+    "kind"
+  ],
+  "title": "RuntimeConfig",
+  "type": "object"
+}

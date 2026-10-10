@@ -222,6 +222,23 @@ impl SecretResolver {
         &self,
         reference: &SecretReference,
     ) -> Result<ProtectedSecret, SecretError> {
+        let secret = self.resolve_binary_reference(reference)?;
+        if secret.expose_secret().contains(&0) {
+            return Err(SecretError::InvalidValue);
+        }
+        Ok(secret)
+    }
+
+    /// Resolve bounded, opaque secret bytes, including zero bytes in a key file.
+    ///
+    /// Use this explicitly for binary cryptographic material. Textual consumers
+    /// should keep using [`Self::resolve_reference`], which rejects NUL bytes.
+    /// File safety checks, provider allowlists, size limits and zeroization are
+    /// identical for both paths. Environment values cannot contain NUL bytes.
+    pub fn resolve_binary_reference(
+        &self,
+        reference: &SecretReference,
+    ) -> Result<ProtectedSecret, SecretError> {
         if !self.providers.contains(&reference.provider()) {
             return Err(SecretError::ProviderDisabled);
         }
@@ -325,7 +342,7 @@ fn read_bounded(file: File) -> Result<Zeroizing<Vec<u8>>, SecretError> {
 }
 
 fn validate_secret(bytes: Zeroizing<Vec<u8>>) -> Result<ProtectedSecret, SecretError> {
-    if bytes.is_empty() || bytes.len() > MAX_SECRET_BYTES || bytes.contains(&0) {
+    if bytes.is_empty() || bytes.len() > MAX_SECRET_BYTES {
         return Err(SecretError::InvalidValue);
     }
     Ok(ProtectedSecret(bytes))
@@ -473,12 +490,8 @@ mod tests {
     }
 
     #[test]
-    fn empty_nul_and_oversized_values_are_rejected_without_echo() {
-        for value in [
-            Vec::new(),
-            b"canary\0value".to_vec(),
-            vec![b'x'; MAX_SECRET_BYTES + 1],
-        ] {
+    fn empty_and_oversized_values_are_rejected_without_echo() {
+        for value in [Vec::new(), vec![b'x'; MAX_SECRET_BYTES + 1]] {
             let error = validate_secret(Zeroizing::new(value)).expect_err("invalid secret");
             assert_eq!(error, SecretError::InvalidValue);
             assert_eq!(error.to_string(), "the referenced secret value is invalid");
@@ -521,6 +534,28 @@ mod tests {
                     Err(SecretError::UnsafeFile)
                 ));
             }
+        }
+
+        #[test]
+        fn binary_key_files_preserve_zero_bytes_without_widening_text_secrets() {
+            let root = tempfile::tempdir().expect("temporary root");
+            let resolver =
+                SecretResolver::new([SecretProvider::File], root.path()).expect("resolver builds");
+            let bytes = [0_u8, 0xff, 1, 2, 0, 3];
+            write_secret(root.path(), "binary-key", &bytes, 0o600);
+            let reference = SecretReference::parse("secret:file/binary-key").unwrap();
+            let key = resolver.resolve_binary_reference(&reference).unwrap();
+            assert_eq!(key.expose_secret(), bytes);
+            assert_eq!(format!("{key:?}"), "ProtectedSecret([REDACTED])");
+            assert_eq!(
+                resolver.resolve_reference(&reference).unwrap_err(),
+                SecretError::InvalidValue
+            );
+            write_secret(root.path(), "binary-key", &bytes, 0o644);
+            assert_eq!(
+                resolver.resolve_binary_reference(&reference).unwrap_err(),
+                SecretError::UnsafeFile
+            );
         }
 
         #[test]

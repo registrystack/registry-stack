@@ -284,6 +284,24 @@ upstream manifest digest byte for byte, so it adds no org-controlled build
 input; every other GHCR reference stays banned so the rehearsal cannot read
 published release artifacts.
 
+### Pull pinned prerequisite images
+
+Maintained CI services and local dev tools use the Docker Official Images
+published through `public.ecr.aws/docker/library/postgres`. Debian recipe roots
+use `public.ecr.aws/docker/library/debian`, and Mailpit uses its upstream
+`ghcr.io/axllent/mailpit` mirror. Each reference retains the exact upstream
+manifest digest; the registry endpoint changes, not the selected image bytes.
+Public CLI help retains the canonical `postgres:17.11@sha256:…` and
+`axllent/mailpit:v1.31.2@sha256:…` identities; the implementations pull the
+corresponding mirror URI at the same full digest.
+
+[Docker Official Images on ECR Public](https://aws.amazon.com/blogs/containers/docker-official-images-now-available-on-amazon-elastic-container-registry-public/)
+and [Mailpit's Docker installation guide](https://mailpit.axllent.org/docs/install/docker/)
+document these upstream alternatives. When updating a pin, verify the returned
+manifest's SHA256 at the selected endpoint before changing its immutable digest.
+The strict recipe and gate checks continue to require the recorded repository
+and digest. No registry account is required for these public image pulls.
+
 ### Provision client registries
 
 Registry Stack v0.22.0 through v0.26.0 promoted separate Evidence, Relay, and,

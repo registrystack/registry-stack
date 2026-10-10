@@ -36,6 +36,10 @@
 //! limit refusal is never resent; it carries the bounded wait its
 //! `Retry-After` asked for, and waiting on it stays the caller's decision.
 
+//! `message_receipt` observes a retained original success by caller, key, and exact request
+//! without replaying the mutation. The single read is never retried, and a
+//! typed `receipt.unresolved` preserves uncertainty about the original effect.
+
 #![deny(unsafe_code)]
 
 mod client;
@@ -51,6 +55,6 @@ pub use registry_messaging_core::{
     Recipient, RenderedParts, SegmentCount, SmsEncoding, SubmitMessageRequest, TemplatePreview,
     TemplatePreviewRequest, TemplateReference, HEALTH_PATH, IDEMPOTENCY_KEY_HEADER,
     MAXIMUM_IDEMPOTENCY_KEY_BYTES, MESSAGES_PATH, MESSAGE_CANCEL_PATH, MESSAGE_PATH,
-    MESSAGING_PROBLEM_TYPE_BASE, READY_PATH, TEMPLATE_PREVIEW_PATH,
+    MESSAGE_RECEIPT_PATH, MESSAGING_PROBLEM_TYPE_BASE, READY_PATH, TEMPLATE_PREVIEW_PATH,
 };
 pub use registry_platform_httputil::client::{BearerToken, TransportKind};

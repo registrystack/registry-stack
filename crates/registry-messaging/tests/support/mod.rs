@@ -461,6 +461,21 @@ impl Harness {
     /// package's own access profiles, as after an activation that changed
     /// what a caller may send.
     pub async fn app_with_access_profiles(&self, profiles: AccessProfiles) -> Router {
+        self.app_with_profiles_and_limits(profiles, unmetered_limits(&self.package))
+            .await
+    }
+
+    /// Rebuild the router with a bounded submission budget for rate tests.
+    pub async fn app_with_caller_limits(&self, limits: CallerLimits) -> Router {
+        self.app_with_profiles_and_limits(self.package.access_profiles().clone(), limits)
+            .await
+    }
+
+    async fn app_with_profiles_and_limits(
+        &self,
+        profiles: AccessProfiles,
+        limits: CallerLimits,
+    ) -> Router {
         let schema = self.store.current_schema().await.expect("the schema");
         let messages = MessageStore::new(
             self.store.clone(),
@@ -494,7 +509,7 @@ impl Harness {
                 audit: Arc::clone(&self.audit),
             },
             metrics: Arc::new(Metrics::default()),
-            limits: Arc::new(unmetered_limits(&self.package)),
+            limits: Arc::new(limits),
             package: Arc::clone(&self.package),
             audit: Arc::clone(&self.audit),
             messages: Some(service),

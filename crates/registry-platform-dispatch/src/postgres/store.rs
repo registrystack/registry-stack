@@ -393,6 +393,17 @@ pub trait DispatchStore: Send + Sync + 'static {
         Ok(())
     }
 
+    /// Apply consumer relational replay writes after the job reset, before
+    /// that same transaction commits. Refusal rolls back the reset and these
+    /// writes together. The default preserves the core's due-now schedule.
+    async fn write_replay(
+        &self,
+        _transaction: &Transaction<'_>,
+        _audit: &ReplayAudit<Self::Record>,
+    ) -> Result<(), DispatchError> {
+        Ok(())
+    }
+
     /// Audit an attempt start or outcome directly.
     async fn record_attempt_audit(
         &self,

@@ -443,7 +443,10 @@ impl Integrations {
                 .map(|instance| local::agent_id(instance, &template.client))
                 .unwrap_or_else(|| config::principal(&template.client));
             if template.agent.subject != expected {
-                bail!("task template agent must use its exact local issuer identity");
+                return Err(super::DevFailure::integration(
+                    "task template agent must use its exact local issuer identity",
+                )
+                .into());
             }
         }
         for binding in self.sources.values() {
@@ -459,7 +462,7 @@ impl Integrations {
                     })
             });
             if reader.is_none() {
-                bail!("source reader references must select the same generated service client with exactly the binding resource and scopes");
+                return Err(super::DevFailure::integration("source reader references must select the same generated service client with exactly the binding resource and scopes").into());
             }
             if binding.token_endpoint != format!("{}/oauth2/token", state.issuer_origin())
                 || binding.client_assertion_audience.as_deref()
@@ -470,7 +473,7 @@ impl Integrations {
                     .as_ref()
                     .is_none_or(|scopes| scopes.is_empty())
             {
-                bail!("source bindings must explicitly use the session issuer token endpoint/audience, integrations.resource and reader scopes; configure BREG to admit that resource with independent human profiles/scopes/clients");
+                return Err(super::DevFailure::integration("source bindings must explicitly use the session issuer token endpoint/audience, integrations.resource and reader scopes; configure BREG to admit that resource with independent human profiles/scopes/clients").into());
             }
         }
         if let Some(authority) = &self.task_authority {
@@ -534,7 +537,7 @@ impl Integrations {
                     })
                 });
             if !registered {
-                bail!("shared issuer owner must pre-register the exact Casework task authority connection");
+                return Err(super::DevFailure::SharedTaskAuthority { source: anyhow::anyhow!("shared issuer owner must pre-register the exact Casework task authority connection").into() }.into());
             }
         }
         if !self.browser_clients.is_empty() {
@@ -679,6 +682,7 @@ impl Integrations {
                     token_exchange: client.task_exchange.then(|| TokenExchangeClient {
                         assertion_resource_server_id: server,
                         assertion_scope: "casework:grants:assert".into(),
+                        ordinary_resource_permissions: Vec::new(),
                     }),
                 });
             }
@@ -765,11 +769,29 @@ pub(super) fn validate_bindings(root: &Path, project: &Path) -> Result<()> {
     let secrets = registry_casework::secret_resolver(&config)?;
     let policy = crate::project::load_and_check_policy(project)?;
     for source in &policy.sources {
-        config.sources.get(&source.id).ok_or_else(||anyhow::anyhow!("a declared source binding is missing"))?
+        config
+            .sources
+            .get(&source.id)
+            .ok_or_else(|| anyhow::anyhow!("a declared source binding is missing"))?
             .build_adapter(source, project, &secrets)
-            .map_err(|_| anyhow::anyhow!("local source binding is invalid; check its exact BREG event source, reader profile, source description and credential references before starting services"))?;
+            .map_err(source_binding_failure)?;
     }
     Ok(())
+}
+
+/// Only a typed invalid adapter contract is an authoring refusal. Operational
+/// adapter failures keep their type for the owning CLI classifier.
+pub(super) fn source_binding_failure(
+    error: registry_casework_core::SourceAdapterError,
+) -> anyhow::Error {
+    if error == registry_casework_core::SourceAdapterError::Invalid {
+        super::DevFailure::SourceBindingConfiguration {
+            source: Box::new(error),
+        }
+        .into()
+    } else {
+        error.into()
+    }
 }
 
 /// Report one service or browser client ID: its grammar, the reserved

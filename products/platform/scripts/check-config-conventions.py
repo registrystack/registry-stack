@@ -93,6 +93,7 @@ SCHEMA_GLOBS = (
 PREFIXES = {
     "breg": "BReg",
     "casework": "Casework",
+    "coordinator": "Coordinator",
     "scheduling": "Scheduling",
     "messaging": "Messaging",
     "discovery": "Discovery",
@@ -101,7 +102,7 @@ PREFIXES = {
     "manifest": "Manifest",
     "platform": "Platform",
 }
-KIND_RE = re.compile(r"^(BReg|Casework|Scheduling|Messaging|Discovery|Render|Evidence|Manifest|Platform)([A-Z][a-z0-9]+)+$")
+KIND_RE = re.compile(r"^(BReg|Casework|Coordinator|Scheduling|Messaging|Discovery|Render|Evidence|Manifest|Platform)([A-Z][a-z0-9]+)+$")
 VERSION_RE = re.compile(r"^v[1-9][0-9]*((alpha|beta)[1-9][0-9]*)?$")
 API_VERSION_PREFIX = "id.registrystack.org/formats/"
 SCHEMA_ID_PREFIX = "https://id.registrystack.org/schemas/"
@@ -1256,8 +1257,8 @@ class Lint:
     def check_target(self, fid: str, entry: dict, kinds: dict[str, list[str]]) -> None:
         target = entry["target"]
         if target == "none":
-            if not entry.get("exceptionClass"):
-                self.error(f"{fid}: target none needs an exceptionClass")
+            if not entry.get("exceptionClass") and entry.get("buildArtifact") is not True:
+                self.error(f"{fid}: target none needs an exceptionClass or generated buildArtifact")
             return
         if not isinstance(target, dict) or not {"apiVersion", "kind"} <= set(target):
             self.error(f"{fid}: target needs apiVersion and kind")

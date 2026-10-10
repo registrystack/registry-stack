@@ -1050,9 +1050,17 @@ fn borrowed_source_mode_is_explicit_pinned_and_refuses_session_qualified_subject
         &source,
         &BTreeMap::new(),
     )
-    .unwrap_err()
-    .to_string();
-    assert!(refusal.contains("principalClaim sub"), "{refusal}");
+    .unwrap_err();
+    let (exit, diagnostic) = crate::classify_failure(crate::CommandKind::Operational, &refusal);
+    assert_eq!(exit, crate::DOMAIN_REFUSAL_EXIT);
+    assert_eq!(
+        diagnostic["code"],
+        "caseworkctl.dev.borrowed-principal-invalid"
+    );
+    assert_eq!(
+        diagnostic["path"],
+        "casework.yaml:/accessProfiles/principalClaim"
+    );
 }
 
 #[test]
@@ -1708,6 +1716,47 @@ fn legacy_database_container(state: &State, volume_name: &str, destination: &str
             "Destination": destination,
         }],
     })
+}
+
+#[test]
+fn retained_database_inspection_accepts_only_verified_image_aliases() {
+    let root = crate::canonical_tempdir();
+    let project = standalone(root.path());
+    let mut state = session(&project);
+    state.container_id = Some("retained-container-id".to_owned());
+    let container = json!({
+        "Id": "retained-container-id",
+        "Name": format!("/{}", state.container_name()),
+        "Config": { "Labels": { (LABEL): state.owner }, "Image": IMAGE },
+    });
+    for image in [CANONICAL_IMAGE, IMAGE] {
+        let mut owned = container.clone();
+        owned["Config"]["Image"] = json!(image);
+        verified_container(&state, &owned).unwrap();
+        for (pointer, replacement) in [
+            ("/Name", "different-container"),
+            ("/Id", "different-container-id"),
+            (
+                "/Config/Labels/org.registrystack.caseworkctl.dev-owner",
+                "different-owner",
+            ),
+        ] {
+            let mut changed = owned.clone();
+            *changed.pointer_mut(pointer).unwrap() = json!(replacement);
+            assert!(verified_container(&state, &changed).is_err());
+        }
+    }
+    for image in [
+        IMAGE.replace("67f41722", "07f41722"),
+        CANONICAL_IMAGE.replace("67f41722", "07f41722"),
+        format!("untrusted.example/{CANONICAL_IMAGE}"),
+        "postgres:17.11".to_owned(),
+        "public.ecr.aws/docker/library/postgres:17.11".to_owned(),
+    ] {
+        let mut changed = container.clone();
+        changed["Config"]["Image"] = json!(image);
+        assert!(verified_container(&state, &changed).is_err());
+    }
 }
 
 #[test]
@@ -3518,6 +3567,15 @@ fn explicit_local_integrations_render_only_governed_authority_and_bind_the_sourc
     assert_eq!(operator["sources"]["source"]["resource"], state.audience());
     assert_eq!(description.exchange_issuers.len(), 1);
     let mut wrong = integrations.clone();
+    wrong.resource = "private-preflight-canary".into();
+    let findings = wrong.validate(&clients, &policy).unwrap_err();
+    let finding = findings
+        .iter()
+        .find(|finding| finding.code == "casework.dev-clients.invalid-resource")
+        .expect("the resource refusal is field-addressed");
+    assert_eq!(finding.pointer, "/integrations/resource");
+    assert!(!format!("{findings:?}").contains("private-preflight-canary"));
+    let mut wrong = integrations.clone();
     wrong.sources.get_mut("source").unwrap().resource = Some("urn:other".into());
     assert!(wrong.validate_session(&state, &policy).is_err());
     let mut wrong = integrations.clone();
@@ -3700,16 +3758,24 @@ fn borrowed_casework_client_requires_exact_owner_claims_scopes_and_resource() {
         private::read(&target.join("assertion-key.jwk"), MAX_BYTES).unwrap(),
         private::read(&source.join("assertion-key.jwk"), MAX_BYTES).unwrap()
     );
-    assert!(config::borrow_client(
+    let error = config::borrow_client(
         &project.join("other"),
         &state,
         "staff",
         &scopes,
-        &json!({"registry_actor_kind":"service"}),
+        &json!({"registry_actor_kind":"service", "private":"private-preflight-canary"}),
         &resource,
-        false
+        false,
     )
-    .is_err());
+    .unwrap_err();
+    let (exit, diagnostic) = crate::classify_failure(crate::CommandKind::Operational, &error);
+    assert_eq!(exit, crate::DOMAIN_REFUSAL_EXIT);
+    assert_eq!(diagnostic["code"], "caseworkctl.dev.shared-client-mismatch");
+    assert!(diagnostic["suggestedAction"]
+        .as_str()
+        .unwrap()
+        .contains("explicit actor"));
+    assert!(!diagnostic.to_string().contains("private-preflight-canary"));
 }
 
 #[test]
@@ -3770,9 +3836,11 @@ fn a_borrowed_client_the_owner_registered_for_exchange_must_declare_it() {
         &resource,
         false,
     )
-    .unwrap_err()
-    .to_string();
-    assert!(refusal.contains("exchange client"), "{refusal}");
+    .unwrap_err();
+    assert!(format!("{refusal:#}").contains("exchange client"));
+    let (exit, diagnostic) = crate::classify_failure(crate::CommandKind::Operational, &refusal);
+    assert_eq!(exit, crate::DOMAIN_REFUSAL_EXIT);
+    assert_eq!(diagnostic["code"], "caseworkctl.dev.shared-client-mismatch");
 
     let declared = project.join("declared");
     private::directory(&declared).unwrap();
@@ -3880,9 +3948,17 @@ fn task_template_subject_follows_the_actual_local_issuer_owner() {
     sub_profile.access_profiles[0].principal_claim = "sub".to_owned();
     let refusal = integrations
         .validate_session(&borrowed, &sub_profile)
-        .unwrap_err()
-        .to_string();
-    assert!(refusal.contains("principalClaim sub"), "{refusal}");
+        .unwrap_err();
+    let (exit, diagnostic) = crate::classify_failure(crate::CommandKind::Operational, &refusal);
+    assert_eq!(exit, crate::DOMAIN_REFUSAL_EXIT);
+    assert_eq!(
+        diagnostic["code"],
+        "caseworkctl.dev.borrowed-principal-invalid"
+    );
+    assert_eq!(
+        diagnostic["path"],
+        "casework.yaml:/accessProfiles/principalClaim"
+    );
 
     let standalone = session(&project);
     assert!(integrations.validate_session(&standalone, &policy).is_err());
@@ -4022,8 +4098,7 @@ fn a_borrowed_task_authority_connection_pairs_the_task_exchange_clients() {
         .unwrap();
         let refusal = integrations
             .prepare(&root, &state, None, &policy)
-            .unwrap_err()
-            .to_string();
+            .unwrap_err();
         // The exact pairing passes this check and stops at the borrowed client
         // registration the owner has not written, which is the next check.
         let expected = if paired == json!(["task-agent"]) {
@@ -4031,7 +4106,19 @@ fn a_borrowed_task_authority_connection_pairs_the_task_exchange_clients() {
         } else {
             "shared issuer owner must pre-register the exact Casework task authority connection"
         };
-        assert!(refusal.contains(expected), "{paired}: {refusal}");
+        assert!(
+            format!("{refusal:#}").contains(expected),
+            "{paired}: {refusal}"
+        );
+        let (_, diagnostic) = crate::classify_failure(crate::CommandKind::Operational, &refusal);
+        assert_eq!(
+            diagnostic["code"],
+            if paired == json!(["task-agent"]) {
+                "caseworkctl.dev.shared-client-mismatch"
+            } else {
+                "caseworkctl.dev.shared-task-authority-mismatch"
+            }
+        );
     }
 }
 
@@ -5017,4 +5104,47 @@ fn a_port_bind_refused_for_another_reason_is_not_reported_as_occupied() {
         crate::classify_failure(crate::CommandKind::Operational, &occupied).1["code"],
         "caseworkctl.dev.port-occupied"
     );
+}
+
+#[test]
+fn borrowed_principals_and_invalid_source_bindings_have_specific_safe_diagnostics() {
+    let workspace = crate::canonical_tempdir();
+    let project = standalone(workspace.path());
+    let mut policy = crate::project::load_and_check_policy(&project).unwrap();
+    for profile in &mut policy.access_profiles {
+        profile.principal_claim = "registry_principal".into();
+    }
+    config::require_stable_borrowed_principals(&policy).unwrap();
+    policy.access_profiles[0].principal_claim = "sub".into();
+    let error = config::require_stable_borrowed_principals(&policy).unwrap_err();
+    let (exit, diagnostic) = crate::classify_failure(crate::CommandKind::Operational, &error);
+    assert_eq!(exit, crate::DOMAIN_REFUSAL_EXIT);
+    assert_eq!(
+        diagnostic["code"],
+        "caseworkctl.dev.borrowed-principal-invalid"
+    );
+    assert_eq!(
+        diagnostic["path"],
+        "casework.yaml:/accessProfiles/principalClaim"
+    );
+    assert!(diagnostic["suggestedAction"]
+        .as_str()
+        .unwrap()
+        .contains("Do not use sub"));
+
+    let error =
+        integrations::source_binding_failure(registry_casework_core::SourceAdapterError::Invalid);
+    let (exit, diagnostic) = crate::classify_failure(crate::CommandKind::Operational, &error);
+    assert_eq!(exit, crate::DOMAIN_REFUSAL_EXIT);
+    assert_eq!(diagnostic["code"], "caseworkctl.dev.source-binding-invalid");
+    assert_eq!(diagnostic["path"], "dev-clients.yaml:/integrations/sources");
+    let error = integrations::source_binding_failure(
+        registry_casework_core::SourceAdapterError::Unavailable,
+    );
+    assert!(error
+        .downcast_ref::<registry_casework_core::SourceAdapterError>()
+        .is_some());
+    let (exit, diagnostic) = crate::classify_failure(crate::CommandKind::Operational, &error);
+    assert_eq!(exit, crate::OPERATIONAL_FAILURE_EXIT);
+    assert_eq!(diagnostic["code"], "caseworkctl.operational-failure");
 }

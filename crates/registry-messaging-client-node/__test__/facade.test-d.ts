@@ -98,3 +98,10 @@ function mayHaveTakenEffect(error: MessagingClientError): boolean {
   return unknown
 }
 void mayHaveTakenEffect
+
+const observedReceipt: Promise<MessagingOutcome<MessageReceipt>> = client.messageReceipt(token, 'original-key', templated)
+void observedReceipt
+const unresolved: MessagingProblemCode = 'receipt.unresolved'
+void unresolved
+// @ts-expect-error receipt observation requires the original caller key
+void client.messageReceipt(token, templated)

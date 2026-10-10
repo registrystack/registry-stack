@@ -102,3 +102,12 @@ void schedulingClient.createAppointment('header.payload.signature', 'book-2', {
     prerequisites: [],
   },
 })
+
+void messagingClient.messageReceipt('header.payload.signature', 'original-notice', {
+  senderProfile: 'reminders-sms', to: { phone: '+15550100' }, content: { text: 'Appointment tomorrow' },
+})
+void schedulingClient.appointmentReceipt('header.payload.signature', 'original-booking', { hold: 'hold-1' })
+const unresolvedMessage: messaging.MessagingProblemCode = 'receipt.unresolved'
+const unresolvedAppointment: scheduling.SchedulingProblemCode = 'receipt.unresolved'
+void unresolvedMessage
+void unresolvedAppointment

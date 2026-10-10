@@ -1,0 +1,291 @@
+---
+title: Registry Coordinator configuration reference
+description: Project, runtime, and offline scenario files for Registry Coordinator, with check commands and refusal recovery.
+status: draft
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: unreviewed
+doc_type: reference
+locale: en
+standards_referenced:
+  - json-schema
+---
+
+import ConfigurationFormatChecks from '../../../components/ConfigurationFormatChecks.astro';
+
+Check your Registry Coordinator project and deployment bindings before packaging a workflow.
+The three file formats use the shared [configuration conventions](../configuration-files/).
+Registry Coordinator supports controlled institutional pilots; each receiving product retains
+authorization and ownership of its effects.
+
+{/* Evidence: products/platform/config-formats.yaml;
+    products/coordinator/PILOT-CONTRACT.md;
+    crates/registry-coordinator/src/project_check.rs. */}
+
+## Files and boundaries
+
+`workflow.yaml` carries `CoordinatorProject`, with execution bounds, logical connections, and
+finite steps. Its `project` block names the workflow and version. `functionsFile` names `functions.rhai`,
+which supplies bounded pure mappings. Project checks validate the graph, function exports,
+argument references, and input and outcome schemas.
+
+`runtime.yaml` carries `CoordinatorRuntimeConfig`. It binds logical connections to product
+endpoints and authority, and declares deployment identities, state keys, audit custody, and
+secret providers. An offline check validates the configuration without resolving secret material,
+connecting to PostgreSQL, or contacting products.
+
+`scenarios.yaml` carries `CoordinatorScenarios`. Each case names its `id`, workflow input, typed
+fake replies, and expected execution result. `coordinatorctl test` replays these cases with a
+virtual clock; passing scenarios do not prove a live deployment or provider delivery.
+
+JSON Schema fragments and scenario payloads are foreign JSON trees: they can contain null values.
+Ordinary optional configuration members are omitted rather than written as null.
+
+YAML declares the finite graph, calls and durable waits.
+Use pure Rhai to map fields and choose among those authored branches.
+Functions cannot acquire credentials, contact services or add steps to the graph.
+
+{/* Evidence: crates/registry-coordinator/src/authoring.rs, CoordinatorProject;
+    crates/registry-coordinator/src/runtime.rs, RuntimeConfig;
+    crates/registry-coordinator/src/scenarios.rs, CoordinatorScenarios;
+    crates/registry-coordinator/src/project_check.rs;
+    crates/registry-platform-yaml/src/types.rs, ForeignValue. */}
+
+## Supported operations
+
+| Operation | Connection type | Effect | Recovery |
+| --- | --- | --- | --- |
+| `read-record` | `breg` | Read | Read again |
+| `submit-message` | `messaging` | Mutation | Same command and read-only receipt |
+| `read-scheduling` | `scheduling` | Read | Read again |
+| `read-availability` | `scheduling` | Read | Read again |
+| `create-appointment` | `scheduling` | Mutation | Same command and read-only receipt |
+| `invoke-breg-action` | `breg` | Mutation | Same prepared command; no read-only receipt |
+| `external-get` | `external-http` | Read | Read again |
+| `evaluate-decision` | `decision` | Evaluation | Hold after uncertain dispatch |
+
+These eight identifiers are the complete inventory.
+There is no arbitrary HTTP method, SQL step or dynamic call destination.
+
+`invoke-breg-action` accepts `action` and an object-valued `input`.
+Its BReg runtime connection requires a standing service `authorization` and an explicitly permitted `profile` for the immediate action.
+It accepts no grant field and cannot use `authorization.taskAuthority`.
+The maintained Base Registry Engine (BReg) client validates metadata and prepares the conditional request without mutation.
+Coordinator saves the exact preparation and key before dispatch.
+Later attempts check current metadata and fresh authority while retaining the saved conditions and key.
+Changed contracts, stale conditions, denied authority, cancellation, recovery holds and the original deadline stop unsafe dispatch.
+An uncertain result remains unresolved by `reconcile`, because BReg has no read-only action receipt.
+An ordinary record read is not evidence that the original action succeeded.
+Task-bound operations retain their original approval deadlines across waits and retries.
+
+Version 4 execution snapshots pin the capabilities of each used operation.
+Existing version 3 snapshots retain their original bytes and five-operation contract during restore.
+Package commands remain unchanged, but a changed digest needs a new workflow version when the same ID and version exists in retained history.
+
+{/* Evidence: crates/registry-coordinator/src/operations.rs, CATALOG, LEGACY_CATALOG;
+    crates/registry-coordinator/src/breg_action.rs, prepare, execute;
+    crates/registry-coordinator/src/runtime.rs, RuntimeConfig;
+    crates/registry-coordinator/src/definition.rs, Definition;
+    crates/registry-coordinator/src/worker.rs;
+    crates/registry-coordinator/tests/operation_compatibility.rs. */}
+
+## External HTTP reads
+
+Declare `external-http` as the project's logical connection type, then bind that name under `runtime.externalHttpConnections`.
+Product bindings remain under `runtime.connections`; the names across product, external HTTP, and decision maps must be distinct, with at most 16 connections in total.
+Omitting `externalHttpConnections` disables external reads.
+
+This runtime fragment permits one public directory path and one query parameter:
+
+```yaml
+externalHttpConnections:
+  directory:
+    baseUrl: https://directory.example.org/directory
+    paths: [offices]
+    queryParameters: [district]
+    responseSchema:
+      type: object
+      additionalProperties: false
+      required: [status, body]
+      properties:
+        status:
+          const: 200
+        body:
+          type: object
+```
+
+The call input is an object containing `path` and an optional `query` object of string values.
+Here, the mapped input could select `path: offices` and a `district` query value.
+It cannot supply a URL, method, headers or body.
+The service preserves the configured base path and issues GET with JSON acceptance.
+
+| Runtime member | Contract |
+| --- | --- |
+| `baseUrl` | Required absolute HTTPS URL, or numeric loopback HTTP; no credentials, query or fragment |
+| `paths` | Required 1 to 16 unique exact relative paths; no empty or dot segments, query, fragment or backslashes |
+| `queryParameters` | Optional 1 to 16 unique names; omission permits no query parameters |
+| `authorization` | Optional separately configured service identity; omission means a public read |
+| `responseSchema` | Required local JSON Schema for the complete `{status, body}` response; no external references or schema resource identifiers |
+| `attemptTimeoutMilliseconds` | 1 to 2000, default 2000; covers destination resolution, credentials and HTTP |
+| `maximumResponseBytes` | 1 to 65,536, default 65,536 |
+
+Each query value is at most 1024 bytes and cannot contain control characters.
+Authorization uses the ordinary service fields `tokenEndpoint`, `clientId`, `signingKeyRef`, `resource` and `scopes`.
+The optional `clientAssertionAudience` defaults to the token endpoint.
+It does not accept `taskAuthority`, inherit product authorization or forward the caller's credential.
+
+Redirects and prohibited destinations are refused.
+The adapter accepts an empty response body as null; a nonempty body must be valid JSON within the byte limit.
+The configured schema decides which HTTP statuses and body shapes are accepted, including any permitted non-success statuses.
+An invalid body or schema mismatch stops the read with `external-invalid-response`.
+A timeout or unavailable service is retryable as `external-unavailable` within the existing workflow deadline.
+GET endpoints must implement read semantics; there is no external mutation or receipt recovery contract.
+
+The maintained [external directory project](https://github.com/registrystack/registry-stack/tree/main/products/coordinator/examples/external-directory) includes mappings and deterministic scenarios.
+Those scenarios and mock HTTP adapter checks do not prove a live institutional integration.
+
+{/* Evidence: crates/registry-coordinator/src/external_http.rs, ExternalHttpConfig, GetRequest, ExternalHttpConnection;
+    crates/registry-coordinator/src/runtime.rs, AuthorizationConfig, RuntimeConfig;
+    crates/registry-coordinator/tests/external_http.rs;
+    crates/registry-coordinator/tests/external_runtime.rs;
+    products/coordinator/examples/external-directory/runtime.yaml. */}
+
+## Typed decision models
+
+Declare a logical `decision` connection in your project and call `evaluate-decision`.
+Use `decisionConnections` in the runtime file to select a protocol and model.
+Omitting that map disables decision calls.
+The common contract supports predicates, choices, and ordered rubric scores.
+General structured generation, images, agent tools, and asynchronous jobs are not supported.
+
+```yaml
+decisionConnections:
+  assessor:
+    protocol: system-one
+    baseUrl: https://decision.example.org
+    model: institution-reviewed-model
+    authorization:
+      bearer:
+        tokenRef: secret:env/DECISION_TOKEN
+        principal: institutional-decision-account
+```
+
+`system-one` sends to `v1/systemone`; `openai-decisions` sends to `v1/decisions`.
+The configured base path is preserved.
+Use the service root as `baseUrl`, rather than repeating the protocol path.
+For an unauthenticated local service, explicitly use `authorization.local: {}` and a numeric loopback URL.
+The `principal` names the stable account represented by your bearer credential.
+Keep that account unchanged when rotating the secret; Coordinator cannot discover the account behind an opaque API key.
+
+`attemptTimeoutMilliseconds` accepts 1 to 8000, default 8000.
+`maximumRequestBytes` and `maximumResponseBytes` each accept 1 to 65,536, default 65,536.
+The time budget covers destination resolution, credentials, and HTTP.
+The client performs one request without redirects, ambient proxy use, or automatic provider fallback.
+
+Your existing Rhai input mapping returns `state` and a `questions` object.
+State is a string, object, or array; object and array state becomes canonical JSON text for OpenAI.
+Question names and choice values are local identifiers.
+You can ask 1 to 32 named questions per call.
+Each question supplies text `instructions` and a `type`:
+
+- `predicate` asks for a probability from zero to one.
+- `choice` supplies `criteria` as a map from 2 to 32 allowed choices to their descriptions.
+- `score` supplies `criteria` as an ordered list of 2 to 10 rubric descriptions, indexed from zero.
+
+The result contains `protocol`, `requestedModel`, and named `answers`.
+`returnedModel` appears only when the provider supplies it; `usage` retains provider metadata.
+A predicate answer has `type: predicate` and `probability`.
+A choice answer has `type: choice`, `choice`, `probabilities`, and `nativeConfidence`.
+A score answer has `type: score`, `score`, `legend`, `probabilities`, and `nativeConfidence`.
+An OpenAI per-question refusal is `type: refusal`, with no numeric answer or copied provider explanation.
+System One HTTP refusals stop the call and do not become a typed review answer.
+Rubric scores can be fractional and are not probabilities.
+Native confidence preserves the provider's statistic; it is not normalized across models or a guarantee of correctness.
+
+Review which fields you send to the model, and test your thresholds against labeled cases for that provider and model.
+A model alias may change upstream even though Coordinator pins the configured name.
+Use a stable release identifier when your provider offers one.
+A pure `choose` step applies your policy to the stored answers; the next product operation obtains its own authority.
+A terminal `needs-review` outcome returns control to the caller and creates no approval task.
+
+Before dispatch, Coordinator saves the exact prepared request without credentials.
+The validated result and next checkpoint are committed together, so restarting or reading a completed step does not evaluate again.
+After possible dispatch, a lost or malformed reply leaves the call uncertain.
+Inspection reports `hold-after-dispatch`; automatic retry, `retry-same`, and receipt reconciliation cannot repeat that evaluation.
+Only a proven non-dispatch failure is retryable.
+Cancel the run and make a separately authorized new start if you accept another potentially billable evaluation with a possibly different answer.
+Cancellation does not retract provider processing.
+Status keeps `uncertain: true` and reports `cancelRequested: true`.
+After a restore, complete execution recovery may abandon that cancelled evaluation once its active lease has ended and its protected request has been checked.
+Releasing the restore hold then permits unrelated work while retaining the unknown outcome and preventing replay of the cancelled run.
+Unknown product mutations do not qualify for this recovery path.
+
+Contract tests use local HTTP fixtures for both profiles and the documented System One compatible local-provider shape.
+Offline scenarios test policy, refusal, and uncertainty; they do not establish live model compatibility or decision accuracy.
+
+{/* Evidence: crates/registry-coordinator/src/decision.rs;
+    crates/registry-coordinator/src/runtime.rs, RuntimeConfig;
+    crates/registry-coordinator/src/operations.rs, CATALOG;
+    crates/registry-coordinator/src/store.rs;
+    crates/registry-coordinator/tests/decision_runtime.rs;
+    crates/registry-coordinator/tests/decision_protocol.rs;
+    crates/registry-coordinator/tests/process_restart.rs;
+    products/coordinator/examples/decision-follow-up/functions.rhai. */}
+
+## Application integration
+
+Each deployment admits one active flow definition; existing runs retain their original definitions.
+The authenticated list API returns the latest caller-owned runs with `limit` from 1 to 100, defaulting to 20, without pagination.
+No Coordinator export is available in `@registrystack/client` yet.
+Applications compose through the authenticated HTTP API and the owning Casework, BReg and optional Messaging APIs.
+
+{/* Evidence: crates/registry-coordinator/src/http.rs, HttpState, List;
+    crates/registry-coordinator/src/service.rs;
+    crates/CLIENTS.md. */}
+
+## Check commands
+
+The commands in this table come from the maintained format registry.
+
+<ConfigurationFormatChecks product="coordinator" />
+
+Check a project directory, including its optional runtime and scenario files:
+
+```sh
+coordinatorctl check --project ./my-follow-up --explain
+coordinatorctl test --project ./my-follow-up
+```
+
+The project check examines YAML files at the project root. It skips `.coordinator` state and
+reports an incomplete-check warning for other child directories. Optional companion files can
+be absent. A runtime-only check requires an absolute file path:
+
+```sh
+coordinatorctl check --runtime-config /absolute/path/runtime.yaml --deny-warnings
+```
+
+Without `--environment`, environment expressions defer value checks and produce warnings where
+validation is incomplete. Add `--environment` to check substituted values explicitly.
+`--deny-warnings` makes warnings fail the check. Add `--format json` for a structured report
+containing a diagnostics array. Refusal diagnostics identify the affected file or configuration
+path and suggest a repair. Source positions are included when the error can be tied to source text.
+
+When a check refuses a file, repair the indicated key or reference and run the same check again.
+Use the format registry's header and schema rather than an older authoring envelope. Keep logical
+connection names consistent between the project and runtime files. An accepted offline check does
+not activate a package or establish deployment readiness.
+
+{/* Evidence: crates/registry-coordinator/src/cli.rs;
+    crates/registry-coordinator/src/project_check.rs;
+    crates/registry-coordinator/src/definition.rs;
+    crates/registry-coordinator/tests/project_checking.rs;
+    crates/registry-coordinator/tests/cli_authoring.rs. */}
+
+## Owning contracts
+
+The maintained [Coordinator project guide](https://github.com/registrystack/registry-stack/blob/main/products/coordinator/README.md)
+describes authoring and packaging. The [deployment runbook](https://github.com/registrystack/registry-stack/blob/main/products/coordinator/DEPLOYMENT.md)
+describes installation, authenticated access, activation, operation, and recovery.
+The [pilot contract](https://github.com/registrystack/registry-stack/blob/main/products/coordinator/PILOT-CONTRACT.md)
+defines the supported product boundary.

@@ -55,7 +55,11 @@ use zeroize::Zeroizing;
 const DATABASE_ID: &str = "breg-dev-database";
 const MIGRATION_ROLE: &str = "breg_dev_migration";
 const RUNTIME_ROLE: &str = "breg_dev_runtime";
+// Pull the digest-identical Docker Official Images mirror. Public help keeps
+// the canonical upstream tag and digest, whose image identity is unchanged.
 const IMAGE: &str =
+    "public.ecr.aws/docker/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675";
+const CANONICAL_IMAGE: &str =
     "postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675";
 const SPATIAL_IMAGE: &str =
     "postgis/postgis@sha256:01a6a70e41e6c4467c8f55f6063555ed72db2d6662cd0d571040d42eadaeb6f6";
@@ -783,6 +787,69 @@ fn receiver_port(state: &State) -> Result<u16> {
             return Ok(port);
         }
     }
+}
+
+const LOCAL_SUBJECT_MARKER: &str = "$localClientSubject";
+
+fn has_local_subject_marker(value: &Value) -> bool {
+    match value {
+        Value::String(value) => value == LOCAL_SUBJECT_MARKER,
+        Value::Array(values) => values.iter().any(has_local_subject_marker),
+        Value::Object(values) => values.values().any(has_local_subject_marker),
+        _ => false,
+    }
+}
+
+/// Resolve an explicit local fixture identity, never an arbitrary expectation.
+/// The caller writes only its private captured project, not authored inputs.
+fn resolve_local_subject_markers(
+    journeys: &mut Value,
+    clients: &Clients,
+    compiled: &registry_breg::CompiledRegistry,
+    issuer_instance: &str,
+) -> Result<()> {
+    for journey in journeys["journeys"]
+        .as_array_mut()
+        .context("journeys must contain an array")?
+    {
+        let journey_id = journey["id"]
+            .as_str()
+            .context("journey requires an id")?
+            .to_owned();
+        for step in journey["steps"]
+            .as_array_mut()
+            .context("journey steps must be an array")?
+        {
+            if step["claims"]["principal"] != LOCAL_SUBJECT_MARKER {
+                continue;
+            }
+            let profile = step["accessProfile"]
+                .as_str()
+                .context("journey step requires an access profile")?;
+            let step_id = step["id"].as_str().context("journey step requires an id")?;
+            let profiles = compiled
+                .entities()
+                .values()
+                .filter_map(|entity| entity.access_profiles.get(profile))
+                .collect::<Vec<_>>();
+            if profiles.is_empty()
+                || profiles
+                    .iter()
+                    .any(|profile| profile.principal_claim != "sub")
+            {
+                bail!("$localClientSubject is supported only as claims.principal for an authenticated sub access profile");
+            }
+            let client = journey_client(clients, &journey_id, step_id, profile)?;
+            step["claims"]["principal"] = json!(registry_thunderid_tooling::local::agent_id(
+                issuer_instance,
+                &client.id
+            ));
+        }
+    }
+    if has_local_subject_marker(journeys) {
+        bail!("$localClientSubject must appear only as a sub profile's journey claims.principal");
+    }
+    Ok(())
 }
 
 /// Name the first journey step whose access profile no local client binds.
@@ -2159,9 +2226,18 @@ fn inspect(docker: &Path, state: &State) -> Result<Option<Value>> {
         .into_iter()
         .next()
         .context("Docker returned no exact container")?;
+    verified_container(state, &container)?;
+    Ok(Some(container))
+}
+
+fn verified_container(state: &State, container: &Value) -> Result<()> {
+    let image = container["Config"]["Image"].as_str();
+    let expected_image = state.database_image();
+    let image_matches = image == Some(expected_image)
+        || (!state.requires_postgis && image == Some(CANONICAL_IMAGE));
     if container["Name"] != format!("/{}", state.container_name())
         || container["Config"]["Labels"][LABEL] != state.owner
-        || container["Config"]["Image"] != state.database_image()
+        || !image_matches
         || state
             .container_id
             .as_ref()
@@ -2169,7 +2245,7 @@ fn inspect(docker: &Path, state: &State) -> Result<Option<Value>> {
     {
         bail!("container ownership differs from retained local state; no resource was changed");
     }
-    Ok(Some(container))
+    Ok(())
 }
 
 fn database(docker: &Path, state: &mut State) -> Result<()> {

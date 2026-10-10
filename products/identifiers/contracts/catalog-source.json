@@ -117,6 +117,30 @@
   ],
   "schemaSources": [
     {
+      "glob": "products/coordinator/generated/project/*.schema.json",
+      "sourcePath": "crates/registry-coordinator/src/authoring.rs",
+      "owner": "coordinator",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "description": "Registry Coordinator portable project authoring JSON Schema."
+    },
+    {
+      "glob": "products/coordinator/generated/runtime/*.schema.json",
+      "sourcePath": "crates/registry-coordinator/src/runtime.rs",
+      "owner": "coordinator",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "description": "Registry Coordinator runtime configuration JSON Schema."
+    },
+    {
+      "glob": "products/coordinator/generated/scenarios/*.schema.json",
+      "sourcePath": "crates/registry-coordinator/src/scenarios.rs",
+      "owner": "coordinator",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "description": "Registry Coordinator deterministic scenario authoring JSON Schema."
+    },
+    {
       "glob": "products/identifiers/contracts/*.schema.json",
       "owner": "identifiers",
       "status": "active",

@@ -83,7 +83,7 @@ two-person rule enforce it on who can read the migration credential.
   the same version, which verifies the package bytes and rederives the
   registry revision; Casework takes no crate dependency on the Base Registry
   Engine. A stale pin is `casework.source-revision.stale`, and a project with
-  no, several, or an unknown BReg source is refused rather than guessed
+  no, several, or an unknown Base Registry Engine (BReg) source is refused rather than guessed
   (`casework.source.none`, `casework.source.ambiguous`,
   `casework.source.unknown`).
 - Startup repeats the stranded pinned work comparison read-only, because a
@@ -512,6 +512,51 @@ its activation ledger, and its own audit guards are unchanged.
   and the removed-key refusals stay as they are. Removing them needs a
   decision on a schema floor, because without one an unsupported upgrade
   from before the audit writer would drop unpublished audit rows silently.
+
+## Deferred bounded task authorization
+
+The stored grant now distinguishes an immediate window from explicit
+`authorizationMode: deferred`, with a selected duration no longer than seven
+days. Immediate defaults and serialized template bytes remain unchanged.
+Short assertions and execution tokens do not extend the original grant.
+
+The threat is delayed/restarted work needing repeated approval, or renewal
+reviving, widening, or extending authority. Core template validation and the
+PostgreSQL authorization-window constraints hold immediate grants to 900
+seconds and deferred grants to 604800 elapsed seconds, independent of database
+timezone and daylight saving changes. Casework checks the exact registered
+agent, active immutable template, approver eligibility, proposal identity and
+subject facts before assertion release, and checks again after source I/O.
+
+Retained work-item grants reuse the existing item and directory invalidation
+triggers. A release withdraws authority permanently in its task transaction,
+before any later reclaim, while a benign revision alone does not. Assignment
+owner and absence metadata alone are not legacy grant eligibility inputs; the
+existing contract continues to govern the current holder and template eligibility.
+
+Deferred review grants bind a monotonic assignment generation maintained by a
+task-row trigger. Responsibility changes increment it; draft revision changes
+do not. The trigger owns the generation value even on an update attempting to
+reset it. Approval captures the counter and rechecks it under the existing task
+lock. Release/reclaim or reassignment back cannot revive a grant without a new
+approval. A missing deferred counter fails closed. The first observed mismatch
+uses the existing transactional invalidation history and audit path.
+
+The core mode/window boundary test and deferred HTTP regressions exercise
+restart with simulated elapsed authorization time, unrelated source revision
+changes,
+material proposal change, principal change, expiry, revocation, drafts,
+completion, responsibility transitions, and database timezone boundaries. The simulation ages only synthetic
+fixture timestamps; it does not assert a real sixteen-minute wall-clock wait.
+
+Scheduling uses the shared platform exact-status transport before capacity
+work and caps in-flight execution at the earlier token/grant deadline. The
+resource servers still own their own mutations and atomic duplicate/business
+limits. There is no distributed transaction between status observation and
+resource commit. Temporary status/source failure refuses the current attempt;
+review membership eligibility is checked when observed. Explicit revocation is
+required when a withdrawal must remain effective after eligibility is restored
+between observations.
 
 
 ## Exact supervisory request selection

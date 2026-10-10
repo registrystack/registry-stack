@@ -39,6 +39,9 @@ async fn every_messaging_method_names_its_types(
     let _: MessagingComplete<()> = client.ready().await?;
     let _: MessagingComplete<MessageReceipt> =
         client.submit(token, idempotency_key, submission).await?;
+    let _: MessagingComplete<MessageReceipt> = client
+        .message_receipt(token, idempotency_key, submission)
+        .await?;
     let _: MessagingComplete<MessageView> = client.message(token, message_id).await?;
     let _: MessagingComplete<MessageView> = client.cancel(token, message_id).await?;
     let _: MessagingComplete<TemplatePreview> = client

@@ -156,6 +156,19 @@ and names no member.
 {/* Evidence: crates/registry-scheduling-core/src/admission.rs, detailed_code();
     products/scheduling/generated/registry-scheduling.openapi.json. */}
 
+`POST /v1/appointments/receipt` uses ordinary read authority, the original `Idempotency-Key`,
+and the original `CreateAppointmentRequest` body to observe a retained successful creation
+receipt. Its verified issuer and subject must exactly match the original caller. It returns
+`200` with the original appointment projection and never creates or replays a capacity command.
+Observation can therefore continue after the original task grant ends, using a current token
+with read authority. Missing, expired, changed, or refused receipts answer
+`409 receipt.unresolved`. This refusal leaves the original outcome unknown and is not evidence
+that no appointment was created.
+
+{/* Evidence: crates/registry-scheduling/src/http.rs, appointment_receipt();
+    crates/registry-scheduling/src/service.rs, appointment_receipt();
+    crates/registry-scheduling-core/src/problem.rs, ReceiptUnresolved. */}
+
 ## Task grants
 
 A commitment carries no product scope. Its authority is a task grant inside the access token: the six
@@ -182,25 +195,32 @@ and the grant's client must equal the client the deployment verified.
     APPOINTMENT_CANCEL_ACTION; crates/registry-platform-oidc/src/authorization_claims.rs,
     SchedulingPermission. */}
 
-The grant's bounds are matched once, at the service, before the capacity transaction opens. A grant
-that does not cover the request answers `operation.not-authorized` and nothing is written. Inside the
-transaction, immediately before the claim commits, exactly one fact is read again: the grant's own
-expiry, against the clock that commitment is decided under. A grant that expired between the door and
-the commit therefore cannot take capacity, and the attempt answers `operation.not-authorized` like any
-other authority refusal.
+The grant's bounds are matched at the service before the capacity transaction opens. When the runtime
+has any `taskGrantStatus` entry, Scheduling also obtains a fresh exact answer from the authority selected
+by the signed source issuer before every commitment and idempotent receipt replay. The authority must say
+the grant is active and reproduce its exact identity, bounds, signed subjects, and deadline. An inactive,
+mismatched, unlisted, or incompletely bound grant answers `operation.not-authorized`; an authority or service
+credential outage, including an unusable authority response, answers `service.unavailable`. Positive answers
+are not cached, and the complete attempt is limited to ten seconds. No capacity lock is held during the outbound call.
+This is a fresh observation rather than a distributed transaction: withdrawal after a positive answer can race
+the in-flight local commit.
 
-The bounds themselves are not read again at that point, and Scheduling does not ask the issuer whether
-the grant is still active, so a grant revoked or narrowed at the issuer after its token was minted keeps
-the authority its token carries until the token or the grant deadline passes. Casework holds every
-grant it mints to at most 900 seconds; Scheduling verifies a grant's deadline but does not cap it, so
-hold grants from any other authority to deadlines as short. Casework answers a grant's current status
-at `GET /v1/task-grants/{grantId}/status`, but asking it would put Casework's availability inside every
-capacity transaction. Checking grant status there is a recorded deferral, revisited when an adopter
-needs a revocation to take effect faster than a grant expires.
+Inside the transaction, after lock waits and immediately before commit, Scheduling checks the earlier of
+the verified access-token and grant deadlines. A credential that expires after the status answer cannot
+take capacity through a delayed transaction. The earlier deadline bounds the status-to-commit race but does
+not make revocation atomic across products. An entirely unconfigured deployment accepts only the legacy
+offline path for grants with no more than 900 seconds remaining. Any configured entry disables that
+fallback for every source. Because the token does not name the original authorization mode, the final 15
+minutes of a deferred grant can use the legacy path on an unconfigured deployment; deployments accepting
+deferred grants should configure status.
 
-{/* Evidence: products/scheduling/contracts/security-invariant-matrix.yaml, SCHEDULING-DEF-01 and
-    SCHEDULING-SEC-03; crates/registry-casework-core/src/task_grant.rs, TASK_GRANT_LIFETIME_SECONDS;
-    products/casework/TASK_GRANTS.md, "Revocation and status". */}
+{/* Evidence: products/scheduling/contracts/security-invariant-matrix.yaml, SCHEDULING-SEC-03;
+    crates/registry-scheduling/src/service.rs, require_current_task_grant(), audit_request(), and
+    commitment(); crates/registry-scheduling/tests/postgres_commitments.rs,
+    configured_task_status_is_fresh_for_a_capacity_commit_and_its_replay,
+    inactive_mismatched_and_unavailable_task_status_commit_no_capacity,
+    unconfigured_status_accepts_only_the_legacy_remaining_lifetime, and
+    a_commitment_blocked_past_its_access_token_deadline_never_books. */}
 
 A commitment writes a request audit entry, schema `registry-scheduling-audit/v1`, before the capacity
 transaction opens, and a response entry with the same correlation after the transaction commits or
@@ -210,8 +230,8 @@ the call answers `service.unavailable`; when it refuses the response entry of a 
 the call answers `service.unavailable` with the commitment in place. A permission the service refuses
 before any commitment is reached is one response entry with a correlation of its own.
 
-{/* Evidence: crates/registry-scheduling/src/store.rs, check_grant_current() checks grant_exp_unix and
-    nothing else; crates/registry-scheduling/src/service.rs, require_permission(), audit_request(),
+{/* Evidence: crates/registry-scheduling/src/store.rs, check_grant_current();
+    crates/registry-scheduling/src/service.rs, require_permission(), audit_request(),
     and problem_of(); crates/registry-scheduling/src/audit.rs, SCHEDULING_AUDIT_SCHEMA;
     products/scheduling/contracts/security-invariant-matrix.yaml, SCHEDULING-SEC-03. */}
 
@@ -307,6 +327,7 @@ checked per route.
 | Availability | `/v1/availability`, `/v1/availability/explain` | Catalogue read; Explain |
 | Holds | `/v1/holds`, `/v1/holds/{holdId}` | Commitment |
 | Appointments | `/v1/appointments`, `/v1/appointments/{appointmentId}`, its `reschedule`, `cancel`, and `history` | Commitment for the mutations; Catalogue read for the reads |
+| Appointment receipt observation | `/v1/appointments/receipt` | Catalogue read, matching the exact original owner, key, and creation request |
 | Liveness and readiness | `/healthz`, `/readyz` | Any caller, without a token |
 
 `/readyz` answers `service.unavailable` while PostgreSQL is unreachable or the audit writer is not
@@ -315,7 +336,7 @@ ready.
 {/* Evidence: crates/registry-scheduling/src/http.rs, router() and readyz();
     crates/registry-scheduling-core/src/naming.rs, SCHEDULING_PATH, SERVICES_PATH, OFFERINGS_PATH,
     RESOURCES_PATH, LOCATIONS_PATH, AVAILABILITY_PATH, AVAILABILITY_EXPLAIN_PATH, HOLDS_PATH, and
-    APPOINTMENTS_PATH. */}
+    APPOINTMENTS_PATH and APPOINTMENT_RECEIPT_PATH. */}
 
 ## Source of truth
 

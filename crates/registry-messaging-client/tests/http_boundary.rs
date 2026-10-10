@@ -176,6 +176,7 @@ async fn answer(
 
 async fn serve(prefix: &str, fixture: &Fixture) -> (MessagingClient, tokio::task::JoinHandle<()>) {
     let app = Router::new()
+        .route(&format!("{prefix}/v1/messages/receipt"), post(answer))
         .route(&format!("{prefix}{HEALTH_PATH}"), get(answer))
         .route(&format!("{prefix}{READY_PATH}"), get(answer))
         .route(&message_route(prefix), get(answer))
@@ -905,4 +906,69 @@ async fn a_template_name_outside_the_package_grammar_is_refused_before_any_reque
     }
     assert!(fixture.seen.lock().expect("observations").is_empty());
     server.abort();
+}
+
+#[tokio::test]
+async fn a_receipt_template_name_outside_the_package_grammar_is_refused_before_any_request() {
+    let fixture = Fixture::new(StatusCode::OK, Some("application/json"), &message_receipt());
+    let (client, server) = serve("", &fixture).await;
+    for (template_id, version) in [("../ready", "1"), ("appointment-reminder", "1/preview")] {
+        let mut request = submission();
+        request.template = Some(TemplateReference {
+            id: template_id.to_owned(),
+            version: version.to_owned(),
+        });
+        assert!(
+            matches!(
+                client
+                    .message_receipt(&token(), IDEMPOTENCY_KEY, &request)
+                    .await,
+                Err(MessagingClientError::InvalidRequest { .. })
+            ),
+            "{template_id} {version}"
+        );
+    }
+    assert!(fixture.seen.lock().expect("observations").is_empty());
+    server.abort();
+}
+
+#[tokio::test]
+async fn original_receipt_lookup_is_one_read_with_the_exact_key_and_body() {
+    let fixture = Fixture::new(StatusCode::OK, Some("application/json"), &message_receipt());
+    let (client, server) = serve("/institution", &fixture).await;
+    let request = submission();
+    let answer = client
+        .message_receipt(&token(), IDEMPOTENCY_KEY, &request)
+        .await
+        .unwrap();
+    assert_eq!(answer.value.id, MESSAGE_ID);
+    let seen = fixture.seen.lock().unwrap();
+    assert_eq!(seen.len(), 1);
+    assert_eq!(seen[0].0, "/institution/v1/messages/receipt");
+    assert_eq!(seen[0].1[IDEMPOTENCY_KEY_HEADER], IDEMPOTENCY_KEY);
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&seen[0].2).unwrap(),
+        serde_json::to_value(request).unwrap()
+    );
+    server.abort();
+}
+
+#[tokio::test]
+async fn unresolved_or_unavailable_receipt_lookup_never_retries() {
+    for code in [
+        ProblemCode::ReceiptUnresolved,
+        ProblemCode::ServiceUnavailable,
+    ] {
+        let fixture = Fixture::problem(code);
+        let (client, server) = serve("", &fixture).await;
+        let error = client
+            .message_receipt(&token(), IDEMPOTENCY_KEY, &submission())
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(error, MessagingClientError::Problem { code: actual, .. } if actual == code)
+        );
+        assert_eq!(fixture.seen.lock().unwrap().len(), 1);
+        server.abort();
+    }
 }

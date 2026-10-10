@@ -17,6 +17,7 @@
     - ['`profile.not-authorized`', '403', 'No Messaging access profile authorizes this caller for this request.']
     - ['`quota.exceeded`', '429', 'Your Messaging access profile has accepted its daily limit of messages. Try again after the time in Retry-After.']
     - ['`rate-limit.exceeded`', '429', 'The request rate accepted from this caller is exceeded. Try again after the time in Retry-After.']
+    - ['`receipt.unresolved`', '409', 'No retained success receipt matches the verified caller, original key, and original request. Missing, expired, or changed receipts leave the original outcome unknown; this does not prove that no effect occurred.']
     - ['`request.body-too-large`', '413', 'The request body exceeds the accepted size.']
     - ['`request.invalid`', '400', 'The request could not be read as a Messaging request.']
     - ['`request.method-not-allowed`', '405', 'The route exists but not for this method.']

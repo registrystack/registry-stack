@@ -84,7 +84,11 @@ pub enum FieldCryptoError {
 
 /// HKDF-Expand-SHA256 over `prk` and `info`, filling `okm` completely.
 /// The field DEK is used directly as the PRK, so no Extract step runs.
-fn hkdf_expand_sha256(prk: &[u8], info: &[u8], okm: &mut [u8]) -> Result<(), FieldCryptoError> {
+pub(crate) fn hkdf_expand_sha256(
+    prk: &[u8],
+    info: &[u8],
+    okm: &mut [u8],
+) -> Result<(), FieldCryptoError> {
     let prk = hkdf::Prk::new_less_safe(hkdf::HKDF_SHA256, prk);
     prk.expand(&[info], OkmLength(okm.len()))
         .and_then(|expanded| expanded.fill(okm))
@@ -104,7 +108,7 @@ impl hkdf::KeyType for OkmLength {
 /// HKDF-Expand info bytes: domain label, then each field as a big-endian u32
 /// byte length followed by its UTF-8 bytes, so field boundaries are
 /// unambiguous.
-fn domain_prefixed_info(label: &[u8], fields: &[&str]) -> Vec<u8> {
+pub(crate) fn domain_prefixed_info(label: &[u8], fields: &[&str]) -> Vec<u8> {
     let mut bytes =
         Vec::with_capacity(label.len() + fields.iter().map(|field| field.len() + 4).sum::<usize>());
     bytes.extend_from_slice(label);
@@ -164,19 +168,35 @@ pub fn seal_field(
     aad: &FieldAad<'_>,
     plaintext: &[u8],
 ) -> Result<Vec<u8>, FieldCryptoError> {
-    if plaintext.len() > MAX_FIELD_PLAINTEXT_BYTES {
+    seal_with_aad(
+        key,
+        aad.key_version,
+        &envelope_aad_bytes(aad),
+        plaintext,
+        MAX_FIELD_PLAINTEXT_BYTES,
+    )
+}
+
+/// Shared AES envelope mechanism; each public profile owns its exact AAD and bounds.
+pub(crate) fn seal_with_aad(
+    key: &[u8; 32],
+    key_version: u32,
+    aad: &[u8],
+    plaintext: &[u8],
+    maximum: usize,
+) -> Result<Vec<u8>, FieldCryptoError> {
+    if plaintext.len() > maximum {
         return Err(FieldCryptoError::FieldTooLarge);
     }
     let sealing_key = aead::RandomizedNonceKey::new(&aead::AES_256_GCM, key)
-        .expect("AES-256-GCM accepts the fixed 32-byte field key");
-    let aad_bytes = envelope_aad_bytes(aad);
+        .expect("AES-256-GCM accepts a fixed 32-byte key");
     let mut ciphertext_and_tag = plaintext.to_vec();
     let nonce = sealing_key
-        .seal_in_place_append_tag(aead::Aad::from(aad_bytes), &mut ciphertext_and_tag)
+        .seal_in_place_append_tag(aead::Aad::from(aad), &mut ciphertext_and_tag)
         .map_err(|_| FieldCryptoError::SealingFailed)?;
     let mut envelope = Vec::with_capacity(HEADER_BYTES + ciphertext_and_tag.len());
     envelope.push(FIELD_ENCRYPTION_ENVELOPE_VERSION);
-    envelope.extend_from_slice(&aad.key_version.to_be_bytes());
+    envelope.extend_from_slice(&key_version.to_be_bytes());
     envelope.extend_from_slice(nonce.as_ref());
     envelope.extend_from_slice(&ciphertext_and_tag);
     Ok(envelope)
@@ -190,8 +210,8 @@ struct ParsedEnvelope<'a> {
 }
 
 /// Validate envelope structure without touching key material.
-fn parse_envelope(envelope: &[u8]) -> Result<ParsedEnvelope<'_>, FieldCryptoError> {
-    if envelope.len() > MAX_FIELD_ENVELOPE_BYTES {
+fn parse_envelope(envelope: &[u8], maximum: usize) -> Result<ParsedEnvelope<'_>, FieldCryptoError> {
+    if envelope.len() > HEADER_BYTES + maximum + TAG_BYTES {
         return Err(FieldCryptoError::EnvelopeTooLarge);
     }
     if envelope.len() < HEADER_BYTES + TAG_BYTES {
@@ -222,24 +242,46 @@ pub fn open_field(
     aad: &FieldAad<'_>,
     envelope: &[u8],
 ) -> Result<Zeroizing<Vec<u8>>, FieldCryptoError> {
-    let parsed = parse_envelope(envelope)?;
-    if parsed.key_version != aad.key_version {
+    open_with_aad(
+        key,
+        aad.key_version,
+        &envelope_aad_bytes(aad),
+        envelope,
+        MAX_FIELD_PLAINTEXT_BYTES,
+    )
+}
+
+pub(crate) fn open_with_aad(
+    key: &[u8; 32],
+    key_version: u32,
+    aad: &[u8],
+    envelope: &[u8],
+    maximum: usize,
+) -> Result<Zeroizing<Vec<u8>>, FieldCryptoError> {
+    let parsed = parse_envelope(envelope, maximum)?;
+    if parsed.key_version != key_version {
         return Err(FieldCryptoError::AuthenticationFailed);
     }
     let opening_key = aead::RandomizedNonceKey::new(&aead::AES_256_GCM, key)
-        .expect("AES-256-GCM accepts the fixed 32-byte field key");
-    let aad_bytes = envelope_aad_bytes(aad);
+        .expect("AES-256-GCM accepts a fixed 32-byte key");
     let mut plaintext_and_tag = Zeroizing::new(parsed.ciphertext_and_tag.to_vec());
     opening_key
         .open_in_place(
             aead::Nonce::assume_unique_for_key(parsed.nonce),
-            aead::Aad::from(aad_bytes),
+            aead::Aad::from(aad),
             &mut plaintext_and_tag,
         )
         .map_err(|_| FieldCryptoError::AuthenticationFailed)?;
     let plaintext_len = plaintext_and_tag.len() - TAG_BYTES;
     plaintext_and_tag.truncate(plaintext_len);
     Ok(plaintext_and_tag)
+}
+
+pub(crate) fn key_version_with_bound(
+    envelope: &[u8],
+    maximum: usize,
+) -> Result<u32, FieldCryptoError> {
+    parse_envelope(envelope, maximum).map(|parsed| parsed.key_version)
 }
 
 /// Deterministic blind index over a normalized field value. The domain label
@@ -262,7 +304,7 @@ pub fn blind_index_hmac(key: &[u8; 32], normalized: &str) -> [u8; 32] {
 /// # Errors
 /// [`FieldCryptoError`] when the envelope is structurally invalid.
 pub fn envelope_key_version(envelope: &[u8]) -> Result<u32, FieldCryptoError> {
-    parse_envelope(envelope).map(|parsed| parsed.key_version)
+    key_version_with_bound(envelope, MAX_FIELD_PLAINTEXT_BYTES)
 }
 
 /// The in-JSON representation of one encrypted field value inside row and

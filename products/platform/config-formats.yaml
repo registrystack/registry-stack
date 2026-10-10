@@ -4006,6 +4006,188 @@ formats:
     securityMembers: []
     restrictingMembers: []
 
+
+  # coordinator
+  - id: coordinator/project
+    product: coordinator
+    title: Coordinator project
+    files: [workflow.yaml]
+    syntax: yaml
+    audience: authored
+    stability: unpromised
+    topLevel: project
+    current:
+      apiVersion: id.registrystack.org/formats/coordinator/project/v1alpha1
+      kind: CoordinatorProject
+      checkedBy:
+        file: crates/registry-coordinator/src/authoring.rs
+        symbol: API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/coordinator/project/v1alpha1
+      kind: CoordinatorProject
+    schema:
+      path: products/coordinator/generated/project/project.schema.json
+      id: https://id.registrystack.org/schemas/coordinator/project/project.v1alpha1.schema.json
+      origin: generated
+      generator: cargo run --locked -p registry-coordinator --features schema --example project-schema -- --output products/coordinator/generated/project
+      driftCheck: products/coordinator/scripts/check-schemas.sh
+    reader:
+      crate: registry-coordinator
+      file: crates/registry-coordinator/src/authoring.rs
+      function: parse_project
+      type: CoordinatorProject
+    check: coordinatorctl check --project {project}
+    example: products/coordinator/examples/delayed-follow-up/workflow.yaml
+    conformance:
+      requiredText: /project/id
+      optionalText: none
+      integer: /deadlineSeconds
+      boolean: none
+      reference: /start
+      relativePath: /functionsFile
+    securityMembers: []
+    restrictingMembers: []
+  - id: coordinator/runtime
+    product: coordinator
+    title: Coordinator runtime configuration
+    files: [runtime.yaml, runtime.example.yaml, "*-runtime.yaml"]
+    syntax: yaml
+    audience: operator
+    stability: unpromised
+    current:
+      apiVersion: id.registrystack.org/formats/coordinator/runtime/v1alpha1
+      kind: CoordinatorRuntimeConfig
+      checkedBy:
+        file: crates/registry-coordinator/src/runtime.rs
+        symbol: API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/coordinator/runtime/v1alpha1
+      kind: CoordinatorRuntimeConfig
+    schema:
+      path: products/coordinator/generated/runtime/runtime.schema.json
+      id: https://id.registrystack.org/schemas/coordinator/runtime/runtime.v1alpha1.schema.json
+      origin: generated
+      generator: cargo run --locked -p registry-coordinator --features schema --example runtime-schema -- --output products/coordinator/generated/runtime
+      driftCheck: products/coordinator/scripts/check-schemas.sh
+    reader:
+      crate: registry-coordinator
+      file: crates/registry-coordinator/src/runtime.rs
+      function: load
+      type: RuntimeConfig
+    check: coordinatorctl check --runtime-config {file}
+    example: products/coordinator/examples/pilot-runtime.yaml
+    conformance:
+      requiredText: /namespace
+      optionalText: /connections/applications/profile
+      integer: /deployment/activeStateKey
+      boolean: /deployment/authentication/policies/1/operator
+      set: /connections/applications/authorization/scopes
+    securityMembers:
+      - pointer: /decisionConnections
+        whenOmitted: refused
+      - pointer: /deployment/listener/bind
+        whenOmitted: refused
+      - pointer: /deployment/authentication/allowedClients
+        whenOmitted: refused
+      - pointer: /deployment/authentication/assertionIssuers
+        whenOmitted: open
+      - pointer: /deployment/authentication/policies
+        whenOmitted: refused
+      - pointer: /deployment/package/expectedDigest
+        whenOmitted: refused
+    restrictingMembers: [/deployment/authentication/assertionIssuers]
+  - id: coordinator/scenarios
+    product: coordinator
+    title: Coordinator offline scenarios
+    files: [scenarios.yaml]
+    syntax: yaml
+    audience: authored
+    stability: unpromised
+    current:
+      apiVersion: id.registrystack.org/formats/coordinator/scenarios/v1alpha1
+      kind: CoordinatorScenarios
+      checkedBy:
+        file: crates/registry-coordinator/src/scenarios.rs
+        symbol: API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/coordinator/scenarios/v1alpha1
+      kind: CoordinatorScenarios
+    schema:
+      path: products/coordinator/generated/scenarios/scenarios.schema.json
+      id: https://id.registrystack.org/schemas/coordinator/scenarios/scenarios.v1alpha1.schema.json
+      origin: generated
+      generator: cargo run --locked -p registry-coordinator --features schema --example scenario-schema -- --output products/coordinator/generated/scenarios
+      driftCheck: products/coordinator/scripts/check-schemas.sh
+    reader:
+      crate: registry-coordinator
+      file: crates/registry-coordinator/src/scenarios.rs
+      function: load
+      type: CoordinatorScenarios
+    check: coordinatorctl check --project {project}
+    example: products/coordinator/examples/delayed-follow-up/scenarios.yaml
+    conformance:
+      requiredText: /cases/0/id
+      optionalText: none
+      integer: /cases/0/expect/workflowElapsedSeconds
+      boolean: none
+      idList: /cases
+      reference: /cases/0/expect/path/0
+    securityMembers: []
+    restrictingMembers: []
+  - id: coordinator/ctl-report
+    product: coordinator
+    title: coordinatorctl --format json report
+    files: []
+    syntax: json
+    audience: generated
+    stability: unpromised
+    current:
+      apiVersion: id.registrystack.org/formats/coordinator/ctl-report/v1alpha1
+      kind: CoordinatorCtlReport
+      checkedBy:
+        file: crates/registry-coordinator/src/cli.rs
+        symbol: CTL_REPORT_API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/coordinator/ctl-report/v1alpha1
+      kind: CoordinatorCtlReport
+    schema: none
+    reader: none
+    emittedBy:
+      file: crates/registry-coordinator/src/cli.rs
+      symbol: write_report
+    check: none
+    example: products/coordinator/examples/formats/ctl-report.json
+    conformance: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: coordinator/definition-snapshot
+    product: coordinator
+    title: Built immutable Coordinator definition snapshot
+    files: [definition.json]
+    syntax: json
+    audience: generated
+    stability: unpromised
+    buildArtifact: true
+    current:
+      apiVersion: none
+      kind: none
+      checkedBy: none
+    target: none
+    schema: none
+    reader:
+      crate: registry-coordinator
+      file: crates/registry-coordinator/src/definition.rs
+      function: from_snapshot
+      type: Snapshot
+    emittedBy:
+      file: crates/registry-coordinator/src/definition.rs
+      symbol: snapshot
+    check: none
+    example: none
+    conformance: none
+    securityMembers: []
+    restrictingMembers: []
+
 outOfScope:
   - files: products/breg/generated/*/generated/**
     reason: Compiled package content; the registry/package format governs the envelope.

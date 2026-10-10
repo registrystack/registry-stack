@@ -1,0 +1,47 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/coordinator/project/project.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/coordinator/project/v1alpha1
+kind: CoordinatorProject
+project:
+  id: external-directory
+  version: "1"
+input:
+  type: object
+  additionalProperties: false
+  required: [district]
+  properties:
+    district: {type: string, minLength: 1, maxLength: 128}
+connections:
+  directory: external-http
+functionsFile: functions.rhai
+deadlineSeconds: 60
+start: lookup
+steps:
+  lookup:
+    type: call
+    connection: directory
+    operation: external-get
+    input: {function: lookup_request, arguments: [{type: input}]}
+    next: result
+  result:
+    type: choose
+    choose: {function: office_route, arguments: [{type: step, step: lookup}]}
+    cases: {found: found, missing: missing, unavailable: unavailable}
+  found:
+    type: finish
+    outcome: office-found
+    output: {function: office_result, arguments: [{type: step, step: lookup}]}
+  missing:
+    type: finish
+    outcome: no-directory-entry
+  unavailable:
+    type: finish
+    outcome: directory-unavailable
+outcomes:
+  office-found:
+    type: object
+    additionalProperties: false
+    required: [officeId]
+    properties:
+      officeId: {type: string, minLength: 1, maxLength: 128}
+  no-directory-entry: {type: "null"}
+  directory-unavailable: {type: "null"}
