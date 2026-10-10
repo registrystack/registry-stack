@@ -8,9 +8,7 @@ CREATE TABLE IF NOT EXISTS scheduling_window_revision_heads (
     updated_at timestamptz NOT NULL DEFAULT now()
 );
 
--- Schema version 5 was never released, but a developer may have exercised it
--- from the review branch. Refuse its formerly accepted overlapping staffing
--- shape during upgrade rather than carrying double-bookable records forward.
+-- Refuse overlapping retained staffing before installing revision heads.
 DO $$
 BEGIN
     IF EXISTS (
@@ -28,8 +26,3 @@ BEGIN
     END IF;
 END
 $$;
-
-INSERT INTO scheduling_window_revision_heads(window_id, window_record)
-SELECT window_id, window_record
-FROM scheduling_windows
-ON CONFLICT(window_id) DO NOTHING;

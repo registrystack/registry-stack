@@ -446,9 +446,9 @@ answers they lost, then stop every v0.39.0 runtime. Start the new runtime only a
 succeeds.
 :::
 
-{/* Evidence: crates/registry-messaging/migrations/0003_idempotency_caller.sql;
+{/* Evidence: crates/registry-messaging/migrations/0001_messaging.sql;
     crates/registry-messaging/tests/postgres_migrate.rs,
-    version_3_discards_pseudonym_scoped_records_and_the_runtime_scopes_keys_to_the_caller;
+    the_runtime_scopes_spent_keys_to_the_verified_caller;
     products/messaging/CHANGELOG.md, Unreleased (#1912). */}
 
 Read the active state and activation history with the runtime credential:

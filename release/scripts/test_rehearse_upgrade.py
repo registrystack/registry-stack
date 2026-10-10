@@ -631,7 +631,7 @@ class MessagingUpgradeTest(unittest.TestCase):
                 "pendingSchemaVersions": pending}
 
     def upgrade(self, activated: str | None, *plans: dict[str, Any]
-                ) -> tuple[tuple[list[str], set[str]], Any, list[str]]:
+                ) -> tuple[list[str], Any, list[str]]:
         with tempfile.TemporaryDirectory() as directory:
             messaging = self.messaging(Path(directory))
             side = unittest.mock.Mock()
@@ -645,7 +645,7 @@ class MessagingUpgradeTest(unittest.TestCase):
     def test_pending_schema_versions_are_applied_over_the_previous_activation(self) -> None:
         result, side, runtime = self.upgrade(
             self.ACTIVATED, self.plan("none", [3]), self.plan("none", []))
-        self.assertEqual(result, ([], {"public.messaging_idempotency"}))
+        self.assertEqual(result, [])
         self.assertEqual(side.run.call_args_list, [
             unittest.mock.call("messagingctl", "check", *runtime),
             unittest.mock.call("messagingctl", "apply", *runtime)])
@@ -653,12 +653,12 @@ class MessagingUpgradeTest(unittest.TestCase):
     def test_an_applied_version_that_empties_nothing_names_no_table(self) -> None:
         result, side, _runtime = self.upgrade(
             self.ACTIVATED, self.plan("none", [4]), self.plan("none", []))
-        self.assertEqual(result, ([], set()))
+        self.assertEqual(result, [])
         self.assertEqual(side.run.call_count, 2)
 
     def test_an_upgrade_with_nothing_pending_only_checks_and_plans(self) -> None:
         result, side, runtime = self.upgrade(self.ACTIVATED, self.plan("none", []))
-        self.assertEqual(result, ([], set()))
+        self.assertEqual(result, [])
         side.run.assert_called_once_with("messagingctl", "check", *runtime)
 
     def test_a_lost_activation_is_a_difference_and_is_never_applied_over(self) -> None:
@@ -673,16 +673,14 @@ class MessagingUpgradeTest(unittest.TestCase):
         )
         for activated, planned in cases:
             with self.subTest(activated=activated, planned=planned):
-                (differences, emptied), side, runtime = self.upgrade(activated, planned)
+                differences, side, runtime = self.upgrade(activated, planned)
                 self.assertTrue(differences)
-                self.assertEqual(emptied, set())
                 side.run.assert_called_once_with("messagingctl", "check", *runtime)
 
     def test_the_plan_after_the_apply_is_the_one_compared(self) -> None:
-        differences, emptied = self.upgrade(
+        differences = self.upgrade(
             self.ACTIVATED, self.plan("none", [3]), self.plan("activate", []))[0]
         self.assertEqual(differences, ["the package ledger still names a change to apply"])
-        self.assertEqual(emptied, {"public.messaging_idempotency"})
 
 
 # JSON is YAML, so the runtime document round-trips without PyYAML.
@@ -1223,13 +1221,11 @@ class StateComparisonTest(unittest.TestCase):
     def test_growth_and_new_tables_are_not_losses(self) -> None:
         self.assertEqual(MODULE.row_count_losses({"a": 1}, {"a": 4, "b": 0}), [])
 
-    def test_a_table_the_upgrade_empties_by_design_is_not_a_loss(self) -> None:
+    def test_an_emptied_table_is_a_loss(self) -> None:
         before = {"public.a": 3, "public.b": 2}
         after = {"public.a": 3, "public.b": 0}
-        self.assertEqual(MODULE.row_count_losses(before, after, emptied={"public.b"}), [])
-        self.assertEqual(MODULE.row_count_losses(before, {"public.b": 0},
-                                                 emptied={"public.b"}),
-                         ["public.a disappeared (held 3 rows)"])
+        self.assertEqual(MODULE.row_count_losses(before, after),
+                         ["public.b dropped from 2 to 0 rows"])
 
     def test_names_every_view_served_differently(self) -> None:
         before = {"records/1": {"etag": "1"}, "records/2": {"etag": "2"}}
@@ -1350,7 +1346,7 @@ class MessagingAssertionsTest(unittest.TestCase):
 
         def upgrade(*_arguments):
             written[runtime_stream] += MODULE.MESSAGING_UPGRADED_AUDIT_RECORDS[runtime_stream]
-            return list(ledger_differences), set()
+            return list(ledger_differences)
 
         messaging.upgrade.side_effect = upgrade
 

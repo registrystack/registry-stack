@@ -943,8 +943,7 @@ impl PostgresStore {
 
     /// Publish a policy after proving it does not strand standing commitments
     /// or move their offering to different supply. Re-applying the same digest
-    /// backfills its retained policy document and remains a no-op for the
-    /// revision.
+    /// remains a no-op for the revision.
     ///
     /// Lock order, load-bearing: policy publication takes every existing
     /// supply anchor in order before `scheduling_meta`, the same order as the
@@ -2830,7 +2829,7 @@ async fn check_policy_publication(
             .and_then(|stored| stored.get(0));
         let Some(current_document) = current_document else {
             return Err(StoreError::PolicyInUse(
-                "the current policy document is unavailable; reapply the current policy before publishing a change"
+                "the current policy document is unavailable; restore its verified backup before publishing a change"
                     .to_owned(),
             ));
         };
@@ -2886,8 +2885,8 @@ async fn check_policy_publication(
 }
 
 /// Publish a checked policy: a changed digest takes the next revision, the
-/// same digest backfills its retained document, and every pool the policy's
-/// offerings name is anchored. The caller holds the publication locks.
+/// same digest retains its revision, and every pool the policy's offerings
+/// name is anchored. The caller holds the publication locks.
 async fn publish_policy(
     transaction: &deadpool_postgres::Transaction<'_>,
     publication: &PolicyPublication,
@@ -2911,14 +2910,6 @@ async fn publish_policy(
                 &[&revision, &publication.policy_digest],
             )
             .await?;
-    } else {
-        transaction
-            .execute(
-                "UPDATE scheduling_policy_revisions SET policy_document=$2 \
-                 WHERE policy_revision=$1 AND policy_document IS NULL",
-                &[&revision, &policy_document],
-            )
-            .await?;
     }
     for id in pool_ids {
         anchor_supply(transaction, id, "pool").await?;
@@ -2926,18 +2917,13 @@ async fn publish_policy(
     Ok(revision)
 }
 
-/// Read a retained policy document. Earlier branch builds carried mutable
-/// window records inside the document; that member left the policy shape, so
-/// it is dropped rather than refused when an older document still carries it.
-/// A document that names its identity under the `scheduling` member, where
-/// this release writes `project`, was written by the previous release and is
-/// refused as such, not as a damaged database.
-fn retained_policy(mut document: Value) -> Result<SchedulingPolicy, StoreError> {
-    if let Some(object) = document.as_object_mut() {
+/// Read a retained policy document without reinterpreting its stored members.
+/// The retired `scheduling` identity names an earlier release explicitly.
+fn retained_policy(document: Value) -> Result<SchedulingPolicy, StoreError> {
+    if let Some(object) = document.as_object() {
         if object.contains_key("scheduling") && !object.contains_key("project") {
             return Err(StoreError::EarlierRelease);
         }
-        object.remove("windows");
     }
     serde_json::from_value(document).map_err(|_| StoreError::Corrupt)
 }
@@ -3206,7 +3192,7 @@ pub(crate) async fn replace_facts_in_transaction(
             .and_then(|stored| stored.get(0));
         let Some(document) = document else {
             return Err(StoreError::CombinedInvariant(
-                "the deployed policy document is unavailable; reapply the current policy before replacing the records"
+                "the deployed policy document is unavailable; restore its verified backup before replacing the records"
                     .to_owned(),
             ));
         };

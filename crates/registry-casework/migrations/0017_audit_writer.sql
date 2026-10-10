@@ -37,7 +37,7 @@ BEGIN
         RETURNING g.grant_id, i.item_id, i.revision
     LOOP
         INSERT INTO casework_history(event_id,item_id,item_revision,kind,occurred_at,profile_id,detail)
-        VALUES(gen_random_uuid(),lost.item_id,lost.revision,'task_invalidated',now(),'system:task-grants',jsonb_build_object('grantId',lost.grant_id));
+        VALUES(gen_random_uuid(),lost.item_id,lost.revision,'task-invalidated',now(),'system:task-grants',jsonb_build_object('grantId',lost.grant_id));
     END LOOP;
 END;
 $$;
@@ -45,6 +45,4 @@ $$;
 -- The invalidations one transaction recorded are found by their start time.
 CREATE INDEX IF NOT EXISTS casework_history_task_invalidated_idx
     ON casework_history(occurred_at)
-    WHERE kind='task_invalidated' AND profile_id='system:task-grants';
-
-DROP TABLE casework_audit_outbox;
+    WHERE kind='task-invalidated' AND profile_id='system:task-grants';

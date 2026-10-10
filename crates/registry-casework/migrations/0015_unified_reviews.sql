@@ -1,20 +1,3 @@
--- Unified producer and standalone review model.
---
--- The earlier source-item and hosted-item schemas were experimental and would
--- require inventing a policy snapshot, producer correlation, or task
--- ownership to translate their rows. No Casework database has been deployed
--- on the earlier schema, so this migration drops the experimental hosted
--- tables outright rather than converting them.
-DROP TABLE IF EXISTS casework_hosted_idempotency_tombstones;
-DROP TABLE IF EXISTS casework_hosted_idempotency;
-DROP TABLE IF EXISTS casework_hosted_cursors;
-DROP TABLE IF EXISTS casework_hosted_history;
-DROP TABLE IF EXISTS casework_hosted_notes;
-DROP TABLE IF EXISTS casework_hosted_terminal_events;
-DROP TABLE IF EXISTS casework_hosted_accountability;
-DROP TABLE IF EXISTS casework_hosted_items;
-DROP TABLE IF EXISTS casework_hosted_actor_references;
-
 CREATE TABLE casework_review_requests (
     request_id uuid PRIMARY KEY,
     producer_id text NOT NULL CHECK (octet_length(producer_id) BETWEEN 1 AND 128),
@@ -46,7 +29,7 @@ CREATE TABLE casework_review_requests (
     submission_digest text NOT NULL CHECK (submission_digest ~ '^sha256:[0-9a-f]{64}$'),
     completion_destination text CHECK (completion_destination IS NULL OR octet_length(completion_destination) BETWEEN 1 AND 128),
     completion_recipient_binding text CHECK (completion_recipient_binding IS NULL OR octet_length(completion_recipient_binding) BETWEEN 1 AND 256),
-    lifecycle text NOT NULL CHECK (lifecycle IN ('reviewing','approved','rejected','changes_requested','answered','cancelled','superseded')),
+    lifecycle text NOT NULL CHECK (lifecycle IN ('reviewing','approved','rejected','changes-requested','answered','cancelled','superseded')),
     active_stage_index integer CHECK (active_stage_index IS NULL OR active_stage_index >= 0),
     revision bigint NOT NULL CHECK (revision > 0),
     created_at timestamptz NOT NULL,
@@ -148,13 +131,13 @@ CREATE TABLE casework_review_tasks (
     state text NOT NULL CHECK (state IN ('open','claimed','decided','closed')),
     holder_issuer text CHECK (holder_issuer IS NULL OR octet_length(holder_issuer) BETWEEN 1 AND 2048),
     holder_subject text CHECK (holder_subject IS NULL OR octet_length(holder_subject) BETWEEN 1 AND 2048),
-    assignment_kind text CHECK (assignment_kind IS NULL OR assignment_kind IN ('claim','nomination','delegation','absence_cover')),
+    assignment_kind text CHECK (assignment_kind IS NULL OR assignment_kind IN ('claim','nomination','delegation','absence-cover')),
     assignment_owner_issuer text CHECK (assignment_owner_issuer IS NULL OR octet_length(assignment_owner_issuer) BETWEEN 1 AND 2048),
     assignment_owner_subject text CHECK (assignment_owner_subject IS NULL OR octet_length(assignment_owner_subject) BETWEEN 1 AND 2048),
     assigned_by_issuer text CHECK (assigned_by_issuer IS NULL OR octet_length(assigned_by_issuer) BETWEEN 1 AND 2048),
     assigned_by_subject text CHECK (assigned_by_subject IS NULL OR octet_length(assigned_by_subject) BETWEEN 1 AND 2048),
     assignment_absence_ids uuid[] NOT NULL DEFAULT '{}',
-    staffing_diagnostic text CHECK (staffing_diagnostic IS NULL OR staffing_diagnostic = 'no_cover_available'),
+    staffing_diagnostic text CHECK (staffing_diagnostic IS NULL OR staffing_diagnostic = 'no-cover-available'),
     deadline_at timestamptz,
     revision bigint NOT NULL CHECK (revision > 0),
     created_at timestamptz NOT NULL,
@@ -203,7 +186,7 @@ CREATE TABLE casework_review_decisions (
     actor_issuer text NOT NULL CHECK (octet_length(actor_issuer) BETWEEN 1 AND 2048),
     actor_subject text NOT NULL CHECK (octet_length(actor_subject) BETWEEN 1 AND 2048),
     profile_id text NOT NULL CHECK (octet_length(profile_id) BETWEEN 1 AND 128),
-    decision text NOT NULL CHECK (decision IN ('approve','reject','changes_requested','answer')),
+    decision text NOT NULL CHECK (decision IN ('approve','reject','changes-requested','answer')),
     outcome text CHECK (outcome IS NULL OR octet_length(outcome) BETWEEN 1 AND 128),
     result jsonb CHECK (result IS NULL OR octet_length(result::text) <= 1048576),
     private_reason text CHECK (private_reason IS NULL OR octet_length(private_reason) <= 2000),
@@ -213,21 +196,21 @@ CREATE TABLE casework_review_decisions (
         REFERENCES casework_review_tasks(task_id, request_id, stage_index) ON DELETE CASCADE,
     CHECK (
         (decision = 'approve' AND outcome IS NULL AND result IS NULL)
-        OR (decision IN ('reject','changes_requested','answer') AND outcome IS NOT NULL)
+        OR (decision IN ('reject','changes-requested','answer') AND outcome IS NOT NULL)
     )
 );
 
 CREATE TABLE casework_review_results (
     result_id uuid PRIMARY KEY,
     request_id uuid NOT NULL UNIQUE REFERENCES casework_review_requests(request_id) ON DELETE CASCADE,
-    status text NOT NULL CHECK (status IN ('approved','rejected','changes_requested','answered','cancelled','superseded')),
+    status text NOT NULL CHECK (status IN ('approved','rejected','changes-requested','answered','cancelled','superseded')),
     outcome text CHECK (outcome IS NULL OR octet_length(outcome) BETWEEN 1 AND 128),
     result jsonb CHECK (result IS NULL OR octet_length(result::text) <= 1048576),
     completed_at timestamptz NOT NULL,
     available_until timestamptz NOT NULL,
     CHECK (available_until > completed_at),
     CHECK (status NOT IN ('approved','cancelled','superseded') OR (outcome IS NULL AND result IS NULL)),
-    CHECK (status NOT IN ('rejected','changes_requested','answered') OR outcome IS NOT NULL),
+    CHECK (status NOT IN ('rejected','changes-requested','answered') OR outcome IS NOT NULL),
     UNIQUE (result_id, request_id)
 );
 
@@ -359,7 +342,7 @@ CREATE TABLE casework_review_clock_occurrences (
     task_id uuid REFERENCES casework_review_tasks(task_id) ON DELETE SET NULL,
     policy_digest text NOT NULL CHECK (policy_digest ~ '^sha256:[0-9a-f]{64}$'),
     policy jsonb NOT NULL CHECK (octet_length(policy::text) <= 65536),
-    state text NOT NULL CHECK (state IN ('running','paused','completed','cancelled','source_facts_missing')),
+    state text NOT NULL CHECK (state IN ('running','paused','completed','cancelled','source-facts-missing')),
     anchor_at timestamptz NOT NULL,
     due_at timestamptz,
     at_risk_at timestamptz,
@@ -393,7 +376,7 @@ CREATE INDEX casework_review_clock_due_idx
     WHERE scope='activity' AND state='running' AND next_action_at IS NOT NULL;
 CREATE INDEX casework_review_clock_missing_facts_idx
     ON casework_review_clock_occurrences(updated_at,clock_occurrence_id)
-    WHERE scope='activity' AND state='source_facts_missing';
+    WHERE scope='activity' AND state='source-facts-missing';
 
 CREATE TABLE casework_review_clock_effects (
     clock_occurrence_id uuid NOT NULL

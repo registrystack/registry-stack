@@ -548,24 +548,6 @@ pub(crate) async fn install(
                  record_revision bigint NOT NULL CHECK (record_revision > 0),
                  PRIMARY KEY (run_id, chunk_index, record_id)
              );
-             DO $breg_ingestion_run_creator$
-             BEGIN
-                 IF NOT EXISTS (
-                     SELECT 1
-                       FROM pg_catalog.pg_attribute
-                      WHERE attrelid = 'registry_internal.registry_ingestion_runs'::regclass
-                        AND attname = 'created_issuer'
-                        AND NOT attisdropped
-                 ) THEN
-                     DELETE FROM registry_internal.registry_ingestion_runs;
-                     ALTER TABLE registry_internal.registry_ingestion_runs
-                         ADD COLUMN created_issuer text NOT NULL
-                             CHECK (created_issuer <> ''),
-                         ADD COLUMN created_subject text NOT NULL
-                             CHECK (created_subject <> '');
-                 END IF;
-             END
-             $breg_ingestion_run_creator$;
              CREATE INDEX IF NOT EXISTS registry_ingestion_run_chunk_records_erased_record
                  ON registry_internal.registry_ingestion_run_chunk_records
                      (record_id, record_revision);

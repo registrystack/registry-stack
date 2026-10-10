@@ -18,9 +18,6 @@ const ATTEMPT_KEY_DOMAIN: &str = "scheduling-idempotency-key-v1";
 /// verified issuer, subject, command scope, and idempotency key, each
 /// prefixed by its byte length as a big-endian `u64` so no two different
 /// tuples share one input. Rendered as `sha256:` and 64 lowercase hex digits.
-///
-/// Migration 11 computes the same digest in SQL for the rows it re-keys, so
-/// a change here is a change to that migration as well.
 pub fn attempt_key_reference(issuer: &str, subject: &str, scope: &str, key: &str) -> String {
     let mut hasher = Sha256::new();
     for part in [ATTEMPT_KEY_DOMAIN, issuer, subject, scope, key] {

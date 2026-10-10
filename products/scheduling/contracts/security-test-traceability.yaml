@@ -140,7 +140,7 @@ entries:
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_concurrent_identical_request_replays_the_winning_receipt}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: concurrent_identical_admissible_requests_replay_one_winning_success}
       - {path: crates/registry-scheduling/src/service.rs, name: a_replayed_receipt_records_the_decision_it_carries}
-      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: migration_refuses_to_drop_unpublished_audit_and_drops_a_drained_outbox}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: migration_refuses_unpublished_audit_and_preserves_a_drained_outbox}
       - {path: crates/registry-schedulingctl/tests/records_apply_postgres.rs, name: records_apply_replaces_facts_wholesale_and_audits_each_write}
   - id: SCHEDULING-SEC-15
     tests:
@@ -261,11 +261,11 @@ entries:
     tests:
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_spent_key_forgets_its_raw_caller_after_the_receipt_horizon_and_stays_spent}
       - {path: crates/registry-scheduling/src/store/attempt_key.rs, name: the_attempt_key_reference_is_a_length_prefixed_domain_digest}
-      - {path: crates/registry-schedulingctl/tests/activation_postgres.rs, name: attempt_key_reference_migration_rekeys_spent_keys_and_clears_erased_callers, features: [postgres-test]}
+      - {path: crates/registry-schedulingctl/tests/activation_postgres.rs, name: fresh_attempt_storage_preserves_digests_and_refuses_partial_erasure, features: [postgres-test]}
   - id: SCHEDULING-SEC-34
     tests:
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: rotating_the_audit_key_keeps_existing_claims_with_their_owner}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: one_caller_cannot_outrun_the_hold_ceiling_across_two_pools}
       - {path: crates/registry-scheduling/src/service.rs, name: a_success_replay_receipt_projects_through_the_same_document}
       - {path: crates/registry-scheduling/src/hooks.rs, name: projections_disclose_only_the_requested_closed_fields}
-      - {path: crates/registry-schedulingctl/tests/activation_postgres.rs, name: claim_owner_migration_keeps_existing_claims_and_refuses_a_partial_owner, features: [postgres-test]}
+      - {path: crates/registry-schedulingctl/tests/activation_postgres.rs, name: fresh_claim_storage_refuses_a_partial_owner, features: [postgres-test]}

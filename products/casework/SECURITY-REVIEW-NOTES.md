@@ -554,9 +554,8 @@ stores the outcome code in the existing accountability row. The label and
 policy identity come only from the request's retained immutable policy
 snapshot, so a policy replacement cannot reinterpret an earlier selection.
 No submitted context or structured result is read to resolve it. Approval has
-no selected outcome. Migration backfills a legacy outcome only from an
-existing unexpired decision row. A legacy non-approval selection already
-erased at upgrade omits the receipt rather than imply approval.
+no selected outcome. Fresh installation creates the outcome column directly;
+no earlier selection is reconstructed during installation.
 
 This remains the explicit audited Supervisor read, with current Supervisor
 membership and service of the recorded queue. Both audit acceptance gates and
@@ -593,3 +592,13 @@ absence, author versus prior holder, current scope, source concealment, bounded
 continuation and minimal disclosure. Client regressions cover response scope,
 order, receipt interpretation and native query validation. These references do
 not assert that a live database or listener test has executed.
+
+## Fresh schema and retained decisions
+
+Threat and enforcement: Installation must not reinterpret retained decisions or replay responses. The creation statements write the final kebab-case values and the current task invalidation function directly. Protocol-word rewrites, legacy decision-outcome backfill, experimental hosted tables, and obsolete audit-outbox creation and removal are absent. Named refusals for populated hosted work and unpublished audit remain. No live decision, replay, ownership, or audit rule changes.
+
+Verification: `tests/review_migration_postgres.rs::fresh_database_migrates_through_unified_reviews` and `tests/activation_postgres.rs::plan_reports_the_destructive_migration_refusals_apply_meets`. Schema-only dumps of separate fresh
+installations are compared before and after, with no ledger data.
+
+Residual: v0.40.0 does not upgrade v0.39.0 state in place; apply to a new
+database. No compatibility reader or migration of earlier state is provided.

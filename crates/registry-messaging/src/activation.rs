@@ -551,7 +551,7 @@ mod tests {
 
     #[test]
     fn schema_history_accepts_every_known_prefix() {
-        for applied in [&[][..], &[1][..], &[1, 2][..], &[1, 2, 3][..]] {
+        for applied in [&[][..], &[1][..], &[1, 2][..]] {
             assert!(schema_history_refusal(&schema(applied)).is_none());
         }
     }
