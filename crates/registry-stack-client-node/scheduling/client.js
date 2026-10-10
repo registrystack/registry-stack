@@ -21,7 +21,7 @@ class SchedulingClientError extends Error {
 
 const FALLBACK_MESSAGES = {
   configuration: 'Scheduling client configuration is invalid',
-  invalid_request: 'Scheduling client arguments are invalid',
+  'invalid-request': 'Scheduling client arguments are invalid',
   protocol: 'Registry Scheduling client failed',
 };
 

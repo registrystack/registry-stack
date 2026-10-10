@@ -32,7 +32,13 @@ test('oversized object keys are refused before the native client sees the token'
 
     assert.throws(
       () => client.submit('token-canary', 'key-1', { [oversizedKey]: null }),
-      (error) => error instanceof MessagingClientError && error.kind === 'invalid-request',
+      (error) => {
+        assert.ok(error instanceof MessagingClientError);
+        assert.equal(error.kind, 'invalid-request');
+        assert.equal(error.message, 'Messaging client arguments are invalid');
+        assert.equal(error.outcomeUnknown, false);
+        return true;
+      },
     );
     assert.equal(submitCalls, 0);
   } finally {

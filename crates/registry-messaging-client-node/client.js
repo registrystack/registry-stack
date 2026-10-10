@@ -21,7 +21,7 @@ class MessagingClientError extends Error {
 
 const FALLBACK_MESSAGES = {
   configuration: 'Messaging client configuration is invalid',
-  invalid_request: 'Messaging client arguments are invalid',
+  'invalid-request': 'Messaging client arguments are invalid',
   protocol: 'Registry Messaging client failed',
 };
 
