@@ -626,6 +626,20 @@ fn database_test_only_plaintext_is_refused_outside_test_builds_with_its_fix() {
         diagnostic.suggested_action.contains("testOnlyPlaintext"),
         "the refusal names the fix"
     );
+
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_breg"))
+        .arg("--runtime-config")
+        .arg(&config_path)
+        .env_remove("RUST_LOG")
+        .output()
+        .expect("the default-feature runtime executes");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("breg.runtime.plaintext-database"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("testOnlyPlaintext"), "{stderr}");
 }
 
 #[cfg(feature = "postgres-test")]
