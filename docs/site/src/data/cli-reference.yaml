@@ -6,7 +6,7 @@
 # while this record remains a draft.
 schema_version: registry.cli-reference-review/v3
 status: current
-last_reviewed: 2026-10-09
+last_reviewed: 2026-10-10
 reviewed_source_version: "0.40.0"
 reviewed_catalog_sha256: 3202cecd377ad3acaea22dc94619e485b0ba3d95a1b4f087385c9fb7268194f5
 reviewed_content_sha256: 391bdcaf31a3492a6040084f7658b2391e3b765516354c428dedfa1d64853665
