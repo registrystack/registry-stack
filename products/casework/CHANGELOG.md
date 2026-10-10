@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Execution attempts reserve and release their leases on the PostgreSQL
+  clock used by recovery and settlement. Host clock skew no longer leaves a
+  finished attempt's lease temporarily live or changes its reservation length.
+
 v0.40.0 does not upgrade v0.39.0 state in place; apply to a new database.
 Fresh installation creates the current schema directly, without conversion
 or discard of earlier rows.

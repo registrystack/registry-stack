@@ -602,3 +602,30 @@ installations are compared before and after, with no ledger data.
 
 Residual: v0.40.0 does not upgrade v0.39.0 state in place; apply to a new
 database. No compatibility reader or migration of earlier state is provided.
+
+
+## Execution leases use the database clock
+
+Threat: A host-written execution deadline can remain live on PostgreSQL's
+clock after an attempt has finished. Recovery or settlement then refuses the
+released attempt, and a skewed reservation can expire too early or too late.
+
+Enforcement: `reserve_attempt_for_execution` in
+`crates/registry-casework/src/store.rs` writes the initial lease with
+`now()+interval '330 seconds'`. `finish_attempt` releases it with `now()`.
+Recovery acquisition, execution fencing, and operator settlement already use
+that same database clock. The lease duration, execution token, caller binding,
+state checks, locking, and audit acceptance gates remain authoritative.
+
+Verification: `reserving_an_attempt_sets_a_live_lease_on_the_database_clock`
+and `finishing_an_attempt_releases_its_lease_on_the_database_clock` in
+`crates/registry-casework/tests/postgres_transactions.rs` observe SQL clock
+reads while returning the ordinary PostgreSQL transaction timestamp. They
+check the exact finite deadline, refusal to recover a live lease, and immediate
+recovery after release through an ordinary pool. They require no machine clock
+offset. The full transaction suite also covers live-lease settlement refusals,
+caller-scoped recovery, settlement state checks, and audit failures.
+
+Residual: PostgreSQL transaction time remains the lease authority. This change
+adds no clock synchronization service and does not change host-written history
+timestamps or pagination lifetimes.

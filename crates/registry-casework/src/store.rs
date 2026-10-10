@@ -1663,8 +1663,8 @@ impl PostgresStore {
         let binding = serde_json::to_value(&prepared.source_binding)?;
         let fields = serde_json::to_value(flagged_fields)?;
         transaction.execute(
-            "INSERT INTO casework_attempts(attempt_id,item_id,actor_issuer,actor_subject,casework_profile_id,source_profile_id,item_revision,request_hash,operation,decision_reason,flagged_fields,idempotency_key,displayed_binding,recovery_evidence,state,execution_token,execution_lease_until,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'pending',$15,$16,$17,$17)",
-            &[&attempt_id,&item_id,&actor.principal.issuer,&actor.principal.subject,&actor.profile_id,&source_profile_id,&expected_revision,&request_hash,&operation.as_str(),&reason,&fields,&idempotency_key,&binding,&prepared.recovery_evidence.as_bytes(),&execution_token,&(now+TimeDelta::seconds(330)),&now]
+            "INSERT INTO casework_attempts(attempt_id,item_id,actor_issuer,actor_subject,casework_profile_id,source_profile_id,item_revision,request_hash,operation,decision_reason,flagged_fields,idempotency_key,displayed_binding,recovery_evidence,state,execution_token,execution_lease_until,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'pending',$15,clock_timestamp()+interval '330 seconds',$16,$16)",
+            &[&attempt_id,&item_id,&actor.principal.issuer,&actor.principal.subject,&actor.profile_id,&source_profile_id,&expected_revision,&request_hash,&operation.as_str(),&reason,&fields,&idempotency_key,&binding,&prepared.recovery_evidence.as_bytes(),&execution_token,&now]
         ).await.map_err(map_unique_conflict)?;
         transaction
             .execute(
@@ -1918,7 +1918,7 @@ impl PostgresStore {
         }
         let receipt_json = receipt.map(serde_json::to_value).transpose()?;
         let now = Utc::now();
-        transaction.execute("UPDATE casework_attempts SET state=$2,receipt=$3,execution_lease_until=$4,updated_at=$4 WHERE attempt_id=$1", &[&attempt_id,&attempt_state_name(state),&receipt_json,&now]).await?;
+        transaction.execute("UPDATE casework_attempts SET state=$2,receipt=$3,execution_lease_until=now(),updated_at=$4 WHERE attempt_id=$1", &[&attempt_id,&attempt_state_name(state),&receipt_json,&now]).await?;
         let item_row = transaction
             .query_one(
                 "SELECT * FROM casework_items WHERE item_id=$1 FOR UPDATE",
