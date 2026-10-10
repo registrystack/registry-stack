@@ -152,9 +152,10 @@ its release does not know. To return to the previous release:
 - **Evidence.** Restart the previous binary with the previous bundle and runtime file.
 - **Messaging.** Stop the upgraded runtime. Before you restore, use the upgraded
   `messagingctl messages list` and `messages show`, the audit archive, and provider records to
-  record every message effect after the stopped, pre-apply snapshot. Restore that snapshot, but
-  keep the previous runtime stopped while you inspect it with the previous `messagingctl messages
-  list` and `messages show`. Its supported actions can retry `failed`, settle `unknown`, or cancel
+  record every message effect after the stopped, pre-apply snapshot. Preserve the upgraded database
+  unchanged, and restore that snapshot into a separate fresh database. Point a copy of the previous
+  runtime file at the restored database, and keep both runtimes stopped while you inspect the copy
+  with the previous `messagingctl messages list` and `messages show`. Its supported actions can retry `failed`, settle `unknown`, or cancel
   `queued` messages; apply one only when the restored dispatch state is eligible and external
   evidence supports the decision. Start the previous binary with the previous package and runtime
   file only after every post-snapshot effect is represented in the restored state. Never point the
@@ -198,17 +199,43 @@ has a decommission command, so the steps below are yours.
 Messaging has no runtime or database dependency on another Registry Stack product, so retire it
 independently after its callers stop submitting.
 
-1. Stop routing new submissions to Messaging. Let the runtime drain queued work, and use
-   `messagingctl messages list` to find work that still needs an operator decision. When the
-   metrics listener runs, wait for the `pending` and `leased` `messaging_dispatch_jobs` gauges to
-   reach zero. [Settle each `unknown` message](../../messaging/#settle-an-unknown-outcome) from the
-   provider's record before you stop the runtime.
-2. Stop `messaging` gracefully. It claims no more messages and finishes sends already in flight;
+1. Stop routing new submissions to Messaging. Let the runtime drain queued work. Run
+   `messagingctl messages list --runtime-config FILE --status unknown --limit 500`,
+   [settle each returned message](../../messaging/#settle-an-unknown-outcome) from the provider's
+   record, and repeat until the filtered list is empty. Settling `not-sent` queues another send,
+   so drain that work too. When the metrics listener runs, require the `pending`, `leased`, and
+   `unknown` `messaging_dispatch_jobs` gauges all to reach zero. Without metrics, check that
+   `messages list --status queued`, `--status sending`, and `--status unknown`, each with
+   `--runtime-config FILE`, return empty.
+2. For each callback provider, keep its callback endpoint live through the provider's documented
+   reporting cutoff. Compare the provider's records with `messagingctl messages show`, and record
+   any submitted messages whose delivery report remains unresolved at the cutoff. Empty dispatch
+   gauges prove sends have finished, not that every delivery report has arrived. SMTP has no
+   delivery receipts, so its messages remain `submitted`.
+3. Stop `messaging` gracefully. It claims no more messages and finishes sends already in flight;
    give it time to finish before the service manager kills it.
-3. Messaging has no export command. After the process stops, keep a final `pg_dump`, the active
-   package, runtime file, and matching binary for as long as your policy holds its message,
-   attempt, receipt, and activation records.
-4. Ship the final audit file, its sealed files, and the `messagingctl` sibling of `audit.path`.
+4. After final provider reconciliation and shutdown, remove callback registrations for this
+   deployment and revoke its dedicated outbound provider credentials. When a credential is shared
+   with a system that remains live, rebind that system to another credential before revoking the
+   retired one.
+5. Ship the active file and every sealed segment for both `audit.path` and its `messagingctl`
+   sibling. Keep the secret named by `audit.hashKeyRef` securely through the final archive sweep
+   and for as long as your policy requires correlation with known callers or recipients. Destroying
+   that secret permanently
+   prevents recomputing their audit pseudonyms.
+6. Messaging has no export command. After the process stops, take a final `pg_dump`, and retain
+   the active package, runtime file, and both matching binaries, `messaging` and `messagingctl`,
+   while your policy holds the records. A full dump also holds recipient contacts, rendered parts,
+   and submission receipts; a stopped dump never runs the retention sweep. At each remaining
+   payload or receipt expiry, restore the dump into an isolated database with the runtime stopped.
+   Point a copy of the retained runtime file at that database, keeping its retention values.
+   Preview and apply the matching `messagingctl retention erase-expired --runtime-config FILE
+   --before TIMESTAMP`, using an RFC 3339 cutoff no later than the operator host's or database's
+   clock. Make a replacement dump and destroy the superseded copies. See
+   [Erase expired data on demand](../../messaging/#erase-expired-data-on-demand) for the preview
+   and `--apply` procedure. Ship the tool's active audit file and every sealed segment after each
+   applied sweep. Repeat only through the remaining payload and receipt periods; the content-free
+   archive can then remain for the applicable record period.
 
 ### Retire Scheduling
 
@@ -273,7 +300,12 @@ in this sequence.
     docs/site/src/content/docs/reference/api-stability.mdx, JWKS served by the process;
     products/evidence/OPERATOR-CONTRACT.md, predecessor key retention and audit master retention;
     docs/site/src/content/docs/operate/messaging.mdx, "Operate messages", "Watch metrics", and
-    "Plan, apply, inspect, and serve"; crates/registry-messagingctl/src/lib.rs, Command;
+    "Plan, apply, inspect, and serve"; crates/registry-messagingctl/src/lib.rs, Command,
+    ListArgs, and EraseExpiredArgs; crates/registry-messaging/src/retention.rs, TERMINAL and
+    erase_expired(); crates/registry-messaging/src/receipts.rs, ReceiptOutcome;
+    crates/registry-messaging/src/audit.rs, principal_pseudonym() and recipient_reference();
+    crates/registry-platform-audit/src/writer.rs, for_process();
+    products/messaging/RUNTIME-CONFIG.md, Providers and Provider callbacks;
     crates/registry-messaging/src/runtime.rs, Listeners::serve_until();
     crates/registry-caseworkctl/src/lib.rs, no export command, RetentionCommand, AttemptCommand;
     crates/registry-schedulingctl/src/lib.rs, no export command; crates/registry-scheduling/src/runtime.rs,

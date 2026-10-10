@@ -1,6 +1,6 @@
 ---
 title: Back up, restore, and drill recovery
-description: Back up the databases, audit files, and key material of Base Registry Engine, Registry Casework, and Evidence, restore each one, and prove the restore in a disaster-recovery drill.
+description: Back up and restore Base Registry Engine, Registry Casework, Evidence, and Registry Messaging, including databases, audit files, keys, and provider-effect reconciliation, and drill recovery.
 status: current
 owner: registry-docs
 source_repos:
@@ -11,13 +11,14 @@ locale: en
 standards_referenced: []
 ---
 
-Use this runbook when you operate Base Registry Engine (BReg), Registry Casework, and Evidence
-together and need a recovery plan that covers all three. Each product restores differently:
-BReg restores a database and then proves it is the one instance serving the registry, Casework
-restores a database and then catches up from the BReg sources it reads, and Evidence holds no
-database at all. The procedures below link each product's own guide for the details and state
-what a restore does not bring back. Continuous integration restores both BReg and Casework from a
-logical backup and checks these procedures end to end.
+Use this runbook when you operate Base Registry Engine (BReg), Registry Casework, Evidence, or
+Registry Messaging and need a recovery plan. Each product restores differently: BReg restores a
+database and then proves it is the one instance serving the registry, Casework restores a database
+and then catches up from the BReg sources it reads, and Evidence holds no database at all. Messaging
+restores a database whose dispatch state must be reconciled with sends and receipts the provider
+already holds. The procedures below link each product's own guide for the details and state what a
+restore does not bring back. Continuous integration restores both BReg and Casework from a logical
+backup and checks their procedures end to end.
 
 ## Know what a database backup leaves out
 
@@ -56,14 +57,39 @@ up these alongside every database backup, on the same schedule:
 - The audit master and subject-binding secrets, including every previous audit master whose
   pseudonyms must stay recomputable.
 
+### Registry Messaging state
+
+- The PostgreSQL database, with a stopped, pre-apply `pg_dump` for an upgrade rollback.
+- The active package directory, runtime file, and both matching binaries, `messaging` and
+  `messagingctl`. Inspection with `messagingctl` needs no running send worker.
+- The referenced secret files, including the audit key (`audit.hashKeyRef`), database credentials,
+  and provider credentials and callback secrets. Keep the audit key for as long as correlation
+  with known callers or recipients is required.
+
+A full dump contains recipient contacts, rendered parts, and submission receipts. Apply the
+shorter retention periods to archived copies too: a static dump never runs Messaging's sweep.
+[Retire Messaging](../upgrade-and-retire/#retire-messaging) describes replacing retained dumps
+with swept copies through the remaining payload and receipt periods.
+
+{/* Evidence: crates/registry-messagingctl/src/lib.rs, Command, ListArgs, and EraseExpiredArgs;
+    crates/registry-messaging/src/runtime.rs, message_reader();
+    crates/registry-messaging/src/audit.rs, principal_pseudonym() and recipient_reference();
+    crates/registry-messaging/src/retention.rs, erase_expired();
+    products/messaging/RUNTIME-CONFIG.md, Secrets and providers. */}
+
 ### Audit files
 
 No database backup holds a product's audit files. Ship them to append-only storage as the
 retention guides describe, so the archive, not the host, is the audit record:
 [BReg](../../breg-retention/#keep-the-audit-journal),
-[Casework](../../casework-retention/#keep-the-audit-file), and
-[Evidence](../../evidence-audit/#ship-audit-to-append-only-storage). A restore never replaces
+[Casework](../../casework-retention/#keep-the-audit-file),
+[Evidence](../../evidence-audit/#ship-audit-to-append-only-storage), and
+[Messaging](../../messaging/#read-the-audit-journal). For Messaging, preserve the active file and
+every sealed segment of both `audit.path` and its `messagingctl` sibling. A restore never replaces
 the live audit directory.
+
+{/* Evidence: crates/registry-platform-audit/src/writer.rs, for_process();
+    crates/registry-messaging/src/runtime.rs, open_audit(). */}
 
 {/* Evidence: crates/registry-breg/src/field_encryption.rs, module docs and
     FieldEncryptionProvider::LocalFile; crates/registry-breg/src/attachment_storage.rs, module docs;
@@ -312,6 +338,36 @@ for a fresh one. See
     restore rule; crates/registry-evidence/src/main.rs, check subcommand;
     crates/registry-evidence-oid4vci/src/store.rs, module docs. */}
 
+## Restore Registry Messaging
+
+Stop every `messaging` runtime, preserve the current database unchanged, and restore the dump
+into a separate fresh database provisioned as
+[Provision PostgreSQL](../../messaging/#provision-postgresql) describes. Point a copy of the backed-up
+runtime file at that database, keeping its package and `identity.databaseId`. With the matching
+`messagingctl`, run `status --runtime-config FILE`, `messages list --runtime-config FILE`, and
+`messages show --runtime-config FILE MESSAGE_ID` while the restored runtime remains stopped.
+Check that the activation ledger names the backed-up package before you consider serving it.
+
+A restore rewinds submissions, dispatch jobs, attempts, receipts, and idempotency state. It cannot
+recall a provider send. Compare the backup-to-stop window with the preserved database, audit
+archive, and provider records. The list is bounded and newest first, so use the message identifiers
+from those records for `messages show` rather than treating one list as the complete lost window.
+Follow the [Messaging rollback procedure](../upgrade-and-retire/#roll-back) to reconcile eligible
+states. A new submission missing from the backup, or a send restored as `queued` that the tools
+cannot mark `submitted`, requires fixing forward with the preserved database.
+
+Do not start the restored runtime merely to inspect it: the worker resumes queued dispatch as
+soon as it starts. Serve only after reconciliation shows the restored state can safely resume.
+Repeat erasures the restore undid with the matching
+[`messagingctl retention erase-expired`](../../messaging/#erase-expired-data-on-demand), and keep
+the audit archive rather than replacing it with older files.
+
+{/* Evidence: crates/registry-messaging/src/runtime.rs, message_reader(), Assembled,
+    and Listeners::serve_until(); crates/registry-messagingctl/src/lib.rs, Command, ListArgs,
+    MessageArgs, and eligible_dispatch(); crates/registry-messaging/src/store.rs, ready();
+    crates/registry-messaging/src/retention.rs, erase_expired();
+    crates/registry-messaging/src/messages.rs, MessageReader and OperatorAction. */}
+
 ## Run a disaster-recovery drill
 
 A drill proves the backups restore, the key material is recoverable, and your team can do it within
@@ -320,26 +376,35 @@ backup tooling.
 
 :::danger[Isolate the drill from production]
 An adopted BReg copy delivers the webhooks pending in its backup, a restored Casework reads and acts
-on the sources it names, and Evidence reads the sources in its bundle. Before starting anything,
-point every event destination, Casework source, Evidence source, and OpenID Connect client in the
-drill's runtime files at non-production systems, and keep the drill network unable to reach
-production.
+on the sources it names, Evidence reads the sources in its bundle, and Messaging resumes queued
+sends through its configured providers. Before starting anything, point every event destination,
+Casework source, Evidence source, Messaging provider and callback registration, and OpenID Connect
+client in the drill's runtime files at non-production systems. Use test provider credentials and
+keep the drill network unable to reach production.
 :::
 
 1. Restore the latest BReg and Casework backups onto drill hosts, and redeploy Evidence, using only
    what your backup store and secret escrow hold. A secret you have to fetch from a production host
-   is a gap in the backup set.
+   is a gap in the backup set. When Messaging runs, restore its dump into a fresh drill database,
+   keep `messaging` stopped, and follow [Restore Registry Messaging](#restore-registry-messaging)
+   with the backed-up `messagingctl`. Compare the lost window with the archived audit and provider
+   records, and record whether the supported actions can reconcile the restored dispatch state.
 2. Run `bregctl verify` and `bregctl instance-claim status`, and confirm the status reports that
    the claim names another database, then adopt the copy. Passing `--acknowledge-original-retired`
    is sound here only because the drill network cannot reach production or its clients.
 3. Run `bregctl doctor`, `caseworkctl doctor`, and `evidence check
-   --require-runtime-dependencies`, start the runtimes, and wait for `GET /ready` on each.
+   --require-runtime-dependencies`, start BReg, Casework, and Evidence, and wait for `GET /ready`
+   on each. Keep Messaging stopped throughout its restore and upgrade rehearsal.
 4. Read a known record through BReg, a known work item through Casework, and a synthetic assertion
    through Evidence. Read one encrypted field, when the project encrypts one, to prove the
    field-encryption key restored.
-5. Open the shipped audit archive for the period before the backup, and confirm every file is
-   there and ends with a complete entry.
-6. Record the backup time, the restore time, the measured recovery time, and every step that
+5. For a Messaging upgrade rehearsal, keep the restored runtime stopped. With the target release's
+   `messagingctl`, run `plan --runtime-config FILE` and `apply --runtime-config FILE` on the drill
+   copy, then inspect `status`, `messages list`, and `messages show` again with the same runtime
+   file. Check the activation and the reconciled dispatch state before upgrading production.
+6. Open the shipped audit archive for the period before the backup, and confirm every file is
+   there and ends with a complete entry, including both Messaging streams when it runs.
+7. Record the backup time, the restore time, the measured recovery time, and every step that
    failed, and destroy the drill hosts and their copies of the secrets.
 
 ## Next
