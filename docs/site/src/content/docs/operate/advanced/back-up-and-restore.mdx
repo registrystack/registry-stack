@@ -59,7 +59,8 @@ up these alongside every database backup, on the same schedule:
 
 ### Registry Messaging state
 
-- The PostgreSQL database, with a stopped, pre-apply `pg_dump` for an upgrade rollback.
+- Regular PostgreSQL backups on a schedule that meets your recovery-point objective, the maximum
+  loss window you accept. Also take a stopped, pre-apply `pg_dump` for an upgrade rollback.
 - The active package directory, runtime file, and both matching binaries, `messaging` and
   `messagingctl`. Inspection with `messagingctl` needs no running send worker.
 - The referenced secret files, including the audit key (`audit.hashKeyRef`), database credentials,
