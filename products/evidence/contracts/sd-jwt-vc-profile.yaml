@@ -50,7 +50,7 @@ claims:
     vct: {source: isConformantTo, rule: the Evidence Type is the credential type; no separate credential-type vocabulary is introduced}
     jti: {source: the Evidence identifier, rule: also emitted as id; not a persisted credential identifier and not usable for status lookup}
     _sd_alg: {const: sha-256}
-    issuedBy: {source: issuer.id}
+    issuedBy: {source: issuer.uri}
     providedBy: {source: service.providerId}
     supportsRequirement: {source: supportsRequirement}
     purpose: {source: purpose}

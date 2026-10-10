@@ -58,7 +58,7 @@ therefore cannot distinguish a record that does not exist from one it may not se
 {/* Evidence: crates/registry-breg/src/auth.rs;
     crates/registry-breg/src/api/mod.rs, router();
     crates/registry-breg/src/query.rs, access_profile;
-    crates/registry-breg/src/contract.rs, ProjectAccessProfileSource and AccessPermissionSource. */}
+    crates/registry-breg/src/contract.rs, ProjectAccessProfileSource and PermissionsSource. */}
 
 ## Routes
 
@@ -167,7 +167,7 @@ path is `items[0].domainData`, not `items[0].data.domainData`:
 `nextCursor` is `null` on the last page. To continue, send the cursor as `$skiptoken` with no
 other query option except `accessProfile`. The cursor is signed with the secret named by the
 runtime `cursor.secretRef`, binds the whole original query, and expires after
-`cursor.maxAgeSeconds`; a cursor that fails
+`cursor.maximumAgeSeconds`; a cursor that fails
 any of those checks returns `400 query.cursor_invalid`. With `$count`, the response carries the
 matching total beside the page.
 
@@ -545,7 +545,7 @@ does not see those actions in `actions`, and calling one regardless is refused w
 `precondition.failed`. Review decisions and reviewer stages belong to the configured external
 authority, such as Registry Casework. BReg does not expose local approval routes.
 
-With `review: {mode: none}`, the ordinary apply action needs no external result. Otherwise BReg
+With `review: {type: none}`, the ordinary apply action needs no external result. Otherwise BReg
 submits the exact frozen proposal binding to `review.authority` and accepts application only after
 it has reconciled an approved result for the same subject, policy, and submission digest.
 `onApproved.mode: manual` waits for a currently authorized caller. `automatic` names a logical
@@ -565,7 +565,7 @@ A read of the request record adds `data.request`:
   "bregState": "submitted",
   "proposalVersion": 2,
   "effectDigest": "sha256:9f2c…",
-  "proposal": {"review": {"authority": "casework", "policyId": "asset-placement-correction"}},
+  "proposal": {"review": {"type": "required", "authority": "casework", "policyId": "asset-placement-correction"}},
   "review": {
     "submission": {"state": "accepted", "authority": "casework", "requestId": "…", "submissionDigest": "sha256:…", "policy": {"id": "asset-placement-correction", "version": "1", "digest": "sha256:…"}},
     "result": {"state": "approved", "resultId": "…", "completedAt": "2026-09-20T00:00:00.000000Z", "availableUntil": "2026-10-20T00:00:00.000000Z"},
@@ -575,7 +575,7 @@ A read of the request record adds `data.request`:
   },
   "editable": false,
   "actions": [
-    {"operation": "apply_request", "href": "/v1/records/placement-corrections/2d7e…/actions/apply?accessProfile=correction-applier", "ifMatch": "\"breg-hmac-sha256:…\"", "proposalVersion": 2, "effectDigest": "sha256:9f2c…"}
+    {"operation": "apply-request", "href": "/v1/records/placement-corrections/2d7e…/actions/apply?accessProfile=correction-applier", "ifMatch": "\"breg-hmac-sha256:…\"", "proposalVersion": 2, "effectDigest": "sha256:9f2c…"}
   ]
 }
 ```
@@ -584,7 +584,7 @@ A read of the request record adds `data.request`:
 `href` and the `ifMatch` value to send. Follow those links rather than composing routes.
 
 `proposal` appears once the request has been submitted and describes its frozen review binding.
-`review` is separately disclosure-controlled by `readableRequestFields: [review_state]`. It reports
+`review` is separately disclosure-controlled by `readableRequestFields: [review-state]`. It reports
 durable submission, terminal result, delivery, application, and recovery state. Optional binding,
 result, delivery, and application identifiers are omitted until known. These observations do not
 grant authority. `editable` is `true` only while the request is a draft, the caller owns it, and
@@ -595,14 +595,14 @@ decides which actions stay on offer.
 
 | Result for the current proposal | Actions offered | Refused |
 |---|---|---|
-| `rejected` | `cancel_request` | `revise_request` with `409 mutation.conflict`; `apply_request` with `412 precondition.failed` |
-| `changesRequested` | `revise_request` with `rebase: false`, `cancel_request` | a rebase with `409 mutation.conflict`; `apply_request` with `412 precondition.failed` |
-| `approved`, `availableUntil` not yet reached | `apply_request` for the applier; `revise_request` with `rebase: true` and `cancel_request` for the owner | nothing beyond the ordinary guards |
-| `approved`, `availableUntil` passed before application | `revise_request` with `rebase: false`, `cancel_request` | a rebase with `409 mutation.conflict`; `apply_request` with `412 precondition.failed` |
-| `answered`, `cancelled`, or `superseded` | `revise_request` with `rebase: true`, `cancel_request` | `apply_request` with `412 precondition.failed` |
+| `rejected` | `cancel-request` | `revise-request` with `409 mutation.conflict`; `apply-request` with `412 precondition.failed` |
+| `changesRequested` | `revise-request` with `rebase: false`, `cancel-request` | a rebase with `409 mutation.conflict`; `apply-request` with `412 precondition.failed` |
+| `approved`, `availableUntil` not yet reached | `apply-request` for the applier; `revise-request` with `rebase: true` and `cancel-request` for the owner | nothing beyond the ordinary guards |
+| `approved`, `availableUntil` passed before application | `revise-request` with `rebase: false`, `cancel-request` | a rebase with `409 mutation.conflict`; `apply-request` with `412 precondition.failed` |
+| `answered`, `cancelled`, or `superseded` | `revise-request` with `rebase: true`, `cancel-request` | `apply-request` with `412 precondition.failed` |
 | none yet | unchanged | nothing beyond the ordinary guards |
 
-Send the `rebase` value the `revise_request` action carries: `false` records the new draft as a
+Send the `rebase` value the `revise-request` action carries: `false` records the new draft as a
 revision of the proposal, `true` as a rebase onto updated context. An approval that expired
 unapplied reports `review.application.state` `expired` beside the result's `availableUntil`, also
 when its automatic application is still queued; an application already `applying` keeps that state
@@ -610,17 +610,17 @@ because it may still succeed. The other application states are `awaitingReview`,
 `applying`, `applied`, and `blocked`.
 
 The offered actions follow the result even when the selected profile does not disclose
-`review_state`, so the owner and the applier can tell a coarse outcome from which actions remain,
+`review-state`, so the owner and the applier can tell a coarse outcome from which actions remain,
 for example that a request was rejected. This is deliberate: the same caller would learn as much
 from the refusal of an action BReg no longer offers.
 
 The read and apply decide expiry on different clocks. The read compares the cached result's
 `availableUntil` with the database clock, while apply fetches the result from the review authority
 and checks it with the BReg service clock. Close to `availableUntil` the two can briefly disagree:
-a read can still offer `apply_request` that then answers `412 precondition.failed`, or report
+a read can still offer `apply-request` that then answers `412 precondition.failed`, or report
 `expired` while the authority's result is still available. Apply is authoritative.
 
-A request list whose selected profile discloses `review_state` may also filter on
+A request list whose selected profile discloses `review-state` may also filter on
 `reviewOutcome`, with `eq` or `in`. Its values are `pending`, `approved`, `approvedExpired`,
 `rejected`, `changesRequested`, `answered`, `cancelled`, and `superseded`; a request whose current
 proposal was never submitted for review matches none of them. The filter describes the review
@@ -633,7 +633,7 @@ $filter=bregState eq 'submitted' and reviewOutcome eq 'approved'
 $filter=bregState eq 'submitted' and reviewOutcome eq 'approvedExpired'
 ```
 
-A profile that does not disclose `review_state` is refused the filter with `400 query.invalid`, the
+A profile that does not disclose `review-state` is refused the filter with `400 query.invalid`, the
 same answer as for any field its grant withholds.
 
 {/* Evidence: crates/registry-breg/src/postgres/request_read.rs, action_is_available and revise_rebase_available;
@@ -665,8 +665,8 @@ request's `data.request.application` carries `reasonPresent`, and carries `reaso
 and permitted by the selected profile. Request-detail erasure removes the text while retaining the
 presence flag.
 
-`readableRequestFields` accepts `review_state`, which discloses the closed `review` projection,
-and `actor_reference`, which discloses `submitterReference` and
+`readableRequestFields` accepts `review-state`, which discloses the closed `review` projection,
+and `actor-reference`, which discloses `submitterReference` and
 `applierReference`. Every change-request action response
 separately includes `actorReference`, the caller-supplied actor identity recorded with that
 action, independent of `readableRequestFields`.
@@ -706,7 +706,7 @@ The response of an action is not a Registry Record envelope:
 ```
 
 `application` is `null` until the request is applied. When the entity sets
-`retention.mode: operator_erase`, an operator can erase the proposal payload of a terminal
+`retention.mode: operator-erase`, an operator can erase the proposal payload of a terminal
 request; a later read then shows `request.detailErased: true` and the provenance stub stays
 while target revisions reference the request.
 
@@ -911,7 +911,7 @@ Compiler rules:
 
 - Hook IDs are unique across the registry.
 - A projection names at least one declared field.
-- An entity hook declares `phase: after`; the compiler refuses any other phase. `handler.kind` is
+- An entity hook declares `phase: after`; the compiler refuses any other phase. `handler.type` is
   `url`, `rhai`, or `wasm`; a local handler names its reviewed `script` or `module` path.
 - Production compilation requires every hook to declare a handler, either a bound destination or a
   reviewed local program.
@@ -936,10 +936,10 @@ cannot add projected fields.
 <EventReferenceTable id="triggers" />
 
 A create-only entity refuses `patched` and `tombstoned`, and `tombstoned` also requires tombstone
-support. Only a change request entity permits `request_lifecycle`. Omitting `when` selects every
-matching trigger. With `kind: fields`, at least one test is nonempty, every test combines with
+support. Only a change request entity permits `request-lifecycle`. Omitting `when` selects every
+matching trigger. With `type: fields`, at least one test is nonempty, every test combines with
 AND, and `changed` compares before and after values rather than whether a field appeared in the
-patch. With `kind: request_lifecycle`, at least one of `transitions`, `toStates`, or `stages`
+patch. With `type: request-lifecycle`, at least one of `transitions`, `toStates`, or `stages`
 is set and each nonempty list must match; the projection then contains request fields, not target
 values.
 

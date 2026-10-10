@@ -103,9 +103,9 @@ impl ProgressWorker {
     pub const fn label(self) -> &'static str {
         match self {
             Self::Webhook => "webhook",
-            Self::AttachmentVerification => "attachment_verification",
+            Self::AttachmentVerification => "attachment-verification",
             Self::Review => "review",
-            Self::SubjectAccessLogRetention => "subject_access_log_retention",
+            Self::SubjectAccessLogRetention => "subject-access-log-retention",
         }
     }
 }
@@ -131,9 +131,9 @@ impl PendingQueue {
     #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
-            Self::WebhookDelivery => "webhook_delivery",
-            Self::ReviewSubmission => "review_submission",
-            Self::ReviewApplication => "review_application",
+            Self::WebhookDelivery => "webhook-delivery",
+            Self::ReviewSubmission => "review-submission",
+            Self::ReviewApplication => "review-application",
         }
     }
 }
@@ -312,7 +312,7 @@ impl Metrics {
         // to sample and leaves the gauges at their initial zero.
         let status = self.pool.as_ref().map(RuntimePool::status);
         for (state, count) in [
-            ("max_size", status.as_ref().map(|s| s.max_size)),
+            ("maximum-size", status.as_ref().map(|s| s.max_size)),
             ("size", status.as_ref().map(|s| s.size)),
             ("available", status.as_ref().map(|s| s.available)),
             ("waiting", status.as_ref().map(|s| s.waiting)),
@@ -516,13 +516,13 @@ mod tests {
         metrics.record_http(
             UNMATCHED_ROUTE,
             "OTHER",
-            "client_error",
+            "client-error",
             Duration::from_millis(1),
         );
         metrics.record_http(
             UNMATCHED_ROUTE,
             "OTHER",
-            "client_error",
+            "client-error",
             Duration::from_millis(2),
         );
         let rendered = metrics.render(None);
@@ -540,7 +540,7 @@ mod tests {
         let metrics = Metrics::default();
         metrics.record_http("/v1/records", "GET", "success", Duration::from_millis(1));
         let rendered = metrics.render(None);
-        for state in ["max_size", "size", "available", "waiting"] {
+        for state in ["maximum-size", "size", "available", "waiting"] {
             assert_eq!(
                 rendered
                     .matches(&format!("breg_pool_connections{{state=\"{state}\"}}"))
@@ -588,7 +588,7 @@ mod tests {
     }
 
     #[test]
-    fn every_progress_worker_carries_a_distinct_snake_case_label() {
+    fn every_progress_worker_carries_a_distinct_kebab_case_label() {
         let labels: Vec<&str> = ProgressWorker::ALL
             .into_iter()
             .map(ProgressWorker::label)
@@ -599,8 +599,8 @@ mod tests {
             assert!(
                 label
                     .chars()
-                    .all(|character| character.is_ascii_lowercase() || character == '_'),
-                "{label} is a fixed snake_case token"
+                    .all(|character| character.is_ascii_lowercase() || character == '-'),
+                "{label} is a fixed kebab-case token"
             );
         }
     }
@@ -621,9 +621,9 @@ mod tests {
             (PendingQueue::ReviewApplication, 0.0),
         ]));
         for expected in [
-            "breg_queue_oldest_pending_age_seconds{queue=\"webhook_delivery\"} 0\n",
-            "breg_queue_oldest_pending_age_seconds{queue=\"review_submission\"} 90.5\n",
-            "breg_queue_oldest_pending_age_seconds{queue=\"review_application\"} 0\n",
+            "breg_queue_oldest_pending_age_seconds{queue=\"webhook-delivery\"} 0\n",
+            "breg_queue_oldest_pending_age_seconds{queue=\"review-submission\"} 90.5\n",
+            "breg_queue_oldest_pending_age_seconds{queue=\"review-application\"} 0\n",
         ] {
             assert!(sampled.contains(expected), "{expected} in:\n{sampled}");
         }
@@ -654,7 +654,7 @@ mod tests {
     }
 
     #[test]
-    fn every_pending_queue_carries_a_distinct_snake_case_label() {
+    fn every_pending_queue_carries_a_distinct_kebab_case_label() {
         let labels: Vec<&str> = PendingQueue::ALL
             .into_iter()
             .map(PendingQueue::label)
@@ -665,8 +665,8 @@ mod tests {
             assert!(
                 label
                     .chars()
-                    .all(|character| character.is_ascii_lowercase() || character == '_'),
-                "{label} is a fixed snake_case token"
+                    .all(|character| character.is_ascii_lowercase() || character == '-'),
+                "{label} is a fixed kebab-case token"
             );
         }
     }

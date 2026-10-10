@@ -205,7 +205,7 @@ test('mixed available and notAvailable results retain their positions', async ()
   const spec = requestBatchSpec();
   const stub = await startStubServer({
     'POST /v1/evidence/batch': batchRoute(spec, signingKey, (index, nonce) =>
-      index === 0 ? available(spec, nonce, signingKey) : { result: 'evidence_not_available' },
+      index === 0 ? available(spec, nonce, signingKey) : { result: 'evidence-not-available' },
     ),
   });
 
@@ -228,7 +228,7 @@ test('a prepared request batch can be sent once and the second send stays local'
   const spec = requestBatchSpec();
   const stub = await startStubServer({
     'POST /v1/evidence/batch': batchRoute(spec, signingKey, () => ({
-      result: 'evidence_not_available',
+      result: 'evidence-not-available',
     })),
   });
 
@@ -307,7 +307,7 @@ test('requestAndVerifyBatch performs one live exchange', async () => {
   const spec = requestBatchSpec();
   const stub = await startStubServer({
     'POST /v1/evidence/batch': batchRoute(spec, signingKey, (index, nonce) =>
-      index === 0 ? available(spec, nonce, signingKey) : { result: 'evidence_not_available' },
+      index === 0 ? available(spec, nonce, signingKey) : { result: 'evidence-not-available' },
     ),
   });
 

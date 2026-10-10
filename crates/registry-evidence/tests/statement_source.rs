@@ -129,7 +129,7 @@ impl Plan {
             maximum_extract_age_seconds,
         } = self;
         let document = format!(
-            "transport: sqlite-extract
+            "type: sqlite-extract
 posture: field-projected
 extractProfile: residence-register
 request:
@@ -144,9 +144,9 @@ request:
   maximumCellBytes: {maximum_cell_bytes}
   maximumStatementSteps: 100000
   projection: {projection}
-  timeoutMilliseconds: 10000
+  attemptTimeoutMilliseconds: 10000
   maximumResponseBytes: 65536
-  concurrencyLimit: 2
+  maximumConcurrency: 2
 maximumExtractAgeSeconds: {maximum_extract_age_seconds}
 responseSchema: schemas/response.schema.yaml
 extractScript: adapters/source-a.rhai
@@ -158,12 +158,12 @@ factSchema: schemas/facts.schema.yaml
 }
 
 fn selector_binding(field: &str) -> String {
-    format!("{{kind: selector, role: subject, profile: {SUBJECT_PROFILE}, field: {field}}}")
+    format!("{{type: selector, role: subject, profile: {SUBJECT_PROFILE}, field: {field}}}")
 }
 
 /// A parameter the preparation script fills, which names no selector because
 /// its value is derived rather than resolved.
-const PREPARED_BINDING: &str = "{kind: prepared}";
+const PREPARED_BINDING: &str = "{type: prepared}";
 
 /// The extract every test reads, carrying one metadata row and the canary in
 /// the data an adopter would never want rendered.

@@ -225,17 +225,33 @@ is the one the form accepts wherever an author names something: question `id`
 and `purpose`, subject `role`, `selector`, and `profile`, fact `name`, answer
 `concept`, and a `source.ref`.
 
-Two names the form accepts can still compose into one it refuses. A question
-with more than one subject compiles a selector profile named
-`local-subject-{id}-{role}-v1`, and `validate_named_map` in
-`crates/registry-evidence/src/config.rs` holds every named-map key,
-`selectorProfiles` included, to a 128-byte local identifier, so a 64-byte `id`
-beside a 64-byte `role` produces a 146-byte key the bundle check refuses. The
-compile measures nothing it generates, and the refusal says only that a local
-identifier is invalid, naming neither the question, nor the role, nor the
-length. A single-subject question's profile name reaches 81 bytes and a
-generated source name 77, so the multi-subject form is the only one that can
-cross the ceiling.
+A question's names are narrower where they name something in the compiled
+bundle. The bundle holds the key of every id-keyed map, `selectorProfiles` and
+`sources` included, and every selector field name, to the shared local
+identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`,
+or `-`, so no dot and at most 64 characters (`validate_named_map` and
+`SelectorProfile::validate` in `crates/registry-evidence/src/config.rs`). A
+question that reads an `operation` compiles a selector profile named
+`local-subject-{id}-v1`, or `local-subject-{id}-{role}-v1` when it has more
+than one subject, and a source named `local-source-{id}`. The form refuses,
+at the member that carries it, each name the bundle would refuse:
+
+| Member | Refused | Code |
+|---|---|---|
+| `id` of a question that reads an `operation` and has one subject | over 47 bytes | `evidence.question.compiled-name-length` |
+| `role` of a question that reads an `operation` and has several subjects | `id` and `role` over 46 bytes together | `evidence.question.compiled-name-length` |
+| `role` of a question that reads an `operation` and has several subjects | a dot | `evidence.question.compiled-name-dot` |
+| `selector` | a dot | `evidence.question.compiled-name-dot` |
+| `profile`, and each entry of `profiles` | a dot | `evidence.question.compiled-name-dot` |
+| `source.ref` | a dot | `evidence.question.compiled-name-dot` |
+
+The bounds are measured on the name the compiler writes
+(`crates/registry-evidence-authoring/src/names.rs`), and each is checked after
+every other rule of the form. A question that names its source with
+`source.ref` compiles no name from its `id`, which keeps the whole 64 bytes,
+and a `role` that enters no compiled name keeps the dot: the one subject of a
+question, and every subject of a question with a `source.ref`. `purpose`, a
+fact `name`, and an answer `concept` keep the dot everywhere.
 
 ### Subjects
 
@@ -564,7 +580,7 @@ Omitting it lets `evidencectl` invent disposable
 and a 300 second validity, which are usable for a fixture run and refused for a
 deployment. Six of these keys become the `requirements[]` key of the same name
 in `bundle/evidence.yaml`. The other two are renamed: `governance.requirement`
-becomes `requirements[].id`, and `governance.disclosureFamilies` becomes
+becomes `requirements[].uri`, and `governance.disclosureFamilies` becomes
 `requirements[].disclosureGuard.families`.
 
 | Key | Required | Meaning |
@@ -646,6 +662,10 @@ evidencectl access policy add age-checks \
 When at least one explicit policy exists, local compilation replaces the
 single implicit all-question caller profile with one authority profile per
 policy. A project that has `access/clients/` but no access policy is rejected.
+The compiled profile is named after the policy's requester tag, `policy-v1-`
+or `policy-v2-` and the first 32 hexadecimal digits of the tag's digest, 42
+characters, which fits the bundle's 64; the profile's `requesterTags` carries
+the tag whole, and the tag is what a caller is matched on.
 
 ## Rules that block a build
 

@@ -3,7 +3,7 @@
   "kind": "BRegMigrationRehearsalReceipt",
   "priorPackageDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
   "priorSchemaFingerprint": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
-  "planDigest": "sha256:05a452add1204ad3fc7aa571529ed1ff7329fd9e3639fe63e680ba4698f584aa",
+  "planDigest": "sha256:90118a646a2e4dcf004220dff7999643f01140bc6959a588a28620631e73e444",
   "sqlDigests": [],
   "assertionDigests": [],
   "fixtureInventory": [],

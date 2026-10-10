@@ -8,18 +8,18 @@ SafeInteger: TypeAlias = int
 # UUID strings are parsed by the native binding before any request is sent.
 Uuid: TypeAlias = str
 
-InboxView: TypeAlias = Literal["mine", "my_teams", "team_holdings", "overdue", "completed_by_me"]
+InboxView: TypeAlias = Literal["mine", "my-teams", "team-holdings", "overdue", "completed-by-me"]
 InboxSort: TypeAlias = Literal["due", "age", "type"]
 OccurrenceState: TypeAlias = Literal[
-    "open", "claimed", "waiting_applicant", "waiting_application", "synchronizing",
+    "open", "claimed", "waiting-applicant", "waiting-application", "synchronizing",
     "completed", "superseded", "cancelled",
 ]
-PageStatus: TypeAlias = Literal["complete", "budget_exhausted", "source_unavailable"]
+PageStatus: TypeAlias = Literal["complete", "budget-exhausted", "source-unavailable"]
 HistoryKind: TypeAlias = Literal[
-    "observed", "opened", "claimed", "assigned", "delegated", "caseload_moved",
-    "clock_reminder", "clock_step_applied", "clock_recomputed", "released",
-    "draft_saved", "attempt_reserved", "attempt_uncertain", "action_completed",
-    "attempt_settled", "superseded", "completed",
+    "observed", "opened", "claimed", "assigned", "delegated", "caseload-moved",
+    "clock-reminder", "clock-step-applied", "clock-recomputed", "released",
+    "draft-saved", "attempt-reserved", "attempt-uncertain", "action-completed",
+    "attempt-settled", "superseded", "completed",
 ]
 
 class IssuerPrincipal(TypedDict):
@@ -123,8 +123,8 @@ class SubjectRef(TypedDict):
     id: str
 
 ClockRuntimeState: TypeAlias = Literal[
-    "running", "paused", "completed", "cancelled", "verification_pending",
-    "source_facts_missing",
+    "running", "paused", "completed", "cancelled", "verification-pending",
+    "source-facts-missing",
 ]
 
 class ClockReminderNextEffect(TypedDict):
@@ -209,7 +209,7 @@ class CorrectionRoutingCopy(_CorrectionRoutingCopyOptional):
 class _AssignmentContextOptional(TypedDict, total=False):
     owner: IssuerPrincipal
     assignedBy: IssuerPrincipal
-    staffingDiagnostic: Literal["no_cover_available"]
+    staffingDiagnostic: Literal["no-cover-available"]
 
 class AssignmentContext(_AssignmentContextOptional):
     absenceIds: list[str]
@@ -256,7 +256,7 @@ class WorkItemPage(_WorkItemPageOptional):
     status: PageStatus
 
 
-DirectoryTargetPurpose: TypeAlias = Literal["assignment", "absence_person", "absence_cover"]
+DirectoryTargetPurpose: TypeAlias = Literal["assignment", "absence-person", "absence-cover"]
 
 class _DirectoryTargetsPageOptional(TypedDict, total=False):
     cursor: str
@@ -267,10 +267,10 @@ class DirectoryAssignmentTargetsQuery(_DirectoryTargetsPageOptional):
     queue: str
 
 class DirectoryAbsencePersonTargetsQuery(_DirectoryTargetsPageOptional):
-    purpose: Literal["absence_person"]
+    purpose: Literal["absence-person"]
 
 class DirectoryAbsenceCoverTargetsQuery(_DirectoryTargetsPageOptional):
-    purpose: Literal["absence_cover"]
+    purpose: Literal["absence-cover"]
     personIssuer: str
     personSubject: str
 
@@ -400,7 +400,7 @@ class _CaseloadItemResultOptional(TypedDict, total=False):
 
 class CaseloadItemResult(_CaseloadItemResultOptional):
     itemId: str
-    result: Literal["moved", "not_visible", "not_eligible", "attempt_in_progress", "conflict"]
+    result: Literal["moved", "not-visible", "not-eligible", "attempt-in-progress", "conflict"]
 
 class _SourceReceiptOptional(TypedDict, total=False):
     actorReference: str
@@ -520,12 +520,12 @@ class CalendarPolicy(TypedDict):
     holidaySet: str
 
 class SubjectClockPolicy(TypedDict):
-    scope: Literal["subject"]
+    type: Literal["subject"]
     id: str
-    anchor: Literal["firstSubmittedAt"]
-    completeOn: Literal["reviewCompleted"]
+    anchor: Literal["first-submitted-at"]
+    completeOn: Literal["review-completed"]
     after: ElapsedDuration
-    pauseWhile: list[Literal["awaitingApplicant"]]
+    pauseWhile: list[Literal["awaiting-applicant"]]
 
 class WorkingDaysAfter(TypedDict):
     workingDays: int
@@ -555,9 +555,9 @@ class _ActivityClockPolicyOptional(TypedDict, total=False):
     steps: list[ClockStep]
 
 class ActivityClockPolicy(_ActivityClockPolicyOptional):
-    scope: Literal["activity"]
+    type: Literal["activity"]
     id: str
-    anchor: Literal["stageEnteredAt"]
+    anchor: Literal["stage-entered-at"]
     calendar: str
     after: WorkingDaysAfter
     dueTime: str
@@ -601,7 +601,7 @@ class Page(_PageOptional, Generic[T]):
 DirectoryTargetPage: TypeAlias = Page[DirectoryMember]
 
 CaseworkErrorKind: TypeAlias = Literal[
-    "configuration", "invalid_request", "transport", "problem", "protocol",
+    "configuration", "invalid-request", "transport", "problem", "protocol",
 ]
 KnownCaseworkProblemCode: TypeAlias = Literal[
     "absence.cover-cycle",
@@ -655,23 +655,23 @@ KnownCaseworkProblemCode: TypeAlias = Literal[
 # attribute widens the closed catalogue the way the Node typings do.
 CaseworkProblemCode: TypeAlias = KnownCaseworkProblemCode | str
 CaseworkProtocolFailure: TypeAlias = Literal[
-    "header_bounds", "trace_context", "media_type", "body", "problem", "status", "protocol",
+    "header-bounds", "trace-context", "media-type", "body", "problem", "status", "protocol",
 ]
 ReviewValidationReason: TypeAlias = Literal[
-    "kind_not_allowed",
-    "reference_invalid",
-    "object_required",
-    "maximum_bytes_exceeded",
-    "maximum_depth_exceeded",
-    "schema_mismatch",
-    "outcome_not_declared",
-    "reason_required",
-    "text_invalid",
-    "result_not_declared",
-    "result_required",
-    "field_not_declared",
-    "constraint_invalid",
-    "constraint_violated",
+    "kind-not-allowed",
+    "reference-invalid",
+    "object-required",
+    "maximum-bytes-exceeded",
+    "maximum-depth-exceeded",
+    "schema-mismatch",
+    "outcome-not-declared",
+    "reason-required",
+    "text-invalid",
+    "result-not-declared",
+    "result-required",
+    "field-not-declared",
+    "constraint-invalid",
+    "constraint-violated",
 ]
 
 class ValidationDetail(TypedDict):
@@ -701,8 +701,8 @@ class CaseworkClientError(Exception):
     outcome_unknown: bool
 
 ContentDigest: TypeAlias = str
-ReviewRequestLifecycle: TypeAlias = Literal["reviewing", "approved", "rejected", "changes_requested", "answered", "cancelled", "superseded"]
-ReviewResultStatus: TypeAlias = Literal["approved", "rejected", "changes_requested", "answered", "cancelled", "superseded"]
+ReviewRequestLifecycle: TypeAlias = Literal["reviewing", "approved", "rejected", "changes-requested", "answered", "cancelled", "superseded"]
+ReviewResultStatus: TypeAlias = Literal["approved", "rejected", "changes-requested", "answered", "cancelled", "superseded"]
 ReviewHistoryAudience: TypeAlias = Literal["reviewers", "requester"]
 
 class ReviewSubjectBinding(TypedDict):
@@ -777,7 +777,7 @@ ReviewResultOutcome: TypeAlias = ReviewResultAvailable | ReviewResultPending | R
 class ReviewPageQuery(TypedDict, total=False):
     cursor: Uuid
     limit: SafeInteger
-ReviewTaskOwnership: TypeAlias = Literal["assigned_to_me", "unclaimed"]
+ReviewTaskOwnership: TypeAlias = Literal["assigned-to-me", "unclaimed"]
 class ReviewTaskQuery(ReviewPageQuery, total=False):
     queue: str
     ownership: ReviewTaskOwnership
@@ -806,7 +806,7 @@ class ReviewCancelledResponse(TypedDict):
     outcome: Literal["cancelled"]
     result: ReviewResult
 class ReviewAlreadyTerminalResponse(TypedDict):
-    outcome: Literal["already_terminal"]
+    outcome: Literal["already-terminal"]
     result: ReviewResult
 ReviewCancelResponse: TypeAlias = ReviewCancelledResponse | ReviewAlreadyTerminalResponse
 class ReviewHeldTaskStateValue(TypedDict):
@@ -814,7 +814,7 @@ class ReviewHeldTaskStateValue(TypedDict):
 class ReviewHeldTaskState(TypedDict):
     held: ReviewHeldTaskStateValue
 ReviewerTaskState: TypeAlias = Literal["open", "decided"] | ReviewHeldTaskState
-ReviewDecisionType: TypeAlias = Literal["approve", "reject", "changes_requested", "answer"]
+ReviewDecisionType: TypeAlias = Literal["approve", "reject", "changes-requested", "answer"]
 class _ReviewDecisionReceiptOptional(TypedDict, total=False):
     outcome: str
     outcomeLabel: str
@@ -864,7 +864,7 @@ class _SupervisoryReviewTaskPageOptional(TypedDict, total=False):
 class SupervisoryReviewTaskPage(_SupervisoryReviewTaskPageOptional):
     items: list[SupervisoryReviewTask]
     status: PageStatus
-ReviewSourceBindingStatus: TypeAlias = Literal["current", "binding_changed"]
+ReviewSourceBindingStatus: TypeAlias = Literal["current", "binding-changed"]
 class _ReviewSourceProjectionOptional(TypedDict, total=False):
     displayReference: str
 class ReviewSourceProjection(_ReviewSourceProjectionOptional):
@@ -909,7 +909,7 @@ class ReviewClockOccurrence(_ReviewClockOccurrenceOptional):
     clockId: str
     requestId: Uuid
     correlation: ReviewClockCorrelation
-    state: Literal["running", "paused", "completed", "cancelled", "source_facts_missing"]
+    state: Literal["running", "paused", "completed", "cancelled", "source-facts-missing"]
     policyDigest: ContentDigest
     anchorAt: str
 class ReviewTaskDraftInput(TypedDict):
@@ -929,7 +929,7 @@ class ReviewRejectDecision(_ReviewOutcomeDecisionOptional):
     type: Literal["reject"]
     outcome: str
 class ReviewChangesRequestedDecision(_ReviewOutcomeDecisionOptional):
-    type: Literal["changes_requested"]
+    type: Literal["changes-requested"]
     outcome: str
 class ReviewAnswerDecision(_ReviewOutcomeDecisionOptional):
     type: Literal["answer"]

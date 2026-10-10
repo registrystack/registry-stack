@@ -72,11 +72,11 @@ impl fmt::Debug for AttachmentVerification {
 #[derive(Clone, Deserialize)]
 #[serde(
     remote = "Self",
-    rename_all = "camelCase",
+    rename_all = "kebab-case",
     rename_all_fields = "camelCase",
     deny_unknown_fields
 )]
-#[cfg_attr(feature = "schema", schemars(!remote, tag = "kind"))]
+#[cfg_attr(feature = "schema", schemars(!remote, tag = "type"))]
 pub(crate) enum RawAttachmentVerificationConfig {
     Disabled {},
     Http {
@@ -95,10 +95,10 @@ pub(crate) enum RawAttachmentVerificationConfig {
             feature = "schema",
             schemars(with = "registry_platform_yaml::BoundedU64<100, 60_000>")
         )]
-        timeout_milliseconds: u64,
+        attempt_timeout_milliseconds: u64,
     },
 }
-registry_platform_yaml::tagged_union!(RawAttachmentVerificationConfig, tag = "kind");
+registry_platform_yaml::tagged_union!(RawAttachmentVerificationConfig);
 
 #[cfg(feature = "schema")]
 impl serde::Serialize for RawAttachmentVerificationConfig {
@@ -108,7 +108,7 @@ impl serde::Serialize for RawAttachmentVerificationConfig {
     ) -> std::result::Result<S::Ok, S::Error> {
         crate::contract::serialize_tagged_union(
             Self::serialize(self, serde_json::value::Serializer),
-            "kind",
+            "type",
             serializer,
         )
     }
@@ -141,7 +141,7 @@ impl AttachmentVerificationConfig {
             endpoint,
             authorization_ref,
             policy_id,
-            timeout_milliseconds,
+            attempt_timeout_milliseconds,
         } = raw
         else {
             return Ok(Self::default());
@@ -170,7 +170,7 @@ impl AttachmentVerificationConfig {
             endpoint: url,
             authorization_ref,
             policy_id,
-            timeout: Duration::from_millis(timeout_milliseconds),
+            timeout: Duration::from_millis(attempt_timeout_milliseconds),
         })))
     }
 
@@ -382,7 +382,7 @@ mod tests {
     }
 
     fn raw(endpoint: &str) -> serde_json::Value {
-        json!({"kind":"http", "endpoint":endpoint, "authorizationRef":"secret:file/token", "policyId":"scanner-rules-2026-09"})
+        json!({"type":"http", "endpoint":endpoint, "authorizationRef":"secret:file/token", "policyId":"scanner-rules-2026-09"})
     }
     fn activate(input: serde_json::Value, files: &SecretFile) -> AttachmentVerification {
         AttachmentVerificationConfig::from_raw(serde_json::from_value(input).unwrap())
@@ -435,11 +435,11 @@ mod tests {
         // The timeout is bounded at decode.
         for timeout in [0, 60_001] {
             let mut input = raw("https://verification-canary.example/verify");
-            input["timeoutMilliseconds"] = json!(timeout);
+            input["attemptTimeoutMilliseconds"] = json!(timeout);
             assert!(serde_json::from_value::<RawAttachmentVerificationConfig>(input).is_err());
         }
         assert!(serde_json::from_value::<RawAttachmentVerificationConfig>(
-            json!({"kind":"disabled", "endpoint":"https://ignored.example"})
+            json!({"type":"disabled", "endpoint":"https://ignored.example"})
         )
         .is_err());
         let mut missing = raw("https://example/verify");
@@ -544,7 +544,7 @@ mod tests {
         .await;
         let files = SecretFile::new();
         let mut input = raw(&hook.endpoint);
-        input["timeoutMilliseconds"] = json!(100);
+        input["attemptTimeoutMilliseconds"] = json!(100);
         let verifier = http(activate(input, &files));
         let hash = hex::encode(Sha256::digest(CONTENT));
         assert_eq!(
@@ -619,7 +619,7 @@ mod tests {
         let original = activate(input.clone(), &files).binding_digest();
         std::fs::write(files.0.join("token"), "rotated-token-canary").unwrap();
         let mut tuning = input.clone();
-        tuning["timeoutMilliseconds"] = json!(5000);
+        tuning["attemptTimeoutMilliseconds"] = json!(5000);
         assert_eq!(original, activate(tuning, &files).binding_digest());
         let mut policy = input.clone();
         policy["policyId"] = json!("scanner-rules-next");
@@ -647,7 +647,7 @@ mod tests {
         input.as_object_mut().unwrap().remove("policyId");
         assert!(!validator.is_valid(&input));
         assert!(
-            !validator.is_valid(&json!({"kind":"disabled", "endpoint":"https://ignored.example"}))
+            !validator.is_valid(&json!({"type":"disabled", "endpoint":"https://ignored.example"}))
         );
     }
 }

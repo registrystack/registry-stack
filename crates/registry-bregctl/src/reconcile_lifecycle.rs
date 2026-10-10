@@ -118,10 +118,8 @@ pub(crate) fn run(
     let active_registry = target
         .registry()
         .with_migration_baseline_schema(active.migration_baseline());
-    let active_catalog = registry_breg::postgres::ExpectedManagedCatalog::compiled_predecessor(
-        &active_registry,
-        active.statistical_release_store_present(),
-    );
+    let active_catalog =
+        registry_breg::postgres::ExpectedManagedCatalog::compiled(&active_registry);
     let reconcile = |current, audit| {
         runtime
             .block_on(reconcile_failed_migration(ReconcileRequest {

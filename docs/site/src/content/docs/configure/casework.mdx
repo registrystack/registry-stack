@@ -53,14 +53,14 @@ Point it at a new directory, or edit the project you already have.
 The file opens with a fixed envelope and one identity block:
 
 ```yaml
-apiVersion: registry.registrystack.org/casework/v1alpha1
+apiVersion: id.registrystack.org/formats/casework/project/v1alpha1
 kind: CaseworkProject
-casework:
+project:
   id: standalone-decision
   version: "1"
 ```
 
-`casework.id` names the policy, and `casework.version` is the policy version that `caseworkctl explain` reports and that every accountability record carries, so bump it when you change what a team may do.
+`project.id` names the policy and is a local identifier (a lowercase letter, then at most 63 lowercase letters, digits, underscores, or hyphens), and `project.version` is the policy version that `caseworkctl explain` reports and that every accountability record carries, so bump it when you change what a team may do.
 The rest of the document is the members in this table, and a project needs either `sources` or `reviewKinds` to have any work at all.
 
 | Member | Declares |
@@ -118,7 +118,7 @@ queues:
     label: Decisions awaiting review
 ```
 
-`id` is what the directory, the routing rules, and the clock steps refer to, so keep it stable: it accepts ASCII letters, digits, `.`, `_`, and `-`, up to 128 characters, and it rejects `:`, `/`, and spaces.
+`id` is what the directory, the routing rules, and the clock steps refer to, so keep it stable: it is a local identifier (a lowercase letter, then at most 63 lowercase letters, digits, underscores, or hyphens), as the `id` of an access profile, a review producer, and a task template is.
 `label` is what a person reads in the inbox.
 A deployment needs one team serving every queue you declare before its inbox opens, which is authority an Administrator establishes at the runtime and not something policy can grant.
 
@@ -336,12 +336,12 @@ A subject clock measures the whole request: it anchors on a source timestamp, co
 ```yaml
 clocks:
   - id: response-budget
-    scope: subject
-    anchor: firstSubmittedAt
-    completeOn: reviewCompleted
+    type: subject
+    anchor: first-submitted-at
+    completeOn: review-completed
     after:
       elapsed: PT48H
-    pauseWhile: [awaitingApplicant]
+    pauseWhile: [awaiting-applicant]
 ```
 
 `after.elapsed` is a bounded ISO 8601 duration in hours, minutes, or seconds, so `PT48H` is 48 hours of wall-clock time.
@@ -351,8 +351,8 @@ An activity clock measures one stage of the work, counts in working days against
 
 ```yaml
   - id: review-deadline
-    scope: activity
-    anchor: stageEnteredAt
+    type: activity
+    anchor: stage-entered-at
     calendar: office
     after:
       workingDays: 5
@@ -442,11 +442,11 @@ Five commands read the project and touch no network and no database, so run them
 | `test` | Do the project's own fixtures still pass? |
 | `package` | What exactly would an operator receive? |
 
-`caseworkctl check` validates the project and prints the effective policy, including the values you did not write.
-It prints each problem position first, as `warning[CODE] FILE:LINE:COLUMN /path` or `error[CODE] ...`, then the message and a `next:` line with the fix, and ends with a count of errors and warnings; `--format json` reports the same problems as a `diagnostics` list.
+`caseworkctl check` validates the project and names what it read: the project, the runtime file when you pass one, and the profile it checked under.
+It prints each problem position first, as `warning[CODE] FILE:LINE:COLUMN /path` or `error[CODE] ...`, then the message and a `next:` line with the fix, and ends with a count of errors and warnings; `--format json` reports the same problems as a `diagnostics` list, and the effective policy, including the values you did not write, as `effective`.
 It exits 1 when it reports an error, and `--deny-warnings` makes a warning fail it too.
-For the standalone project it reports standalone mode, the resolved review kind and producer admission with its schemas and retention, and the inbox defaults.
-For a project that declares sources it reports every one of them, and for each of their requests the entity, the fallback queue, the routing rule count, the clock the request names, and its target; it also reports the state of the imported source descriptions, which reads `pending_source_add` before you connect the source and `checked` after.
+For the standalone project `effective` reports standalone mode, the resolved review kind and producer admission with its schemas and retention, and the inbox defaults.
+For a project that declares sources `effective` reports every one of them, and for each of their requests the entity, the fallback queue, the routing rule count, the clock the request names, and its target; it also reports the state of the imported source descriptions, which reads `pending-source-add` before you connect the source and `checked` after.
 
 ```sh
 caseworkctl check ./decisions
@@ -458,7 +458,7 @@ Against a source-backed project it reports each calendar, each clock in full, an
 Read it when you want to confirm that what you wrote is what a team will experience.
 
 `caseworkctl simulate` runs one case at one instant.
-The fixture below belongs to the [complete regional-review example](https://github.com/registrystack/registry-stack/tree/6a3bff6efcc89e0d53d0bc37ebcbe7cd62dc0c0d/products/casework/examples/multi-stage-routing-clocks), which also supplies the matching policy, source descriptions, and holiday-set revision.
+The simulation below belongs to the [complete regional-review example](https://github.com/registrystack/registry-stack/tree/6a3bff6efcc89e0d53d0bc37ebcbe7cd62dc0c0d/products/casework/examples/multi-stage-routing-clocks), which also supplies the matching policy, source descriptions, and holiday-set revision.
 A simulation names the source, the subject with its activity, stage, and projected fields, the moment `now`, the holiday-set revisions in force, and what you expect:
 
 ```yaml
@@ -494,7 +494,7 @@ If you have saved that complete example as `./regional-review`, run:
 
 ```sh
 caseworkctl simulate ./regional-review \
-  --fixture ./regional-review/simulations/friday-review.yaml
+  --simulation ./regional-review/simulations/friday-review.yaml
 ```
 
 The report names the rule that matched and the sentence behind it, the calendar and holiday revision used, the due instant in UTC, the due state, and the reminders and steps eligible at that moment.
@@ -573,7 +573,7 @@ queues:
     label: Licence corrections
 ```
 
-`id` must equal the connected BReg project's `registry.id`. BReg uses that value as the review
+`id` must equal the connected BReg project's `project.id`. BReg uses that value as the review
 subject namespace, and Casework uses the same key for source-context lookup. `adapter: breg`
 selects the BReg adapter, and `description` points at the imported source description that
 `caseworkctl source add` writes.
@@ -581,7 +581,7 @@ Each entry in `requests` binds one BReg entity to one fallback queue; `target` i
 One source can declare up to 32 request entities from the same register, each named once.
 `caseworkctl source add` pairs them all in one pass, and requests that share a review authority must agree on its producer admission.
 Casework discovers work entity by entity, in the order you declare them.
-Until the description exists, `caseworkctl check` reports `"sourceDescription": "pending_source_add"` and a `casework.source-description.missing` warning at the source's `description`, which `--production` refuses as an error.
+Until the description exists, `caseworkctl check` reports `"sourceDescription": "pending-source-add"` and a `casework.source-description.missing` warning at the source's `description`, which `--production` refuses as an error.
 
 The template's `scope-correction` review kind uses `contextStrategy: source`, so its `displaySchema` must admit exactly what the source discloses to a reviewer.
 It restates each projected field's schema under its API name, as `bregctl explain change-requests` reports it: `record` is a UUID string, not an object.
@@ -594,7 +594,7 @@ They catch three mismatches. The first is a projected field the closed schema do
 Both commands work from the two schemas alone, so a constraint that only a made-up value could break is left to the runtime check. That covers lengths, patterns, formats, and numeric bounds, as well as properties written with `$ref`.
 A property a root `allOf` branch constrains, instead of the root `properties` map, is checked the same way: `allOf` requires every branch to validate the whole disclosure, so a branch's own `properties`, `patternProperties`, and `additionalProperties: false` provably apply too, and the refusal names the branch (`allOf branch 1`, and so on). `anyOf`, `oneOf`, `not`, `if`/`then`/`else`, and `$ref` are not provable this way, since only one branch of those needs to hold, so they are left to the runtime check.
 Projected fields are checked whether or not a reviewer profile can see them, because the source may later disclose any of them.
-The kind also declares a `changes-requested` outcome, labelled "Request changes", which settles as `changes_requested` and requires a reason; BReg then offers the submitter a revision (`revise_request` with `rebase: false`) or a cancellation, never an apply, and the revised, resubmitted request opens a fresh review.
+The kind also declares a `changes-requested` outcome, labelled "Request changes", with `settlement: changes-requested` and a required reason; BReg then offers the submitter a revision (`revise-request` with `rebase: false`) or a cancellation, never an apply, and the revised, resubmitted request opens a fresh review.
 
 Continue from the register you built in [Create and query your first registry](../../tutorials/first-breg/), which leaves its project at `tutorial-work/project`.
 Before Casework can present its work, the entity named in `casework.yaml` must declare a change
@@ -616,7 +616,7 @@ Without `--apply` it previews the lifecycle event, the least-privilege `casework
 the paired local clients, and the authority and optional executor runtime bindings.
 The local review authority it adds to BReg's `dev-clients.yaml` calls Casework at `http://127.0.0.1:8092`, the default `caseworkctl dev` port; when your Casework session runs on another port, pass its URL with `--casework-endpoint http://127.0.0.1:PORT`.
 The report includes the exact candidate fragments, `status: preview`, and
-`activation: not_performed`.
+`activation: not-performed`.
 Each paired request entity gets its own lifecycle hook, `casework-lifecycle-v1-<entity>`, because BReg requires a hook id to be unique across the registry and sends it as the event's `ce-type`.
 The prefix leaves room for an entity id of at most 42 bytes within BReg's 64-byte identifier limit; `source add` refuses a longer one before it writes anything.
 Read the patch before you take the next step.
@@ -636,11 +636,12 @@ authority and policy, and application mode, and `professional-licences.breg-runt
 candidate BReg runtime binding. The binding includes the event destination, the Casework review
 authority client, optional completion delivery, and an automatic executor only when the authored
 request selects one. Provision the referenced secrets on the BReg side.
-The command writes no secret and activates nothing: its report says `activation: not_performed` and asks you to review the binding, provision its secret, and let each product's normal launcher path activate it.
+The command writes no secret and activates nothing: its report says `activation: not-performed` and asks you to review the binding, provision its secret, and let each product's normal launcher path activate it.
 Run `caseworkctl check` again, and the source description changes to `checked`.
 
 A repeated `source add --apply` rewrites nothing that already matches, and it never replaces a file that differs from what it would write.
-The source description differs once the BReg registry changes, because it pins `sourceRevision`. It also differs when `casework.yaml` declares a different set of request entities: one entity imports `v1alpha1`, and several import `v1alpha2`.
+The source description differs once the BReg registry changes, because it pins `sourceRevision`. It also differs when `casework.yaml` declares a different set of request entities, because the description lists every paired entity in its `requests` array.
+A description an earlier release wrote differs too: it carries a retired `apiVersion`, `caseworkctl check` refuses it as `config.retired-api-version`, and the same recovery imports it again.
 The runtime binding differs after a hand edit, or when the paired review authorities or executors change.
 The refusal writes nothing. It names each differing file and the reason, then prints the commands that recover: move each file aside to a `.previous` copy, and repeat the same `source add --apply`. Each printed move refuses instead of replacing a `.previous` copy an earlier, unfinished recovery already left there; when one already exists, the refusal names it and asks you to compare it with the current file and delete or rename it before you run the printed commands.
 Compare each new file with its `.previous` copy, carry any hand edit you still need into the new runtime binding, then delete the copies.

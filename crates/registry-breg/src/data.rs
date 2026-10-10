@@ -201,7 +201,7 @@ pub(crate) fn validate_field_value(value: FieldValue<'_>, field_type: &FieldType
 ///
 /// Search terms use the query grammar's byte bound and the field's maximum
 /// character bound. They are not complete stored values, so they may be
-/// shorter than a string's `minLength` or name only part of a vocabulary code.
+/// shorter than a string's `minimumLength` or name only part of a vocabulary code.
 pub(crate) fn valid_text_search_term(value: &str, field_type: &FieldTypeSource) -> bool {
     if value.len() > crate::query::MAX_LITERAL_BYTES || value.chars().any(char::is_control) {
         return false;

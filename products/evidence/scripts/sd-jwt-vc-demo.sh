@@ -246,7 +246,7 @@ verify_command=(
   cargo run --locked --quiet -p registry-evidence -- verify
   --sd-jwt-vc "$state_relative/credential.txt"
   --jwks "$state_relative/trusted.jwks.json"
-  --policy "$state_relative/verification-policy.yaml"
+  --policy "$state_relative/verification.policy.yaml"
 )
 printf '   $ %s\n' "${verify_command[*]}"
 "${verify_command[@]}"
@@ -262,7 +262,7 @@ tamper_command=(
   cargo run --locked --quiet -p registry-evidence -- verify
   --sd-jwt-vc "$state_relative/tampered-credential.txt"
   --jwks "$state_relative/trusted.jwks.json"
-  --policy "$state_relative/verification-policy.yaml"
+  --policy "$state_relative/verification.policy.yaml"
 )
 printf '   $ %s\n' "${tamper_command[*]}"
 if "${tamper_command[@]}" >/dev/null 2>"$state_root/tampered.stderr"; then
@@ -281,7 +281,7 @@ products/evidence/.sd-jwt-vc-demo/:
   credential.txt            the SD-JWT VC
   issuer-metadata.json      the published issuer identity and key set
   trusted.jwks.json         the pinned key set the offline verifier used
-  verification-policy.yaml  expectations taken from the accepted transaction
+  verification.policy.yaml  expectations taken from the accepted transaction
   tampered-credential.txt   the same credential with one edited disclosure
   harness.log               the demo server's own checks
 

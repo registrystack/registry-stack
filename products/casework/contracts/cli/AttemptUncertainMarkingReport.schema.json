@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://id.registrystack.org/schemas/casework/attempt-uncertain-marking-report/attempt-uncertain-marking-report.v1alpha3.schema.json",
-  "title": "AttemptUncertainMarkingReport",
+  "title": "CaseworkAttemptUncertainMarkingReport",
   "description": "Versioned JSON report emitted by caseworkctl for attempt mark-uncertain.",
   "type": "object",
   "required": [
@@ -10,10 +10,10 @@
   ],
   "properties": {
     "apiVersion": {
-      "const": "registry.registrystack.org/caseworkctl/v1alpha3"
+      "const": "id.registrystack.org/formats/casework/attempt-uncertain-marking-report/v1alpha3"
     },
     "kind": {
-      "const": "AttemptUncertainMarkingReport"
+      "const": "CaseworkAttemptUncertainMarkingReport"
     }
   },
   "unevaluatedProperties": false,
@@ -42,10 +42,10 @@
           "const": "complete"
         },
         "apiVersion": {
-          "const": "registry.registrystack.org/caseworkctl/v1alpha3"
+          "const": "id.registrystack.org/formats/casework/attempt-uncertain-marking-report/v1alpha3"
         },
         "kind": {
-          "const": "AttemptUncertainMarkingReport"
+          "const": "CaseworkAttemptUncertainMarkingReport"
         },
         "project": {
           "type": "string"
@@ -83,10 +83,10 @@
           ]
         },
         "apiVersion": {
-          "const": "registry.registrystack.org/caseworkctl/v1alpha3"
+          "const": "id.registrystack.org/formats/casework/attempt-uncertain-marking-report/v1alpha3"
         },
         "kind": {
-          "const": "AttemptUncertainMarkingReport"
+          "const": "CaseworkAttemptUncertainMarkingReport"
         },
         "diagnostics": {
           "$ref": "#/$defs/diagnostics"
@@ -279,10 +279,10 @@
       }
     },
     "Url": {
-      "description": "An absolute http or https URL with a host and no user information.",
+      "description": "An absolute http or https URL with a host, no user information, and no whitespace or control character.",
       "format": "uri",
       "maxLength": 2048,
-      "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://[^/?#@]+([/?#].*)?$",
+      "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://[^/?#@\\u0000-\\u0020\\u007F-\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]+([/?#][^\\u0000-\\u0020\\u007F-\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*)?$",
       "type": "string"
     }
   }

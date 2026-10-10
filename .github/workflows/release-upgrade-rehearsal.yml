@@ -4,6 +4,8 @@ name: RegistryStack Release Upgrade Rehearsal
 # This rehearsal downloads the previous release's authenticated binaries,
 # writes real state with them, upgrades that state with the binaries built
 # from this source, and fails when state is no longer served or a row is lost.
+# While no release on the forward state path is published, the script runs the
+# same legs with this source's binaries on both sides.
 on:
   pull_request:
     branches:
@@ -12,9 +14,6 @@ on:
       - release/manifests/**
       - release/scripts/rehearse-upgrade.py
       - release/scripts/test_rehearse_upgrade.py
-      - release/scripts/upgrade_steps.py
-      - release/scripts/test_upgrade_steps.py
-      - release/notes/config-conventions/upgrade-steps.yaml
       - .github/workflows/release-upgrade-rehearsal.yml
   workflow_dispatch:
     inputs:

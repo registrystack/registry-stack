@@ -1,5 +1,5 @@
 {
-  "apiVersion": "registry.registrystack.org/breg-explain/v1alpha4",
+  "apiVersion": "id.registrystack.org/formats/breg/model-explanation/v1alpha4",
   "entities": {
     "record": {
       "accessProfiles": {
@@ -71,8 +71,8 @@
         "code": {
           "classification": "internal",
           "fieldType": {
-            "maxLength": 32,
-            "minLength": 0,
+            "maximumLength": 32,
+            "minimumLength": 0,
             "type": "string"
           },
           "id": "code",
@@ -82,8 +82,8 @@
         "district": {
           "classification": "internal",
           "fieldType": {
-            "maxLength": 32,
-            "minLength": 0,
+            "maximumLength": 32,
+            "minimumLength": 0,
             "type": "string"
           },
           "id": "district",
@@ -93,8 +93,8 @@
         "label": {
           "classification": "internal",
           "fieldType": {
-            "maxLength": 100,
-            "minLength": 0,
+            "maximumLength": 100,
+            "minimumLength": 0,
             "type": "string"
           },
           "id": "label",
@@ -132,8 +132,8 @@
           "apiName": "code",
           "classification": "internal",
           "fieldType": {
-            "maxLength": 32,
-            "minLength": 0,
+            "maximumLength": 32,
+            "minimumLength": 0,
             "type": "string"
           },
           "id": "code",
@@ -145,8 +145,8 @@
           "apiName": "label",
           "classification": "internal",
           "fieldType": {
-            "maxLength": 100,
-            "minLength": 0,
+            "maximumLength": 100,
+            "minimumLength": 0,
             "type": "string"
           },
           "id": "label",
@@ -158,8 +158,8 @@
           "apiName": "district",
           "classification": "internal",
           "fieldType": {
-            "maxLength": 32,
-            "minLength": 0,
+            "maximumLength": 32,
+            "minimumLength": 0,
             "type": "string"
           },
           "id": "district",
@@ -171,7 +171,7 @@
       "tombstone": false
     }
   },
-  "kind": "ModelExplanation",
+  "kind": "BRegModelExplanation",
   "manifestProjection": {
     "accessProfile": "district-reader",
     "canonicalBaseIri": "https://registry.example.com",

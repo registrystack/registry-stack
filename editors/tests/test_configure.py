@@ -121,6 +121,7 @@ class ConfigureTests(unittest.TestCase):
         for name, pattern in (
             ("backup-binding.v1alpha1.schema.json", "*-binding.json"),
             ("example-scenarios.v1alpha1.schema.json", "examples/scenarios.json"),
+            ("migration-descriptor.v1alpha1.schema.json", "**/modules/*/migrations/*/descriptor.json"),
         ):
             with self.subTest(schema=name):
                 url = (project / ".registry-stack-editor/schemas" / name).as_uri()

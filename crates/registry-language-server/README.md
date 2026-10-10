@@ -17,11 +17,11 @@ holding several products can be read without guessing which tool is talking.
 | Family | A directory is a root when it holds | Diagnostic source |
 |---|---|---|
 | Evidence | `evidence-project.yaml`, or both `source.openapi.yaml` and a `questions/` directory | `evidence` |
-| BReg | `registry.yaml`: `RegistryProject` or BReg `apiVersion` | `breg` |
+| BReg | `registry.yaml`: `BRegProject` or BReg `apiVersion` | `breg` |
 | Casework | `casework.yaml`: `CaseworkProject` or Casework `apiVersion` | `casework` |
 | Scheduling | `scheduling.yaml`: `SchedulingProject` or Scheduling `apiVersion` | `scheduling` |
 | Messaging | `messaging.yaml`: `MessagingProject` or Messaging `apiVersion` | `messaging` |
-| Discovery | `origins.yaml` with a Discovery origins `schemaVersion` | `discovery` |
+| Discovery | `origins.yaml`: `DiscoveryOrigins` or Discovery origins `apiVersion` | `discovery` |
 | Manifest | `metadata.yaml` with `schema_version: registry-manifest/v1`, or an explicit project marker | `manifest` |
 | Render | `manifest.yaml`: `RenderBundle` or Render `apiVersion` | `render` |
 | Evidence OID4VCI | an explicit project marker | `evidence-oid4vci` |

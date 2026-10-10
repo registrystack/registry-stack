@@ -16,8 +16,7 @@ use registry_breg::{
         CHANGE_REQUEST_PLAN_ABI_V1,
     },
     model::{
-        CompiledChangeRequest, CompiledChangeRequestApplication, CompiledChangeRequestNoReview,
-        CompiledChangeRequestNoReviewMode, CompiledChangeRequestOnApproved,
+        CompiledChangeRequest, CompiledChangeRequestApplication, CompiledChangeRequestOnApproved,
         CompiledChangeRequestOnApprovedMode, CompiledChangeRequestPlanner,
         CompiledChangeRequestPlannerKind, CompiledChangeRequestPlannerLimits,
         CompiledChangeRequestPlannerWrite, CompiledChangeRequestRetentionMode,
@@ -37,9 +36,7 @@ fn plan(script: &str, _application_policy: ()) -> CompiledChangeRequest {
         request_entity_id: "request".to_owned(),
         contract_fingerprint: "sha256:test".to_owned(),
         retention_mode: CompiledChangeRequestRetentionMode::Retain,
-        review: CompiledChangeRequestReview::None(CompiledChangeRequestNoReview {
-            mode: CompiledChangeRequestNoReviewMode::None,
-        }),
+        review: CompiledChangeRequestReview::None,
         on_approved: CompiledChangeRequestOnApproved {
             mode: CompiledChangeRequestOnApprovedMode::Manual,
             executor: None,
@@ -532,7 +529,7 @@ fn rhai_planner_contract_fingerprint_binds_governed_meaning_only() {
 
     let mut review_policy = base.clone();
     review_policy["entities"][1]["changeRequest"]["review"] =
-        json!({"authority":"casework-main", "policyId":"person-name-review"});
+        json!({"type":"required","authority":"casework-main", "policyId":"person-name-review"});
     assert_ne!(
         original,
         fingerprint(
@@ -668,7 +665,7 @@ fn automatic_apply_keeps_the_executor_separate_from_source_profiles() {
     let mut project: serde_json::Value =
         serde_norway::from_slice(&project_bytes).expect("fixture YAML converts");
     project["entities"][1]["changeRequest"]["review"] =
-        json!({"authority":"casework-main","policyId":"person-name-change"});
+        json!({"type":"required","authority":"casework-main","policyId":"person-name-change"});
     project["entities"][1]["changeRequest"]["onApproved"] =
         json!({"mode":"automatic","executor":"person-name-change-executor"});
     let project = registry_breg::contract::parse_project_json(
@@ -711,7 +708,7 @@ fn reviewed_planner_allows_a_separate_manual_apply_profile() {
         .find(|entity| entity["id"] == "person-name-change-request")
         .expect("request entity exists");
     request["changeRequest"]["review"] =
-        json!({"authority":"casework-main", "policyId":"person-name-change"});
+        json!({"type":"required","authority":"casework-main", "policyId":"person-name-change"});
     request["changeRequest"]["onApproved"] = json!({"mode":"manual"});
     let profiles = project["accessProfiles"]
         .as_array_mut()
@@ -720,24 +717,24 @@ fn reviewed_planner_allows_a_separate_manual_apply_profile() {
         "id": "source-reader-without-apply",
         "principalClaim": "registry_principal",
         "requiredScopes": "unrestricted",
-        "permissions": [{
+        "permissions": {"entities": [{
             "entity": "person-name-change-request",
             "operations": ["get"],
             "readableFields": ["person", "given-name", "family-name", "handling"],
           "rowBoundaries": "unrestricted"
-        }]
+        }]}
     }));
     profiles.push(json!({
         "id": "separate-manual-applier",
         "principalClaim": "registry_principal",
         "requiredScopes": "unrestricted",
-        "permissions": [{
+        "permissions": {"entities": [{
             "entity": "person-name-change-request",
-            "operations": ["get", "apply_request"],
+            "operations": ["get", "apply-request"],
             "readableFields": ["person", "given-name", "family-name", "handling"],
             "applyTargets": [{"entity": "person", "rowBoundaries": "unrestricted"}],
           "rowBoundaries": "unrestricted"
-        }]
+        }]}
     }));
     let project = registry_breg::contract::parse_project_json(
         &serde_json::to_vec(&project).expect("test project serializes"),

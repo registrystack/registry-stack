@@ -34,7 +34,7 @@ package: {{root: {package}}}
 listener: {{bind: \"{bind}\", tlsTermination: development-loopback}}
 secretProviders: {{file: {{root: {root}/secrets}}, environment: {{}}}}
 database: {{runtimeUrlRef: secret:env/RUNTIME, migrationUrlRef: secret:env/MIGRATION}}
-authentication: {{oidc: {{issuer: http://127.0.0.1:8091, audience: urn:example:casework}}}}
+authentication: {{oidc: {{issuer: http://127.0.0.1:8091, audience: urn:example:casework, allowedClients: unrestricted}}}}
 audit: {{path: {root}/audit.ndjson, hashKeyRef: secret:file/audit}}
 sources: {{}}
 {tail}",

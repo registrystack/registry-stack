@@ -170,7 +170,6 @@ SCHEMA_STRUCTS = {
     },
     "crates/registry-casework-core/src/config.rs": {
         "CaseworkProject": "CaseworkProject",
-        "CaseworkIdentity": "CaseworkIdentity",
         "AccessProfile": "AccessProfile",
         "QueuePolicy": "QueuePolicy",
         "SourcePolicy": "SourcePolicy",
@@ -334,7 +333,7 @@ def review_schemas() -> dict:
         {
             "id": text,
             "label": text,
-            "settlement": {"type": "string", "enum": ["rejected", "changes_requested", "answered"]},
+            "settlement": {"type": "string", "enum": ["rejected", "changes-requested", "answered"]},
             "reasonRequired": {"type": "boolean"},
             "resultRequired": {"type": "boolean"},
         },
@@ -387,7 +386,7 @@ def review_schemas() -> dict:
     }
     review_decision_type = {
         "type": "string",
-        "enum": ["approve", "reject", "changes_requested", "answer"],
+        "enum": ["approve", "reject", "changes-requested", "answer"],
     }
     decision_receipt = obj(
         {
@@ -411,7 +410,7 @@ def review_schemas() -> dict:
             "if": {
                 "properties": {
                     "decision": {
-                        "enum": ["reject", "changes_requested", "answer"]
+                        "enum": ["reject", "changes-requested", "answer"]
                     }
                 },
                 "required": ["decision"],
@@ -463,7 +462,7 @@ def review_schemas() -> dict:
             ),
             obj(
                 {
-                    "type": {"const": "changes_requested"},
+                    "type": {"const": "changes-requested"},
                     "outcome": text,
                     "reason": nullable(text),
                     "result": result_payload,
@@ -490,7 +489,7 @@ def review_schemas() -> dict:
             ),
             obj(
                 {
-                    "outcome": {"const": "already_terminal"},
+                    "outcome": {"const": "already-terminal"},
                     "result": ref("ReviewResult"),
                 },
                 ["outcome", "result"],
@@ -560,7 +559,7 @@ def review_schemas() -> dict:
                     "reference": text,
                     "bindingStatus": {
                         "type": "string",
-                        "enum": ["current", "binding_changed"],
+                        "enum": ["current", "binding-changed"],
                     },
                     "projection": obj(
                         {
@@ -599,8 +598,8 @@ def review_schemas() -> dict:
         "ReviewPolicyBinding": policy,
         "ReviewCreateRequest": obj({"kind": text, "subject": subject, "requesterReference": text, "initiator": nullable(ref("IssuerPrincipal")), "context": review_context, "resultConstraints": result_payload}, ["kind", "subject", "requesterReference", "context"]),
         "ReviewRequestAccepted": obj({"requestId": uuid, "subject": subject, "policy": policy, "submissionDigest": policy_digest}, ["requestId", "subject", "policy", "submissionDigest"]),
-        "ReviewRequestView": obj({"requestId": uuid, "subject": subject, "policy": policy, "submissionDigest": policy_digest, "requesterReference": text, "lifecycle": {"type": "string", "enum": ["reviewing", "approved", "rejected", "changes_requested", "answered", "cancelled", "superseded"]}, "activeStage": text, "createdAt": instant, "updatedAt": instant}, ["requestId", "subject", "policy", "submissionDigest", "requesterReference", "lifecycle", "createdAt", "updatedAt"]),
-        "ReviewResult": obj({"resultId": uuid, "requestId": uuid, "subject": subject, "policy": policy, "submissionDigest": policy_digest, "status": {"type": "string", "enum": ["approved", "rejected", "changes_requested", "answered", "cancelled", "superseded"]}, "outcome": text, "result": portable_json_object(), "completedAt": instant, "availableUntil": instant}, ["resultId", "requestId", "subject", "policy", "submissionDigest", "status", "completedAt", "availableUntil"]),
+        "ReviewRequestView": obj({"requestId": uuid, "subject": subject, "policy": policy, "submissionDigest": policy_digest, "requesterReference": text, "lifecycle": {"type": "string", "enum": ["reviewing", "approved", "rejected", "changes-requested", "answered", "cancelled", "superseded"]}, "activeStage": text, "createdAt": instant, "updatedAt": instant}, ["requestId", "subject", "policy", "submissionDigest", "requesterReference", "lifecycle", "createdAt", "updatedAt"]),
+        "ReviewResult": obj({"resultId": uuid, "requestId": uuid, "subject": subject, "policy": policy, "submissionDigest": policy_digest, "status": {"type": "string", "enum": ["approved", "rejected", "changes-requested", "answered", "cancelled", "superseded"]}, "outcome": text, "result": portable_json_object(), "completedAt": instant, "availableUntil": instant}, ["resultId", "requestId", "subject", "policy", "submissionDigest", "status", "completedAt", "availableUntil"]),
         "ReviewResultFeedEntry": obj({"eventId": uuid, "requestId": uuid, "resultId": uuid, "completedAt": instant}, ["eventId", "requestId", "resultId", "completedAt"]),
         "ReviewResultFeedPage": obj({"items": array(ref("ReviewResultFeedEntry")), "nextCursor": uuid}, ["items"]),
         "ReviewCancelRequest": obj({"subject": subject, "reason": text}, ["subject", "reason"]),
@@ -608,13 +607,13 @@ def review_schemas() -> dict:
         "ReviewDecisionType": review_decision_type,
         "ReviewDecisionReceipt": decision_receipt,
         "OwnReviewDecision": obj({"taskId": uuid, "requestId": uuid, "queue": text, "requesterReference": {"type": "string", "minLength": 1, "maxLength": 256, "x-maximum-utf8-bytes": 256}, "decisionReceipt": ref("ReviewDecisionReceipt")}, ["taskId", "requestId", "queue", "requesterReference", "decisionReceipt"]),
-        "OwnReviewDecisionPage": obj({"items": array(ref("OwnReviewDecision")), "nextCursor": uuid, "status": {"type": "string", "enum": ["complete", "budget_exhausted", "source_unavailable"]}}, ["items", "status"]),
+        "OwnReviewDecisionPage": obj({"items": array(ref("OwnReviewDecision")), "nextCursor": uuid, "status": {"type": "string", "enum": ["complete", "budget-exhausted", "source-unavailable"]}}, ["items", "status"]),
         "ReviewerTaskState": reviewer_task_state,
         "ReviewerTask": task,
-        "ReviewTaskPage": obj({"items": array(task), "nextCursor": uuid, "status": {"type": "string", "enum": ["complete", "budget_exhausted", "source_unavailable"]}}, ["items", "status"]),
+        "ReviewTaskPage": obj({"items": array(task), "nextCursor": uuid, "status": {"type": "string", "enum": ["complete", "budget-exhausted", "source-unavailable"]}}, ["items", "status"]),
         "SupervisoryReviewTaskState": supervisory_review_task_state,
         "SupervisoryReviewTask": supervisory_task,
-        "SupervisoryReviewTaskPage": obj({"items": array(supervisory_task), "nextCursor": uuid, "status": {"type": "string", "enum": ["complete", "budget_exhausted", "source_unavailable"]}}, ["items", "status"]),
+        "SupervisoryReviewTaskPage": obj({"items": array(supervisory_task), "nextCursor": uuid, "status": {"type": "string", "enum": ["complete", "budget-exhausted", "source-unavailable"]}}, ["items", "status"]),
         "ReviewTaskContextData": review_task_context_data,
         "ReviewTaskContext": obj({"taskId": uuid, "requestId": uuid, "subject": subject, "requesterReference": text, "policy": policy, "policySnapshot": ref("ReviewKindPolicySnapshot"), "resultConstraints": portable_json_object(), "context": ref("ReviewTaskContextData")}, ["taskId", "requestId", "subject", "requesterReference", "policy", "policySnapshot", "context"]),
         "ReviewTaskDraftInput": obj({"body": value}, ["body"]),
@@ -638,7 +637,7 @@ def review_schemas() -> dict:
                         "paused",
                         "completed",
                         "cancelled",
-                        "source_facts_missing",
+                        "source-facts-missing",
                     ],
                 },
                 "policyDigest": policy_digest,
@@ -669,12 +668,12 @@ def schemas(problem_entries: list[dict]) -> dict:
     instant = {"type": "string", "format": "date-time"}
     operation_name = {
         "type": "string",
-        "pattern": "^[a-z][a-z0-9_]{0,63}$",
+        "pattern": "^[a-z][a-z0-9_-]{0,63}$",
         "maxLength": 64,
     }
     authored_identifier = {
         "type": "string",
-        "pattern": "^[a-z][a-z0-9-]{0,63}$",
+        "pattern": "^[a-z][a-z0-9_-]{0,63}$",
         "maxLength": 64,
     }
     issuer = obj({"issuer": text, "subject": text}, ["issuer", "subject"])
@@ -717,7 +716,7 @@ def schemas(problem_entries: list[dict]) -> dict:
                 "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
                 "description": "Human-facing source reference disclosed by the source to the current caller. Present only for source-backed items whose request policy explicitly names a reference field and whose current caller read discloses that field.",
             },
-            "state": {"type": "string", "enum": ["open", "claimed", "waiting_applicant", "waiting_application", "synchronizing", "completed", "superseded", "cancelled"]},
+            "state": {"type": "string", "enum": ["open", "claimed", "waiting-applicant", "waiting-application", "synchronizing", "completed", "superseded", "cancelled"]},
             "queueId": text,
             "holder": nullable(ref("IssuerPrincipal")),
             "heldSince": instant,
@@ -737,7 +736,7 @@ def schemas(problem_entries: list[dict]) -> dict:
         },
         ["itemId", "subject", "occurrenceKind", "binding", "bindingReference", "state", "queueId", "revision", "firstObservedAt", "updatedAt", "actions"],
     )
-    page_status = {"type": "string", "enum": ["complete", "budget_exhausted", "source_unavailable"]}
+    page_status = {"type": "string", "enum": ["complete", "budget-exhausted", "source-unavailable"]}
     result = {
         "IssuerPrincipal": issuer,
         "OperationName": operation_name,
@@ -746,7 +745,7 @@ def schemas(problem_entries: list[dict]) -> dict:
         "CaseworkAction": action,
         "StaffingDiagnostic": {
             "type": "string",
-            "enum": ["no_cover_available"],
+            "enum": ["no-cover-available"],
         },
         "AssignmentContext": obj(
             {
@@ -864,9 +863,9 @@ def schemas(problem_entries: list[dict]) -> dict:
             "type": "string",
             "enum": [
                 "moved",
-                "not_visible",
-                "not_eligible",
-                "attempt_in_progress",
+                "not-visible",
+                "not-eligible",
+                "attempt-in-progress",
                 "conflict",
             ],
         },
@@ -908,7 +907,7 @@ def schemas(problem_entries: list[dict]) -> dict:
         ),
         "MutationResponse": obj({"item": ref("WorkItem"), "attempt": nullable(ref("AttemptStatus"))}, ["item"]),
         "HistoryEntry": obj(
-            {"eventId": uuid, "itemId": uuid, "itemRevision": integer, "kind": {"type": "string", "enum": ["observed", "opened", "claimed", "assigned", "delegated", "caseload_moved", "clock_reminder", "clock_step_applied", "clock_recomputed", "released", "draft_saved", "attempt_reserved", "attempt_uncertain", "action_completed", "attempt_settled", "superseded", "completed", "task_approved", "task_revoked", "task_invalidated"]}, "occurredAt": instant, "actor": nullable(ref("IssuerPrincipal")), "profileId": text, "detail": {}},
+            {"eventId": uuid, "itemId": uuid, "itemRevision": integer, "kind": {"type": "string", "enum": ["observed", "opened", "claimed", "assigned", "delegated", "caseload-moved", "clock-reminder", "clock-step-applied", "clock-recomputed", "released", "draft-saved", "attempt-reserved", "attempt-uncertain", "action-completed", "attempt-settled", "superseded", "completed", "task-approved", "task-revoked", "task-invalidated"]}, "occurredAt": instant, "actor": nullable(ref("IssuerPrincipal")), "profileId": text, "detail": {}},
             ["eventId", "itemId", "itemRevision", "kind", "occurredAt", "profileId", "detail"],
         ),
         "HistoryPage": obj({"items": array(ref("HistoryEntry")), "nextCursor": nullable(text), "status": {"const": "complete"}}, ["items", "status"]),
@@ -934,7 +933,7 @@ def schemas(problem_entries: list[dict]) -> dict:
             },
             ["staff", "supervisors", "servedQueues"],
         ),
-        "CaseworkIdentity": obj({"id": text, "version": text}, ["id", "version"]),
+        "ProjectIdentity": obj({"id": text, "version": text}, ["id", "version"]),
         "AccessProfile": obj(
             {
                 "id": text,
@@ -1063,24 +1062,24 @@ def schemas(problem_entries: list[dict]) -> dict:
         "SubjectClockPolicy": obj(
             {
                 "id": authored_identifier,
-                "scope": {"const": "subject"},
-                "anchor": {"const": "firstSubmittedAt"},
-                "completeOn": {"const": "reviewCompleted"},
+                "type": {"const": "subject"},
+                "anchor": {"const": "first-submitted-at"},
+                "completeOn": {"const": "review-completed"},
                 "after": ref("ElapsedDuration"),
                 "pauseWhile": {
                     "type": "array",
-                    "prefixItems": [{"const": "awaitingApplicant"}],
+                    "prefixItems": [{"const": "awaiting-applicant"}],
                     "minItems": 1,
                     "maxItems": 1,
                 },
             },
-            ["id", "scope", "anchor", "completeOn", "after", "pauseWhile"],
+            ["id", "type", "anchor", "completeOn", "after", "pauseWhile"],
         ),
         "ActivityClockPolicy": obj(
             {
                 "id": authored_identifier,
-                "scope": {"const": "activity"},
-                "anchor": {"const": "stageEnteredAt"},
+                "type": {"const": "activity"},
+                "anchor": {"const": "stage-entered-at"},
                 "calendar": authored_identifier,
                 "after": ref("WorkingDaysAfter"),
                 "dueTime": {
@@ -1103,11 +1102,11 @@ def schemas(problem_entries: list[dict]) -> dict:
                     "items": ref("ClockStep"),
                 },
             },
-            ["id", "scope", "anchor", "calendar", "after", "dueTime"],
+            ["id", "type", "anchor", "calendar", "after", "dueTime"],
         ),
         "ClockPolicy": {
             "oneOf": [ref("SubjectClockPolicy"), ref("ActivityClockPolicy")],
-            "discriminator": {"propertyName": "scope"},
+            "discriminator": {"propertyName": "type"},
         },
         "HolidaySetDocument": obj(
             {
@@ -1133,8 +1132,8 @@ def schemas(problem_entries: list[dict]) -> dict:
                 "paused",
                 "completed",
                 "cancelled",
-                "verification_pending",
-                "source_facts_missing",
+                "verification-pending",
+                "source-facts-missing",
             ],
         },
         "ClockNextEffect": {
@@ -1260,9 +1259,9 @@ def schemas(problem_entries: list[dict]) -> dict:
         ),
         "CaseworkProject": obj(
             {
-                "apiVersion": {"const": "registry.registrystack.org/casework/v1alpha1"},
+                "apiVersion": {"const": "id.registrystack.org/formats/casework/project/v1alpha1"},
                 "kind": {"const": "CaseworkProject"},
-                "casework": ref("CaseworkIdentity"),
+                "project": ref("ProjectIdentity"),
                 "accessProfiles": array(ref("AccessProfile")),
                 "queues": array(ref("QueuePolicy")),
                 "sources": array(ref("SourcePolicy")),
@@ -1272,7 +1271,7 @@ def schemas(problem_entries: list[dict]) -> dict:
                 "clocks": {"type": "array", "maxItems": 32, "uniqueItems": True, "x-unique-by": "id", "items": ref("ClockPolicy")},
                 "inbox": ref("InboxPolicy"),
             },
-            ["apiVersion", "kind", "casework", "accessProfiles", "queues"],
+            ["apiVersion", "kind", "project", "accessProfiles", "queues"],
         ),
         "ElapsedDuration": obj({"elapsed": text}, ["elapsed"]),
         "PassiveTargetPolicy": obj({"id": text, "after": ref("ElapsedDuration")}, ["id", "after"]),
@@ -1337,7 +1336,7 @@ def task_schemas() -> dict:
     common = {"agent":ref("IssuerPrincipal"), "client":text, "resource":text, "scopes":{"type":"array","minItems":1,"maxItems":32,"uniqueItems":True,"items":{"type":"string","minLength":1,"maxLength":128,"pattern":r"^[\x21\x23-\x29\x2b-\x5b\x5d-\x7e]+$"}}, "purpose":text, "bounds":ref("TaskGrantBounds")}
     evidence_context = obj({"requesterTags":{"type":"array","minItems":1,"maxItems":32,"uniqueItems":True,"items":{"type":"string","minLength":1,"maxLength":128,"pattern":r"^[a-z][a-z0-9._-]*$"}}, "audience":{"type":"string","format":"uri","minLength":1,"maxLength":4096}}, ["requesterTags","audience"])
     preview = {"id":text, "version":text, "label":text, **common, "evidenceContext":ref("EvidenceRequesterContext"), "subjects":subjects, "lifetimeSeconds":{"type":"integer","minimum":1,"maximum":900}}
-    template = {**preview, "eligibleTeams":array(text), "eligibleProfiles":array(text), "source":text, "reviewKinds":array(text), "itemKinds":array(text), "itemStates":{"type":"array","items":{"enum":["claimed","waiting_applicant","waiting_application"]}}}
+    template = {**preview, "eligibleTeams":array(text), "eligibleProfiles":array(text), "source":text, "reviewKinds":array(text), "itemKinds":array(text), "itemStates":{"type":"array","items":{"enum":["claimed","waiting-applicant","waiting-application"]}}}
     template["subjects"] = {"type":"object", "minProperties":1, "maxProperties":32, "additionalProperties":text}
     view = {"id":uuid, "templateId":text, "templateVersion":text, **common, "evidenceContext":ref("EvidenceRequesterContext"), "expiresAt":number, "invalidated":{"type":"boolean"}}
     details = {"grantId":uuid, "sourceIssuer":text, "principal":text, "client":text, "resource":text, "purpose":text, "bounds":ref("TaskGrantBounds"), "subjects":subjects, "expiresAt":number}
@@ -1421,7 +1420,7 @@ TASK_ID = parameter("task_id", "path", "Unified review task UUID.", {"type": "st
 REQUEST_ID = parameter("request_id", "path", "Unified review request UUID.", {"type": "string", "format": "uuid"})
 KIND_ID = parameter("kind_id", "path", "Configured unified review kind identifier.")
 ABSENCE_ID = parameter("absence_id", "path", "Absence UUID.", {"type": "string", "format": "uuid"})
-HOLIDAY_ID = parameter("id", "path", "Configured holiday-set identifier.", {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,63}$", "maxLength": 64})
+HOLIDAY_ID = parameter("id", "path", "Configured holiday-set identifier.", {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$", "maxLength": 64})
 HOLIDAY_REVISION = parameter("revision", "path", "Positive immutable holiday-set revision.", {"type": "integer", "minimum": 1})
 TEAM_ID = parameter("team_id", "path", "Directory team identifier.", {"type": "string", "minLength": 1, "maxLength": 128, "x-maximum-utf8-bytes": 128, "pattern": "^[A-Za-z0-9._-]+$"})
 EVENT_ID = parameter("event_id", "path", "Protected accountability event UUID.", {"type": "string", "format": "uuid"})
@@ -1527,20 +1526,20 @@ REVIEW_VALIDATION_OPERATIONS = {
     ("post", "/v1/review-tasks/{task_id}/decisions"),
 }
 REVIEW_VALIDATION_REASONS = [
-    "kind_not_allowed",
-    "reference_invalid",
-    "object_required",
-    "maximum_bytes_exceeded",
-    "maximum_depth_exceeded",
-    "schema_mismatch",
-    "outcome_not_declared",
-    "reason_required",
-    "text_invalid",
-    "result_not_declared",
-    "result_required",
-    "field_not_declared",
-    "constraint_invalid",
-    "constraint_violated",
+    "kind-not-allowed",
+    "reference-invalid",
+    "object-required",
+    "maximum-bytes-exceeded",
+    "maximum-depth-exceeded",
+    "schema-mismatch",
+    "outcome-not-declared",
+    "reason-required",
+    "text-invalid",
+    "result-not-declared",
+    "result-required",
+    "field-not-declared",
+    "constraint-invalid",
+    "constraint-violated",
 ]
 SOURCE_ATTEMPT_REFERENCE_OPERATIONS = {
     ("POST", "/v1/work-items/{item_id}/decisions"),
@@ -1613,9 +1612,9 @@ def document(contract: dict) -> dict:
         "/v1/review-requests/{request_id}/result": {"get": operation("Poll a requester-owned review result", "ReviewResult", parameters=[REQUEST_ID], description="Returns 200 with a retained terminal result, 202 while pending, empty 404 for concealed or unknown requests, and 410 after result retention expires.")},
         "/v1/review-requests/{request_id}/cancel": {"post": operation("Cancel a requester-owned active review", "ReviewCancelResponse", idempotency=True, body="ReviewCancelRequest", parameters=[REQUEST_ID])},
         "/v1/review-results": {"get": operation("List requester result-feed events", "ReviewResultFeedPage", parameters=[parameter("cursor", "query", "Last delivered event UUID.", {"type": "string", "format": "uuid"}, required=False), parameter("limit", "query", "Page size from 1 through 100. Zero or a value above 100 is request.limit-out-of-range; a value that is not a non-negative whole number is request.invalid.", {"type": "integer", "minimum": 1, "maximum": 100}, required=False)])},
-        "/v1/review-tasks": {"get": operation("List current reviewer tasks", "ReviewTaskPage", source=True, source_required=False, parameters=[parameter("queue", "query", "Optional queue filter.", required=False), parameter("ownership", "query", "Optional ownership filter applied before pagination. assigned_to_me selects tasks held by the current effective issuer-qualified principal, including a delegated holder. unclaimed selects open tasks. Omit it to list all eligible active tasks.", {"type": "string", "enum": ["assigned_to_me", "unclaimed"]}, required=False), parameter("cursor", "query", "Returned continuation UUID for a live created-at and task-id scan position. Pass unchanged with the same caller, Casework and source profiles, queue and ownership filters. A disclosed task anchor is its task UUID and requires current source visibility. After an undisclosed candidate, a bounded page instead issues an opaque scan checkpoint lasting at most 15 minutes and bound to the exact caller, profiles, view and filters. A checkpoint grants no task or source authority. Current membership, queue service, pinned deciding profile, retention and task existence are rechecked. Ownership and the original policy anchor's active status are not task-anchor validity conditions. Unknown, erased, expired, no-longer-authorized or different-queue anchors and mismatched checkpoints return 410 review.result-expired. Refresh or change a filter by restarting without a cursor. A source-backed task anchor adds at most one preflight outside the candidate source-read budget, under the same page deadline.", {"type": "string", "format": "uuid"}, required=False), parameter("limit", "query", "Page size from 1 through 100. Zero or a value above 100 is request.limit-out-of-range; a value that is not a non-negative whole number is request.invalid.", {"type": "integer", "minimum": 1, "maximum": 100}, required=False)], description="Lists active tasks the current Staff or Supervisor caller may decide under a currently served queue and pinned deciding profile. The ownership filter narrows that authorized set and adds no authority. Each page is a live walk: rows after the cursor position are evaluated against current state, and a newly matching earlier row is visible after restarting the walk.")},
+        "/v1/review-tasks": {"get": operation("List current reviewer tasks", "ReviewTaskPage", source=True, source_required=False, parameters=[parameter("queue", "query", "Optional queue filter.", required=False), parameter("ownership", "query", "Optional ownership filter applied before pagination. assigned-to-me selects tasks held by the current effective issuer-qualified principal, including a delegated holder. unclaimed selects open tasks. Omit it to list all eligible active tasks.", {"type": "string", "enum": ["assigned-to-me", "unclaimed"]}, required=False), parameter("cursor", "query", "Returned continuation UUID for a live created-at and task-id scan position. Pass unchanged with the same caller, Casework and source profiles, queue and ownership filters. A disclosed task anchor is its task UUID and requires current source visibility. After an undisclosed candidate, a bounded page instead issues an opaque scan checkpoint lasting at most 15 minutes and bound to the exact caller, profiles, view and filters. A checkpoint grants no task or source authority. Current membership, queue service, pinned deciding profile, retention and task existence are rechecked. Ownership and the original policy anchor's active status are not task-anchor validity conditions. Unknown, erased, expired, no-longer-authorized or different-queue anchors and mismatched checkpoints return 410 review.result-expired. Refresh or change a filter by restarting without a cursor. A source-backed task anchor adds at most one preflight outside the candidate source-read budget, under the same page deadline.", {"type": "string", "format": "uuid"}, required=False), parameter("limit", "query", "Page size from 1 through 100. Zero or a value above 100 is request.limit-out-of-range; a value that is not a non-negative whole number is request.invalid.", {"type": "integer", "minimum": 1, "maximum": 100}, required=False)], description="Lists active tasks the current Staff or Supervisor caller may decide under a currently served queue and pinned deciding profile. The ownership filter narrows that authorized set and adds no authority. Each page is a live walk: rows after the cursor position are evaluated against current state, and a newly matching earlier row is visible after restarting the walk.")},
         "/v1/review-tasks/supervision": {"get": operation("List review tasks for supervision", "SupervisoryReviewTaskPage", source=True, source_required=False, parameters=[parameter("queue", "query", "Optional currently supervised queue filter.", required=False), parameter("requestId", "query", "Optional exact canonical request UUID, selected before pagination and composed with queue and limit. A reference grants no authority. Unknown, other-team, revoked, concealed or expired requests return the same neutral empty page under current list semantics.", {"type": "string", "format": "uuid"}, required=False), parameter("cursor", "query", "Returned continuation UUID for a live created-at and task-id scan position. Pass unchanged with the same caller, Casework and source profiles, queue and requestId filters. A disclosed task anchor is its task UUID and requires current source visibility. After an undisclosed candidate, a bounded page instead issues an opaque scan checkpoint lasting at most 15 minutes and bound to the exact caller, profiles, supervisory view, queue and requestId selection. A checkpoint grants no task or source authority. Current Supervisor membership, queue service, retention and task existence are rechecked; a deciding profile and the original policy anchor's active status are not required. Unknown, erased, expired, no-longer-authorized or different-queue or different-request anchors and mismatched checkpoints return 410 review.result-expired. Refresh or change the filter by restarting without a cursor. A source-backed task anchor adds at most one preflight outside the candidate source-read budget, under the same page deadline.", {"type": "string", "format": "uuid"}, required=False), parameter("limit", "query", "Page size from 1 through 100. Zero or a value above 100 is request.limit-out-of-range; a value that is not a non-negative whole number is request.invalid.", {"type": "integer", "minimum": 1, "maximum": 100}, required=False)], description="Supervisor-only operational discovery over queues the caller currently supervises. It includes active tasks and retained decided or closed tasks within the terminal result window without requiring a pinned deciding profile. Staff and Administrator profiles are refused. Source-context rows require the current caller's source profile and visibility. Each row is deliberately minimal and releases no context, eligible profiles, holder identity, decision receipt, private reason, note, or producer result. Its state is only open, held, or decided. accountabilityEventId is present only for a retained decision and can be resolved through the separately authorized accountability endpoint. Each page is a live walk: rows after the cursor position are evaluated against current state, and an earlier row becomes visible after restarting the walk.")},
-        "/v1/review-tasks/{task_id}": {"get": operation("Read one current reviewer task", "ReviewerTask", source=True, source_required=False, parameters=[TASK_ID], description="A decided task read always carries decidedByCaller. When it is true, the read also carries decisionReceipt for the retained decision recorded by the current caller's exact issuer-qualified principal. The receipt pins the policy, decision type, optional configured outcome and decision-time outcomeLabel, and decision time. approve has no outcome or label; reject, changes_requested, and answer carry a selected outcome. Labels do not follow current policy edits. Active and supervisory task lists and mutation responses omit both fields. The separate own-decisions discovery returns the same own receipt. The response never names another reviewer or releases a reason or structured producer result; protected accountability stays with supervisors.")},
+        "/v1/review-tasks/{task_id}": {"get": operation("Read one current reviewer task", "ReviewerTask", source=True, source_required=False, parameters=[TASK_ID], description="A decided task read always carries decidedByCaller. When it is true, the read also carries decisionReceipt for the retained decision recorded by the current caller's exact issuer-qualified principal. The receipt pins the policy, decision type, optional configured outcome and decision-time outcomeLabel, and decision time. approve has no outcome or label; reject, changes-requested, and answer carry a selected outcome. Labels do not follow current policy edits. Active and supervisory task lists and mutation responses omit both fields. The separate own-decisions discovery returns the same own receipt. The response never names another reviewer or releases a reason or structured producer result; protected accountability stays with supervisors.")},
         "/v1/review-tasks/{task_id}/context": {"get": operation("Read bounded review task context", "ReviewTaskContext", source=True, source_required=False, parameters=[TASK_ID], description="Submitted context returns the immutable snapshot. Source context requires the current human caller's source profile and token, exact binding, and configured contextProjection; binding changes suppress projected values.")},
         "/v1/review-tasks/{task_id}/claim": {"post": operation("Claim a review task", "ReviewerTask", source=True, source_required=False, mutation=True, parameters=[TASK_ID])},
         "/v1/review-tasks/{task_id}/assign": {"post": operation("Assign a review task", "ReviewerTask", source=True, source_required=False, mutation=True, body="AssignmentRequest", parameters=[TASK_ID])},
@@ -1636,7 +1635,7 @@ def document(contract: dict) -> dict:
         "/v1/review-tasks/{task_id}/task-grants": {"get": operation("List grants for a held review task", "TaskGrantList", source=True, parameters=[TASK_ID]), "post": operation("Approve a grant for a held review task", "TaskGrantView", source=True, mutation=True, body="TaskApprovalRequest", parameters=[TASK_ID])},
         "/v1/review-tasks/{task_id}/task-grants/{grant_id}/revoke": {"post": operation("Revoke a review-task grant", "TaskGrantRevocation", parameters=[TASK_ID, parameter("grant_id", "path", "Task grant UUID.", {"type": "string", "format": "uuid"})])},
         "/v1/work-items": {"get": operation("List a caller-authorized inbox view", "WorkItemPage", source=True, source_required=False, parameters=[
-            parameter("view", "query", "Required view evaluated before pagination.", {"type": "string", "enum": ["mine", "my_teams", "team_holdings", "overdue", "completed_by_me"]}),
+            parameter("view", "query", "Required view evaluated before pagination.", {"type": "string", "enum": ["mine", "my-teams", "team-holdings", "overdue", "completed-by-me"]}),
             parameter("sort", "query", "Source-backed ordering. due orders by effective due date with undated items last, then age and item id; age orders oldest first; type orders by source-neutral subject kind, then age and item id. Defaults to due.", {"type": "string", "enum": ["due", "age", "type"], "default": "due"}, required=False),
             parameter("queue", "query", "Optional queue identifier.", required=False),
             parameter("sourceId", "query", "Exact source identifier. For source-backed requests, supply this together with subjectKind and subjectId or omit all three. The component must be nonempty and is carried without normalization.", {"type": "string", "minLength": 1}, required=False),
@@ -1645,8 +1644,8 @@ def document(contract: dict) -> dict:
             parameter("reference", "query", "Exact case-sensitive human reference. Available only for source-backed requests whose source policy explicitly names a displayReference field. Mutually exclusive with the three-part subject selector.", {"type": "string", "minLength": 1, "maxLength": 512, "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$"}, required=False),
             parameter("cursor", "query", "Opaque cursor bound to this authorized query.", required=False),
             parameter("limit", "query", "Page size from 1 through 100. Zero or a value above 100 is request.limit-out-of-range; a value that is not a non-negative whole number is request.invalid.", {"type": "integer", "minimum": 1, "maximum": 100}, required=False),
-        ], description="Reads source-backed work under the separate current source authority. A complete sourceId, subjectKind, and subjectId selector filters by one exact source-neutral subject. Exact reference lookup returns an item only when the current caller read still discloses the same configured reference. The cursor is bound to the full selector and selected sort; callers follow every page until nextCursor is absent. Source discovery alone does not issue a cursor; if status is budget_exhausted without nextCursor, retry without a cursor after reconciliation. The retried walk starts from the first position and can return items earlier pages already returned, so deduplicate by itemId. Callers serving no queue receive complete without a cursor. Unified review tasks are exposed only through /v1/review-tasks.")},
-        "/v1/work-items/next": {"get": operation("Get the next caller-visible item", "WorkItemPage", source=True, parameters=[parameter("queue", "query", "Optional queue identifier.", required=False), parameter("cursor", "query", "Opaque cursor bound to the authenticated actor, selected Casework and source profiles, optional queue, the next-item feed, and due ordering.", required=False)], description="Returns a WorkItemPage containing at most one caller-visible item. Empty complete and budget_exhausted pages remain successful responses; follow nextCursor when present. Source discovery alone does not issue a cursor; if status is budget_exhausted without nextCursor, retry without a cursor after reconciliation. The retried walk starts from the first position and can return items earlier pages already returned, so deduplicate by itemId. Callers serving no queue receive complete without a cursor. servedQueues is preserved on every page.")},
+        ], description="Reads source-backed work under the separate current source authority. A complete sourceId, subjectKind, and subjectId selector filters by one exact source-neutral subject. Exact reference lookup returns an item only when the current caller read still discloses the same configured reference. The cursor is bound to the full selector and selected sort; callers follow every page until nextCursor is absent. Source discovery alone does not issue a cursor; if status is budget-exhausted without nextCursor, retry without a cursor after reconciliation. The retried walk starts from the first position and can return items earlier pages already returned, so deduplicate by itemId. Callers serving no queue receive complete without a cursor. Unified review tasks are exposed only through /v1/review-tasks.")},
+        "/v1/work-items/next": {"get": operation("Get the next caller-visible item", "WorkItemPage", source=True, parameters=[parameter("queue", "query", "Optional queue identifier.", required=False), parameter("cursor", "query", "Opaque cursor bound to the authenticated actor, selected Casework and source profiles, optional queue, the next-item feed, and due ordering.", required=False)], description="Returns a WorkItemPage containing at most one caller-visible item. Empty complete and budget-exhausted pages remain successful responses; follow nextCursor when present. Source discovery alone does not issue a cursor; if status is budget-exhausted without nextCursor, retry without a cursor after reconciliation. The retried walk starts from the first position and can return items earlier pages already returned, so deduplicate by itemId. Callers serving no queue receive complete without a cursor. servedQueues is preserved on every page.")},
         "/v1/work-items/{item_id}": {"get": operation("Read one currently visible item", "WorkItem", source=True, source_required=False, parameters=[ITEM_ID])},
         "/v1/work-items/{item_id}/clocks": {"get": operation("Read the item's clock occurrences", "ClockOccurrenceList", source=True, parameters=[ITEM_ID], description="Staff or Supervisor read under the same current source visibility as the item. Registry-Source-Profile is required. Returns occurrences ordered by clockId and clockOccurrenceId with pinned policy digest and separate calculation and recompute generations.")},
         "/v1/work-items/{item_id}/claim": {"post": operation("Claim a source work item", "MutationResponse", source=True, mutation=True, parameters=[ITEM_ID])},
@@ -1662,16 +1661,16 @@ def document(contract: dict) -> dict:
         "/v1/work-items/{item_id}/attempts/recover": {"post": operation("Recover the original attempt selected by idempotency key", "MutationResponse", source=True, body="RecoverAttemptRequest", parameters=[ITEM_ID, IDEMPOTENCY])},
         "/v1/work-items/{item_id}/attempts/{attempt_id}/recover": {"post": operation("Recover this exact original attempt", "MutationResponse", source=True, body="RecoverAttemptRequest", parameters=[ITEM_ID, ATTEMPT_ID])},
         "/v1/work-items/{item_id}/history": {"get": operation("Read paginated item history", "HistoryPage", source=True, parameters=[ITEM_ID, parameter("cursor", "query", "Opaque 15-minute cursor bound to the human principal, selected Casework profile, selected source profile, and item. Malformed, unknown, or context-mismatched values are cursor.invalid. On cursor.expired, restart without it and deduplicate by eventId.", required=False), parameter("limit", "query", "Page size from 1 through 100. Zero or a value above 100 is request.limit-out-of-range; a value that is not a non-negative whole number is request.invalid.", {"type": "integer", "minimum": 1, "maximum": 100}, required=False)], description="Staff or Supervisor only under current source visibility. Results are ordered by occurredAt and eventId.")},
-        "/v1/holdings": {"get": operation("Read current caller-visible bounded holdings", "HoldingsPage", source=True, parameters=[parameter("cursor", "query", "Opaque cursor for the next caller-visible holdings page. Follow every page and sum matching principal and queue groups to obtain totals across the caller-visible caseload. When status is source_unavailable, the page contains zero counts and nextCursor retries the failed page.", required=False), parameter("limit", "query", "Page size from 1 through 100. Zero or a value above 100 is request.limit-out-of-range; a value that is not a non-negative whole number is request.invalid.", {"type": "integer", "minimum": 1, "maximum": 100}, required=False)], description="Supervisor-only caller-visible holdings. Counts are grouped by principal and queue within this page; the same group may occur on later pages, so consumers must follow every page and sum matching groups. A source_unavailable page contains zero counts and supplies a cursor that retries the failed page. Source discovery alone does not issue a cursor; if status is budget_exhausted without nextCursor, retry without a cursor after reconciliation and replace the totals summed so far instead of adding to them.")},
+        "/v1/holdings": {"get": operation("Read current caller-visible bounded holdings", "HoldingsPage", source=True, parameters=[parameter("cursor", "query", "Opaque cursor for the next caller-visible holdings page. Follow every page and sum matching principal and queue groups to obtain totals across the caller-visible caseload. When status is source-unavailable, the page contains zero counts and nextCursor retries the failed page.", required=False), parameter("limit", "query", "Page size from 1 through 100. Zero or a value above 100 is request.limit-out-of-range; a value that is not a non-negative whole number is request.invalid.", {"type": "integer", "minimum": 1, "maximum": 100}, required=False)], description="Supervisor-only caller-visible holdings. Counts are grouped by principal and queue within this page; the same group may occur on later pages, so consumers must follow every page and sum matching groups. A source-unavailable page contains zero counts and supplies a cursor that retries the failed page. Source discovery alone does not issue a cursor; if status is budget-exhausted without nextCursor, retry without a cursor after reconciliation and replace the totals summed so far instead of adding to them.")},
         "/v1/directory": {"get": operation("Read the current authorized directory", "DirectoryResponse", description="Administrator-only. Returns one consistent snapshot of the directory revision, teams, memberships, and served queues. The serialized JSON response is bounded to 2 MiB.")},
         "/v1/directory/targets": {"get": operation("List current directory targets", "DirectoryTargetPage", parameters=[
-            parameter("purpose", "query", "Required target-discovery purpose. assignment requires queue and forbids person fields; absence_person forbids queue and person fields; absence_cover requires both exact personIssuer and personSubject and forbids queue.", {"type": "string", "enum": ["assignment", "absence_person", "absence_cover"]}),
+            parameter("purpose", "query", "Required target-discovery purpose. assignment requires queue and forbids person fields; absence-person forbids queue and person fields; absence-cover requires both exact personIssuer and personSubject and forbids queue.", {"type": "string", "enum": ["assignment", "absence-person", "absence-cover"]}),
             parameter("queue", "query", "Required nonempty queue identifier for assignment; forbidden for absence purposes.", {"type": "string", "minLength": 1}, required=False),
-            parameter("personIssuer", "query", "Exact issuer of the managed absent person. Required together with personSubject for absence_cover and forbidden otherwise.", {"type": "string", "minLength": 1, "maxLength": 2048, "x-maximum-utf8-bytes": 2048, "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$"}, required=False),
-            parameter("personSubject", "query", "Exact subject of the managed absent person. Required together with personIssuer for absence_cover and forbidden otherwise.", {"type": "string", "minLength": 1, "maxLength": 2048, "x-maximum-utf8-bytes": 2048, "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$"}, required=False),
+            parameter("personIssuer", "query", "Exact issuer of the managed absent person. Required together with personSubject for absence-cover and forbidden otherwise.", {"type": "string", "minLength": 1, "maxLength": 2048, "x-maximum-utf8-bytes": 2048, "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$"}, required=False),
+            parameter("personSubject", "query", "Exact subject of the managed absent person. Required together with personIssuer for absence-cover and forbidden otherwise.", {"type": "string", "minLength": 1, "maxLength": 2048, "x-maximum-utf8-bytes": 2048, "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$"}, required=False),
             parameter("cursor", "query", "Opaque 15-minute cursor bound to the authenticated human principal, selected Casework profile, purpose, queue, and person fields. Malformed, unknown, or context-mismatched values are cursor.invalid. On cursor.expired, restart without it and deduplicate by issuer and subject.", required=False),
             parameter("limit", "query", "Page size from 1 through 100. Zero or a value above 100 is request.limit-out-of-range; a value that is not a non-negative whole number is request.invalid.", {"type": "integer", "minimum": 1, "maximum": 100}, required=False),
-        ], description="Returns only directory members currently eligible for the requested use. Each member carries an issuer-qualified identity and may carry the display name stored on an authorized team membership. assignment is available to Staff currently serving the queue and Supervisors currently supervising it, and lists current Staff serving that queue across teams; Administrators use the existing full directory for assignment discovery. absence_person lists people the caller may currently manage; absence_cover rechecks authority over the exact person and lists valid current covers under the existing absence roles. Requester profiles are refused. Empty eligible sets return a complete page. No source profile is accepted, and teams and absence details are never returned.")},
+        ], description="Returns only directory members currently eligible for the requested use. Each member carries an issuer-qualified identity and may carry the display name stored on an authorized team membership. assignment is available to Staff currently serving the queue and Supervisors currently supervising it, and lists current Staff serving that queue across teams; Administrators use the existing full directory for assignment discovery. absence-person lists people the caller may currently manage; absence-cover rechecks authority over the exact person and lists valid current covers under the existing absence roles. Requester profiles are refused. Empty eligible sets return a complete page. No source profile is accepted, and teams and absence details are never returned.")},
         "/v1/directory/absences": {
             "get": operation("List authorized absence records", "AbsenceList", parameters=[
                 parameter("cursor", "query", "Opaque 15-minute cursor bound to the caller, selected profile, role, page size, and directory revision. On cursor.expired or a changed directory revision (cursor.invalid), restart without the cursor. Authority is checked again on every page.", required=False),
@@ -1930,16 +1929,16 @@ def rust_struct_fields(source: str, name: str) -> set[str]:
     return set(re.findall(r"^\s*pub\s+([a-z_]+)\s*:", match.group("body"), re.M))
 
 
-def rust_snake_case_unit_enum_values(source: str, name: str) -> list[str]:
+def rust_kebab_case_unit_enum_values(source: str, name: str) -> list[str]:
     match = re.search(
-        rf'#\[serde\(rename_all = "snake_case"\)\]\s*pub enum {re.escape(name)}\s*\{{(?P<body>.*?)^\}}',
+        rf'#\[serde\(rename_all = "kebab-case"\)\]\s*pub enum {re.escape(name)}\s*\{{(?P<body>.*?)^\}}',
         source,
         re.S | re.M,
     )
     if not match:
-        raise ValueError(f"Rust snake_case enum is missing: {name}")
+        raise ValueError(f"Rust kebab-case enum is missing: {name}")
     variants = re.findall(r"^\s*([A-Z][A-Za-z0-9]*)\s*,\s*$", match.group("body"), re.M)
-    return [re.sub(r"(?<!^)(?=[A-Z])", "_", variant).lower() for variant in variants]
+    return [re.sub(r"(?<!^)(?=[A-Z])", "-", variant).lower() for variant in variants]
 
 
 def verify_dto_schemas(repository_root: Path, openapi: dict) -> None:
@@ -1973,18 +1972,18 @@ def verify_dto_schemas(repository_root: Path, openapi: dict) -> None:
         repository_root / "crates/registry-casework-core/src/model.rs"
     ).read_text(encoding="utf-8")
     if set(openapi_schemas["HistoryEntry"]["properties"]["kind"]["enum"]) != set(
-        rust_snake_case_unit_enum_values(model_source, "HistoryKind")
+        rust_kebab_case_unit_enum_values(model_source, "HistoryKind")
     ):
         raise ValueError("OpenAPI HistoryKind values drifted from Rust")
     review_source = (
         repository_root / "crates/registry-casework-core/src/review.rs"
     ).read_text(encoding="utf-8")
     if set(openapi_schemas["ReviewDecisionType"]["enum"]) != set(
-        rust_snake_case_unit_enum_values(review_source, "ReviewDecisionType")
+        rust_kebab_case_unit_enum_values(review_source, "ReviewDecisionType")
     ):
         raise ValueError("OpenAPI ReviewDecisionType values drifted from Rust")
     if set(openapi_schemas["SupervisoryReviewTaskState"]["enum"]) != set(
-        rust_snake_case_unit_enum_values(review_source, "SupervisoryReviewTaskState")
+        rust_kebab_case_unit_enum_values(review_source, "SupervisoryReviewTaskState")
     ):
         raise ValueError("OpenAPI SupervisoryReviewTaskState values drifted from Rust")
     ownership = next(
@@ -1993,13 +1992,13 @@ def verify_dto_schemas(repository_root: Path, openapi: dict) -> None:
         if parameter["name"] == "ownership"
     )
     if set(ownership["enum"]) != set(
-        rust_snake_case_unit_enum_values(review_source, "ReviewTaskOwnership")
+        rust_kebab_case_unit_enum_values(review_source, "ReviewTaskOwnership")
     ):
         raise ValueError("OpenAPI ReviewTaskOwnership values drifted from Rust")
     operation_name = openapi_schemas["OperationName"]
     if operation_name != {
         "type": "string",
-        "pattern": "^[a-z][a-z0-9_]{0,63}$",
+        "pattern": "^[a-z][a-z0-9_-]{0,63}$",
         "maxLength": 64,
     }:
         raise ValueError("OpenAPI OperationName drifted from its Rust validation contract")
@@ -2007,7 +2006,7 @@ def verify_dto_schemas(repository_root: Path, openapi: dict) -> None:
         encoding="utf-8"
     )
     if "pub const MAX_LENGTH: usize = 64;" not in model or (
-        '"operation name must match [a-z][a-z0-9_]{0,63}"' not in model
+        '"operation name must match [a-z][a-z0-9_-]{0,63}"' not in model
     ):
         raise ValueError("Rust OperationName validation markers drifted")
     assignment = (
@@ -2026,16 +2025,16 @@ def verify_dto_schemas(repository_root: Path, openapi: dict) -> None:
         raise ValueError("OpenAPI reviewed caseload bound drifted from Rust")
     if set(openapi_schemas["CaseloadItemOutcome"]["enum"]) != {
         "moved",
-        "not_visible",
-        "not_eligible",
-        "attempt_in_progress",
+        "not-visible",
+        "not-eligible",
+        "attempt-in-progress",
         "conflict",
     }:
         raise ValueError("OpenAPI caseload result vocabulary drifted from Rust")
     if set(openapi_schemas["CaseworkProject"]["properties"]) != {
         "apiVersion",
         "kind",
-        "casework",
+        "project",
         "accessProfiles",
         "queues",
         "sources",
@@ -2217,7 +2216,7 @@ def verify_source(repository_root: Path) -> None:
         "pub const MAXIMUM_CALENDARS: usize = 16;",
         "pub const MAXIMUM_CLOCK_REMINDERS: usize = 8;",
         "pub const MAXIMUM_CLOCK_STEPS: usize = 8;",
-        'tag = "scope"',
+        "registry_platform_yaml::tagged_union!(ClockPolicy);",
         "FirstSubmittedAt",
         "ReviewCompleted",
         "AwaitingApplicant",

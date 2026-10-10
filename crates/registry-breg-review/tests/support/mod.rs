@@ -601,9 +601,9 @@ fn target_list_operation() -> Value {
         "kind": "list",
         "allowCount": false,
         "defaultPageSize": 100,
-        "maxPageSize": 100,
-        "maxFilterClauses": 32,
-        "maxInValues": 100,
+        "maximumPageSize": 100,
+        "maximumFilterClauses": 32,
+        "maximumInValues": 100,
         "filterableFields": [],
         "sortableFields": [],
         "selectableFields": [
@@ -634,7 +634,7 @@ pub fn metadata() -> Value {
         "records.address-correction-request.request.submit",
         "POST",
         &format!("/v1/records/{ROUTE}/{{record_id}}/actions/submit"),
-        "submit_request",
+        "submit-request",
         json!({
             "fieldNames": "api",
             "queryParameters": [],
@@ -663,7 +663,7 @@ pub fn metadata() -> Value {
                 "route": ROUTE,
                 "operations": [
                     {"operation": "get", "accessProfile": PROFILE},
-                    {"operation": "submit_request", "accessProfile": PROFILE}
+                    {"operation": "submit-request", "accessProfile": PROFILE}
                 ],
                 "readableFields": REQUEST_READABLE,
                 "schema": format!("/v1/schemas/{ENTITY}")
@@ -686,7 +686,7 @@ fn draft_record(identifier: &str, draft: &Draft) -> Value {
         json!([])
     } else {
         json!([{
-            "operation": "submit_request",
+            "operation": "submit-request",
             "method": "POST",
             "href": format!(
                 "/v1/records/{ROUTE}/{identifier}/actions/submit?accessProfile={PROFILE}"

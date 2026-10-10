@@ -8,13 +8,13 @@ use registry_casework::{CaseworkService, DatabaseConfig, PostgresStore, ServiceE
 use registry_casework_core::{
     AbsenceInput, AccessProfile, ActiveSubjectsPage, ActorContext, AssignmentRequest,
     AuthoritativeObservation, BootstrapDirectoryRequest, CallerSubjectView, CaseloadApplyRequest,
-    CaseloadItemOutcome, CaseloadItemSelection, CaseloadMoveRequest, CaseworkIdentity,
-    CaseworkProject, CaseworkRole, DelegateRequest, DirectoryMember, DirectoryTargetPurpose,
-    DirectoryTeamUpdateRequest, DiscoveryCursor, EphemeralCredential, EventRequest,
-    ExecutePreparedRequest, HistoryKind, InboxPolicy, IssuerPrincipal, OccurrenceKind,
-    OccurrenceState, OperationName, PageStatus, PrepareActionRequest, PreparedSourceAttempt,
-    QueuePolicy, RecoveryEvidence, SourceAdapter, SourceAdapterError, SourceBinding, SourcePolicy,
-    SourceReceipt, SourceRequestPolicy, StaffingDiagnostic, SubjectRef, TransitionHint,
+    CaseloadItemOutcome, CaseloadItemSelection, CaseloadMoveRequest, CaseworkProject, CaseworkRole,
+    DelegateRequest, DirectoryMember, DirectoryTargetPurpose, DirectoryTeamUpdateRequest,
+    DiscoveryCursor, EphemeralCredential, EventRequest, ExecutePreparedRequest, HistoryKind,
+    InboxPolicy, IssuerPrincipal, OccurrenceKind, OccurrenceState, OperationName, PageStatus,
+    PrepareActionRequest, PreparedSourceAttempt, ProjectIdentity, QueuePolicy, RecoveryEvidence,
+    SourceAdapter, SourceAdapterError, SourceBinding, SourcePolicy, SourceReceipt,
+    SourceRequestPolicy, StaffingDiagnostic, SubjectRef, TransitionHint,
     MAXIMUM_DIRECTORY_DISPLAY_NAME_BYTES, MAXIMUM_DIRECTORY_IDENTIFIER_BYTES,
     MAXIMUM_DIRECTORY_PRINCIPALS, MAXIMUM_DIRECTORY_PRINCIPAL_COMPONENT_BYTES,
 };
@@ -168,8 +168,8 @@ fn project() -> CaseworkProject {
         task_templates: Vec::new(),
         api_version: registry_casework_core::CASEWORK_API_VERSION.to_owned(),
         kind: registry_casework_core::CASEWORK_KIND.to_owned(),
-        casework: CaseworkIdentity {
-            id: "assignment-test".to_owned(),
+        project: ProjectIdentity {
+            id: "assignment-test".parse().unwrap(),
             version: "1".to_owned(),
         },
         access_profiles: vec![
@@ -2690,6 +2690,6 @@ async fn source_observation_that_drops_the_holder_clears_the_assignment_and_reco
         release.detail["previousHolder"],
         json!(fixture.staff_b.principal)
     );
-    assert_eq!(release.detail["reason"], json!("source_observation"));
+    assert_eq!(release.detail["reason"], json!("source-observation"));
     assert_eq!(release.detail["sourceRevision"], json!(2));
 }

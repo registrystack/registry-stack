@@ -77,14 +77,10 @@ pub(super) fn run(args: &SourceAddArgs) -> Result<Value> {
     }
     let mut authored = authored_yaml("registry.yaml", &bytes)
         .context("parsing BReg registry.yaml without duplicate or custom YAML values")?;
-    let registry_id = authored
-        .pointer("/registry/id")
-        .and_then(Value::as_str)
-        .context("BReg registry.yaml has no registry.id")?
-        .to_owned();
+    let registry_id = breg_project_id(&authored)?.to_owned();
     if args.source_id != registry_id {
         bail!(
-            "Casework source id must equal BReg registry.id so review subjects and source-context lookup use one namespace"
+            "Casework source id must equal BReg project.id so review subjects and source-context lookup use one namespace"
         );
     }
     let requests = select_requests(&project, &args.source_id, &registry_id, &explained)?;
@@ -163,7 +159,7 @@ pub(super) fn run(args: &SourceAddArgs) -> Result<Value> {
         "bregAuthoringChanges": breg_authoring_changes,
         "bregAuthoringPatch": authoring_patch,
         "diagnostics": diagnostics,
-        "activation": "not_performed",
+        "activation": "not-performed",
         "next": report_next(args.apply, &dev_clients_plan.warnings),
     });
     if !args.apply {
@@ -574,7 +570,7 @@ fn select_request<'a>(
         .get("policyId")
         .and_then(Value::as_str)
         .context("BReg request must name a Casework review policy")?;
-    if review.len() != 2 {
+    if review.get("type").and_then(Value::as_str) != Some("required") || review.len() != 3 {
         bail!("BReg request review binding contains unsupported members");
     }
     let review_kind = policy["reviewKinds"]
@@ -721,8 +717,8 @@ fn refuse_overlong_lifecycle_hook_ids(paired_entities: &BTreeSet<&str>) -> Resul
 ///
 /// Detection trusts the same reserved names `apply_breg_candidate`'s own
 /// collision refusals already trust: a `hooks` entry on an entity named with
-/// that entity's own `lifecycle_event_type`, and a `permissions` entry naming
-/// any entity under the `accessProfiles` entry with id READER_CLIENT_ID, are
+/// that entity's own `lifecycle_event_type`, and a `permissions.entities` entry
+/// naming any entity under the `accessProfiles` entry with id READER_CLIENT_ID, are
 /// presumed to be source add's own fragments, whether or not that entity is
 /// in the set this run pairs.
 fn refuse_dropped_entity_fragments(
@@ -750,7 +746,12 @@ fn refuse_dropped_entity_fragments(
         .into_iter()
         .flatten()
         .filter(|profile| profile["id"] == READER_CLIENT_ID)
-        .flat_map(|profile| profile["permissions"].as_array().into_iter().flatten())
+        .flat_map(|profile| {
+            profile["permissions"]["entities"]
+                .as_array()
+                .into_iter()
+                .flatten()
+        })
         .filter_map(|permission| permission["entity"].as_str())
         .filter(|entity_id| !paired_entities.contains(entity_id))
         .collect();
@@ -953,7 +954,7 @@ fn reader_grant(metadata: &Value, projection: &[String]) -> Result<ReaderGrant> 
         .map(|write| &write["target"]);
     let targets = declared
         .chain(planned)
-        .filter(|target| target["kind"] == "existing")
+        .filter(|target| target["type"] == "existing")
         .filter_map(|target| target.pointer("/fromField/field").and_then(Value::as_str))
         .map(str::to_owned)
         .collect::<BTreeSet<_>>();
@@ -1066,10 +1067,10 @@ fn apply_breg_candidate(root: &mut Value, entity_id: &str, reader: &ReaderGrant)
     {
         None => profiles.push(profile),
         Some(existing) => {
-            let permission = profile["permissions"][0].clone();
+            let permission = profile["permissions"]["entities"][0].clone();
             let shape = |value: &Value| {
                 let mut value = value.clone();
-                value["permissions"] = json!([]);
+                value["permissions"] = json!({});
                 value
             };
             if shape(existing) != shape(&profile) {
@@ -1077,9 +1078,15 @@ fn apply_breg_candidate(root: &mut Value, entity_id: &str, reader: &ReaderGrant)
                     "BReg access profile {READER_CLIENT_ID} already exists with different content"
                 )
             }
-            let permissions = existing["permissions"].as_array_mut().with_context(|| {
-                format!("BReg access profile {READER_CLIENT_ID} permissions must be a list")
-            })?;
+            let permissions = existing
+                .get_mut("permissions")
+                .and_then(|permissions| permissions.get_mut("entities"))
+                .and_then(Value::as_array_mut)
+                .with_context(|| {
+                    format!(
+                        "BReg access profile {READER_CLIENT_ID} permissions.entities must be a list"
+                    )
+                })?;
             match permissions.iter().find(|item| item["entity"] == entity_id) {
                 Some(existing) if existing != &permission => bail!(
                     "BReg access profile {READER_CLIENT_ID} already grants {entity_id} with different content in registry.yaml, and nothing was written. source add writes that permission from the request's existing-target fields and the casework.yaml projection, so an earlier caseworkctl, a changed projection, or a hand edit leaves a different one. If you did not write that permission yourself, remove that permission for entity {entity_id} from access profile {READER_CLIENT_ID} in the BReg registry.yaml, and the whole {READER_CLIENT_ID} profile when that permission is its only one, then repeat source add --apply; it writes the current permission in its place"
@@ -1090,19 +1097,19 @@ fn apply_breg_candidate(root: &mut Value, entity_id: &str, reader: &ReaderGrant)
         }
     }
     Ok(json!([
-        {"file":"registry.yaml","path":format!("/entities/{entity_id}/hooks/{hook_id}"),"operation":"ensure_exact"},
-        {"file":"registry.yaml","path":format!("/accessProfiles/{READER_CLIENT_ID}"),"operation":"ensure_exact"}
+        {"file":"registry.yaml","path":format!("/entities/{entity_id}/hooks/{hook_id}"),"operation":"ensure-exact"},
+        {"file":"registry.yaml","path":format!("/accessProfiles/{READER_CLIENT_ID}"),"operation":"ensure-exact"}
     ]))
 }
 
 fn candidate_fragments(entity_id: &str, reader: &ReaderGrant) -> (Value, Value) {
     let fields = &reader.fields;
     (
-        json!({"id":lifecycle_event_type(entity_id),"phase":"after","trigger":"request_lifecycle","projection":[reader.event_field],"handler":{"kind":"url","destinationId":"casework"}}),
+        json!({"id":lifecycle_event_type(entity_id),"phase":"after","trigger":"request-lifecycle","projection":[reader.event_field],"handler":{"type":"url","destinationId":"casework"}}),
         json!({
             "id":READER_CLIENT_ID, "default":false, "principalClaim":READER_PRINCIPAL_CLAIM,
             "requiredScopes":[READER_SCOPE], "requiredPurposes":[READER_PURPOSE],
-            "permissions":[{"entity":entity_id,"operations":["get","list"],"readableFields":fields,"readableRequestFields":["review_state"],"rowBoundaries":"unrestricted"}]
+            "permissions":{"entities":[{"entity":entity_id,"operations":["get","list"],"readableFields":fields,"readableRequestFields":["review-state"],"rowBoundaries":"unrestricted"}]}
         }),
     )
 }
@@ -1122,10 +1129,10 @@ fn authoring_patch(readers: &[(String, ReaderGrant)]) -> Value {
     if let [(_, (hook, _))] = fragments.as_slice() {
         return json!({"event": hook, "accessProfile": profile});
     }
-    profile["permissions"] = fragments
+    profile["permissions"]["entities"] = fragments
         .iter()
         .flat_map(|(_, (_, profile))| {
-            profile["permissions"]
+            profile["permissions"]["entities"]
                 .as_array()
                 .cloned()
                 .unwrap_or_default()
@@ -1169,7 +1176,7 @@ fn render_candidate_preserving_authored_text(
             .find(|profile| profile["id"] == READER_CLIENT_ID)
     });
     let has_permission = profile
-        .and_then(|profile| profile["permissions"].as_array())
+        .and_then(|profile| profile["permissions"]["entities"].as_array())
         .is_some_and(|permissions| {
             permissions
                 .iter()
@@ -1243,16 +1250,16 @@ fn insert_entity_hook(text: &str, entity_id: &str, event_field: &str) -> Result<
     };
     let hook_id = lifecycle_event_type(entity_id);
     let block = if hooks.is_some() {
-        format!("{}- id: {hook_id}\n{}  phase: after\n{}  trigger: request_lifecycle\n{}  projection: [{}]\n{}  handler: {{kind: url, destinationId: casework}}\n", " ".repeat(field_indent + 2), " ".repeat(field_indent + 2), " ".repeat(field_indent + 2), " ".repeat(field_indent + 2), yaml_string(event_field), " ".repeat(field_indent + 2))
+        format!("{}- id: {hook_id}\n{}  phase: after\n{}  trigger: request-lifecycle\n{}  projection: [{}]\n{}  handler: {{type: url, destinationId: casework}}\n", " ".repeat(field_indent + 2), " ".repeat(field_indent + 2), " ".repeat(field_indent + 2), " ".repeat(field_indent + 2), yaml_string(event_field), " ".repeat(field_indent + 2))
     } else {
-        format!("{}hooks:\n{}- id: {hook_id}\n{}  phase: after\n{}  trigger: request_lifecycle\n{}  projection: [{}]\n{}  handler: {{kind: url, destinationId: casework}}\n", " ".repeat(field_indent), " ".repeat(field_indent + 2), " ".repeat(field_indent + 2), " ".repeat(field_indent + 2), " ".repeat(field_indent + 2), yaml_string(event_field), " ".repeat(field_indent + 2))
+        format!("{}hooks:\n{}- id: {hook_id}\n{}  phase: after\n{}  trigger: request-lifecycle\n{}  projection: [{}]\n{}  handler: {{type: url, destinationId: casework}}\n", " ".repeat(field_indent), " ".repeat(field_indent + 2), " ".repeat(field_indent + 2), " ".repeat(field_indent + 2), " ".repeat(field_indent + 2), yaml_string(event_field), " ".repeat(field_indent + 2))
     };
     Ok(insert_at_line(&lines, insertion, &block))
 }
 
 fn insert_access_profile(text: &str, entity_id: &str, reader: &ReaderGrant) -> Result<String> {
-    let permission = reader_permission_yaml(6, entity_id, reader)?;
-    let block = format!("  - id: {READER_CLIENT_ID}\n    default: false\n    principalClaim: {READER_PRINCIPAL_CLAIM}\n    requiredScopes: [{READER_SCOPE}]\n    requiredPurposes: [{READER_PURPOSE}]\n    permissions:\n{permission}");
+    let permission = reader_permission_yaml(8, entity_id, reader)?;
+    let block = format!("  - id: {READER_CLIENT_ID}\n    default: false\n    principalClaim: {READER_PRINCIPAL_CLAIM}\n    requiredScopes: [{READER_SCOPE}]\n    requiredPurposes: [{READER_PURPOSE}]\n    permissions:\n      entities:\n{permission}");
     insert_yaml_collection_items(text, "accessProfiles", "[]", &block)
 }
 
@@ -1260,11 +1267,11 @@ fn reader_permission_yaml(indent: usize, entity_id: &str, reader: &ReaderGrant) 
     let fields = serde_json::to_string(&reader.fields)?;
     let pad = " ".repeat(indent);
     let entity_id = yaml_string(entity_id);
-    Ok(format!("{pad}- entity: {entity_id}\n{pad}  operations: [get, list]\n{pad}  readableFields: {fields}\n{pad}  readableRequestFields: [review_state]\n{pad}  rowBoundaries: unrestricted\n"))
+    Ok(format!("{pad}- entity: {entity_id}\n{pad}  operations: [get, list]\n{pad}  readableFields: {fields}\n{pad}  readableRequestFields: [review-state]\n{pad}  rowBoundaries: unrestricted\n"))
 }
 
-/// Append this entity's permission to the block `permissions` list of an
-/// existing casework-reader profile, leaving every authored line in place.
+/// Append this entity's permission to the block `permissions.entities` list of
+/// an existing casework-reader profile, leaving every authored line in place.
 fn insert_reader_permission(text: &str, entity_id: &str, reader: &ReaderGrant) -> Result<String> {
     let lines = text.split_inclusive('\n').collect::<Vec<_>>();
     let significant = |line: &str| !line.trim().is_empty() && !line.trim_start().starts_with('#');
@@ -1280,14 +1287,28 @@ fn insert_reader_permission(text: &str, entity_id: &str, reader: &ReaderGrant) -
                 && lines[*index].trim_start().starts_with("permissions:")
         })
         .context("narrow YAML patch could not locate the casework-reader permissions")?;
-    let value = lines[key]
-        .trim()
-        .trim_start_matches("permissions:")
-        .trim_start();
-    if !value.is_empty() && !value.starts_with('#') {
-        bail!("narrow YAML patch supports a block permissions list on the casework-reader access profile");
-    }
-    let first_item = (key + 1..end)
+    let block_value = |line: &str, key: &str| {
+        let value = line.trim().trim_start_matches(key).trim_start();
+        value.is_empty() || value.starts_with('#')
+    };
+    let end = (key + 1..end)
+        .find(|index| {
+            significant(lines[*index]) && leading_spaces(lines[*index]) <= item_indent + 2
+        })
+        .unwrap_or(end);
+    let member_indent = (key + 1..end)
+        .find(|index| significant(lines[*index]))
+        .map(|index| leading_spaces(lines[index]));
+    let entities = (key + 1..end)
+        .find(|index| {
+            Some(leading_spaces(lines[*index])) == member_indent
+                && lines[*index].trim_start().starts_with("entities:")
+        })
+        .filter(|_| block_value(lines[key], "permissions:"));
+    let Some(entities) = entities.filter(|index| block_value(lines[*index], "entities:")) else {
+        bail!("narrow YAML patch supports a block permissions.entities list on the casework-reader access profile");
+    };
+    let first_item = (entities + 1..end)
         .find(|index| significant(lines[*index]))
         .filter(|index| lines[*index].trim_start().starts_with("- "))
         .context("narrow YAML patch could not locate the casework-reader permission items")?;
@@ -1526,7 +1547,7 @@ struct RowBoundaryLocation {
 }
 
 /// Locates every row boundary nested under a BReg access profile (directly
-/// under a `permissions[]` entry, or nested deeper under a permission's
+/// under a `permissions.entities[]` entry, or nested deeper under a permission's
 /// `applyTargets[]`, `targets[]`, or `requestPresence[]`). `entity` is the
 /// ambient entity carried down from the nearest enclosing object that names
 /// one with an `entity` or `requestType` string field; `path` is the
@@ -1898,7 +1919,7 @@ fn plan_breg_dev_clients(
                             })
                     })
                     .filter(|profile| {
-                        profile["permissions"]
+                        profile["permissions"]["entities"]
                             .as_array()
                             .into_iter()
                             .flatten()
@@ -2063,7 +2084,7 @@ fn apply_local_review_authority_candidate(
     changes
         .as_array_mut()
         .expect("dev-client changes are an array")
-        .push(json!({"file":"dev-clients.yaml","path":format!("/reviewAuthorities/{authority_id}"),"operation":"ensure_exact"}));
+        .push(json!({"file":"dev-clients.yaml","path":format!("/reviewAuthorities/{authority_id}"),"operation":"ensure-exact"}));
     Ok(())
 }
 
@@ -2180,7 +2201,7 @@ fn apply_local_review_executor_candidates(
                 changes
                     .as_array_mut()
                     .expect("dev-client changes are an array")
-                    .push(json!({"file":"dev-clients.yaml","path":format!("/reviewExecutors/{executor}"),"operation":"ensure_exact"}));
+                    .push(json!({"file":"dev-clients.yaml","path":format!("/reviewExecutors/{executor}"),"operation":"ensure-exact"}));
             }
             candidates => {
                 let ids = candidates
@@ -2257,7 +2278,7 @@ fn apply_dev_clients_candidate(root: &mut Value, clients: &[Value]) -> Result<Va
             None => existing.push(client.clone()),
             _ => {}
         }
-        changes.push(json!({"file":"dev-clients.yaml","path":format!("/clients/{id}"),"operation":"ensure_exact"}));
+        changes.push(json!({"file":"dev-clients.yaml","path":format!("/clients/{id}"),"operation":"ensure-exact"}));
     }
     if existing.len() > MAX_BREG_DEV_CLIENTS {
         bail!("merged BReg dev-clients.yaml exceeds the local clients v1 32-client bound");
@@ -2504,25 +2525,18 @@ fn source_description(
     requests: &[SelectedRequest<'_>],
     report: &Value,
 ) -> Result<Value> {
-    let mut description = json!({
-        "apiVersion":"registry.registrystack.org/casework-source-description/v1alpha1",
-        "kind":"BRegCaseworkSourceDescription",
+    let description = json!({
+        "apiVersion":registry_casework_breg::DESCRIPTION_API_VERSION,
+        "kind":registry_casework_breg::DESCRIPTION_KIND,
         "sourceId":source_id,
         "authority":"none",
         "origin":"bregctl explain change-requests",
         "sourceRevision":report["revision"],
+        "requests":requests
+            .iter()
+            .map(|request| request.metadata.clone())
+            .collect::<Vec<_>>(),
     });
-    match requests {
-        [request] => description["request"] = request.metadata.clone(),
-        _ => {
-            description["apiVersion"] =
-                json!("registry.registrystack.org/casework-source-description/v1alpha2");
-            description["requests"] = requests
-                .iter()
-                .map(|request| request.metadata.clone())
-                .collect();
-        }
-    }
     // Refuse before any write a description that check and package would
     // later reject; each entry alone may fit while the aggregate does not.
     if json_file_bytes(&description)?.len() > MAXIMUM_SOURCE_DESCRIPTION_BYTES {
@@ -2583,7 +2597,7 @@ fn runtime_binding(
         }
     }
     let mut binding = format!(
-        "# Candidate BReg operator binding. Review the endpoints and secret references, then merge this into launcher-owned runtime config.\neventDestinations:\n  casework:\n    origin: http://localhost:8100\n    path: /events/sources/{source_id}\n    networkProfile: loopbackDevelopmentHttp\n    dnsFamily: ipv4Only\n    allowedPrivateCidrs: []\n    hmacSha256KeyRef: secret:file/breg-casework-webhook\n    classificationCeiling: restricted\n    deliveryCeilings:\n      attemptTimeoutMilliseconds: 5000\n      maximumAttempts: 5\nreviewAuthorities:\n"
+        "# Candidate BReg operator binding. Review the endpoints and secret references, then merge this into launcher-owned runtime config.\neventDestinations:\n  casework:\n    origin: http://localhost:8100\n    path: /events/sources/{source_id}\n    networkProfile: loopback-development-http\n    dnsFamily: ipv4-only\n    allowedPrivateCidrs: []\n    hmacSha256KeyRef: secret:file/breg-casework-webhook\n    classificationCeiling: restricted\n    deliveryCeilings:\n      attemptTimeoutMilliseconds: 5000\n      maximumAttempts: 5\nreviewAuthorities:\n"
     );
     for (authority, request) in &authorities {
         binding.push_str(&format!(
@@ -2613,6 +2627,14 @@ fn runtime_binding(
     }
     read_runtime_binding(&format!("sources/{source_id}.breg-runtime.yaml"), &binding)?;
     Ok(binding)
+}
+
+/// The name a BReg project gives itself in its authored `registry.yaml`.
+fn breg_project_id(authored: &Value) -> Result<&str> {
+    authored
+        .pointer("/project/id")
+        .and_then(Value::as_str)
+        .context("BReg registry.yaml has no project.id")
 }
 
 /// A BReg authored document, such as `registry.yaml` or `dev-clients.yaml`, as
@@ -2811,6 +2833,14 @@ fn description_conflict(path: &Path, expected: &Value) -> Result<Option<String>>
     if &actual == expected {
         return Ok(None);
     }
+    if actual["apiVersion"].as_str().is_some_and(|version| {
+        registry_casework_breg::RETIRED_DESCRIPTION_API_VERSIONS.contains(&version)
+    }) {
+        return Ok(Some(format!(
+            "carries a retired apiVersion an earlier release wrote, and this run writes `{}`",
+            registry_casework_breg::DESCRIPTION_API_VERSION
+        )));
+    }
     let (previous, next) = (described_entities(&actual), described_entities(expected));
     if previous != next {
         let dropped = previous
@@ -2832,11 +2862,9 @@ fn description_conflict(path: &Path, expected: &Value) -> Result<Option<String>>
             )
         };
         return Ok(Some(format!(
-            "pairs {} ({}), and this run pairs {} ({}) because casework.yaml declares a different set of request entities{cleanup}",
+            "pairs {}, and this run pairs {} because casework.yaml declares a different set of request entities{cleanup}",
             entity_list(&previous),
-            description_version(&actual),
             entity_list(&next),
-            description_version(expected),
         )));
     }
     if actual["sourceRevision"] != expected["sourceRevision"] {
@@ -2863,16 +2891,12 @@ fn binding_conflict(path: &Path, expected: &[u8]) -> Result<Option<String>> {
 }
 
 fn described_entities(description: &Value) -> Vec<&str> {
-    match description.get("requests").and_then(Value::as_array) {
-        Some(requests) => requests
-            .iter()
-            .filter_map(|request| request["requestEntity"].as_str())
-            .collect(),
-        None => description["request"]["requestEntity"]
-            .as_str()
-            .into_iter()
-            .collect(),
-    }
+    description["requests"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|request| request["requestEntity"].as_str())
+        .collect()
 }
 
 fn entity_list(entities: &[&str]) -> String {
@@ -2881,13 +2905,6 @@ fn entity_list(entities: &[&str]) -> String {
         [entity] => format!("request entity {entity}"),
         several => format!("request entities {}", several.join(", ")),
     }
-}
-
-fn description_version(description: &Value) -> &str {
-    description["apiVersion"]
-        .as_str()
-        .and_then(|version| version.rsplit('/').next())
-        .unwrap_or("unknown apiVersion")
 }
 
 /// Quote a word for a POSIX shell only when it needs it.
@@ -3049,11 +3066,11 @@ mod tests {
     /// an adopter's registry would carry instead of the starter's.
     fn starter_description_with_activities(activities: &[&str]) -> Value {
         json!({
-            "apiVersion":"registry.registrystack.org/casework-source-description/v1alpha1",
+            "apiVersion":"id.registrystack.org/formats/casework/breg-source-description/v1alpha1",
             "sourceId":"professional-licences",
-            "request":{
+            "requests":[{
                 "requestEntity":"scope-correction",
-                "review":{"authority":"casework","policyId":"scope-correction"},
+                "review":{"type":"required","authority":"casework","policyId":"scope-correction"},
                 "fields":[
                     {"field":"record","apiName":"record","schema":{"type":"string","format":"uuid"}},
                     {"field":"licensed-activities","apiName":"licensedActivities","schema":{
@@ -3064,7 +3081,7 @@ mod tests {
                     {"field":"reason","apiName":"reason","schema":{"type":"string","minLength":1,"maxLength":500}},
                     {"field":"supporting-reference","apiName":"supportingReference","schema":{"type":"string","minLength":1,"maxLength":500}}
                 ]
-            }
+            }]
         })
     }
 
@@ -3121,20 +3138,57 @@ mod tests {
             .iter()
             .map(|entity| json!({"requestEntity": entity}))
             .collect::<Vec<_>>();
-        let mut description = json!({"sourceId":"professional-licences","sourceRevision":revision});
-        if let [request] = requests.as_slice() {
-            description["apiVersion"] =
-                json!("registry.registrystack.org/casework-source-description/v1alpha1");
-            description["request"] = request.clone();
-        } else {
-            description["apiVersion"] =
-                json!("registry.registrystack.org/casework-source-description/v1alpha2");
-            description["requests"] = json!(requests);
-        }
-        description
+        json!({
+            "apiVersion":"id.registrystack.org/formats/casework/breg-source-description/v1alpha1",
+            "sourceId":"professional-licences",
+            "sourceRevision":revision,
+            "requests":requests,
+        })
     }
 
     const RETRY: &str = "caseworkctl source add /registry --project /casework --source-id professional-licences --apply";
+
+    #[test]
+    fn cfg_env_2_source_apply_names_a_description_an_earlier_release_wrote() {
+        let project = tempfile::tempdir().unwrap();
+        let description_path = project.path().join("professional-licences.json");
+        let binding_path = project
+            .path()
+            .join("professional-licences.breg-runtime.yaml");
+        for retired in [
+            "registry.registrystack.org/casework-source-description/v1alpha1",
+            "registry.registrystack.org/casework-source-description/v1alpha2",
+        ] {
+            let mut previous = paired_description("sha256:one", &["scope-correction"]);
+            previous["apiVersion"] = json!(retired);
+            fs::write(&description_path, json_file_bytes(&previous).unwrap()).unwrap();
+
+            let error = require_outputs_absent_or_exact(
+                &description_path,
+                &paired_description("sha256:one", &["scope-correction"]),
+                &binding_path,
+                b"reviewAuthorities: {}\n",
+                RETRY,
+            )
+            .expect_err("a description under a retired apiVersion is preserved, not replaced");
+
+            let error = format!("{error:#}");
+            let description = description_path.display().to_string();
+            assert!(
+                error.contains(&format!(
+                    "{description} carries a retired apiVersion an earlier release wrote, and this run writes `id.registrystack.org/formats/casework/breg-source-description/v1alpha1`"
+                )),
+                "{error}"
+            );
+            assert!(
+                error.contains(&format!(
+                    "test ! -e {description}.previous && mv {description} {description}.previous"
+                )),
+                "{error}"
+            );
+            assert!(!error.contains(retired), "{error}");
+        }
+    }
 
     #[test]
     fn source_apply_names_every_differing_output_with_its_reason_and_recovery() {
@@ -3163,9 +3217,9 @@ mod tests {
         assert!(error.contains(&description), "{error}");
         assert!(error.contains(&binding), "{error}");
         assert!(
-            error.contains("pairs request entity scope-correction")
-                && error.contains("scope-correction, scope-review")
-                && error.contains("v1alpha2"),
+            error.contains(
+                "pairs request entity scope-correction, and this run pairs request entities scope-correction, scope-review because casework.yaml declares a different set of request entities"
+            ),
             "{error}"
         );
         assert!(
@@ -3512,7 +3566,7 @@ mod tests {
         );
         let report = json!({"explanation":{"requests":[{
             "requestEntity":"correction",
-            "review":{"authority":"casework-main","policyId":"registry-correction"},
+            "review":{"type":"required","authority":"casework-main","policyId":"registry-correction"},
             "onApproved":{"mode":"manual"}
         }]}});
         let selected = select_requests(
@@ -3552,8 +3606,8 @@ mod tests {
         let project = tempfile::tempdir().unwrap();
         casework_policy_with_one_review_kind(project.path());
         let authored = json!({"entities":[
-            {"id":"correction", "changeRequest":{"review":{"authority":"casework","policyId":"registry-correction"}}},
-            {"id":"address-correction", "changeRequest":{"review":{"authority":"casework","policyId":"missing-kind"}}}
+            {"id":"correction", "changeRequest":{"review":{"type":"required","authority":"casework","policyId":"registry-correction"}}},
+            {"id":"address-correction", "changeRequest":{"review":{"type":"required","authority":"casework","policyId":"missing-kind"}}}
         ]});
 
         let findings = check_unpaired_review_policies(
@@ -3588,9 +3642,9 @@ mod tests {
         // `bregctl check` refuses a missing or non-string policyId before this
         // check runs, so it promises no finding for one.
         let authored = json!({"entities":[
-            {"id":"correction", "changeRequest":{"review":{"authority":"casework","policyId":"registry-correction"}}},
-            {"id":"numeric-policy", "changeRequest":{"review":{"authority":"casework","policyId":123}}},
-            {"id":"no-policy", "changeRequest":{"review":{"authority":"casework"}}}
+            {"id":"correction", "changeRequest":{"review":{"type":"required","authority":"casework","policyId":"registry-correction"}}},
+            {"id":"numeric-policy", "changeRequest":{"review":{"type":"required","authority":"casework","policyId":123}}},
+            {"id":"no-policy", "changeRequest":{"review":{"type":"required","authority":"casework"}}}
         ]});
 
         let findings = check_unpaired_review_policies(
@@ -3609,10 +3663,10 @@ mod tests {
         let project = tempfile::tempdir().unwrap();
         casework_policy_with_one_review_kind(project.path());
         let authored = json!({"entities":[
-            {"id":"correction", "changeRequest":{"review":{"authority":"casework","policyId":"undeclared-but-paired-so-skipped"}}},
-            {"id":"external-workflow", "changeRequest":{"review":{"authority":"external-reviewer","policyId":"anything"}}},
+            {"id":"correction", "changeRequest":{"review":{"type":"required","authority":"casework","policyId":"undeclared-but-paired-so-skipped"}}},
+            {"id":"external-workflow", "changeRequest":{"review":{"type":"required","authority":"external-reviewer","policyId":"anything"}}},
             {"id":"plain-dataset"},
-            {"id":"sibling-correction", "changeRequest":{"review":{"authority":"casework","policyId":"registry-correction"}}}
+            {"id":"sibling-correction", "changeRequest":{"review":{"type":"required","authority":"casework","policyId":"registry-correction"}}}
         ]});
 
         let findings = check_unpaired_review_policies(
@@ -3630,9 +3684,9 @@ mod tests {
         let project = tempfile::tempdir().unwrap();
         casework_policy_with_one_review_kind(project.path());
         let authored = json!({"entities":[
-            {"id":"correction", "changeRequest":{"review":{"authority":"casework","policyId":"registry-correction"}}},
-            {"id":"renewal", "changeRequest":{"review":{"authority":"casework-renewals","policyId":"registry-correction"}}},
-            {"id":"renewal-appeal", "changeRequest":{"review":{"authority":"casework-renewals","policyId":"missing-kind"}}}
+            {"id":"correction", "changeRequest":{"review":{"type":"required","authority":"casework","policyId":"registry-correction"}}},
+            {"id":"renewal", "changeRequest":{"review":{"type":"required","authority":"casework-renewals","policyId":"registry-correction"}}},
+            {"id":"renewal-appeal", "changeRequest":{"review":{"type":"required","authority":"casework-renewals","policyId":"missing-kind"}}}
         ]});
 
         let findings = check_unpaired_review_policies(
@@ -3696,15 +3750,15 @@ mod tests {
         apply_breg_candidate(&mut root, "request", &record_reader(&[])).unwrap();
         assert_eq!(
             root["entities"][0]["hooks"][0]["trigger"],
-            "request_lifecycle"
+            "request-lifecycle"
         );
         assert_eq!(
-            root["accessProfiles"][0]["permissions"][0]["operations"],
+            root["accessProfiles"][0]["permissions"]["entities"][0]["operations"],
             json!(["get", "list"])
         );
         assert_eq!(
-            root["accessProfiles"][0]["permissions"][0]["readableRequestFields"],
-            json!(["review_state"])
+            root["accessProfiles"][0]["permissions"]["entities"][0]["readableRequestFields"],
+            json!(["review-state"])
         );
         apply_breg_candidate(&mut root, "request", &record_reader(&[])).unwrap();
         assert_eq!(root["entities"][0]["hooks"].as_array().unwrap().len(), 1);
@@ -3739,7 +3793,7 @@ mod tests {
         assert!(rendered.contains("# keep authored context"));
         assert!(rendered.contains("accessProfiles: # keep the profile context"));
         assert_eq!(
-            expected["accessProfiles"][0]["permissions"][0]["readableFields"],
+            expected["accessProfiles"][0]["permissions"]["entities"][0]["readableFields"],
             json!(["record", "region"])
         );
         assert_eq!(
@@ -3759,15 +3813,15 @@ mod tests {
 
     /// The reader grant for a request whose target record field is `record`.
     fn record_reader(projection: &[String]) -> ReaderGrant {
-        let metadata = json!({"effects":[target(json!({"kind":"existing","fromField":{"field":"record","apiName":"record"}}))]});
+        let metadata = json!({"effects":[target(json!({"type":"existing","fromField":{"field":"record","apiName":"record"}}))]});
         reader_grant(&metadata, projection).unwrap()
     }
 
     #[test]
     fn reader_grant_reads_the_request_target_field_whatever_its_name() {
         let metadata = json!({
-            "effects":[target(json!({"kind":"existing","fromField":{"field":"farmer-ref","apiName":"farmerRef"}}))],
-            "planner":{"kind":"declarative"}
+            "effects":[target(json!({"type":"existing","fromField":{"field":"farmer-ref","apiName":"farmerRef"}}))],
+            "planner":{"type":"declarative"}
         });
         let grant = reader_grant(&metadata, &["region".to_owned()]).unwrap();
         assert_eq!(grant.fields, ["farmer-ref", "region"]);
@@ -3775,7 +3829,7 @@ mod tests {
 
         let planned = json!({
             "effects":[],
-            "planner":{"kind":"rhai","possibleWrites":[{"target":{"kind":"existing","entity":"farmer","fromField":{"field":"farmer-ref","apiName":"farmerRef"}}}]}
+            "planner":{"type":"rhai","possibleWrites":[{"target":{"type":"existing","entity":"farmer","fromField":{"field":"farmer-ref","apiName":"farmerRef"}}}]}
         });
         let grant = reader_grant(&planned, &[]).unwrap();
         assert_eq!(grant.fields, ["farmer-ref"]);
@@ -3785,8 +3839,8 @@ mod tests {
     #[test]
     fn reader_grant_for_a_create_request_carries_a_projected_field() {
         let metadata = json!({
-            "effects":[target(json!({"kind":"reserved_create","effect":"register"}))],
-            "planner":{"kind":"declarative"}
+            "effects":[target(json!({"type":"reserved-create","effect":"register"}))],
+            "planner":{"type":"declarative"}
         });
         let grant = reader_grant(&metadata, &["region".to_owned(), "district".to_owned()]).unwrap();
         assert_eq!(grant.fields, ["district", "region"]);
@@ -3816,7 +3870,7 @@ mod tests {
 
     #[test]
     fn candidate_refuses_conflicting_existing_grant() {
-        let mut root = json!({"entities":[{"id":"request"}],"accessProfiles":[{"id":"casework-reader","permissions":[]}]});
+        let mut root = json!({"entities":[{"id":"request"}],"accessProfiles":[{"id":"casework-reader","permissions":{"entities":[]}}]});
         assert!(apply_breg_candidate(&mut root, "request", &record_reader(&[])).is_err());
     }
 
@@ -3894,7 +3948,7 @@ mod tests {
     /// as written, and does not count it as a fragment it generated.
     #[test]
     fn a_bare_lifecycle_hook_is_left_as_an_authored_hook() {
-        let bare = json!({"id":"casework-lifecycle-v1","phase":"after","trigger":"request_lifecycle","projection":["record"],"handler":{"kind":"url","destinationId":"casework"}});
+        let bare = json!({"id":"casework-lifecycle-v1","phase":"after","trigger":"request-lifecycle","projection":["record"],"handler":{"type":"url","destinationId":"casework"}});
         // BReg hook identifiers are unique across a registry, so one registry
         // carries the bare hook on at most one entity.
         let mut root = json!({"entities":[
@@ -3987,7 +4041,7 @@ mod tests {
         assert_eq!(root, once, "re-pairing an entity changes nothing");
         let profiles = root["accessProfiles"].as_array().unwrap();
         assert_eq!(profiles.len(), 1);
-        let entities = profiles[0]["permissions"]
+        let entities = profiles[0]["permissions"]["entities"]
             .as_array()
             .unwrap()
             .iter()
@@ -3995,7 +4049,7 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(entities, ["request", "transfer"]);
         assert_eq!(
-            profiles[0]["permissions"][1]["readableFields"],
+            profiles[0]["permissions"]["entities"][1]["readableFields"],
             json!(["record", "region"])
         );
 
@@ -4020,8 +4074,8 @@ mod tests {
         )
         .unwrap();
         let paired = paired.replace(
-            "    permissions:\n",
-            "    permissions: # keep the grant context\n",
+            "    permissions:\n      entities:\n",
+            "    permissions: # keep the grant context\n      entities: # keep the list context\n",
         );
         let mut second = first.clone();
         apply_breg_candidate(&mut second, "transfer", &record_reader(&[])).unwrap();
@@ -4033,7 +4087,51 @@ mod tests {
         )
         .unwrap();
         assert!(rendered.contains("# keep the grant context"));
+        assert!(rendered.contains("# keep the list context"));
         assert_eq!(serde_norway::from_str::<Value>(&rendered).unwrap(), second);
+    }
+
+    #[test]
+    fn narrow_yaml_patch_adds_a_permission_inside_the_entities_list() {
+        let input = "entities:\n  - id: request\n    route: requests\n  - id: transfer\n    route: transfers\naccessProfiles: []\n";
+        let mut first: Value = serde_norway::from_str(input).unwrap();
+        apply_breg_candidate(&mut first, "request", &record_reader(&[])).unwrap();
+        let paired = render_candidate_preserving_authored_text(
+            input.as_bytes(),
+            "request",
+            &first,
+            &record_reader(&[]),
+        )
+        .unwrap();
+        // A hand-added sibling list after `entities` stays where it is.
+        let authored = format!("{paired}      datasets: []\n");
+        let mut second: Value = serde_norway::from_str(&authored).unwrap();
+        apply_breg_candidate(&mut second, "transfer", &record_reader(&[])).unwrap();
+        let rendered = render_candidate_preserving_authored_text(
+            authored.as_bytes(),
+            "transfer",
+            &second,
+            &record_reader(&[]),
+        )
+        .unwrap();
+        assert!(rendered.ends_with("      datasets: []\n"), "{rendered}");
+        assert_eq!(serde_norway::from_str::<Value>(&rendered).unwrap(), second);
+    }
+
+    #[test]
+    fn narrow_yaml_patch_refuses_flow_style_reader_permissions() {
+        for permissions in [
+            "    permissions: {entities: [{entity: request}]}\n",
+            "    permissions:\n      entities: [{entity: request}]\n",
+        ] {
+            let text = format!("accessProfiles:\n  - id: {READER_CLIENT_ID}\n{permissions}");
+            let error =
+                insert_reader_permission(&text, "transfer", &record_reader(&[])).unwrap_err();
+            assert!(
+                format!("{error:#}").contains("supports a block permissions.entities list"),
+                "{error:#}"
+            );
+        }
     }
 
     #[test]
@@ -4077,7 +4175,7 @@ mod tests {
 
     #[test]
     fn narrow_yaml_patch_finds_the_entity_under_entities_only() {
-        let input = "accessProfiles:\n  - id: request\n    permissions: []\nentities:\n  - id: request\n    route: requests\n";
+        let input = "accessProfiles:\n  - id: request\n    permissions: {}\nentities:\n  - id: request\n    route: requests\n";
         let mut expected: Value = serde_norway::from_str(input).unwrap();
         apply_breg_candidate(&mut expected, "request", &record_reader(&[])).unwrap();
         let patched = render_candidate_preserving_authored_text(
@@ -4092,8 +4190,8 @@ mod tests {
 
     #[test]
     fn narrow_yaml_patch_quotes_a_lifecycle_field_yaml_reads_as_another_type() {
-        let input = "entities:\n  - id: request\n    route: requests\naccessProfiles:\n  - id: reader\n    permissions: []\n";
-        let metadata = json!({"effects":[target(json!({"kind":"existing","fromField":{"field":"null","apiName":"null"}}))]});
+        let input = "entities:\n  - id: request\n    route: requests\naccessProfiles:\n  - id: reader\n    permissions: {}\n";
+        let metadata = json!({"effects":[target(json!({"type":"existing","fromField":{"field":"null","apiName":"null"}}))]});
         let reader = reader_grant(&metadata, &[]).unwrap();
         let mut expected: Value = serde_norway::from_str(input).unwrap();
         apply_breg_candidate(&mut expected, "request", &reader).unwrap();
@@ -4116,7 +4214,7 @@ mod tests {
 
     #[test]
     fn narrow_yaml_patch_preserves_comments() {
-        let input = "# useful\nentities:\n  - id: request\n    route: requests\naccessProfiles:\n  - id: reader\n    # keep this\n    permissions: []\n";
+        let input = "# useful\nentities:\n  - id: request\n    route: requests\naccessProfiles:\n  - id: reader\n    # keep this\n    permissions: {}\n";
         let mut expected: Value = serde_norway::from_str(input).unwrap();
         apply_breg_candidate(&mut expected, "request", &record_reader(&[])).unwrap();
         let patched = render_candidate_preserving_authored_text(
@@ -4256,12 +4354,12 @@ mod tests {
         assert_eq!(
             plan.changes,
             json!([
-                {"file":"dev-clients.yaml","path":"/clients/casework-reader","operation":"ensure_exact"},
-                {"file":"dev-clients.yaml","path":"/clients/administrator","operation":"ensure_exact"},
-                {"file":"dev-clients.yaml","path":"/clients/supervisor","operation":"ensure_exact"},
-                {"file":"dev-clients.yaml","path":"/clients/staff","operation":"ensure_exact"},
-                {"file":"dev-clients.yaml","path":"/clients/integration-requester","operation":"ensure_exact"},
-                {"file":"dev-clients.yaml","path":"/reviewAuthorities/casework","operation":"ensure_exact"}
+                {"file":"dev-clients.yaml","path":"/clients/casework-reader","operation":"ensure-exact"},
+                {"file":"dev-clients.yaml","path":"/clients/administrator","operation":"ensure-exact"},
+                {"file":"dev-clients.yaml","path":"/clients/supervisor","operation":"ensure-exact"},
+                {"file":"dev-clients.yaml","path":"/clients/staff","operation":"ensure-exact"},
+                {"file":"dev-clients.yaml","path":"/clients/integration-requester","operation":"ensure-exact"},
+                {"file":"dev-clients.yaml","path":"/reviewAuthorities/casework","operation":"ensure-exact"}
             ])
         );
 
@@ -4320,10 +4418,10 @@ mod tests {
             "id": "request",
             "fields": [{"id": "region", "type": "string"}]
         }]);
-        authored["accessProfiles"][0]["permissions"] = json!([{
+        authored["accessProfiles"][0]["permissions"] = json!({"entities": [{
             "entity": "request",
             "rowBoundaries": [{"field": "region", "claim": "allowed_regions", "operator": "equals"}]
-        }]);
+        }]});
 
         let plan = plan_breg_dev_clients(
             registry.path(),
@@ -4343,7 +4441,7 @@ mod tests {
         assert_eq!(finding.severity, Severity::Warning);
         assert_eq!(
             finding.path,
-            "/accessProfiles/0/permissions/0/rowBoundaries"
+            "/accessProfiles/0/permissions/entities/0/rowBoundaries"
         );
         assert!(
             !finding.message.contains("allowed_regions"),
@@ -4828,14 +4926,14 @@ mod tests {
         .unwrap();
         let (mut authored, mut metadata) = reviewer_fixture();
         authored["accessProfiles"][0]["permissions"] =
-            json!([{"entity":"requests","operations":["get"]}]);
+            json!({"entities":[{"entity":"requests","operations":["get"]}]});
         authored["accessProfiles"]
             .as_array_mut()
             .unwrap()
             .push(json!({
                 "id":"automatic-applier", "actorKind":"service", "principalClaim":"sub",
                 "requesterClients":["executor"], "requiredScopes":["requests:apply"],
-                "permissions":[{"entity":"requests","operations":["get","apply_request"]}]
+                "permissions":{"entities":[{"entity":"requests","operations":["get","apply-request"]}]}
             }));
         authored["accessProfiles"]
             .as_array_mut()
@@ -4843,7 +4941,7 @@ mod tests {
             .push(json!({
                 "id":"citizen-reader", "actorKind":"human", "principalClaim":"sub",
                 "requesterClients":["citizen"], "requiredScopes":["citizen:read"],
-                "permissions":[{"entity":"requests","operations":["get"]}]
+                "permissions":{"entities":[{"entity":"requests","operations":["get"]}]}
             }));
         metadata["requestEntity"] = json!("requests");
         metadata["reviewPermissions"] = json!([]);
@@ -4938,7 +5036,7 @@ mod tests {
             .push(json!({
                 "id":"other-reviewer", "actorKind":"human", "principalClaim":"registry_principal",
                 "requesterClients":["staff", "supervisor"], "requiredScopes":["other:review"],
-                "permissions":[{"entity":"requests","operations":["get"]}]
+                "permissions":{"entities":[{"entity":"requests","operations":["get"]}]}
             }));
         let mut ambiguous_request = selected_request(&metadata);
         ambiguous_request.application = ApplicationPlan::Automatic {
@@ -4960,7 +5058,7 @@ mod tests {
             executor: "applier".to_owned(),
             access_profile: "automatic-applier".to_owned(),
         };
-        authored["accessProfiles"][0]["permissions"] = json!([]);
+        authored["accessProfiles"][0]["permissions"] = json!({});
         let error = plan_breg_dev_clients(
             registry.path(),
             &project,
@@ -5082,10 +5180,10 @@ mod tests {
                     "requiredScopes":"unrestricted",
                     "actorKind":"human",
                     "requesterClients":["staff","supervisor"],
-                    "permissions":[{
+                    "permissions":{"entities":[{
                         "entity":"request",
                         "rowBoundaries":[row_boundary]
-                    }]
+                    }]}
                 }
             ]
         });
@@ -5114,7 +5212,7 @@ mod tests {
         // rowBoundaries is nested under.
         assert_eq!(
             finding.path,
-            "/accessProfiles/1/permissions/0/rowBoundaries"
+            "/accessProfiles/1/permissions/entities/0/rowBoundaries"
         );
         assert!(
             finding.suggested_action.contains("string"),
@@ -5347,13 +5445,13 @@ mod tests {
         json!({"revision":"r1", "explanation":{"requests":[
             {
                 "requestEntity":"renewal",
-                "review":{"authority":"casework-renewals","policyId":"registry-renewal"},
+                "review":{"type":"required","authority":"casework-renewals","policyId":"registry-renewal"},
                 "onApproved":{"mode":"automatic","executor":"registry-automatic"},
                 "applyPermissions":[{"profile":"automatic-applier"}]
             },
             {
                 "requestEntity":"correction",
-                "review":{"authority":"casework-main","policyId":"registry-correction"},
+                "review":{"type":"required","authority":"casework-main","policyId":"registry-correction"},
                 "onApproved":{"mode":"manual"}
             }
         ]}})
@@ -5468,7 +5566,7 @@ mod tests {
     }
 
     #[test]
-    fn source_description_lists_every_request_only_when_there_are_several() {
+    fn cfg_env_2_source_description_carries_the_format_header_and_lists_every_request() {
         let project = tempfile::tempdir().unwrap();
         two_entity_policy(project.path());
         let report = two_entity_explanation();
@@ -5477,15 +5575,17 @@ mod tests {
         let single = source_description("farmers", &selected[..1], &report).unwrap();
         assert_eq!(
             single["apiVersion"],
-            "registry.registrystack.org/casework-source-description/v1alpha1"
+            "id.registrystack.org/formats/casework/breg-source-description/v1alpha1"
         );
-        assert_eq!(single["request"]["requestEntity"], "correction");
-        assert!(single.get("requests").is_none());
+        assert_eq!(single["kind"], "CaseworkBregSourceDescription");
+        assert!(single.get("request").is_none());
+        assert_eq!(single["requests"].as_array().unwrap().len(), 1);
+        assert_eq!(single["requests"][0]["requestEntity"], "correction");
 
         let several = source_description("farmers", &selected, &report).unwrap();
         assert_eq!(
             several["apiVersion"],
-            "registry.registrystack.org/casework-source-description/v1alpha2"
+            "id.registrystack.org/formats/casework/breg-source-description/v1alpha1"
         );
         assert!(several.get("request").is_none());
         let entities = several["requests"]
@@ -5527,6 +5627,93 @@ mod tests {
         assert!(format!("{error:#}").contains("casework-main"));
     }
 
+    /// A BReg project names itself under `project.id`, and the Casework source
+    /// id is checked against that name.
+    #[test]
+    fn the_breg_project_id_is_read_from_the_project_block() {
+        let authored = json!({
+            "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
+            "kind": "BRegProject",
+            "project": {"id": "farmers"}
+        });
+        assert_eq!(breg_project_id(&authored).unwrap(), "farmers");
+        let error = breg_project_id(&json!({"registry": {"id": "farmers"}}))
+            .unwrap_err()
+            .to_string();
+        assert_eq!(error, "BReg registry.yaml has no project.id");
+    }
+
+    /// The fragments are written into a BReg project, so each must be one
+    /// the BReg project schema admits.
+    #[test]
+    fn candidate_fragments_are_admitted_by_the_breg_project_schema() {
+        use jsonschema::{Draft, JSONSchema};
+
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/breg/generated/authoring/registry-project.schema.json");
+        let document: Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+        let (hook, profile) = candidate_fragments("correction", &record_reader(&[]));
+        for (definition, fragment) in [
+            ("HookSource", hook),
+            ("ProjectAccessProfileSource", profile),
+        ] {
+            let schema = JSONSchema::options()
+                .with_draft(Draft::Draft202012)
+                .compile(&json!({
+                    "$schema": document["$schema"],
+                    "$defs": document["$defs"],
+                    "$ref": format!("#/$defs/{definition}")
+                }))
+                .expect("the BReg project schema compiles as Draft 2020-12");
+            let refusals: Vec<String> = schema
+                .validate(&fragment)
+                .err()
+                .into_iter()
+                .flatten()
+                .map(|error| format!("{}: {error}", error.instance_path))
+                .collect();
+            assert!(refusals.is_empty(), "{definition}: {refusals:#?}");
+        }
+    }
+
+    /// An operator merges the candidate binding into a BReg runtime file, so
+    /// every member and word it writes must be one the BReg runtime schema
+    /// admits.
+    #[test]
+    fn runtime_binding_is_admitted_by_the_breg_runtime_schema() {
+        use jsonschema::{Draft, JSONSchema};
+
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/breg/generated/runtime/runtime.schema.json");
+        let mut document: Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+        // The binding is a fragment of a runtime file: it states only the
+        // members Casework pairs, so the root's required members do not apply.
+        document["required"] = json!([]);
+        let schema = JSONSchema::options()
+            .with_draft(Draft::Draft202012)
+            .compile(&document)
+            .expect("the BReg runtime schema compiles as Draft 2020-12");
+
+        let project = tempfile::tempdir().unwrap();
+        two_entity_policy(project.path());
+        let report = two_entity_explanation();
+        let selected = select_requests(project.path(), "farmers", "farmers", &report).unwrap();
+        let binding = runtime_binding("farmers", "farmers", &selected).unwrap();
+        let parsed: Value = serde_norway::from_str(&binding).unwrap();
+        for member in ["eventDestinations", "reviewAuthorities", "reviewExecutors"] {
+            assert!(parsed.get(member).is_some(), "{member} is written");
+        }
+
+        let refusals: Vec<String> = schema
+            .validate(&parsed)
+            .err()
+            .into_iter()
+            .flatten()
+            .map(|error| format!("{}: {error}", error.instance_path))
+            .collect();
+        assert!(refusals.is_empty(), "{refusals:#?}");
+    }
+
     #[test]
     fn candidate_pairs_every_request_entity_in_one_pass() {
         let input = "# keep authored context\nentities:\n  - id: correction\n    route: corrections\n  - id: renewal\n    route: renewals\naccessProfiles: []\n";
@@ -5550,7 +5737,7 @@ mod tests {
                 format!("casework-lifecycle-v1-{}", entity["id"].as_str().unwrap())
             );
         }
-        let permitted = authored["accessProfiles"][0]["permissions"]
+        let permitted = authored["accessProfiles"][0]["permissions"]["entities"]
             .as_array()
             .unwrap()
             .iter()

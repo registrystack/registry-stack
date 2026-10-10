@@ -100,7 +100,7 @@ test('a selected slot exposes the served limits and its record projection', asyn
     assert.deepEqual(slot.valueIn(emptied()), { kind: 'empty', value: null });
     const unselected = structuredClone(fixture.record);
     delete unselected.data.domainData['supporting-file'];
-    assert.deepEqual(slot.valueIn(unselected), { kind: 'not_selected', value: null });
+    assert.deepEqual(slot.valueIn(unselected), { kind: 'not-selected', value: null });
     assert.equal(requests.length, 1);
   } finally {
     await close();
@@ -120,7 +120,7 @@ test('an upload the slot cannot accept never reaches the engine', async () => {
     ]) {
       assert.throws(
         () => slot.prepareUpload(contentType, body),
-        (error) => error instanceof BaseRegistryClientError && error.kind === 'invalid_request',
+        (error) => error instanceof BaseRegistryClientError && error.kind === 'invalid-request',
       );
     }
     assert.equal(requests.length, 1);
@@ -182,26 +182,26 @@ test('slot authority stays bound to the client source and the served routes', as
     const before = second.requests.length;
     await assert.rejects(
       second.client.downloadAttachment(first.slot, RECORD_ID, 1),
-      (error) => error instanceof BaseRegistryClientError && error.kind === 'invalid_request',
+      (error) => error instanceof BaseRegistryClientError && error.kind === 'invalid-request',
     );
     await assert.rejects(
       second.client.downloadAttachment(second.slot, RECORD_ID, 0),
-      (error) => error instanceof BaseRegistryClientError && error.kind === 'invalid_request',
+      (error) => error instanceof BaseRegistryClientError && error.kind === 'invalid-request',
     );
     await assert.rejects(
       second.client.uploadAttachment(second.slot, 'not-a-uuid', ETAG,
         second.slot.prepareUpload('application/pdf', CONTENT), 'upload-1'),
-      (error) => error instanceof BaseRegistryClientError && error.kind === 'invalid_request',
+      (error) => error instanceof BaseRegistryClientError && error.kind === 'invalid-request',
     );
     assert.throws(
       () => second.metadata.selectAttachments('missing-entity', 'company-writer'),
       (error) => error instanceof BaseRegistryClientError
-        && error.kind === 'metadata_selection' && error.code === 'not_found',
+        && error.kind === 'metadata-selection' && error.code === 'not-found',
     );
     assert.throws(
       () => second.metadata.selectAttachments('company', 'auditor'),
       (error) => error instanceof BaseRegistryClientError
-        && error.kind === 'metadata_selection' && error.code === 'profile_mismatch',
+        && error.kind === 'metadata-selection' && error.code === 'profile-mismatch',
     );
     assert.equal(second.requests.length, before);
   } finally {

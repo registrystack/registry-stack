@@ -20,15 +20,15 @@
   ],
   "properties": {
     "apiVersion": {
-      "const": "registry.registrystack.org/breg-explain/v1alpha4"
+      "const": "id.registrystack.org/formats/breg/access-preview/v1alpha4"
     },
     "kind": {
-      "const": "AccessPreview"
+      "const": "BRegAccessPreview"
     },
-    "mode": { "const": "offline_synthetic" },
+    "mode": { "const": "offline-synthetic" },
     "admitted": { "type": "boolean" },
     "reason": { "type": "string" },
-    "recordAccess": { "const": "not_evaluated" },
+    "recordAccess": { "const": "not-evaluated" },
     "credentialsVerified": { "type": "boolean" },
     "authorityIssued": { "type": "boolean" },
     "rowValuesDisclosed": { "type": "boolean" },

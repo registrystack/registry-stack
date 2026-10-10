@@ -49,7 +49,7 @@ use registry_platform_crypto::PrivateJwk;
 
 // Every instance also carries a `kind` attribute, one of the eight stable
 // strings `EvidenceClientError::kind` reports: "configuration", "nonce",
-// "token", "transport", "denied", "not_available", "protocol", or
+// "token", "transport", "denied", "not-available", "protocol", or
 // "verification". Branch on `kind`, never on the rendered message, which
 // this crate does not freeze.
 //
@@ -155,7 +155,7 @@ fn exception_for_kind(kind: &str, message: String) -> PyErr {
         "token" => TokenError::new_err(message),
         "transport" => TransportError::new_err(message),
         "denied" => DeniedError::new_err(message),
-        "not_available" => NotAvailableError::new_err(message),
+        "not-available" => NotAvailableError::new_err(message),
         "protocol" => ProtocolError::new_err(message),
         "verification" => VerificationError::new_err(message),
         _ => EvidenceClientError::new_err(message),
@@ -1465,7 +1465,9 @@ except BaseException as error:
                 .is_instance_of::<TransportError>(py));
             assert!(exception_for_kind("denied", "message".to_owned())
                 .is_instance_of::<DeniedError>(py));
-            assert!(exception_for_kind("not_available", "message".to_owned())
+            assert!(exception_for_kind("not-available", "message".to_owned())
+                .is_instance_of::<NotAvailableError>(py));
+            assert!(!exception_for_kind("not_available", "message".to_owned())
                 .is_instance_of::<NotAvailableError>(py));
             assert!(exception_for_kind("protocol", "message".to_owned())
                 .is_instance_of::<ProtocolError>(py));

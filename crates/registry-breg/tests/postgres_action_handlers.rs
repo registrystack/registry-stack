@@ -137,6 +137,7 @@ async fn setup_with_handler_source(
         .find(|profile| profile.id == "person-administrator")
         .unwrap()
         .permissions
+        .entities
         .iter_mut()
         .find(|grant| grant.entity == "person")
         .unwrap()
@@ -176,8 +177,9 @@ async fn setup_with_handler_source(
         .find(|profile| profile.id == "person-registrar")
         .unwrap()
         .permissions
+        .actions
         .iter_mut()
-        .find(|grant| grant.action.as_deref() == Some("register-person-with-registration"))
+        .find(|grant| grant.action == "register-person-with-registration")
         .unwrap()
         .targets
         .iter_mut()
@@ -1168,29 +1170,29 @@ fn event_destinations(
             .expect("key is private");
     }
     let config = json!({
-        "apiVersion":"registry.registrystack.org/breg-runtime/v1alpha1",
+        "apiVersion":"id.registrystack.org/formats/breg/runtime/v1alpha1",
         "kind":"BRegRuntimeConfig",
         "listener":{"bind":"127.0.0.1:8080"},
         "identity":{"environment":"local", "instanceId":"facility-test", "databaseId":"facility-test", "databaseInitializationEnvironment":"local"},
         "secretProviders":{"file":{"root":root}},
         "database":{
             "runtimeUrlRef":"secret:file/database-url", "migrationUrlRef":"secret:file/migration-url",
-            "pool":{"maxSize":4,"waitTimeoutMilliseconds":1000,"createTimeoutMilliseconds":1000,"recycleTimeoutMilliseconds":1000},
+            "pool":{"maximumConnections":4,"waitTimeoutMilliseconds":1000,"createTimeoutMilliseconds":1000,"recycleTimeoutMilliseconds":1000},
             "roles":{"migration":"registry_migration","runtime":"registry_runtime"}
         },
         "package":{"root":root},
         "authentication":{
             "oidc":{
                 "issuer":"https://issuer.example", "audience":"urn:breg:handler-test", "allowedAlgorithm":"EdDSA", "accessTokenType":"JWT",
-                "scopeClaim":"scope", "scopeSeparator":" ", "allowedClients":"unrestricted", "maxTokenLifetimeSeconds":300, "leewayMilliseconds":60000,
-                "jwksCache":{"cacheTtlSeconds":600,"negativeCacheTtlSeconds":60,"refreshCooldownSeconds":30,"maxDocumentBytes":65536,"requestTimeoutMilliseconds":5000,"outageToleranceSeconds":900}
+                "scopeClaim":"scope", "scopeSeparator":" ", "allowedClients":"unrestricted", "maximumTokenLifetimeSeconds":300, "leewayMilliseconds":60000,
+                "jwksCache":{"cacheTtlSeconds":600,"negativeCacheTtlSeconds":60,"refreshCooldownSeconds":30,"maximumDocumentBytes":65536,"attemptTimeoutMilliseconds":5000,"outageToleranceSeconds":900}
             },
             "authorityClaims":{"principal":"registry_principal", "purpose":"purpose"}
         },
         "audit":{"hashKeyRef":"secret:file/audit-key","path":root.join("audit").join("audit.jsonl")},
-        "cursor":{"secretRef":"secret:file/cursor-key", "maxAgeSeconds":300},
+        "cursor":{"secretRef":"secret:file/cursor-key", "maximumAgeSeconds":300},
         "eventDestinations":{"person-events":{
-            "origin":"https://consumer.example/", "path":"/events", "networkProfile":"productionHttps", "dnsFamily":"dualStackStrict",
+            "origin":"https://consumer.example/", "path":"/events", "networkProfile":"production-https", "dnsFamily":"dual-stack-strict",
             "allowedPrivateCidrs":[], "hmacSha256KeyRef":"secret:file/event-key", "classificationCeiling":"internal",
             "deliveryCeilings":{"attemptTimeoutMilliseconds":5000,"maximumAttempts":5}
         }},

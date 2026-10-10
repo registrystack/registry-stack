@@ -146,7 +146,7 @@ pub(crate) async fn activate_task_templates_in(
                 audit,
                 &grant,
                 id,
-                "task_grant_invalidated",
+                "task-grant-invalidated",
                 Some("template"),
                 None,
             )
@@ -210,7 +210,7 @@ impl PostgresStore {
     ) -> Result<StoredTaskGrant, StoreError> {
         let mut audit = self
             .begin_audit(crate::audit::request_record(
-                "task_approved",
+                "task-approved",
                 Some(actor),
                 &actor.profile_id,
                 json!({"itemId": grant.item_id, "grantId": grant.id}),
@@ -285,7 +285,7 @@ impl PostgresStore {
             &transaction,
             &mut audit,
             &item,
-            "task_approved",
+            "task-approved",
             Some(actor),
             grant.id,
         )
@@ -390,9 +390,9 @@ impl PostgresStore {
             .begin_audit_for(
                 actor,
                 if reason == "revoked" {
-                    "task_revoked"
+                    "task-revoked"
                 } else {
-                    "task_invalidated"
+                    "task-invalidated"
                 },
                 json!({"grantId": id}),
             )
@@ -518,7 +518,7 @@ impl PostgresStore {
         }
         let mut audit = self
             .begin_audit(crate::audit::request_record(
-                "task_grant_approved",
+                "task-grant-approved",
                 Some(actor),
                 &actor.profile_id,
                 json!({"grantId": grant.id}),
@@ -665,7 +665,7 @@ impl PostgresStore {
             &mut audit,
             &grant,
             grant.id,
-            "task_grant_approved",
+            "task-grant-approved",
             None,
             Some(actor),
         )
@@ -786,7 +786,7 @@ impl PostgresStore {
                     &mut audit,
                     grant,
                     grant.id,
-                    "task_grant_invalidated",
+                    "task-grant-invalidated",
                     Some("eligibility"),
                     None,
                 )
@@ -819,9 +819,9 @@ impl PostgresStore {
             .begin_audit_for(
                 actor,
                 if reason == "revoked" {
-                    "task_grant_revoked"
+                    "task-grant-revoked"
                 } else {
-                    "task_grant_invalidated"
+                    "task-grant-invalidated"
                 },
                 json!({"grantId": id}),
             )
@@ -893,9 +893,9 @@ impl PostgresStore {
             == 1;
         if first_invalidation {
             let kind = if reason == "revoked" {
-                "task_grant_revoked"
+                "task-grant-revoked"
             } else {
-                "task_grant_invalidated"
+                "task-grant-invalidated"
             };
             review_grant_event(
                 &transaction,
@@ -989,7 +989,7 @@ async fn invalidate(
     actor: Option<&ActorContext>,
 ) -> Result<(), StoreError> {
     if transaction.execute("UPDATE casework_task_grants SET invalidated_at=now(),invalidation_reason=$2 WHERE grant_id=$1 AND invalidated_at IS NULL", &[&id,&reason]).await? == 1 {
-        task_event(transaction,audit,item,if reason=="revoked" {"task_revoked"} else {"task_invalidated"},actor,id).await?;
+        task_event(transaction,audit,item,if reason=="revoked" {"task-revoked"} else {"task-invalidated"},actor,id).await?;
     } else {
         // The grant was already invalidated, so no domain event is recorded.
         audit.record_outcome(crate::audit::AuditOutcome::Unchanged);

@@ -238,7 +238,7 @@ fn render_refusal(refusal: &CoreRefusalAuditEvent) -> Result<String> {
     }
     parse_time(&refusal.occurred_at)?;
     Ok(format!(
-        "ACCESS REFUSED requester={} reason=not_authorized\n",
+        "ACCESS REFUSED requester={} reason=not-authorized\n",
         refusal.requester_pseudonym
     ))
 }
@@ -647,13 +647,13 @@ impl Decision {
     /// operation without a release.
     fn reason(self) -> Option<&'static str> {
         Some(match self {
-            Self::NoMatch => "no_match",
+            Self::NoMatch => "no-match",
             Self::Ambiguous => "ambiguous",
             Self::Unresolved => "unresolved",
-            Self::FactMissing => "fact_missing",
-            Self::DependencyFailure => "dependency_failure",
-            Self::EvaluationFailure => "evaluation_failure",
-            Self::SigningFailure => "signing_failure",
+            Self::FactMissing => "fact-missing",
+            Self::DependencyFailure => "dependency-failure",
+            Self::EvaluationFailure => "evaluation-failure",
+            Self::SigningFailure => "signing-failure",
             Self::Authorized | Self::Released | Self::NotAuthorized | Self::Unrecognized => {
                 return None
             }

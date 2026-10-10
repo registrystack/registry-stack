@@ -192,7 +192,7 @@ class GeneratedOpenApiTests(unittest.TestCase):
         self.assertNotIn("decisionReceipt", schemas["ReviewerTask"]["required"])
         receipt = schemas["ReviewDecisionReceipt"]
         self.assertEqual(
-            ["approve", "reject", "changes_requested", "answer"],
+            ["approve", "reject", "changes-requested", "answer"],
             schemas["ReviewDecisionType"]["enum"],
         )
         self.assertEqual(
@@ -266,7 +266,7 @@ class GeneratedOpenApiTests(unittest.TestCase):
             self.openapi, "get", "/v1/review-tasks", "ownership"
         )
         self.assertEqual(
-            {"type": "string", "enum": ["assigned_to_me", "unclaimed"]},
+            {"type": "string", "enum": ["assigned-to-me", "unclaimed"]},
             ownership,
         )
         reviewer_description = self.openapi["paths"]["/v1/review-tasks"]["get"][
@@ -458,10 +458,10 @@ class GeneratedOpenApiTests(unittest.TestCase):
         self.assertEqual(
             {
                 "observed", "opened", "claimed", "assigned", "delegated",
-                "caseload_moved", "clock_reminder", "clock_step_applied",
-                "clock_recomputed", "released", "draft_saved", "attempt_reserved",
-                "attempt_uncertain", "action_completed", "attempt_settled", "superseded",
-                "completed", "task_approved", "task_revoked", "task_invalidated",
+                "caseload-moved", "clock-reminder", "clock-step-applied",
+                "clock-recomputed", "released", "draft-saved", "attempt-reserved",
+                "attempt-uncertain", "action-completed", "attempt-settled", "superseded",
+                "completed", "task-approved", "task-revoked", "task-invalidated",
             },
             set(schemas["HistoryEntry"]["properties"]["kind"]["enum"]),
         )
@@ -489,7 +489,7 @@ class GeneratedOpenApiTests(unittest.TestCase):
         ]["post"]["description"]
         self.assertIn("source", release_description.lower())
         self.assertEqual(
-            "^[a-z][a-z0-9_]{0,63}$", schemas["OperationName"]["pattern"]
+            "^[a-z][a-z0-9_-]{0,63}$", schemas["OperationName"]["pattern"]
         )
         limit = next(
             parameter
@@ -522,7 +522,7 @@ class GeneratedOpenApiTests(unittest.TestCase):
             next_schema["allOf"][1]["properties"]["items"]["maxItems"],
         )
         self.assertIn("Empty complete", next_operation["description"])
-        self.assertIn("budget_exhausted", next_operation["description"])
+        self.assertIn("budget-exhausted", next_operation["description"])
         next_parameters = {
             parameter["name"]: parameter for parameter in next_operation["parameters"]
         }
@@ -547,7 +547,7 @@ class GeneratedOpenApiTests(unittest.TestCase):
             encoding="utf-8"
         )
         self.assertEqual(
-            set(GENERATOR.rust_snake_case_unit_enum_values(model_source, "HistoryKind")),
+            set(GENERATOR.rust_kebab_case_unit_enum_values(model_source, "HistoryKind")),
             set(
                 self.openapi["components"]["schemas"]["HistoryEntry"]["properties"][
                     "kind"
@@ -702,7 +702,7 @@ class GeneratedOpenApiTests(unittest.TestCase):
         operation = self.openapi["paths"]["/v1/holdings"]["get"]
         self.assertIn("within this page", operation["description"])
         self.assertIn("follow every page and sum matching groups", operation["description"])
-        self.assertIn("source_unavailable page contains zero counts", operation["description"])
+        self.assertIn("source-unavailable page contains zero counts", operation["description"])
         self.assertIn("retries the failed page", parameters["cursor"]["description"])
 
     def test_directory_target_discovery_is_purpose_bound_and_directory_member_only(self) -> None:
@@ -711,7 +711,7 @@ class GeneratedOpenApiTests(unittest.TestCase):
             parameter["name"]: parameter for parameter in operation["parameters"]
         }
         self.assertEqual(
-            ["assignment", "absence_person", "absence_cover"],
+            ["assignment", "absence-person", "absence-cover"],
             parameters["purpose"]["schema"]["enum"],
         )
         self.assertTrue(parameters["purpose"]["required"])
@@ -746,7 +746,7 @@ class GeneratedOpenApiTests(unittest.TestCase):
             set(schemas["AssignmentContext"]["properties"]),
         )
         self.assertEqual(
-            ["no_cover_available"], schemas["StaffingDiagnostic"]["enum"]
+            ["no-cover-available"], schemas["StaffingDiagnostic"]["enum"]
         )
         absence_list = schemas["AbsenceList"]
         self.assertEqual(
@@ -775,9 +775,9 @@ class GeneratedOpenApiTests(unittest.TestCase):
         self.assertEqual(
             {
                 "moved",
-                "not_visible",
-                "not_eligible",
-                "attempt_in_progress",
+                "not-visible",
+                "not-eligible",
+                "attempt-in-progress",
                 "conflict",
             },
             set(schemas["CaseloadItemOutcome"]["enum"]),
@@ -875,10 +875,13 @@ class GeneratedOpenApiTests(unittest.TestCase):
             },
         )
         subject = schemas["SubjectClockPolicy"]["properties"]
-        self.assertEqual("firstSubmittedAt", subject["anchor"]["const"])
-        self.assertEqual("reviewCompleted", subject["completeOn"]["const"])
+        self.assertEqual("first-submitted-at", subject["anchor"]["const"])
+        self.assertEqual("subject", subject["type"]["const"])
+        self.assertNotIn("scope", subject)
+        self.assertEqual("review-completed", subject["completeOn"]["const"])
         activity = schemas["ActivityClockPolicy"]["properties"]
-        self.assertEqual("stageEnteredAt", activity["anchor"]["const"])
+        self.assertEqual("stage-entered-at", activity["anchor"]["const"])
+        self.assertEqual("activity", activity["type"]["const"])
         self.assertEqual(8, activity["reminders"]["maxItems"])
         self.assertEqual(8, activity["steps"]["maxItems"])
         self.assertNotIn("holidaySet", project)
@@ -891,8 +894,8 @@ class GeneratedOpenApiTests(unittest.TestCase):
                 "paused",
                 "completed",
                 "cancelled",
-                "verification_pending",
-                "source_facts_missing",
+                "verification-pending",
+                "source-facts-missing",
             },
             set(schemas["ClockRuntimeState"]["enum"]),
         )
@@ -1102,11 +1105,11 @@ class GeneratedOpenApiTests(unittest.TestCase):
             for variant in decision["oneOf"]
         }
         self.assertEqual(
-            {"approve", "reject", "changes_requested", "answer"}, set(variants)
+            {"approve", "reject", "changes-requested", "answer"}, set(variants)
         )
         self.assertEqual({"type"}, set(variants["approve"]["properties"]))
         self.assertEqual(["type"], variants["approve"]["required"])
-        for name in ("reject", "changes_requested", "answer"):
+        for name in ("reject", "changes-requested", "answer"):
             with self.subTest(decision=name):
                 variant = variants[name]
                 self.assertFalse(variant["additionalProperties"])
@@ -1131,7 +1134,7 @@ class GeneratedOpenApiTests(unittest.TestCase):
             variant["properties"]["outcome"]["const"]: variant
             for variant in response["oneOf"]
         }
-        self.assertEqual({"cancelled", "already_terminal"}, set(variants))
+        self.assertEqual({"cancelled", "already-terminal"}, set(variants))
         for outcome, variant in variants.items():
             with self.subTest(outcome=outcome):
                 self.assertFalse(variant["additionalProperties"])
@@ -1187,7 +1190,7 @@ class GeneratedOpenApiTests(unittest.TestCase):
         )
         self.assertEqual({"type": "string"}, occurrence["properties"]["clockId"])
         self.assertEqual(
-            ["running", "paused", "completed", "cancelled", "source_facts_missing"],
+            ["running", "paused", "completed", "cancelled", "source-facts-missing"],
             occurrence["properties"]["state"]["enum"],
         )
         self.assertEqual(

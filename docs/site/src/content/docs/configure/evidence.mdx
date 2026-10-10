@@ -104,12 +104,12 @@ Top-level required fields:
 
 | Field | Binds |
 | --- | --- |
-| `apiVersion` | Fixed at `registry.registrystack.org/evidence-runtime/v1alpha1`. |
+| `apiVersion` | Fixed at `id.registrystack.org/formats/evidence/runtime/v1alpha1`. |
 | `kind` | Fixed at `EvidenceRuntimeConfig`. |
 | `package` | `root`, the stable absolute path to the governed package directory, plus an optional `expectedDigest` that must match the digest of its verified `SHA256SUMS` file. |
 | `listener` | `bind` as one `host:port` value (loopback, private IPv4, or unique-local IPv6 only; an IPv6 host goes in brackets), `tlsTermination` (fixed at `operator-controlled-upstream`: TLS terminates ahead of Evidence Gateway), `trustProxyIdentityHeaders` (fixed `false`: proxy-supplied identity is never trusted), plus request-size, concurrency, timeout, and shutdown-grace bounds. |
 | `secretProviders` | The secret providers the deployment enables, at least one. `file.root` is the owner-only directory every `secret:file/<name>` reference resolves beneath; `environment: {}` enables `secret:env/<NAME>` references to operator-named variables, and any reference in the reviewed bundle may then name any variable in the process environment; prefer the file provider, or give the process a dedicated environment holding only the secrets it needs. A reference to a provider that is not declared is refused. |
-| `audit` | `destination` (`file` by default, or `stdout`); for `file`, the absolute `path` of the active audit file, `rotateBytes` (100 MiB by default), and `retainDays` (90 by default). |
+| `audit` | `destination` (`file` by default, or `stdout`); for `file`, the absolute `path` of the active audit file, `rotateBytes` (100 MiB by default), and `retentionDays` (90 by default). |
 | `outboundTls` | `systemRoots` (fixed `true`) plus named `trustProfiles`, each a local id bound to one CA bundle file a source or `authentication` can select through `tlsTrustProfile`. |
 
 An optional `metricsListener` (`bind`) serves `GET /metrics` on a second private
@@ -131,7 +131,7 @@ atomic revision (`products/evidence/contracts/bundle.schema.yaml`). Its top-leve
 | Section | Declares |
 | --- | --- |
 | `service`, `issuer` | The technical provider and the legal issuing authority, both URIs. |
-| `authentication` | `oidc`, the one trusted OIDC access-token issuer: issuer, the single accepted `audience`, token type, algorithms, `jwksSource` (only `kind: uri` with a fixed `uri`), maximum token lifetime, revoked key identifiers, and the claim names for principal, requester tags, evidence audience, grant id, and grant authority. An optional `tlsTrustProfile` names the private CA the key set is served under; see [An issuer behind a private CA](#an-issuer-behind-a-private-ca). |
+| `authentication` | `oidc`, the one trusted OIDC access-token issuer: issuer, the single accepted `audience`, token type, algorithms, `jwksSource` (only `type: uri` with a fixed `uri`), maximum token lifetime, revoked key identifiers, and the claim names for principal, requester tags, evidence audience, grant id, and grant authority. An optional `tlsTrustProfile` names the private CA the key set is served under; see [An issuer behind a private CA](#an-issuer-behind-a-private-ca). |
 | `audit` | Audit pseudonyms: `hashKeyRef`, the secret the pseudonym key is derived from, and `hashKeyVersion`, stamped into every pseudonym. Every audit gate is fail closed. |
 | `subjectBinding` | The secret reference and key version behind the audience-scoped entity-reference HMAC. |
 | `rateLimits` | Per-principal request, burst, and failed-selector-attempt bounds. |
@@ -169,10 +169,10 @@ Each requirement declares one closed acquisition kind. `single` names one fixed 
 
 ```yaml
 requirements:
-  - id: urn:example:requirement:registered-status:v1
+  - uri: urn:example:requirement:registered-status:v1
     kind: criterion
     acquisition:
-      kind: search-then-fetch
+      type: search-then-fetch
       search: subject-search
       fetch: subject-record
 ```
@@ -194,7 +194,7 @@ as a source does:
 authentication:
   oidc:
     jwksSource:
-      kind: uri
+      type: uri
       uri: https://issuer.internal.example/oauth2/jwks
     tlsTrustProfile: issuer-pki
 ```
@@ -311,9 +311,10 @@ selector values or creating one identifier that every audience can reuse.
 
 ### Client assertion keys
 
-A source that names `authentication.kind: oauth2-client-credentials` authenticates to its token
-endpoint with either a client secret or a private key. The private-key form is RFC 7523 section 2.2
-`private_key_jwt`: Evidence Gateway signs a short-lived assertion with the key that
+A source obtains its access token with the client-credentials grant and authenticates to the token
+endpoint in one of two ways, each its own `authentication.type`: `oauth2-client-credentials` sends a
+client secret, and `oauth2-private-key-jwt` signs with a private key. The private-key type is RFC
+7523 section 2.2 `private_key_jwt`: Evidence Gateway signs a short-lived assertion with the key that
 `clientAssertionKeyRef` names and sends that assertion in place of a secret, so no shared secret
 reaches the token endpoint. SMART on FHIR Backend Services sources authenticate this way.
 
@@ -357,7 +358,7 @@ different identifier states it in `clientAssertionAudience`:
 
 ```yaml
 authentication:
-  kind: oauth2-client-credentials
+  type: oauth2-private-key-jwt
   tokenEndpoint: https://gateway.example.gov/oauth2/token
   clientIdRef: secret:file/source-client-id
   clientAssertionKeyRef: secret:file/source-client-key
@@ -371,9 +372,9 @@ issuer identifier. RFC 8414 does not require an issuer identifier to share an or
 endpoint, so Evidence Gateway imposes no relationship between the two. RFC 7523 section 3 has the
 authorization server compare the value by Simple String Comparison, so what you write is signed byte
 for byte: a default port or a trailing slash survives into the claim rather than being normalized
-away. The key is accepted only beside `clientAssertionKeyRef`, since a client secret carries no
-assertion to hold the claim, and it changes only who may accept the assertion, never where the token
-request goes. Register one assertion key per authorization server: a key registered at two servers is
+away. The key is accepted only under `type: oauth2-private-key-jwt`, since a client secret carries
+no assertion to hold the claim, and it changes only who may accept the assertion, never where the
+token request goes. Register one assertion key per authorization server: a key registered at two servers is
 what would let an assertion audienced for one be presented to the other.
 
 ## Immutability

@@ -11,9 +11,9 @@ use chrono::{DateTime, TimeDelta, Timelike, Utc};
 use registry_casework::{CaseworkService, DatabaseConfig, PostgresStore, ServiceError, StoreError};
 use registry_casework_core::{
     AccessProfile, ActiveSubjectsPage, ActorContext, BootstrapDirectoryRequest, CallerSubjectView,
-    CaseworkIdentity, CaseworkProject, CaseworkRole, ClockRuntimeState, DiscoveryCursor,
-    DisplayReferencePolicy, EphemeralCredential, EventRequest, ExecutePreparedRequest, InboxPolicy,
-    InboxSort, InboxView, IssuerPrincipal, PageStatus, PrepareActionRequest, PreparedSourceAttempt,
+    CaseworkProject, CaseworkRole, ClockRuntimeState, DiscoveryCursor, DisplayReferencePolicy,
+    EphemeralCredential, EventRequest, ExecutePreparedRequest, InboxPolicy, InboxSort, InboxView,
+    IssuerPrincipal, PageStatus, PrepareActionRequest, PreparedSourceAttempt, ProjectIdentity,
     QueuePolicy, SourceAdapter, SourceAdapterError, SourceBinding, SourcePolicy, SourceReceipt,
     SourceRequestPolicy, SubjectRef, TransitionHint,
 };
@@ -178,8 +178,8 @@ fn project_with_inbox(inbox: InboxPolicy) -> CaseworkProject {
         task_templates: Vec::new(),
         api_version: registry_casework_core::CASEWORK_API_VERSION.to_owned(),
         kind: registry_casework_core::CASEWORK_KIND.to_owned(),
-        casework: CaseworkIdentity {
-            id: "inbox-ordering-test".to_owned(),
+        project: ProjectIdentity {
+            id: "inbox-ordering-test".parse().unwrap(),
             version: "1".to_owned(),
         },
         access_profiles: vec![
@@ -799,7 +799,7 @@ async fn effective_due_selector_cursor_holdings_and_served_queues_share_current_
         Uuid::from_u128(2),
         "real",
         "deadline",
-        "verification_pending",
+        "verification-pending",
         Some(now - TimeDelta::days(3)),
     )
     .await;
@@ -817,7 +817,7 @@ async fn effective_due_selector_cursor_holdings_and_served_queues_share_current_
         Uuid::from_u128(5),
         "facts-missing",
         "deadline",
-        "source_facts_missing",
+        "source-facts-missing",
         None,
     )
     .await;
@@ -1317,7 +1317,7 @@ async fn a_caller_who_loses_its_last_queue_mid_read_receives_the_empty_complete_
         .await
         .expect("bootstrap directory");
     // Discovery is still running and there is more local work than one page,
-    // so a caller who still serves a queue sees `budget_exhausted` and a
+    // so a caller who still serves a queue sees `budget-exhausted` and a
     // cursor.
     store
         .set_source_status(SOURCE_ID, GENERATION, false, false)

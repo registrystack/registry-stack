@@ -1,4 +1,4 @@
-apiVersion: registry.registrystack.org/casework-runtime/v1alpha1
+apiVersion: id.registrystack.org/formats/casework/runtime/v1alpha1
 kind: CaseworkRuntimeConfig
 identity:
   # The operator-chosen logical name of this deployment's database. The first
@@ -25,6 +25,12 @@ authentication:
   oidc:
     issuer: https://identity.example.test/realms/registry
     audience: urn:example:casework
+    # The clients whose tokens the runtime admits, written in every file.
+    # `unrestricted` admits every client the issuer verifies and is accepted
+    # only on development loopback; behind
+    # listener.tlsTermination: operator-controlled-upstream list the clients
+    # instead, for example `allowedClients: [casework-console]`.
+    allowedClients: unrestricted
     # Stock ThunderID emits OAuth scopes in `scope`; the compatibility default is
     # `registry_scopes` for deployments that omit this field.
     scopeClaim: scope
@@ -34,7 +40,7 @@ authentication:
     # are pinned by hand. It does no rotation of its own: rolling a key means
     # replacing the referenced document and restarting Casework.
     # jwksSource:
-    #   kind: static
+    #   type: static
     #   documentRef: secret:file/jwks.json
     # The trusted issuer must add this claim only to interactive human sessions.
     # Client-credentials and other service tokens must omit it or use another value.

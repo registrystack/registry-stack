@@ -31,6 +31,8 @@ pub enum EvidenceSubjectResolution {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct EvidenceProviderSource {
+    #[serde(deserialize_with = "crate::contract::local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
     pub contracts: String,
     pub subject_resolution: EvidenceSubjectResolution,
@@ -39,9 +41,16 @@ pub struct EvidenceProviderSource {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ActionEvidenceSource {
+    #[serde(deserialize_with = "crate::contract::local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
     pub provider: String,
     pub requirement: String,
+    #[serde(deserialize_with = "crate::contract::external_id_map")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "crate::contract::external_id_map_schema::<EvidenceSubjectSource>")
+    )]
     pub subjects: BTreeMap<String, EvidenceSubjectSource>,
     pub outputs: Vec<String>,
     #[serde(deserialize_with = "crate::contract::bounded_u64::<_, 1, MAX_EVIDENCE_AGE_SECONDS>")]

@@ -32,7 +32,7 @@ The canonical adopter commands do not change the numeric Evidence Gateway Versio
 | `evidencectl check <project>` | Editable project | Reports authoring completeness and field-addressed warnings | Claim deployment closure, run fixtures, resolve secrets, or contact a dependency |
 | `evidencectl check <project> --target <target>` | Editable project and one explicit target | Adds the target's governance, runtime structure, public keys, source connections, and governed-bundle validation | Require target-host paths or secrets to exist, run fixtures, or contact a dependency |
 | `evidencectl check <project> --target <target> --production` | Editable project and one explicit production or evidence-grade target | Refuses incomplete deployment closure under that target's own assurance profile | Select a target, upgrade its profile, or prove live readiness |
-| `evidencectl check --file <file>` | One tooling file: a client profile, reviewed contracts, development state, a source-import baseline or journal, a source resolution file, or a source export manifest | Reads the file with its format's reader, named by the file's `kind` (or, for a client profile and reviewed contracts, its `schema`), and reports field-addressed diagnostics; exits 0 when it passes, 1 when it is refused, 3 when the file cannot be read | Check a project, resolve secrets, write the file, or contact a dependency |
+| `evidencectl check --file <file>` | One tooling file: a client profile, reviewed contracts, development state, a source-import baseline or journal, a source resolution file, or a source export manifest | Reads the file with its format's reader, named by the file's `kind`, and reports field-addressed diagnostics; exits 0 when it passes, 1 when it is refused, 3 when the file cannot be read | Check a project, resolve secrets, write the file, or contact a dependency |
 | `evidencectl explain <project> [--target <target>]` | Editable project and optional explicit target | Applies the same offline authoring validation, then reports status, diagnostics, revision, and the authored inventory; includes target governance only when selected | Contact sources or expose secret and subject values |
 | `evidencectl package <project> --target <target> --output <new-package>` | Editable project and one explicit production target | Creates one closed package with `SHA256SUMS`; runtime remains in the target | Overwrite output, contact source services or OIDC, create production secrets, or start a listener |
 | `evidencectl test <editable-project> [--target <deployment-target>]` | An editable project with `questions/`, `sources/`, and referenced synthetic fixtures; an optional target supplies complete deployment governance | Privately compiles the project, then uses runtime `bundle-check` and `bundle-evaluate` | Start HTTP, call a source, or write a production audit entry |
@@ -69,9 +69,9 @@ derivation reads a fact the check should not see. It, a read inside a helper fun
 fixtures.
 
 An ordinary `check` can succeed with `status: incomplete` and visible warnings. Add
-`--deny-warnings` when any warning must refuse the command; the former `--deny-findings` spelling
-is a usage error that names it. Every diagnostic carries `severity`, `code`, `artifact`, `path`,
-`message`, `suggestedAction`, and the `source` file, line, and column it names, and the JSON report
+`--deny-warnings` to exit 1 when the check reports any warning. Every diagnostic carries
+`severity`, `code`, `artifact`, `path`, `message`, `suggestedAction`, and the `source` file, line,
+and column it names, and the JSON report
 lists them under `diagnostics`. `check` exits 0 when it passes, 1 when it refuses the project, 2
 for a usage error, and 3 when it could not finish. Human output is the default. Add the global
 `--format json` option for the same result as structured JSON. A command that provides no JSON
@@ -219,7 +219,7 @@ binding for institutional exchange. A direct client omits both bootstrap flags.
 For a portal that signs first-party context, create an active policy client with
 `--first-party-bootstrap-scope evidence:invoke --first-party-bootstrap-resource <Evidence resource> --first-party-issuer <issuer>`.
 The borrowed owner must register the same client key and bootstrap permission, and an exact
-`first_party` exchange issuer. Its bootstrap registration carries no static Evidence requester
+`first-party` exchange issuer. Its bootstrap registration carries no static Evidence requester
 tags or audience; the signed context supplies those attributes for each request. The client
 still needs an active Evidence policy assignment and cannot use a task-grant policy.
 {/* Evidence: crates/registry-evidence-authoring/src/model.rs, AccessTaskGrant, AccessTaskBinding;

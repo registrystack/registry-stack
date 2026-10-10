@@ -325,7 +325,7 @@ resourceServer:
   resource: {resource}
   issuer: {issuer}
   jwksSource:
-    kind: uri
+    type: uri
     uri: {jwks}
   algorithms: [EdDSA]
   allowedClients: [{CHAT_HOST}]

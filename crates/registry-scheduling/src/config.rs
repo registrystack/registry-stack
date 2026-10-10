@@ -19,7 +19,7 @@ use registry_platform_config::{
     sha256_uri, ConfigBlockError, ConfigBlockErrorKind, PackageDigestMismatch, PackageError,
     PackageErrorKind, PackageLimits, RemovedKey, RuntimeConfigLoader, RuntimeEnvelope,
     RuntimeFileCheck, SecretReference, SecretResolver, VerifiedPackage, DEFAULT_STAND_IN,
-    REMOVED_OIDC_JWKS_URI,
+    REMOVED_OIDC_JWKS_SOURCE_KIND, REMOVED_OIDC_JWKS_URI,
 };
 pub use registry_platform_config::{
     AuditKeyConfig, DatabaseConfig, EnvironmentSecretProviderConfig, FileSecretProviderConfig,
@@ -90,6 +90,7 @@ pub const SCHEDULING_RUNTIME_ENVELOPE: RuntimeEnvelope = RuntimeEnvelope {
 /// with the key that replaced it.
 pub const SCHEDULING_REMOVED_KEYS: &[RemovedKey] = &[
     REMOVED_OIDC_JWKS_URI,
+    REMOVED_OIDC_JWKS_SOURCE_KIND,
     RemovedKey {
         path: "audit.retainDays",
         replacement: "Rename audit.retainDays to audit.retentionDays",
@@ -734,11 +735,12 @@ impl RuntimeConfig {
         if let Err(error) = oidc.clients.check("authentication.oidc") {
             findings.push(error.into());
         }
-        // An empty client list admits every client the issuer verifies, so a
-        // deployment that simply forgot the field would accept a token minted
-        // for an unrelated application in the same realm. A development file
-        // is copied toward production, so the member is decided in every file
-        // (CFG-EMPTY-2): omitted and `[]` are refused in every mode.
+        // `allowedClients: unrestricted` admits every client the issuer
+        // verifies, so the deployment would accept a token minted for an
+        // unrelated application in the same realm. A development file is
+        // copied toward production, so every file lists the clients it admits
+        // (CFG-EMPTY-2): the reader refuses an omitted member and `[]`, and
+        // `unrestricted` is refused here in every mode.
         if oidc.clients.allowed_clients.is_empty() {
             findings.push(RuntimeConfigError::AllowedClientsRequired);
         }
@@ -1195,7 +1197,7 @@ pub enum RuntimeConfigError {
         reason: &'static str,
     },
     #[error(
-        "authentication.oidc.allowedClients must name every client the deployment admits; an omitted or empty list would admit every client the issuer verifies"
+        "authentication.oidc.allowedClients must name every client the deployment admits; unrestricted would admit every client the issuer verifies"
     )]
     AllowedClientsRequired,
     #[error(
@@ -1688,6 +1690,20 @@ holdPolicy:
         document["authentication"]["oidc"]["assertionIssuers"] = serde_json::json!({});
         let error = parse_runtime(&document).expect_err("an empty map is refused");
         assert_eq!(error.pointer(), "/authentication/oidc/assertionIssuers");
+    }
+
+    #[test]
+    fn a_listed_client_with_no_assertion_issuers_is_refused_at_that_client() {
+        let root = canonical_tempdir();
+        let (_, mut document) = development(root.path());
+        document["authentication"]["oidc"]["assertionIssuers"] =
+            serde_json::json!({"case-portal": []});
+        let error = parse_runtime(&document).expect_err("an empty issuer list is refused");
+        assert_eq!(error.code(), "config.invalid-value", "{error}");
+        assert_eq!(
+            error.pointer(),
+            "/authentication/oidc/assertionIssuers/case-portal"
+        );
     }
 
     #[test]
@@ -2325,11 +2341,37 @@ holdPolicy:
 
         let mut document = base;
         document["authentication"]["oidc"]["jwksSource"] =
-            serde_json::json!({"kind": "uri", "uri": "https://identity.example.test/jwks"});
+            serde_json::json!({"type": "uri", "uri": "https://identity.example.test/jwks"});
         let config = RuntimeConfig::load(write_operator(root.path(), document)).unwrap();
         assert_eq!(
             config.authentication.oidc.provider.jwks_source.uri(),
             Some("https://identity.example.test/jwks")
+        );
+    }
+
+    #[test]
+    fn a_jwks_source_tagged_by_kind_names_type() {
+        let root = canonical_tempdir();
+        let (_, mut document) = development(root.path());
+        document["authentication"]["oidc"]["jwksSource"] =
+            serde_json::json!({"kind": "uri", "uri": "https://identity.example.test/jwks"});
+        let error = RuntimeConfig::load(write_operator(root.path(), document)).unwrap_err();
+        assert_eq!(
+            refusal(&error),
+            (
+                "config.removed-key".to_owned(),
+                "/authentication/oidc/jwksSource/kind".to_owned()
+            )
+        );
+        assert!(
+            error
+                .suggested_action()
+                .contains("authentication.oidc.jwksSource.type"),
+            "{error}"
+        );
+        assert!(
+            !error.to_string().contains("identity.example.test"),
+            "{error}"
         );
     }
 
@@ -2493,8 +2535,10 @@ holdPolicy:
             "/authentication/oidc/allowedClients".to_owned(),
         );
 
-        // An omitted member and an empty list are refused in every mode,
-        // development loopback included (CFG-EMPTY-2).
+        // The decision is written in every file, in either listener mode: an
+        // omitted member, an empty list, and a repeated client are refused
+        // by the reader, and `unrestricted` by the runtime, development
+        // loopback included (CFG-EMPTY-2).
         for termination in ["operator-controlled-upstream", "development-loopback"] {
             let mut omitted = operator_value(&package, termination);
             omitted["authentication"]["oidc"]
@@ -2503,12 +2547,41 @@ holdPolicy:
                 .remove("allowedClients");
             let error = RuntimeConfig::load(write_operator(root.path(), omitted))
                 .expect_err("a deployment with no allowedClients was accepted");
-            assert_eq!(refusal(&error), expected, "{termination}");
+            assert_eq!(error.code(), "config.missing-key", "{termination}: {error}");
+            assert!(error.to_string().contains("allowedClients"), "{error}");
 
             let mut empty = operator_value(&package, termination);
             empty["authentication"]["oidc"]["allowedClients"] = serde_json::json!([]);
             let error = RuntimeConfig::load(write_operator(root.path(), empty))
                 .expect_err("a deployment with an empty allowedClients was accepted");
+            assert_eq!(
+                refusal(&error),
+                (
+                    "config.invalid-value".to_owned(),
+                    "/authentication/oidc/allowedClients".to_owned()
+                ),
+                "{termination}: {error}"
+            );
+
+            let mut repeated = operator_value(&package, termination);
+            repeated["authentication"]["oidc"]["allowedClients"] =
+                serde_json::json!(["scheduling-booking-agent", "scheduling-booking-agent"]);
+            let error = RuntimeConfig::load(write_operator(root.path(), repeated))
+                .expect_err("a repeated client was accepted");
+            assert_eq!(
+                refusal(&error),
+                (
+                    "config.duplicate-item".to_owned(),
+                    "/authentication/oidc/allowedClients/1".to_owned()
+                ),
+                "{termination}: {error}"
+            );
+
+            let mut unrestricted = operator_value(&package, termination);
+            unrestricted["authentication"]["oidc"]["allowedClients"] =
+                serde_json::json!("unrestricted");
+            let error = RuntimeConfig::load(write_operator(root.path(), unrestricted))
+                .expect_err("a deployment admitting every client was accepted");
             assert_eq!(refusal(&error), expected, "{termination}");
 
             RuntimeConfig::load(write_operator(
@@ -2793,7 +2866,7 @@ holdPolicy:
         let secrets_root = root.path().join("secrets");
         std::fs::create_dir(&secrets_root).unwrap();
         document["authentication"]["oidc"]["jwksSource"] =
-            serde_json::json!({"kind": "static", "documentRef": "secret:file/jwks.json"});
+            serde_json::json!({"type": "static", "documentRef": "secret:file/jwks.json"});
         let config = RuntimeConfig::load(write_operator(root.path(), document)).unwrap();
         let secrets = config.secret_providers.resolver().unwrap();
         let jwks = secrets_root.join("jwks.json");

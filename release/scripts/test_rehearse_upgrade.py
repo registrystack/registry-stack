@@ -52,23 +52,45 @@ class ReleaseSelectionTest(unittest.TestCase):
             MODULE.select_from_tag(["v0.34.0"], "0.33.0")
 
     def test_refuses_a_start_before_the_immediate_predecessor(self) -> None:
-        for tag in ("v0.38.0", "v0.33.0", "v0.1.0"):
+        for tag in ("v0.39.0", "v0.33.0", "v0.1.0"):
             with self.subTest(tag=tag), self.assertRaisesRegex(Error, "immediate predecessor"):
-                MODULE.check_forward_path(tag, "0.40.0")
-        MODULE.check_forward_path("v0.39.0", "0.39.0")
-        MODULE.check_forward_path("v0.39.0", "0.40.0")
+                MODULE.check_forward_path(tag, "0.41.0")
+        MODULE.check_forward_path("v0.40.0", "0.40.0")
+        MODULE.check_forward_path("v0.40.0", "0.41.0")
 
-    def test_refuses_a_floor_that_is_not_the_release_before_the_workspace_version(self) -> None:
+    def test_refuses_a_floor_behind_the_release_before_the_workspace_version(self) -> None:
         released = ["0.9.0", "0.37.0", "0.38.0", "0.39.0"]
         with unittest.mock.patch.object(MODULE, "FORWARD_PATH_FLOOR", (0, 38, 0)):
             MODULE.check_floor_is_current(released, "0.39.0")
             MODULE.check_floor_is_current(released[:-1], "0.39.0")
-            for version in ("0.40.0", "0.38.0"):
-                with self.subTest(version=version), \
-                        self.assertRaisesRegex(Error, "FORWARD_PATH_FLOOR"):
-                    MODULE.check_floor_is_current(released, version)
+            with self.assertRaisesRegex(Error, "FORWARD_PATH_FLOOR is v0.38.0, but .* is v0.39.0"):
+                MODULE.check_floor_is_current(released, "0.40.0")
             with self.assertRaisesRegex(Error, "no released manifest"):
                 MODULE.check_floor_is_current(released, "0.9.0")
+
+    def test_a_floor_may_start_the_forward_path_at_the_workspace_version(self) -> None:
+        released = ["0.38.0", "0.39.0"]
+        with unittest.mock.patch.object(MODULE, "FORWARD_PATH_FLOOR", (0, 40, 0)):
+            # Unpublished, published, patched, and succeeded by the next minor
+            # line whether or not its publication is recorded yet: the floor
+            # stands through all of them without an edit.
+            for recorded, version in ((released, "0.40.0"),
+                                      ([*released, "0.40.0"], "0.40.0"),
+                                      ([*released, "0.40.0"], "0.40.1"),
+                                      (released, "0.41.0"),
+                                      ([*released, "0.40.0"], "0.41.0")):
+                with self.subTest(recorded=recorded, version=version):
+                    MODULE.check_floor_is_current(recorded, version)
+            with self.assertRaisesRegex(Error, "FORWARD_PATH_FLOOR is v0.40.0, but .* is v0.41.0"):
+                MODULE.check_floor_is_current([*released, "0.40.0", "0.41.0"], "0.42.0")
+
+    def test_refuses_a_floor_the_workspace_version_has_not_reached(self) -> None:
+        released = ["0.37.0", "0.38.0"]
+        with unittest.mock.patch.object(MODULE, "FORWARD_PATH_FLOOR", (0, 40, 0)):
+            for version in ("0.39.0", "0.39.4"):
+                with self.subTest(version=version), \
+                        self.assertRaisesRegex(Error, "newer than workspace version"):
+                    MODULE.check_floor_is_current(released, version)
 
     def test_a_patch_release_keeps_the_floor_of_its_minor_line(self) -> None:
         released = ["0.37.0", "0.38.0", "0.39.0", "0.39.1"]
@@ -174,17 +196,17 @@ class ReleaseSelectionTest(unittest.TestCase):
             bin_dir.mkdir(mode=0o700)
             for binary in binaries:
                 script = bin_dir / binary
-                script.write_text(f"#!/bin/sh\necho '{binary} 0.39.0'\n", encoding="utf-8")
+                script.write_text(f"#!/bin/sh\necho '{binary} 0.40.0'\n", encoding="utf-8")
                 script.chmod(0o755)
 
         with tempfile.TemporaryDirectory() as temporary, \
                 contextlib.redirect_stdout(io.StringIO()), \
                 unittest.mock.patch.object(MODULE, "fetch_release", side_effect=fetch) as fetched, \
                 unittest.mock.patch.object(MODULE, "Postgres", side_effect=AssertionError("started")), \
-                unittest.mock.patch.object(MODULE, "workspace_version", return_value="0.40.0"):
+                unittest.mock.patch.object(MODULE, "workspace_version", return_value="0.41.0"):
             work = Path(temporary) / "work"
             report = Path(temporary) / "report.json"
-            status = MODULE.main(["--fetch-only", "--from-tag", "v0.39.0", "--platform",
+            status = MODULE.main(["--fetch-only", "--from-tag", "v0.40.0", "--platform",
                                   "linux-amd64", "--product", "breg", "--work-dir", str(work),
                                   "--report", str(report)])
             self.assertEqual(status, 0)
@@ -194,6 +216,110 @@ class ReleaseSelectionTest(unittest.TestCase):
         self.assertEqual(document["fromProvenance"], "cosign and SHA256SUMS verified")
         self.assertEqual(document["fromBinDir"], str(work.resolve() / "from-bin"))
         self.assertNotIn("breg", document)
+
+
+class UnpublishedFloorTest(unittest.TestCase):
+    """While no release from the floor onward is published, this source's
+    build stands on both sides. The floor and workspace version are fixed here
+    so the tests hold after the floor's release is published."""
+
+    def run_main(self, arguments: list[str], published: list[str], version: str = "0.40.0"
+                 ) -> tuple[int, str, str, dict[str, Any]]:
+        seen: dict[str, Any] = {"sides": [], "legs": []}
+
+        def binaries(side, expected_version, names):
+            seen["sides"].append((side.label, side.bin_dir, expected_version))
+            return {name: f"{name} {version}-dev" for name in names}
+
+        def leg(work, keys, tls, old, new, report):
+            seen["legs"].append((old.bin_dir, new.bin_dir))
+
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr), \
+                unittest.mock.patch.object(MODULE, "FORWARD_PATH_FLOOR", (0, 40, 0)), \
+                unittest.mock.patch.object(MODULE, "workspace_version", return_value=version), \
+                unittest.mock.patch.object(MODULE, "released_versions",
+                                           return_value=["0.38.0", "0.39.0"]), \
+                unittest.mock.patch.object(MODULE, "published_tags", return_value=published), \
+                unittest.mock.patch.object(MODULE, "fetch_release") as fetched, \
+                unittest.mock.patch.object(MODULE, "check_binaries", side_effect=binaries), \
+                unittest.mock.patch.object(MODULE, "Keys"), \
+                unittest.mock.patch.object(MODULE, "Postgres"), \
+                unittest.mock.patch.object(MODULE, "rehearse_evidence", side_effect=leg):
+            status = MODULE.main(arguments)
+        seen["fetched"] = fetched.call_args_list
+        return status, stdout.getvalue(), stderr.getvalue(), seen
+
+    def test_the_legs_run_from_this_source_s_build_on_both_sides(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            built = Path(temporary).resolve() / "bin"
+            built.mkdir()
+            report = Path(temporary) / "report.json"
+            status, stdout, _stderr, seen = self.run_main(
+                ["--platform", "linux-amd64", "--product", "evidence", "--to-bin-dir",
+                 str(built), "--work-dir", str(Path(temporary) / "work"),
+                 "--report", str(report)], ["v0.38.0", "v0.39.0"])
+            document = json.loads(report.read_text(encoding="utf-8"))
+        self.assertEqual(status, 0)
+        self.assertEqual(seen["fetched"], [])
+        # A build of this source reports a development version, so neither
+        # side is held to the tag.
+        self.assertEqual(seen["sides"], [("from", built, None), ("to", built, None)])
+        self.assertEqual(seen["legs"], [(built, built)])
+        self.assertEqual(document["from"], "v0.40.0")
+        self.assertEqual(document["fromProvenance"],
+                         "this source's build, no published predecessor")
+        self.assertIn("no release from v0.40.0 onward is published", stdout)
+
+    def test_a_product_that_publishes_no_asset_for_the_platform_still_runs(self) -> None:
+        with unittest.mock.patch.object(MODULE.release_roster, "MESSAGING_FIRST_RELEASE",
+                                        (0, 40, 0)), \
+                unittest.mock.patch.object(MODULE, "rehearse_messaging") as leg, \
+                tempfile.TemporaryDirectory() as temporary:
+            status, _stdout, _stderr, _seen = self.run_main(
+                ["--platform", "macos-arm64", "--product", "messaging", "--to-bin-dir",
+                 temporary, "--work-dir", str(Path(temporary) / "work")], ["v0.39.0"])
+        self.assertEqual(status, 0)
+        leg.assert_called_once()
+
+    def test_fetch_only_has_nothing_to_fetch(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            work = Path(temporary) / "work"
+            status, stdout, _stderr, seen = self.run_main(
+                ["--fetch-only", "--platform", "linux-amd64", "--work-dir", str(work)],
+                ["v0.39.0"])
+            self.assertFalse(work.exists())
+        self.assertEqual(status, 0)
+        self.assertEqual(seen["fetched"], [])
+        self.assertEqual(seen["sides"], [])
+        self.assertEqual(stdout.count("\n"), 1)
+        self.assertIn("no release from v0.40.0 onward is published", stdout)
+
+    def test_the_floor_s_release_is_downloaded_once_it_is_published(self) -> None:
+        for version in ("0.40.0", "0.40.1", "0.41.0"):
+            with self.subTest(version=version), tempfile.TemporaryDirectory() as temporary:
+                work = Path(temporary) / "work"
+                status, stdout, _stderr, seen = self.run_main(
+                    ["--platform", "linux-amd64", "--product", "evidence", "--to-bin-dir",
+                     temporary, "--work-dir", str(work)], ["v0.39.0", "v0.40.0"], version)
+                self.assertEqual(status, 0)
+                (fetched,) = seen["fetched"]
+                self.assertEqual(fetched.args[0], "v0.40.0")
+                self.assertEqual(seen["sides"][0],
+                                 ("from", work.resolve() / "from-bin", "0.40.0"))
+                self.assertNotIn("no release from", stdout)
+
+    def test_a_named_or_local_start_before_the_floor_is_still_refused(self) -> None:
+        for chosen in (["--from-tag", "v0.39.0"], ["--from-bin-dir", "/previous"]):
+            with self.subTest(chosen=chosen), tempfile.TemporaryDirectory() as temporary:
+                work = Path(temporary) / "work"
+                status, _stdout, stderr, seen = self.run_main(
+                    [*chosen, "--platform", "linux-amd64", "--to-bin-dir", temporary,
+                     "--work-dir", str(work)], ["v0.39.0"])
+                self.assertFalse(work.exists())
+                self.assertEqual(status, 1)
+                self.assertIn("immediate predecessor", stderr)
+                self.assertEqual(seen["sides"], [])
 
 
 class ProductSelectionTest(unittest.TestCase):
@@ -267,17 +393,18 @@ class ProductSelectionTest(unittest.TestCase):
     def test_main_refuses_an_unshipped_product_before_any_download_or_container(self) -> None:
         stderr = io.StringIO()
         with tempfile.TemporaryDirectory() as temporary, contextlib.redirect_stderr(stderr), \
+                unittest.mock.patch.object(MODULE, "workspace_version", return_value="0.41.0"), \
                 unittest.mock.patch.object(MODULE.release_roster, "MESSAGING_FIRST_RELEASE",
-                                           (0, 40, 0)):
+                                           (0, 41, 0)):
             work = Path(temporary) / "work"
             status = MODULE.main([
-                "--from-tag", "v0.39.0", "--platform", "linux-amd64",
+                "--from-tag", "v0.40.0", "--platform", "linux-amd64",
                 "--product", "messaging",
                 "--to-bin-dir", temporary, "--work-dir", str(work),
             ])
             self.assertFalse(work.exists())
         self.assertEqual(status, 1)
-        self.assertIn("messaging was first shipped in v0.40.0, so v0.39.0 holds no",
+        self.assertIn("messaging was first shipped in v0.41.0, so v0.40.0 holds no",
                       stderr.getvalue())
 
 
@@ -412,8 +539,7 @@ def dump_json(path: Path, document: object) -> None:
     path.write_text(json.dumps(document), encoding="utf-8")
 
 
-# JSON is YAML, so the runtime document round-trips without PyYAML, which the
-# release-tool CI step does not install.
+# JSON is YAML, so the runtime document round-trips without PyYAML.
 @unittest.mock.patch.object(MODULE, "dump_yaml", dump_json)
 @unittest.mock.patch.object(MODULE, "load_yaml", load_json)
 class CaseworkPackageTest(unittest.TestCase):
@@ -492,7 +618,6 @@ class CaseworkPackageTest(unittest.TestCase):
 
 class MessagingUpgradeTest(unittest.TestCase):
     ACTIVATED = "sha256:" + "a" * 64
-    PACKAGE = "sha256:" + "b" * 64
     OTHER = "sha256:" + "c" * 64
 
     def messaging(self, root: Path) -> object:
@@ -501,126 +626,66 @@ class MessagingUpgradeTest(unittest.TestCase):
         return messaging
 
     def plan(self, change: str, pending: list[int], active: str | None = ACTIVATED,
-             package: str | None = PACKAGE) -> dict[str, Any]:
+             package: str | None = ACTIVATED) -> dict[str, Any]:
         return {"packageDigest": package, "activeDigest": active, "change": change,
                 "pendingSchemaVersions": pending}
 
-    def status(self, package: str | None = PACKAGE, predecessor: str | None = ACTIVATED
-               ) -> dict[str, Any]:
-        return {"active": {"packageDigest": package, "predecessorPackageDigest": predecessor}}
-
-    def test_the_package_built_again_is_applied_over_the_previous_activation(self) -> None:
+    def upgrade(self, activated: str | None, *plans: dict[str, Any]
+                ) -> tuple[tuple[list[str], set[str]], Any, list[str]]:
         with tempfile.TemporaryDirectory() as directory:
             messaging = self.messaging(Path(directory))
             side = unittest.mock.Mock()
-            side.run_json.side_effect = [self.plan("activate", [3]),
-                                         self.plan("none", [], self.PACKAGE), self.status()]
-            self.assertEqual(messaging.upgrade(side, self.ACTIVATED),
-                             ([], {"public.messaging_idempotency"}))
+            side.run_json.side_effect = list(plans)
+            result = messaging.upgrade(side, activated)
             runtime = ["--runtime-config", str(messaging.runtime)]
-            plan = unittest.mock.call("messagingctl", "--format", "json", "plan", *runtime)
-            status = unittest.mock.call("messagingctl", "--format", "json", "status", *runtime)
-            self.assertEqual(side.run_json.call_args_list, [plan, plan, status])
-            side.run.assert_called_once_with("messagingctl", "apply", *runtime)
+        plan = unittest.mock.call("messagingctl", "--format", "json", "plan", *runtime)
+        self.assertEqual(side.run_json.call_args_list, [plan] * len(plans))
+        return result, side, runtime
 
-    def test_a_lost_activation_is_never_applied_over(self) -> None:
+    def test_pending_schema_versions_are_applied_over_the_previous_activation(self) -> None:
+        result, side, runtime = self.upgrade(
+            self.ACTIVATED, self.plan("none", [3]), self.plan("none", []))
+        self.assertEqual(result, ([], {"public.messaging_idempotency"}))
+        self.assertEqual(side.run.call_args_list, [
+            unittest.mock.call("messagingctl", "check", *runtime),
+            unittest.mock.call("messagingctl", "apply", *runtime)])
+
+    def test_an_applied_version_that_empties_nothing_names_no_table(self) -> None:
+        result, side, _runtime = self.upgrade(
+            self.ACTIVATED, self.plan("none", [4]), self.plan("none", []))
+        self.assertEqual(result, ([], set()))
+        self.assertEqual(side.run.call_count, 2)
+
+    def test_an_upgrade_with_nothing_pending_only_checks_and_plans(self) -> None:
+        result, side, runtime = self.upgrade(self.ACTIVATED, self.plan("none", []))
+        self.assertEqual(result, ([], set()))
+        side.run.assert_called_once_with("messagingctl", "check", *runtime)
+
+    def test_a_lost_activation_is_a_difference_and_is_never_applied_over(self) -> None:
         cases = (
             (self.ACTIVATED, self.plan("activate", [3], None)),
             (self.ACTIVATED, self.plan("activate", [3], self.OTHER)),
-            (self.ACTIVATED, self.plan("none", [3], package=self.ACTIVATED)),
-            (self.ACTIVATED, self.plan("activate", [3], package=None)),
-            (None, self.plan("activate", [3], None)),
+            (self.ACTIVATED, self.plan("activate", [3], package=self.OTHER)),
+            (self.ACTIVATED, self.plan("activate", [3], self.OTHER, self.OTHER)),
+            (self.ACTIVATED, self.plan("activate", [3], None, None)),
+            (None, self.plan("activate", [3], None, None)),
+            (None, self.plan("none", [3])),
         )
         for activated, planned in cases:
-            with self.subTest(activated=activated, planned=planned), \
-                    tempfile.TemporaryDirectory() as directory:
-                messaging = self.messaging(Path(directory))
-                side = unittest.mock.Mock()
-                side.run_json.return_value = planned
-                with self.assertRaisesRegex(MODULE.RehearsalError, "messagingctl plan"):
-                    messaging.upgrade(side, activated)
-                side.run_json.assert_called_once()
-                side.run.assert_not_called()
+            with self.subTest(activated=activated, planned=planned):
+                (differences, emptied), side, runtime = self.upgrade(activated, planned)
+                self.assertTrue(differences)
+                self.assertEqual(emptied, set())
+                side.run.assert_called_once_with("messagingctl", "check", *runtime)
 
-    def test_an_applied_version_that_empties_nothing_names_no_table(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            messaging = self.messaging(Path(directory))
-            side = unittest.mock.Mock()
-            side.run_json.side_effect = [self.plan("activate", [4]),
-                                         self.plan("none", [], self.PACKAGE), self.status()]
-            self.assertEqual(messaging.upgrade(side, self.ACTIVATED), ([], set()))
-            side.run.assert_called_once()
-
-    def test_the_ledger_after_the_apply_is_compared_with_the_plan_before_it(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            messaging = self.messaging(Path(directory))
-            side = unittest.mock.Mock()
-            side.run_json.side_effect = [self.plan("activate", []),
-                                         self.plan("none", [], self.PACKAGE),
-                                         self.status(predecessor=self.OTHER)]
-            differences, emptied = messaging.upgrade(side, self.ACTIVATED)
-            self.assertEqual(len(differences), 1)
-            self.assertIn("predecessor", differences[0])
-            self.assertEqual(emptied, set())
+    def test_the_plan_after_the_apply_is_the_one_compared(self) -> None:
+        differences, emptied = self.upgrade(
+            self.ACTIVATED, self.plan("none", [3]), self.plan("activate", []))[0]
+        self.assertEqual(differences, ["the package ledger still names a change to apply"])
+        self.assertEqual(emptied, {"public.messaging_idempotency"})
 
 
-# JSON is YAML, so the runtime document round-trips without PyYAML, which the
-# release-tool CI step does not install.
-@unittest.mock.patch.object(MODULE, "dump_yaml", dump_json)
-@unittest.mock.patch.object(MODULE, "load_yaml", load_json)
-class MessagingRepackageTest(unittest.TestCase):
-    def test_the_operator_path_runs_in_the_documented_order(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            messaging = MODULE.Messaging.__new__(MODULE.Messaging)
-            messaging.work = root
-            messaging.project = root / "project"
-            messaging.package = root / "package"
-            messaging.upgraded_package = root / "package-upgraded"
-            messaging.runtime = root / "runtime.yaml"
-            dump_json(messaging.runtime, {"kind": "MessagingRuntimeConfig",
-                                          "package": {"root": str(messaging.package)}})
-            events: list[Any] = []
-
-            def steps(ids, roots, catalog=None):
-                events.append(("steps", tuple(ids), roots))
-                return []
-
-            def command(binary, *arguments, **_):
-                self.assertEqual(binary, "messagingctl")
-                root_now = load_json(messaging.runtime)["package"]["root"]
-                events.append((*arguments, root_now) if "--runtime-config" in arguments
-                              else arguments)
-
-            side = unittest.mock.Mock()
-            side.run.side_effect = command
-            with unittest.mock.patch.object(MODULE.upgrade_steps, "apply_steps",
-                                            side_effect=steps), \
-                    unittest.mock.patch.object(
-                        MODULE, "write_messaging_project_envelope",
-                        side_effect=lambda project: events.append(("envelope", project))):
-                messaging.repackage(side)
-            project, upgraded = str(messaging.project), str(messaging.upgraded_package)
-            self.assertEqual(events, [
-                ("steps", MODULE.MESSAGING_RUNTIME_UPGRADE_STEPS, {"runtime": root}),
-                ("steps", MODULE.MESSAGING_UPGRADE_STEPS, {"project": messaging.project}),
-                ("envelope", messaging.project),
-                ("check", "--project", project),
-                ("package", project, "--output", upgraded),
-                ("check", "--package", upgraded),
-                ("check", "--runtime-config", str(messaging.runtime), upgraded),
-            ])
-            self.assertEqual(load_json(messaging.runtime),
-                             {"kind": "MessagingRuntimeConfig", "package": {"root": upgraded}})
-
-    def test_the_package_built_again_never_overwrites_the_previous_release_s(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            messaging = MODULE.Messaging(Path(directory) / "messaging", unittest.mock.Mock(),
-                                         unittest.mock.Mock())
-            self.assertNotEqual(messaging.upgraded_package, messaging.package)
-            self.assertEqual(messaging.upgraded_package.parent, messaging.package.parent)
-
-
+# JSON is YAML, so the runtime document round-trips without PyYAML.
 @unittest.mock.patch.object(MODULE, "dump_yaml", dump_json)
 @unittest.mock.patch.object(MODULE, "load_yaml", load_json)
 class BregLedgerTest(unittest.TestCase):
@@ -632,21 +697,17 @@ class BregLedgerTest(unittest.TestCase):
         breg.secrets = root / "secrets"
         breg.project = root / "project"
         breg.clients = [MODULE.BREG_CLIENT]
-        breg.upgraded = False
         return breg
 
     EMPTY_PLAN = {"ok": False, "command": "plan", "diagnostics": [
         {"severity": "error", "code": "apply.package.empty_plan", "path": "package"}]}
 
     def rehearse_ledger_upgrade(self, root: Path, upgraded_plan: dict[str, Any] | None,
-                                *, upgrade_loses_rows: bool = False,
-                                real_steps: bool = False):
+                                *, upgrade_loses_rows: bool = False):
         """Run rehearse_breg against mocked binaries. `upgraded_plan` is what
         bregctl plan prints, exiting 1, for the rebuilt predecessor; None plans
         it as a pending successor. `upgrade_loses_rows` empties the table the
-        previous release seeded until the upgraded runtime writes again.
-        `real_steps` applies the catalog steps to the files under
-        `root/project` instead of recording the call."""
+        previous release seeded until the upgraded runtime writes again."""
         old = unittest.mock.Mock()
         new = unittest.mock.Mock()
         postgres = unittest.mock.Mock()
@@ -738,12 +799,6 @@ class BregLedgerTest(unittest.TestCase):
                 current["active"] = state["active"]
             return {"epoch": 1}
 
-        def steps(ids, roots, catalog=None):
-            self.assertEqual(tuple(ids), MODULE.BREG_UPGRADE_STEPS)
-            self.assertEqual(roots, {"project": breg.project})
-            events.append(("journeys",))
-            return []
-
         breg.package.side_effect = package
         breg.write_runtime.side_effect = runtime
         breg.seed.side_effect = seed
@@ -752,16 +807,11 @@ class BregLedgerTest(unittest.TestCase):
         new.run.side_effect = process
         report = {}
         registry = {"package": {}, "entities": [{"id": "record-group", "fields": []}]}
-        steps_patch = (unittest.mock.patch.object(
-            MODULE.upgrade_steps, "apply_steps", wraps=MODULE.upgrade_steps.apply_steps)
-            if real_steps else unittest.mock.patch.object(
-                MODULE.upgrade_steps, "apply_steps", side_effect=steps))
         with (unittest.mock.patch.object(MODULE, "Breg", return_value=breg),
               unittest.mock.patch.object(MODULE, "Service"),
               unittest.mock.patch.object(MODULE, "instance_claim", side_effect=claim),
               unittest.mock.patch.object(MODULE, "load_yaml", return_value=registry),
-              unittest.mock.patch.object(MODULE, "dump_yaml"),
-              steps_patch):
+              unittest.mock.patch.object(MODULE, "dump_yaml")):
             MODULE.rehearse_breg(root, unittest.mock.Mock(), postgres, old, new, report)
         packages = {"old": old_package, "upgraded": upgraded_package,
                     "successor": successor_package}
@@ -781,48 +831,6 @@ class BregLedgerTest(unittest.TestCase):
         self.assertEqual(current["active"], "sha256:" + "b" * 64,
                          "a changed package must be applied before current reads")
         self.assertIn(("package", "build-successor", packages["upgraded"]), events)
-
-    def test_the_rebuild_tests_journeys_this_source_wrote(self) -> None:
-        # Journeys are an authored test file, not state, so this source need
-        # not read the format the previous release wrote them in.
-        with tempfile.TemporaryDirectory() as directory:
-            events, _ledger, _report, _current, packages = self.rehearse_ledger_upgrade(
-                Path(directory), None)
-        self.assertEqual(events.count(("journeys",)), 1)
-        self.assertLess(events.index(("journeys",)),
-                        events.index(("package", "build-upgraded", packages["old"])))
-
-    def test_the_leg_changes_the_project_only_through_cataloged_steps(self) -> None:
-        # The project the leg leaves on disk equals the project after applying
-        # exactly the listed steps to the starter the previous release wrote.
-        starter = {
-            "registry.yaml": {
-                "accessProfiles": [{"id": "operator", "requiredScopes": [],
-                                    "permissions": [{"entity": "record",
-                                                     "rowBoundaries": []}]}]},
-            "tests/journeys.yaml": {"journeys": [{"id": "j", "steps": [
-                {"id": "s", "request": {"operation": "read_path"}}]}]},
-        }
-
-        def write_starter(project: Path) -> None:
-            for name, document in starter.items():
-                (project / name).parent.mkdir(parents=True, exist_ok=True)
-                (project / name).write_text(json.dumps(document))
-
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            (root / "project").mkdir()
-            write_starter(root / "project")
-            (root / "expected").mkdir()
-            write_starter(root / "expected")
-            MODULE.upgrade_steps.apply_steps(list(MODULE.BREG_UPGRADE_STEPS),
-                                             {"project": root / "expected"})
-            self.rehearse_ledger_upgrade(root, None, real_steps=True)
-            for name in starter:
-                with self.subTest(file=name):
-                    leg = (root / "project" / name).read_text()
-                    self.assertEqual(leg, (root / "expected" / name).read_text())
-                    self.assertNotEqual(leg, json.dumps(starter[name]))
 
     def test_a_rebuild_with_nothing_to_apply_keeps_the_predecessor_package(self) -> None:
         # Rebuilding against the predecessor always records fromPackageDigest,
@@ -867,18 +875,19 @@ class BregLedgerTest(unittest.TestCase):
             self.assertEqual(load_json(root / "runtime.yaml")["package"],
                              {"root": str(root / "pkg")})
 
-    def test_an_upgraded_runtime_carries_the_documented_runtime_steps(self) -> None:
+    def test_a_ledger_runtime_is_written_in_the_stable_spelling(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            breg = self.breg(root)
-            breg.clients = []
-            breg.write_runtime(root / "before.yaml", "registry", root / "pkg", 8000)
-            breg.upgraded = True
-            breg.write_runtime(root / "after.yaml", "registry", root / "pkg", 8000)
-            self.assertEqual(load_json(root / "before.yaml")["authentication"]["oidc"][
-                "allowedClients"], [])
-            self.assertEqual(MODULE.upgrade_steps.load_document(root / "after.yaml")[
-                "authentication"]["oidc"]["allowedClients"], "unrestricted")
+            self.breg(root).write_runtime(root / "runtime.yaml", "registry", root / "pkg",
+                                          8000)
+            runtime = load_json(root / "runtime.yaml")
+            self.assertEqual(runtime["apiVersion"],
+                             "id.registrystack.org/formats/breg/runtime/v1alpha1")
+            self.assertEqual(runtime["database"]["pool"], {"maximumConnections": 8})
+            oidc = runtime["authentication"]["oidc"]
+            self.assertEqual(oidc["maximumTokenLifetimeSeconds"], 300)
+            self.assertNotIn("maxTokenLifetimeSeconds", oidc)
+            self.assertNotIn("deniedKids", oidc)
 
     def test_a_ledger_package_is_tested_and_built_against_its_baseline_unsigned(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -892,8 +901,7 @@ class BregLedgerTest(unittest.TestCase):
             package, digest = breg.package(side, root / "build-2", baseline=baseline)
             self.assertEqual((package, digest), (root / "build-2" / "out" / "package", self.DIGEST))
             breg.create_database.assert_called_once_with("schematest")
-            breg.credentials.assert_called_once_with(root / "build-2" / "credentials.json",
-                                                     side)
+            breg.credentials.assert_called_once_with(root / "build-2" / "credentials.json")
             tested, packaged = (call.args for call in side.run_json.call_args_list)
             self.assertEqual(tested[3], "test")
             self.assertEqual(packaged[3], "package")
@@ -915,13 +923,7 @@ class BregLedgerTest(unittest.TestCase):
             with self.assertRaisesRegex(Error, "packageDigest"):
                 breg.package(side, Path(directory) / "build")
 
-    def test_schema_test_credentials_carry_the_envelope_each_side_reads(self) -> None:
-        envelopes = {
-            "from": {"apiVersion": "registry.registrystack.org/breg-schema-test-credentials/v1",
-                     "kind": "SchemaTestCredentials"},
-            "to": {"apiVersion": "id.registrystack.org/formats/breg/schema-test-credentials/v1",
-                   "kind": "BRegSchemaTestCredentials"},
-        }
+    def test_schema_test_credentials_carry_the_registered_envelope(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             breg = self.breg(root)
@@ -931,24 +933,17 @@ class BregLedgerTest(unittest.TestCase):
             dump_json(breg.project / "tests" / "journeys.yaml", {"journeys": [
                 {"id": "j", "steps": [{"id": "open", "claims": {"principal": "q"}},
                                       {"id": "held", "claims": {"principal": "p"}}]}]})
-            for label, envelope in envelopes.items():
-                with self.subTest(side=label):
-                    side = unittest.mock.Mock()
-                    side.label = label
-                    breg.credentials(root / f"{label}.json", side)
-                    written = load_json(root / f"{label}.json")
-                    self.assertEqual(written, {**envelope, "bindings": [
-                        {"journeyId": "j", "stepId": "open",
-                         "credential": {"type": "bearer",
-                                        "tokenRef": "secret:file/journey-token-j-open"}},
-                        {"journeyId": "j", "stepId": "held",
-                         "credential": {"type": "bearer",
-                                        "tokenRef": "secret:file/journey-token-j-held"}}]})
-
-    def test_the_journeys_step_replaces_the_starter_shortcut(self) -> None:
-        self.assertEqual(MODULE.BREG_UPGRADE_STEPS,
-                         ("breg-journeys", "breg-access-unrestricted"))
-        self.assertFalse(hasattr(MODULE.Breg, "adopt_journeys"))
+            breg.credentials(root / "credentials.json")
+            self.assertEqual(load_json(root / "credentials.json"), {
+                "apiVersion": "id.registrystack.org/formats/breg/schema-test-credentials/v1",
+                "kind": "BRegSchemaTestCredentials",
+                "bindings": [
+                    {"journeyId": "j", "stepId": "open",
+                     "credential": {"type": "bearer",
+                                    "tokenRef": "secret:file/journey-token-j-open"}},
+                    {"journeyId": "j", "stepId": "held",
+                     "credential": {"type": "bearer",
+                                    "tokenRef": "secret:file/journey-token-j-held"}}]})
 
     def author(self, root: Path, package: dict[str, Any]) -> dict[str, Any]:
         breg = self.breg(root)
@@ -1016,49 +1011,7 @@ class BregLedgerTest(unittest.TestCase):
             MODULE.expect_ledger(unchained, "sha256:" + "b" * 64)
 
 
-# JSON is YAML, so the journeys document reads without PyYAML.
-@unittest.mock.patch.object(MODULE, "load_yaml", load_json)
-class UpgradeStepsWiringTest(unittest.TestCase):
-    def test_evidence_applies_its_steps_to_project_and_target_before_packaging(self) -> None:
-        events = []
-        evidence = MODULE.Evidence.__new__(MODULE.Evidence)
-        evidence.work = Path("work")
-        evidence.project = Path("project")
-        evidence.target = Path("target")
-        evidence.package = lambda side, output: events.append("package")
-
-        def steps(ids, roots, catalog=None):
-            self.assertEqual(tuple(ids), MODULE.EVIDENCE_UPGRADE_STEPS)
-            self.assertEqual(roots, {"project": Path("project"), "target": Path("target")})
-            events.append("steps")
-            return []
-
-        with unittest.mock.patch.object(MODULE.upgrade_steps, "apply_steps",
-                                        side_effect=steps):
-            evidence.upgrade(unittest.mock.Mock())
-        self.assertEqual(events, ["steps", "package"])
-
-    def test_a_step_failure_is_a_rehearsal_failure_naming_the_product(self) -> None:
-        with unittest.mock.patch.object(
-                MODULE.upgrade_steps, "apply_steps",
-                side_effect=MODULE.upgrade_steps.StepError("no file matches")):
-            with self.assertRaisesRegex(MODULE.RehearsalError, "Casework.*no file matches"):
-                MODULE.apply_upgrade_steps("Casework", ("x",), project=Path("."))
-
-    def test_manual_instructions_are_printed_not_applied(self) -> None:
-        with (unittest.mock.patch.object(MODULE.upgrade_steps, "apply_steps",
-                                         return_value=["edit the thing by hand"]),
-              unittest.mock.patch("builtins.print") as printed):
-            MODULE.apply_upgrade_steps("Evidence", ("x",), project=Path("."))
-        self.assertIn("edit the thing by hand", str(printed.call_args_list))
-
-
 class BregCredentialsTest(unittest.TestCase):
-    def side(self) -> object:
-        side = unittest.mock.Mock()
-        side.label = "to"
-        return side
-
     def breg(self, root: Path, steps: list[dict[str, Any]]) -> object:
         breg = MODULE.Breg.__new__(MODULE.Breg)
         breg.secrets = root / "secrets"
@@ -1074,7 +1027,7 @@ class BregCredentialsTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             breg = self.breg(root, [{"id": "read", "claims": {"principal": "operator"}}])
-            breg.credentials(root / "credentials.json", self.side())
+            breg.credentials(root / "credentials.json")
             bindings = load_json(root / "credentials.json")["bindings"]
             self.assertEqual(bindings, [{
                 "journeyId": "journey", "stepId": "read",
@@ -1086,7 +1039,7 @@ class BregCredentialsTest(unittest.TestCase):
             root = Path(directory)
             breg = self.breg(root, [{"id": "read"}])
             with self.assertRaisesRegex(MODULE.RehearsalError, "names no claims"):
-                breg.credentials(root / "credentials.json", self.side())
+                breg.credentials(root / "credentials.json")
             self.assertFalse((root / "credentials.json").exists())
 
 
@@ -1163,7 +1116,7 @@ class EvidenceGrammarTest(unittest.TestCase):
                          {"activePublicJwkFile": "public-keys/transit.jwk.json"})
         self.assertEqual(production["authentication"], {"oidc": {
             "issuer": "https://127.0.0.1:9443",
-            "jwksSource": {"kind": "uri", "uri": "https://127.0.0.1:9443/oauth2/jwks"}}})
+            "jwksSource": {"type": "uri", "uri": "https://127.0.0.1:9443/oauth2/jwks"}}})
         self.assertEqual(local["assuranceProfile"], "local")
 
 
@@ -1328,56 +1281,31 @@ class AuditUpgradeTest(unittest.TestCase):
 
 class MessagingAssertionsTest(unittest.TestCase):
     ACTIVE = "sha256:" + "a" * 64
-    PACKAGE = "sha256:" + "b" * 64
+    OTHER = "sha256:" + "b" * 64
 
-    def plan(self, **members: str) -> dict[str, str]:
-        return {"activeDigest": self.ACTIVE, "packageDigest": self.PACKAGE, **members}
+    def plan(self, **members: str | None) -> dict[str, str | None]:
+        return {"activeDigest": self.ACTIVE, "packageDigest": self.ACTIVE, "change": "none",
+                **members}
 
-    def test_the_plan_must_name_the_previous_activation_and_another_package(self) -> None:
-        self.assertEqual(MODULE.ledger_plan_differences(self.ACTIVE, self.plan()), [])
+    def test_the_plan_must_name_the_previous_activation_with_nothing_to_change(self) -> None:
+        self.assertEqual(MODULE.ledger_digest_differences(self.ACTIVE, self.plan()), [])
         for planned, named in (
-                (self.plan(activeDigest="sha256:" + "c" * 64), "activeDigest"),
+                (self.plan(activeDigest=self.OTHER), "activeDigest"),
                 (self.plan(activeDigest=None), "activeDigest"),
-                (self.plan(packageDigest=self.ACTIVE), "packageDigest"),
+                (self.plan(packageDigest=self.OTHER), "packageDigest"),
                 (self.plan(packageDigest=None), "packageDigest"),
+                (self.plan(change="activate"), "change to apply"),
                 ({}, "activeDigest")):
             with self.subTest(planned=planned):
-                differences = MODULE.ledger_plan_differences(self.ACTIVE, planned)
+                differences = MODULE.ledger_digest_differences(self.ACTIVE, planned)
                 self.assertTrue(differences)
                 self.assertIn(named, differences[0])
 
     def test_a_ledger_that_named_no_package_before_the_upgrade_is_a_difference(self) -> None:
         for activated in (None, ""):
             with self.subTest(activated=activated):
-                (difference,) = MODULE.ledger_plan_differences(activated, self.plan())
+                (difference,) = MODULE.ledger_digest_differences(activated, self.plan())
                 self.assertIn("previous release", difference)
-
-    def activation(self, **members: str | None) -> dict[str, str | None]:
-        return {"packageDigest": self.PACKAGE, "predecessorPackageDigest": self.ACTIVE,
-                **members}
-
-    def settled(self, **members: str | None) -> dict[str, str | None]:
-        return {"activeDigest": self.PACKAGE, "packageDigest": self.PACKAGE, "change": "none",
-                **members}
-
-    def test_the_applied_ledger_names_the_planned_package_and_its_predecessor(self) -> None:
-        differences = MODULE.ledger_activation_differences
-        self.assertEqual(differences(self.ACTIVE, self.plan(), self.settled(),
-                                     self.activation()), [])
-        other = "sha256:" + "c" * 64
-        for settled, active, named in (
-                (self.settled(change="activate"), self.activation(), "applied package"),
-                (self.settled(activeDigest=self.ACTIVE), self.activation(), "applied package"),
-                (self.settled(activeDigest=other, packageDigest=other), self.activation(),
-                 "packageDigest changed"),
-                (self.settled(), self.activation(packageDigest=other), "active activation"),
-                (self.settled(), self.activation(predecessorPackageDigest=other), "predecessor"),
-                (self.settled(), self.activation(predecessorPackageDigest=None), "predecessor"),
-                (self.settled(), {}, "active activation")):
-            with self.subTest(settled=settled, active=active):
-                found = differences(self.ACTIVE, self.plan(), settled, active)
-                self.assertTrue(found)
-                self.assertIn(named, found[0])
 
     def test_counts_one_event_across_every_segment_of_the_stream(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -1408,11 +1336,10 @@ class MessagingAssertionsTest(unittest.TestCase):
         self.assertEqual(len(MODULE.retention_audit_losses(0, 0, 0, 1)), 1)
         self.assertEqual(len(MODULE.retention_audit_losses(2, 2, 2, 2)), 2)
 
-    def rehearse(self, *, erase_events: int = 1, activation_records: int = 2,
+    def rehearse(self, *, erase_events: int = 1,
                  ledger_differences: tuple[str, ...] = ()) -> tuple[dict, Any, Any]:
         """Run rehearse_messaging with every process and database faked. The
-        upgrade writes `activation_records` records to the operator stream and
-        the erase command `erase_events` requested and erased records."""
+        erase command writes `erase_events` requested and erased records."""
         old, new = unittest.mock.Mock(), unittest.mock.Mock()
         old.run_json.return_value = {"active": {"packageDigest": self.ACTIVE}}
         messaging = unittest.mock.Mock()
@@ -1422,7 +1349,6 @@ class MessagingAssertionsTest(unittest.TestCase):
         written = {"events": 0, runtime_stream: 9, operator_stream: 2}
 
         def upgrade(*_arguments):
-            written[operator_stream] += activation_records
             written[runtime_stream] += MODULE.MESSAGING_UPGRADED_AUDIT_RECORDS[runtime_stream]
             return list(ledger_differences), set()
 
@@ -1471,30 +1397,22 @@ class MessagingAssertionsTest(unittest.TestCase):
         with self.assertRaisesRegex(MODULE.RehearsalError, "retention.erased"):
             self.rehearse(erase_events=0)
 
-    def test_the_leg_repackages_then_upgrades_from_the_digest_the_old_release_activated(
-            self) -> None:
+    def test_the_leg_upgrades_from_the_digest_the_old_release_activated(self) -> None:
         _report, new, messaging = self.rehearse()
-        self.assertEqual(
-            [call for call in messaging.mock_calls if call[0] in ("repackage", "upgrade")],
-            [unittest.mock.call.repackage(new), unittest.mock.call.upgrade(new, self.ACTIVE)])
+        messaging.upgrade.assert_called_once_with(new, self.ACTIVE)
 
     def test_the_leg_fails_on_a_ledger_difference_the_upgrade_names(self) -> None:
         with self.assertRaisesRegex(MODULE.RehearsalError, "names another predecessor"):
             self.rehearse(ledger_differences=("the ledger names another predecessor",))
 
-    def test_the_leg_fails_when_the_activation_leaves_no_operator_audit_record(self) -> None:
-        with self.assertRaisesRegex(MODULE.RehearsalError,
-                                    "Messaging operator audit stream held 2 records"):
-            self.rehearse(activation_records=0)
-
     def test_each_stream_is_held_to_the_records_the_upgrade_writes_to_it(self) -> None:
         self.assertEqual(MODULE.MESSAGING_UPGRADED_AUDIT_RECORDS,
-                         {"messaging.ndjson": 7, "messaging.messagingctl.ndjson": 4})
+                         {"messaging.ndjson": 7, "messaging.messagingctl.ndjson": 2})
         report, _new, _messaging = self.rehearse()
         self.assertEqual(report["messaging"]["auditRecordsBefore"],
                          {"messaging.ndjson": 9, "messaging.messagingctl.ndjson": 2})
         self.assertEqual(report["messaging"]["auditRecordsAfter"],
-                         {"messaging.ndjson": 16, "messaging.messagingctl.ndjson": 6})
+                         {"messaging.ndjson": 16, "messaging.messagingctl.ndjson": 4})
 
 
 class GateWiringTest(unittest.TestCase):
@@ -1513,10 +1431,9 @@ class GateWiringTest(unittest.TestCase):
         MODULE.check_floor_is_current(MODULE.released_versions(ROOT),
                                       MODULE.workspace_version(ROOT))
 
-    def test_api_stability_states_the_same_floor(self) -> None:
+    def test_api_stability_states_the_promise_and_its_rehearsal(self) -> None:
         page = API_STABILITY.read_text(encoding="utf-8")
-        floor = "v{}.{}.{}".format(*MODULE.FORWARD_PATH_FLOOR)
-        for required in (floor, "immediate predecessor", "rehearse-upgrade.py"):
+        for required in ("immediate predecessor", "rehearse-upgrade.py"):
             self.assertTrue(required in page, f"api-stability page lacks {required!r}")
 
 

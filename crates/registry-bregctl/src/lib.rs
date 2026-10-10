@@ -121,6 +121,38 @@ use webhook_lifecycle::{
 const DOMAIN_REFUSAL_EXIT: u8 = 1;
 const USAGE_EXIT: u8 = 2;
 const OPERATIONAL_FAILURE_EXIT: u8 = 3;
+
+/// The `apiVersion` every `--format json` report opens with.
+pub const CTL_REPORT_API_VERSION: &str = "id.registrystack.org/formats/breg/ctl-report/v1alpha1";
+/// The `kind` every `--format json` report opens with.
+pub const CTL_REPORT_KIND: &str = "BRegCtlReport";
+
+/// One `--format json` report as it is written: the two members that name its
+/// format, then the command's own members in the order the command gives them.
+#[derive(Serialize)]
+struct CtlReport<'a, T: Serialize + ?Sized> {
+    #[serde(rename = "apiVersion")]
+    api_version: &'static str,
+    kind: &'static str,
+    #[serde(flatten)]
+    report: &'a T,
+}
+
+/// Write one `--format json` report. Every command writes its report through
+/// here, so no command names the format itself and none can leave it out.
+fn write_ctl_report<T: Serialize + ?Sized>(
+    stdout: &mut dyn Write,
+    report: &T,
+) -> serde_json::Result<()> {
+    serde_json::to_writer_pretty(
+        stdout,
+        &CtlReport {
+            api_version: CTL_REPORT_API_VERSION,
+            kind: CTL_REPORT_KIND,
+            report,
+        },
+    )
+}
 // Keep ctl-authored project and module source capture aligned with the
 // schema-test package rederivation ceiling so source-size refusals occur
 // before runtime secret resolution or database rehearsal. Broader package-file
@@ -152,7 +184,8 @@ enum Command {
     /// one derived from an embedded reference model with `--from`, or a shipped
     /// starter with `--template`.
     Init(InitArgs),
-    /// Validate a Base Registry Engine authoring project without opening a database.
+    /// Check a Base Registry Engine authoring project, package, tool file, or runtime
+    /// file without opening a database.
     Check(CheckArgs),
     /// Maintain deterministic authoring project metadata.
     Project(ProjectArgs),
@@ -386,13 +419,17 @@ struct CheckArgs {
     /// Enforce production-only package closure requirements.
     #[arg(long)]
     production: bool,
-    /// Exit unsuccessfully when the check reports any warning, including access warnings.
+    /// Exit 1 when a warning is reported.
     #[arg(long)]
     deny_warnings: bool,
-    /// Runtime configuration file to check offline beside the project; no package, database, network, or secret is read.
+    /// Runtime file to check offline against PROJECT, as `breg` reads it, with no
+    /// package, database, network, or secret material (`package.root` is not read;
+    /// `breg` verifies the package at startup).
     #[arg(long, value_name = "FILE")]
     runtime_config: Option<PathBuf>,
-    /// Resolve the runtime configuration's `${VAR}` substitutions from the environment, and report an unset variable.
+    /// Fill `${NAME}` expressions in the runtime file from the process environment and
+    /// check the values they produce. Without it, each expression is checked by syntax
+    /// and position only.
     #[arg(long, requires = "runtime_config")]
     environment: bool,
 }
@@ -1895,7 +1932,7 @@ struct PlanSuccessReport {
 /// The activation `bregctl apply` would report, or `none` when the package is
 /// already active with the configured roles.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 enum PlanActivation {
     Initial,
     Successor,
@@ -2080,7 +2117,7 @@ struct AttachmentCleanupSuccessReport {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 enum ApplyActivation {
     Initial,
     Successor,
@@ -2608,7 +2645,7 @@ where
             return match outcome {
                 Ok(erased) => {
                     let result = if format == OutputFormat::Json {
-                        serde_json::to_writer_pretty(&mut *stdout, &json!({"ok":true,"command":"evidence-retention erase-expired","erased":erased}))
+                        write_ctl_report(&mut *stdout, &json!({"ok":true,"command":"evidence-retention erase-expired","erased":erased}))
                             .map_err(io::Error::other).and_then(|()| writeln!(stdout))
                     } else {
                         render_report(
@@ -2639,7 +2676,7 @@ where
             return match outcome {
                 Ok(erased) => {
                     let result = if format == OutputFormat::Json {
-                        serde_json::to_writer_pretty(&mut *stdout, &json!({"ok":true,"command":"idempotency-retention erase-expired","erased":erased}))
+                        write_ctl_report(&mut *stdout, &json!({"ok":true,"command":"idempotency-retention erase-expired","erased":erased}))
                             .map_err(io::Error::other).and_then(|()| writeln!(stdout))
                     } else {
                         render_report(
@@ -3293,7 +3330,7 @@ fn write_instance_claim_status(
 ) -> ExitCode {
     let result = if format == OutputFormat::Json {
         let body = json!({"ok": true, "command": "instance-claim status", "status": status});
-        serde_json::to_writer_pretty(&mut *stdout, &body)
+        write_ctl_report(&mut *stdout, &body)
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
@@ -3333,7 +3370,7 @@ fn write_instance_claim_adoption(
 ) -> ExitCode {
     let result = if format == OutputFormat::Json {
         let body = json!({"ok": true, "command": "instance-claim adopt", "adoption": adoption});
-        serde_json::to_writer_pretty(&mut *stdout, &body)
+        write_ctl_report(&mut *stdout, &body)
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
@@ -3371,7 +3408,7 @@ fn write_import_authority_success(
             }
             _ => json!({"ok": true, "command": command, "authorities": authorities}),
         };
-        serde_json::to_writer_pretty(&mut *stdout, &body)
+        write_ctl_report(&mut *stdout, &body)
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
@@ -7527,7 +7564,7 @@ fn planner_test(args: &ProjectPlannerTestArgs) -> Result<PlannerTestSuccessRepor
                     } => "existing",
                     registry_breg::rhai_planner::CandidateChangeRequestTargetBinding::ReservedCreate {
                         ..
-                    } => "reserved_create",
+                    } => "reserved-create",
                 },
                 operation: operation_wire_name(effect.operation),
                 fields,
@@ -7595,23 +7632,64 @@ fn planner_test_failure(code: &str, path: &str, message: &str) -> FailureReport 
     )
 }
 
-/// `apiVersion` for every `bregctl explain` payload, versioned as a whole: any change
-/// to a pinned object's shape in one of the nine kinds bumps this version.
-const EXPLAIN_API_VERSION: &str = "registry.registrystack.org/breg-explain/v1alpha4";
+/// The header one `bregctl explain` payload opens with. Each of the nine
+/// formats carries its own `apiVersion`, so a change to a pinned object's shape
+/// bumps the version of the format that pins it.
+struct ExplainFormat {
+    api_version: &'static str,
+    kind: &'static str,
+}
 
-/// Which `explanation` kind a subject (and, for `access`, whether a scenario ran)
+const MODEL_EXPLANATION: ExplainFormat = ExplainFormat {
+    api_version: "id.registrystack.org/formats/breg/model-explanation/v1alpha4",
+    kind: "BRegModelExplanation",
+};
+const ACCESS_EXPLANATION: ExplainFormat = ExplainFormat {
+    api_version: "id.registrystack.org/formats/breg/access-explanation/v1alpha4",
+    kind: "BRegAccessExplanation",
+};
+const ACCESS_PREVIEW: ExplainFormat = ExplainFormat {
+    api_version: "id.registrystack.org/formats/breg/access-preview/v1alpha4",
+    kind: "BRegAccessPreview",
+};
+const ROUTES_EXPLANATION: ExplainFormat = ExplainFormat {
+    api_version: "id.registrystack.org/formats/breg/routes-explanation/v1alpha4",
+    kind: "BRegRoutesExplanation",
+};
+const QUERIES_EXPLANATION: ExplainFormat = ExplainFormat {
+    api_version: "id.registrystack.org/formats/breg/queries-explanation/v1alpha4",
+    kind: "BRegQueriesExplanation",
+};
+const ACTIONS_EXPLANATION: ExplainFormat = ExplainFormat {
+    api_version: "id.registrystack.org/formats/breg/actions-explanation/v1alpha4",
+    kind: "BRegActionsExplanation",
+};
+const CHANGE_REQUESTS_EXPLANATION: ExplainFormat = ExplainFormat {
+    api_version: "id.registrystack.org/formats/breg/change-requests-explanation/v1alpha4",
+    kind: "BRegChangeRequestsExplanation",
+};
+const EVENTS_EXPLANATION: ExplainFormat = ExplainFormat {
+    api_version: "id.registrystack.org/formats/breg/events-explanation/v1alpha4",
+    kind: "BRegEventsExplanation",
+};
+const LIFECYCLE_EXPLANATION: ExplainFormat = ExplainFormat {
+    api_version: "id.registrystack.org/formats/breg/lifecycle-explanation/v1alpha4",
+    kind: "BRegLifecycleExplanation",
+};
+
+/// Which `explanation` format a subject (and, for `access`, whether a scenario ran)
 /// produces. Kept beside `explain_envelope` because the two always travel together.
-fn explain_kind(subject: ExplainSubject, scenario_present: bool) -> &'static str {
+fn explain_format(subject: ExplainSubject, scenario_present: bool) -> &'static ExplainFormat {
     match subject {
-        ExplainSubject::Model => "ModelExplanation",
-        ExplainSubject::Access if scenario_present => "AccessPreview",
-        ExplainSubject::Access => "AccessExplanation",
-        ExplainSubject::Routes => "RoutesExplanation",
-        ExplainSubject::Queries => "QueriesExplanation",
-        ExplainSubject::Actions => "ActionsExplanation",
-        ExplainSubject::ChangeRequests => "ChangeRequestsExplanation",
-        ExplainSubject::Events => "EventsExplanation",
-        ExplainSubject::Lifecycle => "LifecycleExplanation",
+        ExplainSubject::Model => &MODEL_EXPLANATION,
+        ExplainSubject::Access if scenario_present => &ACCESS_PREVIEW,
+        ExplainSubject::Access => &ACCESS_EXPLANATION,
+        ExplainSubject::Routes => &ROUTES_EXPLANATION,
+        ExplainSubject::Queries => &QUERIES_EXPLANATION,
+        ExplainSubject::Actions => &ACTIONS_EXPLANATION,
+        ExplainSubject::ChangeRequests => &CHANGE_REQUESTS_EXPLANATION,
+        ExplainSubject::Events => &EVENTS_EXPLANATION,
+        ExplainSubject::Lifecycle => &LIFECYCLE_EXPLANATION,
     }
 }
 
@@ -7623,13 +7701,13 @@ fn explain_kind(subject: ExplainSubject, scenario_present: bool) -> &'static str
 /// types, and `CompiledEventDeliveryInventory` is `deny_unknown_fields` and round-trips
 /// through package inventories, so an extra field on any of them would either misdescribe
 /// an unrelated report or break an unrelated contract.
-fn explain_envelope(kind: &'static str, mut explanation: Value) -> Value {
+fn explain_envelope(format: &ExplainFormat, mut explanation: Value) -> Value {
     explanation
         .as_object_mut()
         .expect("every explanation payload serializes as an object")
         .extend([
-            ("apiVersion".to_string(), Value::from(EXPLAIN_API_VERSION)),
-            ("kind".to_string(), Value::from(kind)),
+            ("apiVersion".to_string(), Value::from(format.api_version)),
+            ("kind".to_string(), Value::from(format.kind)),
         ]);
     explanation
 }
@@ -7720,7 +7798,7 @@ fn explain_lifecycle(
         findings: Vec::new(),
         artifacts: Vec::new(),
         explanation: Some(explain_envelope(
-            explain_kind(ExplainSubject::Lifecycle, false),
+            explain_format(ExplainSubject::Lifecycle, false),
             explanation,
         )),
         next_steps: Vec::new(),
@@ -7785,7 +7863,7 @@ fn explain(
         ExplainSubject::Lifecycle => unreachable!("lifecycle returns before the project compiles"),
     }
     .map_err(|_| explain_render_error())?;
-    let explanation = explain_envelope(explain_kind(subject, scenario_present), explanation);
+    let explanation = explain_envelope(explain_format(subject, scenario_present), explanation);
     Ok(SuccessReport {
         ok: true,
         command: "explain",
@@ -8799,17 +8877,18 @@ documentation below walks through preparing them for a deployment.
 "#;
 
 const INIT_REGISTRY_PROJECT: &[u8] =
-    br#"# The registry project: one document that decides the model, the access rules,
+    br#"# yaml-language-server: $schema=https://id.registrystack.org/schemas/breg/project/project.v1alpha1.schema.json
+# The registry project: one document that decides the model, the access rules,
 # and the catalogue description of a single registry. Every bregctl
 # command reads it. Replace the identifiers, titles, and URLs below with your
 # own; every value here is a placeholder chosen to be obviously synthetic.
-apiVersion: registry.registrystack.org/v1alpha1
-kind: RegistryProject
+apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
 
 # Registry identity. `canonicalBaseIri` is the stable base of the IRIs this
 # registry publishes, so point it at a hostname you control before a production
 # package. Names under `.example.invalid` never resolve.
-registry:
+project:
   id: generic-registry
   version: 0.1.0
   defaultLanguage: en
@@ -8841,7 +8920,7 @@ manifestProjection:
       title: Generic Registry
       description: Placeholder dataset description; replace it with your own.
       owner: Generic Registry Authority
-      status: under_development
+      status: under-development
   dataServices:
     - id: generic-registry-api
       title: Generic Registry API
@@ -8867,10 +8946,10 @@ entities:
     mutationMode: mutable
     classification: public
     fields:
-      - {id: code, type: string, required: true, minLength: 1, maxLength: 64, classification: public}
-      - {id: label, type: string, required: true, maxLength: 200, classification: public}
+      - {id: code, type: string, required: true, minimumLength: 1, maximumLength: 64, classification: public}
+      - {id: label, type: string, required: true, maximumLength: 200, classification: public}
     constraints:
-      - {id: record-group-code-unique, kind: unique, fields: [code]}
+      - {id: record-group-code-unique, type: unique, fields: [code]}
 
   # The registry's records. `group` is a reference: the server stores the target
   # record's identifier and refuses a value that names no `record-group`.
@@ -8880,7 +8959,7 @@ entities:
   # An entity may also declare `hooks`, which project chosen fields of a
   # committed change to a URL destination the deployment binds by name. Each
   # hook declares `phase: after` and a handler such as
-  # `{kind: url, destinationId: registry-events}`. This project declares none:
+  # `{type: url, destinationId: registry-events}`. This project declares none:
   # a package refuses to activate until the runtime configuration binds every
   # destination its URL handlers name. `bregctl dev` supplies local receiver
   # bindings; operated deployments bind their own.
@@ -8890,12 +8969,12 @@ entities:
     mutationMode: mutable
     classification: internal
     fields:
-      - {id: code, type: string, required: true, minLength: 1, maxLength: 64, classification: internal}
-      - {id: label, type: string, required: true, maxLength: 200, classification: internal}
+      - {id: code, type: string, required: true, minimumLength: 1, maximumLength: 64, classification: internal}
+      - {id: label, type: string, required: true, maximumLength: 200, classification: internal}
       - {id: group, type: reference, target: record-group, classification: internal}
       - {id: status, type: vocabulary-code, vocabulary: record-status, classification: internal}
     constraints:
-      - {id: record-code-unique, kind: unique, fields: [code]}
+      - {id: record-code-unique, type: unique, fields: [code]}
     # An index lets a list filtered or sorted by its leading field skip the
     # rows that do not match. `check` reports a finding for a filterable or
     # sortable field no index leads with. The unique constraint above already
@@ -8904,7 +8983,7 @@ entities:
       - {id: record-status, fields: [status]}
     # A selector profile names an exact-match question a caller may ask by
     # value, rather than a filter over a listing. Every field it names must
-    # refuse the empty value, which is why `code` declares `minLength: 1` above.
+    # refuse the empty value, which is why `code` declares `minimumLength: 1` above.
     # `bregctl generate evidence-source` exports one Evidence source per
     # selector an access profile grants a lookup on.
     selectorProfiles:
@@ -8932,18 +9011,19 @@ accessProfiles:
     requiredScopes: [registry:generic:operate]
     requiredPurposes: [registry-operations]
     permissions:
-      - entity: record-group
-        rowBoundaries: unrestricted
-        operations: [create, get, list]
-        readableFields: [code, label]
-        writableFields: [code, label]
-        filterableFields: [code]
-      - entity: record
-        rowBoundaries: unrestricted
-        operations: [create, get, list, patch]
-        readableFields: [code, label, group, status]
-        writableFields: [code, label, group, status]
-        filterableFields: [code, status]
+      entities:
+        - entity: record-group
+          rowBoundaries: unrestricted
+          operations: [create, get, list]
+          readableFields: [code, label]
+          writableFields: [code, label]
+          filterableFields: [code]
+        - entity: record
+          rowBoundaries: unrestricted
+          operations: [create, get, list, patch]
+          readableFields: [code, label, group, status]
+          writableFields: [code, label, group, status]
+          filterableFields: [code, status]
 
   # A row-restricted reader. A row boundary compares a declared field against a
   # verified claim on the caller's credentials, so this profile reads only the
@@ -8960,12 +9040,13 @@ accessProfiles:
     requiredScopes: [registry:generic:read]
     requiredPurposes: [registry-reporting]
     permissions:
-      - entity: record
-        operations: [get, list]
-        readableFields: [code, label, group, status]
-        filterableFields: [code]
-        rowBoundaries:
-          - {field: status, claim: registry_record_status, operator: equals}
+      entities:
+        - entity: record
+          operations: [get, list]
+          readableFields: [code, label, group, status]
+          filterableFields: [code]
+          rowBoundaries:
+            - {field: status, claim: registry_record_status, operator: equals}
 
   # A lookup-only source. It answers one exact-match question, by `code`, and
   # reads only the fields that answer it. `valueOrigin: request` says the caller
@@ -8984,12 +9065,13 @@ accessProfiles:
     requiredScopes: [registry:evidence:lookup]
     requiredPurposes: [evidence-source-read]
     permissions:
-      - entity: record
-        rowBoundaries: unrestricted
-        operations: [lookup]
-        readableFields: [code, status]
-        lookups:
-          - {selector: by-code, valueOrigin: request}
+      entities:
+        - entity: record
+          rowBoundaries: unrestricted
+          operations: [lookup]
+          readableFields: [code, status]
+          lookups:
+            - {selector: by-code, valueOrigin: request}
 
 # Modules contribute to the model from their own files under `modules/`.
 # `bregctl project lock` writes the version and content digest below;
@@ -9002,12 +9084,15 @@ modules:
 "#;
 
 const INIT_MODULE: &[u8] =
-    br#"# A module contributes to the model from its own file, so a reusable part of a
+    br#"# yaml-language-server: $schema=https://id.registrystack.org/schemas/breg/module/module.v1alpha1.schema.json
+# A module contributes to the model from its own file, so a reusable part of a
 # registry can be reviewed and versioned separately from the project that adopts
 # it. `extendEntities` adds to an entity the module does not own.
 #
 # Raise `version` and re-run `bregctl project lock` after every edit
 # here; the project's `modules` entry pins this file by content digest.
+apiVersion: id.registrystack.org/formats/breg/module/v1alpha1
+kind: BRegModule
 id: record-notes
 version: 0.1.0
 extendEntities:
@@ -9017,18 +9102,19 @@ extendEntities:
   # before a caller can see or set it.
   - entity: record
     fields:
-      - {id: internal-note, type: string, maxLength: 500, classification: internal}
+      - {id: internal-note, type: string, maximumLength: 500, classification: internal}
 "#;
 
 const INIT_RUNTIME_EXAMPLE: &[u8] =
-    br#"# An example runtime configuration. It is not read by any command: copy it to a
+    br#"# yaml-language-server: $schema=https://id.registrystack.org/schemas/breg/runtime/runtime.v1alpha1.schema.json
+# An example runtime configuration. It is not read by any command: copy it to a
 # file the operator keeps outside this project, then replace every value below.
 # The runtime file is a deployment artifact. It binds one compiled package to
 # one database, one token issuer, and one listener. It never holds a credential:
 # a `secret:file/<name>` reference names an owner-only file under the file
 # provider root, and `secret:env/<NAME>` an environment variable.
 # Every host here is under `.example.invalid`, which never resolves.
-apiVersion: registry.registrystack.org/breg-runtime/v1alpha1
+apiVersion: id.registrystack.org/formats/breg/runtime/v1alpha1
 kind: BRegRuntimeConfig
 
 # Where the server listens. Client addresses and TLS termination belong to
@@ -9057,7 +9143,7 @@ database:
   runtimeUrlRef: secret:file/runtime-database-url
   migrationUrlRef: secret:file/migration-database-url
   pool:
-    maxSize: 8
+    maximumConnections: 8
   roles:
     migration: registry_migration
     runtime: registry_runtime
@@ -9080,11 +9166,10 @@ authentication:
     scopeClaim: scope
     scopeSeparator: " "
     allowedClients: [generic-registry-client]
-    deniedKids: []
-    maxTokenLifetimeSeconds: 300
+    maximumTokenLifetimeSeconds: 300
     leewayMilliseconds: 30000
     jwksSource:
-      kind: discovery
+      type: discovery
   authorityClaims:
     principal: registry_principal
     purpose: registry_purpose
@@ -9600,15 +9685,7 @@ fn explain_change_requests(compiled: &CompiledRegistry) -> serde_json::Result<Va
                     "maximumSnapshotBytes": request.maximum_snapshot_bytes,
                 },
                 "planner": explain_change_request_planner(compiled, entity, request),
-                "review": match &request.review {
-                    registry_breg::model::CompiledChangeRequestReview::Required(requirement) => json!({
-                        "authority": requirement.authority,
-                        "policyId": requirement.policy_id,
-                    }),
-                    registry_breg::model::CompiledChangeRequestReview::None(no_review) => json!({
-                        "mode": no_review.mode,
-                    }),
-                },
+                "review": request.review,
                 "onApproved": request.on_approved,
                 "application": request.application,
                 "effects": request.effects.iter().map(|effect| {
@@ -9620,28 +9697,28 @@ fn explain_change_requests(compiled: &CompiledRegistry) -> serde_json::Result<Va
                             "entity": effect.target.entity_id,
                             "binding": match &effect.target.binding {
                                 registry_breg::model::CompiledChangeRequestTargetBinding::Existing { from_field } => {
-                                    json!({"kind": "existing", "fromField": field_summary(entity, from_field)})
+                                    json!({"type": "existing", "fromField": field_summary(entity, from_field)})
                                 }
                                 registry_breg::model::CompiledChangeRequestTargetBinding::ReservedCreate { effect } => {
-                                    json!({"kind": "reserved_create", "effect": effect})
+                                    json!({"type": "reserved-create", "effect": effect})
                                 }
                             },
                         },
                         "fields": effect.mutations.iter().map(|mutation| match mutation {
                             registry_breg::model::CompiledChangeRequestMutation::Set { field, value } => json!({
-                                "kind": "set",
+                                "type": "set",
                                 "target": field_summary_optional(target, field),
                                 "value": match value {
                                     registry_breg::model::CompiledChangeRequestValue::FromField { field } => {
-                                        json!({"kind": "from_field", "field": field_summary(entity, field)})
+                                        json!({"type": "from-field", "field": field_summary(entity, field)})
                                     }
                                     registry_breg::model::CompiledChangeRequestValue::FromEffect { effect, target_entity_id } => {
-                                        json!({"kind": "from_effect", "effect": effect, "targetEntity": target_entity_id})
+                                        json!({"type": "from-effect", "effect": effect, "targetEntity": target_entity_id})
                                     }
                                 },
                             }),
                             registry_breg::model::CompiledChangeRequestMutation::Clear { field } => json!({
-                                "kind": "clear",
+                                "type": "clear",
                                 "target": field_summary_optional(target, field),
                             }),
                         }).collect::<Vec<_>>(),
@@ -9698,7 +9775,7 @@ fn explain_change_requests(compiled: &CompiledRegistry) -> serde_json::Result<Va
                 "route": entity.route,
                 "requiredFor": control.required_for.iter().map(|operation| operation_wire_name(*operation)).collect::<Vec<_>>(),
                 "eligibleRequestTypes": eligible,
-                "directWriteRestriction": "controlled operations are absent from ordinary permissions and require compiled apply_request context",
+                "directWriteRestriction": "controlled operations are absent from ordinary permissions and require compiled apply-request context",
             }))
         })
         .collect::<Vec<_>>();
@@ -9715,18 +9792,18 @@ fn explain_change_request_planner(
 ) -> Value {
     let Some(planner) = request.planner.as_ref() else {
         return json!({
-            "kind": "declarative",
+            "type": "declarative",
             "abi": registry_breg::contract::CHANGE_REQUEST_PLAN_ABI_V1,
         });
     };
     json!({
-        "kind": "rhai",
+        "type": "rhai",
         "abi": planner.abi,
         "rhaiVersion": planner.rhai_version,
         "scriptSha256": planner.script_sha256,
         "declaringOrigin": match &planner.source_module {
-            Some(module) => json!({"kind": "module", "id": module}),
-            None => json!({"kind": "project"}),
+            Some(module) => json!({"type": "module", "id": module}),
+            None => json!({"type": "project"}),
         },
         "requestFields": planner.request_fields.iter()
             .map(|field| field_summary(request_entity, field))
@@ -9749,12 +9826,12 @@ fn explain_change_request_planner(
             json!({
                 "target": match &write.target_from_field {
                     Some(field) => json!({
-                        "kind": "existing",
+                        "type": "existing",
                         "entity": write.target_entity_id,
                         "fromField": field_summary(request_entity, field),
                     }),
                     None => json!({
-                        "kind": "reserved_create",
+                        "type": "reserved-create",
                         "entity": write.target_entity_id,
                     }),
                 },
@@ -9769,7 +9846,7 @@ fn explain_change_request_planner(
 
 fn explain_routes(compiled: &CompiledRegistry) -> serde_json::Result<Value> {
     // The explain payload mixes two record shapes in one array (entity routes and
-    // action routes, which share no field), so every record needs an explicit `kind`
+    // action routes, which share no field), so every record needs an explicit `type`
     // discriminator. It is distinct from `actionRouteKind`, which says which action
     // route a record is rather than which shape it has. The field lives here, not on
     // `CompiledRoute` or `CompiledActionRoute`: both are `deny_unknown_fields` types
@@ -9784,11 +9861,11 @@ fn explain_routes(compiled: &CompiledRegistry) -> serde_json::Result<Value> {
         route
             .as_object_mut()
             .expect("compiled routes serialize as objects")
-            .insert("kind".to_string(), Value::from("entity"));
+            .insert("type".to_string(), Value::from("entity"));
     }
     routes.extend(compiled.actions().routes.iter().map(|route| {
         json!({
-            "kind": "action",
+            "type": "action",
             "id": route.id,
             "actionId": route.action_id,
             "actionRouteKind": action_route_kind_wire_name(route.kind),
@@ -9841,20 +9918,20 @@ fn explain_actions(compiled: &CompiledRegistry) -> serde_json::Result<Value> {
                         "target": action_target_summary(effect),
                         "fields": effect.mutations.iter().map(|mutation| match mutation {
                             registry_breg::model::CompiledActionMutation::Set { field, value } => json!({
-                                "kind": "set",
+                                "type": "set",
                                 "target": field_summary_optional(target_entity, field),
                                 "value": match value {
-                                    registry_breg::model::CompiledActionValue::Literal { .. } => json!({"kind": "computed"}),
+                                    registry_breg::model::CompiledActionValue::Literal { .. } => json!({"type": "computed"}),
                                     registry_breg::model::CompiledActionValue::FromInput { input } => {
-                                        json!({"kind": "from_input", "input": action_input_identity(action, input)})
+                                        json!({"type": "from-input", "input": action_input_identity(action, input)})
                                     }
                                     registry_breg::model::CompiledActionValue::FromEffect { effect, target_entity_id } => {
-                                        json!({"kind": "from_effect", "effect": effect, "targetEntity": target_entity_id})
+                                        json!({"type": "from-effect", "effect": effect, "targetEntity": target_entity_id})
                                     }
                                 },
                             }),
                             registry_breg::model::CompiledActionMutation::Clear { field } => json!({
-                                "kind": "clear",
+                                "type": "clear",
                                 "target": field_summary_optional(target_entity, field),
                             }),
                         }).collect::<Vec<_>>(),
@@ -9941,14 +10018,14 @@ fn explain_actions(compiled: &CompiledRegistry) -> serde_json::Result<Value> {
                 };
                 let mut handler_summary = json!({
                     "kind": kind, "abi": handler.abi,
-                    "entrypoint": "handle", "context": "ctx.inputs", "inputKeys": "authored_ids",
+                    "entrypoint": "handle", "context": "ctx.inputs", "inputKeys": "authored-ids",
                     "possibleWrites": handler.writes,
                     "refusals": handler.refusals.iter().map(|(code,label)| json!({"code":code,"label":label})).collect::<Vec<_>>(),
                     "outcomes": ["effects", "refusal"],
-                    "omittedSlots": "no_write_or_result; all_declared_existing_targets_still_require_admission_and_conditions",
-                    "evaluation": "after_locked_receipt_recovery_before_target_locks",
-                    "reads": "supplied_inputs_only",
-                    "replay": "recover_committed_result_without_handler_evaluation",
+                    "omittedSlots": "no-write-or-result; all-declared-existing-targets-still-require-admission-and-conditions",
+                    "evaluation": "after-locked-receipt-recovery-before-target-locks",
+                    "reads": "supplied-inputs-only",
+                    "replay": "recover-committed-result-without-handler-evaluation",
                 });
                 if let Some(object) = handler_summary.as_object_mut() {
                     object.extend(backend_source.as_object().cloned().unwrap_or_default());
@@ -9963,17 +10040,17 @@ fn explain_actions(compiled: &CompiledRegistry) -> serde_json::Result<Value> {
                     "maximumConcurrentEvaluations": 8,
                     "maximumRetainedBytes": 1_048_576,
                     "maximumResponseBytes": 262_144,
-                    "retentionSeconds": 86_400,
+                    "retentionDays": 1,
                     "maximumAssertionLifetimeSeconds": 300,
                     "clockSkewSeconds": 0,
                     "maximumObservationAgeSeconds": 300,
                     "defaultActionDeadlineMilliseconds": 10_000,
-                    "deadline": "bounded_by_operator_http_request_timeout_and_action_timeout",
-                    "invocation": "optional_explicit_helper_calls; omission_makes_no_remote_request",
-                    "disclosure": "remote_requirement_disclosure_is_not_reduced_by_output_selection",
-                    "lifecycle": "outside_postgres; frozen_transcript_reused_for_sql_retries; receipt_replay_has_zero_calls"
+                    "deadline": "bounded-by-operator-http-request-timeout-and-action-timeout",
+                    "invocation": "optional-explicit-helper-calls; omission-makes-no-remote-request",
+                    "disclosure": "remote-requirement-disclosure-is-not-reduced-by-output-selection",
+                    "lifecycle": "outside-postgres; frozen-transcript-reused-for-sql-retries; receipt-replay-has-zero-calls"
                 });
-                summary["handler"]["evaluation"] = json!("outside_postgres_after_admission_and_receipt_preflight");
+                summary["handler"]["evaluation"] = json!("outside-postgres-after-admission-and-receipt-preflight");
             }
             if !action.requires.is_empty() {
                 summary["requires"] = json!(action.requires.iter().map(|requirement| {
@@ -9985,7 +10062,7 @@ fn explain_actions(compiled: &CompiledRegistry) -> serde_json::Result<Value> {
                             &requirement.field,
                         ),
                         "equals": requirement.equals,
-                        "evaluated": "before_effects_under_target_lock",
+                        "evaluated": "before-effects-under-target-lock",
                     })
                 }).collect::<Vec<_>>());
             }
@@ -10096,14 +10173,14 @@ fn explain_queries(compiled: &CompiledRegistry) -> serde_json::Result<Value> {
                     "asOf": "asOf",
                 },
                 "bounds": {
-                    "maxPageSize": operation.max_page_size,
-                    "maxTop": registry_breg::query::MAX_TOP,
-                    "maxSelectedFields": registry_breg::query::MAX_SELECTED_FIELDS,
-                    "maxFilterPayloadBytes": registry_breg::query::MAX_QUERY_PAYLOAD_BYTES,
-                    "maxFilterDepth": registry_breg::query::MAX_FILTER_DEPTH,
-                    "maxFilterNodes": registry_breg::query::MAX_FILTER_NODES,
-                    "maxFilterPredicates": registry_breg::query::MAX_FILTER_PREDICATES,
-                    "maxInValues": registry_breg::query::MAX_IN_VALUES,
+                    "maximumPageSize": operation.max_page_size,
+                    "maximumTop": registry_breg::query::MAX_TOP,
+                    "maximumSelectedFields": registry_breg::query::MAX_SELECTED_FIELDS,
+                    "maximumFilterPayloadBytes": registry_breg::query::MAX_QUERY_PAYLOAD_BYTES,
+                    "maximumFilterDepth": registry_breg::query::MAX_FILTER_DEPTH,
+                    "maximumFilterNodes": registry_breg::query::MAX_FILTER_NODES,
+                    "maximumFilterPredicates": registry_breg::query::MAX_FILTER_PREDICATES,
+                    "maximumInValues": registry_breg::query::MAX_IN_VALUES,
                 }
             });
             if let Some(bbox) = operation.spatial.as_ref().and_then(|spatial| spatial.bbox.as_ref()) {
@@ -10223,10 +10300,10 @@ fn action_target_use_source(
 ) -> Value {
     match source {
         registry_breg::model::CompiledActionTargetUseSource::Effect { effect } => {
-            json!({"kind": "effect", "effect": effect})
+            json!({"type": "effect", "effect": effect})
         }
         registry_breg::model::CompiledActionTargetUseSource::Input { input } => {
-            json!({"kind": "input", "input": action_input_identity(action, input)})
+            json!({"type": "input", "input": action_input_identity(action, input)})
         }
     }
 }
@@ -10235,12 +10312,12 @@ fn action_target_summary(effect: &registry_breg::model::CompiledActionEffect) ->
     match &effect.target.binding {
         registry_breg::model::CompiledActionTargetBinding::Create => json!({
             "entity": effect.target.entity_id,
-            "binding": {"kind": "create"},
+            "binding": {"type": "create"},
         }),
         registry_breg::model::CompiledActionTargetBinding::Existing { input } => json!({
             "entity": effect.target.entity_id,
             "binding": {
-                "kind": "existing",
+                "type": "existing",
                 "input": input,
             },
         }),
@@ -10250,7 +10327,7 @@ fn action_target_summary(effect: &registry_breg::model::CompiledActionEffect) ->
 fn action_route_kind_wire_name(kind: registry_breg::model::ActionRouteKind) -> &'static str {
     match kind {
         registry_breg::model::ActionRouteKind::Invoke => "invoke",
-        registry_breg::model::ActionRouteKind::TargetConditions => "target_conditions",
+        registry_breg::model::ActionRouteKind::TargetConditions => "target-conditions",
     }
 }
 
@@ -10275,10 +10352,10 @@ fn operation_wire_name(operation: registry_breg::contract::Operation) -> &'stati
         registry_breg::contract::Operation::Tombstone => "tombstone",
         registry_breg::contract::Operation::Batch => "batch",
         registry_breg::contract::Operation::Revisions => "revisions",
-        registry_breg::contract::Operation::SubmitRequest => "submit_request",
-        registry_breg::contract::Operation::ReviseRequest => "revise_request",
-        registry_breg::contract::Operation::CancelRequest => "cancel_request",
-        registry_breg::contract::Operation::ApplyRequest => "apply_request",
+        registry_breg::contract::Operation::SubmitRequest => "submit-request",
+        registry_breg::contract::Operation::ReviseRequest => "revise-request",
+        registry_breg::contract::Operation::CancelRequest => "cancel-request",
+        registry_breg::contract::Operation::ApplyRequest => "apply-request",
         registry_breg::contract::Operation::Invoke => "invoke",
         registry_breg::contract::Operation::Snapshot => "snapshot",
         registry_breg::contract::Operation::Import => "import",
@@ -11143,7 +11220,7 @@ fn render_success(report: &SuccessReport, stdout: &mut dyn Write) -> io::Result<
     let mut document = None;
     if let Some(explanation) = &report.explanation {
         if explanation.get("scopeMatching").is_some()
-            || explanation.get("mode").and_then(Value::as_str) == Some("offline_synthetic")
+            || explanation.get("mode").and_then(Value::as_str) == Some("offline-synthetic")
         {
             push_access_explanation(explanation, &mut lines);
         } else if explanation.get("requireConsent").is_some() {
@@ -11169,7 +11246,7 @@ fn write_success(
     stderr: &mut dyn Write,
 ) -> ExitCode {
     let result = if format == OutputFormat::Json {
-        serde_json::to_writer_pretty(&mut *stdout, report)
+        write_ctl_report(&mut *stdout, report)
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
@@ -11294,7 +11371,7 @@ fn write_planner_test_success(
 }
 
 fn push_access_explanation(explanation: &Value, lines: &mut report::Lines) {
-    if explanation.get("mode").and_then(Value::as_str) == Some("offline_synthetic") {
+    if explanation.get("mode").and_then(Value::as_str) == Some("offline-synthetic") {
         let admitted = explanation["admitted"].as_bool() == Some(true);
         lines.verdict(
             "Synthetic profile admission:",
@@ -11523,8 +11600,11 @@ fn push_consent_explanation(consent: &Value, lines: &mut report::Lines) {
                     joined_or(&permission["purposes"], "unrestricted"),
                 ),
                 (
-                    "max duration",
-                    permission["maxDuration"].as_str().unwrap_or("").to_owned(),
+                    "maximum duration",
+                    permission["maximumDurationDays"]
+                        .as_u64()
+                        .map(|days| format!("{days} days"))
+                        .unwrap_or_default(),
                 ),
                 (
                     "probe function",
@@ -11665,7 +11745,7 @@ fn write_examples_success(
     stderr: &mut dyn Write,
 ) -> ExitCode {
     if format == OutputFormat::Json {
-        let result = serde_json::to_writer_pretty(&mut *stdout, report)
+        let result = write_ctl_report(&mut *stdout, report)
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout));
         return write_result(result, stderr);
@@ -11756,7 +11836,7 @@ fn write_dev_success(
     stderr: &mut dyn Write,
 ) -> ExitCode {
     let result = if format == OutputFormat::Json {
-        serde_json::to_writer_pretty(&mut *stdout, report)
+        write_ctl_report(&mut *stdout, report)
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
@@ -11876,7 +11956,7 @@ fn write_doctor_success(
             .collect(),
     };
     let result = if format == OutputFormat::Json {
-        serde_json::to_writer_pretty(&mut *stdout, &report)
+        write_ctl_report(&mut *stdout, &report)
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
@@ -11934,7 +12014,7 @@ fn write_field_encryption_keygen_success(
         output: &outcome.output.display().to_string(),
     };
     let result = if format == OutputFormat::Json {
-        serde_json::to_writer_pretty(&mut *stdout, &report)
+        write_ctl_report(&mut *stdout, &report)
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
@@ -11960,7 +12040,7 @@ fn write_field_encryption_preflight_success(
     stderr: &mut dyn Write,
 ) -> ExitCode {
     let result = if format == OutputFormat::Json {
-        serde_json::to_writer_pretty(&mut *stdout, report)
+        write_ctl_report(&mut *stdout, report)
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
@@ -12031,7 +12111,7 @@ fn write_field_encryption_erase_history_success(
     stderr: &mut dyn Write,
 ) -> ExitCode {
     let result = if format == OutputFormat::Json {
-        serde_json::to_writer_pretty(&mut *stdout, report)
+        write_ctl_report(&mut *stdout, report)
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
@@ -12176,7 +12256,7 @@ fn write_verify_success(
     stderr: &mut dyn Write,
 ) -> ExitCode {
     let result = if format == OutputFormat::Json {
-        serde_json::to_writer_pretty(&mut *stdout, report)
+        write_ctl_report(&mut *stdout, report)
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
@@ -12228,7 +12308,7 @@ fn write_package_success(
     stderr: &mut dyn Write,
 ) -> ExitCode {
     let result = if format == OutputFormat::Json {
-        serde_json::to_writer_pretty(&mut *stdout, report)
+        write_ctl_report(&mut *stdout, report)
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
@@ -12257,7 +12337,7 @@ fn write_schema_test_success(
     stderr: &mut dyn Write,
 ) -> ExitCode {
     let result = if format == OutputFormat::Json {
-        serde_json::to_writer_pretty(&mut *stdout, report)
+        write_ctl_report(&mut *stdout, report)
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
@@ -12291,7 +12371,7 @@ fn write_schema_fingerprint(
     stderr: &mut dyn Write,
 ) -> ExitCode {
     let result = if format == OutputFormat::Json {
-        serde_json::to_writer_pretty(&mut *stdout, report)
+        write_ctl_report(&mut *stdout, report)
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
@@ -12315,7 +12395,7 @@ fn write_apply_success(
     stderr: &mut dyn Write,
 ) -> ExitCode {
     let result = if format == OutputFormat::Json {
-        serde_json::to_writer_pretty(&mut *stdout, report)
+        write_ctl_report(&mut *stdout, report)
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
@@ -12333,7 +12413,7 @@ fn write_apply_success(
                     match report.activation {
                         ApplyActivation::Initial => "initial",
                         ApplyActivation::Successor => "successor",
-                        ApplyActivation::RoleChange => "role_change",
+                        ApplyActivation::RoleChange => "role-change",
                     }
                     .to_owned(),
                 ),
@@ -12354,7 +12434,7 @@ fn write_plan_success(
     stderr: &mut dyn Write,
 ) -> ExitCode {
     let result = if format == OutputFormat::Json {
-        serde_json::to_writer_pretty(&mut *stdout, report)
+        write_ctl_report(&mut *stdout, report)
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
@@ -12372,7 +12452,7 @@ fn write_plan_success(
                 match report.activation {
                     PlanActivation::Initial => "initial",
                     PlanActivation::Successor => "successor",
-                    PlanActivation::RoleChange => "role_change",
+                    PlanActivation::RoleChange => "role-change",
                     PlanActivation::None => "none",
                 }
                 .to_owned(),
@@ -12417,7 +12497,7 @@ fn write_status_success(
     stderr: &mut dyn Write,
 ) -> ExitCode {
     let result = if format == OutputFormat::Json {
-        serde_json::to_writer_pretty(&mut *stdout, report)
+        write_ctl_report(&mut *stdout, report)
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
@@ -12492,7 +12572,7 @@ fn write_migration_explain_success(
     stderr: &mut dyn Write,
 ) -> ExitCode {
     let result = if format == OutputFormat::Json {
-        serde_json::to_writer_pretty(&mut *stdout, report)
+        write_ctl_report(&mut *stdout, report)
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
@@ -12514,7 +12594,7 @@ fn write_migration_reconcile_success(
     stderr: &mut dyn Write,
 ) -> ExitCode {
     let result = if format == OutputFormat::Json {
-        serde_json::to_writer_pretty(&mut *stdout, report)
+        write_ctl_report(&mut *stdout, report)
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
@@ -12599,7 +12679,7 @@ fn write_history_erase_success(
     stderr: &mut dyn Write,
 ) -> ExitCode {
     let result = if format == OutputFormat::Json {
-        serde_json::to_writer_pretty(&mut *stdout, report)
+        write_ctl_report(&mut *stdout, report)
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
@@ -12668,7 +12748,7 @@ fn write_history_rebaseline_success(
     stderr: &mut dyn Write,
 ) -> ExitCode {
     let result = if format == OutputFormat::Json {
-        serde_json::to_writer_pretty(&mut *stdout, report)
+        write_ctl_report(&mut *stdout, report)
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
@@ -12727,7 +12807,7 @@ fn write_data_validate_success(
     stderr: &mut dyn Write,
 ) -> ExitCode {
     let result = if format == OutputFormat::Json {
-        serde_json::to_writer_pretty(&mut *stdout, report)
+        write_ctl_report(&mut *stdout, report)
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
@@ -12766,7 +12846,7 @@ fn write_data_import_success(
     stderr: &mut dyn Write,
 ) -> ExitCode {
     let result = if format == OutputFormat::Json {
-        serde_json::to_writer_pretty(&mut *stdout, report)
+        write_ctl_report(&mut *stdout, report)
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
@@ -12809,7 +12889,7 @@ fn write_data_export_success(
     stderr: &mut dyn Write,
 ) -> ExitCode {
     let result = if format == OutputFormat::Json {
-        serde_json::to_writer_pretty(&mut *stdout, report)
+        write_ctl_report(&mut *stdout, report)
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
@@ -12847,7 +12927,7 @@ fn write_statistics_success(
     stderr: &mut dyn Write,
 ) -> ExitCode {
     let result = if format == OutputFormat::Json {
-        serde_json::to_writer_pretty(&mut *stdout, report)
+        write_ctl_report(&mut *stdout, report)
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
@@ -12900,7 +12980,7 @@ fn write_webhook_sample_success(
     stderr: &mut dyn Write,
 ) -> ExitCode {
     let result = if format == OutputFormat::Json {
-        serde_json::to_writer_pretty(&mut *stdout, report)
+        write_ctl_report(&mut *stdout, report)
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
@@ -12935,7 +13015,7 @@ fn write_webhook_list_success(
     stderr: &mut dyn Write,
 ) -> ExitCode {
     let result = if format == OutputFormat::Json {
-        serde_json::to_writer_pretty(&mut *stdout, report)
+        write_ctl_report(&mut *stdout, report)
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
@@ -12971,7 +13051,7 @@ fn write_webhook_replay_success(
     stderr: &mut dyn Write,
 ) -> ExitCode {
     let result = if format == OutputFormat::Json {
-        serde_json::to_writer_pretty(&mut *stdout, report)
+        write_ctl_report(&mut *stdout, report)
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
@@ -12995,7 +13075,7 @@ fn write_webhook_discard_success(
     stderr: &mut dyn Write,
 ) -> ExitCode {
     let result = if format == OutputFormat::Json {
-        serde_json::to_writer_pretty(&mut *stdout, report)
+        write_ctl_report(&mut *stdout, report)
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
@@ -13019,7 +13099,7 @@ fn write_request_retention_list_success(
     stderr: &mut dyn Write,
 ) -> ExitCode {
     let result = if format == OutputFormat::Json {
-        serde_json::to_writer_pretty(&mut *stdout, report)
+        write_ctl_report(&mut *stdout, report)
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
@@ -13059,7 +13139,7 @@ fn write_request_retention_dry_run_success(
     stderr: &mut dyn Write,
 ) -> ExitCode {
     let result = if format == OutputFormat::Json {
-        serde_json::to_writer_pretty(&mut *stdout, report)
+        write_ctl_report(&mut *stdout, report)
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
@@ -13104,7 +13184,7 @@ fn write_attachment_cleanup_success(
     stderr: &mut dyn Write,
 ) -> ExitCode {
     let result = if format == OutputFormat::Json {
-        serde_json::to_writer_pretty(&mut *stdout, report)
+        write_ctl_report(&mut *stdout, report)
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
@@ -13133,7 +13213,7 @@ fn write_request_retention_erase_success(
     stderr: &mut dyn Write,
 ) -> ExitCode {
     let result = if format == OutputFormat::Json {
-        serde_json::to_writer_pretty(&mut *stdout, report)
+        write_ctl_report(&mut *stdout, report)
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
@@ -13166,7 +13246,7 @@ fn write_review_recovery_success(
     stderr: &mut dyn Write,
 ) -> ExitCode {
     let result = if format == OutputFormat::Json {
-        serde_json::to_writer_pretty(&mut *stdout, report)
+        write_ctl_report(&mut *stdout, report)
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
@@ -13308,24 +13388,24 @@ fn write_migration_explain_human(
 fn plan_kind_name(kind: MigrationInspectionPlanKind) -> &'static str {
     match kind {
         MigrationInspectionPlanKind::Initial => "initial",
-        MigrationInspectionPlanKind::CompatibleAdditive => "compatible_additive",
+        MigrationInspectionPlanKind::CompatibleAdditive => "compatible-additive",
         MigrationInspectionPlanKind::Reviewed => "reviewed",
     }
 }
 
 fn change_class_name(class: CompiledRegistryChangeClass) -> &'static str {
     match class {
-        CompiledRegistryChangeClass::CompatibleAdditive => "compatible_additive",
-        CompiledRegistryChangeClass::DataBackfillRequired => "data_backfill_required",
-        CompiledRegistryChangeClass::AccessOrDisclosureChange => "access_or_disclosure_change",
-        CompiledRegistryChangeClass::DestructiveOrIrreversible => "destructive_or_irreversible",
+        CompiledRegistryChangeClass::CompatibleAdditive => "compatible-additive",
+        CompiledRegistryChangeClass::DataBackfillRequired => "data-backfill-required",
+        CompiledRegistryChangeClass::AccessOrDisclosureChange => "access-or-disclosure-change",
+        CompiledRegistryChangeClass::DestructiveOrIrreversible => "destructive-or-irreversible",
         CompiledRegistryChangeClass::Unsupported => "unsupported",
     }
 }
 
 fn recovery_name(recovery: ReviewedMigrationRecovery) -> &'static str {
     match recovery {
-        ReviewedMigrationRecovery::ExactTargetResume => "exact_target_resume",
+        ReviewedMigrationRecovery::ExactTargetResume => "exact-target-resume",
     }
 }
 
@@ -13336,7 +13416,7 @@ fn write_diff_success(
     stderr: &mut dyn Write,
 ) -> ExitCode {
     let result = if format == OutputFormat::Json {
-        serde_json::to_writer_pretty(&mut *stdout, report)
+        write_ctl_report(&mut *stdout, report)
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
@@ -13415,7 +13495,7 @@ fn write_document_failure(
     stderr: &mut dyn Write,
 ) -> ExitCode {
     let result = if format == OutputFormat::Json {
-        serde_json::to_writer_pretty(
+        write_ctl_report(
             &mut *stdout,
             &DocumentFailureReport {
                 ok: false,
@@ -13450,7 +13530,7 @@ fn write_failure(
     stderr: &mut dyn Write,
 ) -> ExitCode {
     let result = if format == OutputFormat::Json {
-        serde_json::to_writer_pretty(&mut *stdout, report)
+        write_ctl_report(&mut *stdout, report)
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
@@ -14175,6 +14255,15 @@ mod tests {
         anstream::adapter::strip_str(&rendered).to_string()
     }
 
+    /// The report a command built, as `--format json` writes it: with the two
+    /// members that name the report format beside the command's own.
+    fn with_ctl_report_header(report: &Value) -> Value {
+        let mut written = report.clone();
+        written["apiVersion"] = json!(CTL_REPORT_API_VERSION);
+        written["kind"] = json!(CTL_REPORT_KIND);
+        written
+    }
+
     fn nested_artifact_path(levels: u32, leaf: &str) -> String {
         let mut path = String::new();
         for level in 0..levels {
@@ -14434,7 +14523,7 @@ mod tests {
             assert_eq!(action["evidence"]["maximumConcurrentEvaluations"], 8);
             assert_eq!(
                 action["handler"]["evaluation"],
-                "outside_postgres_after_admission_and_receipt_preflight"
+                "outside-postgres-after-admission-and-receipt-preflight"
             );
         }
     }
@@ -14477,7 +14566,7 @@ mod tests {
                 schema["properties"][&field.logical.api_name]
             );
         }
-        assert_eq!(request["planner"]["kind"], "rhai");
+        assert_eq!(request["planner"]["type"], "rhai");
         assert_eq!(
             request["planner"]["abi"],
             registry_breg::contract::CHANGE_REQUEST_PLAN_ABI_V1
@@ -14491,7 +14580,7 @@ mod tests {
             .is_some_and(|digest| digest.starts_with("sha256:")));
         assert_eq!(
             request["planner"]["declaringOrigin"],
-            json!({"kind": "project"})
+            json!({"type": "project"})
         );
         assert_eq!(request["planner"]["limits"]["maximumOperations"], 100_000);
         assert_eq!(request["planner"]["limits"]["maximumModules"], 0);
@@ -14499,7 +14588,7 @@ mod tests {
             request["planner"]["possibleWrites"][0]["operation"],
             "patch"
         );
-        assert_eq!(request["review"], json!({"mode": "none"}));
+        assert_eq!(request["review"], json!({"type": "none"}));
         assert_eq!(request["onApproved"], json!({"mode": "manual"}));
         assert_eq!(request["application"], json!({}));
         assert!(explanation["controlledWrites"]
@@ -14933,7 +15022,10 @@ mod tests {
             write_examples_success(&report, OutputFormat::Json, &mut json, &mut stderr),
             ExitCode::SUCCESS
         );
-        assert_eq!(serde_json::from_slice::<Value>(&json).unwrap(), report);
+        assert_eq!(
+            serde_json::from_slice::<Value>(&json).unwrap(),
+            with_ctl_report_header(&report)
+        );
         assert!(stderr.is_empty());
     }
 
@@ -14993,7 +15085,7 @@ mod tests {
         let rendered = String::from_utf8(stdout).expect("output is UTF-8");
         assert_eq!(
             serde_json::from_str::<Value>(&rendered).expect("report is JSON"),
-            report
+            with_ctl_report_header(&report)
         );
         assert!(rendered.ends_with("\n}\n"));
         assert!(stderr.is_empty());
@@ -15232,7 +15324,7 @@ mod tests {
             ),
             (
                 OutputFormat::Json,
-                "{\n  \"ok\": true,\n  \"command\": \"doctor\",\n  \"checked\": [\n    \"runtimeConfig\",\n    \"package\",\n    \"database\",\n    \"audit\",\n    \"cursor\",\n    \"authentication.oidc\",\n    \"eventDestinations\",\n    \"reviewBindings\",\n    \"authentication\",\n    \"fieldEncryption\"\n  ],\n  \"roleMode\": \"split\",\n  \"advisories\": []\n}\n",
+                "{\n  \"apiVersion\": \"id.registrystack.org/formats/breg/ctl-report/v1alpha1\",\n  \"kind\": \"BRegCtlReport\",\n  \"ok\": true,\n  \"command\": \"doctor\",\n  \"checked\": [\n    \"runtimeConfig\",\n    \"package\",\n    \"database\",\n    \"audit\",\n    \"cursor\",\n    \"authentication.oidc\",\n    \"eventDestinations\",\n    \"reviewBindings\",\n    \"authentication\",\n    \"fieldEncryption\"\n  ],\n  \"roleMode\": \"split\",\n  \"advisories\": []\n}\n",
             ),
         ] {
             let mut stdout = Vec::new();
@@ -15584,9 +15676,9 @@ mod tests {
     fn publication_refuses_a_destination_created_after_staging() {
         let project = parse_project_yaml(
             br#"
-apiVersion: registry.registrystack.org/v1alpha1
-kind: RegistryProject
-registry:
+apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
   id: example-registry
   version: 0.1.0
   defaultLanguage: en
@@ -15600,7 +15692,7 @@ entities:
       - id: code
         type: string
         required: true
-        maxLength: 64
+        maximumLength: 64
         classification: internal
 accessProfiles:
   - id: operator
@@ -15608,11 +15700,12 @@ accessProfiles:
     requiredScopes: unrestricted
     requiredPurposes: [operations]
     permissions:
-      - entity: record
-        rowBoundaries: unrestricted
-        operations: [create, get, list, patch]
-        readableFields: [code]
-        writableFields: [code]
+      entities:
+        - entity: record
+          rowBoundaries: unrestricted
+          operations: [create, get, list, patch]
+          readableFields: [code]
+          writableFields: [code]
 "#,
         )
         .expect("domain-neutral test project parses");
@@ -15738,7 +15831,10 @@ accessProfiles:
 
         /// A module that declares derived SQL and both Rhai entry points, so
         /// each declared asset stays bound to the module's directory descriptor.
-        const MODULE_WITH_ASSETS: &[u8] = br#"id: persons
+        const MODULE_WITH_ASSETS: &[u8] =
+            br#"apiVersion: id.registrystack.org/formats/breg/module/v1alpha1
+kind: BRegModule
+id: persons
 version: 0.1.0
 extendEntities:
   - entity: person
@@ -15751,11 +15847,11 @@ extendEntities:
         kind: rhai
         script: planners/person.rhai
         abi: registry.change-request-plan/v1
-      review: {mode: none}
+      review: {type: none}
 actions:
   - id: normalize-person
     handler:
-      kind: rhai
+      type: rhai
       script: handlers/person.rhai
       abi: registry.action-handler/v1
       writes: []

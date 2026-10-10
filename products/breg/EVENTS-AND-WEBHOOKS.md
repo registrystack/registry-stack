@@ -37,12 +37,12 @@ hooks:
     trigger: patched
     projection: [status, programme]
     when:
-      kind: fields
+      type: fields
       changed: [status]
       beforeEquals: {status: pending}
       afterEquals: {status: approved}
     handler:
-      kind: url
+      type: url
       destinationId: eligibility-service
 ```
 
@@ -50,22 +50,22 @@ hooks:
   new versioned id.
 - `phase` is `after`: an entity hook runs after the triggering transaction
   commits. The compiler refuses `before`, which the runtime cannot run here.
-- `trigger` is one of `created`, `patched`, `tombstoned`, or `request_lifecycle`.
-  Only a change-request entity can declare `request_lifecycle`.
+- `trigger` is one of `created`, `patched`, `tombstoned`, or `request-lifecycle`.
+  Only a change-request entity can declare `request-lifecycle`.
 - `projection` is the complete set of record values that may leave the
   registry. System event metadata does not need to be listed.
-- `when` is optional. For record mutations, use `kind: fields`. `changed`,
+- `when` is optional. For record mutations, use `type: fields`. `changed`,
   `beforeEquals`, and `afterEquals` are optional, combine with AND, and accept
   declared fields with scalar or null comparison values. At least one test is
   required when `when` is present. `created` may use `afterEquals`, `patched`
   may use all three tests, and `tombstoned` may use `beforeEquals`; invalid
   combinations fail compilation.
-- Lifecycle events use `kind: request_lifecycle` with at least one nonempty
+- Lifecycle events use `type: request-lifecycle` with at least one nonempty
   `transitions` or `toStates` list. Each nonempty list must match;
   field predicates are not available for this trigger.
-- `handler` declares either `kind: url` with the logical `destinationId`, or
-  one of the local kinds: `kind: rhai` with a reviewed `script` path, or
-  `kind: wasm` with a reviewed `module` path. A url handler delivers to a bound
+- `handler` declares either `type: url` with the logical `destinationId`, or
+  one of the local kinds: `type: rhai` with a reviewed `script` path, or
+  `type: wasm` with a reviewed `module` path. A url handler delivers to a bound
   destination; a local handler runs its program in the post-commit worker. The
   delivery row records the settled answer's digest, and never the answer
   bytes. One event has at most one handler. A project that needs fanout uses

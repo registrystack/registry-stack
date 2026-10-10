@@ -131,7 +131,8 @@ The governed file is `bundle/evidence.yaml`.
 
 | Key | Required | Meaning |
 |---|---|---|
-| `version` | yes | Bundle schema version. Version 1 requires integer `1`. |
+| `apiVersion` | yes | Names the bundle grammar. The value is `id.registrystack.org/formats/evidence/bundle/v1`; the runtime refuses any other value at startup. |
+| `kind` | yes | Names the document type. The value is `EvidenceBundle`. |
 | `assuranceProfile` | yes | Explicitly `local`, `production`, or `evidence-grade`. Runtime configuration cannot override it. |
 | `service` | yes | Evidence provider identity and trust domain. |
 | `issuer` | yes | Issuer identity placed in evidence. |
@@ -142,12 +143,29 @@ The governed file is `bundle/evidence.yaml`.
 | `signing` | yes | Evidence/JWS format, algorithm, key references, validity, JWKS path, and rollover policy. |
 | `responseFormats` | no | Response formats the whole deployment permits. Omission means `[signed-jws]`. Declare it explicitly in production bundles. |
 | `acquisitionCapabilities` | no | Gated acquisition kinds and source optimizations this bundle opts in to, at most two entries: `search-then-fetch-set` and `source-batch`. Omission and `[]` both enable nothing. |
-| `holderBoundBatchMaxSize` | no | Ceiling of 1 through 16 on how many assertions one holder-bound release may carry. Omission means 1, so a bundle written before batch release cannot serve a batch. |
+| `maximumHolderBoundBatchSize` | no | Ceiling of 1 through 16 on how many assertions one holder-bound release may carry. Omission means 1, so a bundle written before batch release cannot serve a batch. |
 | `selectorProfiles` | yes | Closed caller/grant/context selector shapes. |
 | `sourceConnections` | no | Optional named owners of fixed HTTP endpoints, workload credentials, TLS profiles and shared per-process resource bounds. |
 | `sources` | yes | Fixed source authorities, transport policy, scripts, schemas, and bounds. |
 | `authorityProfiles` | yes | Who may request which requirement, purpose, audience, roles, profiles, and value origins. |
 | `requirements` | yes | Evidence semantics, source, derivation, concepts, fixtures, and disclosure family. |
+
+A bundle written with the earlier `version: 1` header is refused before
+anything else is read, with the envelope that replaced it named. No old
+spelling is read as an alias.
+
+The key of every id-keyed map in the bundle is a local identifier: a lowercase
+letter, then up to 63 lowercase letters, digits, `_`, or `-`. That holds for
+`selectorProfiles`, `sourceConnections`, `sources`, and `authorityProfiles`,
+for a selector profile's `fields`, for a source's `pathBindings` and the
+placeholders its `path` names, for a grant subject's `valueClaims`, and
+for a requirement's `derivation.parameters`. A key with a dot, or one longer
+than 64 characters, is refused at the key. Two kinds of key are another
+party's spelling and keep it. The names in `adapterParameters` and in a
+statement's `parameterBindings` are what the script or the statement reads: a
+letter or `_`, then up to 127 letters, digits, `.`, `_`, or `-`. A key of
+`authentication.oidc.assertionIssuers` is a client identifier as its issuer
+writes it: 1 through 128 bytes with no control character.
 
 `local` is an authoring profile. A local requirement may omit `fixtures` while
 the provider contract is still being written. This does not disable any other
@@ -172,9 +190,9 @@ artifact, or alternate evaluator is introduced by the assurance profile.
 | `service.providerId` | yes | Technical Evidence provider URI placed in evidence. |
 | `service.publicOrigin` | yes | Exact canonical public Evidence origin used by RFC 9728 metadata. HTTPS is required outside the numeric-loopback local profile. |
 | `service.trustDomain` | yes | One operator-controlled trust-domain URI for the process. |
-| `issuer.id` | yes | Legal issuer URI placed in evidence. Governance must authorize the provider to act for it. |
+| `issuer.uri` | yes | Legal issuer URI placed in evidence. Governance must authorize the provider to act for it. The key was `issuer.id`; a bundle that still writes `id` there is refused with `config.removed-key`. |
 | `authentication.oidc` | yes | The one OpenID Connect issuer whose access tokens this deployment accepts, and the rules a token from it must satisfy. Evidence accepts no other inbound credential. |
-| `authentication.oidc.issuer`, `authentication.oidc.jwksSource` | yes | Exact HTTPS token issuer and the fixed JWKS endpoint, written `jwksSource: {kind: uri, uri: <JWKS URL>}`. `uri` is the only key-source kind Evidence accepts; discovery and static key sets are refused. Path-based issuers are supported. The fixed JWKS endpoint may resolve to a public or private HTTPS address; DNS is pinned for each fetch, ambient proxies are disabled, and cloud-metadata destinations remain prohibited. |
+| `authentication.oidc.issuer`, `authentication.oidc.jwksSource` | yes | Exact HTTPS token issuer and the fixed JWKS endpoint, written `jwksSource: {type: uri, uri: <JWKS URL>}`. `uri` is the only key-source type Evidence accepts; discovery and static key sets are refused. Path-based issuers are supported. The fixed JWKS endpoint may resolve to a public or private HTTPS address; DNS is pinned for each fetch, ambient proxies are disabled, and cloud-metadata destinations remain prohibited. |
 | `authentication.oidc.audience` | yes | The one exact audience an inbound token must carry. It is also the resource the deployment advertises in its protected-resource metadata. |
 | `authentication.oidc.tokenTypes` | yes | Non-empty allowlist containing only `at+jwt` and/or `application/at+jwt`. |
 | `authentication.oidc.algorithms` | yes | Non-empty allowlist containing only `EdDSA`, `ES256`, and/or `RS256`. No algorithm fallback is permitted. |
@@ -184,9 +202,9 @@ artifact, or alternate evaluator is introduced by the assurance profile.
 | `authentication.oidc.claims` | no | Direct claim-name mapping for shared actor, purpose, grant id, authority, source issuer, client, resource, expiration, bounds, and approver claims. Omission uses the documented `registry_*` names. The names must be distinct from each other, Evidence product claims, and registered authentication claims. `registry_assertion_issuer` is deliberately not among them, and is reserved against being used as one of these names: the issuer derives it from the verified subject token rather than any deployment minting it, so there is no foreign vocabulary to adapt to, and a name changed at one end only would leave `authentication.oidc.assertionIssuers` reading a claim the token does not carry, which applies no rule rather than refusing. |
 | `authentication.oidc.maximumTokenLifetimeSeconds` | yes | Positive maximum accepted `exp - iat`, up to 86,400 seconds. Its presence requires `iat`, `exp > iat`, and an interval within the maximum. |
 | `authentication.oidc.revokedKeyIds` | yes | Explicit emergency denylist, including an empty list. It is checked before cached JWKS key selection. |
-| `authentication.oidc.allowedClients` | no | Explicit machine-client admission, matched against the verified token's `client_id`/`azp` and never `sub`. Omission keeps the issuer-vouched-client behavior. A stated list must be non-empty, unique, and bounded (at most 32 entries of 1..=128 bytes). Audience plus static issuer-governed attributes alone cannot establish that a client was granted this resource's permission, which is what `requiredScopes` closes. |
+| `authentication.oidc.allowedClients` | yes | Machine-client admission every bundle decides, matched against the verified token's `client_id`/`azp` and never `sub`. The keyword `unrestricted` admits every client the issuer vouched for; a list admits exactly the clients it names and must be non-empty, unique, and bounded (at most 32 entries of 1..=128 bytes). Omission and an empty list are refused. A bundle with a task-grant authority profile must list its clients. Audience plus static issuer-governed attributes alone cannot establish that a client was granted this resource's permission, which is what `requiredScopes` closes. |
 | `authentication.oidc.assertionIssuers` | no | Per-client assertion-authority admission for a token carrying the platform verifier's `registry_assertion_issuer` claim, keyed by the client the token's `client_id`/`azp` names and naming the issuers that client may present the claim as. Omission applies no rule, so a claim-bearing token is admitted regardless of its value. A stated map must be non-empty and bounded (at most 32 client keys of 1..=128 bytes), and each client's issuer list must be non-empty, unique, and bounded (at most 8 entries of 1..=512 bytes). A token carrying no such claim is never affected by this admission. |
-| `authentication.oidc.requiredScopes` | no | Scopes every inbound token must carry, read from the verified token's scope set after signature verification and before any authority claim is read. Omission keeps the no-scope-gate behavior. A stated list must be non-empty, unique RFC 6749 scope-tokens (at most 32 entries of 1..=256 bytes). A missing scope is never inferred from tags, principal, roles, `sub`, or request fields. |
+| `authentication.oidc.requiredScopes` | yes | Scope gate every bundle decides, read from the verified token's scope set after signature verification and before any authority claim is read. The keyword `unrestricted` applies no scope gate; a list names the scopes every inbound token must carry and must be non-empty, unique RFC 6749 scope-tokens (at most 32 entries of 1..=256 bytes). Omission and an empty list are refused. A missing scope is never inferred from tags, principal, roles, `sub`, or request fields. |
 | `authentication.oidc.actorClaim` | no | Optional verified actor claim. Omission does not enable a fallback actor source. |
 | `authentication.oidc.tlsTrustProfile` | no | Logical profile name bound by `runtime.yaml` to a private CA file trusted beside the system roots for the `jwksSource.uri` connection alone. Omission uses system roots only. Refused when `jwksSource.uri` is a local HTTP origin. |
 
@@ -203,7 +221,7 @@ spelling is read as an alias.
 |---|---|
 | `audit` | `hashKeyRef` and positive `hashKeyVersion`, both required. The referenced master contains at least 32 raw secret bytes; Rust derives the audit pseudonym key from it, and `hashKeyVersion` is stamped into every audit pseudonym so pseudonyms under different key material stay distinguishable. Every audit gate is fail closed whatever this section says. The runtime file owns the audit destination. |
 | `subjectBinding` | `secretRef` and positive `keyVersion`. The referenced master contains at least 32 raw secret bytes, uses a distinct reference, and must resolve to bytes distinct from the audit master. Rust derives purpose-scoped bindings over the complete canonical role/profile/value bundle, never per-field hashes. The remaining scope input is the requirement's binding mode: the authenticated audience for an audience-scoped requirement, the presented holder key thumbprint for a holder-bound one. The two derivations are domain-separated, so one mode's binding can never be read as the other's. |
-| `rateLimits` | Positive `requestsPerPrincipalPerMinute`, `burstPerPrincipal`, and `failedSelectorAttemptsPerPrincipalAuthorityPerMinute`. A request batch costs one token per item, up to sixteen for any audience-scoped requirement, and a holder-bound release one per holder key, up to `holderBoundBatchMaxSize` when `sd-jwt-vc-batch` is enabled. A cost above `burstPerPrincipal` can never be admitted and is refused as `evidence.invalid_request` without `Retry-After`. `evidence check` and `evidencectl doctor` warn when the burst is below the largest such cost; set it to at least that cost unless capping batches is intended. Raw selector values never become rate-limit labels. |
+| `rateLimits` | Positive `requestsPerPrincipalPerMinute`, `burstPerPrincipal`, and `failedSelectorAttemptsPerPrincipalAuthorityPerMinute`. A request batch costs one token per item, up to sixteen for any audience-scoped requirement, and a holder-bound release one per holder key, up to `maximumHolderBoundBatchSize` when `sd-jwt-vc-batch` is enabled. A cost above `burstPerPrincipal` can never be admitted and is refused as `evidence.invalid-request` without `Retry-After`. `evidence check` and `evidencectl doctor` warn when the burst is below the largest such cost; set it to at least that cost unless capping batches is intended. Raw selector values never become rate-limit labels. |
 | `signing` | Exact keys are `format: flattened-jws-json`, `algorithm: ES256`, `activePublicJwkFile`, `publishedPublicJwkFiles`, `revokedKeyIds`, fixed `jwksPath`, `maximumAssertionValiditySeconds`, and `verifierClockSkewSeconds`. Every exact public EC P-256 JWK has a 43-character RFC 7638 thumbprint `kid`; active, published, and revoked sets are disjoint. Missing signing material fails readiness; there is no unsigned fallback. |
 | `responseFormats` | Closed unique list of 1 through 3 entries drawn from `signed-jws`, `unsigned-json`, and `sd-jwt-vc`. `signed-jws` must always be present; a bundle that omits it is rejected at startup. Every other format additionally requires the matched grant to permit it, and signing material must still be ready even for an unsigned response. |
 
@@ -285,7 +303,7 @@ Every grant subject fixes `role`, `selectorProfile`, and one `valueOrigin`:
 
 An authority profile containing an `authenticated-grant` subject must declare
 nonempty `requesterClients` and one exact `grantSourceIssuer`. Every requester
-client must also appear in `authentication.allowedClients`.
+client must also appear in `authentication.oidc.allowedClients`.
 
 Claim paths are resolved only from the strictly verified access token. A
 caller-supplied grant reference, selector, consent reference, or approval value
@@ -312,7 +330,7 @@ Each requirement declares these fields:
 
 | Key | Required | Meaning |
 |---|---|---|
-| `id`, `kind` | yes | Stable requirement URI and one of `criterion`, `information-requirement`, or `constraint`. |
+| `uri`, `kind` | yes | Stable requirement URI and one of `criterion`, `information-requirement`, or `constraint`. Two requirements with the same `uri` are refused with `config.duplicate-id` at the second one's `uri`. The key was `id`; a bundle that still writes `id` there is refused with `config.removed-key`. |
 | `subjectBinding` | no | `audience-scoped` or `holder-bound`. Omission means `audience-scoped`, and an omitted key stays out of the projected configuration, so declaring the mode on one requirement moves no other requirement's `configurationRevision`. See the holder-bound rules below. |
 | `acquisition` | yes | One of the three closed shapes below. None permits response-led routing. |
 | `purposes` | yes | Closed purpose codes that authority grants may select. |
@@ -321,14 +339,14 @@ Each requirement declares these fields:
 | `observationTimezone` | no | Valid IANA timezone used for `legal_local_date` and `legal_local_time`. Omission uses UTC. Declare it explicitly whenever local legal time can affect a result. |
 | `validitySeconds` | yes | Positive assertion lifetime no greater than the signing maximum. |
 | `derivation` | yes | Script, optional minimized `selectorInputs`, and closed typed parameters. |
-| `concepts` | yes | 1 through 16 exact outputs, each with `id`, `form`, `required`, and closed form-specific `constraints`. |
+| `concepts` | yes | 1 through 16 exact outputs, each with `handle`, `uri`, `type`, `required`, and closed form-specific `constraints`. `uri` is the stable concept URI the assertion names as `providesValueFor`. The key was `id`; a concept that still writes `id` is refused with `config.removed-key`. `type` names the concept's value form, the tag that fixes which `constraints` keys apply. The key was `form`; a concept that still writes `form` is refused with `config.removed-key`. |
 | `fixtures` | conditional | Bundle-relative sanitized project fixture referenced by exactly one requirement. It may be omitted only under `assuranceProfile: local`; production and evidence-grade require it and complete coverage. |
 | `disclosureGuard.families` | yes | Non-empty reviewed disclosure-family URI set. Reuse across enabled requirements is rejected; distinct labels still require human combined-disclosure review. |
 | `existenceDisclosure` | yes | Exactly `collapse-unresolved` in Version 1. |
 
-`acquisition.kind` selects one of three closed shapes:
+`acquisition.type` selects one of three closed shapes:
 
-| `kind` | Other keys | Call ceiling |
+| `type` | Other keys | Call ceiling |
 |---|---|---|
 | `single` | `source` | One. |
 | `search-then-fetch` | `search`, `fetch` (one source id) | Two. |
@@ -350,7 +368,7 @@ whole acquisition, including the transitions between stages; exceeding it fails
 the requirement as a dependency failure and never cancels a durable audit
 append.
 
-Supported concept forms are `boolean`, `controlled-code`,
+Supported concept forms, written as the concept's `type`, are `boolean`, `controlled-code`,
 `controlled-category`, `bounded-identifier`, `bounded-integer`, `bounded-decimal`, `date-bucket`,
 `time-bucket`, `audience-scoped-entity-reference`, `controlled-code-list`,
 `entity-reference-list`, and `reviewed-structured-value`. Constraint keys use
@@ -401,7 +419,7 @@ secrets or runtime authority.
 
 ### Source
 
-A source declares one `transport`, and that tag decides the rest of the object.
+A source declares its transport in `type`, and that tag decides the rest of the object.
 Version 1 defines two, and they are peers. `http-json` reaches a fixed HTTPS
 origin over the network. `sqlite-extract` runs one reviewed SQL statement
 against a read-only SQLite extract file mounted beside the process. A key
@@ -413,7 +431,7 @@ Every source carries the same keys whichever transport it names:
 
 | Key | Required | Meaning |
 |---|---|---|
-| `transport` | yes | `http-json` or `sqlite-extract`. Selects which further keys the source declares. |
+| `type` | yes | `http-json` or `sqlite-extract`. Selects which further keys the source declares. |
 | `posture` | yes | `source-derived`, `field-projected`, or `record-transformed`, describing what crosses the source boundary. |
 | `request` | yes | One fixed request plan, shaped by the transport. |
 | `responseSchema` | yes | Bundle-relative closed JSON Schema for the projected source response. Checked before the declared `extract/2` or `extract/3` runs. |
@@ -463,7 +481,7 @@ The `evidence` object contains:
 
 | Key | Required | Meaning |
 |---|---|---|
-| `contract` | yes | An independently reviewed `registry.evidence-definitions/v1` document containing exactly one audience-scoped definition that supports `signed-jws` and whose selectors all declare `valueOrigin: request`. Keep its audience, issuer, provider, assurance, requirement, purpose, revision, subjects, selector bounds, and output forms intact. |
+| `contract` | yes | An independently reviewed `registry.evidence-definitions/v1` document containing exactly one audience-scoped definition that supports `signed-jws` and whose selectors all declare `valueOrigin: request`. Keep its audience, issuer, provider, assurance, requirement, purpose, revision, subjects, selector bounds, and output forms intact. Wherever a value form is named, `type` is the tag: a requirement's own concept carries it directly, beside the `constraints` it selects, and a concept of this contract or of a verification policy's `expectedOutputs` carries it inside `form`, as `form: {type: boolean}` or `form: {type: list, items: string, minimumItems: 1, maximumItems: 8, unique: true}`. A form written as a bare name is refused with `config.invalid-type`, and a list whose members sit under a `list` key is refused with `config.removed-key`. |
 | `trustedJwks` | yes | A JWKS object with 1 through 33 explicitly accepted public signing keys. Each key has exactly the members `alg` (`ES256`), `crv` (`P-256`), `kty` (`EC`), `x`, `y`, and `kid`, which must be the key's RFC 7638 SHA-256 thumbprint. Private key material and unusable keys are refused. |
 | `revokedKeyIds` | no | Up to 33 distinct thumbprint key identifiers that must be refused, including keys still present in `trustedJwks`. Omission means none. |
 | `maximumAssertionLifetimeSeconds` | yes | Maximum accepted upstream assertion lifetime, from 1 through 31536000 seconds. Choose the shortest lifetime the integration needs. |
@@ -525,7 +543,7 @@ authorizes and audits this service's own source credential and does not read
 the reserved attribution headers, so forwarding would only send the downstream
 caller's requester and purpose to another deployment. For the same reason a
 signed Evidence source must authenticate: configuration validation refuses
-`authentication: {kind: none}` even under the local assurance profile, because
+`authentication: {type: none}` even under the local assurance profile, because
 the upstream Evidence service answers only an authenticated, authorized source
 credential. The
 downstream requirement can issue its own independently authorized wallet
@@ -536,12 +554,12 @@ credential after acquiring these verified facts.
 ```yaml
 sources:
   source-a:
-    transport: http-json
+    type: http-json
     baseUrl: https://registry.gov.example
     posture: record-transformed
     tlsTrustProfile: government-internal-pki
     authentication:
-      kind: static-authorization
+      type: static-authorization
       tokenRef: secret:file/source-token
     request: {}
     responseSchema: schemas/source-a-response.schema.yaml
@@ -556,9 +574,9 @@ Beyond the shared keys, an `http-json` source declares:
 | `connection` | no | Explicit `sourceConnections` owner. Every copied endpoint, authentication, TLS and concurrency value must equal that owner at startup. |
 | `behaviorRevision` | no | Provider-selected behavior digest, exactly `sha256:` followed by 64 lowercase hexadecimal characters. This reached source dependency changes its questions' revisions independently of export provenance. |
 | `forwardAccessAttribution` | no | Defaults to `false`. When `true`, Rust sends the verified authorized requester and purpose as base64url UTF-8 in the reserved `Registry-Access-Requester` and `Registry-Access-Purpose` headers. The authenticated source must independently trust this Evidence service as an intermediary; the headers grant no source authority. A source that declares `evidence` cannot set it. |
-| `baseUrl` | yes | Fixed HTTPS origin, except for the `kind: none` local loopback boundary below. No path, query, fragment, user information, wildcard, or runtime substitution. |
+| `baseUrl` | yes | Fixed HTTPS origin, except for the `type: none` local loopback boundary below. No path, query, fragment, user information, wildcard, or runtime substitution. |
 | `tlsTrustProfile` | no | Logical profile name bound by `runtime.yaml`. Omission uses configured system roots only. |
-| `authentication` | yes | One closed source-authentication profile below. `kind: none` is restricted to explicit local authoring at a numeric-loopback origin, and a source that declares `evidence` cannot use it. |
+| `authentication` | yes | One closed source-authentication profile below. `type: none` is restricted to explicit local authoring at a numeric-loopback origin, and a source that declares `evidence` cannot use it. |
 | `unresolvedProblem` | no | Exact source-neutral `{status: 404, type: absolute HTTPS URI, code: bounded problem id}` tuple. Only an exact six-member `application/problem+json` response becomes explicit unresolved; omission leaves every 404 a dependency failure. Incompatible with `batch`. |
 | `batch` | no | Reviewed one-call optimization for the multi-subject request-batch route. It is fixed-path-only and requires both bundle and runtime `source-batch` capability. |
 
@@ -596,7 +614,7 @@ sourceConnections:
     baseUrl: https://registry.gov.example
     tlsTrustProfile: government-internal-pki
     authentication:
-      kind: oauth2-client-credentials
+      type: oauth2-private-key-jwt
       tokenEndpoint: https://identity.gov.example/token
       clientIdRef: secret:file/workload-client-id
       clientAssertionKeyRef: secret:file/workload-client-key
@@ -604,27 +622,28 @@ sourceConnections:
       audience: https://registry.gov.example
       resource: https://registry.gov.example
       maximumCacheSeconds: 60
-    concurrencyLimit: 4
+    maximumConcurrency: 4
     admissionTimeoutMilliseconds: 5000
     tokenTimeoutMilliseconds: 5000
 ```
 
 The authentication object is the complete existing union documented below:
-local `none`, Basic, static authorization, static API key, or OAuth client
-credentials using a shared secret or signed client assertion. Resource
+local `none`, Basic, static authorization, static API key, OAuth client
+credentials with a shared secret, or OAuth client credentials with a signed
+client assertion. Resource
 `audience`, `resource`, and `clientAssertionAudience` retain their distinct
 meanings. The logical `tlsTrustProfile` retains its additive runtime CA binding.
 
 | Connection key | Required | Meaning |
 |---|---|---|
-| `baseUrl`, `authentication` | yes | Sole authored owner of origin and workload identity. `baseUrl` is a fixed HTTPS origin, or an HTTP numeric-loopback origin when `authentication.kind` is `none`, with no path, query, fragment, or user information; `kind: none` additionally requires an explicit port. |
+| `baseUrl`, `authentication` | yes | Sole authored owner of origin and workload identity. `baseUrl` is a fixed HTTPS origin, or an HTTP numeric-loopback origin when `authentication.type` is `none`, with no path, query, fragment, or user information; `type: none` additionally requires an explicit port. |
 | `tlsTrustProfile` | no | Sole authored TLS profile; omission uses system roots. |
-| `concurrencyLimit` | no | Aggregate source-call capacity for this name in one process, 1 to 256; default 4. |
+| `maximumConcurrency` | no | Aggregate source-call capacity for this name in one process, 1 to 256; default 4. |
 | `admissionTimeoutMilliseconds` | no | Maximum wait for capacity or an in-progress OAuth refresh, 1 to 30,000; default 5,000. |
 | `tokenTimeoutMilliseconds` | no | OAuth request and body-read timeout, 1 to 30,000; default 5,000. |
 
 In an authored source, `connection: shared-read` replaces `baseUrl`,
-`authentication`, `tlsTrustProfile` and `request.concurrencyLimit`; those keys
+`authentication`, `tlsTrustProfile` and `request.maximumConcurrency`; those keys
 must be absent, so source overrides have no precedence rule. Build resolves
 the reference into concrete values in the governed candidate and retains the
 connection identity and owner. Startup rejects missing owners and mismatched
@@ -633,7 +652,7 @@ configuration revision includes only its reached connection owners.
 
 The operation still owns its method, fixed path, headers, preparation limits,
 projection, response schemas, response byte limit and
-`request.timeoutMilliseconds`. None of these has a connection override.
+`request.attemptTimeoutMilliseconds`. None of these has a connection override.
 Sources under one name share one eligible HTTP connection pool, one aggregate
 admission semaphore and one OAuth cache with single-flight refresh. Cancellation
 and timeout drop admission permits and refresh locks. Facts, assertions and
@@ -654,34 +673,34 @@ to Rhai.
 ```yaml
 # No outbound credential, for local authoring only
 authentication:
-  kind: none
+  type: none
 
 # HTTP Basic
 authentication:
-  kind: basic
+  type: basic
   usernameRef: secret:file/source-username
   passwordRef: secret:file/source-password
 
 # Authorization: Bearer <secret>
 authentication:
-  kind: static-authorization
+  type: static-authorization
   tokenRef: secret:file/source-token
 
 # Authorization: Token <secret>, for a source that names another scheme
 authentication:
-  kind: static-authorization
+  type: static-authorization
   tokenRef: secret:file/source-token
   scheme: Token
 
 # A provider-specific API-key header
 authentication:
-  kind: static-api-key
+  type: static-api-key
   headerName: X-API-Key
   valueRef: secret:file/source-api-key
 
 # OAuth 2.0 client credentials, client-secret form
 authentication:
-  kind: oauth2-client-credentials
+  type: oauth2-client-credentials
   tokenEndpoint: https://auth.registry.gov.example/token
   clientIdRef: secret:file/source-client-id
   clientSecretRef: secret:file/source-client-secret
@@ -691,7 +710,7 @@ authentication:
 
 # OAuth 2.0 client credentials, private_key_jwt form
 authentication:
-  kind: oauth2-client-credentials
+  type: oauth2-private-key-jwt
   tokenEndpoint: https://auth.registry.gov.example/token
   clientIdRef: secret:file/source-client-id
   clientAssertionKeyRef: secret:file/source-client-key
@@ -705,7 +724,7 @@ authentication:
   maximumCacheSeconds: 300
 ```
 
-`kind: none` is accepted only when the bundle declares
+`type: none` is accepted only when the bundle declares
 `assuranceProfile: local` and `baseUrl` is an exact canonical
 `http://<numeric-loopback>:<non-zero-port>` origin. It accepts no other
 members, cannot use `tlsTrustProfile`, and sends no `Authorization` or other
@@ -726,10 +745,13 @@ hop-by-hop header, forwarding/proxy header, or tracing header. Names are
 validated as HTTP field names. Secret values are bounded and reject controls,
 CR, and LF.
 
-An OAuth source declares exactly one client authentication form.
-`clientSecretRef` selects the client-secret form and requires
-`credentialPlacement`; `clientAssertionKeyRef` selects `private_key_jwt` and
-admits neither. The referenced key file holds a private JWK, and the runtime
+An OAuth source declares exactly one client authentication form, and `type`
+names it. `type: oauth2-client-credentials` is the client-secret form and
+requires `clientSecretRef` and `credentialPlacement`;
+`type: oauth2-private-key-jwt` is `private_key_jwt`, requires
+`clientAssertionKeyRef`, and admits neither of the other two. A member written
+under the type that does not carry it is refused at the key. The referenced
+key file holds a private JWK, and the runtime
 signs a short-lived assertion under the algorithm that key declares: SMART on
 FHIR Backend Services names ES384 and RS384, and requires this form rather than
 a client secret. RFC 7523 section 2.2 fixes the client-assertion type, so it is
@@ -746,8 +768,8 @@ used, and leaves the string to out-of-band agreement, so no relationship to
 `tokenEndpoint` is imposed and the value is not a URL to the runtime. Section 3
 has the server compare it by Simple String Comparison, so it is signed byte for
 byte: a default port or trailing slash written here survives into the claim. It
-is admitted only beside `clientAssertionKeyRef`, because a shared secret carries
-no claim to put it in, and it names who may accept the assertion, never where
+is admitted only under `type: oauth2-private-key-jwt`, because a shared secret
+carries no claim to put it in, and it names who may accept the assertion, never where
 the token request is sent. Register one assertion key per authorization server:
 a key registered at two servers is what lets an audience meant for one be
 presented to the other.
@@ -834,17 +856,16 @@ request:
     - /total
     - /results/*/status
   redirects: deny
-  timeoutMilliseconds: 3000
+  attemptTimeoutMilliseconds: 3000
   maximumResponseBytes: 65536
-  concurrencyLimit: 8
+  maximumConcurrency: 8
 ```
 
 | Key | Required | Meaning |
 |---|---|---|
 | `method` | yes | Fixed `GET` or `POST`. |
-| `path` | conditional | Fixed absolute path. Exactly one of `path` or `pathTemplate` is required. |
-| `pathTemplate` | conditional | Fixed absolute path with complete-segment placeholders resolved by Rust. |
-| `pathBindings` | with template | Closed tagged placeholder bindings from an authorized selector, or on fetch only from a scalar prior fact. |
+| `path` | yes | Fixed absolute path, 2 to 2048 bytes: a literal, or a template with complete-segment placeholders resolved by Rust. |
+| `pathBindings` | with placeholders | Closed tagged placeholder bindings from an authorized selector, or on fetch only from a scalar prior fact. Required exactly when `path` names a placeholder. |
 | `fixedHeaders` | no | Ordered non-secret constants. Names are unique after ASCII case folding. |
 | `selectorInputs` | yes | Exact minimized authorized selector alternatives visible to `prepare` and optional three-argument `extract`; an empty array is valid only for a fetch source. |
 | `prepareScript` | yes | Bundle-relative Rhai script implementing `prepare/2`. |
@@ -853,9 +874,9 @@ request:
 | `preparationLimits` | yes | Per-channel policy and stricter output bounds. |
 | `projection` | yes | Non-empty Rust-enforced response allowlist defined by `ADAPTER-API.md`. |
 | `redirects` | yes | Exactly `deny` in Version 1. |
-| `timeoutMilliseconds` | yes | Positive source-request timeout within the global ceiling. |
+| `attemptTimeoutMilliseconds` | yes | Positive source-request timeout within the global ceiling. |
 | `maximumResponseBytes` | yes | Positive pre-projection response limit within the global ceiling. |
-| `concurrencyLimit` | yes | Positive per-source request concurrency limit for inline sources; an explicit named connection supplies its aggregate limit in a resolved candidate. |
+| `maximumConcurrency` | yes | Positive per-source request concurrency limit for inline sources; an explicit named connection supplies its aggregate limit in a resolved candidate. |
 
 Fixed headers cannot set authentication, host/routing, cookies, body framing,
 content length/type, connection, forwarding, proxy, or tracing headers. Rust
@@ -874,18 +895,18 @@ Use a path template only when the provider lacks a safe query/body lookup:
 ```yaml
 request:
   method: GET
-  pathTemplate: /api/records/{record_reference}
+  path: /api/records/{record_reference}
   pathBindings:
     record_reference:
-      from: selector
+      type: selector
       role: subject
       profile: record-reference-v1
       field: record_reference
 ```
 
 Each placeholder occupies one complete path segment and has exactly one tagged
-binding. Rust reads `from: selector` directly from an already validated and
-authorized selector. On a fetch source, `from: prior-fact` may instead name a
+binding. Rust reads `type: selector` directly from an already validated and
+authorized selector. On a fetch source, `type: prior-fact` may instead name a
 scalar property required by the search fact schema. Scripts do not choose path
 binding origins or return path values. A value must be non-empty bounded
 UTF-8 and cannot contain `/`, `\`, `%`, controls, `.` or `..`. Rust
@@ -930,7 +951,7 @@ optimized call for a complete multi-subject request batch:
 acquisitionCapabilities: [source-batch]
 sources:
   source-a:
-    transport: http-json
+    type: http-json
     # ordinary baseUrl, posture, authentication, request, and schemas omitted
     batch:
       maximumItems: 16
@@ -998,7 +1019,7 @@ checked against the evaluation instant before any row is read.
 ```yaml
 sources:
   source-b:
-    transport: sqlite-extract
+    type: sqlite-extract
     # Only this aggregate crosses the source boundary.
     posture: source-derived
     extractProfile: reference-extract
@@ -1013,7 +1034,7 @@ sources:
             - {profile: record-reference-v1, fields: [record_reference]}
       parameterBindings:
         record_reference:
-          kind: selector
+          type: selector
           role: subject
           profile: record-reference-v1
           field: record_reference
@@ -1023,9 +1044,9 @@ sources:
       maximumRows: 1
       maximumCellBytes: 256
       maximumStatementSteps: 100000
-      timeoutMilliseconds: 2000
+      attemptTimeoutMilliseconds: 2000
       maximumResponseBytes: 8192
-      concurrencyLimit: 8
+      maximumConcurrency: 8
     responseSchema: schemas/source-b-response.schema.yaml
     extractScript: adapters/source-b-extract.rhai
     factSchema: schemas/source-b-facts.schema.yaml
@@ -1079,7 +1100,7 @@ startup fails the deployment instead of answering from bytes the runtime
 revision does not name. That narrows the window rather than closing it, so
 publishing to a new path and restarting remains the supported workflow.
 
-Startup opens one connection for each `concurrencyLimit` permit, reads the
+Startup opens one connection for each `maximumConcurrency` permit, reads the
 metadata, and runs the statement against the real extract. A statement whose
 result columns disagree with `columns`, a parameter no binding supplies, and a
 binding the statement never names all fail before the listener binds.
@@ -1121,18 +1142,18 @@ This is the `request` a `sqlite-extract` source declares.
 | `maximumRows` | yes | 1 through 256 rows. A statement matching more broadly than intended fails here rather than moving a bulk result into the runtime. |
 | `maximumCellBytes` | yes | 1 through 65,536 bytes for one returned value. |
 | `maximumStatementSteps` | yes | 1 through 1,000,000 virtual-machine steps. |
-| `timeoutMilliseconds` | yes | 1 through 30,000 milliseconds. One absolute deadline covers concurrency admission, blocking-worker queueing, and statement execution. |
+| `attemptTimeoutMilliseconds` | yes | 1 through 30,000 milliseconds. One absolute deadline covers concurrency admission, blocking-worker queueing, and statement execution. |
 | `maximumResponseBytes` | yes | 1 through 1,048,576 bytes for the assembled result before projection. |
-| `concurrencyLimit` | yes | 1 through 256 statements held against this extract at once. |
+| `maximumConcurrency` | yes | 1 through 256 statements held against this extract at once. |
 
-`maximumStatementSteps` and `timeoutMilliseconds` bound different things. The
+`maximumStatementSteps` and `attemptTimeoutMilliseconds` bound different things. The
 timeout is one elapsed-time deadline across admission, blocking-worker queueing,
 and execution. The step budget bounds work itself, so a statement that scans
 more than the author expected is stopped on a fast host as well as a slow one.
 Set both, and keep the outer request and acquisition ceilings no shorter than
 the source work they admit.
 
-`maximumCellBytes`, `maximumResponseBytes`, and `concurrencyLimit` are one
+`maximumCellBytes`, `maximumResponseBytes`, and `maximumConcurrency` are one
 process-capacity decision, not independent validation knobs. Set them
 conservatively against both publisher capacity and the Evidence process memory
 budget.
@@ -1140,26 +1161,26 @@ budget.
 Each `parameterBindings` entry is keyed by the parameter name as the statement
 writes it, without its sigil, and Rust accepts `:name`, `@name`, and `$name`.
 Positional parameters have no name to bind, so `?` reads as an undeclared
-parameter and fails. Each entry is a closed tagged binding whose `kind` states
+parameter and fails. Each entry is a closed tagged binding whose `type` states
 the one origin its value comes from.
 
-A `kind: selector` binding is filled from an authorized selector field and from
+A `type: selector` binding is filled from an authorized selector field and from
 nothing else, so a preparation script cannot stand in for an authorized value:
 
 | Key | Required | Meaning |
 |---|---|---|
-| `kind` | yes | Exactly `selector`. |
+| `type` | yes | Exactly `selector`. |
 | `role` | yes | Subject role the value comes from, which `selectorInputs` must declare. |
 | `profile` | yes | Selector profile the value comes from, which must be an alternative that role declares. |
 | `field` | yes | Exact field of that profile whose resolved value Rust binds. |
 
-A `kind: prepared` binding is filled by `prepareScript` and by nothing else,
+A `type: prepared` binding is filled by `prepareScript` and by nothing else,
 which is how a value no selector holds, such as a normalized reference or a
 derived bound, reaches the statement:
 
 | Key | Required | Meaning |
 |---|---|---|
-| `kind` | yes | Exactly `prepared`. The entry names no selector, because naming one would give the parameter a second origin. |
+| `type` | yes | Exactly `prepared`. The entry names no selector, because naming one would give the parameter a second origin. |
 
 A parameter has one origin and exactly one, so reading the declared bindings is
 enough to know where every value the statement binds came from. Four request-time
@@ -1306,23 +1327,36 @@ are closed JSON Schema 2020-12 documents; fact and reviewed-value schemas close
 every reachable object and bound every reachable string, array, and number.
 Fixtures use the exact contract in [`FIXTURES.md`](FIXTURES.md).
 
-Codelists under `codelists/` use one of two closed YAML shapes:
+Codelists under `codelists/` open with the `apiVersion` and `kind` envelope,
+name their form with `type`, and use one of two closed YAML shapes:
 
 ```yaml
 # Exact code set
-id: urn:gov:example:codelist:status
+apiVersion: id.registrystack.org/formats/evidence/codelist/v1alpha1
+kind: EvidenceCodelist
+uri: urn:gov:example:codelist:status
 version: '1'
+type: code-list
 codes: [active, inactive]
-
-# Exact source-to-output mapping
-id: urn:gov:example:codelist:region-map
-version: '1'
-entries: {SOURCE-A: REGION-NORTH, SOURCE-B: REGION-SOUTH}
-allowed_outputs: [REGION-NORTH, REGION-SOUTH]
 ```
 
-Each document has 1 through 4,096 unique bounded codes. A mapping output must
-appear in `allowed_outputs`. Referencing configuration repeats the exact
+```yaml
+# Exact source-to-output mapping
+apiVersion: id.registrystack.org/formats/evidence/codelist/v1alpha1
+kind: EvidenceCodelist
+uri: urn:gov:example:codelist:region-map
+version: '1'
+type: mapping
+entries: {SOURCE-A: REGION-NORTH, SOURCE-B: REGION-SOUTH}
+allowedOutputs: [REGION-NORTH, REGION-SOUTH]
+```
+
+`uri` is the absolute URI other configuration cites, written exactly as its
+issuer gives it: at most 512 characters, with no whitespace and no control
+character. A file without the envelope is refused with the two lines
+named; the members `id` and `allowed_outputs` are refused as removed keys
+naming `uri` and `allowedOutputs`. Each document has 1 through 4,096 unique
+bounded codes. A mapping output must appear in `allowedOutputs`. Referencing configuration repeats the exact
 artifact version and startup rejects a mismatch. Active and temporarily
 published service keys live under `public-keys/` as exact public P-256 JWK JSON
 files. Private signing material is never a bundle artifact.
@@ -1332,7 +1366,7 @@ files. Private signing material is never a bundle artifact.
 `runtime.yaml` contains only process-local bindings:
 
 ```yaml
-apiVersion: registry.registrystack.org/evidence-runtime/v1alpha1
+apiVersion: id.registrystack.org/formats/evidence/runtime/v1alpha1
 kind: EvidenceRuntimeConfig
 package:
   root: /etc/registry-evidence/bundle
@@ -1348,17 +1382,17 @@ secretProviders:
   file:
     root: /run/secrets/registry-evidence
 signer:
-  kind: transit
+  type: transit
   unixSocketPath: /run/registry-evidence/transit-proxy.sock
   mount: transit
   keyName: evidence-signing
   keyVersion: 7
-  timeoutMilliseconds: 2000
+  attemptTimeoutMilliseconds: 2000
 audit:
   destination: file
   path: /var/lib/registry-evidence/audit/evidence.jsonl
   rotateBytes: 104857600
-  retainDays: 90
+  retentionDays: 90
 outboundTls:
   systemRoots: true
   trustProfiles:
@@ -1371,7 +1405,7 @@ sourceExtracts:
 
 | Key | Required | Meaning and Version 1 bounds |
 |---|---|---|
-| `apiVersion` | yes | Literal `registry.registrystack.org/evidence-runtime/v1alpha1`. Names the grammar the document is written in. |
+| `apiVersion` | yes | Literal `id.registrystack.org/formats/evidence/runtime/v1alpha1`. Names the grammar the document is written in. The earlier value `registry.registrystack.org/evidence-runtime/v1alpha1` is refused as `config.retired-api-version` with this one named. |
 | `kind` | yes | Literal `EvidenceRuntimeConfig`. Together with `apiVersion` it tells an Evidence runtime file apart from another product's runtime configuration. |
 | `package.root` | yes | Absolute path to the single governed package directory. No alternate, overlay, or fallback package exists. |
 | `package.expectedDigest` | no | The `sha256:` package digest the operator approved. When set, startup is refused unless the package at `package.root` computes exactly this digest. Omission still verifies and loads the package found there. |
@@ -1387,16 +1421,16 @@ sourceExtracts:
 | `secretProviders` | yes | The providers a secret reference may resolve through, at least one. A bundle reference naming a provider this section does not enable is refused at startup. |
 | `secretProviders.file.root` | when the file provider is used | Absolute root for logical `secret:file/...` references. Only regular, non-symlink, single-link files owned by the service identity with exact mode `0400` or `0600` are accepted. |
 | `secretProviders.environment` | no | Written `environment: {}`, with no settings. Enables `secret:env/NAME` references, read from the process environment. Absence means no reference may name the environment. Use it where the platform injects secrets as environment variables; the file provider keeps its ownership and mode checks, which the environment cannot offer. Once enabled, any reference in the reviewed bundle, a source credential included, may name any variable in the process environment, so give the process a dedicated environment holding only the secrets this deployment needs, and review each `secret:env/NAME` reference as part of the bundle. A bundle cannot enable a provider itself. |
-| `signer` | yes | Closed runtime signer union. `production` and `evidence-grade` require a pinned Transit signer over a workload-local Unix socket. `local` requires `kind: local-jwk` with `privateKeyRef: secret:file/evidence-signing`. Startup validates provider controls and exact public-key agreement, then signs and verifies a challenge. |
+| `signer` | yes | Closed runtime signer union. `production` and `evidence-grade` require a pinned Transit signer over a workload-local Unix socket. `local` requires `type: local-jwk` with `privateKeyRef: secret:file/evidence-signing`. Startup validates provider controls and exact public-key agreement, then signs and verifies a challenge. |
 | `audit` | yes | Where this process writes its audit entries through the shared platform audit writer, one JSON line per entry with the members `schema`, `eventId`, `time`, `phase`, `correlation`, and `record`. Entries are not chained; ship them to append-only storage for tamper evidence. Every audit gate is fail closed on either destination. |
 | `audit.destination` | no | `file` by default, or `stdout`. `file` appends each entry durably (the append returns only after `fsync`) under a single-writer lock at `<path>.lock`, so a second process on the same path fails startup. `stdout` writes each entry as one line on standard output for a collector that owns durability, rotation, and retention; `check --require-audit-under` refuses it, and local audit inspection cannot read it. |
 | `audit.path` | for `file` | Absolute path to the active append-only JSON Lines audit file on operator-owned durable storage. The writer reserves `<path>.<sequence>` (eight digits), `<path>.lock`, `<path>.seq`, which records the next sequence across restarts, and `<path>.seq.tmp`, so no other audit stream's path may be one of those names. Refused for `stdout`. |
 | `audit.rotateBytes` | no | 1,048,576 through 4,294,967,295 bytes; 104,857,600 (100 MiB) by default. Reaching it seals the active file under an ascending sequence number and opens a fresh one at `path`. A write or sync failure, not rotation itself, is what fails closed. Refused for `stdout`. |
-| `audit.retainDays` | no | 1 through 36,500 days; 90 by default. When the writer opens or rotates, sealed files last modified longer ago than this are deleted; the active file never is. Refused for `stdout`. |
+| `audit.retentionDays` | no | 1 through 36,500 days; 90 by default. When the writer opens or rotates, sealed files last modified longer ago than this are deleted; the active file never is. Refused for `stdout`. |
 | `outboundTls.systemRoots` | yes | Literal `true`. |
-| `outboundTls.trustProfiles` | yes | Closed map of at most 64 logical profile ids. It may be empty when neither a source nor `authentication` names a private trust profile. |
+| `outboundTls.trustProfiles` | yes | Closed map of at most 64 logical profile ids, each a local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`. It may be empty when neither a source nor `authentication` names a private trust profile. |
 | `outboundTls.trustProfiles.<id>.caBundleFile` | for each profile | Absolute path to one bounded PEM CA file. Profile names must exactly match bundle `tlsTrustProfile` references. |
-| `sourceExtracts` | no | Closed map of at most 64 logical extract names. Omission binds none, which is what a runtime file for a bundle with no extract source says. |
+| `sourceExtracts` | no | Closed map of at most 64 logical extract names, each a local identifier of the same grammar. Omission binds none, which is what a runtime file for a bundle with no extract source says. |
 | `sourceExtracts.<name>.path` | for each name | Absolute path to one read-only regular file. Names must exactly match bundle `extractProfile` references. |
 | `acquisitionCapabilities` | no | Gated acquisition kinds and source optimizations this deployment enables, at most two entries: `search-then-fetch-set` and `source-batch`. Omission and `[]` both enable nothing, so a bundle carrying a source batch block or needing a gated kind is refused before the listener binds. |
 
@@ -1668,6 +1702,7 @@ and document the new keys in the prose above.
 ```text
 acquisitionCapabilities
 acquisitionCapabilities[]
+apiVersion
 assuranceProfile
 audit
 audit.hashKeyRef
@@ -1696,7 +1731,7 @@ authentication.oidc.claims.purpose
 authentication.oidc.evidenceAudienceClaim
 authentication.oidc.issuer
 authentication.oidc.jwksSource
-authentication.oidc.jwksSource.kind
+authentication.oidc.jwksSource.type
 authentication.oidc.jwksSource.uri
 authentication.oidc.maximumTokenLifetimeSeconds
 authentication.oidc.principalClaim
@@ -1733,9 +1768,10 @@ authorityProfiles.*.requesterClients
 authorityProfiles.*.requesterClients[]
 authorityProfiles.*.requesterTags
 authorityProfiles.*.requesterTags[]
-holderBoundBatchMaxSize
 issuer
-issuer.id
+issuer.uri
+kind
+maximumHolderBoundBatchSize
 publication
 publication.description
 publication.endpointUrl
@@ -1757,10 +1793,10 @@ requirements[].acquisition.fetch[]
 requirements[].acquisition.fetch[].factInputs
 requirements[].acquisition.fetch[].factInputs[]
 requirements[].acquisition.fetch[].source
-requirements[].acquisition.kind
 requirements[].acquisition.maximumAcquisitionMilliseconds
 requirements[].acquisition.search
 requirements[].acquisition.source
+requirements[].acquisition.type
 requirements[].concepts
 requirements[].concepts[]
 requirements[].concepts[].constraints
@@ -1780,13 +1816,13 @@ requirements[].concepts[].constraints.prefix
 requirements[].concepts[].constraints.schema
 requirements[].concepts[].constraints.schemeVersion
 requirements[].concepts[].constraints.unique
-requirements[].concepts[].form
 requirements[].concepts[].handle
-requirements[].concepts[].id
 requirements[].concepts[].required
 requirements[].concepts[].sdJwtVc
 requirements[].concepts[].sdJwtVc.claim
 requirements[].concepts[].sdJwtVc.disclosure
+requirements[].concepts[].type
+requirements[].concepts[].uri
 requirements[].derivation
 requirements[].derivation.parameters
 requirements[].derivation.parameters.*
@@ -1816,7 +1852,6 @@ requirements[].evidenceType
 requirements[].existenceDisclosure
 requirements[].fixtures
 requirements[].handle
-requirements[].id
 requirements[].kind
 requirements[].observationTimezone
 requirements[].purposes
@@ -1830,6 +1865,7 @@ requirements[].subjectRoles[].cardinality
 requirements[].subjectRoles[].role
 requirements[].subjectRoles[].selectorProfiles
 requirements[].subjectRoles[].selectorProfiles[]
+requirements[].uri
 requirements[].validitySeconds
 responseFormats
 responseFormats[]
@@ -1872,7 +1908,6 @@ sourceConnections.*.authentication.clientIdRef
 sourceConnections.*.authentication.clientSecretRef
 sourceConnections.*.authentication.credentialPlacement
 sourceConnections.*.authentication.headerName
-sourceConnections.*.authentication.kind
 sourceConnections.*.authentication.maximumCacheSeconds
 sourceConnections.*.authentication.passwordRef
 sourceConnections.*.authentication.resource
@@ -1880,10 +1915,11 @@ sourceConnections.*.authentication.scheme
 sourceConnections.*.authentication.scope
 sourceConnections.*.authentication.tokenEndpoint
 sourceConnections.*.authentication.tokenRef
+sourceConnections.*.authentication.type
 sourceConnections.*.authentication.usernameRef
 sourceConnections.*.authentication.valueRef
 sourceConnections.*.baseUrl
-sourceConnections.*.concurrencyLimit
+sourceConnections.*.maximumConcurrency
 sourceConnections.*.tlsTrustProfile
 sourceConnections.*.tokenTimeoutMilliseconds
 sources
@@ -1897,7 +1933,6 @@ sources.*.authentication.clientIdRef
 sources.*.authentication.clientSecretRef
 sources.*.authentication.credentialPlacement
 sources.*.authentication.headerName
-sources.*.authentication.kind
 sources.*.authentication.maximumCacheSeconds
 sources.*.authentication.passwordRef
 sources.*.authentication.resource
@@ -1905,6 +1940,7 @@ sources.*.authentication.scheme
 sources.*.authentication.scope
 sources.*.authentication.tokenEndpoint
 sources.*.authentication.tokenRef
+sources.*.authentication.type
 sources.*.authentication.usernameRef
 sources.*.authentication.valueRef
 sources.*.baseUrl
@@ -1928,11 +1964,11 @@ sources.*.evidence.contract.definitions[].concepts
 sources.*.evidence.contract.definitions[].concepts[]
 sources.*.evidence.contract.definitions[].concepts[].concept
 sources.*.evidence.contract.definitions[].concepts[].form
-sources.*.evidence.contract.definitions[].concepts[].form.list
-sources.*.evidence.contract.definitions[].concepts[].form.list.items
-sources.*.evidence.contract.definitions[].concepts[].form.list.maximumItems
-sources.*.evidence.contract.definitions[].concepts[].form.list.minimumItems
-sources.*.evidence.contract.definitions[].concepts[].form.list.unique
+sources.*.evidence.contract.definitions[].concepts[].form.items
+sources.*.evidence.contract.definitions[].concepts[].form.maximumItems
+sources.*.evidence.contract.definitions[].concepts[].form.minimumItems
+sources.*.evidence.contract.definitions[].concepts[].form.type
+sources.*.evidence.contract.definitions[].concepts[].form.unique
 sources.*.evidence.contract.definitions[].concepts[].handle
 sources.*.evidence.contract.definitions[].concepts[].required
 sources.*.evidence.contract.definitions[].configurationRevision
@@ -1963,8 +1999,8 @@ sources.*.evidence.contract.definitions[].subjects[].selector.fields[].type
 sources.*.evidence.contract.definitions[].subjects[].selector.fields[].version
 sources.*.evidence.contract.definitions[].subjects[].selector.profile
 sources.*.evidence.contract.definitions[].subjects[].selector.valueOrigin
-sources.*.evidence.contract.holderBoundBatchMaxSize
 sources.*.evidence.contract.issuedBy
+sources.*.evidence.contract.maximumHolderBoundBatchSize
 sources.*.evidence.contract.providedBy
 sources.*.evidence.contract.schema
 sources.*.evidence.maximumAssertionLifetimeSeconds
@@ -1991,16 +2027,17 @@ sources.*.request.adapterParameters.*
 sources.*.request.adapterParameters.*.*
 sources.*.request.adapterParameters.*[]
 sources.*.request.adapterParametersSchema
+sources.*.request.attemptTimeoutMilliseconds
 sources.*.request.columns
 sources.*.request.columns[]
 sources.*.request.columns[].name
 sources.*.request.columns[].type
-sources.*.request.concurrencyLimit
 sources.*.request.fixedHeaders
 sources.*.request.fixedHeaders[]
 sources.*.request.fixedHeaders[].name
 sources.*.request.fixedHeaders[].value
 sources.*.request.maximumCellBytes
+sources.*.request.maximumConcurrency
 sources.*.request.maximumResponseBytes
 sources.*.request.maximumRows
 sources.*.request.maximumStatementSteps
@@ -2008,17 +2045,16 @@ sources.*.request.method
 sources.*.request.parameterBindings
 sources.*.request.parameterBindings.*
 sources.*.request.parameterBindings.*.field
-sources.*.request.parameterBindings.*.kind
 sources.*.request.parameterBindings.*.profile
 sources.*.request.parameterBindings.*.role
+sources.*.request.parameterBindings.*.type
 sources.*.request.path
 sources.*.request.pathBindings
 sources.*.request.pathBindings.*
 sources.*.request.pathBindings.*.field
-sources.*.request.pathBindings.*.from
 sources.*.request.pathBindings.*.profile
 sources.*.request.pathBindings.*.role
-sources.*.request.pathTemplate
+sources.*.request.pathBindings.*.type
 sources.*.request.preparationLimits
 sources.*.request.preparationLimits.jsonBody
 sources.*.request.preparationLimits.maximumCollectionItems
@@ -2044,10 +2080,9 @@ sources.*.request.selectorInputs[].alternatives[].fields[]
 sources.*.request.selectorInputs[].alternatives[].profile
 sources.*.request.selectorInputs[].role
 sources.*.request.statement
-sources.*.request.timeoutMilliseconds
 sources.*.responseSchema
 sources.*.tlsTrustProfile
-sources.*.transport
+sources.*.type
 sources.*.unresolvedProblem
 sources.*.unresolvedProblem.code
 sources.*.unresolvedProblem.status
@@ -2055,7 +2090,6 @@ sources.*.unresolvedProblem.type
 subjectBinding
 subjectBinding.keyVersion
 subjectBinding.secretRef
-version
 ```
 <!-- evidence-bundle-key-paths:end -->
 
@@ -2069,7 +2103,7 @@ apiVersion
 audit
 audit.destination
 audit.path
-audit.retainDays
+audit.retentionDays
 audit.rotateBytes
 kind
 listener
@@ -2096,12 +2130,12 @@ secretProviders.environment
 secretProviders.file
 secretProviders.file.root
 signer
+signer.attemptTimeoutMilliseconds
 signer.keyName
 signer.keyVersion
-signer.kind
 signer.mount
 signer.privateKeyRef
-signer.timeoutMilliseconds
+signer.type
 signer.unixSocketPath
 sourceExtracts
 sourceExtracts.*

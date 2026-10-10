@@ -166,6 +166,57 @@ fn a_file_of_no_known_format_is_refused_naming_the_formats() {
     }
 }
 
+/// A client file that still opens with the removed `schema` header is refused
+/// by its own reader, which names the envelope to write.
+#[test]
+fn a_client_file_with_the_removed_schema_header_is_refused_naming_the_envelope() {
+    let directory = tempfile::tempdir().expect("directory");
+    for (relative, header, kind) in [
+        (
+            "evidence/examples/client-profile/client-profile.json",
+            "registry.evidence-client-profile/v1",
+            "EvidenceClientProfile",
+        ),
+        (
+            "evidence/examples/client-contracts/evidence.contracts.json",
+            "registry.evidence-client-contracts/v1",
+            "EvidenceClientContracts",
+        ),
+    ] {
+        let mut document: Value =
+            serde_json::from_slice(&fs::read(example(relative)).expect("example")).expect("JSON");
+        let members = document.as_object_mut().expect("an object");
+        members.remove("apiVersion");
+        members.remove("kind");
+        members.insert("schema".to_owned(), Value::from(header));
+        let file = directory.path().join(format!("{kind}.json"));
+        fs::write(&file, serde_json::to_vec_pretty(&document).expect("JSON")).expect("write");
+
+        let json = check_file(&file, &["--format", "json"]);
+        assert_eq!(json.status.code(), Some(1), "{kind}");
+        let report = json_report(&json);
+        let removed = report["diagnostics"]
+            .as_array()
+            .expect("diagnostics")
+            .iter()
+            .find(|diagnostic| diagnostic["code"] == "config.removed-key")
+            .unwrap_or_else(|| panic!("{kind}: no config.removed-key in {report}"));
+        assert_eq!(removed["path"], "/schema", "{kind}");
+        let action = removed["suggestedAction"].as_str().expect("an action");
+        assert!(
+            action.contains("apiVersion") && action.contains(kind),
+            "{kind}: {action}"
+        );
+        assert!(
+            !json
+                .stdout
+                .windows(header.len())
+                .any(|window| window == header.as_bytes()),
+            "{kind}: the report repeats the written header"
+        );
+    }
+}
+
 #[test]
 fn a_file_that_is_not_a_document_is_refused_by_the_reader() {
     let directory = tempfile::tempdir().expect("directory");

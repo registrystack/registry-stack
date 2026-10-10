@@ -77,7 +77,7 @@ fn assert_guard(detail: &AccessChangeDetail, reason: &str) {
 }
 
 fn food_targeting_person(value: &mut Value) -> &mut Value {
-    &mut value["accessProfiles"][FOOD_TARGETING]["permissions"][PERSON_PERMISSION]
+    &mut value["accessProfiles"][FOOD_TARGETING]["permissions"]["entities"][PERSON_PERMISSION]
 }
 
 #[test]
@@ -129,7 +129,8 @@ fn adding_a_lookup_to_a_gated_profile_asks_for_a_new_scope() {
 #[test]
 fn widening_an_ungated_profile_keeps_its_plain_direction() {
     let mut widened = source();
-    widened["accessProfiles"][STEWARD]["permissions"][0]["filterableFields"] = json!(["district"]);
+    widened["accessProfiles"][STEWARD]["permissions"]["entities"][0]["filterableFields"] =
+        json!(["district"]);
     let diff = classify(&source(), &widened);
     let steward = profile_change(&diff, "person", "steward");
     let filterable = detail(steward, "filterableFields");
@@ -179,17 +180,21 @@ fn changing_group_membership_changes_who_holds_its_consents() {
 }
 
 #[test]
-fn raising_max_duration_outlasts_the_notice() {
+fn raising_the_maximum_duration_outlasts_the_notice() {
     let mut raised = source();
-    raised["entities"][CONSENT_RECORD]["consentRecord"]["validity"]["maxDuration"] = json!("P2Y");
+    raised["entities"][CONSENT_RECORD]["consentRecord"]["validity"]["maximumDurationDays"] =
+        json!(730);
     let diff = classify(&source(), &raised);
     let record = change(&diff, Code::ConsentRecordChanged, None);
     assert_eq!(record.classification, DiffClassification::AccessChange);
-    assert_guard(detail(record, "maxDuration"), "longer than the notice said");
+    assert_guard(
+        detail(record, "maximumDurationDays"),
+        "longer than the notice said",
+    );
 
     let lowered = classify(&raised, &source());
     let record = change(&lowered, Code::ConsentRecordChanged, None);
-    let duration = detail(record, "maxDuration");
+    let duration = detail(record, "maximumDurationDays");
     assert_eq!(duration.direction, AccessChangeDirection::Narrowing);
     assert_eq!(duration.reason, None);
 }
@@ -254,10 +259,10 @@ fn a_steward_issuer_creates_consent_without_the_subject() {
     let mut second = added["actions"][0].clone();
     second["id"] = json!("record-referral-consent");
     added["actions"].as_array_mut().unwrap().push(second);
-    let mut permission = added["accessProfiles"][STEWARD]["permissions"][5].clone();
+    let mut permission = added["accessProfiles"][STEWARD]["permissions"]["actions"][0].clone();
     assert_eq!(permission["action"], "record-consent");
     permission["action"] = json!("record-referral-consent");
-    added["accessProfiles"][STEWARD]["permissions"]
+    added["accessProfiles"][STEWARD]["permissions"]["actions"]
         .as_array_mut()
         .unwrap()
         .push(permission);
@@ -319,7 +324,8 @@ fn a_consent_change_never_classifies_as_unsupported() {
     let mut changed = source();
     changed["recipients"]["organizations"][2]["clients"] = json!(["ngo-beta-portal"]);
     changed["recipients"]["groups"][0]["members"] = json!(["wfp"]);
-    changed["entities"][CONSENT_RECORD]["consentRecord"]["validity"]["maxDuration"] = json!("P30D");
+    changed["entities"][CONSENT_RECORD]["consentRecord"]["validity"]["maximumDurationDays"] =
+        json!(30);
     let diff = classify(&source(), &changed);
     assert!(
         diff.changes
@@ -363,24 +369,24 @@ fn a_preview_admits_a_gated_profile_and_names_the_client_recipients() {
     .unwrap();
     assert_eq!(admitted["admitted"], true, "{admitted}");
     assert_eq!(admitted["recipients"], json!(["referral-network", "wfp"]));
-    assert_eq!(admitted["recordAccess"], "not_evaluated");
+    assert_eq!(admitted["recordAccess"], "not-evaluated");
 
     for (claims, reason) in [
         (
             json!({"requesterClient": "wfp-scope"}),
-            "actor_kind_missing",
+            "actor-kind-missing",
         ),
         (
             json!({"actorKind": "human", "requesterClient": "wfp-scope"}),
-            "actor_kind_mismatched",
+            "actor-kind-mismatched",
         ),
         (
             json!({"actorKind": "service"}),
-            "requester_client_missing_or_mismatched",
+            "requester-client-missing-or-mismatched",
         ),
         (
             json!({"actorKind": "service", "requesterClient": "steward-console"}),
-            "requester_client_missing_or_mismatched",
+            "requester-client-missing-or-mismatched",
         ),
     ] {
         let refused = preview(food_targeting_scenario(claims)).unwrap();
@@ -482,7 +488,8 @@ fn a_changed_revoke_set_says_it_rebuilds_the_consent_indexes() {
 
     // A longer validity leaves both indexes as they were.
     let mut raised = source();
-    raised["entities"][CONSENT_RECORD]["consentRecord"]["validity"]["maxDuration"] = json!("P2Y");
+    raised["entities"][CONSENT_RECORD]["consentRecord"]["validity"]["maximumDurationDays"] =
+        json!(730);
     let diff = classify(&source(), &raised);
     let record = change(&diff, Code::ConsentRecordChanged, None);
     assert!(

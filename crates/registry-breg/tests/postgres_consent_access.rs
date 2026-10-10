@@ -778,14 +778,17 @@ async fn real_postgres_consent_orders_decisions_by_capped_time_and_expires_gives
     .await;
     assert!(!h.sees(&forged, &wfp).await);
 
-    // Expiry by maxDuration (P365D from the ordering time) and by `until`.
+    // Expiry by maximumDurationDays (365 days from the ordering time) and by `until`.
     let capped = h.person("Capped").await;
     h.decide(Decision {
         from: days(-366),
         ..decision(&capped, "wfp", "given")
     })
     .await;
-    assert!(!h.sees(&capped, &wfp).await, "maxDuration expired the give");
+    assert!(
+        !h.sees(&capped, &wfp).await,
+        "maximumDurationDays expired the give"
+    );
     let within = h.person("Within").await;
     h.decide(Decision {
         from: days(-364),
@@ -794,7 +797,7 @@ async fn real_postgres_consent_orders_decisions_by_capped_time_and_expires_gives
     .await;
     assert!(
         h.sees(&within, &wfp).await,
-        "the give is within maxDuration"
+        "the give is within maximumDurationDays"
     );
     let until = h.person("Until").await;
     h.decide(Decision {
@@ -1073,14 +1076,14 @@ async fn real_postgres_consent_refusals_reach_no_recipient_through_an_authored_s
         .push(json!({
             "id": "recipient-lookup", "principalClaim": "principal", "actorKind": "service",
             "requesterClients": [BETA_CLIENT], "requiredScopes": ["consent:read"],
-            "permissions": [{
+            "permissions": {"entities": [{
                 "entity": "consent-decision", "operations": ["lookup"],
                 "readableFields": ["subject", "recipient", "decision"], "rowBoundaries": "unrestricted",
                 "lookups": [{
-                    "selector": "recipient", "valueOrigin": "verified_claim",
+                    "selector": "recipient", "valueOrigin": "verified-claim",
                     "claimMapping": {"recipient": "registry:recipients"}
                 }]
-            }]
+            }]}
         }));
     let Err(failure) = consent_fixture::compile(&selector) else {
         panic!("a lookup selecting by the recipient claim compiled");
@@ -1433,12 +1436,12 @@ async fn real_postgres_consent_successors_match_fresh_install_when_added_changed
     // the compiler-applicable plan removes the complete predecessor policy set
     // before retiring its consent helper.
     let mut gated = consent_fixture::source();
-    gated["accessProfiles"][0]["permissions"]
+    gated["accessProfiles"][0]["permissions"]["entities"]
         .as_array_mut()
         .unwrap()
         .retain(|permission| permission["entity"] != "household");
     let mut base = gated.clone();
-    for permission in base["accessProfiles"][0]["permissions"]
+    for permission in base["accessProfiles"][0]["permissions"]["entities"]
         .as_array_mut()
         .unwrap()
     {
@@ -1448,7 +1451,7 @@ async fn real_postgres_consent_successors_match_fresh_install_when_added_changed
     // former id is retired, since codes are append-only.
     let mut removed = gated.clone();
     removed["accessProfiles"][0]["id"] = json!("food-targeting-open");
-    for permission in removed["accessProfiles"][0]["permissions"]
+    for permission in removed["accessProfiles"][0]["permissions"]["entities"]
         .as_array_mut()
         .unwrap()
     {
@@ -1462,7 +1465,7 @@ async fn real_postgres_consent_successors_match_fresh_install_when_added_changed
         .iter_mut()
         .find(|entity| entity["id"] == "consent-decision")
         .unwrap();
-    record["consentRecord"]["validity"]["maxDuration"] = json!("P30D");
+    record["consentRecord"]["validity"]["maximumDurationDays"] = json!(30);
     record["consentRecord"]["decision"]["revokes"] = json!(["refused", "withdrawn"]);
     let mut previous = consent_fixture::compile(&base).unwrap();
     let upgraded = postgres_harness::TestDatabase::create(1).await;

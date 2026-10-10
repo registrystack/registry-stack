@@ -8,10 +8,10 @@ export type JsonObject = { readonly [key: string]: JsonValue }
 export type SafeInteger = number
 
 export type WebhookVerificationRefusalCode =
-  | 'missing_header'
-  | 'malformed_signature'
-  | 'signature_mismatch'
-  | 'unsupported_version'
+  | 'missing-header'
+  | 'malformed-signature'
+  | 'signature-mismatch'
+  | 'unsupported-version'
 
 export interface WebhookDeliveryInput {
   method: string
@@ -233,8 +233,8 @@ export type BRegRequestResultReferenceData = JsonObject & {
 }
 export type BRegRequestState = 'draft' | 'submitted' | 'cancelled' | 'applied'
 export type BRegRequestReviewRequirement =
-  | Readonly<{ mode: 'none' }>
-  | Readonly<{ authority: string; policyId: string }>
+  | Readonly<{ type: 'none' }>
+  | Readonly<{ type: 'required'; authority: string; policyId: string }>
 export type BRegExternalReviewStatus = Readonly<{
   submission: Readonly<{
     state: 'pending' | 'accepted' | 'uncertain' | 'cancelling' | 'cancelled' | 'failed'
@@ -469,9 +469,9 @@ export interface BRegQueryDescriptor {
   readonly sortableFields: ReadonlyArray<BRegQueryField>
   readonly allowCount: boolean
   readonly defaultPageSize: number
-  readonly maxPageSize: number
-  readonly maxFilterClauses: number
-  readonly maxInValues: number
+  readonly maximumPageSize: number
+  readonly maximumFilterClauses: number
+  readonly maximumInValues: number
   readonly pagination: { readonly parameter: string; readonly responsePath: string; readonly exclusive: boolean }
   readonly temporal: JsonObject | null
   readonly spatialQueries?: {
@@ -829,7 +829,7 @@ export interface BRegAttachmentState {
 
 /** What one record projection says about one slot. */
 export type BRegAttachmentSlotValue =
-  | { readonly kind: 'not_selected'; readonly value: null }
+  | { readonly kind: 'not-selected'; readonly value: null }
   | { readonly kind: 'empty'; readonly value: null }
   | { readonly kind: 'filled'; readonly value: BRegAttachmentState }
 

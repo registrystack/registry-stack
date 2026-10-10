@@ -305,11 +305,11 @@ impl DatabaseConfig {
     rename_all_fields = "camelCase",
     deny_unknown_fields
 )]
-#[cfg_attr(feature = "schema", schemars(!remote, tag = "kind"))]
+#[cfg_attr(feature = "schema", schemars(!remote, tag = "type"))]
 pub enum JwksSource {
     /// Read `jwks_uri` from the issuer's OpenID Connect discovery document.
     // A struct variant, so `deny_unknown_fields` refuses a `uri` or a
-    // `documentRef` written beside `kind: discovery`; serde ignores extra
+    // `documentRef` written beside `type: discovery`; serde ignores extra
     // members on a unit variant of an internally tagged enum.
     Discovery {},
     /// Fetch the key set from this absolute `https` URI, skipping discovery.
@@ -326,18 +326,18 @@ pub enum JwksSource {
     },
 }
 
-registry_platform_yaml::tagged_union!(JwksSource, tag = "kind");
+registry_platform_yaml::tagged_union!(JwksSource);
 
 impl Serialize for JwksSource {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeMap;
-        let (kind, member) = match self {
+        let (tag, member) = match self {
             Self::Discovery {} => ("discovery", None),
             Self::Uri { uri } => ("uri", Some(("uri", uri))),
             Self::Static { document_ref } => ("static", Some(("documentRef", document_ref))),
         };
         let mut map = serializer.serialize_map(Some(1 + usize::from(member.is_some())))?;
-        map.serialize_entry("kind", kind)?;
+        map.serialize_entry("type", tag)?;
         if let Some((key, value)) = member {
             map.serialize_entry(key, value)?;
         }
@@ -536,15 +536,24 @@ pub const MAX_ASSERTION_ISSUER_BYTES: usize = 512;
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schema", schemars(deny_unknown_fields))]
 pub struct OidcClientsConfig {
-    /// Client identifiers whose access tokens are admitted. A runtime decides
-    /// whether an empty list is acceptable in production.
-    #[serde(default)]
+    /// The OAuth clients whose access tokens are admitted: `unrestricted` to
+    /// admit a token from every client the issuer verifies, or a list of at
+    /// least one distinct client. A runtime decides whether `unrestricted`
+    /// is acceptable in production.
+    // Held as the list the token verifier takes, where empty admits every
+    // client.
+    #[serde(
+        deserialize_with = "allowed_clients",
+        serialize_with = "serialize_allowed_clients"
+    )]
+    #[cfg_attr(feature = "schema", schemars(with = "OidcAllowedClients"))]
     pub allowed_clients: Vec<String>,
     /// Assertion authorities each client may exchange a subject token from,
     /// keyed by client identifier. Omitted, no assertion-issuer rule applies;
-    /// written, it lists at least one client. Once a client is listed, a
-    /// token it exchanged is accepted only for one of that client's declared
-    /// authorities.
+    /// written, it lists at least one client, each with at least one
+    /// authority. Once a client is listed, a token it exchanged is accepted
+    /// only for one of that client's declared authorities, and a client that
+    /// is not listed may exchange from no authority.
     #[serde(
         default,
         skip_serializing_if = "BTreeMap::is_empty",
@@ -552,6 +561,111 @@ pub struct OidcClientsConfig {
     )]
     #[cfg_attr(feature = "schema", schemars(schema_with = "assertion_issuers_schema"))]
     pub assertion_issuers: BTreeMap<String, Vec<String>>,
+}
+
+const UNRESTRICTED: &str = "unrestricted";
+
+fn allowed_clients_refused<E: serde::de::Error>() -> E {
+    registry_platform_yaml::Invalid::expected(
+        "unrestricted, or a list of at least one OAuth client",
+        "List the OAuth clients whose access tokens are admitted, or write unrestricted to admit every client the issuer verifies.",
+    )
+    .into_error()
+}
+
+/// How `allowedClients` is written (CFG-EMPTY-2): the keyword `unrestricted`,
+/// or a list of at least one client. An empty list is refused, because it
+/// reads as both "none" and "any".
+// Its schema name is the block's own: a runtime that reads the member through
+// a type of its own keeps that definition under a different name, which the
+// shared-block drift check compares by name.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", schemars(untagged))]
+enum OidcAllowedClients {
+    /// Admit a token from every client the issuer verifies.
+    Unrestricted(UnrestrictedClients),
+    /// Admit a token only from a listed client.
+    Listed(ListedClients),
+}
+
+registry_platform_yaml::shape_union!(OidcAllowedClients { scalar => Unrestricted, list => Listed });
+
+/// The keyword `unrestricted`.
+struct UnrestrictedClients;
+
+impl<'de> Deserialize<'de> for UnrestrictedClients {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        if String::deserialize(deserializer)? == UNRESTRICTED {
+            Ok(Self)
+        } else {
+            Err(allowed_clients_refused())
+        }
+    }
+}
+
+#[cfg(feature = "schema")]
+impl schemars::JsonSchema for UnrestrictedClients {
+    fn inline_schema() -> bool {
+        true
+    }
+
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "UnrestrictedClients".into()
+    }
+
+    fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({"type": "string", "const": UNRESTRICTED})
+    }
+}
+
+/// At least one client, none repeated (CFG-ID-6).
+struct ListedClients(Vec<String>);
+
+impl<'de> Deserialize<'de> for ListedClients {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let clients = registry_platform_yaml::UniqueList::<String>::deserialize(deserializer)?;
+        if clients.is_empty() {
+            return Err(allowed_clients_refused());
+        }
+        Ok(Self(clients.into_iter().collect()))
+    }
+}
+
+#[cfg(feature = "schema")]
+impl schemars::JsonSchema for ListedClients {
+    fn inline_schema() -> bool {
+        true
+    }
+
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "ListedClients".into()
+    }
+
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        let mut schema = generator.subschema_for::<registry_platform_yaml::UniqueList<String>>();
+        schema.insert("minItems".to_owned(), 1.into());
+        schema
+    }
+}
+
+/// Reads the authored member into the list the token verifier holds, where
+/// empty admits every client.
+fn allowed_clients<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<String>, D::Error> {
+    Ok(match OidcAllowedClients::deserialize(deserializer)? {
+        OidcAllowedClients::Unrestricted(UnrestrictedClients) => Vec::new(),
+        OidcAllowedClients::Listed(ListedClients(clients)) => clients,
+    })
+}
+
+fn serialize_allowed_clients<S: serde::Serializer>(
+    clients: &[String],
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    if clients.is_empty() {
+        serializer.serialize_str(UNRESTRICTED)
+    } else {
+        clients.serialize(serializer)
+    }
 }
 
 /// Client identifiers are external identifiers (CFG-ID-2) with a stated
@@ -571,6 +685,7 @@ fn assertion_issuers_schema(generator: &mut schemars::SchemaGenerator) -> schema
         "propertyNames": client,
         "additionalProperties": {
             "type": "array",
+            "minItems": 1,
             "maxItems": MAX_ASSERTION_ISSUERS_PER_CLIENT,
             "uniqueItems": true,
             "items": {"type": "string", "minLength": 1, "maxLength": MAX_ASSERTION_ISSUER_BYTES}
@@ -583,7 +698,7 @@ fn assertion_issuers_schema(generator: &mut schemars::SchemaGenerator) -> schema
 fn non_empty_assertion_issuers<'de, D: Deserializer<'de>>(
     deserializer: D,
 ) -> Result<BTreeMap<String, Vec<String>>, D::Error> {
-    let issuers = BTreeMap::<String, Vec<String>>::deserialize(deserializer)?;
+    let issuers = BTreeMap::<String, ListedIssuers>::deserialize(deserializer)?;
     if issuers.is_empty() {
         return Err(registry_platform_yaml::Invalid::expected(
             "at least one client",
@@ -591,7 +706,28 @@ fn non_empty_assertion_issuers<'de, D: Deserializer<'de>>(
         )
         .into_error());
     }
-    Ok(issuers)
+    Ok(issuers
+        .into_iter()
+        .map(|(client, issuers)| (client, issuers.0))
+        .collect())
+}
+
+/// The assertion issuers of one listed client. An empty list is not how a
+/// file says "no authority" (CFG-EMPTY-2): leaving the client out says it.
+struct ListedIssuers(Vec<String>);
+
+impl<'de> Deserialize<'de> for ListedIssuers {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let issuers = Vec::<String>::deserialize(deserializer)?;
+        if issuers.is_empty() {
+            return Err(registry_platform_yaml::Invalid::expected(
+                "at least one assertion issuer",
+                "List at least one assertion issuer for this client, or remove the client: a client that is not listed may exchange from no authority.",
+            )
+            .into_error());
+        }
+        Ok(Self(issuers))
+    }
 }
 
 impl OidcClientsConfig {

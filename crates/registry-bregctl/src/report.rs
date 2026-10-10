@@ -880,7 +880,7 @@ mod tests {
         lines.pairs(&[("generated statement count", "3".to_owned())]);
         lines.blank();
         lines.item("reviewed migration 1");
-        lines.pairs_at(2, &[("recovery", "exact_target_resume".to_owned())]);
+        lines.pairs_at(2, &[("recovery", "exact-target-resume".to_owned())]);
         assert_eq!(
             plain(&lines.finish()),
             concat!(
@@ -888,7 +888,7 @@ mod tests {
                 "  generated statement count  3\n",
                 "\n",
                 "  reviewed migration 1\n",
-                "    recovery  exact_target_resume\n",
+                "    recovery  exact-target-resume\n",
             )
         );
     }

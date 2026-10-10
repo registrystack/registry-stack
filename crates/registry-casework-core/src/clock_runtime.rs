@@ -7,7 +7,7 @@ use uuid::Uuid;
 use crate::{HolidaySetDocument, SubjectRef};
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub enum ClockRuntimeState {
     Running,
     Paused,
@@ -49,7 +49,7 @@ pub struct ClockOccurrenceView {
 /// The next unapplied effect authored by the pinned clock policy. Runtime
 /// verification retry times and source timing inputs are deliberately absent.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum ClockNextEffect {
     Reminder {
         id: String,

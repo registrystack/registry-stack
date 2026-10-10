@@ -30,7 +30,7 @@ cannot replace unsaved content.
 
 | Product | Project entry | Semantic navigation |
 |---|---|---|
-| Base Registry Engine | `registry.yaml` declaring `RegistryProject` | Entities, fields, access profiles, actions, and authored modules |
+| Base Registry Engine | `registry.yaml` declaring `BRegProject` | Entities, fields, access profiles, actions, and authored modules |
 | Registry Casework | `casework.yaml` | Sources, queues, routing, review policies, and directory references |
 | Registry Scheduling | `scheduling.yaml` | Services, locations, offerings, opening patterns, holiday sets, and fixture references |
 | Registry Messaging | `messaging.yaml` | Templates and versions, access profiles, providers, and template files |

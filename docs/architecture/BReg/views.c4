@@ -37,7 +37,7 @@ views {
   view events {
     title 'BReg / 03. Events and delivery boundaries'
     description '''
-      A package declares created, patched, tombstoned or request_lifecycle events.
+      A package declares created, patched, tombstoned or request-lifecycle events.
       Event projection and delivery intent commit with the owning record/request,
       history in one PostgreSQL transaction. A nonmatching event condition
       permits the write without producing that event; capture failure rolls it back.

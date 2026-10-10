@@ -59,6 +59,9 @@ const COMPILED_HOOK_SCHEMA: &str = "registry.scheduling-hooks/v1";
 const DATA_SCHEMA_BINDING: &str = "registry.scheduling-hook-data/v1";
 const IDEMPOTENCY_DOMAIN: &[u8] = b"scheduling-hook-idempotency-v1";
 const ENTITY_ID: &str = "appointment";
+/// The refusal code retained with a delivery whose destination answered with
+/// a proposal. Each dotted segment is lowercase kebab-case.
+const PROPOSAL_UNSUPPORTED_CODE: &str = "scheduling.hook.proposal-unsupported";
 
 const MIN_HMAC_SHA256_KEY_BYTES: usize = 32;
 const INITIAL_BACKOFF_MS: i64 = 30_000;
@@ -392,8 +395,8 @@ impl ActivatedHooks {
                     schema_fingerprint: &self.compiled.schema_fingerprint,
                     data_schema: &hook.data_schema,
                     classification_ceiling: "restricted",
-                    authentication_profile: "hmac_sha256_v1",
-                    delivery_mode: "after_commit",
+                    authentication_profile: "hmac-sha256-v1",
+                    delivery_mode: "after-commit",
                     attempt_timeout_ms: i64::from(MAX_HOOK_ATTEMPT_TIMEOUT_MILLISECONDS),
                     initial_backoff_ms: INITIAL_BACKOFF_MS,
                     maximum_backoff_ms: MAXIMUM_BACKOFF_MS,
@@ -752,7 +755,7 @@ impl DeliverySeams for SchedulingDeliverySeams {
         _application: ProposalApplication<'_>,
     ) -> Result<ProposalOutcome, DeliveryError> {
         Ok(ProposalOutcome::Refused {
-            code: bounded_proposal_code("scheduling.hook.proposal_unsupported"),
+            code: bounded_proposal_code(PROPOSAL_UNSUPPORTED_CODE),
             summary: bounded_proposal_summary(
                 "Scheduling appointment observer hooks cannot propose changes",
             ),
@@ -1080,47 +1083,53 @@ fn audit_phase(value: DeliveryAuditPhase) -> &'static str {
     }
 }
 
+/// The audit word for one delivery outcome. An outcome that repeats a
+/// dead-letter reason is spelled exactly as `DeliveryFailureReason` spells the
+/// stored reason; every other word is Scheduling's own.
 fn audit_outcome(value: DeliveryAuditOutcome) -> &'static str {
     match value {
-        DeliveryAuditOutcome::AttemptStarted => "attempt_started",
+        DeliveryAuditOutcome::AttemptStarted => "attempt-started",
         DeliveryAuditOutcome::Delivered => "delivered",
-        DeliveryAuditOutcome::HttpNonSuccess => "http_non_success",
-        DeliveryAuditOutcome::DestinationTimeout => "destination_timeout",
-        DeliveryAuditOutcome::DestinationResolutionRefused => "destination_resolution_refused",
+        DeliveryAuditOutcome::HttpNonSuccess => "http-non-success",
+        DeliveryAuditOutcome::DestinationTimeout => "destination-timeout",
+        DeliveryAuditOutcome::DestinationResolutionRefused => "destination-resolution-refused",
         DeliveryAuditOutcome::DestinationTransportUnavailable => {
-            "destination_transport_unavailable"
+            "destination-transport-unavailable"
         }
-        DeliveryAuditOutcome::DestinationPolicyRefused => "destination_policy_refused",
-        DeliveryAuditOutcome::DestinationBindingRefused => "destination_binding_refused",
-        DeliveryAuditOutcome::HandlerBindingRefused => "handler_binding_refused",
-        DeliveryAuditOutcome::HandlerDeadline => "handler_deadline",
-        DeliveryAuditOutcome::HandlerResource => "handler_resource",
-        DeliveryAuditOutcome::HandlerExecution => "handler_execution",
-        DeliveryAuditOutcome::HandlerSource => "handler_source",
-        DeliveryAuditOutcome::HandlerUnavailable => "handler_unavailable",
-        DeliveryAuditOutcome::PayloadRefused => "payload_refused",
-        DeliveryAuditOutcome::PayloadExpired => "payload_expired",
-        DeliveryAuditOutcome::WorkerInterrupted => "worker_interrupted",
-        DeliveryAuditOutcome::ReplayRequested => "replay_requested",
-        DeliveryAuditOutcome::ReplayCommitted => "replay_committed",
-        DeliveryAuditOutcome::ReplayRefused => "replay_refused",
-        DeliveryAuditOutcome::ReplayUnfinished => "replay_unfinished",
-        DeliveryAuditOutcome::DiscardRequested => "discard_requested",
-        DeliveryAuditOutcome::DiscardCommitted => "discard_committed",
-        DeliveryAuditOutcome::DiscardRefused => "discard_refused",
-        DeliveryAuditOutcome::DiscardUnfinished => "discard_unfinished",
+        DeliveryAuditOutcome::DestinationPolicyRefused => "destination-policy-refused",
+        DeliveryAuditOutcome::DestinationBindingRefused => "destination-binding-refused",
+        DeliveryAuditOutcome::HandlerBindingRefused => "handler-binding-refused",
+        DeliveryAuditOutcome::HandlerDeadline => "handler-deadline",
+        DeliveryAuditOutcome::HandlerResource => "handler-resource",
+        DeliveryAuditOutcome::HandlerExecution => "handler-execution",
+        DeliveryAuditOutcome::HandlerSource => "handler-source",
+        DeliveryAuditOutcome::HandlerUnavailable => "handler-unavailable",
+        DeliveryAuditOutcome::PayloadRefused => "payload-refused",
+        DeliveryAuditOutcome::PayloadExpired => "payload-expired",
+        DeliveryAuditOutcome::WorkerInterrupted => "worker-interrupted",
+        DeliveryAuditOutcome::ReplayRequested => "replay-requested",
+        DeliveryAuditOutcome::ReplayCommitted => "replay-committed",
+        DeliveryAuditOutcome::ReplayRefused => "replay-refused",
+        DeliveryAuditOutcome::ReplayUnfinished => "replay-unfinished",
+        DeliveryAuditOutcome::DiscardRequested => "discard-requested",
+        DeliveryAuditOutcome::DiscardCommitted => "discard-committed",
+        DeliveryAuditOutcome::DiscardRefused => "discard-refused",
+        DeliveryAuditOutcome::DiscardUnfinished => "discard-unfinished",
     }
 }
 
+/// The audit word for where a delivery stands. `retry-pending`,
+/// `dead-lettered`, and `replay-pending` repeat the words the shared delivery
+/// crates store; every other word is Scheduling's own.
 fn audit_disposition(value: DeliveryAuditDisposition) -> &'static str {
     match value {
         DeliveryAuditDisposition::Leased => "leased",
         DeliveryAuditDisposition::Delivered => "delivered",
-        DeliveryAuditDisposition::RetryPending => "retry_pending",
-        DeliveryAuditDisposition::DeadLettered => "dead_lettered",
+        DeliveryAuditDisposition::RetryPending => "retry-pending",
+        DeliveryAuditDisposition::DeadLettered => "dead-lettered",
         DeliveryAuditDisposition::Expired => "expired",
-        DeliveryAuditDisposition::ReplayPending => "replay_pending",
-        DeliveryAuditDisposition::DiscardPending => "discard_pending",
+        DeliveryAuditDisposition::ReplayPending => "replay-pending",
+        DeliveryAuditDisposition::DiscardPending => "discard-pending",
         DeliveryAuditDisposition::Discarded => "discarded",
         DeliveryAuditDisposition::Unknown => "unknown",
     }
@@ -1145,11 +1154,154 @@ fn transition_code(
 mod tests {
     use chrono::{TimeDelta, Utc};
     use registry_platform_config::SecretProvider;
+    use registry_platform_hooks::delivery::DeliveryFailureReason;
     use registry_scheduling_core::LedgerKind;
 
     use super::*;
     use crate::config::{reads_block, DestinationsConfig, MIN_HOOK_ATTEMPT_TIMEOUT_MILLISECONDS};
     use crate::store::{ClaimOwner, ClaimState};
+
+    /// Lowercase kebab-case, the spelling of every value a machine matches.
+    fn is_kebab_case(word: &str) -> bool {
+        !word.is_empty()
+            && word.split('-').all(|part| {
+                !part.is_empty()
+                    && part.chars().all(|character| {
+                        character.is_ascii_lowercase() || character.is_ascii_digit()
+                    })
+            })
+            && word.starts_with(|character: char| character.is_ascii_lowercase())
+    }
+
+    #[test]
+    fn hook_delivery_audit_outcomes_scheduling_names_are_written_in_kebab_case() {
+        let outcomes = [
+            (DeliveryAuditOutcome::AttemptStarted, "attempt-started"),
+            (DeliveryAuditOutcome::Delivered, "delivered"),
+            (
+                DeliveryAuditOutcome::DestinationResolutionRefused,
+                "destination-resolution-refused",
+            ),
+            (
+                DeliveryAuditOutcome::DestinationTransportUnavailable,
+                "destination-transport-unavailable",
+            ),
+            (DeliveryAuditOutcome::PayloadExpired, "payload-expired"),
+            (DeliveryAuditOutcome::ReplayRequested, "replay-requested"),
+            (DeliveryAuditOutcome::ReplayCommitted, "replay-committed"),
+            (DeliveryAuditOutcome::ReplayRefused, "replay-refused"),
+            (DeliveryAuditOutcome::ReplayUnfinished, "replay-unfinished"),
+            (DeliveryAuditOutcome::DiscardRequested, "discard-requested"),
+            (DeliveryAuditOutcome::DiscardCommitted, "discard-committed"),
+            (DeliveryAuditOutcome::DiscardRefused, "discard-refused"),
+            (
+                DeliveryAuditOutcome::DiscardUnfinished,
+                "discard-unfinished",
+            ),
+        ];
+        for (outcome, word) in outcomes {
+            assert!(is_kebab_case(word), "{word}");
+            assert_eq!(audit_outcome(outcome), word);
+        }
+    }
+
+    /// An outcome that repeats a dead-letter reason is spelled exactly as the
+    /// hook delivery schema stores that reason.
+    #[test]
+    fn hook_delivery_audit_outcomes_repeat_the_stored_dead_letter_reason() {
+        let repeated = [
+            (
+                DeliveryAuditOutcome::HttpNonSuccess,
+                DeliveryFailureReason::HttpNonSuccess,
+            ),
+            (
+                DeliveryAuditOutcome::DestinationTimeout,
+                DeliveryFailureReason::DestinationTimeout,
+            ),
+            (
+                DeliveryAuditOutcome::DestinationPolicyRefused,
+                DeliveryFailureReason::DestinationPolicyRefused,
+            ),
+            (
+                DeliveryAuditOutcome::DestinationBindingRefused,
+                DeliveryFailureReason::DestinationBindingRefused,
+            ),
+            (
+                DeliveryAuditOutcome::HandlerBindingRefused,
+                DeliveryFailureReason::HandlerBindingRefused,
+            ),
+            (
+                DeliveryAuditOutcome::HandlerDeadline,
+                DeliveryFailureReason::HandlerDeadline,
+            ),
+            (
+                DeliveryAuditOutcome::HandlerResource,
+                DeliveryFailureReason::HandlerResource,
+            ),
+            (
+                DeliveryAuditOutcome::HandlerExecution,
+                DeliveryFailureReason::HandlerExecution,
+            ),
+            (
+                DeliveryAuditOutcome::HandlerSource,
+                DeliveryFailureReason::HandlerSource,
+            ),
+            (
+                DeliveryAuditOutcome::HandlerUnavailable,
+                DeliveryFailureReason::HandlerUnavailable,
+            ),
+            (
+                DeliveryAuditOutcome::PayloadRefused,
+                DeliveryFailureReason::PayloadRefused,
+            ),
+            (
+                DeliveryAuditOutcome::WorkerInterrupted,
+                DeliveryFailureReason::WorkerInterrupted,
+            ),
+        ];
+        for (outcome, reason) in repeated {
+            let word = audit_outcome(outcome);
+            assert!(is_kebab_case(word), "{word}");
+            assert_eq!(word, reason.as_str());
+        }
+    }
+
+    #[test]
+    fn hook_delivery_audit_dispositions_and_phases_scheduling_names_are_written_in_kebab_case() {
+        let dispositions = [
+            (DeliveryAuditDisposition::Leased, "leased"),
+            (DeliveryAuditDisposition::Delivered, "delivered"),
+            (DeliveryAuditDisposition::RetryPending, "retry-pending"),
+            (DeliveryAuditDisposition::DeadLettered, "dead-lettered"),
+            (DeliveryAuditDisposition::Expired, "expired"),
+            (DeliveryAuditDisposition::ReplayPending, "replay-pending"),
+            (DeliveryAuditDisposition::DiscardPending, "discard-pending"),
+            (DeliveryAuditDisposition::Discarded, "discarded"),
+            (DeliveryAuditDisposition::Unknown, "unknown"),
+        ];
+        for (disposition, word) in dispositions {
+            assert!(is_kebab_case(word), "{word}");
+            assert_eq!(audit_disposition(disposition), word);
+        }
+        for phase in [
+            DeliveryAuditPhase::Attempt,
+            DeliveryAuditPhase::Terminal,
+            DeliveryAuditPhase::Replay,
+            DeliveryAuditPhase::Discard,
+        ] {
+            let word = audit_phase(phase);
+            assert!(is_kebab_case(word), "{word}");
+        }
+    }
+
+    #[test]
+    fn the_proposal_refusal_code_is_dotted_kebab_case() {
+        assert_eq!(
+            PROPOSAL_UNSUPPORTED_CODE,
+            "scheduling.hook.proposal-unsupported"
+        );
+        assert!(PROPOSAL_UNSUPPORTED_CODE.split('.').all(is_kebab_case));
+    }
 
     #[test]
     fn projections_disclose_only_the_requested_closed_fields() {

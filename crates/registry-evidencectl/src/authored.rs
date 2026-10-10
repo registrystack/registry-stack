@@ -301,10 +301,10 @@ fn compiler_action(code: &str) -> &'static str {
             "Remove the member, which the closed Evidence source shape does not define."
         }
         "evidence.source.transport-missing" => {
-            "Declare the source's transport: http-json or sqlite-extract."
+            "Declare the source's type: http-json or sqlite-extract."
         }
         "evidence.source.production-channel" => {
-            "Give the production source an https baseUrl and an authentication kind other than none or review-required."
+            "Give the production source an https baseUrl and an authentication type other than none or review-required."
         }
         "evidence.source.production-transport" => {
             "Use a source transport with stated production conditions: http-json or sqlite-extract."

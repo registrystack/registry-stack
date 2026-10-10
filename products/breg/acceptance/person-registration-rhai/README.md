@@ -20,7 +20,7 @@ specification or checksum.
 
 ```yaml
 handler:
-  kind: rhai
+  type: rhai
   script: scripts/register-person.rhai
   abi: registry.action-handler/v1
   refusals:
@@ -34,14 +34,14 @@ handler:
 
 This ABI accepts declared scalar inputs, including reference IDs. It does not
 accept `crs84-point`, `structured`, or arbitrary JSON object or array values.
-String and text inputs must declare `maxLength` of at most 4,096 Unicode scalar
+String and text inputs must declare `maximumLength` of at most 4,096 Unicode scalar
 values so every value fits Rhai's 16,384-byte UTF-8 string budget. This project
 uses 13 characters for the identifier and 80 for each name part. Other scalar
 types retain their own bounds, and decimal values use canonical JSON strings.
 Every input string also has a 16,384-byte admission limit, including timestamps.
 An HTTP request exceeding a declared bound or this byte limit returns
 `400 request.invalid` before the handler runs. A project with an overlarge
-`maxLength` must reduce it; use fixed effects for actions needing point or
+`maximumLength` must reduce it; use fixed effects for actions needing point or
 structured inputs.
 
 The [handler](scripts/register-person.rhai) exports `fn handle(ctx)` and reads
@@ -75,7 +75,7 @@ actions and receive their result references, but has no ordinary entity write
 grant. `person-reader` independently grants reads; `person-administrator`
 supplies ordinary creates and patches for the comparison and register setup.
 
-The stored identifier uses `pattern: '^[0-9]{13}$'` with `maxLength: 13`.
+The stored identifier uses `pattern: '^[0-9]{13}$'` with `maximumLength: 13`.
 [PostgreSQL native patterns](../../native-patterns.md) enforce the expression on
 every write path. Requiredness is
 separate. Patterns are not silently converted into JavaScript regular

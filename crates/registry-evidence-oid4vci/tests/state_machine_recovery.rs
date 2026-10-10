@@ -78,7 +78,7 @@ const DEFINITIONS: &str = r#"{
   "audience": "https://wallet.example.org",
   "issuedBy": "https://registry.example.org",
   "providedBy": "https://provider.example.org",
-  "holderBoundBatchMaxSize": 4,
+  "maximumHolderBoundBatchSize": 4,
   "definitions": [{
     "handle": "holder-bound",
     "requirement": "urn:example:requirement:holder-bound",
@@ -103,7 +103,7 @@ const DEFINITIONS: &str = r#"{
         }]
       }
     }],
-    "concepts": [{"handle": "outcome", "concept": "urn:example:concept:outcome", "required": true, "form": "boolean"}]
+    "concepts": [{"handle": "outcome", "concept": "urn:example:concept:outcome", "required": true, "form": {"type": "boolean"}}]
   }]
 }"#;
 
@@ -137,7 +137,7 @@ fn credential_catalog() -> Arc<CredentialCatalog> {
 fn credential_catalog_with_batch_maximum(maximum: u16) -> Arc<CredentialCatalog> {
     let mut document: EvidenceDefinitionsDocument =
         serde_json::from_str(DEFINITIONS).expect("the test definitions parse");
-    document.holder_bound_batch_max_size = maximum;
+    document.maximum_holder_bound_batch_size = maximum;
     assert_eq!(
         document.definitions[0].subject_binding_mode,
         Some(SubjectBindingMode::HolderBound)

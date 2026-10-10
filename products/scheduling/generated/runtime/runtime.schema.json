@@ -222,13 +222,13 @@
           "additionalProperties": false,
           "description": "Read `jwks_uri` from the issuer's OpenID Connect discovery document.",
           "properties": {
-            "kind": {
+            "type": {
               "const": "discovery",
               "type": "string"
             }
           },
           "required": [
-            "kind"
+            "type"
           ],
           "type": "object"
         },
@@ -236,7 +236,7 @@
           "additionalProperties": false,
           "description": "Fetch the key set from this absolute `https` URI, skipping discovery.",
           "properties": {
-            "kind": {
+            "type": {
               "const": "uri",
               "type": "string"
             },
@@ -245,7 +245,7 @@
             }
           },
           "required": [
-            "kind",
+            "type",
             "uri"
           ],
           "type": "object"
@@ -257,13 +257,13 @@
             "documentRef": {
               "$ref": "#/$defs/SecretReference"
             },
-            "kind": {
+            "type": {
               "const": "static",
               "type": "string"
             }
           },
           "required": [
-            "kind",
+            "type",
             "documentRef"
           ],
           "type": "object"
@@ -294,12 +294,13 @@
       "description": "The access tokens this runtime accepts: the issuer and its keys, the\nclients admitted, and the scopes each route family requires.",
       "properties": {
         "allowedClients": {
-          "description": "Client identifiers whose access tokens are admitted. Required in every\nfile; an omitted or empty list is refused.",
+          "description": "Client identifiers whose access tokens are admitted. Required in every\nfile; an omitted or empty list, a repeated client, and `unrestricted`\nare refused.",
           "items": {
             "type": "string"
           },
           "minItems": 1,
-          "type": "array"
+          "type": "array",
+          "uniqueItems": true
         },
         "assertionIssuers": {
           "additionalProperties": {
@@ -309,10 +310,11 @@
               "type": "string"
             },
             "maxItems": 16,
+            "minItems": 1,
             "type": "array",
             "uniqueItems": true
           },
-          "description": "Assertion authorities each client may exchange a subject token from,\nkeyed by client identifier. Omitted, no assertion-issuer rule applies;\nwritten, it lists at least one client. Once a client is listed, a\ntoken it exchanged is accepted only for one of that client's declared\nauthorities.",
+          "description": "Assertion authorities each client may exchange a subject token from,\nkeyed by client identifier. Omitted, no assertion-issuer rule applies;\nwritten, it lists at least one client, each with at least one\nauthority. Once a client is listed, a token it exchanged is accepted\nonly for one of that client's declared authorities, and a client that\nis not listed may exchange from no authority.",
           "maxProperties": 64,
           "minProperties": 1,
           "propertyNames": {
@@ -339,7 +341,7 @@
         "jwksSource": {
           "$ref": "#/$defs/JwksSource",
           "default": {
-            "kind": "discovery"
+            "type": "discovery"
           },
           "description": "Where the issuer's signing keys come from. Absent reads the issuer's\nOpenID Connect discovery document."
         },
@@ -490,10 +492,10 @@
       "type": "string"
     },
     "Url": {
-      "description": "An absolute http or https URL with a host and no user information.",
+      "description": "An absolute http or https URL with a host, no user information, and no whitespace or control character.",
       "format": "uri",
       "maxLength": 2048,
-      "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://[^/?#@]+([/?#].*)?$",
+      "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://[^/?#@\\u0000-\\u0020\\u007F-\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]+([/?#][^\\u0000-\\u0020\\u007F-\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*)?$",
       "type": "string"
     }
   },

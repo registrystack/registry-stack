@@ -6,7 +6,7 @@ kind: EvidenceSource
 
 # The transport decides the shape of the rest of this file. `sqlite-extract`
 # reads one published extract file through one fixed statement.
-transport: sqlite-extract
+type: sqlite-extract
 
 # `source-derived` says the answer is read from the source, not asserted by
 # this deployment on its own authority.
@@ -37,7 +37,7 @@ request:
   # never text the statement parses.
   parameterBindings:
     record_reference:
-      kind: selector
+      type: selector
       role: subject
       profile: record-reference-v1
       field: record_reference
@@ -52,9 +52,9 @@ request:
   maximumRows: 2
   maximumCellBytes: 64
   maximumStatementSteps: 100000
-  timeoutMilliseconds: 2000
+  attemptTimeoutMilliseconds: 2000
   maximumResponseBytes: 8192
-  concurrencyLimit: 8
+  maximumConcurrency: 8
 
 # The three files that bound what leaves the source: the shape the statement
 # result must have, the script that reduces it to facts, and the shape those

@@ -27,8 +27,8 @@ fields[0].reference = { manualEntry: true, targetEntity: 'item', operations: [
 const query = {
   kind: 'list', selectableFields: [{id: 'wide', apiName: 'wide'}],
   filterableFields: [{id: '__request_breg_state', apiName: 'bregState', operators: ['equals', 'in']}],
-  sortableFields: [], allowCount: true, defaultPageSize: 20, maxPageSize: 100,
-  maxFilterClauses: 10, maxInValues: 20,
+  sortableFields: [], allowCount: true, defaultPageSize: 20, maximumPageSize: 100,
+  maximumFilterClauses: 10, maximumInValues: 20,
   pagination: {parameter:'$skiptoken', responsePath:'pageInfo.nextCursor', exclusive:true}, temporal:{mode:'current'},
 };
 function operation(kind) {
@@ -61,7 +61,7 @@ function lookupOperation() {
 }
 function lifecycleOperation() {
   return {id:'records.item.request.apply', method:'POST', path:'/v1/records/items/{record_id}/actions/apply',
-    operation:'apply_request', sourceEntity:'item', responseEntity:'item', accessProfile:profile,
+    operation:'apply-request', sourceEntity:'item', responseEntity:'item', accessProfile:profile,
     requiredCapabilities:['change_request_lifecycle'],
     entityLabel:'Item', identifier:{apiName:'id',location:'envelope'}, titleFields:[], fields:[],
     readableFields:[], readableRequestFields:[], createWritableFields:[], patchWritableFields:[], selectors:[], query:null,
@@ -102,10 +102,10 @@ function otherCreateOperation() {
 }
 const metadata = {id:'test-registry',version:'1',revision:`sha256:${'a'.repeat(64)}`,metadataVersion:'1',
   entities:[{id:'item',datasetIdentifier:'items',route:'items',schema:'/v1/schemas/item',
-    operations:['create','patch','list','lookup','apply_request','tombstone','batch'].map(operation=>({operation,accessProfile:profile})),readableFields:fields.map(f=>f.id),
+    operations:['create','patch','list','lookup','apply-request','tombstone','batch'].map(operation=>({operation,accessProfile:profile})),readableFields:fields.map(f=>f.id),
     changeRequest:{planner:{kind:'declarative'},
       effects:[{id:'move',operation:'patch',target:{entity:'item',fromField:'reference'},set:[{field:'wide',fromField:'date'},{field:'decimal'}],clear:['nullable']}],
-      review:{authority:'casework',policyId:'address-review'},
+      review:{type:'required',authority:'casework',policyId:'address-review'},
       onApproved:{mode:'automatic',executor:'breg-worker'},application:{preconditions:{request:[]}}}},
     {id:'other',datasetIdentifier:'other-items',route:'others',schema:'/v1/schemas/other',
       operations:[{operation:'create',accessProfile:profile}],readableFields:fields.map(f=>f.id)}],
@@ -122,7 +122,7 @@ const lifecycleRecord = JSON.stringify({
     request: {
       bregState: 'submitted', proposalVersion, editable: false, effectDigest: digest,
       submitterReference: 'opaque-submitter',
-      proposal: {review:{authority:'casework',policyId:'address-review'}},
+      proposal: {review:{type:'required',authority:'casework',policyId:'address-review'}},
       review: {
         submission:{state:'accepted',authority:'casework',requestId:id,submissionDigest:digest,recoveryDeadline:'2026-10-01T10:00:00Z',policy:{id:'address-review',version:'1',digest}},
         result:{state:'approved',resultId:applicationId,completedAt:'2026-09-01T11:00:00Z',availableUntil:'2026-10-01T11:00:00Z'},
@@ -130,7 +130,7 @@ const lifecycleRecord = JSON.stringify({
         application:{mode:'automatic',state:'queued',executor:'breg-worker',attempts:3,nextAttemptAt:'2026-09-01T11:00:05Z'},
         recovery:{state:'none'},
       },
-      actions: [{operation:'apply_request', method:'POST', href:lifecycleActionHref, ifMatch:actionIfMatch, proposalVersion, effectDigest:digest}],
+      actions: [{operation:'apply-request', method:'POST', href:lifecycleActionHref, ifMatch:actionIfMatch, proposalVersion, effectDigest:digest}],
     },
   },
   meta,
@@ -203,7 +203,7 @@ test('native JSON methods preserve values, metadata, cursors and mutation precon
     const binding = contract.selectCreate('records.item.create',profile);
     const data = `{"wide":9007199254740992,"decimal":"12.3400","date":"2026-09-08","nullable":null,"reference":"${id}"}`;
     const structuredCreateCount = requests.length;
-    assert.throws(() => client.createRecord(binding,{wide:Number.MAX_SAFE_INTEGER + 1},'unsafe-create'),error=>error.kind === 'invalid_request');
+    assert.throws(() => client.createRecord(binding,{wide:Number.MAX_SAFE_INTEGER + 1},'unsafe-create'),error=>error.kind === 'invalid-request');
     assert.equal(requests.length,structuredCreateCount);
     const preparedCreate = client.prepareCreateJson(binding,data,'recover-create');
     const preparedCreateBytes = preparedCreate.toBytes();
@@ -220,7 +220,7 @@ test('native JSON methods preserve values, metadata, cursors and mutation precon
     assert.equal(requests.at(-1).headers['idempotency-key'],'recover-create');
     const recoveryRequestCount = requests.length;
     const otherBinding = restartedContract.selectCreate('records.other.create',profile);
-    await assert.rejects(restartedClient.executeRecoveredCreate(otherBinding,recoveredCreate),error=>error.kind === 'invalid_request');
+    await assert.rejects(restartedClient.executeRecoveredCreate(otherBinding,recoveredCreate),error=>error.kind === 'invalid-request');
     assert.equal(requests.length,recoveryRequestCount);
     const created = await client.createRecordJson(binding,data,'exact-create');
     assert.match(created.valueJson,/"wide":9007199254740992/);
@@ -230,12 +230,12 @@ test('native JSON methods preserve values, metadata, cursors and mutation precon
     assert.ok(!Object.hasOwn(JSON.parse(created.valueJson).data.domainData,'absent'));
     const before = requests.length;
     for (const invalid of ['{"wide":9007199254740993}','{"wide":9007199254740993.0}','{"wide":0.10000000000000001}','{"wide":1,"wide":2}','{"wide":1e9999}']) {
-      await assert.rejects(client.createRecordJson(binding,invalid,'refused'), error=>error.kind === 'invalid_request');
+      await assert.rejects(client.createRecordJson(binding,invalid,'refused'), error=>error.kind === 'invalid-request');
     }
     assert.equal(requests.length,before);
     const patch = contract.selectPatch('records.item.patch',profile);
     const structuredPatchCount = requests.length;
-    assert.throws(() => client.patchRecord(patch,id,created.etag,[{op:'replace',field:'wide',value:Number.MAX_SAFE_INTEGER + 1}],'unsafe-patch'),error=>error.kind === 'invalid_request');
+    assert.throws(() => client.patchRecord(patch,id,created.etag,[{op:'replace',field:'wide',value:Number.MAX_SAFE_INTEGER + 1}],'unsafe-patch'),error=>error.kind === 'invalid-request');
     assert.equal(requests.length,structuredPatchCount);
     await client.patchRecordJson(patch,id,created.etag,'[{"op":"replace","field":"wide","value":9007199254740992}]','exact-patch');
     assert.equal(requests.at(-1).headers['if-match'],created.etag);
@@ -260,11 +260,11 @@ test('native JSON methods preserve values, metadata, cursors and mutation precon
     const removedJson = await client.tombstoneRecordJson(tombstone,id,'"breg-record-000000000001"','remove-two');
     assert.match(removedJson.valueJson,/9007199254740992/);
     const mutationRequestCount = requests.length;
-    await assert.rejects(client.batchRecords(batch,{items:[]},'empty-batch'),error=>error.kind === 'invalid_request');
-    assert.throws(() => client.batchRecords(batch,{items:[{operation:'create',data:{wide:Number.MAX_SAFE_INTEGER + 1}}]},'unsafe-batch'),error=>error.kind === 'invalid_request');
-    await assert.rejects(client.tombstoneRecord(tombstone,'not-a-uuid','"breg-record-000000000001"','bad-remove'),error=>error.kind === 'invalid_request');
+    await assert.rejects(client.batchRecords(batch,{items:[]},'empty-batch'),error=>error.kind === 'invalid-request');
+    assert.throws(() => client.batchRecords(batch,{items:[{operation:'create',data:{wide:Number.MAX_SAFE_INTEGER + 1}}]},'unsafe-batch'),error=>error.kind === 'invalid-request');
+    await assert.rejects(client.tombstoneRecord(tombstone,'not-a-uuid','"breg-record-000000000001"','bad-remove'),error=>error.kind === 'invalid-request');
     const foreign = new BaseRegistryClient({baseUrl:'http://127.0.0.1:1'});
-    await assert.rejects(foreign.batchRecords(batch,{items:[{operation:'create',data:{wide:1}}]},'foreign-batch'),error=>error.kind === 'invalid_request');
+    await assert.rejects(foreign.batchRecords(batch,{items:[{operation:'create',data:{wide:1}}]},'foreign-batch'),error=>error.kind === 'invalid-request');
     assert.equal(requests.length,mutationRequestCount);
     const page = await client.listRecordsJson('items',{accessProfile:profile,filter:"bregState eq 'submitted'"});
     assert.match(page.valueJson,/9007199254740992/);
@@ -287,7 +287,7 @@ test('native JSON methods preserve values, metadata, cursors and mutation precon
     const authority = contract.selectLifecycle('item',profile);
     const actions = client.lifecycleActionsJson(authority,lifecycleRecord);
     assert.equal(actions.length,1);
-    assert.equal(actions[0].operation,'apply_request');
+    assert.equal(actions[0].operation,'apply-request');
     assert.equal(actions[0].href,lifecycleActionHref);
     const recoveredReceiptRecord = JSON.parse(lifecycleRecord);
     recoveredReceiptRecord.data.request.bregState = 'applied';
@@ -301,13 +301,13 @@ test('native JSON methods preserve values, metadata, cursors and mutation precon
     recoveredReceiptRecord.data.request.review.application.receiptRecovered = false;
     assert.throws(
       () => client.lifecycleActions(authority,recoveredReceiptRecord),
-      error => error.kind === 'lifecycle_promotion' && error.code === 'binding',
+      error => error.kind === 'lifecycle-promotion' && error.code === 'binding',
     );
     const malformedLifecycleRecord = JSON.parse(lifecycleRecord);
     malformedLifecycleRecord.data.request.review.submission.submissionDigest = 'sha256:UPPERCASE';
     assert.throws(
       () => client.lifecycleActions(authority,malformedLifecycleRecord),
-      error => error.kind === 'lifecycle_promotion' && error.code === 'binding',
+      error => error.kind === 'lifecycle-promotion' && error.code === 'binding',
     );
     const preparedLifecycle = client.prepareLifecycleActionJson(
       authority,lifecycleRecord,actions[0],'recover-apply',

@@ -16,10 +16,10 @@ use registry_casework::{
 };
 use registry_casework_core::{
     AccessProfile, ActiveSubjectsPage, ActorContext, AuthoritativeObservation,
-    BootstrapDirectoryRequest, CallerSubjectView, CaseworkIdentity, CaseworkProject, CaseworkRole,
-    DiscoveryCursor, EphemeralCredential, EventRequest, ExecutePreparedRequest, InboxPolicy,
-    IssuerPrincipal, OccurrenceKind, OccurrenceState, OperationName, PrepareActionRequest,
-    PreparedSourceAttempt, QueuePolicy, RecoveryEvidence, SourceAdapter, SourceAdapterError,
+    BootstrapDirectoryRequest, CallerSubjectView, CaseworkProject, CaseworkRole, DiscoveryCursor,
+    EphemeralCredential, EventRequest, ExecutePreparedRequest, InboxPolicy, IssuerPrincipal,
+    OccurrenceKind, OccurrenceState, OperationName, PrepareActionRequest, PreparedSourceAttempt,
+    ProjectIdentity, QueuePolicy, RecoveryEvidence, SourceAdapter, SourceAdapterError,
     SourceBinding, SourcePolicy, SourceReceipt, SourceRequestPolicy, SourceRetentionSelector,
     SubjectRef, TransitionHint, CASEWORK_API_VERSION, CASEWORK_KIND, CASEWORK_PROFILE_HEADER,
     IDEMPOTENCY_KEY_HEADER, IF_MATCH_HEADER, SOURCE_PROFILE_HEADER,
@@ -96,7 +96,7 @@ impl SourceAdapter for SourceFixture {
             binding: binding(1),
             disclosed: BTreeMap::from([("summary".to_owned(), json!(CANARY))]),
             permitted_operations: vec![
-                OperationName::parse("request_correction").expect("operation")
+                OperationName::parse("request-correction").expect("operation")
             ],
         })
     }
@@ -150,8 +150,8 @@ fn project() -> CaseworkProject {
         task_templates: Vec::new(),
         api_version: CASEWORK_API_VERSION.to_owned(),
         kind: CASEWORK_KIND.to_owned(),
-        casework: CaseworkIdentity {
-            id: "source-retention-test".to_owned(),
+        project: ProjectIdentity {
+            id: "source-retention-test".parse().unwrap(),
             version: "1".to_owned(),
         },
         access_profiles: vec![
@@ -216,7 +216,7 @@ fn observation(id: String, revision: i64) -> AuthoritativeObservation {
         occurrence_kind: OccurrenceKind::Review,
         stage: Some("review".to_owned()),
         state: OccurrenceState::Open,
-        remaining_actions: vec![OperationName::parse("request_correction").expect("operation")],
+        remaining_actions: vec![OperationName::parse("request-correction").expect("operation")],
     }
 }
 
@@ -312,7 +312,7 @@ async fn source_erasure_scrubs_payloads_fences_rehydration_and_preserves_expired
             item.item_id,
             current.revision,
             "reader",
-            OperationName::parse("request_correction").expect("operation"),
+            OperationName::parse("request-correction").expect("operation"),
             Some(CANARY),
             &["field-a".to_owned()],
             &current.binding,
@@ -517,7 +517,7 @@ async fn source_erasure_scrubs_payloads_fences_rehydration_and_preserves_expired
         "the erasure selector does not enter audit"
     );
     assert_eq!(
-        audit_capture.responses("source_retention_erased").len(),
+        audit_capture.responses("source-retention-erased").len(),
         1,
         "the erasure is audited once"
     );
@@ -560,7 +560,7 @@ async fn source_erasure_scrubs_payloads_fences_rehydration_and_preserves_expired
                 item.item_id,
                 current.revision,
                 "reader",
-                OperationName::parse("request_correction").expect("operation"),
+                OperationName::parse("request-correction").expect("operation"),
                 Some(CANARY),
                 &["field-a".to_owned()],
                 &current.binding,
@@ -681,7 +681,7 @@ async fn source_erasure_scrubs_payloads_fences_rehydration_and_preserves_expired
             blocked_item.item_id,
             blocked_claim.revision,
             "reader",
-            OperationName::parse("request_correction").expect("operation"),
+            OperationName::parse("request-correction").expect("operation"),
             Some("pending payload"),
             &[],
             "pending-key",

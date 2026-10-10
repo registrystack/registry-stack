@@ -31,8 +31,8 @@ test('task grants preserve preview, approval revision/key and token-only machine
  for(const request of requests.slice(0,4)){assert.equal(request.headers['registry-casework-profile'],'staff');assert.equal(request.headers['registry-source-profile'],'source-reviewer');}
  for(const request of requests.slice(4)){assert.equal(request.headers['registry-casework-profile'],undefined);assert.equal(request.headers['registry-source-profile'],undefined);}
  const before=requests.length;
- await assert.rejects(client.approveTaskGrant('human-token','staff','source-reviewer',item,7,'caller-attempt-key',{...approval,resource:'urn:other'}),e=>e.kind==='invalid_request');
- await assert.rejects(client.taskAssertion('bootstrap-token','not-a-grant-id'),e=>e.kind==='invalid_request');
- assert.throws(()=>client.taskAssertionEndpoint('not-a-grant-id'),e=>e.kind==='invalid_request');
+ await assert.rejects(client.approveTaskGrant('human-token','staff','source-reviewer',item,7,'caller-attempt-key',{...approval,resource:'urn:other'}),e=>e.kind==='invalid-request');
+ await assert.rejects(client.taskAssertion('bootstrap-token','not-a-grant-id'),e=>e.kind==='invalid-request');
+ assert.throws(()=>client.taskAssertionEndpoint('not-a-grant-id'),e=>e.kind==='invalid-request');
  assert.equal(requests.length,before);
 });

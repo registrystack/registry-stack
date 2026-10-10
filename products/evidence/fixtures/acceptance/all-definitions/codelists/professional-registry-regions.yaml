@@ -1,3 +1,6 @@
-id: urn:example:fixture:codelist:registry-regions
+apiVersion: id.registrystack.org/formats/evidence/codelist/v1alpha1
+kind: EvidenceCodelist
+uri: urn:example:fixture:codelist:registry-regions
 version: '1'
+type: code-list
 codes: [RR-A, RR-B]

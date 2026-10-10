@@ -193,7 +193,7 @@ pub(crate) async fn install(
              request_id uuid NOT NULL,
              proposal_version bigint NOT NULL CHECK (proposal_version > 0),
              link_kind text NOT NULL CHECK (link_kind IN
-                 ('request_create','request_patch','request_lifecycle','request_batch')),
+                 ('request_create','request_patch','request-lifecycle','request_batch')),
              created_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
              PRIMARY KEY (entity_id, record_id, record_revision,
                           request_entity_id, request_id, proposal_version),
@@ -650,7 +650,7 @@ pub(crate) async fn link_request_revision(
         || proposal_version <= 0
         || !matches!(
             link_kind,
-            "request_create" | "request_patch" | "request_lifecycle" | "request_batch"
+            "request_create" | "request_patch" | "request-lifecycle" | "request_batch"
         )
     {
         return Err(MutationError::InvalidRequest);
@@ -1162,10 +1162,7 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
-    use crate::model::{
-        CompiledChangeRequestNoReview, CompiledChangeRequestNoReviewMode,
-        CompiledChangeRequestReview,
-    };
+    use crate::model::CompiledChangeRequestReview;
     use crate::mutation::install_mutation_schema;
     use crate::request_workflow::{
         ContractFingerprint, EffectId, FieldId, FieldValue, FrozenPlannerKind,
@@ -1321,9 +1318,7 @@ mod tests {
                 "sha256:2222222222222222222222222222222222222222222222222222222222222222",
             )
             .expect("package fingerprint"),
-            CompiledChangeRequestReview::None(CompiledChangeRequestNoReview {
-                mode: CompiledChangeRequestNoReviewMode::None,
-            }),
+            CompiledChangeRequestReview::None,
             FrozenPlanningBinding::new(
                 FrozenPlannerKind::Declarative,
                 "registry.change-request-plan/v1",

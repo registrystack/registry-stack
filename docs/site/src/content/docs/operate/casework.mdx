@@ -41,10 +41,10 @@ the package directory and ends at a serving deployment.
   `secret:env/<NAME>` names an environment variable.
 - **Durable storage for the audit file, and somewhere to ship it.** The runtime appends one JSON
   line per audit entry to one file, seals it under an eight-digit numeric suffix when it would pass
-  `audit.rotateBytes`, and deletes sealed files older than `audit.retainDays`. It holds a
+  `audit.rotateBytes`, and deletes sealed files older than `audit.retentionDays`. It holds a
   process-lifetime lock on a `.lock` file beside it, so exactly one process writes one file. The
   directory must belong to the runtime user and must not be group- or world-writable. Entries are
-  not chained or signed, so tamper evidence and history past `retainDays` come from shipping sealed
+  not chained or signed, so tamper evidence and history past `retentionDays` come from shipping sealed
   files, or a `stdout` destination's stream, to append-only storage you operate.
 - **A host for one process, or a place to run the container image.**
 
@@ -190,7 +190,7 @@ binding per source the package declares. It is a deployment artifact: keep it ou
 project, and put no credential in it.
 
 ```yaml
-apiVersion: registry.registrystack.org/casework-runtime/v1alpha1
+apiVersion: id.registrystack.org/formats/casework/runtime/v1alpha1
 kind: CaseworkRuntimeConfig
 identity:
   # The logical identity of the database this file belongs to; the first apply records it.
@@ -220,14 +220,15 @@ authentication:
   oidc:
     issuer: https://identity.example.org/realms/registry
     audience: urn:example:casework
-    # Every client whose tokens this deployment admits; required in production.
+    # Every client whose tokens this deployment admits. Development loopback
+    # also accepts `unrestricted`.
     allowedClients: [casework-console]
     scopeClaim: scope
     humanIdentity:
       claim: registry_actor_kind
       value: human
     jwksSource:
-      kind: discovery
+      type: discovery
 audit:
   destination: file
   path: /var/lib/registry-casework/audit/casework.ndjson
@@ -253,11 +254,11 @@ sources:
 | `secretProviders` | The explicitly enabled file and environment secret providers. |
 | `database` | Secret references for the runtime and migration connection URLs, and an optional trusted root certificate for the PostgreSQL connection. |
 | `authentication` | The OpenID Connect issuer, audience, claim names, human-identity assertion, and the source of the issuer's keys. |
-| `audit` | Where audit entries go, `file` (the default) at an absolute `path` or `stdout`, the optional `rotateBytes` (100 MiB by default, at least 1 MiB, at most 4294967295) and `retainDays` (90 by default, at most 36500) of a `file` destination, and the reference to the key that pseudonymizes the identifiers entries name. |
+| `audit` | Where audit entries go, `file` (the default) at an absolute `path` or `stdout`, the optional `rotateBytes` (100 MiB by default, at least 1 MiB, at most 4294967295) and `retentionDays` (90 by default, at most 36500) of a `file` destination, and the reference to the key that pseudonymizes the identifiers entries name. |
 | `sources` | One BReg binding per source the package declares: base URL, reader profile, token endpoint, and references to the client identifier, client assertion key, and webhook secret. The set of keys must equal the set of declared source ids exactly, and a package with no source needs no block. |
 
 The package root, file secret root, and audit path must be absolute. A `stdout` destination
-refuses `path`, `rotateBytes`, and `retainDays`, and leaves collection and retention to the
+refuses `path`, `rotateBytes`, and `retentionDays`, and leaves collection and retention to the
 platform that reads the stream. An environment reference is
 valid only when `secretProviders.environment: {}` explicitly enables that provider. The runtime file
 itself may not pass through a symbolic link and is at most 1 MiB. A string value may take a
@@ -290,21 +291,23 @@ configured to mint the access-token type.
 only for an IPv4 loopback address under `development-loopback`. `audience` is at most 512 characters.
 
 `allowedClients` names the clients whose tokens the runtime admits, matched against the token's
-`azp` claim or, when it has none, its `client_id` claim. With `operator-controlled-upstream` the list
-must name at least one client, and the runtime refuses to start at
-`authentication.oidc.allowedClients` otherwise: an empty list admits every client the issuer
-verifies, including an unrelated application registered in the same realm. `development-loopback`
-still accepts an empty list. A configured `taskAuthority` requires a non-empty list in either mode.
+`azp` claim or, when it has none, its `client_id` claim. Every file writes the member: a list of at
+least one distinct client, or `unrestricted`, which admits every client the issuer verifies,
+including an unrelated application registered in the same realm. An omitted member, an empty list,
+and a repeated client are refused when the file is read. With `operator-controlled-upstream` the
+member must list its clients, and the runtime refuses to start at
+`authentication.oidc.allowedClients` otherwise. `development-loopback` accepts `unrestricted`. A
+configured `taskAuthority` requires a list in either mode.
 
 With the discovery source, the default, the runtime reads the issuer's discovery document at
-startup and fetches its keys from the `jwks_uri` that document names. `kind: uri` with `uri` fetches
+startup and fetches its keys from the `jwks_uri` that document names. `type: uri` with `uri` fetches
 the keys from that fixed address instead and skips discovery; the removed `jwksUri` key is refused
 with that replacement named. Prefer the static alternative when the Casework host cannot reach the
 issuer at all, or when you pin the issuer's keys deliberately:
 
 ```yaml
 jwksSource:
-  kind: static
+  type: static
   documentRef: secret:file/casework-issuer-jwks
 ```
 
@@ -313,7 +316,7 @@ non-empty `kid`. It is read once, at startup, so a key rotation at the issuer is
 that secret and a restart of every serving process.
 
 Each source binding also accepts `trustedRootCertificatesRef` for a private certificate authority
-in front of the source, `requestTimeoutMilliseconds` and `connectTimeoutMilliseconds`, which
+in front of the source, `attemptTimeoutMilliseconds` and `connectTimeoutMilliseconds`, which
 default to 30000 and 10000, accept at most 300000, and are refused when the connect timeout is the
 larger of the two, and `reconciliationIntervalMilliseconds`, how often the runtime re-reads the
 source for work the source's own notifications did not deliver, which defaults to 60000 and accepts
@@ -484,11 +487,13 @@ source ids exactly. `caseworkctl check` reports them before you deploy, as
 ## Refuse a package that strands pinned work
 
 A review request pins its kind's policy when it is admitted: the stages, their queues, the
-profiles that decide them, and the display schema reviewers read against. An open work item keeps
-the queue it was routed to. A later package can remove one of those queues or profiles, change a
-kind's content without changing its version, or change a source read so that the pinned display
-schema no longer accepts it. Each of those would leave in-flight work that no team serves, that no
-reviewer can decide, or whose context every reviewer is refused.
+profiles that decide them, and the display schema reviewers read against. It also keeps the id of
+the review producer that submitted it, and that producer reads it, cancels it, and receives its
+result only under that id. An open work item keeps the queue it was routed to. A later package can
+remove one of those queues or profiles, remove or rename the producer, change a kind's content
+without changing its version, or change a source read so that the pinned display schema no longer
+accepts it. Each of those would leave in-flight work that no team serves, that no reviewer can
+decide, that no producer can read, or whose context every reviewer is refused.
 
 Inside its transaction, before it registers any source generation, `caseworkctl apply` compares
 the package it is about to activate with the work the database retains and refuses a package that
@@ -500,6 +505,7 @@ error[casework.activation.stranded-work] runtime.yaml:/package/acknowledgeStrand
 ```
 
 The other conflicts read the same way: an access profile the package no longer declares, a review
+producer the package no longer declares while a review it submitted is still under review, a review
 kind version declared with different content, a removed source that source-context reviews or open
 work items still need (no action on such an item can reach its source), and a field a source read
 would add to, or drop from, what the pinned display schema allows. Give a
@@ -522,7 +528,8 @@ refusal until that work finishes or `package.acknowledgeStrandedWork` names the 
     crates/registry-caseworkctl/src/project.rs, doctor_pinned_work();
     crates/registry-casework/src/runtime.rs, check_pinned_work() and serve_from_path();
     crates/registry-casework/tests/review_postgres.rs,
-    activation_preflight_counts_in_flight_reviews_a_package_would_strand();
+    activation_preflight_counts_in_flight_reviews_a_package_would_strand() and
+    activation_plan_refuses_a_package_that_drops_the_producer_of_an_in_flight_review();
     crates/registry-casework/tests/activation_postgres.rs,
     stranded_work_is_refused_until_the_exact_package_is_acknowledged() and
     startup_refuses_work_stranded_after_apply_until_the_package_is_acknowledged(). */}
@@ -751,7 +758,7 @@ the audit destination, and schema migration 17 drops that table. Before the firs
    chained entry, so this move is required, not optional. Once a fresh file is in place, this
    release does not read or verify the chain; it appends its own entries to whatever file sits at
    the configured path, and at startup and on each rotation it deletes any file named with an
-   eight-digit suffix beside it that is older than `audit.retainDays`, which includes files
+   eight-digit suffix beside it that is older than `audit.retentionDays`, which includes files
    Casework 0.34.0 sealed.
 
    ```sh
@@ -1079,7 +1086,7 @@ bound to the actor and selected profile for 15 minutes; an expired preview retur
 | `caseworkctl doctor` stops at `the Casework audit destination is not writable by this user` | Run `doctor` as the runtime user, and fix the audit directory's owner and mode, or the audit file's, as the message names. |
 | `GET /ready` returns `503` while `GET /health` returns `200` | The audit writer stopped, PostgreSQL is failing, or a source's reconciliation is failing. Run `caseworkctl doctor`, which names the check, then read the runtime log for `audit file write failed` or the reconciliation entry, and check the audit file, its lock, the free space, and the database. |
 | `doctor` refuses at `doctor:/checks/reconciliation` | The named source's last passes failed. `source-unavailable` means the source did not answer; `source-refused` means it answered with a refusal or a response Casework cannot use; `store` and `configuration` point at the database and the binding. Repair the cause; the next pass that succeeds restores readiness. |
-| `doctor` refuses at `doctor:/checks/pinnedWork`, or `caseworkctl apply` refuses with `would strand work pinned under an earlier package` | The package removes a queue, profile, or source that in-flight work still needs, edits a pinned review kind without a new version, or changes what a source read discloses. Keep the earlier package until that work finishes, or set `package.acknowledgeStrandedWork` to the digest the refusal names. |
+| `doctor` refuses at `doctor:/checks/pinnedWork`, or `caseworkctl apply` refuses with `would strand work pinned under an earlier package` | The package removes a queue, profile, review producer, or source that in-flight work still needs, edits a pinned review kind without a new version, or changes what a source read discloses. Keep the earlier package until that work finishes, or set `package.acknowledgeStrandedWork` to the digest the refusal names. |
 | `BReg source ID runs engine version X and this Casework runs Y`, or `BReg source ID does not report its engine version` | Casework and that BReg source are on different releases, or a proxy removes the `Registry-Engine-Version` header. Upgrade the one that is behind as [the lock-step upgrade](#upgrade-casework-and-breg-in-lock-step) describes, or let the header through; source reads resume on the next matching read. |
 | `profile.not-human` on a token you believe is human | The issuer did not add the configured human-identity claim to that session. Check the claim name and value against the issuer's mapping for interactive sessions. |
 | Work items report a source outage | The bound source is unreachable or refusing the reader. Run `caseworkctl doctor`, which names the failing source, read the runtime log's `Casework source reader request to BReg failed` entry for the cause, then check that binding's base URL, token endpoint, and reader grants. |

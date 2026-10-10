@@ -1,3 +1,5 @@
+apiVersion: id.registrystack.org/formats/breg/module/v1alpha1
+kind: BRegModule
 id: spatial-service-sites-core
 version: 0.1.0
 extendEntities:
@@ -8,4 +10,4 @@ extendEntities:
         key: id
         execution: live
         fields:
-          - {id: map-label, type: string, maxLength: 220, classification: public}
+          - {id: map-label, type: string, maximumLength: 220, classification: public}

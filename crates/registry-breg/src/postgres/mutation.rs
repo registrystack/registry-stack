@@ -2628,21 +2628,21 @@ mod ingestion_context_tests {
     use crate::task_grant::TaskGrantBinding;
 
     const CONTEXT_FIXTURE: &str = r#"{
-      "apiVersion":"registry.registrystack.org/v1alpha1",
-      "kind":"RegistryProject",
-      "registry":{"id":"run-context-test","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+      "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+      "kind":"BRegProject",
+      "project":{"id":"run-context-test","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
       "entities":[{
         "id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable","classification":"internal",
-        "fields":[{"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"}]
+        "fields":[{"id":"tenant","type":"string","minimumLength":1,"maximumLength":64,"required":true,"classification":"internal"}]
       }],
       "accessProfiles":[{
         "id":"operator","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
         "requiredPurposes":["review"],
-        "permissions":[{
+        "permissions":{"entities":[{
           "entity":"entry","operations":["get"],
           "readableFields":["tenant"],
           "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]
-        }]
+        }]}
       }]
     }"#;
 

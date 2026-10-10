@@ -16,7 +16,7 @@ use std::{
     thread,
 };
 
-use anyhow::{anyhow, bail, Context as _, Result};
+use anyhow::{anyhow, bail, ensure, Context as _, Result};
 use jsonschema::{error::ValidationErrorKind, Draft, JSONSchema};
 use registry_platform_crypto::{canonicalize_json, domain_separated_sha256};
 use serde_json::{json, Map, Value};
@@ -31,7 +31,10 @@ use registry_platform_yaml::{
 };
 
 use crate::authored::{self, Gathered};
-use crate::evidence_binary::{EVIDENCE_RUNTIME_API_VERSION, EVIDENCE_RUNTIME_KIND};
+use crate::evidence_binary::{
+    EVIDENCE_BUNDLE_API_VERSION, EVIDENCE_BUNDLE_KIND, EVIDENCE_CODELIST_API_VERSION,
+    EVIDENCE_CODELIST_KIND, EVIDENCE_RUNTIME_API_VERSION, EVIDENCE_RUNTIME_KIND,
+};
 use crate::suggest::{
     narrow,
     openapi::Spec,
@@ -53,6 +56,7 @@ pub(crate) use registry_evidence_authoring::{
         AccessPolicy, AccessTaskGrant, AnswerType, FactCombination, Question, QuestionAnswer,
         QuestionFact, QuestionResponseFormat, QuestionSdJwtVcDisclosure, QuestionSource,
     },
+    names::{local_source_id, local_subject_selector_profile_id},
     validate::{
         collection_pointers, question_subjects, valid_local_identifier, validate_access_policy,
         validate_answer_schema_document,
@@ -65,6 +69,9 @@ const LOCAL_AUDIENCE: &str = "urn:registrystack:evidence:local:gateway";
 const LOCAL_SIGNING_PRIVATE_FILENAME: &str = "signing-p256-private-jwk";
 const LOCAL_SIGNING_PUBLIC_FILENAME: &str = "signing-p256-public.jwk.json";
 const AUTHORITY_PROFILE_ID: &str = "local-caller";
+/// How much of an access policy's requester tag names its authority profile:
+/// `policy-vN-` and 32 hexadecimal digits.
+const AUTHORITY_PROFILE_ID_CHARACTERS: usize = 42;
 /// The largest number of authority grants one generated profile may carry.
 ///
 /// `products/evidence/contracts/bundle.schema.yaml` bounds
@@ -204,9 +211,9 @@ enum CompileProfile {
     Production(Value),
 }
 
-/// The client admission a local bundle states. The default states none and
-/// leaves admission to the issuer, which is what a session owning its own
-/// issuer wants.
+/// The client admission a local bundle states. The default lists none, so the
+/// bundle states `unrestricted` and leaves admission to the issuer, which is
+/// what a session owning its own issuer wants.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct LocalAdmission {
     /// The machine clients the compiled bundle admits by name.
@@ -404,11 +411,11 @@ pub(crate) fn valid_local_audience(value: &str) -> bool {
 
 fn validate_local_dev_sources(sources: &BTreeMap<String, Value>) -> Result<()> {
     for (source_id, source) in sources {
-        if source.get("transport").and_then(Value::as_str) == Some("sqlite-extract") {
+        if source.get("type").and_then(Value::as_str) == Some("sqlite-extract") {
             return Err(crate::dev::DevRefusal {
                 operational: false,
                 code: "evidence.dev.local-transport-refused",
-                path: format!("sources/{source_id}.yaml:/transport"),
+                path: format!("sources/{source_id}.yaml:/type"),
                 message: "Local serving does not bind SQLite extracts.".to_owned(),
                 suggested_action: "Prove this editable project offline with `evidencectl test <dir>`, or re-author the source over an HTTP transport before `evidencectl dev start`."
                     .to_owned(),
@@ -680,7 +687,7 @@ fn validate_compiled_bundle_shape(bundle: &Value) -> Result<()> {
     let schema = authored::embedded_document("Evidence bundle schema", BUNDLE_SCHEMA)?;
     if let Some(sources) = bundle.get("sources").and_then(Value::as_object) {
         for (source_id, source) in sources {
-            let Some(transport) = source.get("transport") else {
+            let Some(transport) = source.get("type") else {
                 continue;
             };
             let branch = schema
@@ -693,7 +700,7 @@ fn validate_compiled_bundle_shape(bundle: &Value) -> Result<()> {
                     reference
                         .strip_prefix('#')
                         .and_then(|pointer| schema.pointer(pointer))
-                        .and_then(|branch| branch.pointer("/properties/transport/const"))
+                        .and_then(|branch| branch.pointer("/properties/type/const"))
                         == Some(transport)
                 });
             let Some(branch) = branch else { continue };
@@ -1371,14 +1378,15 @@ fn validate_production_sources(bundle: &Value) -> Result<()> {
         .and_then(Value::as_object)
         .ok_or_else(|| anyhow!("the deployment bundle has no sources object"))?;
     for (source_id, source) in sources {
-        let transport = source
-            .get("transport")
-            .and_then(Value::as_str)
-            .ok_or_else(|| AuthoredDiagnostic {
-                code: "evidence.source.transport-missing".to_owned(),
-                path: format!("sources/{source_id}.yaml:/transport"),
-                message: "every production source must declare its transport".to_owned(),
-            })?;
+        let transport =
+            source
+                .get("type")
+                .and_then(Value::as_str)
+                .ok_or_else(|| AuthoredDiagnostic {
+                    code: "evidence.source.transport-missing".to_owned(),
+                    path: format!("sources/{source_id}.yaml:/type"),
+                    message: "every production source must declare its transport".to_owned(),
+                })?;
         match transport {
             "http-json" => {
                 let https = source
@@ -1386,7 +1394,7 @@ fn validate_production_sources(bundle: &Value) -> Result<()> {
                     .and_then(Value::as_str)
                     .is_some_and(|value| value.starts_with("https://"));
                 let authenticated = source
-                    .pointer("/authentication/kind")
+                    .pointer("/authentication/type")
                     .and_then(Value::as_str)
                     .is_some_and(|kind| kind != "none" && kind != "review-required");
                 if !https || !authenticated {
@@ -1395,7 +1403,7 @@ fn validate_production_sources(bundle: &Value) -> Result<()> {
                         path: if !https {
                             format!("sources/{source_id}.yaml:/baseUrl")
                         } else {
-                            format!("sources/{source_id}.yaml:/authentication/kind")
+                            format!("sources/{source_id}.yaml:/authentication/type")
                         },
                         message: "every production source must use authenticated HTTPS".to_owned(),
                     }
@@ -1415,7 +1423,7 @@ fn validate_production_sources(bundle: &Value) -> Result<()> {
             _ => {
                 return Err(AuthoredDiagnostic {
                     code: "evidence.source.production-transport".to_owned(),
-                    path: format!("sources/{source_id}.yaml:/transport"),
+                    path: format!("sources/{source_id}.yaml:/type"),
                     message: "the production source transport has no stated production conditions"
                         .to_owned(),
                 }
@@ -1582,6 +1590,18 @@ pub(crate) fn access_policy_requester_tag(id: &str, questions: &[String]) -> Res
         write!(&mut tag, "{byte:02x}").expect("writing to a string cannot fail");
     }
     Ok(tag)
+}
+
+/// The name of the authority profile an authored access policy compiles to:
+/// the policy's requester tag through the first 32 hexadecimal digits of its
+/// digest, 42 characters. The bundle names an authority profile with a local
+/// identifier of at most 64 characters, which the tag, at 74, is not; the
+/// profile's `requesterTags` carries the tag whole.
+pub(crate) fn access_policy_authority_profile_id(requester_tag: &str) -> String {
+    requester_tag
+        .chars()
+        .take(AUTHORITY_PROFILE_ID_CHARACTERS)
+        .collect()
 }
 
 pub(crate) fn access_policy_requester_tag_for(policy: &AccessPolicy) -> Result<String> {
@@ -2033,7 +2053,7 @@ fn resolve_source_connections(
         let source = source
             .as_object_mut()
             .ok_or_else(|| anyhow!("source must be a mapping"))?;
-        if source.get("transport").and_then(Value::as_str) != Some("http-json") {
+        if source.get("type").and_then(Value::as_str) != Some("http-json") {
             bail!("only an HTTP source may reference a named connection");
         }
         if ["baseUrl", "authentication", "tlsTrustProfile"]
@@ -2046,13 +2066,13 @@ fn resolve_source_connections(
             .get_mut("request")
             .and_then(Value::as_object_mut)
             .ok_or_else(|| anyhow!("source request must be a mapping"))?;
-        if request.contains_key("concurrencyLimit") {
-            bail!("a connected source must omit request.concurrencyLimit");
+        if request.contains_key("maximumConcurrency") {
+            bail!("a connected source must omit request.maximumConcurrency");
         }
         request.insert(
-            "concurrencyLimit".to_owned(),
+            "maximumConcurrency".to_owned(),
             connection
-                .get("concurrencyLimit")
+                .get("maximumConcurrency")
                 .cloned()
                 .unwrap_or_else(|| json!(4)),
         );
@@ -2125,11 +2145,11 @@ fn validate_source_artifact_graph_with_target_bindings(
                 .and_then(Value::as_str)
                 .filter(|name| valid_local_identifier(name))
                 .ok_or_else(|| anyhow!("source connection must name a valid connection"))?;
-            if source.get("transport").and_then(Value::as_str) != Some("http-json")
+            if source.get("type").and_then(Value::as_str) != Some("http-json")
                 || ["baseUrl", "authentication", "tlsTrustProfile"]
                     .iter()
                     .any(|field| source.get(field).is_some())
-                || source.pointer("/request/concurrencyLimit").is_some()
+                || source.pointer("/request/maximumConcurrency").is_some()
             {
                 bail!("source `{source_id}` must leave connection-owned fields to `{name}`");
             }
@@ -2734,7 +2754,7 @@ fn validate_referenced_source_authentication(
     source_id: &str,
     source: &Value,
 ) -> Result<()> {
-    if source.get("transport").and_then(Value::as_str) != Some("http-json") {
+    if source.get("type").and_then(Value::as_str) != Some("http-json") {
         return Ok(());
     }
     let Some(authentication) = source
@@ -2744,19 +2764,19 @@ fn validate_referenced_source_authentication(
         bail!(
             "the referenced source sends no credential, and an absent field does not decide that: \
 question `{question_id}` must declare the posture itself by adding an `authentication:` mapping \
-naming the `kind:` its channel uses, in sources/{source_id}.yaml"
+naming the `type:` its channel uses, in sources/{source_id}.yaml"
         )
     };
     if authentication
-        .get("kind")
+        .get("type")
         .and_then(Value::as_str)
         .is_some_and(|kind| !kind.trim().is_empty())
     {
         return Ok(());
     }
     bail!(
-        "the referenced source states `authentication:` without naming a `kind`, and an undecided \
-mapping is not a posture: question `{question_id}` must name the `kind:` its channel uses under \
+        "the referenced source states `authentication:` without naming a `type`, and an undecided \
+mapping is not a posture: question `{question_id}` must name the `type:` its channel uses under \
 `authentication:` in sources/{source_id}.yaml"
     )
 }
@@ -2784,7 +2804,7 @@ fn referenced_source_artifacts(source: &Value) -> Result<Vec<String>> {
     for pointer in ["/responseSchema", "/extractScript", "/factSchema"] {
         required(source, pointer, &mut artifacts)?;
     }
-    match source.get("transport").and_then(Value::as_str) {
+    match source.get("type").and_then(Value::as_str) {
         Some("http-json") => {
             required(source, "/request/prepareScript", &mut artifacts)?;
             required(source, "/request/adapterParametersSchema", &mut artifacts)?;
@@ -2915,8 +2935,11 @@ fn compile_concept(
                 codelist: Some((
                     path,
                     json!({
-                        "id": scheme,
+                        "apiVersion": EVIDENCE_CODELIST_API_VERSION,
+                        "kind": EVIDENCE_CODELIST_KIND,
+                        "uri": scheme,
                         "version": "1",
+                        "type": "code-list",
                         "codes": answer.values,
                     }),
                 )),
@@ -3649,7 +3672,7 @@ fn render_question_bundle_parts(
         (
             subject.selectors[0].fields[0].clone(),
             json!({
-                "from": "selector",
+                "type": "selector",
                 "role": subject.role,
                 "profile": subject.selectors[0].profile,
                 "field": subject.selectors[0].fields[0],
@@ -3675,13 +3698,13 @@ fn render_question_bundle_parts(
         .collect::<Vec<_>>();
 
     let source_value = json!({
-        "transport": "http-json",
+        "type": "http-json",
         "baseUrl": base_url,
         "posture": "field-projected",
-        "authentication": {"kind": "none"},
+        "authentication": {"type": "none"},
         "request": {
             "method": "GET",
-            "pathTemplate": path_template,
+            "path": path_template,
             "pathBindings": path_bindings,
             "fixedHeaders": [{"name": "Accept", "value": "application/json"}],
             "selectorInputs": selector_inputs,
@@ -3698,9 +3721,9 @@ fn render_question_bundle_parts(
             },
             "projection": projection,
             "redirects": "deny",
-            "timeoutMilliseconds": 3000,
+            "attemptTimeoutMilliseconds": 3000,
             "maximumResponseBytes": 65536,
-            "concurrencyLimit": 8,
+            "maximumConcurrency": 8,
         },
         "responseSchema": format!("schemas/{}-source-response.schema.yaml", question.id),
         "extractScript": format!("adapters/{}-source-extract.rhai", question.id),
@@ -3774,8 +3797,8 @@ fn render_governance_parts(
         .map(|concept| {
             let mut rendered = json!({
                 "handle": concept.concept_alias,
-                "id": concept.concept_uri,
-                "form": match concept.concept_form {
+                "uri": concept.concept_uri,
+                "type": match concept.concept_form {
                     CompiledConceptForm::Boolean => "boolean",
                     CompiledConceptForm::ControlledCategory => "controlled-category",
                     CompiledConceptForm::BoundedIdentifier => "bounded-identifier",
@@ -3823,10 +3846,10 @@ fn render_governance_parts(
     }
     let mut requirement_value = json!({
             "handle": requirement.handle,
-            "id": requirement.requirement_uri,
+            "uri": requirement.requirement_uri,
             "kind": requirement.kind,
             "acquisition": {
-                "kind": "single",
+                "type": "single",
                 "source": source_id,
             },
             "purposes": [question.purpose],
@@ -3866,9 +3889,15 @@ pub(crate) fn local_target_governance(active_public_jwk_file: &str) -> Result<Va
     let object = governance
         .as_object_mut()
         .expect("local bundle is a mapping");
-    // The bundle's grammar version is not a governance member: the
-    // governance format version is its `apiVersion`.
-    for name in ["version", "selectorProfiles", "sources", "requirements"] {
+    // The bundle's envelope is not a governance member: governance declares
+    // its own.
+    for name in [
+        "apiVersion",
+        "kind",
+        "selectorProfiles",
+        "sources",
+        "requirements",
+    ] {
         object.remove(name);
     }
     Ok(governance)
@@ -3911,14 +3940,15 @@ fn render_local_bundle(
         .map(QuestionResponseFormat::as_str)
         .collect::<Vec<_>>();
     let mut bundle = json!({
-        "version": 1,
+        "apiVersion": EVIDENCE_BUNDLE_API_VERSION,
+        "kind": EVIDENCE_BUNDLE_KIND,
         "assuranceProfile": "local",
         "service": {
             "providerId": provider_id,
             "trustDomain": local_uri("trust-domain"),
             "publicOrigin": format!("http://127.0.0.1:{}", ports.evidence),
         },
-        "issuer": {"id": issuer_id},
+        "issuer": {"uri": issuer_id},
         "publication": {
             "serviceId": service_id,
             "title": "Local Evidence service",
@@ -3930,12 +3960,13 @@ fn render_local_bundle(
             "oidc": {
                 "issuer": issuer_origin,
                 "audience": audience,
-                "jwksSource": {"kind": "uri", "uri": format!("{issuer_origin}/oauth2/jwks")},
+                "jwksSource": {"type": "uri", "uri": format!("{issuer_origin}/oauth2/jwks")},
                 "tokenTypes": ["at+jwt"],
                 "algorithms": ["RS256"],
                 "principalClaim": "sub",
                 "requesterTagsClaim": "evidence_tags",
                 "evidenceAudienceClaim": "evidence_audience",
+                "allowedClients": "unrestricted",
                 "requiredScopes": ["evidence:invoke"],
                 "maximumTokenLifetimeSeconds": 300,
                 "revokedKeyIds": [],
@@ -4017,7 +4048,7 @@ fn render_local_authority_profiles(
             render_authority_profile(AUTHORITY_PROFILE_ID, questions.iter())?,
         )]));
     }
-    access_policies
+    let profiles = access_policies
         .iter()
         .map(|policy| {
             let covered = policy.questions.iter().map(|question_id| {
@@ -4027,11 +4058,18 @@ fn render_local_authority_profiles(
                     .expect("access policy questions were validated")
             });
             Ok((
-                policy.requester_tag.clone(),
+                access_policy_authority_profile_id(&policy.requester_tag),
                 render_policy_authority_profile(policy, covered, active_client_policies)?,
             ))
         })
-        .collect::<Result<Map<_, _>>>()
+        .collect::<Result<Map<_, _>>>()?;
+    // A profile is named by part of its policy's tag, so two policies could in
+    // principle share a name; one would then replace the other in the map.
+    ensure!(
+        profiles.len() == access_policies.len(),
+        "two access policies compile to one authority profile name; rename one of them"
+    );
+    Ok(profiles)
 }
 
 fn render_policy_authority_profile<'a>(
@@ -4282,7 +4320,7 @@ fn write_plan(
         },
         "secretProviders": {"file": {"root": secret_root.to_string_lossy()}},
         "signer": {
-            "kind": "local-jwk",
+            "type": "local-jwk",
             "privateKeyRef": format!("secret:file/{LOCAL_SIGNING_PRIVATE_FILENAME}"),
         },
         "audit": {
@@ -5034,26 +5072,6 @@ fn local_uri(suffix: &str) -> String {
     format!("{LOCAL_URI_PREFIX}{suffix}")
 }
 
-fn local_selector_profile_id(question_id: &str) -> String {
-    format!("local-subject-{question_id}-v1")
-}
-
-fn local_subject_selector_profile_id(
-    question_id: &str,
-    role: &str,
-    subject_count: usize,
-) -> String {
-    if subject_count == 1 {
-        local_selector_profile_id(question_id)
-    } else {
-        format!("local-subject-{question_id}-{role}-v1")
-    }
-}
-
-fn local_source_id(question_id: &str) -> String {
-    format!("local-source-{question_id}")
-}
-
 fn json_string(value: &str) -> String {
     serde_json::to_string(value).expect("strings serialize")
 }
@@ -5122,6 +5140,7 @@ mod tests {
         );
     }
     use crate::evidence_binary::retry_busy_stub;
+    use registry_evidence_authoring::local_selector_profile_id;
     use std::{
         io::Write as _,
         os::unix::fs::{symlink, OpenOptionsExt as _},
@@ -5475,7 +5494,7 @@ properties:
                 bundle["service"]["providerId"],
                 format!("{audience}:provider")
             );
-            assert_eq!(bundle["issuer"]["id"], format!("{audience}:issuer"));
+            assert_eq!(bundle["issuer"]["uri"], format!("{audience}:issuer"));
             assert_eq!(
                 bundle["publication"]["serviceId"],
                 format!("{audience}:service")
@@ -5503,8 +5522,8 @@ properties:
             &fs::read(own_issuer.staging.join("bundle/evidence.yaml")).unwrap(),
         )
         .unwrap();
-        assert!(
-            bundle["authentication"].get("allowedClients").is_none(),
+        assert_eq!(
+            bundle["authentication"]["oidc"]["allowedClients"], "unrestricted",
             "a session that renders its own issuer states no client list: {}",
             bundle["authentication"]
         );
@@ -5647,15 +5666,15 @@ properties:
         let selector_profile = local_selector_profile_id("adult-status");
         assert_eq!(
             bundle["sources"][&source_id]["authentication"],
-            json!({"kind": "none"})
+            json!({"type": "none"})
         );
         assert_eq!(
             bundle["sources"][&source_id]["request"]["pathBindings"]["person_id"],
-            json!({"from": "selector", "role": "person", "profile": selector_profile, "field": "person_id"})
+            json!({"type": "selector", "role": "person", "profile": selector_profile, "field": "person_id"})
         );
         assert_eq!(
             bundle["requirements"][0]["acquisition"],
-            json!({"kind": "single", "source": source_id})
+            json!({"type": "single", "source": source_id})
         );
         assert_eq!(bundle["requirements"][0]["handle"], "adult-status");
         assert_eq!(
@@ -5827,7 +5846,7 @@ properties:
             json!(["signed-jws", "sd-jwt-vc"])
         );
         let concept = &bundle["requirements"][0]["concepts"][0];
-        assert_eq!(concept["form"], "reviewed-structured-value");
+        assert_eq!(concept["type"], "reviewed-structured-value");
         assert_eq!(
             concept["constraints"],
             json!({
@@ -5971,7 +5990,7 @@ properties:
         }
         fs::write(
             fixture.project.join("sources/people.yaml"),
-            "apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1\nkind: EvidenceSource\ntransport: http-json\nfactSchema: schemas/people-facts.yaml\n",
+            "apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1\nkind: EvidenceSource\ntype: http-json\nfactSchema: schemas/people-facts.yaml\n",
         )
         .expect("source");
         let facts = |closed: bool, name: &str| {
@@ -6291,7 +6310,7 @@ properties:
         .expect("bundle parses");
         assert_eq!(bundle["requirements"][0]["kind"], "information-requirement");
         assert_eq!(
-            bundle["requirements"][0]["concepts"][0]["form"],
+            bundle["requirements"][0]["concepts"][0]["type"],
             "controlled-category"
         );
     }
@@ -6321,7 +6340,7 @@ values: [under-18, adult]
         );
         let (_, codelist) = concept.codelist.expect("controlled category codelist");
         assert_eq!(
-            codelist["id"],
+            codelist["uri"],
             "urn:authority:concept:age-bracket:v1:categories"
         );
     }
@@ -6360,7 +6379,7 @@ values: [under-18, adult]
         )
         .expect("bundle parses");
         assert_eq!(
-            bundle["requirements"][0]["concepts"][0]["form"],
+            bundle["requirements"][0]["concepts"][0]["type"],
             "bounded-identifier"
         );
         assert_eq!(
@@ -6430,15 +6449,15 @@ maximumAggregateBytes: 64\nfields:\n  {field}:\n    type: string\n    minimumByt
             fixture.project.join("sources/people.yaml"),
             r#"apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1
 kind: EvidenceSource
-transport: http-json
+type: http-json
 baseUrl: https://records.example.test
 posture: field-projected
-authentication: {kind: static-authorization, tokenRef: 'secret:file/records-token'}
+authentication: {type: static-authorization, tokenRef: 'secret:file/records-token'}
 request:
   method: GET
-  pathTemplate: /people/{person_id}
+  path: /people/{person_id}
   pathBindings:
-    person_id: {from: selector, role: person, profile: person-reference-v1, field: person_id}
+    person_id: {type: selector, role: person, profile: person-reference-v1, field: person_id}
   fixedHeaders: [{name: Accept, value: application/json}]
   selectorInputs:
     - role: person
@@ -6450,9 +6469,9 @@ request:
   preparationLimits: {query: forbidden, jsonBody: forbidden, maximumNormalizedBytes: 4096}
   projection: [/value]
   redirects: deny
-  timeoutMilliseconds: 3000
+  attemptTimeoutMilliseconds: 3000
   maximumResponseBytes: 65536
-  concurrencyLimit: 8
+  maximumConcurrency: 8
 responseSchema: schemas/source-response.schema.yaml
 extractScript: adapters/source-extract.rhai
 factSchema: schemas/source-facts.schema.yaml
@@ -6463,16 +6482,16 @@ factSchema: schemas/source-facts.schema.yaml
             fixture.project.join("sources/relationships.yaml"),
             r#"apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1
 kind: EvidenceSource
-transport: http-json
+type: http-json
 baseUrl: https://relationships.example.test
 posture: field-projected
-authentication: {kind: static-authorization, tokenRef: 'secret:file/relationships-token'}
+authentication: {type: static-authorization, tokenRef: 'secret:file/relationships-token'}
 request:
   method: GET
-  pathTemplate: /children/{child_id}/candidates/{candidate_id}
+  path: /children/{child_id}/candidates/{candidate_id}
   pathBindings:
-    child_id: {from: selector, role: child, profile: child-reference-v1, field: child_id}
-    candidate_id: {from: selector, role: candidate-parent, profile: candidate-reference-v1, field: candidate_id}
+    child_id: {type: selector, role: child, profile: child-reference-v1, field: child_id}
+    candidate_id: {type: selector, role: candidate-parent, profile: candidate-reference-v1, field: candidate_id}
   fixedHeaders: [{name: Accept, value: application/json}]
   selectorInputs:
     - role: child
@@ -6487,9 +6506,9 @@ request:
   preparationLimits: {query: forbidden, jsonBody: forbidden, maximumNormalizedBytes: 4096}
   projection: [/value]
   redirects: deny
-  timeoutMilliseconds: 3000
+  attemptTimeoutMilliseconds: 3000
   maximumResponseBytes: 65536
-  concurrencyLimit: 8
+  maximumConcurrency: 8
 responseSchema: schemas/source-response.schema.yaml
 extractScript: adapters/source-extract.rhai
 factSchema: schemas/source-facts.schema.yaml
@@ -6584,14 +6603,15 @@ factSchema: schemas/source-facts.schema.yaml
         .expect("malformed local access link");
 
         let target = json!({
-            "version": 1,
+            "apiVersion": EVIDENCE_BUNDLE_API_VERSION,
+            "kind": EVIDENCE_BUNDLE_KIND,
             "assuranceProfile": "production",
             "service": {
                 "providerId": "urn:authority:provider",
                 "trustDomain": "urn:authority:trust",
                 "publicOrigin": "https://evidence.example.test"
             },
-            "issuer": {"id": "urn:authority:issuer"},
+            "issuer": {"uri": "urn:authority:issuer"},
             "authentication": {},
             "audit": {},
             "subjectBinding": {},
@@ -6615,7 +6635,7 @@ factSchema: schemas/source-facts.schema.yaml
         assert_eq!(
             requirements
                 .iter()
-                .map(|requirement| requirement["id"].as_str().expect("requirement id"))
+                .map(|requirement| requirement["uri"].as_str().expect("requirement URI"))
                 .collect::<Vec<_>>(),
             [
                 "urn:authority:requirement:adult-status:v1",
@@ -6624,15 +6644,15 @@ factSchema: schemas/source-facts.schema.yaml
                 "urn:authority:requirement:parent-relationship:v1",
             ]
         );
-        assert_eq!(requirements[0]["concepts"][0]["form"], "boolean");
+        assert_eq!(requirements[0]["concepts"][0]["type"], "boolean");
         assert_eq!(requirements[0]["handle"], "adult-status");
         assert_eq!(requirements[0]["concepts"][0]["handle"], "is_adult");
         assert_eq!(
-            requirements[1]["concepts"][0]["form"],
+            requirements[1]["concepts"][0]["type"],
             "controlled-category"
         );
         assert_eq!(requirements[2]["concepts"].as_array().unwrap().len(), 2);
-        assert_eq!(requirements[2]["concepts"][1]["form"], "bounded-integer");
+        assert_eq!(requirements[2]["concepts"][1]["type"], "bounded-integer");
         assert_eq!(requirements[3]["subjectRoles"].as_array().unwrap().len(), 2);
         assert_eq!(compiled.fixture_paths.len(), 4);
         assert!(!serde_json::to_string(&bundle)
@@ -6642,10 +6662,10 @@ factSchema: schemas/source-facts.schema.yaml
 
     fn production_http_source() -> Value {
         json!({
-            "transport": "http-json",
+            "type": "http-json",
             "baseUrl": "https://records.example.test",
             "authentication": {
-                "kind": "static-authorization",
+                "type": "static-authorization",
                 "tokenRef": "secret:file/records-token",
             },
         })
@@ -6653,7 +6673,7 @@ factSchema: schemas/source-facts.schema.yaml
 
     fn production_statement_source() -> Value {
         json!({
-            "transport": "sqlite-extract",
+            "type": "sqlite-extract",
             "extractProfile": "licence-register-extract",
             "maximumExtractAgeSeconds": 604800,
         })
@@ -6661,20 +6681,19 @@ factSchema: schemas/source-facts.schema.yaml
 
     #[test]
     fn local_dev_refuses_an_unbound_statement_source_with_the_fixture_next_step() {
-        let sources =
-            BTreeMap::from([("records".to_owned(), json!({"transport": "sqlite-extract"}))]);
+        let sources = BTreeMap::from([("records".to_owned(), json!({"type": "sqlite-extract"}))]);
         let error = validate_local_dev_sources(&sources)
             .expect_err("local serving accepted an unbound statement source");
         let refusal = error
             .downcast_ref::<crate::dev::DevRefusal>()
             .expect("the refusal is typed so both output formats keep its cause");
         assert_eq!(refusal.code, "evidence.dev.local-transport-refused");
-        assert_eq!(refusal.path, "sources/records.yaml:/transport");
+        assert_eq!(refusal.path, "sources/records.yaml:/type");
         assert!(refusal.suggested_action.contains("evidencectl test <dir>"));
 
         validate_local_dev_sources(&BTreeMap::from([(
             "records".to_owned(),
-            json!({"transport": "http-json"}),
+            json!({"type": "http-json"}),
         )]))
         .expect("HTTP local development remains supported");
     }
@@ -6690,7 +6709,7 @@ factSchema: schemas/source-facts.schema.yaml
         let mut plaintext = production_http_source();
         plaintext["baseUrl"] = json!("http://records.example.test");
         let mut unauthenticated = production_http_source();
-        unauthenticated["authentication"] = json!({"kind": "none"});
+        unauthenticated["authentication"] = json!({"type": "none"});
         for broken in [plaintext, unauthenticated] {
             let bundle = json!({
                 "sources": {
@@ -6719,9 +6738,9 @@ factSchema: schemas/source-facts.schema.yaml
         let mut plaintext = production_http_source();
         plaintext["baseUrl"] = json!("http://records.example.test");
         let mut unauthenticated = production_http_source();
-        unauthenticated["authentication"] = json!({"kind": "none"});
+        unauthenticated["authentication"] = json!({"type": "none"});
         let mut unreviewed = production_http_source();
-        unreviewed["authentication"] = json!({"kind": "review-required"});
+        unreviewed["authentication"] = json!({"type": "review-required"});
         for broken in [plaintext, unauthenticated, unreviewed] {
             let bundle = json!({"sources": {"people": broken}});
             assert_eq!(
@@ -6735,7 +6754,7 @@ factSchema: schemas/source-facts.schema.yaml
 
     #[test]
     fn production_source_transport_without_stated_conditions_is_refused() {
-        let bundle = json!({"sources": {"people": {"transport": "carrier-pigeon"}}});
+        let bundle = json!({"sources": {"people": {"type": "carrier-pigeon"}}});
         assert_eq!(
             validate_production_sources(&bundle)
                 .expect_err("an ungoverned transport is refused rather than waved through")
@@ -6793,13 +6812,13 @@ factSchema: schemas/source-facts.schema.yaml
             .expect("active public JWK file");
         assert!(fixture.staging.join("bundle").join(public_key).is_file());
         assert_eq!(
-            requirement["id"],
+            requirement["uri"],
             "urn:authority:requirement:adult-status:v1"
         );
         assert_eq!(requirement["validitySeconds"], 900);
         assert_eq!(requirement["observationTimezone"], "Asia/Bangkok");
         assert_eq!(
-            requirement["concepts"][0]["id"],
+            requirement["concepts"][0]["uri"],
             "urn:authority:concept:is-adult:v1"
         );
         assert!(fixture
@@ -6811,7 +6830,7 @@ factSchema: schemas/source-facts.schema.yaml
     #[test]
     fn local_target_compilation_keeps_target_governance_without_local_secrets() {
         let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
-        let question = write_referenced_people_project(&fixture, "authentication: {kind: none}\n");
+        let question = write_referenced_people_project(&fixture, "authentication: {type: none}\n");
         let mut question: Value = serde_norway::from_str(&question).unwrap();
         question["answers"][0]["uri"] = json!("urn:authority:concept:is-adult:v1");
         question["governance"] = json!({
@@ -6834,7 +6853,7 @@ factSchema: schemas/source-facts.schema.yaml
         .unwrap();
         fs::remove_dir_all(fixture.project.join(SECRETS_DIRECTORY)).unwrap();
         let target = json!({
-            "version":1, "assuranceProfile":"local", "service":{"publicOrigin":"http://127.0.0.1:9444"},
+            "apiVersion":EVIDENCE_BUNDLE_API_VERSION, "kind":EVIDENCE_BUNDLE_KIND, "assuranceProfile":"local", "service":{"publicOrigin":"http://127.0.0.1:9444"},
             "authentication":{"issuer":"http://127.0.0.1:9445"},
             "authorityProfiles":{"operator":{"kind":"explicit-request"}},
             "signing":{}, "audit":{"hashKeyVersion":"target-version"}
@@ -6862,7 +6881,7 @@ factSchema: schemas/source-facts.schema.yaml
             );
         }
         assert_eq!(
-            compiled.bundle["sources"]["people"]["authentication"]["kind"],
+            compiled.bundle["sources"]["people"]["authentication"]["type"],
             "none"
         );
         assert_eq!(
@@ -6880,7 +6899,7 @@ factSchema: schemas/source-facts.schema.yaml
     #[test]
     fn a_local_baseline_target_compiles_its_grants_and_formats_from_the_questions() {
         let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
-        write_governed_referenced_people_project(&fixture, "authentication: {kind: none}\n");
+        write_governed_referenced_people_project(&fixture, "authentication: {type: none}\n");
         fs::create_dir(fixture.project.join("public-keys")).unwrap();
         fs::write(
             fixture.project.join(OFFLINE_CHECK_PUBLIC_JWK_FILE),
@@ -6925,7 +6944,7 @@ factSchema: schemas/source-facts.schema.yaml
     #[test]
     fn an_authored_local_governance_keeps_its_own_grants_and_formats() {
         let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
-        write_governed_referenced_people_project(&fixture, "authentication: {kind: none}\n");
+        write_governed_referenced_people_project(&fixture, "authentication: {type: none}\n");
         fs::create_dir(fixture.project.join("public-keys")).unwrap();
         fs::write(
             fixture.project.join(OFFLINE_CHECK_PUBLIC_JWK_FILE),
@@ -6969,7 +6988,7 @@ factSchema: schemas/source-facts.schema.yaml
     #[test]
     fn a_local_baseline_target_compiles_only_the_grants_its_access_policies_name() {
         let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
-        write_governed_referenced_people_project(&fixture, "authentication: {kind: none}\n");
+        write_governed_referenced_people_project(&fixture, "authentication: {type: none}\n");
         add_governed_age_bracket_question(&fixture);
         fixture.add_access_policy("age-checks", &["adult-status"]);
         fs::create_dir(fixture.project.join("public-keys")).unwrap();
@@ -6992,12 +7011,14 @@ factSchema: schemas/source-facts.schema.yaml
             .as_object()
             .expect("authority profiles");
         let tag = access_policy_requester_tag("age-checks", &["adult-status".to_owned()]).unwrap();
+        let profile = access_policy_authority_profile_id(&tag);
         assert_eq!(
             profiles.keys().collect::<Vec<_>>(),
-            [&tag],
+            [&profile],
             "the policy replaces the generated baseline profile"
         );
-        let requirements = profiles[&tag]["grants"]
+        assert_eq!(profiles[&profile]["requesterTags"], json!([tag]));
+        let requirements = profiles[&profile]["grants"]
             .as_array()
             .expect("compiled grants")
             .iter()
@@ -7112,7 +7133,7 @@ factSchema: schemas/source-facts.schema.yaml
         let referenced = QUESTION.replace(inline, "source:\n  ref: people\n");
         let question = parsed_question(&referenced);
         let source: Value = serde_norway::from_str(&format!(
-            "apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1\nkind: EvidenceSource\ntransport: http-json\nbaseUrl: https://records.example.test\nposture: field-projected\nauthentication: {{kind: none}}\n{REFERENCED_SOURCE_TAIL}"
+            "apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1\nkind: EvidenceSource\ntype: http-json\nbaseUrl: https://records.example.test\nposture: field-projected\nauthentication: {{type: none}}\n{REFERENCED_SOURCE_TAIL}"
         ))
         .unwrap();
         let sources = BTreeMap::from([("people".to_owned(), source)]);
@@ -7218,7 +7239,7 @@ factSchema: schemas/source-facts.schema.yaml
         .unwrap();
         fs::remove_dir_all(fixture.project.join(SECRETS_DIRECTORY)).unwrap();
         let target = json!({
-            "version":1, "assuranceProfile":assurance_profile, "service":{"publicOrigin":"http://127.0.0.1:9444"},
+            "apiVersion":EVIDENCE_BUNDLE_API_VERSION, "kind":EVIDENCE_BUNDLE_KIND, "assuranceProfile":assurance_profile, "service":{"publicOrigin":"http://127.0.0.1:9444"},
             "authentication":{"issuer":"http://127.0.0.1:9445"},
             "authorityProfiles":{"operator":{"kind":"explicit-request"}},
             "signing":{}, "audit":{"hashKeyVersion":"target-version"}
@@ -7236,10 +7257,10 @@ factSchema: schemas/source-facts.schema.yaml
     #[test]
     fn evidence_grade_target_is_held_to_the_production_checks() {
         let production_error =
-            compile_referenced_people_target("production", "authentication: {kind: none}\n")
+            compile_referenced_people_target("production", "authentication: {type: none}\n")
                 .expect_err("an unauthenticated HTTP source is refused under production checks");
         let evidence_grade_error =
-            compile_referenced_people_target("evidence-grade", "authentication: {kind: none}\n")
+            compile_referenced_people_target("evidence-grade", "authentication: {type: none}\n")
                 .expect_err("evidence-grade is held to the same production checks");
         let production_message = format!("{production_error:#}");
         let evidence_grade_message = format!("{evidence_grade_error:#}");
@@ -7255,7 +7276,7 @@ factSchema: schemas/source-facts.schema.yaml
     fn evidence_grade_target_compiles_through_the_production_path() {
         let compiled = compile_referenced_people_target(
             "evidence-grade",
-            "authentication: {kind: static-authorization, tokenRef: secret:file/records-token}\n",
+            "authentication: {type: static-authorization, tokenRef: secret:file/records-token}\n",
         )
         .expect("an evidence-grade target compiles through the production checks");
         assert_eq!(compiled.bundle["assuranceProfile"], "evidence-grade");
@@ -7264,7 +7285,7 @@ factSchema: schemas/source-facts.schema.yaml
     #[test]
     fn an_unknown_assurance_profile_is_refused_by_name() {
         let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
-        let target = json!({"version": 1, "assuranceProfile": "staging"});
+        let target = json!({"apiVersion": EVIDENCE_BUNDLE_API_VERSION, "kind": EVIDENCE_BUNDLE_KIND, "assuranceProfile": "staging"});
         let project = fs::canonicalize(&fixture.project).unwrap();
         let error = compile_target_project(
             &project,
@@ -7393,8 +7414,8 @@ factSchema: schemas/source-facts.schema.yaml
         let requirement = &bundle["requirements"][0];
         assert_eq!(requirement["kind"], "information-requirement");
         assert_eq!(requirement["concepts"].as_array().unwrap().len(), 2);
-        assert_eq!(requirement["concepts"][0]["form"], "boolean");
-        assert_eq!(requirement["concepts"][1]["form"], "bounded-integer");
+        assert_eq!(requirement["concepts"][0]["type"], "boolean");
+        assert_eq!(requirement["concepts"][1]["type"], "bounded-integer");
         assert_eq!(
             requirement["concepts"][1]["constraints"],
             json!({"minimum": 0, "maximum": 20})
@@ -7488,7 +7509,7 @@ factSchema: schemas/source-facts.schema.yaml
         assert_eq!(profiles.len(), 2);
         assert!(!profiles.contains_key(AUTHORITY_PROFILE_ID));
         for policy in &compiled.access_policies {
-            let profile = &profiles[&policy.requester_tag];
+            let profile = &profiles[&access_policy_authority_profile_id(&policy.requester_tag)];
             assert_eq!(profile["kind"], "explicit-request");
             assert_eq!(profile["requesterTags"], json!([policy.requester_tag]));
             let grants = profile["grants"].as_array().unwrap();
@@ -7500,6 +7521,96 @@ factSchema: schemas/source-facts.schema.yaml
                 );
             }
         }
+    }
+
+    /// The `evidence` binary built from this commit, for the gates that hold a
+    /// compiled bundle to the real reader rather than to the stub.
+    fn evidence_built_from_this_commit() -> PathBuf {
+        PathBuf::from(
+            std::env::var_os("EVIDENCE_BIN")
+                .expect("EVIDENCE_BIN names the evidence binary built from this commit"),
+        )
+    }
+
+    #[test]
+    fn an_access_policy_names_its_authority_profile_with_a_local_identifier() {
+        let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
+        fixture.add_access_policy("age-checks", &["adult-status"]);
+
+        let compiled = compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
+            .expect("an access policy compiles");
+
+        let bundle: Value = serde_norway::from_slice(
+            &fs::read(fixture.staging.join("bundle/evidence.yaml")).expect("bundle reads"),
+        )
+        .expect("bundle parses");
+        let profiles = bundle["authorityProfiles"]
+            .as_object()
+            .expect("authority profiles");
+        let policy = &compiled.access_policies[0];
+        assert_eq!(
+            profiles.keys().collect::<Vec<_>>(),
+            [&access_policy_authority_profile_id(&policy.requester_tag)]
+        );
+        for (name, profile) in profiles {
+            assert!(
+                registry_platform_yaml::LocalId::new(name.as_str()).is_ok(),
+                "the bundle reader refuses the authority profile name `{name}`"
+            );
+            assert_eq!(profile["requesterTags"], json!([policy.requester_tag]));
+        }
+    }
+
+    #[test]
+    #[ignore = "run with EVIDENCE_BIN naming the evidence binary built from this commit"]
+    fn an_access_policy_compiles_to_a_bundle_the_reader_accepts() {
+        let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
+        fixture.add_access_policy("age-checks", &["adult-status"]);
+
+        compile_local_project(
+            &fixture.project,
+            &fixture.staging,
+            &evidence_built_from_this_commit(),
+        )
+        .expect("the reader accepts the bundle an access policy compiles to");
+    }
+
+    #[test]
+    #[ignore = "run with EVIDENCE_BIN naming the evidence binary built from this commit"]
+    fn the_longest_question_names_the_form_accepts_compile_to_a_bundle_the_reader_accepts() {
+        // One subject: `local-subject-<id>-v1` holds 64 characters at an id of 47.
+        let longest_id = format!("adult-status-{}", "a".repeat(34));
+        assert_eq!(longest_id.len(), 47);
+        let fixture = Fixture::new(
+            OPENAPI,
+            &QUESTION.replace("adult-status", &longest_id),
+            ANSWER,
+            true,
+        );
+        compile_local_project(
+            &fixture.project,
+            &fixture.staging,
+            &evidence_built_from_this_commit(),
+        )
+        .expect("the reader accepts the longest single-subject question id");
+
+        // Several subjects: `local-subject-<id>-<role>-v1` holds 64 characters
+        // when the id and the role are 46 together.
+        let longest_role = format!("candidate-parent-{}", "a".repeat(10));
+        assert_eq!("parent-relationship".len() + longest_role.len(), 46);
+        let fixture = Fixture::new(
+            RELATIONSHIP_OPENAPI,
+            &RELATIONSHIP_QUESTION
+                .replace("role: candidate-parent", &format!("role: {longest_role}")),
+            RELATIONSHIP_ANSWER,
+            true,
+        );
+        compile_local_project(
+            &fixture.project,
+            &fixture.staging,
+            &evidence_built_from_this_commit(),
+        )
+        .expect("the reader accepts the longest id and role of a several-subject question");
     }
 
     #[test]
@@ -7561,7 +7672,8 @@ factSchema: schemas/source-facts.schema.yaml
             bundle["authentication"]["oidc"]["allowedClients"],
             json!(["task-agent"])
         );
-        let profile = &bundle["authorityProfiles"][&policy.requester_tag];
+        let profile = &bundle["authorityProfiles"]
+            [&access_policy_authority_profile_id(&policy.requester_tag)];
         assert_eq!(profile["kind"], "delegated");
         assert_eq!(profile["grantSourceIssuer"], "https://casework.invalid");
         assert_eq!(profile["requesterClients"], json!(["task-agent"]));
@@ -7615,7 +7727,7 @@ factSchema: schemas/source-facts.schema.yaml
     #[test]
     fn source_artifact_graph_validates_without_questions_target_or_secrets() {
         let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
-        write_referenced_people_project(&fixture, "authentication: {kind: none}\n");
+        write_referenced_people_project(&fixture, "authentication: {type: none}\n");
         fs::remove_file(fixture.project.join("questions/adult-status.yaml")).unwrap();
         fs::remove_dir_all(fixture.project.join(SECRETS_DIRECTORY)).unwrap();
         fs::write(fixture.project.join("adapters/people-prepare.rhai"), r#"
@@ -7656,7 +7768,7 @@ fn prepare(selectors, context) {
     #[test]
     fn target_bound_source_shape_validates_without_resolving_a_target() {
         let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
-        write_referenced_people_project(&fixture, "authentication: {kind: none}\n");
+        write_referenced_people_project(&fixture, "authentication: {type: none}\n");
         let source_path = fixture.project.join("sources/people.yaml");
         let mut source: Value = serde_norway::from_slice(&fs::read(&source_path).unwrap()).unwrap();
         for field in ["baseUrl", "authentication"] {
@@ -7665,7 +7777,7 @@ fn prepare(selectors, context) {
         source["request"]
             .as_object_mut()
             .unwrap()
-            .remove("concurrencyLimit");
+            .remove("maximumConcurrency");
         source["connection"] = json!("records");
         fs::write(&source_path, serde_norway::to_string(&source).unwrap()).unwrap();
 
@@ -7692,7 +7804,7 @@ fn prepare(selectors, context) {
     #[test]
     fn one_question_compiles_explicit_overlapping_and_composite_profiles() {
         let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
-        let question = write_referenced_people_project(&fixture, "authentication: {kind: none}\n");
+        let question = write_referenced_people_project(&fixture, "authentication: {type: none}\n");
         let mut question: Value = serde_norway::from_str(&question).unwrap();
         question["subject"] = json!({"role":"person", "profiles":["person-reference-v1","person-composite-v1"], "derivation":true});
         fs::write(
@@ -7707,7 +7819,6 @@ maximumAggregateBytes: 220\nfields:\n  person_id: {type: string, minimumBytes: 1
         let mut source: Value = serde_norway::from_slice(&fs::read(&source_path).unwrap()).unwrap();
         source["baseUrl"] = json!("http://127.0.0.1:8082");
         let request = source["request"].as_object_mut().unwrap();
-        request.remove("pathTemplate");
         request.remove("pathBindings");
         request.insert("path".to_owned(), json!("/lookup"));
         request["selectorInputs"][0]["alternatives"]
@@ -7808,9 +7919,9 @@ maximumAggregateBytes: 220\nfields:\n  person_id: {type: string, minimumBytes: 1
 
     #[test]
     fn source_connections_fill_only_owned_slots_and_preserve_ordinary_sources() {
-        let original = json!({"transport":"http-json", "baseUrl":"https://ordinary.example", "authentication":{"kind":"static-authorization","tokenRef":"secret:file/existing"}, "request":{"concurrencyLimit":8}});
-        let connected = json!({"transport":"http-json", "connection":"records", "request":{}});
-        let connections = json!({"records":{"baseUrl":"https://records.example", "authentication":{"kind":"static-authorization","tokenRef":"secret:file/records"}, "tlsTrustProfile":"private-ca"}});
+        let original = json!({"type":"http-json", "baseUrl":"https://ordinary.example", "authentication":{"type":"static-authorization","tokenRef":"secret:file/existing"}, "request":{"maximumConcurrency":8}});
+        let connected = json!({"type":"http-json", "connection":"records", "request":{}});
+        let connections = json!({"records":{"baseUrl":"https://records.example", "authentication":{"type":"static-authorization","tokenRef":"secret:file/records"}, "tlsTrustProfile":"private-ca"}});
         let mut sources = BTreeMap::from([
             ("ordinary".to_owned(), original.clone()),
             ("connected".to_owned(), connected.clone()),
@@ -7822,7 +7933,7 @@ maximumAggregateBytes: 220\nfields:\n  person_id: {type: string, minimumBytes: 1
             sources["connected"]["baseUrl"],
             connections["records"]["baseUrl"]
         );
-        assert_eq!(sources["connected"]["request"]["concurrencyLimit"], 4);
+        assert_eq!(sources["connected"]["request"]["maximumConcurrency"], 4);
         assert_eq!(
             sources["connected"]["authentication"],
             connections["records"]["authentication"]
@@ -7850,7 +7961,7 @@ maximumAggregateBytes: 220\nfields:\n  person_id: {type: string, minimumBytes: 1
     #[test]
     fn local_dev_reuses_connection_and_tls_inputs_with_generated_local_governance() {
         let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
-        write_referenced_people_project(&fixture, "authentication: {kind: none}\n");
+        write_referenced_people_project(&fixture, "authentication: {type: none}\n");
         let source_path = fixture.project.join("sources/people.yaml");
         let mut source: Value = serde_norway::from_slice(&fs::read(&source_path).unwrap()).unwrap();
         source.as_object_mut().unwrap().remove("baseUrl");
@@ -7858,10 +7969,10 @@ maximumAggregateBytes: 220\nfields:\n  person_id: {type: string, minimumBytes: 1
         source["request"]
             .as_object_mut()
             .unwrap()
-            .remove("concurrencyLimit");
+            .remove("maximumConcurrency");
         source["connection"] = json!("records");
         fs::write(source_path, serde_norway::to_string(&source).unwrap()).unwrap();
-        let connections = json!({"records":{"baseUrl":"http://127.0.0.1:8082", "authentication":{"kind":"none"}, "concurrencyLimit":3}});
+        let connections = json!({"records":{"baseUrl":"http://127.0.0.1:8082", "authentication":{"type":"none"}, "maximumConcurrency":3}});
         let tls = json!({"systemRoots":false, "trustProfiles":{}});
         let compiled = compile_local_project_with_target_inputs(
             &fixture.project,
@@ -7880,7 +7991,7 @@ maximumAggregateBytes: 220\nfields:\n  person_id: {type: string, minimumBytes: 1
             serde_norway::from_slice(&fs::read(compiled.runtime_path).unwrap()).unwrap();
         assert_eq!(bundle["sourceConnections"], connections);
         assert_eq!(
-            bundle["sources"]["people"]["request"]["concurrencyLimit"],
+            bundle["sources"]["people"]["request"]["maximumConcurrency"],
             3
         );
         assert_eq!(
@@ -7889,7 +8000,7 @@ maximumAggregateBytes: 220\nfields:\n  person_id: {type: string, minimumBytes: 1
         );
         assert_eq!(bundle["assuranceProfile"], "local");
         assert_eq!(runtime["outboundTls"], tls);
-        assert_eq!(runtime["signer"]["kind"], "local-jwk");
+        assert_eq!(runtime["signer"]["type"], "local-jwk");
     }
 
     #[test]
@@ -7950,9 +8061,9 @@ maximumAggregateBytes: 220\nfields:\n  person_id: {type: string, minimumBytes: 1
     /// to settle.
     const REFERENCED_SOURCE_TAIL: &str = r#"request:
   method: GET
-  pathTemplate: /people/{person_id}
+  path: /people/{person_id}
   pathBindings:
-    person_id: {from: selector, role: person, profile: person-reference-v1, field: person_id}
+    person_id: {type: selector, role: person, profile: person-reference-v1, field: person_id}
   fixedHeaders: [{name: Accept, value: application/json}]
   selectorInputs:
     - role: person
@@ -7964,9 +8075,9 @@ maximumAggregateBytes: 220\nfields:\n  person_id: {type: string, minimumBytes: 1
   preparationLimits: {query: allowed, jsonBody: forbidden, maximumNormalizedBytes: 4096}
   projection: [/date_of_birth]
   redirects: deny
-  timeoutMilliseconds: 3000
+  attemptTimeoutMilliseconds: 3000
   maximumResponseBytes: 65536
-  concurrencyLimit: 8
+  maximumConcurrency: 8
 responseSchema: schemas/people-response.schema.yaml
 extractScript: adapters/people-extract.rhai
 factSchema: schemas/people-facts.schema.yaml
@@ -7988,7 +8099,7 @@ maximumAggregateBytes: 200\nfields:\n  person_id:\n    type: string\n    minimum
         fs::write(
             fixture.project.join("sources/people.yaml"),
             format!(
-                "apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1\nkind: EvidenceSource\ntransport: http-json\nbaseUrl: https://records.example.test\nposture: field-projected\n{authentication}{REFERENCED_SOURCE_TAIL}"
+                "apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1\nkind: EvidenceSource\ntype: http-json\nbaseUrl: https://records.example.test\nposture: field-projected\n{authentication}{REFERENCED_SOURCE_TAIL}"
             ),
         )
         .expect("source");
@@ -8038,7 +8149,7 @@ maximumAggregateBytes: 200\nfields:\n  person_id:\n    type: string\n    minimum
         let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
         let referenced = write_referenced_people_project(
             &fixture,
-            "authentication:\n  kind: basic\n  usernameRef: secret:file/records-username\n  passwordRef: secret:file/records-password\n",
+            "authentication:\n  type: basic\n  usernameRef: secret:file/records-username\n  passwordRef: secret:file/records-password\n",
         );
         let copied = referenced
             .replace("id: adult-status", "id: adult-status-copy")
@@ -8086,7 +8197,7 @@ maximumAggregateBytes: 200\nfields:\n  person_id:\n    type: string\n    minimum
             error,
             "the referenced source sends no credential, and an absent field does not decide \
 that: question `adult-status` must declare the posture itself by adding an `authentication:` \
-mapping naming the `kind:` its channel uses, in sources/people.yaml"
+mapping naming the `type:` its channel uses, in sources/people.yaml"
         );
         assert!(fixture.staging_is_empty());
     }
@@ -8128,8 +8239,8 @@ mapping naming the `kind:` its channel uses, in sources/people.yaml"
 
             assert_eq!(
                 error,
-                "the referenced source states `authentication:` without naming a `kind`, and an \
-undecided mapping is not a posture: question `adult-status` must name the `kind:` its channel \
+                "the referenced source states `authentication:` without naming a `type`, and an \
+undecided mapping is not a posture: question `adult-status` must name the `type:` its channel \
 uses under `authentication:` in sources/people.yaml",
                 "{authentication:?} was not refused as an unnamed kind"
             );
@@ -8140,12 +8251,12 @@ uses under `authentication:` in sources/people.yaml",
     #[test]
     fn referenced_http_source_compiles_every_declared_authentication_posture() {
         for authentication in [
-            "authentication: {kind: none}\n",
-            "authentication: {kind: static-authorization, tokenRef: 'secret:file/records-token'}\n",
-            // The runtime owns the closed set of kinds. evidencectl settles
-            // only that the source named one, so an unrecognized kind reaches
+            "authentication: {type: none}\n",
+            "authentication: {type: static-authorization, tokenRef: 'secret:file/records-token'}\n",
+            // The runtime owns the closed set of types. evidencectl settles
+            // only that the source named one, so an unrecognized type reaches
             // the runtime rather than being judged twice.
-            "authentication: {kind: kind-this-tool-does-not-enumerate}\n",
+            "authentication: {type: type-this-tool-does-not-enumerate}\n",
         ] {
             let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
             write_referenced_people_project(&fixture, authentication);
@@ -8245,15 +8356,15 @@ maximumAggregateBytes: 200\nfields:\n  {field}:\n    type: string\n    minimumBy
             fixture.project.join("sources/family-record.yaml"),
             r#"apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1
 kind: EvidenceSource
-transport: http-json
+type: http-json
 baseUrl: https://records.example.test
 posture: field-projected
-authentication: {kind: static-authorization, tokenRef: 'secret:file/records-token'}
+authentication: {type: static-authorization, tokenRef: 'secret:file/records-token'}
 request:
   method: GET
-  pathTemplate: /children/{child_reference}/relationships
+  path: /children/{child_reference}/relationships
   pathBindings:
-    child_reference: {from: selector, role: child, profile: child-reference-v1, field: child_reference}
+    child_reference: {type: selector, role: child, profile: child-reference-v1, field: child_reference}
   selectorInputs:
     - role: child
       alternatives:
@@ -8264,9 +8375,9 @@ request:
   preparationLimits: {query: forbidden, jsonBody: forbidden, maximumNormalizedBytes: 4096}
   projection: [/relationship_complete]
   redirects: deny
-  timeoutMilliseconds: 3000
+  attemptTimeoutMilliseconds: 3000
   maximumResponseBytes: 65536
-  concurrencyLimit: 8
+  maximumConcurrency: 8
 responseSchema: schemas/family-response.schema.yaml
 extractScript: adapters/family-extract.rhai
 factSchema: schemas/family-facts.schema.yaml
@@ -8597,7 +8708,7 @@ factSchema: schemas/family-facts.schema.yaml
 
         assert_eq!(
             compiled.questions[0].subjects[0].selectors[0].fields[0],
-            "person-id.v1"
+            "person-id_v1"
         );
         let extract = fs::read_to_string(
             fixture
@@ -8766,14 +8877,13 @@ maximumAggregateBytes: 200\nfields:\n  {field}:\n    type: string\n    minimumBy
 
         let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
         let referenced =
-            write_referenced_people_project(&fixture, "authentication: {kind: none}\n");
+            write_referenced_people_project(&fixture, "authentication: {type: none}\n");
         let people = selector_profiles(&fixture, "person", "person_id", 16);
         let guardians = selector_profiles(&fixture, "guardian", "guardian_id", 5);
 
         let source_path = fixture.project.join("sources/people.yaml");
         let mut source: Value = serde_norway::from_slice(&fs::read(&source_path).unwrap()).unwrap();
         let request = source["request"].as_object_mut().unwrap();
-        request.remove("pathTemplate");
         request.remove("pathBindings");
         request.insert("path".to_owned(), json!("/lookup"));
         request.insert(
@@ -8875,12 +8985,15 @@ maximumAggregateBytes: 200\nfields:\n  {field}:\n    type: string\n    minimumBy
         );
     }
 
+    /// The tutorial project with every punctuation mark its names may carry: a
+    /// selector takes `-` and `_`, the bundle's grammar for a selector field,
+    /// and a fact name also takes a dot.
     fn punctuated_inputs() -> (String, String, String) {
         let openapi = OPENAPI
-            .replace("person_id", "person-id.v1")
+            .replace("person_id", "person-id_v1")
             .replace("date_of_birth", "date-of.birth");
         let question = QUESTION
-            .replace("person_id", "person-id.v1")
+            .replace("person_id", "person-id_v1")
             .replace("date_of_birth", "date-of.birth");
         let answer = ANSWER.replace("facts.date_of_birth", "facts[\"date-of.birth\"]");
         (openapi, question, answer)

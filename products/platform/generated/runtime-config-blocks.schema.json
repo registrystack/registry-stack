@@ -81,13 +81,13 @@
           "additionalProperties": false,
           "description": "Read `jwks_uri` from the issuer's OpenID Connect discovery document.",
           "properties": {
-            "kind": {
+            "type": {
               "const": "discovery",
               "type": "string"
             }
           },
           "required": [
-            "kind"
+            "type"
           ],
           "type": "object"
         },
@@ -95,7 +95,7 @@
           "additionalProperties": false,
           "description": "Fetch the key set from this absolute `https` URI, skipping discovery.",
           "properties": {
-            "kind": {
+            "type": {
               "const": "uri",
               "type": "string"
             },
@@ -104,7 +104,7 @@
             }
           },
           "required": [
-            "kind",
+            "type",
             "uri"
           ],
           "type": "object"
@@ -116,13 +116,13 @@
             "documentRef": {
               "$ref": "#/$defs/SecretReference"
             },
-            "kind": {
+            "type": {
               "const": "static",
               "type": "string"
             }
           },
           "required": [
-            "kind",
+            "type",
             "documentRef"
           ],
           "type": "object"
@@ -156,17 +156,32 @@
       ],
       "type": "string"
     },
+    "OidcAllowedClients": {
+      "anyOf": [
+        {
+          "const": "unrestricted",
+          "description": "Admit a token from every client the issuer verifies.",
+          "type": "string"
+        },
+        {
+          "description": "Admit a token only from a listed client.",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        }
+      ],
+      "description": "How `allowedClients` is written (CFG-EMPTY-2): the keyword `unrestricted`,\nor a list of at least one client. An empty list is refused, because it\nreads as both \"none\" and \"any\"."
+    },
     "OidcClientsConfig": {
       "additionalProperties": false,
       "description": "The OAuth clients a runtime admits access tokens for, and the assertion\nauthorities each client may exchange a subject token from, written under\n`authentication.oidc` beside the issuer.",
       "properties": {
         "allowedClients": {
-          "default": [],
-          "description": "Client identifiers whose access tokens are admitted. A runtime decides\nwhether an empty list is acceptable in production.",
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
+          "$ref": "#/$defs/OidcAllowedClients",
+          "description": "The OAuth clients whose access tokens are admitted: `unrestricted` to\nadmit a token from every client the issuer verifies, or a list of at\nleast one distinct client. A runtime decides whether `unrestricted`\nis acceptable in production."
         },
         "assertionIssuers": {
           "additionalProperties": {
@@ -176,10 +191,11 @@
               "type": "string"
             },
             "maxItems": 16,
+            "minItems": 1,
             "type": "array",
             "uniqueItems": true
           },
-          "description": "Assertion authorities each client may exchange a subject token from,\nkeyed by client identifier. Omitted, no assertion-issuer rule applies;\nwritten, it lists at least one client. Once a client is listed, a\ntoken it exchanged is accepted only for one of that client's declared\nauthorities.",
+          "description": "Assertion authorities each client may exchange a subject token from,\nkeyed by client identifier. Omitted, no assertion-issuer rule applies;\nwritten, it lists at least one client, each with at least one\nauthority. Once a client is listed, a token it exchanged is accepted\nonly for one of that client's declared authorities, and a client that\nis not listed may exchange from no authority.",
           "maxProperties": 64,
           "minProperties": 1,
           "propertyNames": {
@@ -189,6 +205,9 @@
           "type": "object"
         }
       },
+      "required": [
+        "allowedClients"
+      ],
       "type": "object"
     },
     "OidcIssuerConfig": {
@@ -208,7 +227,7 @@
         "jwksSource": {
           "$ref": "#/$defs/JwksSource",
           "default": {
-            "kind": "discovery"
+            "type": "discovery"
           },
           "description": "Where the issuer's signing keys come from. Absent reads the issuer's\nOpenID Connect discovery document."
         }
@@ -310,10 +329,10 @@
       "type": "string"
     },
     "Url": {
-      "description": "An absolute http or https URL with a host and no user information.",
+      "description": "An absolute http or https URL with a host, no user information, and no whitespace or control character.",
       "format": "uri",
       "maxLength": 2048,
-      "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://[^/?#@]+([/?#].*)?$",
+      "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://[^/?#@\\u0000-\\u0020\\u007F-\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]+([/?#][^\\u0000-\\u0020\\u007F-\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*)?$",
       "type": "string"
     }
   },

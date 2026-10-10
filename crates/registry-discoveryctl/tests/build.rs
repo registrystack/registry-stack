@@ -220,14 +220,14 @@ fn authoring_project(catalog_url: &str) -> TempDir {
     fs::write(
         project.path().join("origins.yaml"),
         format!(
-            "schemaVersion: registry-discovery/origins/v1alpha1\norigins:\n  - originId: evidence-one\n    catalogUrl: {catalog_url}\n    profile: registry-discovery-v1alpha1\n    enabled: true\n"
+            "apiVersion: id.registrystack.org/formats/discovery/origins/v1alpha1\nkind: DiscoveryOrigins\norigins:\n  - originId: evidence-one\n    catalogUrl: {catalog_url}\n    profile: registry-discovery-v1alpha1\n    enabled: true\n"
         ),
     )
     .expect("origins");
     fs::create_dir(project.path().join("mappings")).expect("mappings");
     fs::write(
         project.path().join("mappings/adult-status.yaml"),
-        "schemaVersion: registry-discovery/evidence-mapping/v1alpha1\nmappingId: urn:example:mapping:adult-status\nmappingAuthorityId: urn:example:authority\nrequirementId: urn:example:requirement:adult-status\njurisdiction: urn:example:jurisdiction\nalternatives:\n  - evidenceTypeListId: urn:example:list:adult-status\n    evidenceTypeIds:\n      - urn:example:evidence-type:adult-status\n",
+        "apiVersion: id.registrystack.org/formats/discovery/evidence-mapping/v1alpha1\nkind: DiscoveryEvidenceMapping\nmappingId: urn:example:mapping:adult-status\nmappingAuthorityId: urn:example:authority\nrequirementId: urn:example:requirement:adult-status\njurisdiction: urn:example:jurisdiction\nalternatives:\n  - evidenceTypeListId: urn:example:list:adult-status\n    evidenceTypeIds:\n      - urn:example:evidence-type:adult-status\n",
     )
     .expect("mapping");
     project
@@ -390,7 +390,7 @@ async fn identical_claimed_service_ids_from_distinct_origins_remain_separate() {
     fs::write(
         project.path().join("origins.yaml"),
         format!(
-            "schemaVersion: registry-discovery/origins/v1alpha1\norigins:\n  - originId: evidence-one\n    catalogUrl: {first_url}\n    profile: registry-discovery-v1alpha1\n    enabled: true\n  - originId: evidence-two\n    catalogUrl: {second_url}\n    profile: registry-discovery-v1alpha1\n    enabled: true\n"
+            "apiVersion: id.registrystack.org/formats/discovery/origins/v1alpha1\nkind: DiscoveryOrigins\norigins:\n  - originId: evidence-one\n    catalogUrl: {first_url}\n    profile: registry-discovery-v1alpha1\n    enabled: true\n  - originId: evidence-two\n    catalogUrl: {second_url}\n    profile: registry-discovery-v1alpha1\n    enabled: true\n"
         ),
     )
     .expect("origins");
@@ -598,7 +598,7 @@ async fn invalid_mapping_is_refused_before_origin_io_and_preserves_previous_outp
     let project = authoring_project(&catalog_url);
     fs::write(
         project.path().join("mappings/adult-status.yaml"),
-        "schemaVersion: registry-discovery/evidence-mapping/v1alpha1\nunexpected: true\n",
+        "apiVersion: id.registrystack.org/formats/discovery/evidence-mapping/v1alpha1\nkind: DiscoveryEvidenceMapping\nunexpected: true\n",
     )
     .expect("invalid mapping");
     let output = project.path().join("index.json");
@@ -612,7 +612,7 @@ async fn invalid_mapping_is_refused_before_origin_io_and_preserves_previous_outp
     let rendered = refusal.to_string();
     assert!(rendered.contains("error[config.unknown-key]"), "{rendered}");
     assert!(
-        rendered.contains("adult-status.yaml:2:1 /unexpected"),
+        rendered.contains("adult-status.yaml:3:1 /unexpected"),
         "{rendered}"
     );
     assert_eq!(counter.load(Ordering::SeqCst), 0);
@@ -633,7 +633,7 @@ async fn compiled_service_bound_leaves_the_previous_output_untouched() {
     let (base_url, task) = any_path_provider(body, Arc::clone(&counter)).await;
     let project = TempDir::new().expect("project");
     let mut origins =
-        String::from("schemaVersion: registry-discovery/origins/v1alpha1\norigins:\n");
+        String::from("apiVersion: id.registrystack.org/formats/discovery/origins/v1alpha1\nkind: DiscoveryOrigins\norigins:\n");
     for index in 0..origins_needed {
         origins.push_str(&format!(
             "  - originId: evidence-{index:03}\n    catalogUrl: {base_url}/catalog-{index:03}.jsonld\n    profile: registry-discovery-v1alpha1\n    enabled: true\n"

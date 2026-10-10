@@ -244,7 +244,7 @@ entities:
 
     #[test]
     fn another_kind_is_refused_by_name() {
-        let document = MINIMAL.replace("kind: BRegModelSelection", "kind: RegistryProject");
+        let document = MINIMAL.replace("kind: BRegModelSelection", "kind: BRegProject");
         let report = Selection::parse("test", document.as_bytes()).expect_err("refused");
         assert_eq!(codes(&report), ["config.wrong-kind"]);
         let diagnostic = &report.diagnostics()[0];

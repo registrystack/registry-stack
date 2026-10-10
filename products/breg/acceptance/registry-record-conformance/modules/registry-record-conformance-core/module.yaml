@@ -1,3 +1,5 @@
+apiVersion: id.registrystack.org/formats/breg/module/v1alpha1
+kind: BRegModule
 id: registry-record-conformance-core
 version: 0.1.0
 entities:
@@ -10,7 +12,7 @@ entities:
       - id: label
         type: string
         required: true
-        maxLength: 160
+        maximumLength: 160
         classification: public
   - id: protected-unit
     primaryDataset: protected-units
@@ -21,5 +23,5 @@ entities:
       - id: label
         type: string
         required: true
-        maxLength: 160
+        maximumLength: 160
         classification: internal

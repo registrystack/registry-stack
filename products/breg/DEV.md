@@ -176,7 +176,7 @@ reviewExecutors:
     client: automatic-applier
 ```
 
-The profile must grant `apply_request` for every request entity that selects
+The profile must grant `apply-request` for every request entity that selects
 the executor, declare `actorKind: service`, and admit the client's exact ID,
 scopes, purpose, and principal claim. Dev derives the endpoint and registry ID
 from this BReg session. It copies the selected client's retained ID and

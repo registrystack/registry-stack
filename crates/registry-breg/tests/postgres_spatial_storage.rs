@@ -130,24 +130,24 @@ fn compiled_spatial_registry() -> registry_breg::CompiledRegistry {
     compile_project(
         &parse_project_json(
             br#"{
-              "apiVersion":"registry.registrystack.org/v1alpha1",
-              "kind":"RegistryProject",
-              "registry":{"id":"spatial-storage","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+              "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+              "kind":"BRegProject",
+              "project":{"id":"spatial-storage","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
               "entities":[{
                 "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"mutable","tombstone":true,"classification":"internal",
                 "fields":[
-                  {"id":"code","type":"string","maxLength":32,"required":true,"classification":"internal"},
+                  {"id":"code","type":"string","maximumLength":32,"required":true,"classification":"internal"},
                   {"id":"location","type":"crs84-point","precision":6,"classification":"internal"}
                 ],
                 "geojson":{"geometryField":"location"}
               }],
               "accessProfiles":[{
-                "id":"map-reader","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
+                "id":"map-reader","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
                   "entity":"site","operations":["create","get","list","patch","tombstone"],
                   "readableFields":["code","location"],"writableFields":["code","location"],
                   "spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":0.25,"maximumLatitudeSpanDegrees":1.5}},
                   "rowBoundaries": "unrestricted"
-                }]
+                }]}
               }]
             }"#,
         )
@@ -161,23 +161,23 @@ fn compiled_spatial_registry() -> registry_breg::CompiledRegistry {
 fn compiled_spatial_derived_registry() -> registry_breg::CompiledRegistry {
     let project = parse_project_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"spatial-derived-storage","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"spatial-derived-storage","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
             "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"mutable","classification":"internal",
             "fields":[
-              {"id":"code","type":"string","maxLength":32,"required":true,"classification":"internal"},
+              {"id":"code","type":"string","maximumLength":32,"required":true,"classification":"internal"},
               {"id":"location","type":"crs84-point","precision":6,"classification":"internal"}
             ],
             "geojson":{"geometryField":"location"},
             "derived":[{
               "id":"labels","sql":"sql/site-labels.sql","key":"id","execution":"live",
-              "fields":[{"id":"map-label","type":"string","maxLength":64,"classification":"internal"}]
+              "fields":[{"id":"map-label","type":"string","maximumLength":64,"classification":"internal"}]
             }]
           }],
           "accessProfiles":[{
-            "id":"map-reader","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
+            "id":"map-reader","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
               "entity":"site","operations":["create","get","list","patch"],
               "readableFields":["code","location","map-label"],
               "writableFields":["code","location"],
@@ -185,7 +185,7 @@ fn compiled_spatial_derived_registry() -> registry_breg::CompiledRegistry {
               "sortableFields":["map-label"],
               "spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":0.25,"maximumLatitudeSpanDegrees":1.5}},
               "rowBoundaries": "unrestricted"
-            }]
+            }]}
           }]
         }"#,
     )
@@ -206,30 +206,30 @@ fn compiled_spatial_derived_registry() -> registry_breg::CompiledRegistry {
 fn compiled_spatial_cross_entity_derived_registry() -> registry_breg::CompiledRegistry {
     let project = parse_project_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"spatial-cross-derived-storage","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"spatial-cross-derived-storage","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
             "id":"zone","primaryDataset":"test-dataset","route":"zones","mutationMode":"mutable","classification":"internal",
             "fields":[
-              {"id":"code","type":"string","maxLength":32,"required":true,"classification":"internal"},
-              {"id":"label","type":"string","maxLength":64,"required":true,"classification":"internal"}
+              {"id":"code","type":"string","maximumLength":32,"required":true,"classification":"internal"},
+              {"id":"label","type":"string","maximumLength":64,"required":true,"classification":"internal"}
             ]
           },{
             "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"mutable","classification":"internal",
             "fields":[
-              {"id":"code","type":"string","maxLength":32,"required":true,"classification":"internal"},
+              {"id":"code","type":"string","maximumLength":32,"required":true,"classification":"internal"},
               {"id":"zone","type":"reference","target":"zone","required":true,"classification":"internal"},
               {"id":"location","type":"crs84-point","precision":6,"classification":"internal"}
             ],
             "geojson":{"geometryField":"location"},
             "derived":[{
               "id":"labels","sql":"sql/site-zone-labels.sql","key":"id","execution":"live",
-              "fields":[{"id":"map-label","type":"string","maxLength":96,"classification":"internal"}]
+              "fields":[{"id":"map-label","type":"string","maximumLength":96,"classification":"internal"}]
             }]
           }],
           "accessProfiles":[{
-            "id":"map-reader","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
+            "id":"map-reader","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
               "entity":"zone","operations":["create","get","list"],
               "readableFields":["code","label"],"writableFields":["code","label"],
               "rowBoundaries": "unrestricted"
@@ -241,7 +241,7 @@ fn compiled_spatial_cross_entity_derived_registry() -> registry_breg::CompiledRe
               "sortableFields":["map-label"],
               "spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":0.25,"maximumLatitudeSpanDegrees":1.5}},
               "rowBoundaries": "unrestricted"
-            }]
+            }]}
           }]
         }"#,
     )
@@ -365,22 +365,22 @@ fn crs84_point_without_bbox_keeps_non_gis_ddl_and_inventory_stable() {
     let registry = compile_project(
         &parse_project_json(
             br#"{
-              "apiVersion":"registry.registrystack.org/v1alpha1",
-              "kind":"RegistryProject",
-              "registry":{"id":"ordinary-point","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+              "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+              "kind":"BRegProject",
+              "project":{"id":"ordinary-point","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
               "entities":[{
                 "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"mutable","classification":"internal",
                 "fields":[
-                  {"id":"code","type":"string","maxLength":32,"classification":"internal"},
+                  {"id":"code","type":"string","maximumLength":32,"classification":"internal"},
                   {"id":"location","type":"crs84-point","precision":6,"classification":"internal"}
                 ],
                 "geojson":{"geometryField":"location"}
               }],
               "accessProfiles":[{
-                "id":"reader","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
+                "id":"reader","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
                   "entity":"site","operations":["get","list"],"readableFields":["code","location"],
                   "rowBoundaries": "unrestricted"
-                }]
+                }]}
               }]
             }"#,
         )

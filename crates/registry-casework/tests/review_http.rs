@@ -24,9 +24,9 @@ use registry_casework_client::{
 };
 use registry_casework_core::{
     AccessProfile, ActiveSubjectsPage, ActorContext, AuthoritativeObservation, CallerSubjectView,
-    CaseworkIdentity, CaseworkProject, CaseworkRole, ContentDigest, DiscoveryCursor,
-    EphemeralCredential, EventRequest, ExecutePreparedRequest, HumanIdentity, InboxPolicy,
-    OccurrenceKind, OccurrenceState, PrepareActionRequest, PreparedSourceAttempt, QueuePolicy,
+    CaseworkProject, CaseworkRole, ContentDigest, DiscoveryCursor, EphemeralCredential,
+    EventRequest, ExecutePreparedRequest, HumanIdentity, InboxPolicy, OccurrenceKind,
+    OccurrenceState, PrepareActionRequest, PreparedSourceAttempt, ProjectIdentity, QueuePolicy,
     ReviewContext, ReviewContextStrategy, ReviewCreateRequest, ReviewKindPolicy, ReviewKindPurpose,
     ReviewOutcomePolicy, ReviewOutcomeSettlement, ReviewProducerPolicy, ReviewRequestAccepted,
     ReviewResult, ReviewResultStatus, ReviewRetentionPolicy, ReviewStagePolicy, ReviewTaskPage,
@@ -171,8 +171,8 @@ fn project(issuer: &str) -> CaseworkProject {
     CaseworkProject {
         api_version: registry_casework_core::CASEWORK_API_VERSION.to_owned(),
         kind: registry_casework_core::CASEWORK_KIND.to_owned(),
-        casework: CaseworkIdentity {
-            id: "review-http-test".to_owned(),
+        project: ProjectIdentity {
+            id: "review-http-test".parse().unwrap(),
             version: "1".to_owned(),
         },
         access_profiles: vec![
@@ -879,7 +879,7 @@ async fn producer_http_create_recover_conflict_and_pending_result_are_closed() {
     .expect("changed-binding task context JSON");
     assert_eq!(
         changed_context["context"]["bindingStatus"],
-        "binding_changed"
+        "binding-changed"
     );
     assert!(changed_context["context"].get("projection").is_none());
     source_changed.store(false, Ordering::SeqCst);
@@ -1989,6 +1989,47 @@ async fn standalone_structured_answer_can_be_claimed_decided_and_polled_over_htt
         .expect("claim standalone answer response");
     assert_eq!(claimed.status(), StatusCode::OK);
 
+    let previous_spelling = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/v1/review-tasks/{task_id}/decisions"))
+                .header("authorization", format!("Bearer {reviewer_token}"))
+                .header(CASEWORK_PROFILE_HEADER, "staff")
+                .header(CONTENT_TYPE, "application/json")
+                .header("if-match", "\"2\"")
+                .header("idempotency-key", "decision-previous-spelling")
+                .body(Body::from(
+                    serde_json::to_vec(&json!({
+                        "decision": {
+                            "type": "changes_requested",
+                            "outcome": "found"
+                        }
+                    }))
+                    .expect("serialize a decision in the previous spelling"),
+                ))
+                .expect("previous-spelling decision request"),
+        )
+        .await
+        .expect("previous-spelling decision response");
+    assert_eq!(
+        previous_spelling.status(),
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "the decision type has one spelling: changes-requested"
+    );
+    assert!(previous_spelling
+        .headers()
+        .get(VALIDATION_REASON_HEADER)
+        .is_none());
+    let previous_spelling_problem: Value = serde_json::from_slice(
+        &to_bytes(previous_spelling.into_body(), 32 * 1024)
+            .await
+            .expect("bounded previous-spelling problem"),
+    )
+    .expect("previous-spelling problem JSON");
+    assert_eq!(previous_spelling_problem["code"], "request.unprocessable");
+
     let null_result = app
         .clone()
         .oneshot(
@@ -2027,7 +2068,7 @@ async fn standalone_structured_answer_can_be_claimed_decided_and_polled_over_htt
             .headers()
             .get(VALIDATION_REASON_HEADER)
             .and_then(|value| value.to_str().ok()),
-        Some("object_required")
+        Some("object-required")
     );
     let null_result_problem: Value = serde_json::from_slice(
         &to_bytes(null_result.into_body(), 32 * 1024)
@@ -2214,7 +2255,7 @@ async fn an_initiator_reads_only_the_requester_visible_history_of_their_own_requ
     let (status, history) = send(read(request_id, &own_token, "initiator")).await;
     assert_eq!(status, StatusCode::OK, "{history}");
     assert!(history.contains("REQUESTER_REASON_CANARY"));
-    assert!(history.contains("request_created"));
+    assert!(history.contains("request-created"));
     assert!(!history.contains("REVIEWER_ONLY_CANARY"));
     let (_, producer_history) = send(read(request_id, &producer_token, "producer")).await;
     assert_eq!(
@@ -4109,7 +4150,7 @@ async fn every_paged_route_names_its_limit_range_when_refusing_it() {
         ),
         (
             "GET",
-            "/v1/work-items?view=my_teams&".to_owned(),
+            "/v1/work-items?view=my-teams&".to_owned(),
             100,
             false,
             true,
@@ -4126,7 +4167,7 @@ async fn every_paged_route_names_its_limit_range_when_refusing_it() {
         ("GET", "/v1/holdings?".to_owned(), 100, false, true, None),
         (
             "GET",
-            "/v1/directory/targets?purpose=absence_person&".to_owned(),
+            "/v1/directory/targets?purpose=absence-person&".to_owned(),
             100,
             false,
             false,

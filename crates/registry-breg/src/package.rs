@@ -4,13 +4,6 @@
 #[cfg(test)]
 #[path = "package/tests/immediate_actions.rs"]
 mod immediate_action_tests;
-#[cfg(test)]
-#[path = "package/tests/predecessor_source.rs"]
-mod predecessor_source_tests;
-#[cfg(test)]
-#[path = "package/tests/retired_anonymous.rs"]
-mod retired_anonymous_tests;
-
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
@@ -21,15 +14,13 @@ use registry_platform_config::package::{
     plan_package, write_sum_file, PackageLimits as SharedPackageLimits,
     VerifiedPackage as SharedVerifiedPackage, REVISION_FILE, SUM_FILE,
 };
-use registry_platform_yaml::Reader;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::borrow::Cow;
 use thiserror::Error;
 
 use crate::artifacts::{restore_effective_model_planner_origins, REGISTRY_METADATA_ARTIFACT_PATH};
-use crate::compiler::{compile_project_with_assets, module_digest_with_assets, CompileProfile};
+use crate::compiler::{compile_project_with_assets, CompileProfile};
 use crate::contract::{
     parse_module_yaml, parse_project_yaml, FieldTypeSource, ModuleAssetSource, RegistryModule,
     RegistryProject,
@@ -68,10 +59,8 @@ use crate::CompiledRegistry;
 pub const PACKAGE_API_VERSION: &str = "id.registrystack.org/formats/breg/package/v2";
 pub const PACKAGE_KIND: &str = "BRegPackage";
 /// The apiVersion packages carried before the format took its
-/// `id.registrystack.org` name. A deployed package that carries it is still
-/// read as a predecessor, so the package that replaces it can be built,
-/// planned, and applied; every other read refuses it and names the current
-/// apiVersion.
+/// `id.registrystack.org` name. Every read refuses a package that carries it
+/// and names the current apiVersion.
 pub const RETIRED_PACKAGE_API_VERSION: &str = "registry.registrystack.org/package/v2";
 pub const COMPILER_ID: &str = "breg";
 pub const FIXTURE_JOURNEYS_PATH: &str = "tests/journeys.yaml";
@@ -96,16 +85,6 @@ pub struct PackageEnvelope {
     pub api_version: String,
     pub kind: String,
     pub manifest: PackageManifest,
-}
-
-/// The envelope a package carrying [`RETIRED_PACKAGE_API_VERSION`] was
-/// written with: it predates `kind`.
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-struct RetiredPackageEnvelope {
-    #[serde(rename = "apiVersion")]
-    _api_version: String,
-    manifest: PackageManifest,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -289,7 +268,8 @@ pub struct CompiledRegistryChange {
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "kebab-case")]
 pub enum CompiledRegistryChangeClass {
     CompatibleAdditive,
     DataBackfillRequired,
@@ -299,7 +279,8 @@ pub enum CompiledRegistryChangeClass {
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "kebab-case")]
 pub enum CompiledRegistryChangeCode {
     RegistryIdentityChanged,
     RegistryVersionChanged,
@@ -367,6 +348,7 @@ pub enum CompiledRegistryChangeCode {
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct CompiledRegistryChangeTarget {
     pub kind: CompiledRegistryChangeTargetKind,
@@ -377,7 +359,8 @@ pub struct CompiledRegistryChangeTarget {
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "kebab-case")]
 pub enum CompiledRegistryChangeTargetKind {
     Registry,
     Entity,
@@ -453,7 +436,7 @@ impl MigrationInspectionSummary {
 
 #[cfg(feature = "tooling")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub enum MigrationInspectionPlanKind {
     Initial,
     CompatibleAdditive,
@@ -637,8 +620,6 @@ pub struct VerifiedPredecessorPackage {
     package_digest: String,
     migration_baseline: CompiledRegistryMigrationBaseline,
     history_schema_descriptor: HistorySchemaDescriptor,
-    statistical_release_store_present: bool,
-    retired_api_version: bool,
 }
 
 impl VerifiedPredecessorPackage {
@@ -666,26 +647,11 @@ impl VerifiedPredecessorPackage {
         self.history_schema_descriptor.clone()
     }
 
-    /// Whether this predecessor's hash-covered manifest declares the complete
-    /// engine-owned statistical release store. Reconciliation uses this closed
-    /// fact to compare an older active catalog without granting partial-store
-    /// compatibility.
-    pub fn statistical_release_store_present(&self) -> bool {
-        self.statistical_release_store_present
-    }
-
     /// The engine-owned capabilities this predecessor's hash-covered manifest
     /// declares. A successor declaring one this set lacks has apply work even
     /// when its authored model is unchanged.
     pub fn engine_features(&self) -> &BTreeSet<PackageEngineFeature> {
         &self.manifest.engine_features
-    }
-
-    /// Whether this predecessor carries [`RETIRED_PACKAGE_API_VERSION`]. The
-    /// runtime no longer starts such a package, so a successor that replaces
-    /// it has apply work even when its authored model is unchanged.
-    pub fn carries_retired_api_version(&self) -> bool {
-        self.retired_api_version
     }
 }
 
@@ -1113,7 +1079,7 @@ impl CompiledRegistryChangeCode {
     pub fn explanation(self) -> Option<&'static str> {
         match self {
             Self::RegistryVersionChanged => Some(
-                "registry.version is bound to the database for its lifetime: an installed database keeps the registry identity it was initialized with, so a package that changes the version can only initialize a new database, never migrate this one",
+                "project.version is bound to the database for its lifetime: an installed database keeps the registry identity it was initialized with, so a package that changes the version can only initialize a new database, never migrate this one",
             ),
             Self::FieldEncryptionChanged => Some(
                 "turning field encryption on rekeys storage behind a reviewed backfill before the plaintext column retires; Phase 1 does not support turning encryption off",
@@ -3604,7 +3570,7 @@ fn validate_build_bindings(
     compiled: &CompiledRegistry,
 ) -> Result<()> {
     let identity = project.package.as_ref().ok_or(PackageError::Derivation)?;
-    if project.registry.id != compiled.registry_id()
+    if project.project.id != compiled.registry_id()
         || identity.source_revision != request.compiler_source_revision
     {
         return Err(PackageError::Derivation);
@@ -3683,8 +3649,7 @@ pub fn load_package_with_verified_envelope(
     shared: &SharedVerifiedPackage,
 ) -> Result<VerifiedPackage> {
     let production = context.database_initialization_environment != "local";
-    let (manifest, _, loaded) =
-        load_verified_closure(root, shared, production, EnvelopeRead::Current)?;
+    let (manifest, loaded) = load_verified_closure(root, shared, production)?;
     let (registry, reviewed_migration_plan) = rederive(&manifest, &loaded)?;
 
     Ok(VerifiedPackage {
@@ -3741,46 +3706,20 @@ fn bind_shared_envelope_files(
     Ok(())
 }
 
-/// Which package apiVersions one read accepts.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum EnvelopeRead {
-    /// A package to start, check, inspect, or activate: only the apiVersion
-    /// this release writes.
-    Current,
-    /// A deployed predecessor, which the operator cannot rebuild without
-    /// losing the digest the database names: the retired apiVersion too.
-    Predecessor,
-}
-
-/// Parse a package manifest under the apiVersions `read` accepts, returning
-/// the manifest and whether it carries the retired apiVersion. A retired
-/// package outside a predecessor read is refused with the current apiVersion
-/// named; any other apiVersion, or a `kind` other than `BRegPackage`, is an
-/// integrity failure, since a package is generated and never edited.
-fn parse_package_envelope(bytes: &[u8], read: EnvelopeRead) -> Result<(PackageManifest, bool)> {
-    let mut value: Value = parse_canonical(bytes)?;
-    if read == EnvelopeRead::Predecessor {
-        if let Some(baseline) = value.pointer_mut("/manifest/migrationPlan/priorBaseline") {
-            retire_predecessor_anonymous(
-                baseline,
-                &["entities", "statisticalDatasets"],
-                "/actions/actions",
-            )?;
-        }
-    }
-    let (manifest, retired) = match value.get("apiVersion").and_then(Value::as_str) {
+/// Parse a package manifest. A package carrying the retired apiVersion is
+/// refused with the current apiVersion named; any other apiVersion, or a
+/// `kind` other than `BRegPackage`, is an integrity failure, since a package
+/// is generated and never edited.
+fn parse_package_envelope(bytes: &[u8]) -> Result<PackageManifest> {
+    let value: Value = parse_canonical(bytes)?;
+    let manifest = match value.get("apiVersion").and_then(Value::as_str) {
         Some(PACKAGE_API_VERSION) => {
             let envelope: PackageEnvelope =
                 serde_json::from_value(value).map_err(|_| PackageError::CanonicalJson)?;
             if envelope.kind != PACKAGE_KIND {
                 return Err(PackageError::Integrity);
             }
-            (envelope.manifest, false)
-        }
-        Some(RETIRED_PACKAGE_API_VERSION) if read == EnvelopeRead::Predecessor => {
-            let envelope: RetiredPackageEnvelope =
-                serde_json::from_value(value).map_err(|_| PackageError::CanonicalJson)?;
-            (envelope.manifest, true)
+            envelope.manifest
         }
         Some(RETIRED_PACKAGE_API_VERSION) => return Err(PackageError::RetiredApiVersion),
         _ => return Err(PackageError::Integrity),
@@ -3788,19 +3727,16 @@ fn parse_package_envelope(bytes: &[u8], read: EnvelopeRead) -> Result<(PackageMa
     if manifest.files.is_empty() || manifest.files.len() > MAX_PACKAGE_FILES {
         return Err(PackageError::Integrity);
     }
-    Ok((manifest, retired))
+    Ok(manifest)
 }
 
 /// Read the manifest and every listed file of a package whose shared envelope
-/// was verified, binding each byte to the sum file and the manifest. The
-/// returned flag says whether the manifest carries the retired apiVersion,
-/// which only a predecessor read accepts.
+/// was verified, binding each byte to the sum file and the manifest.
 fn load_verified_closure(
     root: &Path,
     shared: &SharedVerifiedPackage,
     production: bool,
-    read: EnvelopeRead,
-) -> Result<(PackageManifest, bool, BTreeMap<String, Vec<u8>>)> {
+) -> Result<(PackageManifest, BTreeMap<String, Vec<u8>>)> {
     validate_root(root)?;
     if production {
         ensure_safe_permissions(root)?;
@@ -3810,7 +3746,7 @@ fn load_verified_closure(
     let manifest_path = root.join(MANIFEST_PATH);
     let manifest_bytes = read_bounded_regular(&manifest_path, MAX_MANIFEST_BYTES, production)?;
     bind_shared_file(shared, MANIFEST_PATH, &manifest_bytes)?;
-    let (manifest, retired) = parse_package_envelope(&manifest_bytes, read)?;
+    let manifest = parse_package_envelope(&manifest_bytes)?;
     validate_intrinsic_bindings(&manifest)?;
     let loaded = load_closure(
         root,
@@ -3819,7 +3755,7 @@ fn load_verified_closure(
         production,
         shared,
     )?;
-    Ok((manifest, retired, loaded))
+    Ok((manifest, loaded))
 }
 
 /// Rederive a closed package for integrity-only comparison. Safe permissions
@@ -3836,7 +3772,7 @@ pub fn inspect_package_integrity_with_verified_envelope(
     root: &Path,
     shared: &SharedVerifiedPackage,
 ) -> Result<IntegrityInspectedPackage> {
-    let (manifest, _, loaded) = load_verified_closure(root, shared, true, EnvelopeRead::Current)?;
+    let (manifest, loaded) = load_verified_closure(root, shared, true)?;
     let (registry, _reviewed_migration_plan) = rederive(&manifest, &loaded)?;
     #[cfg(feature = "tooling")]
     let migration = migration_inspection_summary(&manifest, _reviewed_migration_plan.as_ref())?;
@@ -3898,8 +3834,7 @@ pub fn load_predecessor_rehearsal_baseline_with_verified_envelope(
     shared: &SharedVerifiedPackage,
 ) -> Result<(VerifiedPredecessorPackage, CompiledRegistry)> {
     let (package, loaded) = load_predecessor_closure(root, context, shared)?;
-    let registry =
-        compile_package_sources(&package.manifest, &loaded, SourceSpelling::Predecessor)?;
+    let registry = compile_package_sources(&package.manifest, &loaded)?;
     Ok((package, registry))
 }
 
@@ -3909,8 +3844,7 @@ fn load_predecessor_closure(
     shared: &SharedVerifiedPackage,
 ) -> Result<(VerifiedPredecessorPackage, BTreeMap<String, Vec<u8>>)> {
     let production = context.database_initialization_environment != "local";
-    let (manifest, retired_api_version, loaded) =
-        load_verified_closure(root, shared, production, EnvelopeRead::Predecessor)?;
+    let (manifest, loaded) = load_verified_closure(root, shared, production)?;
     validate_source_inventory(&manifest)?;
     let governed = package_predecessor_governed_model(&manifest, &loaded)?;
     validate_predecessor_registry_bindings(&manifest, &governed)?;
@@ -3918,9 +3852,6 @@ fn load_predecessor_closure(
     let migration_baseline = governed.migration_baseline(&package_digest);
     validate_migration_baseline(&migration_baseline)?;
     let history_schema_descriptor = governed.history_schema_descriptor(&package_digest)?;
-    let statistical_release_store_present = manifest
-        .engine_features
-        .contains(&PackageEngineFeature::StatisticalReleaseStore);
 
     Ok((
         VerifiedPredecessorPackage {
@@ -3928,8 +3859,6 @@ fn load_predecessor_closure(
             package_digest,
             migration_baseline,
             history_schema_descriptor,
-            statistical_release_store_present,
-            retired_api_version,
         },
         loaded,
     ))
@@ -4124,12 +4053,7 @@ fn package_predecessor_governed_model(
 ) -> Result<PredecessorGovernedModel> {
     let entry = unique_manifest_file(manifest, PackageFileRole::GovernedModel)?;
     let bytes = loaded.get(&entry.path).ok_or(PackageError::Closure)?;
-    let mut value = parse_canonical::<Value>(bytes).map_err(|_| PackageError::Derivation)?;
-    retire_predecessor_anonymous(
-        &mut value,
-        &["entities", "statisticalDatasets"],
-        "/actionInventory/actions",
-    )?;
+    let value = parse_canonical::<Value>(bytes).map_err(|_| PackageError::Derivation)?;
 
     let registry_id = required_str(&value, "registryId")?.to_owned();
     let version = required_str(&value, "version")?.to_owned();
@@ -4194,10 +4118,7 @@ fn package_predecessor_governed_model(
                 return Err(PackageError::Derivation);
             }
             let bytes = loaded.get(&entry.path).ok_or(PackageError::Closure)?;
-            let mut value =
-                parse_canonical::<Value>(bytes).map_err(|_| PackageError::Derivation)?;
-            retire_predecessor_anonymous(&mut value, &[], "/actions")?;
-            serde_json::from_value(value).map_err(|_| PackageError::Derivation)?
+            parse_canonical(bytes).map_err(|_| PackageError::Derivation)?
         }
         None => CompiledActionInventory::default(),
     };
@@ -4223,60 +4144,6 @@ fn package_predecessor_governed_model(
         actions,
         recipients,
     })
-}
-
-/// Packages an earlier release built carry an `anonymous` member on every
-/// compiled access profile and action permission. This release serves
-/// authenticated callers only, so a predecessor read removes the member where
-/// it is `false`, letting the current types read the model it describes. A
-/// predecessor that granted unauthenticated access is refused: a successor
-/// planned over that baseline would keep row policies that admit a caller
-/// without a principal.
-///
-/// `profile_owners` name the members of `value` that map an owner to its
-/// `accessProfiles`; `actions` points at the compiled action list.
-fn retire_predecessor_anonymous(
-    value: &mut Value,
-    profile_owners: &[&str],
-    actions: &str,
-) -> Result<()> {
-    fn retire(member: &mut Value) -> Result<()> {
-        match member
-            .as_object_mut()
-            .and_then(|member| member.remove("anonymous"))
-        {
-            None | Some(Value::Bool(false)) => Ok(()),
-            Some(_) => Err(PackageError::Derivation),
-        }
-    }
-    for owners in profile_owners {
-        let Some(owners) = value.get_mut(*owners).and_then(Value::as_object_mut) else {
-            continue;
-        };
-        for owner in owners.values_mut() {
-            let Some(profiles) = owner
-                .get_mut("accessProfiles")
-                .and_then(Value::as_object_mut)
-            else {
-                continue;
-            };
-            for profile in profiles.values_mut() {
-                retire(profile)?;
-            }
-        }
-    }
-    if let Some(actions) = value.pointer_mut(actions).and_then(Value::as_array_mut) {
-        for action in actions {
-            let Some(permissions) = action.get_mut("permissions").and_then(Value::as_array_mut)
-            else {
-                continue;
-            };
-            for permission in permissions {
-                retire(permission)?;
-            }
-        }
-    }
-    Ok(())
 }
 
 fn packaged_manifest_json<T: for<'de> Deserialize<'de>>(
@@ -4421,299 +4288,11 @@ fn load_closure(
     Ok(loaded)
 }
 
-/// How packaged authored sources are read.
-#[derive(Clone, Copy)]
-enum SourceSpelling {
-    /// The spellings this release writes. Anything else is refused.
-    Current,
-    /// A predecessor's sources, which an earlier release wrote. Access members
-    /// it spelled as an empty list, and the statistical dataset grants it
-    /// wrote on the dataset, read with the meaning that release gave them, so
-    /// a rehearsal can compile the predecessor it replaces.
-    Predecessor,
-}
-
-/// Rewrite the access spellings an earlier release wrote into the ones this
-/// release reads, keeping their meaning: an empty `rowBoundaries` reached
-/// every row, and an omitted or empty `requiredScopes` demanded no scope, so
-/// both become `unrestricted`; an empty narrowing list narrowed nothing, so it
-/// is omitted. The statistical forms that release wrote are rewritten with
-/// them. Only a predecessor read calls this; a current source keeps
-/// refusing the empty list. The source is read through the shared reader's
-/// structural pass, so a sealed source outside the YAML subset is refused.
-fn retired_access_spellings_read(bytes: &[u8]) -> Result<Vec<u8>> {
-    fn unrestricted_rows(owner: &mut Value) {
-        let Some(owner) = owner.as_object_mut() else {
-            return;
-        };
-        if owner.get("rowBoundaries").is_some_and(is_empty_list) {
-            owner.insert("rowBoundaries".into(), json!("unrestricted"));
-        }
-    }
-    // An earlier release read a `null` optional member as absent. A null that
-    // is data stays as written: an `equals` comparison literal, the literals
-    // of a hook's `beforeEquals` and `afterEquals`, and anything inside a
-    // field's foreign JSON Schema.
-    fn without_nulls(value: &mut Value) {
-        match value {
-            Value::Object(members) => {
-                members.retain(|name, member| name == "equals" || !member.is_null());
-                for (name, member) in members {
-                    match (name.as_str(), member) {
-                        ("equals" | "beforeEquals" | "afterEquals" | "schema", _) => {}
-                        // The adopter names the members of these mappings, so
-                        // a name in one says nothing about the value under it.
-                        ("set" | "selectors" | "subjects" | "exemptions", Value::Object(named)) => {
-                            named.values_mut().for_each(without_nulls);
-                        }
-                        (_, member) => without_nulls(member),
-                    }
-                }
-            }
-            Value::Array(items) => items.iter_mut().for_each(without_nulls),
-            _ => {}
-        }
-    }
-    fn is_empty_list(value: &Value) -> bool {
-        value.as_array().is_some_and(Vec::is_empty)
-    }
-    // `anonymous: false` said nothing; `anonymous: true` stays, and the reader
-    // refuses it.
-    fn retire_unauthenticated_false(members: &mut serde_json::Map<String, Value>) {
-        if members.get("anonymous") == Some(&Value::Bool(false)) {
-            members.remove("anonymous");
-        }
-    }
-    fn profile(profile: &mut Value) {
-        let Some(members) = profile.as_object_mut() else {
-            return;
-        };
-        retire_unauthenticated_false(members);
-        if members.get("requiredScopes").is_none_or(is_empty_list) {
-            members.insert("requiredScopes".into(), json!("unrestricted"));
-        }
-        for narrowing in ["requiredPurposes", "requesterClients"] {
-            if members.get(narrowing).is_some_and(is_empty_list) {
-                members.remove(narrowing);
-            }
-        }
-        unrestricted_rows(profile);
-        for list in ["applyTargets", "requestPresence"] {
-            for item in profile
-                .get_mut(list)
-                .and_then(Value::as_array_mut)
-                .into_iter()
-                .flatten()
-            {
-                unrestricted_rows(item);
-            }
-        }
-        for permission in profile
-            .get_mut("permissions")
-            .and_then(Value::as_array_mut)
-            .into_iter()
-            .flatten()
-        {
-            if let Some(members) = permission.as_object_mut() {
-                retire_unauthenticated_false(members);
-            }
-            // An action has no rows of its own; its targets carry the reach.
-            if permission.get("action").is_some() {
-                if let Some(members) = permission.as_object_mut() {
-                    if members.get("rowBoundaries").is_some_and(is_empty_list) {
-                        members.remove("rowBoundaries");
-                    }
-                }
-            } else {
-                unrestricted_rows(permission);
-            }
-            for list in ["applyTargets", "targets"] {
-                for item in permission
-                    .get_mut(list)
-                    .and_then(Value::as_array_mut)
-                    .into_iter()
-                    .flatten()
-                {
-                    unrestricted_rows(item);
-                }
-            }
-        }
-    }
-    fn requirements(owner: &mut Value) {
-        let Some(requirements) = owner
-            .get_mut("accessRequirements")
-            .and_then(Value::as_object_mut)
-        else {
-            return;
-        };
-        for narrowing in ["requiredScopes", "allowedPurposes", "rowBoundaries"] {
-            if requirements.get(narrowing).is_some_and(is_empty_list) {
-                requirements.remove(narrowing);
-            }
-        }
-    }
-    // The shared reader's structural pass refuses YAML outside the
-    // configuration subset (anchors, aliases, tags, merge and duplicate keys);
-    // its report is not carried, so no value leaves. An empty or comment-only
-    // stream reads as null.
-    let mut value = Reader::new("predecessor source")
-        .scan(bytes)
-        .map_err(|_| PackageError::Derivation)?
-        .map_or(Value::Null, |node| node.to_json_value());
-    without_nulls(&mut value);
-    retired_statistical_spellings_read(&mut value)?;
-    for item in value
-        .get_mut("accessProfiles")
-        .and_then(Value::as_array_mut)
-        .into_iter()
-        .flatten()
-    {
-        profile(item);
-    }
-    for list in ["entities", "extendEntities"] {
-        for entity in value
-            .get_mut(list)
-            .and_then(Value::as_array_mut)
-            .into_iter()
-            .flatten()
-        {
-            requirements(entity);
-            for item in entity
-                .get_mut("accessProfiles")
-                .and_then(Value::as_array_mut)
-                .into_iter()
-                .flatten()
-            {
-                profile(item);
-            }
-        }
-    }
-    serde_norway::to_string(&value)
-        .map(String::into_bytes)
-        .map_err(|_| PackageError::Derivation)
-}
-
-/// Rewrite the statistical forms an earlier release wrote into the ones this
-/// release reads, keeping who is served. That release granted a dataset from
-/// the dataset: `live` listed the profiles reading its live counts, and
-/// `releases` named the publisher and the release readers. This release
-/// grants it from the profile, so each profile a dataset named gains one
-/// permission on it: `read-live` for a live profile, `publish` for the
-/// publisher, and `read-releases` for every profile a published dataset
-/// named, because the earlier release served its releases to the publisher
-/// and to each live profile whether or not `readers` listed them. A period
-/// wrote its tag as `kind`. A dataset naming a profile the project does not
-/// declare is refused, as the earlier release refused it, and so is a list
-/// that holds anything but profile ids. A source in this release's spelling
-/// is left as written.
-fn retired_statistical_spellings_read(project: &mut Value) -> Result<()> {
-    #[derive(Deserialize)]
-    #[serde(deny_unknown_fields)]
-    struct Releases {
-        publisher: String,
-        readers: Vec<String>,
-    }
-    fn retired<T: serde::de::DeserializeOwned>(member: Option<Value>) -> Result<Option<T>> {
-        member
-            .map(serde_json::from_value)
-            .transpose()
-            .map_err(|_| PackageError::Derivation)
-    }
-    let mut grants = Vec::new();
-    for dataset in project
-        .get_mut("statisticalDatasets")
-        .and_then(Value::as_array_mut)
-        .into_iter()
-        .flatten()
-    {
-        if let Some(period) = dataset.get_mut("period").and_then(Value::as_object_mut) {
-            if !period.contains_key("type") {
-                if let Some(tag) = period.remove("kind") {
-                    period.insert("type".into(), tag);
-                }
-            }
-        }
-        let Some(members) = dataset.as_object_mut() else {
-            continue;
-        };
-        let live: Vec<String> = retired(members.remove("live"))?.unwrap_or_default();
-        let releases: Option<Releases> = retired(members.remove("releases"))?;
-        let named =
-            live.iter()
-                .chain(releases.iter().flat_map(|releases| {
-                    std::iter::once(&releases.publisher).chain(&releases.readers)
-                }))
-                .collect::<BTreeSet<_>>();
-        for profile in named {
-            let mut operations = Vec::new();
-            if live.contains(profile) {
-                operations.push("read-live");
-            }
-            if let Some(releases) = &releases {
-                if releases.publisher == *profile {
-                    operations.push("publish");
-                }
-                operations.push("read-releases");
-            }
-            let id = members.get("id").ok_or(PackageError::Derivation)?;
-            grants.push((
-                profile.clone(),
-                json!({"dataset": id, "operations": operations}),
-            ));
-        }
-    }
-    for (profile, permission) in grants {
-        project
-            .get_mut("accessProfiles")
-            .and_then(Value::as_array_mut)
-            .into_iter()
-            .flatten()
-            .find(|declared| declared.get("id").and_then(Value::as_str) == Some(profile.as_str()))
-            .and_then(Value::as_object_mut)
-            .ok_or(PackageError::Derivation)?
-            .entry("permissions")
-            .or_insert_with(|| json!([]))
-            .as_array_mut()
-            .ok_or(PackageError::Derivation)?
-            .push(permission);
-    }
-    Ok(())
-}
-
-fn authored_source(bytes: &[u8], spelling: SourceSpelling) -> Result<Cow<'_, [u8]>> {
-    match spelling {
-        SourceSpelling::Current => Ok(Cow::Borrowed(bytes)),
-        SourceSpelling::Predecessor => retired_access_spellings_read(bytes).map(Cow::Owned),
-    }
-}
-
-/// Lock each module of a predecessor project under the digest this release
-/// computes for it. A module digest covers the module as its release
-/// serialized it, and an earlier release serialized access members this
-/// release reads with their meaning, so the sealed lock names a value this
-/// release cannot compute. The lock adds nothing a predecessor read relies
-/// on: the verified closure already binds every module byte to the package
-/// digest the caller pinned, and the release that sealed the package checked
-/// the lock when it built it. A module the project does not lock, a lock
-/// without a module, and a version that differs are still refused.
-fn relock_predecessor_modules(
-    project: &mut RegistryProject,
-    modules: &[RegistryModule],
-    assets: &[ModuleAssetSource],
-) {
-    for lock in &mut project.modules {
-        if let Some(module) = modules.iter().find(|module| module.id == lock.id) {
-            lock.digest = Some(module_digest_with_assets(module, assets));
-        }
-    }
-}
-
 /// Compile the sources of one verified package closure. The caller
 /// decides whether generated artifacts must also match byte for byte.
 fn compile_package_sources(
     manifest: &PackageManifest,
     loaded: &BTreeMap<String, Vec<u8>>,
-    spelling: SourceSpelling,
 ) -> Result<CompiledRegistry> {
     validate_source_inventory(manifest)?;
     let fixture_journeys = loaded
@@ -4726,8 +4305,7 @@ fn compile_package_sources(
     let project_bytes = loaded
         .get(&manifest.sources.project)
         .ok_or(PackageError::Derivation)?;
-    let mut project = parse_project_yaml(&authored_source(project_bytes, spelling)?)
-        .map_err(|_| PackageError::Derivation)?;
+    let project = parse_project_yaml(project_bytes).map_err(|_| PackageError::Derivation)?;
     let modules = manifest
         .sources
         .modules
@@ -4736,16 +4314,10 @@ fn compile_package_sources(
             loaded
                 .get(&source.path)
                 .ok_or(PackageError::Derivation)
-                .and_then(|bytes| {
-                    parse_module_yaml(&authored_source(bytes, spelling)?)
-                        .map_err(|_| PackageError::Derivation)
-                })
+                .and_then(|bytes| parse_module_yaml(bytes).map_err(|_| PackageError::Derivation))
         })
         .collect::<Result<Vec<RegistryModule>>>()?;
     let module_assets = captured_compiler_assets(manifest, loaded)?;
-    if matches!(spelling, SourceSpelling::Predecessor) {
-        relock_predecessor_modules(&mut project, &modules, &module_assets);
-    }
     let project_assets = module_assets
         .iter()
         .filter(|asset| asset.module.is_none())
@@ -4794,7 +4366,7 @@ fn rederive(
     if manifest.engine_features != current_engine_features() {
         return Err(PackageError::Derivation);
     }
-    let compiled = compile_package_sources(manifest, loaded, SourceSpelling::Current)?;
+    let compiled = compile_package_sources(manifest, loaded)?;
     let expected_artifacts = expected_artifact_bytes(manifest, &compiled)?;
     let packaged_artifacts = manifest
         .files
@@ -5093,7 +4665,7 @@ fn validate_captured_bindings(
     modules: &[RegistryModule],
 ) -> Result<()> {
     let identity = project.package.as_ref().ok_or(PackageError::Derivation)?;
-    if project.registry.id != manifest.package_id
+    if project.project.id != manifest.package_id
         || identity.source_revision != manifest.compiler.source_revision
     {
         return Err(PackageError::Derivation);

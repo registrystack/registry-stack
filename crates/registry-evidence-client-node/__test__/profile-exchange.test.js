@@ -17,9 +17,11 @@ function key() {
 }
 
 test('profile and exchange compose without losing pins or authority binding', async () => {
-  const contracts = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', '..', 'products',
+  // The contracts file carries an envelope the published definitions document does not.
+  const { apiVersion: _apiVersion, kind: _kind, ...contracts } = JSON.parse(fs.readFileSync(path.join(
+    __dirname, '..', '..', '..', 'products',
     'breg', 'acceptance', 'farmer-landholding-evidence', 'evidence', 'farmer-contracts.json')));
-  const published = { ...contracts, schema: 'registry.evidence-definitions/v1', holderBoundBatchMaxSize: 1 };
+  const published = { ...contracts, schema: 'registry.evidence-definitions/v1', maximumHolderBoundBatchSize: 1 };
   const jwks = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'tests', 'fixtures', 'jwks.json')));
   let origin;
   let revision = contracts.definitions[0].configurationRevision;
@@ -65,8 +67,9 @@ test('profile and exchange compose without losing pins or authority binding', as
   try {
     const profilePath = path.join(directory, 'client.json');
     fs.writeFileSync(profilePath, JSON.stringify({
-      schema: 'registry.evidence-client-profile/v1', baseUrl: origin, clientId: 'profile-staff',
-      privateKey: { source: 'environment', variable: 'UNUSED_PROFILE_EXCHANGE_KEY' },
+      apiVersion: 'id.registrystack.org/formats/evidence/client-profile/v1',
+      kind: 'EvidenceClientProfile', baseUrl: origin, clientId: 'profile-staff',
+      privateKey: { type: 'environment', variable: 'UNUSED_PROFILE_EXCHANGE_KEY' },
       trust: { type: 'local-loopback-discovery' }, contracts: { type: 'published' },
       oauth: { resource: 'urn:registry:evidence', scopes: ['evidence:invoke'] },
       expected: { definitions: { 'farmer-status': {

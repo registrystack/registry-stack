@@ -50,7 +50,7 @@ def request_spec() -> dict:
                 "handle": "status-holds",
                 "concept": "urn:example:concept:status-holds",
                 "required": True,
-                "form": "boolean",
+                "form": {"type": "boolean"},
             }
         ],
         "maximum_assertion_lifetime_seconds": 300,
@@ -114,15 +114,15 @@ def problem_body(status: int, code: str, trace_id: str = TRACE_ID) -> bytes:
     it survives unchanged into the mapped exception's `trace_id` attribute.
     """
     title, detail = {
-        "evidence.invalid_request": (
+        "evidence.invalid-request": (
             "Evidence request is invalid",
             "the Evidence request is invalid",
         ),
-        "request.selector_invalid": (
+        "request.selector-invalid": (
             "Selector is invalid",
             "selector does not match an available request profile",
         ),
-        "auth.invalid_credential": (
+        "auth.invalid-credential": (
             "Bearer access token is invalid",
             "bearer access token validation failed",
         ),
@@ -138,7 +138,7 @@ def problem_body(status: int, code: str, trace_id: str = TRACE_ID) -> bytes:
             "Evidence could not be produced",
             "evidence could not be produced for this request",
         ),
-        "evidence.rate_limited": (
+        "evidence.rate-limited": (
             "Evidence request rate is exhausted",
             "the Evidence request rate is exhausted",
         ),
@@ -147,7 +147,7 @@ def problem_body(status: int, code: str, trace_id: str = TRACE_ID) -> bytes:
             "the authoritative source is unavailable",
         ),
         "service.unavailable": ("Service is unavailable", "the request could not be served"),
-        "resource.not_found": (
+        "resource.not-found": (
             "Requested resource was not found",
             "the requested resource was not found",
         ),

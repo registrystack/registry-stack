@@ -1015,7 +1015,7 @@ async fn repeated_migration_is_a_ledger_no_op_and_never_drops_the_occurrence_ind
     let (store, client, schema) = isolated_schema("migrate").await;
     store.migrate().await.expect("first migration");
     let applied = applied_versions(&client).await;
-    assert_eq!(applied, (1..=21).collect::<Vec<i64>>());
+    assert_eq!(applied, (1..=25).collect::<Vec<i64>>());
     let index = occurrence_index(&client, &schema).await;
     assert!(index.1, "the occurrence identity index is unique");
 
@@ -1098,7 +1098,7 @@ fn queue_project(queue: &str) -> registry_casework_core::CaseworkProject {
     serde_json::from_value(serde_json::json!({
         "apiVersion": registry_casework_core::CASEWORK_API_VERSION,
         "kind": registry_casework_core::CASEWORK_KIND,
-        "casework": {"id": "pinned", "version": "1"},
+        "project": {"id": "pinned", "version": "1"},
         "accessProfiles": [{"id": "staff", "principalClaim": "sub", "requiredScopes": [], "role": "staff"}],
         "queues": [{"id": queue, "label": "Queue"}]
     }))
@@ -1260,7 +1260,7 @@ async fn migration_16_releases_superseded_identities_in_a_database_that_holds_th
 
     assert_eq!(
         applied_versions(&client).await,
-        (1..=21).collect::<Vec<_>>()
+        (1..=25).collect::<Vec<_>>()
     );
     let second_a = observe_open_in_generation(&store, "binding-a").await;
     let states: Vec<(uuid::Uuid, String)> = items_by_state(&client)
@@ -1288,6 +1288,198 @@ async fn migration_16_releases_superseded_identities_in_a_database_that_holds_th
             .as_db_error()
             .and_then(|error| error.constraint()),
         Some("casework_items_occurrence_idx")
+    );
+}
+
+/// The state constraint `casework_items` held before migration 22, which
+/// admitted the two waiting states in their snake_case spelling.
+const STATE_CHECK_BEFORE_MIGRATION_22: &str = "ALTER TABLE casework_items ADD CONSTRAINT casework_items_state_check CHECK (state IN \
+     ('open','claimed','waiting_applicant','waiting_application','synchronizing','completed','superseded','cancelled'));";
+
+fn stored_template(item_states: [&str; 3]) -> serde_json::Value {
+    serde_json::json!({
+        "id":"summary", "version":"1", "label":"Prepare summary",
+        "eligibleTeams":["team"], "eligibleProfiles":["staff"], "source":"source-cycle",
+        "itemKinds":["request-a"], "itemStates": item_states,
+        "agent":{"issuer":"https://issuer.test", "subject":"agent"},
+        "client":"agent-client", "resource":"urn:test:breg", "scopes":["records:get"],
+        "purpose":"prepare-summary", "bounds":{"type":"breg", "permissions":[{"collection":"records", "operations":["get"]}]},
+        "subjects":{"subject_reference":"subject-reference"}, "lifetimeSeconds":900
+    })
+}
+
+async fn stored_states(client: &tokio_postgres::Client, items: &[uuid::Uuid]) -> Vec<String> {
+    let mut states = Vec::new();
+    for item in items {
+        states.push(
+            client
+                .query_one("SELECT state FROM casework_items WHERE item_id=$1", &[item])
+                .await
+                .expect("read the stored state")
+                .get(0),
+        );
+    }
+    states
+}
+
+#[tokio::test]
+async fn migration_22_respells_the_waiting_states_the_previous_release_stored() {
+    let previous = ["claimed", "waiting_applicant", "waiting_application"];
+    let current = ["claimed", "waiting-applicant", "waiting-application"];
+    let (store, client, _schema) = isolated_schema("occurrence_state_spelling").await;
+    store.migrate().await.expect("establish current schema");
+    store
+        .register_source_generation("source-cycle", "binding-cycle")
+        .await
+        .expect("bind the source generation");
+    let mut items = Vec::new();
+    for (subject, state) in [
+        ("subject-applicant", OccurrenceState::WaitingApplicant),
+        ("subject-application", OccurrenceState::WaitingApplication),
+        ("subject-open", OccurrenceState::Open),
+    ] {
+        items.push(
+            store
+                .apply_observation(
+                    &observation_for_subject(subject, 1, "proposal-1", state),
+                    "default",
+                    None,
+                )
+                .await
+                .expect("the observation applies")
+                .expect("the observation opens an item")
+                .item_id,
+        );
+    }
+    let [applicant, application, open] = items[..] else {
+        panic!("three items were observed");
+    };
+
+    // Return the schema and every row to what the previous release wrote: the
+    // waiting states in snake_case in the item column, in the stored task
+    // template, and in a live grant's record. A retained replay response never
+    // holds one: claim and release answer only with open or claimed.
+    client
+        .batch_execute(&format!(
+            "DELETE FROM casework_schema_migrations WHERE version=22; \
+             ALTER TABLE casework_items DROP CONSTRAINT casework_items_state_check; \
+             UPDATE casework_items SET state=replace(state,'-','_') WHERE state LIKE 'waiting-%'; \
+             {STATE_CHECK_BEFORE_MIGRATION_22} \
+             INSERT INTO casework_teams(team_id,revision) VALUES('team',1); \
+             INSERT INTO casework_memberships(team_id,issuer,subject,membership_kind) VALUES('team','https://issuer.test','human','staff'); \
+             INSERT INTO casework_queue_service(queue_id,team_id,revision) VALUES('default','team',1);"
+        ))
+        .await
+        .expect("simulate the schema and rows before migration 22");
+    client
+        .execute(
+            "UPDATE casework_items SET holder_issuer='https://issuer.test',holder_subject='human' WHERE item_id=$1",
+            &[&applicant],
+        )
+        .await
+        .expect("the approver holds the waiting item");
+    client
+        .execute(
+            "INSERT INTO casework_task_templates(template_id,template_version,document,active) VALUES('summary','1',$1,true)",
+            &[&stored_template(previous)],
+        )
+        .await
+        .expect("store the template as the previous release serialized it");
+    let grant = uuid::Uuid::new_v4();
+    client
+        .execute(
+            "INSERT INTO casework_task_grants(grant_id,item_id,approver_issuer,approver_subject,approver_profile,approver_role,idempotency_key,request_hash,record,approved_at,expires_at) \
+             SELECT $1,item_id,'https://issuer.test','human','staff','staff','key','synthetic-hash', \
+                    jsonb_build_object('template',$2::jsonb,'proposal',jsonb_build_object('version',binding->'version','integrity',binding->'integrity','generation',binding->'generation')), \
+                    now(),now()+interval '900 seconds' \
+             FROM casework_items WHERE item_id=$3",
+            &[&grant, &stored_template(previous), &applicant],
+        )
+        .await
+        .expect("store a live grant as the previous release serialized it");
+    let ids = [applicant, application, open];
+    assert_eq!(
+        stored_states(&client, &ids).await,
+        ["waiting_applicant", "waiting_application", "open"]
+    );
+
+    store
+        .migrate()
+        .await
+        .expect("migration 22 applies over rows in the previous spelling");
+
+    assert_eq!(
+        applied_versions(&client).await,
+        (1..=25).collect::<Vec<_>>()
+    );
+    assert_eq!(
+        stored_states(&client, &ids).await,
+        ["waiting-applicant", "waiting-application", "open"]
+    );
+    // The runtime reads the migrated rows.
+    assert_eq!(
+        store.item(applicant).await.expect("read the item").state,
+        OccurrenceState::WaitingApplicant
+    );
+    assert_eq!(
+        store.item(application).await.expect("read the item").state,
+        OccurrenceState::WaitingApplication
+    );
+    assert_eq!(
+        store.item(open).await.expect("read the item").state,
+        OccurrenceState::Open
+    );
+    let document: serde_json::Value = client
+        .query_one(
+            "SELECT document FROM casework_task_templates WHERE template_id='summary' AND template_version='1'",
+            &[],
+        )
+        .await
+        .expect("read the stored template")
+        .get(0);
+    assert_eq!(document, stored_template(current));
+    let template: registry_casework_core::TaskTemplate =
+        serde_json::from_value(document).expect("the migrated template is read");
+    assert_eq!(
+        serde_json::to_value(&template).expect("serialize the template"),
+        stored_template(current),
+        "a package naming the same version in the current spelling matches the stored document"
+    );
+    // The grant keeps its authority: its record was respelled with the
+    // template and the item, so it still matches both. A directory change
+    // re-evaluates every live grant.
+    client
+        .batch_execute("UPDATE casework_meta SET directory_revision=directory_revision+1")
+        .await
+        .expect("re-evaluate live grants");
+    let row = client
+        .query_one(
+            "SELECT g.invalidated_at IS NULL, g.record->'template', \
+                    EXISTS(SELECT 1 FROM casework_task_templates t WHERE t.active AND t.document=g.record->'template') \
+             FROM casework_task_grants g WHERE g.grant_id=$1",
+            &[&grant],
+        )
+        .await
+        .expect("read the grant");
+    assert!(
+        row.get::<_, bool>(0),
+        "the live grant survives the migration"
+    );
+    assert_eq!(row.get::<_, serde_json::Value>(1), stored_template(current));
+    assert!(
+        row.get::<_, bool>(2),
+        "the grant still names the active template"
+    );
+    let refused = client
+        .execute(
+            "UPDATE casework_items SET state='waiting_applicant' WHERE item_id=$1",
+            &[&application],
+        )
+        .await
+        .expect_err("the previous spelling is no longer a state");
+    assert_eq!(
+        refused.as_db_error().and_then(|error| error.constraint()),
+        Some("casework_items_state_check")
     );
 }
 
@@ -1458,7 +1650,7 @@ async fn migration_refuses_to_drop_unpublished_audit_and_drops_a_drained_outbox(
     store.migrate().await.expect("a drained outbox is dropped");
     assert_eq!(
         applied_versions(&client).await,
-        (1..=21).collect::<Vec<_>>()
+        (1..=25).collect::<Vec<_>>()
     );
     let dropped: bool = client
         .query_one("SELECT to_regclass('casework_audit_outbox') IS NULL", &[])
@@ -1480,7 +1672,7 @@ async fn migration_replaces_empty_hosted_tables_through_the_ledger_head() {
 
     assert_eq!(
         applied_versions(&client).await,
-        (1..=21).collect::<Vec<_>>()
+        (1..=25).collect::<Vec<_>>()
     );
     let hosted_tables_remaining: bool = client
         .query_one(
@@ -1547,7 +1739,7 @@ async fn migration_locks_hosted_work_before_counting_it_for_the_drop() {
         .expect("migration completes once the blocker releases the table");
     assert_eq!(
         applied_versions(&client).await,
-        (1..=21).collect::<Vec<_>>()
+        (1..=25).collect::<Vec<_>>()
     );
 }
 
@@ -1568,7 +1760,7 @@ async fn migration_13_adds_sync_claim_indexes_to_an_existing_schema() {
 
     assert_eq!(
         applied_versions(&client).await,
-        (1..=21).collect::<Vec<_>>()
+        (1..=25).collect::<Vec<_>>()
     );
     let indexes: Vec<String> = client
         .query(
@@ -1594,7 +1786,9 @@ async fn migration_20_adds_review_discovery_indexes_to_an_existing_schema() {
     let (store, client, schema) = isolated_schema("review_discovery_indexes").await;
     store.migrate().await.expect("establish current schema");
     // Remove migration 21's outcome and author index too, so removing migration
-    // 20's discovery indexes and both ledger entries restores version 19.
+    // 20's discovery indexes and every later ledger entry restores version 19.
+    // The protocol word migrations after them apply again over rows and
+    // constraints already in the current spelling.
     client
         .batch_execute(
             "DROP INDEX casework_review_decision_author_position_idx; \
@@ -1617,7 +1811,7 @@ async fn migration_20_adds_review_discovery_indexes_to_an_existing_schema() {
         .expect("apply review discovery indexes");
     assert_eq!(
         applied_versions(&client).await,
-        (1..=21).collect::<Vec<_>>()
+        (1..=25).collect::<Vec<_>>()
     );
     let indexes = review_discovery_indexes(&client, &schema).await;
     assert_eq!(
@@ -1636,7 +1830,7 @@ async fn migration_20_adds_review_discovery_indexes_to_an_existing_schema() {
     store.migrate().await.expect("repeat the migration");
     assert_eq!(
         applied_versions(&client).await,
-        (1..=21).collect::<Vec<_>>()
+        (1..=25).collect::<Vec<_>>()
     );
     assert_eq!(
         review_discovery_indexes(&client, &schema).await,
@@ -1668,14 +1862,14 @@ async fn readiness_rejects_an_unmigrated_schema() {
             store.ready().await,
             Err(StoreError::SchemaNotCurrent {
                 applied: None,
-                required: 21
+                required: 25
             })
         ),
         "a schema without the migration ledger must fail readiness"
     );
     assert_eq!(
         store.ready().await.unwrap_err().to_string(),
-        "the Casework database schema is not current: no migration has been applied, and this binary requires version 21; run `caseworkctl plan --runtime-config FILE` then `caseworkctl apply --runtime-config FILE`"
+        "the Casework database schema is not current: no migration has been applied, and this binary requires version 25; run `caseworkctl plan --runtime-config FILE` then `caseworkctl apply --runtime-config FILE`"
     );
 }
 
@@ -1698,8 +1892,8 @@ async fn readiness_rejects_a_partial_schema_missing_review_tables() {
         matches!(
             store.ready().await,
             Err(StoreError::SchemaNotCurrent {
-                applied: Some(21),
-                required: 21
+                applied: Some(25),
+                required: 25
             })
         ),
         "a partial migration ledger must fail readiness"
@@ -1730,15 +1924,15 @@ async fn readiness_rejects_an_unsupported_migration_version() {
         matches!(
             refusal,
             StoreError::SchemaNewer {
-                found: 22,
-                supported: 21
+                found: 26,
+                supported: 25
             }
         ),
         "a newer schema is not reported as corrupt data: {refusal:?}"
     );
     assert_eq!(
         refusal.to_string(),
-        "the Casework database schema version 22 is newer than this binary supports (21); run a casework release that supports it"
+        "the Casework database schema version 26 is newer than this binary supports (25); run a casework release that supports it"
     );
 }
 
@@ -1767,8 +1961,8 @@ async fn migration_refuses_a_schema_newer_than_this_binary_and_writes_nothing() 
         matches!(
             refusal,
             StoreError::SchemaNewer {
-                found: 22,
-                supported: 21
+                found: 26,
+                supported: 25
             }
         ),
         "{refusal:?}"
@@ -2187,9 +2381,9 @@ impl SettlementFixture {
             )
             .await
             .expect("the settlement is a durable event");
-        assert_eq!(durable.get::<_, String>(0), "attempt_settled");
+        assert_eq!(durable.get::<_, String>(0), "attempt-settled");
         assert_eq!(durable.get::<_, serde_json::Value>(1), settled.detail);
-        let audit = self.audited_response("attempt_settled", settled.event_id);
+        let audit = self.audited_response("attempt-settled", settled.event_id);
         assert_eq!(audit["itemRevision"], item_revision);
         assert!(audit.get("principalPseudonym").is_none());
     }
@@ -2226,7 +2420,7 @@ async fn a_not_applied_settlement_refuses_the_attempt_and_returns_the_item_to_it
     assert_eq!(after.holder, Some(fixture.holder.principal.clone()));
     assert_eq!(after.revision, before.revision + 1);
     fixture
-        .assert_settlement_recorded("not_applied", after.revision)
+        .assert_settlement_recorded("not-applied", after.revision)
         .await;
 
     let prepared = PreparedSourceAttempt {
@@ -2371,7 +2565,7 @@ async fn a_refused_audit_response_reports_unavailable_after_the_settlement_commi
     assert_eq!(entries[written]["phase"], "request");
     assert_eq!(
         entries[written]["record"]["event"],
-        "casework.attempt_settled"
+        "casework.attempt-settled"
     );
 }
 
@@ -3002,9 +3196,9 @@ async fn an_operator_marks_an_expired_pending_attempt_uncertain_naming_both_part
         )
         .await
         .expect("the decision is a durable event");
-    assert_eq!(durable.get::<_, String>(0), "attempt_uncertain");
+    assert_eq!(durable.get::<_, String>(0), "attempt-uncertain");
     assert_eq!(durable.get::<_, serde_json::Value>(1), marked.detail);
-    let audit = fixture.audited_response("attempt_uncertain", marked.event_id);
+    let audit = fixture.audited_response("attempt-uncertain", marked.event_id);
     assert_eq!(audit["itemRevision"], after.revision);
     assert_eq!(audit["profileId"], "system:operator");
     assert!(audit.get("principalPseudonym").is_none());

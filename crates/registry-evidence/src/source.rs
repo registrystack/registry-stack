@@ -358,7 +358,7 @@ impl SourceConnectionPool {
             let token_timeout = Duration::from_millis(connection.token_timeout_milliseconds.get());
             let admission_timeout =
                 Duration::from_millis(connection.admission_timeout_milliseconds.get());
-            let concurrency = usize::try_from(connection.concurrency_limit.get())
+            let concurrency = usize::try_from(connection.maximum_concurrency.get())
                 .map_err(|_| SourceError::InvalidPlan)?;
             let mut authentication =
                 compile_authentication(&connection.authentication, token_timeout)?;
@@ -1166,8 +1166,8 @@ impl HttpTransport {
         {
             return Err(SourceError::InvalidPlan);
         }
-        let timeout = Duration::from_millis(configured_request.timeout_milliseconds.get());
-        let concurrency = usize::try_from(configured_request.concurrency_limit.get())
+        let timeout = Duration::from_millis(configured_request.attempt_timeout_milliseconds.get());
+        let concurrency = usize::try_from(configured_request.maximum_concurrency.get())
             .map_err(|_| SourceError::InvalidPlan)?;
         let base_url = validate_url(configured_base_url, true)?;
         let resources = if let Some(resources) = shared_resources {
@@ -1952,12 +1952,12 @@ fn compile_source_path(
     request: &FixedRequest,
     inputs: &BTreeMap<String, BTreeMap<String, BTreeSet<String>>>,
 ) -> Result<SourcePath, SourceError> {
-    match (&request.path, &request.path_template) {
-        (Some(path), None) if request.path_bindings.is_empty() => {
+    match (&request.path, request.path_is_template()) {
+        (path, false) if request.path_bindings.is_empty() => {
             validate_request_path(path)?;
             Ok(SourcePath::Fixed(path.clone()))
         }
-        (None, Some(template)) => {
+        (template, true) => {
             validate_template_shape(template, &request.path_bindings)?;
             let mut bindings = BTreeMap::new();
             for (name, binding) in request.path_bindings.iter() {
@@ -2115,15 +2115,22 @@ fn compile_authentication(
         SourceAuthentication::Oauth2ClientCredentials {
             token_endpoint,
             client_id_ref,
-            client_secret_ref,
-            client_assertion_key_ref,
-            client_assertion_audience,
             scope,
             audience,
             resource,
-            credential_placement,
             maximum_cache_seconds,
             assumed_lifetime_seconds,
+            ..
+        }
+        | SourceAuthentication::Oauth2PrivateKeyJwt {
+            token_endpoint,
+            client_id_ref,
+            scope,
+            audience,
+            resource,
+            maximum_cache_seconds,
+            assumed_lifetime_seconds,
+            ..
         } => {
             // The audience the assertion falls back to is the endpoint as the
             // operator wrote it, not as a parser renders it. RFC 7523 section 3
@@ -2141,23 +2148,21 @@ fn compile_authentication(
             if let Some(resource) = resource {
                 validate_oauth_resource(resource).map_err(|_| SourceError::InvalidPlan)?;
             }
-            let client_authentication = match (
-                client_secret_ref,
-                credential_placement,
-                client_assertion_key_ref,
-            ) {
-                (Some(secret_ref), Some(placement), None) => {
-                    // An assertion audience has no assertion to travel in.
-                    if client_assertion_audience.is_some() {
-                        return Err(SourceError::InvalidPlan);
-                    }
-                    OauthClientAuthentication::ClientSecret {
-                        secret_ref: secret_ref.clone(),
-                        placement: *placement,
-                    }
-                }
-                (None, None, Some(key_ref)) => OauthClientAuthentication::PrivateKeyJwt {
-                    key_ref: key_ref.clone(),
+            let client_authentication = match authentication {
+                SourceAuthentication::Oauth2ClientCredentials {
+                    client_secret_ref,
+                    credential_placement,
+                    ..
+                } => OauthClientAuthentication::ClientSecret {
+                    secret_ref: client_secret_ref.clone(),
+                    placement: *credential_placement,
+                },
+                SourceAuthentication::Oauth2PrivateKeyJwt {
+                    client_assertion_key_ref,
+                    client_assertion_audience,
+                    ..
+                } => OauthClientAuthentication::PrivateKeyJwt {
+                    key_ref: client_assertion_key_ref.clone(),
                     audience: client_assertion_audience
                         .clone()
                         .unwrap_or_else(|| configured_token_endpoint.to_owned()),
@@ -3389,10 +3394,10 @@ mod tests {
 
     fn optimized_batch_source(base_url: &str) -> SourceConfig {
         let source: SourceConfig = serde_json::from_value(json!({
-            "transport": "http-json",
+            "type": "http-json",
             "baseUrl": base_url,
             "posture": "field-projected",
-            "authentication": {"kind": "none"},
+            "authentication": {"type": "none"},
             "request": {
                 "method": "POST",
                 "path": "/batch-data",
@@ -3414,9 +3419,9 @@ mod tests {
                 },
                 "projection": ["/single"],
                 "redirects": "deny",
-                "timeoutMilliseconds": 1000,
+                "attemptTimeoutMilliseconds": 1000,
                 "maximumResponseBytes": 4096,
-                "concurrencyLimit": 1
+                "maximumConcurrency": 1
             },
             "responseSchema": "schemas/response.schema.yaml",
             "extractScript": "adapters/extract.rhai",
@@ -3450,7 +3455,7 @@ mod tests {
         .unwrap();
         let connection: SourceConnectionConfig = serde_json::from_value(json!({
             "baseUrl": base_url, "authentication": authentication,
-            "concurrencyLimit": 1, "admissionTimeoutMilliseconds": 100,
+            "maximumConcurrency": 1, "admissionTimeoutMilliseconds": 100,
             "tokenTimeoutMilliseconds": 1000
         }))
         .unwrap();
@@ -3470,7 +3475,7 @@ mod tests {
         }
         let mut second = first.clone();
         if let SourceConfig::HttpJson { request, .. } = &mut second {
-            request.path = Some("/second".to_owned());
+            request.path = "/second".to_owned();
         }
         let mut independent = first.clone();
         if let SourceConfig::HttpJson { connection, .. } = &mut independent {
@@ -3538,7 +3543,7 @@ mod tests {
         let secrets = Arc::new(
             SecretResolver::new([crate::secrets::SecretProvider::File], root.path()).unwrap(),
         );
-        let config = connection_test_config(&server.uri(), json!({"kind": "none"}));
+        let config = connection_test_config(&server.uri(), json!({"type": "none"}));
         let executors = connection_test_executors(&config, secrets);
         assert!(Arc::ptr_eq(
             http_resources(&executors[0]),
@@ -3628,7 +3633,7 @@ mod tests {
         );
         let config = connection_test_config(
             "https://sources.example/",
-            json!({"kind": "static-authorization", "tokenRef": "secret:file/token"}),
+            json!({"type": "static-authorization", "tokenRef": "secret:file/token"}),
         );
         assert_eq!(
             serde_json::to_value(config.source_connections.get("shared")).unwrap(),
@@ -3710,7 +3715,7 @@ mod tests {
         let config = connection_test_config(
             &server.uri(),
             json!({
-                "kind": "oauth2-client-credentials", "tokenEndpoint": format!("{}/token", server.uri()),
+                "type": "oauth2-client-credentials", "tokenEndpoint": format!("{}/token", server.uri()),
                 "clientIdRef": "secret:file/client-id", "clientSecretRef": "secret:file/client-secret",
                 "credentialPlacement": "form-body", "maximumCacheSeconds": 300
             }),
@@ -3789,7 +3794,7 @@ mod tests {
         let mut config = connection_test_config(
             &server.uri(),
             json!({
-                "kind": "oauth2-client-credentials", "tokenEndpoint": format!("{}/token", server.uri()),
+                "type": "oauth2-client-credentials", "tokenEndpoint": format!("{}/token", server.uri()),
                 "clientIdRef": "secret:file/client-id", "clientSecretRef": "secret:file/client-secret",
                 "credentialPlacement": "form-body", "maximumCacheSeconds": 300
             }),
@@ -3802,15 +3807,17 @@ mod tests {
             .unwrap()
             .values_mut()
         {
-            connection["concurrencyLimit"] = 2.into();
+            connection["maximumConcurrency"] = 2.into();
         }
         for source in document["sources"].as_object_mut().unwrap().values_mut() {
-            source["request"]["concurrencyLimit"] = 2.into();
+            source["request"]["maximumConcurrency"] = 2.into();
         }
         document["sourceConnections"]["independent"]["authentication"]["clientSecretRef"] =
             "secret:file/independent-secret".into();
         document["sources"]["independent"]["authentication"]["clientSecretRef"] =
             "secret:file/independent-secret".into();
+        document["apiVersion"] = crate::config::EVIDENCE_BUNDLE_API_VERSION.into();
+        document["kind"] = crate::config::EVIDENCE_BUNDLE_KIND.into();
         config = EvidenceConfig::decode_without_rules(&serde_json::to_vec(&document).unwrap());
         let executors = connection_test_executors(&config, Arc::clone(&secrets));
         let request = prepared_batch_request();
@@ -3954,11 +3961,11 @@ mod tests {
     async fn saturated_source_admission_fails_at_the_configured_timeout() {
         let server = wiremock::MockServer::start().await;
         let source: SourceConfig = serde_json::from_value(json!({
-            "transport": "http-json",
+            "type": "http-json",
             "baseUrl": server.uri(),
             "posture": "source-derived",
             "authentication": {
-                "kind": "static-authorization",
+                "type": "static-authorization",
                 "tokenRef": "secret:file/missing-source-token"
             },
             "request": {
@@ -3982,9 +3989,9 @@ mod tests {
                 },
                 "projection": ["/ok"],
                 "redirects": "deny",
-                "timeoutMilliseconds": 20,
+                "attemptTimeoutMilliseconds": 20,
                 "maximumResponseBytes": 1024,
-                "concurrencyLimit": 1
+                "maximumConcurrency": 1
             },
             "responseSchema": "schemas/response.schema.yaml",
             "extractScript": "adapters/extract.rhai",
@@ -4084,11 +4091,11 @@ mod tests {
     {
         let (address, _server) = spawn_untrusted_tls_server("127.0.0.1").await;
         let source: SourceConfig = serde_json::from_value(json!({
-            "transport": "http-json",
+            "type": "http-json",
             "baseUrl": format!("https://{address}"),
             "posture": "source-derived",
             "authentication": {
-                "kind": "static-authorization",
+                "type": "static-authorization",
                 "tokenRef": "secret:file/missing-source-token"
             },
             "request": {
@@ -4112,9 +4119,9 @@ mod tests {
                 },
                 "projection": ["/ok"],
                 "redirects": "deny",
-                "timeoutMilliseconds": 2000,
+                "attemptTimeoutMilliseconds": 2000,
                 "maximumResponseBytes": 1024,
-                "concurrencyLimit": 1
+                "maximumConcurrency": 1
             },
             "responseSchema": "schemas/response.schema.yaml",
             "extractScript": "adapters/extract.rhai",

@@ -1333,7 +1333,7 @@ class GateInventoryTest(unittest.TestCase):
 
     def test_missing_release_planning_command_tests_are_reported(self) -> None:
         text = self.workflow.replace(
-            "run: python3 -m unittest release/scripts/test_registry_release_plans.py",
+            "run: uv run --no-project --with PyYAML==6.0.2 python3 -m unittest release/scripts/test_registry_release_plans.py",
             "run: true",
         )
         self.assertIn("Release planning command tests", self.module.missing_gates(text))

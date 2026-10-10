@@ -94,7 +94,7 @@ impl CredentialCatalog {
             entries.remove(&requirement);
         }
         let maximum_holder_keys =
-            usize::from(document.holder_bound_batch_max_size).min(MAXIMUM_HOLDER_KEYS);
+            usize::from(document.maximum_holder_bound_batch_size).min(MAXIMUM_HOLDER_KEYS);
         // Zero is outside the definitions contract. Treat such a document as
         // incapable of serving holder-bound credentials instead of silently
         // widening it to one.
@@ -250,7 +250,7 @@ pub(crate) mod tests {
       "audience": "https://wallet.example.org",
       "issuedBy": "https://registry.example.org",
       "providedBy": "https://provider.example.org",
-      "holderBoundBatchMaxSize": 4,
+      "maximumHolderBoundBatchSize": 4,
       "definitions": [
         {
           "handle": "holder-bound",
@@ -275,7 +275,7 @@ pub(crate) mod tests {
               }
             }
           ],
-          "concepts": [{"handle": "outcome", "concept": "urn:example:concept:outcome", "required": true, "form": "boolean"}]
+          "concepts": [{"handle": "outcome", "concept": "urn:example:concept:outcome", "required": true, "form": {"type": "boolean"}}]
         },
         {
           "handle": "audience-scoped",
@@ -299,7 +299,7 @@ pub(crate) mod tests {
               }
             }
           ],
-          "concepts": [{"handle": "outcome", "concept": "urn:example:concept:outcome", "required": true, "form": "boolean"}]
+          "concepts": [{"handle": "outcome", "concept": "urn:example:concept:outcome", "required": true, "form": {"type": "boolean"}}]
         }
       ]
     }"#;
@@ -457,7 +457,7 @@ pub(crate) mod tests {
         );
 
         let mut narrow = document();
-        narrow.holder_bound_batch_max_size = 2;
+        narrow.maximum_holder_bound_batch_size = 2;
         assert_eq!(
             CredentialCatalog::derive(&narrow)
                 .expect("the catalog is valid")
@@ -466,14 +466,14 @@ pub(crate) mod tests {
         );
 
         let mut singular = document();
-        singular.holder_bound_batch_max_size = 1;
+        singular.maximum_holder_bound_batch_size = 1;
         let singular = CredentialCatalog::derive(&singular)
             .expect("the catalog is valid")
             .issuer_metadata(&config);
         assert!(singular.get("batch_credential_issuance").is_none());
 
         let mut invalid_zero = document();
-        invalid_zero.holder_bound_batch_max_size = 0;
+        invalid_zero.maximum_holder_bound_batch_size = 0;
         let invalid_zero = CredentialCatalog::derive(&invalid_zero)
             .expect("the zero ceiling is handled conservatively")
             .issuer_metadata(&config);
@@ -484,7 +484,7 @@ pub(crate) mod tests {
         );
 
         let mut wider = document();
-        wider.holder_bound_batch_max_size = u16::MAX;
+        wider.maximum_holder_bound_batch_size = u16::MAX;
         assert_eq!(
             CredentialCatalog::derive(&wider)
                 .expect("the wide ceiling is bounded conservatively")

@@ -3,11 +3,11 @@ classification: compatibility-shaped-local-mock
 synthetic_only: true
 server: {base_url: 'http://127.0.0.2:18082', bind: '127.0.0.2:18082'}
 validated_source_definition:
-  transport: http-json
+  type: http-json
   baseUrl: http://127.0.0.2:18082
   posture: field-projected
   authentication:
-    kind: basic
+    type: basic
     usernameRef: secret:file/fixture-nested-rest-username
     passwordRef: secret:file/fixture-nested-rest-password
   request:
@@ -44,9 +44,9 @@ validated_source_definition:
       - /trackedEntities/*/attributes/*/attribute
       - /trackedEntities/*/attributes/*/value
     redirects: deny
-    timeoutMilliseconds: 3000
+    attemptTimeoutMilliseconds: 3000
     maximumResponseBytes: 65536
-    concurrencyLimit: 4
+    maximumConcurrency: 4
   responseSchema: schemas/response.schema.yaml
   extractScript: adapters/nested-paged-rest.rhai
   factSchema: schemas/facts.schema.yaml

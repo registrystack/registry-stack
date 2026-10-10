@@ -1,6 +1,6 @@
 {
-  "apiVersion": "registry.registrystack.org/breg-explain/v1alpha4",
+  "apiVersion": "id.registrystack.org/formats/breg/change-requests-explanation/v1alpha4",
   "controlledWrites": [],
-  "kind": "ChangeRequestsExplanation",
+  "kind": "BRegChangeRequestsExplanation",
   "requests": []
 }

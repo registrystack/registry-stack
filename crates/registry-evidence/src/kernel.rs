@@ -2022,10 +2022,10 @@ mod tests {
     #[test]
     fn source_batch_items_are_revalidated_as_exact_minimized_selectors() {
         let source: SourceConfig = serde_json::from_value(json!({
-            "transport": "http-json",
+            "type": "http-json",
             "baseUrl": "https://source.invalid",
             "posture": "field-projected",
-            "authentication": {"kind": "static-authorization", "tokenRef": "secret:file/source"},
+            "authentication": {"type": "static-authorization", "tokenRef": "secret:file/source"},
             "request": {
                 "method": "POST",
                 "path": "/facts",
@@ -2040,9 +2040,9 @@ mod tests {
                 "preparationLimits": {"query": "forbidden", "jsonBody": "required"},
                 "projection": ["/result"],
                 "redirects": "deny",
-                "timeoutMilliseconds": 1000,
+                "attemptTimeoutMilliseconds": 1000,
                 "maximumResponseBytes": 4096,
-                "concurrencyLimit": 1
+                "maximumConcurrency": 1
             },
             "responseSchema": "schemas/response.schema.yaml",
             "extractScript": "adapters/extract.rhai",
@@ -2169,7 +2169,7 @@ mod tests {
         copy_tree(&source, temporary.path());
         let config_path = temporary.path().join("evidence.yaml");
         let config = fs::read_to_string(&config_path).expect("configuration reads");
-        assert_eq!(config.matches("version: 1\n").count(), 1);
+        assert_eq!(config.matches("kind: EvidenceBundle\n").count(), 1);
         assert_eq!(
             config
                 .matches("    factSchema: schemas/facts.schema.yaml\n")
@@ -2178,8 +2178,8 @@ mod tests {
         );
         let config = config
             .replacen(
-                "version: 1\n",
-                "version: 1\nacquisitionCapabilities: [source-batch]\n",
+                "kind: EvidenceBundle\n",
+                "kind: EvidenceBundle\nacquisitionCapabilities: [source-batch]\n",
                 1,
             )
             .replacen(
@@ -2741,7 +2741,7 @@ fn extract_batch(response, context) {
 
         assert_eq!(
             validate_value(
-                &concept("form: boolean\nrequired: true\nconstraints: {}"),
+                &concept("type: boolean\nrequired: true\nconstraints: {}"),
                 &DerivedValue::Json(json!(false)),
                 &projection(),
                 &codelists,
@@ -2752,7 +2752,7 @@ fn extract_batch(response, context) {
         assert_eq!(
             validate_value(
                 &concept(
-                    "form: bounded-integer\nrequired: true\nconstraints: {minimum: -2, maximum: 2}"
+                    "type: bounded-integer\nrequired: true\nconstraints: {minimum: -2, maximum: 2}"
                 ),
                 &DerivedValue::Json(json!(2)),
                 &projection(),
@@ -2763,7 +2763,7 @@ fn extract_batch(response, context) {
         );
         assert_eq!(
             validate_value(
-                &concept("form: controlled-code\nrequired: true\nconstraints: {codelist: 'urn:example:codes', codelistVersion: '1', maximumBytes: 8}"),
+                &concept("type: controlled-code\nrequired: true\nconstraints: {codelist: 'urn:example:codes', codelistVersion: '1', maximumBytes: 8}"),
                 &DerivedValue::Json(json!("A")),
                 &projection(),
                 &codelists,
@@ -2773,7 +2773,7 @@ fn extract_batch(response, context) {
         );
         assert_eq!(
             validate_value(
-                &concept("form: bounded-decimal\nrequired: true\nconstraints: {minimum: '-1.5', maximum: '1.5', maximumScale: 2}"),
+                &concept("type: bounded-decimal\nrequired: true\nconstraints: {minimum: '-1.5', maximum: '1.5', maximumScale: 2}"),
                 &DerivedValue::Decimal(Decimal::parse("0.25").expect("decimal")),
                 &projection(),
                 &codelists,
@@ -2782,7 +2782,7 @@ fn extract_batch(response, context) {
             Ok(PublicValue::String("0.25".to_owned()))
         );
         assert!(validate_value(
-            &concept("form: bounded-decimal\nrequired: true\nconstraints: {minimum: '-1.5', maximum: '1.5', maximumScale: 2}"),
+            &concept("type: bounded-decimal\nrequired: true\nconstraints: {minimum: '-1.5', maximum: '1.5', maximumScale: 2}"),
             &DerivedValue::Json(json!(0.25)),
             &projection(),
             &codelists,
@@ -2791,7 +2791,7 @@ fn extract_batch(response, context) {
         .is_err());
 
         let controlled = concept(
-            "form: controlled-code-list\nrequired: true\nconstraints: {codelist: 'urn:example:codes', codelistVersion: '1', minimumItems: 1, maximumItems: 2, unique: true}",
+            "type: controlled-code-list\nrequired: true\nconstraints: {codelist: 'urn:example:codes', codelistVersion: '1', minimumItems: 1, maximumItems: 2, unique: true}",
         );
         assert!(validate_value(
             &controlled,
@@ -2819,7 +2819,7 @@ fn extract_batch(response, context) {
             BTreeMap::from([("codelists/categories.yaml".to_owned(), category_list)]);
         assert_eq!(
             validate_value(
-                &concept("form: controlled-category\nrequired: true\nconstraints: {categoryScheme: 'urn:example:category-scheme', schemeVersion: '7', maximumBytes: 32, codelist: 'codelists/categories.yaml'}"),
+                &concept("type: controlled-category\nrequired: true\nconstraints: {categoryScheme: 'urn:example:category-scheme', schemeVersion: '7', maximumBytes: 32, codelist: 'codelists/categories.yaml'}"),
                 &DerivedValue::Json(json!("category-a")),
                 &projection(),
                 &category_lists,
@@ -2838,10 +2838,10 @@ fn extract_batch(response, context) {
         };
         let codelists = BTreeMap::from([("buckets".to_owned(), buckets)]);
         let bucket = concept(
-            "form: time-bucket\nrequired: true\nconstraints: {bucketScheme: 'urn:example:bucket-scheme', schemeVersion: '1'}",
+            "type: time-bucket\nrequired: true\nconstraints: {bucketScheme: 'urn:example:bucket-scheme', schemeVersion: '1'}",
         );
         let date_bucket = concept(
-            "form: date-bucket\nrequired: true\nconstraints: {bucketScheme: 'urn:example:bucket-scheme', schemeVersion: '1'}",
+            "type: date-bucket\nrequired: true\nconstraints: {bucketScheme: 'urn:example:bucket-scheme', schemeVersion: '1'}",
         );
         assert!(matches!(
             validate_value(
@@ -2868,7 +2868,7 @@ fn extract_batch(response, context) {
         .is_err());
 
         let entity = concept(
-            "form: audience-scoped-entity-reference\nrequired: true\nconstraints: {maximumBytes: 160}",
+            "type: audience-scoped-entity-reference\nrequired: true\nconstraints: {maximumBytes: 160}",
         );
         let seed = crate::values::EntityReferenceSeed::new("protected-seed").expect("seed");
         let public = validate_value(
@@ -2890,7 +2890,7 @@ fn extract_batch(response, context) {
         .is_err());
 
         let entity_list = concept(
-            "form: entity-reference-list\nrequired: true\nconstraints: {minimumItems: 1, maximumItems: 2, unique: true}",
+            "type: entity-reference-list\nrequired: true\nconstraints: {minimumItems: 1, maximumItems: 2, unique: true}",
         );
         let duplicate = crate::values::EntityReferenceSeed::new("same-seed").expect("seed");
         assert!(validate_value(
@@ -2933,7 +2933,7 @@ fn extract_batch(response, context) {
         .expect("schema compiles");
         let schemas = BTreeMap::from([(schema_id.to_owned(), schema)]);
         let structured = concept(
-            "form: reviewed-structured-value\nrequired: true\nconstraints: {schema: 'urn:example:structured', maximumSerializedBytes: 512}",
+            "type: reviewed-structured-value\nrequired: true\nconstraints: {schema: 'urn:example:structured', maximumSerializedBytes: 512}",
         );
         assert!(validate_value(
             &structured,
@@ -3125,7 +3125,7 @@ fn extract_batch(response, context) {
     #[test]
     fn an_entity_reference_has_no_holder_bound_projection() {
         let entity = concept(
-            "form: audience-scoped-entity-reference\nrequired: true\nconstraints: {maximumBytes: 160}",
+            "type: audience-scoped-entity-reference\nrequired: true\nconstraints: {maximumBytes: 160}",
         );
         let seed = crate::values::EntityReferenceSeed::new("protected-seed").expect("seed");
         let holder_bound = ValueProjection {
@@ -3332,7 +3332,7 @@ fn extract_batch(response, context) {
         };
         assert_eq!(
             validate_value(
-                &concept("form: controlled-code\nrequired: true\nconstraints: {codelist: oversized, codelistVersion: '1', maximumBytes: 8192}"),
+                &concept("type: controlled-code\nrequired: true\nconstraints: {codelist: oversized, codelistVersion: '1', maximumBytes: 8192}"),
                 &DerivedValue::Json(Value::String(oversized)),
                 &projection(),
                 &BTreeMap::from([("oversized".to_owned(), oversized_codelist)]),
@@ -3358,7 +3358,7 @@ fn extract_batch(response, context) {
         let aggregate_concepts = (0..16)
             .map(|index| {
                 let mut candidate = concept(&format!(
-                    "form: reviewed-structured-value\nrequired: false\nconstraints: {{schema: '{aggregate_schema_id}', maximumSerializedBytes: 8192}}"
+                    "type: reviewed-structured-value\nrequired: false\nconstraints: {{schema: '{aggregate_schema_id}', maximumSerializedBytes: 8192}}"
                 ));
                 candidate.id = format!("urn:example:fixture:concept:aggregate-{index}");
                 candidate
@@ -3690,14 +3690,14 @@ fn extract_batch(response, context) {
 
     fn concept(body: &str) -> ConceptConfig {
         serde_norway::from_str(&format!(
-            "handle: example-concept\nid: urn:example:concept\n{body}\n"
+            "handle: example-concept\nuri: urn:example:concept\n{body}\n"
         ))
         .expect("concept parses")
     }
 
     #[test]
     fn bounded_identifier_requires_exact_prefix_ascii_suffix_and_byte_bounds() {
-        let identifier = concept("form: bounded-identifier\nrequired: true\nconstraints: {prefix: 'urn:example:report:', minimumBytes: 20, maximumBytes: 32}");
+        let identifier = concept("type: bounded-identifier\nrequired: true\nconstraints: {prefix: 'urn:example:report:', minimumBytes: 20, maximumBytes: 32}");
         let accepted = DerivedValue::Json(json!("urn:example:report:A-01"));
         assert_eq!(
             validate_value(

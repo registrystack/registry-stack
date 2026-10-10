@@ -1,16 +1,17 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
+pub use registry_platform_yaml::ProjectIdentity;
 use registry_platform_yaml::{
-    ApiVersion, Decoded, EnvelopeRule, Expect, FormatSpec, Reader, Refusal, Report, ScalarHook,
-    ScalarSite,
+    ApiVersion, Decoded, EnvelopeRule, Expect, FormatSpec, Identified, Reader, Refusal, RemovedKey,
+    Report, RetiredApiVersion, ScalarHook, ScalarSite,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::finding::{
-    findings_report, ConfigFinding, Findings, DIRECTORY_IDENTIFIER_ACTION,
-    DIRECTORY_IDENTIFIER_MESSAGE, ELAPSED_ACTION, ELAPSED_MESSAGE,
+    findings_report, ConfigFinding, Findings, ELAPSED_ACTION, ELAPSED_MESSAGE, IDENTIFIER_ACTION,
+    IDENTIFIER_MESSAGE,
 };
 use crate::CaseworkRole;
 use crate::ReviewKindPolicy;
@@ -19,7 +20,7 @@ use crate::{
     clock_policy_findings, routing_policy_findings, CalendarPolicy, ClockPolicy, RoutingRule,
 };
 
-pub const CASEWORK_API_VERSION: &str = "registry.registrystack.org/casework/v1alpha1";
+pub const CASEWORK_API_VERSION: &str = "id.registrystack.org/formats/casework/project/v1alpha1";
 pub const CASEWORK_KIND: &str = "CaseworkProject";
 // Matches the maximum RFC 6749 scope-token size Casework accepts.
 const MAXIMUM_REQUIRED_SCOPE_BYTES: usize = 256;
@@ -77,23 +78,51 @@ pub fn valid_directory_identifier(value: &str) -> bool {
 pub struct CaseworkProject {
     pub api_version: String,
     pub kind: String,
-    pub casework: CaseworkIdentity,
+    pub project: ProjectIdentity,
+    #[serde(deserialize_with = "crate::typed::unique_id_list")]
     pub access_profiles: Vec<AccessProfile>,
+    #[serde(deserialize_with = "crate::typed::unique_id_list")]
     pub queues: Vec<QueuePolicy>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::typed::unique_id_list")]
     pub sources: Vec<SourcePolicy>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::typed::unique_id_list")]
     pub review_kinds: Vec<ReviewKindPolicy>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::typed::unique_id_list")]
     pub review_producers: Vec<ReviewProducerPolicy>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::typed::unique_id_list")]
     pub calendars: Vec<CalendarPolicy>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::typed::unique_id_list")]
     pub clocks: Vec<ClockPolicy>,
     #[serde(default)]
     pub inbox: InboxPolicy,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::typed::unique_id_list")]
     pub task_templates: Vec<crate::TaskTemplate>,
+}
+
+/// The named lists of a project are unique by `id` (CFG-ID-5).
+macro_rules! identified {
+    ($($item:ty),+ $(,)?) => {$(
+        impl Identified for $item {
+            fn id(&self) -> &str {
+                &self.id
+            }
+        }
+    )+};
+}
+identified!(
+    AccessProfile,
+    QueuePolicy,
+    SourcePolicy,
+    ReviewKindPolicy,
+    ReviewProducerPolicy,
+    CalendarPolicy,
+    crate::TaskTemplate,
+);
+
+impl Identified for ClockPolicy {
+    fn id(&self) -> &str {
+        ClockPolicy::id(self)
+    }
 }
 
 /// The format a `casework.yaml` file declares (CFG-ENV-1).
@@ -101,9 +130,23 @@ pub const CASEWORK_PROJECT_FORMAT: FormatSpec<'static> = FormatSpec {
     kind: CASEWORK_KIND,
     envelope: EnvelopeRule::ApiVersionKind {
         api_versions: &[ApiVersion::current(CASEWORK_API_VERSION)],
-        retired_api_versions: &[],
+        retired_api_versions: &[RetiredApiVersion {
+            api_version: "registry.registrystack.org/casework/v1alpha1",
+            replacement:
+                "Write apiVersion: id.registrystack.org/formats/casework/project/v1alpha1.",
+        }],
     },
-    removed_keys: &[],
+    removed_keys: &[
+        RemovedKey {
+            pointer: "/casework",
+            replacement:
+                "Write the project identity as project: {id: PROJECT_ID, version: \"VERSION\"}.",
+        },
+        RemovedKey {
+            pointer: "/clocks/*/scope",
+            replacement: "Write the clock's kind as type: subject or type: activity.",
+        },
+    ],
 };
 
 /// The name a project read from bytes carries in its diagnostics.
@@ -242,18 +285,10 @@ impl CaseworkProject {
                 format!("Write kind: {CASEWORK_KIND}."),
             );
         }
-        if self.casework.id.is_empty() {
-            findings.push(
-                "casework.project.empty-id",
-                "/casework/id",
-                "the project id is empty",
-                "Write the project id, such as benefits-casework.",
-            );
-        }
-        if self.casework.version.is_empty() {
+        if self.project.version.is_empty() {
             findings.push(
                 "casework.project.empty-version",
-                "/casework/version",
+                "/project/version",
                 "the project version is empty",
                 "Write the project version, such as 1.",
             );
@@ -324,12 +359,12 @@ impl CaseworkProject {
             "Give every queue a unique id.",
         );
         for (index, queue) in self.queues.iter().enumerate() {
-            if !valid_directory_identifier(&queue.id) {
+            if !crate::typed::valid_local_identifier(&queue.id) {
                 findings.push(
                     "casework.queue.invalid-id",
                     format!("/queues/{index}/id"),
-                    DIRECTORY_IDENTIFIER_MESSAGE,
-                    DIRECTORY_IDENTIFIER_ACTION,
+                    IDENTIFIER_MESSAGE,
+                    IDENTIFIER_ACTION,
                 );
             }
             if queue.label.trim().is_empty() || queue.label.len() > 160 {
@@ -345,11 +380,11 @@ impl CaseworkProject {
 
     fn access_profile_findings(&self, findings: &mut Findings) {
         for (index, profile) in self.access_profiles.iter().enumerate() {
-            if !valid_profile_identifier(&profile.id) {
+            if !crate::typed::valid_local_identifier(&profile.id) {
                 findings.push(
                     "casework.access-profile.invalid-id",
                     format!("/accessProfiles/{index}/id"),
-                    PROFILE_IDENTIFIER_MESSAGE,
+                    IDENTIFIER_MESSAGE,
                     PROFILE_IDENTIFIER_ACTION,
                 );
             }
@@ -793,18 +828,16 @@ fn profiles_without_a_separate_scope(profiles: &[AccessProfile]) -> Vec<usize> {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct CaseworkIdentity {
-    pub id: String,
-    pub version: String,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AccessProfile {
+    #[serde(deserialize_with = "crate::typed::local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
     pub principal_claim: String,
-    #[cfg_attr(feature = "schema", schemars(length(min = 1)))]
+    #[serde(deserialize_with = "crate::typed::unique_list")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::UniqueList<String>", length(min = 1))
+    )]
     pub required_scopes: Vec<String>,
     pub role: CaseworkRole,
 }
@@ -813,6 +846,8 @@ pub struct AccessProfile {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReviewProducerPolicy {
+    #[serde(deserialize_with = "crate::typed::local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
     pub profile: String,
     #[serde(deserialize_with = "crate::typed::url")]
@@ -846,11 +881,11 @@ pub struct ReviewProducerPolicy {
 impl ReviewProducerPolicy {
     /// The findings in the producer's own members, at `at`.
     fn findings(&self, findings: &mut Findings, at: &str) {
-        if !valid_review_name(&self.id) {
+        if !crate::typed::valid_local_identifier(&self.id) {
             findings.push(
                 "casework.review-producer.invalid-id",
                 format!("{at}/id"),
-                REVIEW_NAME_MESSAGE,
+                IDENTIFIER_MESSAGE,
                 "Write a review producer identifier, such as benefits-portal.",
             );
         }
@@ -1045,6 +1080,8 @@ fn bounded_config_text(value: &str, maximum: usize) -> bool {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct QueuePolicy {
+    #[serde(deserialize_with = "crate::typed::local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
     pub label: String,
 }
@@ -1053,6 +1090,8 @@ pub struct QueuePolicy {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SourcePolicy {
+    #[serde(deserialize_with = "crate::typed::local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
     pub adapter: String,
     pub description: String,
@@ -1166,6 +1205,8 @@ pub struct DisplayReferencePolicy {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PassiveTargetPolicy {
+    #[serde(deserialize_with = "crate::typed::local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
     pub after: ElapsedDuration,
 }
@@ -1395,8 +1436,8 @@ mod tests {
             task_templates: Vec::new(),
             api_version: CASEWORK_API_VERSION.to_owned(),
             kind: CASEWORK_KIND.to_owned(),
-            casework: CaseworkIdentity {
-                id: "standalone".to_owned(),
+            project: ProjectIdentity {
+                id: "standalone".parse().unwrap(),
                 version: "1".to_owned(),
             },
             access_profiles: vec![
@@ -1520,9 +1561,9 @@ mod tests {
             .collect()
     }
 
-    const MINIMAL: &str = r#"apiVersion: registry.registrystack.org/casework/v1alpha1
+    const MINIMAL: &str = r#"apiVersion: id.registrystack.org/formats/casework/project/v1alpha1
 kind: CaseworkProject
-casework: {id: regional-review, version: "1"}
+project: {id: regional-review, version: "1"}
 accessProfiles:
   - {id: staff, principalClaim: sub, requiredScopes: [casework:staff], role: staff}
   - {id: supervisor, principalClaim: sub, requiredScopes: [casework:supervisor], role: supervisor}
@@ -1541,6 +1582,238 @@ sources:
     #[track_caller]
     fn refused(project: &CaseworkProject, code: &'static str, pointer: &str) {
         assert_eq!(refusals(project), [(code, pointer.to_owned())]);
+    }
+
+    #[test]
+    fn cfg_env_2_the_project_header_names_its_format() {
+        assert_eq!(
+            CASEWORK_API_VERSION,
+            "id.registrystack.org/formats/casework/project/v1alpha1"
+        );
+        let project = read(MINIMAL).expect("the project is read");
+        assert_eq!(project.api_version, CASEWORK_API_VERSION);
+        assert_eq!(project.check(), Ok(()));
+    }
+
+    #[test]
+    fn cfg_id_1_a_source_id_and_a_target_id_are_local_identifiers() {
+        let underscored = MINIMAL.replace("id: register", "id: civil_register");
+        assert_eq!(read(&underscored).unwrap().check(), Ok(()));
+        let source = MINIMAL.replace("id: register", "id: Civil Register");
+        assert_eq!(
+            diagnostics(&source),
+            [(
+                "config.invalid-value".to_owned(),
+                "/sources/0/id".to_owned(),
+                Some(11)
+            )]
+        );
+        let targeted = |id: &str| {
+            format!("{MINIMAL}        target:\n          id: {id}\n          after: {{elapsed: PT48H}}\n")
+        };
+        assert_eq!(read(&targeted("first_decision")).unwrap().check(), Ok(()));
+        assert_eq!(
+            diagnostics(&targeted("First.Decision")),
+            [(
+                "config.invalid-value".to_owned(),
+                "/sources/0/requests/0/target/id".to_owned(),
+                Some(18)
+            )]
+        );
+    }
+
+    #[test]
+    fn cfg_id_1_a_profile_a_queue_and_a_producer_id_are_local_identifiers() {
+        let with_producer = |profile: &str, queue: &str, producer: &str| {
+            let project = MINIMAL
+                .replace("{id: staff,", &format!("{{id: {profile},"))
+                .replace("{id: triage,", &format!("{{id: {queue},"))
+                .replace("queue: triage", &format!("queue: {queue}"))
+                .replace(
+                    "queues:\n",
+                    "  - {id: producer, principalClaim: sub, requiredScopes: [casework:producer], role: requester}\nqueues:\n",
+                );
+            format!(
+                "{project}reviewProducers:\n  - {{id: {producer}, profile: producer, issuer: \"https://issuer.test\", subject: registry-service, sourceNamespaces: [registry], kinds: [correction], recoveryDays: 7}}\nreviewKinds:\n  - id: correction\n    version: \"1\"\n    purpose: approval\n    contextStrategy: source\n    stages:\n      - {{id: review, queue: {queue}, decidingProfiles: [supervisor], requiredApprovals: 1}}\n    outcomes:\n      - {{id: needs-change, label: Request changes, settlement: changes-requested, reasonRequired: true}}\n    retention: {{terminalDays: 30, accountabilityDays: 365}}\n    displaySchema: {{type: object, additionalProperties: false, properties: {{}}}}\n"
+            )
+        };
+        assert_eq!(
+            read(&with_producer(
+                "front_desk-2",
+                "first_triage-2",
+                "benefits_portal-2"
+            ))
+            .unwrap()
+            .check(),
+            Ok(())
+        );
+        for (yaml, pointer, line) in [
+            (
+                with_producer("staff.review:v1", "triage", "registry"),
+                "/accessProfiles/0/id",
+                5,
+            ),
+            (
+                with_producer("staff", "Triage.Desk", "registry"),
+                "/queues/0/id",
+                10,
+            ),
+            (
+                with_producer("staff", "triage", "benefits.portal:v1"),
+                "/reviewProducers/0/id",
+                19,
+            ),
+        ] {
+            assert_eq!(
+                diagnostics(&yaml)
+                    .into_iter()
+                    .filter(|(_, path, _)| path == pointer)
+                    .collect::<Vec<_>>(),
+                [(
+                    "config.invalid-value".to_owned(),
+                    pointer.to_owned(),
+                    Some(line)
+                )]
+            );
+        }
+    }
+
+    #[test]
+    fn review_producer_ids_follow_the_local_identifier_grammar() {
+        for valid in ["benefits_portal-2".to_owned(), "x".repeat(64)] {
+            let mut candidate = project();
+            candidate.review_producers[0].id = valid;
+            assert_eq!(candidate.check(), Ok(()));
+        }
+        for invalid in [
+            String::new(),
+            "x".repeat(65),
+            "benefits.portal".to_owned(),
+            "benefits:portal".to_owned(),
+            "Portal".to_owned(),
+            "1portal".to_owned(),
+        ] {
+            let mut candidate = project();
+            candidate.review_producers[0].id = invalid;
+            refused(
+                &candidate,
+                "casework.review-producer.invalid-id",
+                "/reviewProducers/0/id",
+            );
+        }
+    }
+
+    #[test]
+    fn cfg_change_2_the_retired_project_header_names_its_replacement() {
+        let retired = MINIMAL.replacen(
+            CASEWORK_API_VERSION,
+            "registry.registrystack.org/casework/v1alpha1",
+            1,
+        );
+        let report = read(&retired).expect_err("the retired header is refused");
+        let found = report.diagnostics();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].code, "config.retired-api-version");
+        assert_eq!(found[0].path, "/apiVersion");
+        assert!(found[0]
+            .suggested_action
+            .contains("apiVersion: id.registrystack.org/formats/casework/project/v1alpha1"));
+    }
+
+    #[test]
+    fn cfg_env_6_the_project_is_named_in_a_project_block() {
+        let project = read(MINIMAL).expect("the project block is read");
+        assert_eq!(project.project.id.as_str(), "regional-review");
+        assert_eq!(project.project.version, "1");
+        assert_eq!(project.check(), Ok(()));
+    }
+
+    #[test]
+    fn cfg_change_3_the_removed_casework_block_names_the_project_block() {
+        let removed = MINIMAL.replacen("project: {id", "casework: {id", 1);
+        assert!(removed.contains("\ncasework: {id"));
+        let report = read(&removed).expect_err("the removed block is refused");
+        let found = report.diagnostics();
+        let removal = found
+            .iter()
+            .find(|diagnostic| diagnostic.code == "config.removed-key")
+            .expect("the removed key is reported");
+        assert_eq!(removal.path, "/casework");
+        assert!(removal.suggested_action.contains("project: {id: "));
+    }
+
+    #[test]
+    fn cfg_id_7_the_removed_clock_scope_tag_names_type() {
+        let authored = format!(
+            "{MINIMAL}clocks:\n  - id: response-budget\n    scope: subject\n    anchor: first-submitted-at\n    completeOn: review-completed\n    after: {{elapsed: PT48H}}\n    pauseWhile: [awaiting-applicant]\n"
+        );
+        let report = read(&authored).expect_err("the removed tag is refused");
+        let found = report.diagnostics();
+        let removal = found
+            .iter()
+            .find(|diagnostic| diagnostic.code == "config.removed-key")
+            .expect("the removed key is reported");
+        assert_eq!(removal.path, "/clocks/0/scope");
+        assert!(removal.suggested_action.contains("type: subject"));
+        assert!(removal.suggested_action.contains("type: activity"));
+
+        let current = authored.replacen("scope: subject", "type: subject", 1);
+        read(&current).expect("the clock is read by its type");
+    }
+
+    #[test]
+    fn cfg_name_2_the_previous_waiting_state_spellings_are_refused_and_the_current_named() {
+        for (previous, current) in [
+            ("waiting_applicant", "waiting-applicant"),
+            ("waiting_application", "waiting-application"),
+        ] {
+            let authored = format!(
+                "{MINIMAL}taskTemplates:\n  - id: summary\n    version: \"1\"\n    label: Prepare summary\n    eligibleTeams: [team]\n    eligibleProfiles: [staff]\n    source: source\n    itemKinds: [request]\n    itemStates: [{previous}]\n    agent: {{issuer: \"https://issuer.test\", subject: agent}}\n    client: agent-client\n    resource: urn:test:breg\n    scopes: [\"records:get\"]\n    purpose: prepare-summary\n    bounds: {{type: breg, permissions: [{{collection: records, operations: [get]}}]}}\n    subjects: {{subject_reference: subject-reference}}\n    lifetimeSeconds: 900\n"
+            );
+            let report = read(&authored).expect_err("the previous spelling is refused");
+            let found = report.diagnostics();
+            let refusal = found
+                .iter()
+                .find(|diagnostic| diagnostic.path == "/taskTemplates/0/itemStates/0")
+                .expect("the item state is reported where it is written");
+            assert_eq!(refusal.code, "config.unknown-variant");
+            assert!(
+                refusal.message.contains(current) || refusal.suggested_action.contains(current),
+                "{previous} names {current}"
+            );
+        }
+    }
+
+    #[test]
+    fn cfg_name_2_the_previous_settlement_spelling_is_refused_and_the_current_named() {
+        let authored = |settlement: &str| {
+            let project = MINIMAL.replace(
+                "queues:\n",
+                "  - {id: producer, principalClaim: sub, requiredScopes: [casework:producer], role: requester}\nqueues:\n",
+            );
+            format!(
+                "{project}reviewProducers:\n  - {{id: registry, profile: producer, issuer: \"https://issuer.test\", subject: registry-service, sourceNamespaces: [registry], kinds: [correction], recoveryDays: 7}}\nreviewKinds:\n  - id: correction\n    version: \"1\"\n    purpose: approval\n    contextStrategy: source\n    stages:\n      - {{id: review, queue: triage, decidingProfiles: [staff], requiredApprovals: 1}}\n    outcomes:\n      - {{id: needs-change, label: Request changes, settlement: {settlement}, reasonRequired: true}}\n    retention: {{terminalDays: 30, accountabilityDays: 365}}\n    displaySchema: {{type: object, additionalProperties: false, properties: {{}}}}\n"
+            )
+        };
+        let project = read(&authored("changes-requested")).expect("the settlement is read");
+        assert_eq!(
+            project.review_kinds[0].outcomes[0].settlement,
+            crate::ReviewOutcomeSettlement::ChangesRequested
+        );
+
+        let report =
+            read(&authored("changes_requested")).expect_err("the previous spelling is refused");
+        let found = report.diagnostics();
+        let refusal = found
+            .iter()
+            .find(|diagnostic| diagnostic.path == "/reviewKinds/0/outcomes/0/settlement")
+            .expect("the settlement is reported where it is written");
+        assert_eq!(refusal.code, "config.unknown-variant");
+        assert!(
+            refusal.message.contains("changes-requested")
+                || refusal.suggested_action.contains("changes-requested"),
+            "the refusal names the current spelling"
+        );
     }
 
     #[test]
@@ -1955,7 +2228,7 @@ sources:
 
     #[test]
     fn access_profile_ids_match_the_http_selection_contract() {
-        for valid in ["staff.review:v1_2-3".to_owned(), "x".repeat(128)] {
+        for valid in ["staff_review-2".to_owned(), "x".repeat(64)] {
             let mut candidate = project();
             candidate.access_profiles[2].id = valid;
             assert_eq!(candidate.check(), Ok(()));
@@ -1963,10 +2236,13 @@ sources:
 
         for invalid in [
             String::new(),
-            "x".repeat(129),
+            "x".repeat(65),
             "staff/reviewer".to_owned(),
             "staff reviewer".to_owned(),
             "stáff".to_owned(),
+            "staff.review:v1".to_owned(),
+            "Staff".to_owned(),
+            "1staff".to_owned(),
         ] {
             let mut candidate = project();
             candidate.access_profiles[2].id = invalid;
@@ -1980,18 +2256,21 @@ sources:
 
     #[test]
     fn queue_ids_match_the_directory_assignment_contract() {
-        for valid in ["review.queue_1-2".to_owned(), "x".repeat(128)] {
+        for valid in ["review_queue-2".to_owned(), "x".repeat(64)] {
             let candidate = project_with_source_queue(&valid);
             assert_eq!(candidate.check(), Ok(()));
         }
 
         for invalid in [
             String::new(),
-            "x".repeat(129),
+            "x".repeat(65),
             "review/queue".to_owned(),
             "review queue".to_owned(),
             "réview".to_owned(),
             "review:queue".to_owned(),
+            "review.queue".to_owned(),
+            "Review".to_owned(),
+            "1review".to_owned(),
         ] {
             let candidate = project_with_source_queue(&invalid);
             refused(&candidate, "casework.queue.invalid-id", "/queues/0/id");
@@ -2066,9 +2345,9 @@ sources:
     #[test]
     fn multi_queue_routing_and_named_clocks_use_the_documented_authoring_shape() {
         let project = read(
-            r#"apiVersion: registry.registrystack.org/casework/v1alpha1
+            r#"apiVersion: id.registrystack.org/formats/casework/project/v1alpha1
 kind: CaseworkProject
-casework: {id: regional-review, version: "1"}
+project: {id: regional-review, version: "1"}
 accessProfiles:
   - {id: staff, principalClaim: sub, requiredScopes: [casework:staff], role: staff}
   - {id: supervisor, principalClaim: sub, requiredScopes: [casework:supervisor], role: supervisor}
@@ -2103,8 +2382,8 @@ calendars:
     holidaySet: office-holidays
 clocks:
   - id: review-deadline
-    scope: activity
-    anchor: stageEnteredAt
+    type: activity
+    anchor: stage-entered-at
     calendar: office
     after: {workingDays: 5}
     dueTime: "17:00"
@@ -2155,17 +2434,68 @@ clocks:
     }
 
     #[test]
+    fn cfg_id_5_a_repeated_id_in_a_named_list_is_refused_by_the_reader() {
+        let found = |yaml: String, pointer: &str, line: usize| {
+            assert_eq!(
+                diagnostics(&yaml),
+                [(
+                    "config.duplicate-id".to_owned(),
+                    pointer.to_owned(),
+                    Some(line)
+                )]
+            );
+        };
+        found(
+            MINIMAL.replace(
+                "  - {id: triage, label: Triage}\n",
+                "  - {id: triage, label: Triage}\n  - {id: triage, label: Again}\n",
+            ),
+            "/queues/1/id",
+            10,
+        );
+        found(
+            MINIMAL.replace(
+                "  - {id: supervisor, principalClaim",
+                "  - {id: staff, principalClaim",
+            ),
+            "/accessProfiles/1/id",
+            6,
+        );
+        found(
+            format!("{MINIMAL}  - id: register\n    adapter: breg\n    description: sources/other.json\n    requests:\n      - entity: other\n        queue: triage\n"),
+            "/sources/1/id",
+            17,
+        );
+    }
+
+    #[test]
+    fn cfg_id_6_a_repeated_required_scope_is_refused_by_the_reader() {
+        let yaml = MINIMAL.replace(
+            "requiredScopes: [casework:staff]",
+            "requiredScopes: [casework:staff, casework:staff]",
+        );
+        assert_eq!(
+            diagnostics(&yaml),
+            [(
+                "config.duplicate-item".to_owned(),
+                "/accessProfiles/0/requiredScopes/1".to_owned(),
+                Some(5)
+            )]
+        );
+    }
+
+    #[test]
     fn a_read_reports_every_semantic_finding_at_its_line() {
         assert_eq!(read(MINIMAL).map(|_| ()), Ok(()));
         let yaml = MINIMAL
-            .replace("  - {id: triage, label: Triage}\n", "  - {id: triage, label: Triage}\n  - {id: triage, label: Again}\n")
+            .replace("  - {id: triage, label: Triage}\n", "  - {id: triage, label: Triage}\n  - {id: second, label: \" \"}\n")
             .replace("        queue: triage\n", "        queue: triage\n        clock: missing\n        contextProjection: [summary, summary]\n");
         assert_eq!(
             diagnostics(&yaml),
             [
                 (
-                    "casework.queue.duplicate-id".to_owned(),
-                    "/queues/1/id".to_owned(),
+                    "casework.queue.invalid-label".to_owned(),
+                    "/queues/1/label".to_owned(),
                     Some(10)
                 ),
                 (

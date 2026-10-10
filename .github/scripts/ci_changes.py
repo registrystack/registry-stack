@@ -359,6 +359,10 @@ CLI_REFERENCE_INPUTS = (
     ("Cargo.lock", "Cargo.lock"),
     ("Cargo.toml", "Cargo.toml"),
     ("crates/registry-cli-docs/**", "crates/registry-cli-docs/src/lib.rs"),
+    (
+        "crates/registry-cli-reference/src/**",
+        "crates/registry-cli-reference/src/lib.rs",
+    ),
     # Feature/dependency changes can alter the collector without editing Clap.
     ("crates/*/Cargo.toml", "crates/registry-cli-docs/Cargo.toml"),
     ("crates/registry-evidence/src/cli.rs", "crates/registry-evidence/src/cli.rs"),
@@ -384,6 +388,17 @@ CLI_REFERENCE_INPUTS = (
         "crates/registry-messaging/src/runtime.rs",
     ),
     ("crates/registry-messagingctl/src/**", "crates/registry-messagingctl/src/lib.rs"),
+    (
+        "crates/registry-scheduling/src/runtime.rs",
+        "crates/registry-scheduling/src/runtime.rs",
+    ),
+    (
+        "crates/registry-schedulingctl/src/**",
+        "crates/registry-schedulingctl/src/lib.rs",
+    ),
+    ("crates/registry-render/src/cli.rs", "crates/registry-render/src/cli.rs"),
+    # The check subcommand takes its --format values from this module.
+    ("crates/registry-render/src/check.rs", "crates/registry-render/src/check.rs"),
 )
 CLI_REFERENCE_PATTERNS = tuple(pattern for pattern, _ in CLI_REFERENCE_INPUTS)
 
@@ -1225,6 +1240,22 @@ def classify(
             "crates/registry-evidencectl/schemas/authoring/*",
             "products/breg/generated/authoring/*",
             "products/breg/generated/runtime/*",
+            # The Scheduling configuration reference page is generated from
+            # these schemas.
+            "products/scheduling/generated/project/*",
+            "products/scheduling/generated/records/*",
+            "products/scheduling/generated/fixture/*",
+            "products/scheduling/generated/runtime/*",
+            # The configuration files reference page is generated from the
+            # format registry.
+            "products/platform/config-formats.yaml",
+            # The API reference pages are generated from these descriptions,
+            # as the Evidence one is from its own above.
+            "products/casework/generated/registry-casework.openapi.json",
+            "products/messaging/generated/registry-messaging.openapi.json",
+            "products/scheduling/generated/registry-scheduling.openapi.json",
+            # The client capabilities page imports this inventory at build.
+            "products/breg/contracts/client-capabilities.json",
             "products/breg/evidence/**",
             "products/evidence/reference/authoring-projects/SOURCE-EXPORT.md",
             "products/evidence/reference/request-adapter/deployment-projects/SOURCE-CREDENTIAL-ROTATION.md",
@@ -1236,6 +1267,11 @@ def classify(
             # modules, not only the generated question and marker schemas.
             *EVIDENCE_AUTHORING_GUIDE_IMPLEMENTATION_PATTERNS,
             *CLI_REFERENCE_PATTERNS,
+            # The docs release suites (scripts/release-notes-drift.test.mjs,
+            # scripts/deployment-documentation-truth.test.mjs) and the archive
+            # lock check read every release manifest and release note name.
+            "release/manifests/*",
+            "release/notes/*",
         )
         or path in repo_docs
         or path
@@ -1244,6 +1280,22 @@ def classify(
             # suite (scripts/current-docs-release-pins.test.mjs) scans as a
             # current page.
             "docker/README.md",
+            # Files outside the site that a docs script test holds a published
+            # page against, each named by the test that reads it.
+            # scripts/evidence-production-build-docs.test.mjs
+            "docker/compose/README.md",
+            "docker/compose/docker-compose.yaml",
+            "docker/compose/runtime.docker.yaml",
+            # scripts/breg-event-reference.test.mjs
+            "crates/registry-platform-httputil/src/destination.rs",
+            # scripts/publicschema-revision.test.mjs
+            "crates/registry-linkml/publicschema/PIN.yaml",
+            # scripts/openssf-evidence.test.mjs
+            "release/openssf-best-practices-silver.yaml",
+            # scripts/shell-fence-syntax.test.mjs
+            "release/exercises/README.md",
+            # scripts/release-notes-drift.test.mjs
+            "products/manifest/CHANGELOG.md",
         }
         for path in paths
     ) or (

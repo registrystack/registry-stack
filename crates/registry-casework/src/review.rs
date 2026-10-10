@@ -1556,7 +1556,7 @@ impl PostgresStore {
                 "SELECT task_id
                    FROM casework_review_clock_occurrences
                   WHERE scope='activity' AND task_id IS NOT NULL
-                    AND ((state='source_facts_missing'
+                    AND ((state='source-facts-missing'
                           AND (next_action_at IS NULL OR next_action_at<=now()))
                          OR (state='running' AND next_action_at<=now()))
                   GROUP BY task_id
@@ -1578,7 +1578,7 @@ impl PostgresStore {
                     SET next_action_at=transaction_timestamp()+interval '30 seconds',
                         updated_at=transaction_timestamp()
                   WHERE task_id=$1 AND scope='activity'
-                    AND ((state='source_facts_missing'
+                    AND ((state='source-facts-missing'
                           AND (next_action_at IS NULL OR next_action_at<=now()))
                          OR (state='running' AND next_action_at<=now()))",
                 &[&task_id],
@@ -1606,7 +1606,7 @@ impl PostgresStore {
                  FROM casework_review_clock_occurrences
                  WHERE scope='activity'
                    AND task_id=ANY($2)
-                   AND ((state='source_facts_missing'
+                   AND ((state='source-facts-missing'
                         AND (next_action_at IS NULL OR next_action_at<=$3))
                         OR (state='running' AND next_action_at<=now()))
                  ORDER BY COALESCE(next_action_at,updated_at),clock_occurrence_id
@@ -1648,7 +1648,7 @@ impl PostgresStore {
                     "SELECT policy,state,anchor_at,holiday_document,reminders,steps
                      FROM casework_review_clock_occurrences
                      WHERE clock_occurrence_id=$1 AND scope='activity'
-                       AND ((state='source_facts_missing'
+                       AND ((state='source-facts-missing'
                             AND (next_action_at IS NULL OR next_action_at<=$2))
                             OR (state='running' AND next_action_at<=$2))
                      FOR UPDATE",
@@ -1665,7 +1665,7 @@ impl PostgresStore {
                 HolidaySetDocument,
                 Vec<ReminderOccurrence>,
                 Vec<StepOccurrence>,
-            ) = if state == "source_facts_missing" {
+            ) = if state == "source-facts-missing" {
                 let calendar = definition
                     .calendar
                     .as_ref()
@@ -1682,7 +1682,7 @@ impl PostgresStore {
                         .execute(
                             "UPDATE casework_review_clock_occurrences
                              SET next_action_at=$2::timestamptz+interval '30 seconds',updated_at=$2
-                             WHERE clock_occurrence_id=$1 AND state='source_facts_missing'",
+                             WHERE clock_occurrence_id=$1 AND state='source-facts-missing'",
                             &[&occurrence_id, &now],
                         )
                         .await?;
@@ -1702,7 +1702,7 @@ impl PostgresStore {
                         "UPDATE casework_review_clock_occurrences
                          SET state='running',holiday_document=$2,reminders=$3,steps=$4,
                              due_at=$5,at_risk_at=$6,next_action_at=$7,updated_at=$8
-                         WHERE clock_occurrence_id=$1 AND state='source_facts_missing'",
+                         WHERE clock_occurrence_id=$1 AND state='source-facts-missing'",
                         &[
                             &occurrence_id,
                             &serde_json::to_value(&holiday)?,
@@ -1759,7 +1759,7 @@ impl PostgresStore {
                         .execute(
                             "INSERT INTO casework_review_history(
                                 event_id,request_id,task_id,kind,actor_ref,detail,occurred_at)
-                             VALUES($1,$2,$3,'clock_reminder',NULL,$4,$5)",
+                             VALUES($1,$2,$3,'clock-reminder',NULL,$4,$5)",
                             &[
                                 &event_id,
                                 &request_id,
@@ -1828,7 +1828,7 @@ impl PostgresStore {
                         .execute(
                             "INSERT INTO casework_review_history(
                                 event_id,request_id,task_id,kind,actor_ref,detail,occurred_at)
-                             VALUES($1,$2,$3,'clock_step_applied',NULL,$4,$5)",
+                             VALUES($1,$2,$3,'clock-step-applied',NULL,$4,$5)",
                             &[
                                 &event_id,
                                 &request_id,
@@ -2031,7 +2031,7 @@ impl PostgresStore {
         let supervisory = view.is_supervisory();
         let ownership = match view.ownership() {
             None => None,
-            Some(ReviewTaskOwnership::AssignedToMe) => Some("assigned_to_me"),
+            Some(ReviewTaskOwnership::AssignedToMe) => Some("assigned-to-me"),
             Some(ReviewTaskOwnership::Unclaimed) => Some("unclaimed"),
         };
         let (cursor_created_at, cursor_task_id) = match cursor {
@@ -2062,7 +2062,7 @@ impl PostgresStore {
                    AND ($9 OR ((r.policy_snapshot->'stages'->t.stage_index->'decidingProfiles') ? $8))
                    AND ($10::text IS NULL
                         OR ($10='unclaimed' AND t.state='open')
-                        OR ($10='assigned_to_me' AND t.state='claimed'
+                        OR ($10='assigned-to-me' AND t.state='claimed'
                             AND t.holder_issuer=$1 AND t.holder_subject=$2))
                    AND ($11::uuid IS NULL OR t.request_id=$11)
                  ORDER BY t.created_at,t.task_id LIMIT $7",
@@ -2461,7 +2461,7 @@ impl PostgresStore {
                 _ => "nomination",
             }
         } else {
-            "absence_cover"
+            "absence-cover"
         };
         if current == desired
             && row.get::<_, String>(2) == if eligible { "claimed" } else { "open" }
@@ -2487,7 +2487,7 @@ impl PostgresStore {
                     &desired.as_ref().map(|person| &person.subject),
                     &eligible.then_some(assignment_kind),
                     &cover.absence_ids,
-                    &(!eligible).then_some("no_cover_available"),
+                    &(!eligible).then_some("no-cover-available"),
                     &now,
                 ],
             )
@@ -2497,7 +2497,7 @@ impl PostgresStore {
             .execute(
                 "INSERT INTO casework_review_history(
                     event_id,request_id,task_id,kind,actor_ref,detail,occurred_at)
-                 VALUES($1,$2,$3,'task_absence_reconciled',NULL,$4,$5)",
+                 VALUES($1,$2,$3,'task-absence-reconciled',NULL,$4,$5)",
                 &[
                     &Uuid::new_v4(),
                     &request_id,
@@ -3141,7 +3141,7 @@ impl PostgresStore {
                 .execute(
                     "INSERT INTO casework_review_history(
                         event_id,request_id,task_id,kind,actor_ref,detail,occurred_at)
-                     VALUES($1,$2,NULL,'review_superseded',NULL,'{}'::jsonb,$3)",
+                     VALUES($1,$2,NULL,'review-superseded',NULL,'{}'::jsonb,$3)",
                     &[&Uuid::new_v4(), &prior_id, &now],
                 )
                 .await?;
@@ -3237,8 +3237,8 @@ impl PostgresStore {
             .execute(
                 "INSERT INTO casework_review_history(event_id,request_id,task_id,kind,actor_ref,detail,occurred_at)
                  VALUES
-                    ($1,$2,NULL,'review_created',NULL,$3,$5),
-                    ($4,$2,NULL,'request_created',NULL,'{}'::jsonb,$5)",
+                    ($1,$2,NULL,'review-created',NULL,$3,$5),
+                    ($4,$2,NULL,'request-created',NULL,'{}'::jsonb,$5)",
                 &[
                     &Uuid::new_v4(),
                     &request_id,
@@ -3401,7 +3401,7 @@ impl PostgresStore {
         let now = Utc::now();
         let mut audit = self
             .begin_audit(crate::audit::request_record(
-                "review_cancelled",
+                "review-cancelled",
                 Some(actor),
                 &actor.profile_id,
                 json!({}),
@@ -3466,7 +3466,7 @@ impl PostgresStore {
         transaction
             .execute(
                 "INSERT INTO casework_review_history(event_id,request_id,task_id,kind,actor_ref,detail,occurred_at)
-                 VALUES($1,$2,NULL,'review_cancelled',NULL,$3,$4)",
+                 VALUES($1,$2,NULL,'review-cancelled',NULL,$3,$4)",
                 &[
                     &cancel_event_id,
                     &request_id,
@@ -3481,7 +3481,7 @@ impl PostgresStore {
         audit.record(
             cancel_event_id,
             json!({
-                "event": "casework.review_cancelled",
+                "event": "casework.review-cancelled",
                 "eventId": cancel_event_id,
                 "requestId": request_id,
                 "actor": {
@@ -3518,7 +3518,7 @@ impl PostgresStore {
         let now = Utc::now();
         let mut audit = self
             .begin_audit(crate::audit::request_record(
-                "task_claimed",
+                "task-claimed",
                 Some(actor),
                 &actor.profile_id,
                 json!({}),
@@ -3664,7 +3664,7 @@ impl PostgresStore {
                 .execute(
                     "INSERT INTO casework_review_history(
                         event_id,request_id,task_id,kind,actor_ref,detail,occurred_at)
-                     VALUES($1,$2,$3,'task_claimed',$4,$5,$6)",
+                     VALUES($1,$2,$3,'task-claimed',$4,$5,$6)",
                     &[
                         &claim_event_id,
                         &request_id,
@@ -3687,7 +3687,7 @@ impl PostgresStore {
         audit.record(
             claim_event_id,
             json!({
-                "event": "casework.task_claimed",
+                "event": "casework.task-claimed",
                 "eventId": claim_event_id,
                 "requestId": request_id,
                 "taskId": task_id,
@@ -3734,9 +3734,9 @@ impl PostgresStore {
         let mut audit = self
             .begin_audit(crate::audit::request_record(
                 if delegate {
-                    "task_delegated"
+                    "task-delegated"
                 } else {
-                    "task_assigned"
+                    "task-assigned"
                 },
                 Some(actor),
                 &actor.profile_id,
@@ -3887,7 +3887,7 @@ impl PostgresStore {
                 "nomination"
             }
         } else {
-            "absence_cover"
+            "absence-cover"
         };
         let next_revision = expected_revision + 1;
         transaction
@@ -3909,7 +3909,7 @@ impl PostgresStore {
                     &actor.principal.issuer,
                     &actor.principal.subject,
                     &cover.absence_ids,
-                    &(!eligible).then_some("no_cover_available"),
+                    &(!eligible).then_some("no-cover-available"),
                     &next_revision,
                     &now,
                 ],
@@ -3929,9 +3929,9 @@ impl PostgresStore {
                     &request_id,
                     &task_id,
                     &if delegate {
-                        "task_delegated"
+                        "task-delegated"
                     } else {
-                        "task_assigned"
+                        "task-assigned"
                     },
                     &actor_ref,
                     &json!({
@@ -3952,9 +3952,9 @@ impl PostgresStore {
             assignment_event_id,
             json!({
                 "event": if delegate {
-                    "casework.task_delegated"
+                    "casework.task-delegated"
                 } else {
-                    "casework.task_assigned"
+                    "casework.task-assigned"
                 },
                 "eventId": assignment_event_id,
                 "requestId": request_id,
@@ -4135,7 +4135,7 @@ impl PostgresStore {
             .execute(
                 "INSERT INTO casework_review_history(
                     event_id,request_id,task_id,kind,actor_ref,detail,occurred_at)
-                 VALUES($1,$2,$3,'task_draft_saved',$4,$5,$6)",
+                 VALUES($1,$2,$3,'task-draft-saved',$4,$5,$6)",
                 &[
                     &Uuid::new_v4(),
                     &request_id,
@@ -4279,7 +4279,7 @@ impl PostgresStore {
                     .query_opt(
                         "SELECT occurred_at,event_id FROM casework_review_history
                          WHERE request_id=$1 AND event_id=$2 AND (
-                            NOT $3 OR kind IN ('request_created','stage_advanced','review_settled','review_cancelled')
+                            NOT $3 OR kind IN ('request-created','stage-advanced','review-settled','review-cancelled')
                             OR (kind='note' AND detail->>'audience'='requester')
                          )",
                         &[&request_id, &cursor, &requester.is_some()],
@@ -4299,7 +4299,7 @@ impl PostgresStore {
                 "SELECT event_id,request_id,task_id,kind,actor_ref,detail,occurred_at
                  FROM casework_review_history
                  WHERE request_id=$1 AND (
-                    NOT $2 OR kind IN ('request_created','stage_advanced','review_settled','review_cancelled')
+                    NOT $2 OR kind IN ('request-created','stage-advanced','review-settled','review-cancelled')
                     OR (kind='note' AND detail->>'audience'='requester')
                  )
                  AND ($3::timestamptz IS NULL OR (occurred_at,event_id)>($3,$4))
@@ -4369,7 +4369,7 @@ impl PostgresStore {
     ) -> Result<ReviewAccountabilityRecord, ReviewRuntimeError> {
         let mut audit = self
             .begin_audit(crate::audit::request_record(
-                "review_accountability_read",
+                "review-accountability-read",
                 Some(actor),
                 &actor.profile_id,
                 json!({"accountabilityEventId": event_id}),
@@ -4428,7 +4428,7 @@ impl PostgresStore {
         audit.record(
             read_event_id,
             json!({
-                "event": "casework.review_accountability_read",
+                "event": "casework.review-accountability-read",
                 "eventId": read_event_id,
                 "accountabilityEventId": record.event_id,
                 "actor": {
@@ -4452,7 +4452,7 @@ impl PostgresStore {
     ) -> Result<ReviewHistoryEntry, ReviewRuntimeError> {
         let mut audit = self
             .begin_audit(crate::audit::request_record(
-                "review_note_added",
+                "review-note-added",
                 Some(actor),
                 &actor.profile_id,
                 json!({"reviewRequestId": request_id}),
@@ -4541,7 +4541,7 @@ impl PostgresStore {
         audit.record(
             entry.event_id,
             json!({
-                "event": "casework.review_note_added",
+                "event": "casework.review-note-added",
                 "eventId": entry.event_id,
                 "actor": {
                     "issuer": actor.principal.issuer,
@@ -4564,7 +4564,7 @@ impl PostgresStore {
         let now = Utc::now();
         let mut audit = self
             .begin_audit(crate::audit::request_record(
-                "task_released",
+                "task-released",
                 Some(actor),
                 &actor.profile_id,
                 json!({}),
@@ -4647,7 +4647,7 @@ impl PostgresStore {
             .execute(
                 "INSERT INTO casework_review_history(
                     event_id,request_id,task_id,kind,actor_ref,detail,occurred_at)
-                 VALUES($1,$2,$3,'task_released',$4,$5,$6)",
+                 VALUES($1,$2,$3,'task-released',$4,$5,$6)",
                 &[
                     &release_event_id,
                     &request_id,
@@ -4667,7 +4667,7 @@ impl PostgresStore {
         audit.record(
             release_event_id,
             json!({
-                "event": "casework.task_released",
+                "event": "casework.task-released",
                 "eventId": release_event_id,
                 "requestId": request_id,
                 "taskId": task_id,
@@ -4704,7 +4704,7 @@ impl PostgresStore {
         let now = Utc::now();
         let mut audit = self
             .begin_audit(crate::audit::request_record(
-                "review_decided",
+                "review-decided",
                 Some(actor),
                 &actor.profile_id,
                 json!({}),
@@ -4931,7 +4931,7 @@ impl PostgresStore {
                     .execute(
                         "INSERT INTO casework_review_history(
                             event_id,request_id,task_id,kind,actor_ref,detail,occurred_at)
-                         VALUES($1,$2,NULL,'stage_advanced',NULL,$3,$4)",
+                         VALUES($1,$2,NULL,'stage-advanced',NULL,$3,$4)",
                         &[
                             &Uuid::new_v4(),
                             &request_id,
@@ -4950,7 +4950,7 @@ impl PostgresStore {
         transaction
             .execute(
                 "INSERT INTO casework_review_history(event_id,request_id,task_id,kind,actor_ref,detail,occurred_at)
-                 VALUES($1,$2,$3,'review_decided',$4,$5,$6)",
+                 VALUES($1,$2,$3,'review-decided',$4,$5,$6)",
                 &[
                     &decision_event_id,
                     &request_id,
@@ -4973,7 +4973,7 @@ impl PostgresStore {
         audit.record(
             decision_event_id,
             json!({
-                "event": "casework.review_decided",
+                "event": "casework.review-decided",
                 "eventId": decision_event_id,
                 "requestId": request_id,
                 "taskId": task_id,
@@ -5039,6 +5039,7 @@ async fn insert_stage_tasks(
     Ok(tasks)
 }
 
+/// The clock a review clock occurrence stored when it started.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ReviewClockDefinition {
@@ -5347,7 +5348,7 @@ async fn insert_review_activity_clock(
                 )
             } else {
                 (
-                    "source_facts_missing",
+                    "source-facts-missing",
                     None,
                     None,
                     None,
@@ -5467,7 +5468,7 @@ async fn settle_review(
         .execute(
             "INSERT INTO casework_review_history(
                 event_id,request_id,task_id,kind,actor_ref,detail,occurred_at)
-             VALUES($1,$2,NULL,'review_settled',NULL,$3,$4)",
+             VALUES($1,$2,NULL,'review-settled',NULL,$3,$4)",
             &[
                 &Uuid::new_v4(),
                 &record.request_id,
@@ -5901,7 +5902,7 @@ async fn load_decisions(
                     reason: row.get::<_, Option<String>>(8),
                     result: row.get(7),
                 },
-                "changes_requested" => ReviewerDecisionKind::ChangesRequested {
+                "changes-requested" => ReviewerDecisionKind::ChangesRequested {
                     outcome: row
                         .get::<_, Option<String>>(6)
                         .ok_or(ReviewRuntimeError::Corrupt)?,
@@ -6097,7 +6098,7 @@ fn review_decision_receipt(
     let decision = match decision {
         "approve" if outcome.is_none() => ReviewDecisionType::Approve,
         "reject" if outcome.is_some() => ReviewDecisionType::Reject,
-        "changes_requested" if outcome.is_some() => ReviewDecisionType::ChangesRequested,
+        "changes-requested" if outcome.is_some() => ReviewDecisionType::ChangesRequested,
         "answer" if outcome.is_some() => ReviewDecisionType::Answer,
         _ => return Err(ReviewRuntimeError::Corrupt),
     };
@@ -6211,7 +6212,7 @@ fn parse_lifecycle(value: &str) -> Result<ReviewRequestLifecycle, ReviewRuntimeE
         "reviewing" => Ok(ReviewRequestLifecycle::Reviewing),
         "approved" => Ok(ReviewRequestLifecycle::Approved),
         "rejected" => Ok(ReviewRequestLifecycle::Rejected),
-        "changes_requested" => Ok(ReviewRequestLifecycle::ChangesRequested),
+        "changes-requested" => Ok(ReviewRequestLifecycle::ChangesRequested),
         "answered" => Ok(ReviewRequestLifecycle::Answered),
         "cancelled" => Ok(ReviewRequestLifecycle::Cancelled),
         "superseded" => Ok(ReviewRequestLifecycle::Superseded),
@@ -6223,7 +6224,7 @@ fn parse_result_status(value: &str) -> Result<ReviewResultStatus, ReviewRuntimeE
     match value {
         "approved" => Ok(ReviewResultStatus::Approved),
         "rejected" => Ok(ReviewResultStatus::Rejected),
-        "changes_requested" => Ok(ReviewResultStatus::ChangesRequested),
+        "changes-requested" => Ok(ReviewResultStatus::ChangesRequested),
         "answered" => Ok(ReviewResultStatus::Answered),
         "cancelled" => Ok(ReviewResultStatus::Cancelled),
         "superseded" => Ok(ReviewResultStatus::Superseded),
@@ -6235,7 +6236,7 @@ fn result_status_name(value: ReviewResultStatus) -> &'static str {
     match value {
         ReviewResultStatus::Approved => "approved",
         ReviewResultStatus::Rejected => "rejected",
-        ReviewResultStatus::ChangesRequested => "changes_requested",
+        ReviewResultStatus::ChangesRequested => "changes-requested",
         ReviewResultStatus::Answered => "answered",
         ReviewResultStatus::Cancelled => "cancelled",
         ReviewResultStatus::Superseded => "superseded",
@@ -6262,7 +6263,7 @@ fn decision_columns(
             reason,
             result,
         } => (
-            "changes_requested",
+            "changes-requested",
             Some(outcome.clone()),
             result.clone(),
             reason.clone(),
@@ -6306,11 +6307,11 @@ fn settlement_columns(
 fn transition_kind(transition: &ReviewTransition) -> &'static str {
     match transition {
         ReviewTransition::Recorded { .. } => "recorded",
-        ReviewTransition::StageAdvanced { .. } => "stage_advanced",
+        ReviewTransition::StageAdvanced { .. } => "stage-advanced",
         ReviewTransition::Settled { settlement } => match settlement {
             ReviewSettlement::Approved => "approved",
             ReviewSettlement::Rejected { .. } => "rejected",
-            ReviewSettlement::ChangesRequested { .. } => "changes_requested",
+            ReviewSettlement::ChangesRequested { .. } => "changes-requested",
             ReviewSettlement::Answered { .. } => "answered",
         },
     }
@@ -6427,7 +6428,7 @@ fn review_clock_from_row(row: &Row) -> Result<ReviewClockOccurrence, ReviewRunti
         "paused" => ReviewClockState::Paused,
         "completed" => ReviewClockState::Completed,
         "cancelled" => ReviewClockState::Cancelled,
-        "source_facts_missing" => ReviewClockState::SourceFactsMissing,
+        "source-facts-missing" => ReviewClockState::SourceFactsMissing,
         _ => return Err(ReviewRuntimeError::Corrupt),
     };
     Ok(ReviewClockOccurrence {

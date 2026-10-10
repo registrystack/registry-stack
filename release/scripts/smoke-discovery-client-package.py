@@ -128,7 +128,7 @@ def main() -> None:
             },
         )
     except client_module.DiscoveryClientError as error:
-        if error.kind != "selection_changed":
+        if error.kind != "selection-changed":
             raise SystemExit(f"unexpected renewal error kind {error.kind!r}") from error
     else:
         raise SystemExit("trust-relevant selection drift must require new acceptance")

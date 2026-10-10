@@ -52,7 +52,8 @@ struct Cli {
 enum Command {
     /// Create a complete Registry Scheduling authoring project in a new directory.
     Init(InitArgs),
-    /// Check every project file offline and print effective defaults.
+    /// Check a project and, with --runtime-config, a runtime file, offline, and
+    /// print effective defaults.
     Check(CheckArgs),
     /// Run every fixture's replay cases offline.
     Test(ProjectArgs),
@@ -87,17 +88,18 @@ struct CheckArgs {
     /// Authored scheduling project directory.
     #[arg(value_name = "PROJECT")]
     project: PathBuf,
-    /// Exit 1 when the check reports any warning.
+    /// Exit 1 when a warning is reported.
     #[arg(long)]
     deny_warnings: bool,
-    /// Runtime configuration to check offline against PROJECT, as scheduling
-    /// serve reads it, with no package, database, network, or secret material
-    /// (package.root is not read; scheduling serve verifies the package at
+    /// Runtime file to check offline against PROJECT, as `scheduling serve`
+    /// reads it, with no package, database, network, or secret material
+    /// (`package.root` is not read; `scheduling serve` verifies the package at
     /// startup).
     #[arg(long, value_name = "FILE")]
     runtime_config: Option<PathBuf>,
-    /// Substitute the runtime file's environment variable expressions from
-    /// this process's environment and check the values they produce.
+    /// Fill `${NAME}` expressions in the runtime file from the process
+    /// environment and check the values they produce. Without it, each
+    /// expression is checked by syntax and position only.
     #[arg(long, requires = "runtime_config")]
     environment: bool,
 }
@@ -416,7 +418,7 @@ fn completed_report(mut report: Value, command: &str, refusal: bool) -> Value {
         } else {
             (
                 "schedulingctl.test.fixtures-failed",
-                "scheduling_project",
+                "scheduling-project",
                 "$.fixtures",
                 "One or more offline synthetic fixture cases failed.",
                 "Correct each failing case under fixtures, or the policy it exercises, then rerun schedulingctl test PROJECT.",
@@ -449,7 +451,7 @@ fn usage_failure(message: String, action: &str) -> Value {
         vec![json!({
             "severity": "error",
             "code": "schedulingctl.usage-invalid",
-            "artifact": "command_arguments",
+            "artifact": "command-arguments",
             "path": "arguments",
             "message": message,
             "suggestedAction": action,
@@ -553,7 +555,7 @@ fn classify_failure(error: &anyhow::Error) -> (u8, Value) {
             json!({
                 "severity": "error",
                 "code": "schedulingctl.runtime-configuration.invalid",
-                "artifact": "runtime_configuration",
+                "artifact": "runtime-configuration",
                 "path": "runtime.yaml",
                 "message": format!("{error:#}"),
                 "suggestedAction": "Correct the runtime configuration the message names, then retry.",
@@ -588,7 +590,7 @@ fn classify_failure(error: &anyhow::Error) -> (u8, Value) {
             json!({
                 "severity": "error",
                 "code": activation::HOOK_DESTINATIONS_CODE,
-                "artifact": "runtime_configuration",
+                "artifact": "runtime-configuration",
                 "path": "destinations.hooks",
                 "message": format!("{error:#}"),
                 "suggestedAction": "Bind every destination the policy hooks name under destinations.hooks, with an hmacSha256KeyRef that resolves to a key of at least 32 bytes, then retry.",
@@ -645,7 +647,7 @@ fn classify_failure(error: &anyhow::Error) -> (u8, Value) {
             json!({
                 "severity": "error",
                 "code": "schedulingctl.refused",
-                "artifact": "scheduling_project",
+                "artifact": "scheduling-project",
                 "path": AUTHORED_POLICY_FILE,
                 "message": format!("{error:#}"),
                 "suggestedAction": "Correct the authored input the message names, then retry.",
@@ -1111,6 +1113,7 @@ mod tests {
         let (exit, diagnostic) = classify_failure(&refused);
         assert_eq!(exit, DOMAIN_REFUSAL_EXIT);
         assert_eq!(diagnostic["code"], activation::HOOK_DESTINATIONS_CODE);
+        assert_eq!(diagnostic["artifact"], "runtime-configuration");
         assert_eq!(diagnostic["path"], "destinations.hooks");
     }
 
@@ -1521,6 +1524,7 @@ mod tests {
             report["diagnostics"][0]["code"],
             "schedulingctl.test.fixtures-failed"
         );
+        assert_eq!(report["diagnostics"][0]["artifact"], "scheduling-project");
         assert_eq!(report["diagnostics"][0]["path"], "$.fixtures");
         let fixtures = report["fixtures"].as_array().unwrap();
         let counter = fixtures
@@ -1601,6 +1605,7 @@ mod tests {
         let report: Value = serde_json::from_slice(&stdout).unwrap();
         assert_eq!(report["command"], "usage");
         let diagnostic = &report["diagnostics"][0];
+        assert_eq!(diagnostic["artifact"], "command-arguments");
         for field in [
             "severity",
             "code",
@@ -1669,7 +1674,7 @@ mod tests {
         assert!(stderr.is_empty());
         let text = String::from_utf8(stdout).unwrap();
         assert!(text.starts_with("Offline synthetic fixtures passed."));
-        assert!(text.contains("proofBoundary: offline_synthetic"));
+        assert!(text.contains("proofBoundary: offline-synthetic"));
         assert!(text.contains("productionClosure: false"));
         assert!(text.contains("networkAccess: false"));
 
@@ -1724,7 +1729,7 @@ mod tests {
         assert_eq!(exit, ExitCode::SUCCESS);
         let help = String::from_utf8(stdout).unwrap().replace("\n  ", " ");
         assert!(
-            help.contains("package.root is not read; scheduling serve verifies the package"),
+            help.contains("`package.root` is not read; `scheduling serve` verifies the package"),
             "{help}"
         );
     }
@@ -1863,7 +1868,13 @@ mod tests {
             diagnostic["code"],
             "schedulingctl.runtime-configuration.invalid"
         );
-        assert_eq!(diagnostic["artifact"], "runtime_configuration");
+        assert_eq!(diagnostic["artifact"], "runtime-configuration");
+
+        let authored_error = anyhow::anyhow!("the authored policy is refused");
+        let (exit, diagnostic) = classify_failure(&authored_error);
+        assert_eq!(exit, DOMAIN_REFUSAL_EXIT);
+        assert_eq!(diagnostic["code"], "schedulingctl.refused");
+        assert_eq!(diagnostic["artifact"], "scheduling-project");
 
         let store_error = anyhow::Error::new(StoreError::Configuration).context("connecting");
         let (exit, diagnostic) = classify_failure(&store_error);

@@ -144,7 +144,7 @@ resourceServer:
   resource: https://gateway.example.test/mcp
   issuer: https://login.example.test
   jwksSource:
-    kind: uri
+    type: uri
     uri: https://login.example.test/jwks.json
   algorithms: [EdDSA, ES256]
   allowedClients: [chat-host]
@@ -195,8 +195,8 @@ number has the bound its schema states: `maximumTokenLifetimeSeconds` 1 to
 10000), `requestsPerMinute` and `burst` 1 to 1000000, and `limits.maximumRequestBytes` 1 to 1048576
 (default 65536). Plain HTTP is accepted only with
 `tlsTermination: development-loopback` on a loopback address. `jwksSource`
-defaults to OIDC discovery; `kind: uri` fetches the configured key set and
-`kind: static` resolves a `documentRef` secret. Network key sources use the
+defaults to OIDC discovery; `type: uri` fetches the configured key set and
+`type: static` resolves a `documentRef` secret. Network key sources use the
 platform's strict URL policy, which refuses a
 loopback, private, or cloud-metadata address before connecting; only under
 `development-loopback` does the development policy also admit plain HTTP to

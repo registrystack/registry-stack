@@ -36,7 +36,7 @@ DEFINITIONS_DOCUMENT = {
     "audience": "urn:example:py-test:audience",
     "issuedBy": "https://issuer.example.test",
     "providedBy": "https://provider.example.test",
-    "holderBoundBatchMaxSize": 4,
+    "maximumHolderBoundBatchSize": 4,
     "definitions": [
         {
             "handle": "status",
@@ -72,7 +72,7 @@ DEFINITIONS_DOCUMENT = {
                     "handle": "status-holds",
                     "concept": "urn:example:py-test:concept:status-holds",
                     "required": True,
-                    "form": "boolean",
+                    "form": {"type": "boolean"},
                 }
             ],
         }
@@ -124,7 +124,7 @@ class DiscoveryTest(unittest.TestCase):
 
         with self.assertRaises(revc.TransportError) as raised:
             self._client(max_metadata_bytes=len(body) - 1).discover()
-        self.assertEqual(raised.exception.transport_kind, "response_too_large")
+        self.assertEqual(raised.exception.transport_kind, "response-too-large")
 
     def test_discover_sends_a_bearer_credential(self):
         self._serve_definitions()

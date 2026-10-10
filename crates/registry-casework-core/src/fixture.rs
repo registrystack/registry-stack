@@ -133,6 +133,15 @@ impl OfflineFileKind {
         }
     }
 
+    /// The format of this kind of file.
+    pub fn format(self) -> &'static FormatSpec<'static> {
+        match self {
+            OfflineFileKind::Fixture => &CASEWORK_FIXTURE_FORMAT,
+            OfflineFileKind::Simulation => &CASEWORK_SIMULATION_FORMAT,
+            OfflineFileKind::HolidaySet => &CASEWORK_HOLIDAY_SET_FORMAT,
+        }
+    }
+
     fn from_kind(kind: &str) -> Option<Self> {
         [
             OfflineFileKind::Fixture,
@@ -163,7 +172,8 @@ pub fn read_offline_file(
     let mut hook = AuthoredOnly;
     let document = Reader::new(file)
         .with_hook(&mut hook)
-        .read(bytes, &Expect::new(&CASEWORK_OFFLINE_FORMATS))?;
+        .read(bytes, &Expect::new(&CASEWORK_OFFLINE_FORMATS))
+        .map_err(|report| refusal_naming_the_header(file, bytes, expected, report))?;
     let found = OfflineFileKind::from_kind(&document.envelope().kind);
     if found != Some(expected) {
         let message = match found {
@@ -193,6 +203,34 @@ pub fn read_offline_file(
             .map(|decoded| OfflineFile::Simulation(Box::new(decoded))),
         OfflineFileKind::HolidaySet => checked(document, CaseworkHolidaySet::findings)
             .map(|decoded| OfflineFile::HolidaySet(Box::new(decoded))),
+    }
+}
+
+/// The refusal of a file that lacks its envelope, naming the header the
+/// file's directory holds. A read that accepts all three formats names all
+/// three headers, so the refusal is taken from a read against the one
+/// format `expected` names, whose suggested action gives the exact
+/// `apiVersion` and `kind` (CFG-DIAG-5).
+fn refusal_naming_the_header(
+    file: &str,
+    bytes: &[u8],
+    expected: OfflineFileKind,
+    report: Report,
+) -> Report {
+    let lacks_envelope = report
+        .diagnostics()
+        .iter()
+        .any(|diagnostic| diagnostic.code == "config.missing-envelope");
+    if !lacks_envelope {
+        return report;
+    }
+    let mut hook = AuthoredOnly;
+    match Reader::new(file)
+        .with_hook(&mut hook)
+        .read(bytes, &Expect::one(expected.format()))
+    {
+        Err(named) => named,
+        Ok(_) => report,
     }
 }
 
@@ -1129,6 +1167,57 @@ kind: CaseworkProject
             panic!("another kind is refused");
         };
         assert_eq!(codes(&report), [("config.wrong-kind", "/kind")]);
+    }
+
+    #[test]
+    fn a_file_with_no_envelope_is_told_the_header_its_directory_holds() {
+        for (file, expected, start) in [
+            (
+                "fixtures/f.yaml",
+                OfflineFileKind::Fixture,
+                "`apiVersion: id.registrystack.org/formats/casework/fixture/v1alpha1` and `kind: CaseworkFixture`",
+            ),
+            (
+                "simulations/s.yaml",
+                OfflineFileKind::Simulation,
+                "`apiVersion: id.registrystack.org/formats/casework/simulation/v1alpha1` and `kind: CaseworkSimulation`",
+            ),
+            (
+                "simulations/holiday-sets/h.yaml",
+                OfflineFileKind::HolidaySet,
+                "`apiVersion: id.registrystack.org/formats/casework/holiday-set/v1alpha1` and `kind: CaseworkHolidaySet`",
+            ),
+        ] {
+            for bytes in ["", "id: example\n"] {
+                let Err(report) = read_offline_file(file, bytes.as_bytes(), expected) else {
+                    panic!("a file with no envelope is refused");
+                };
+                assert_eq!(codes(&report), [("config.missing-envelope", "")]);
+                assert_eq!(
+                    report.diagnostics()[0].suggested_action,
+                    format!("Start the file with {start}.")
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_misplaced_file_with_its_envelope_is_still_told_to_move() {
+        let Err(report) = read_offline_file(
+            "simulations/f.yaml",
+            FIXTURE.as_bytes(),
+            OfflineFileKind::Simulation,
+        ) else {
+            panic!("a fixture under simulations/ is refused");
+        };
+        assert_eq!(
+            codes(&report),
+            [("casework.project.misplaced-file", "/kind")]
+        );
+        assert_eq!(
+            report.diagnostics()[0].suggested_action,
+            "Move the file to fixtures/."
+        );
     }
 
     #[test]

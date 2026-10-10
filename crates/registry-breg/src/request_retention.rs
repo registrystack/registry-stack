@@ -1196,7 +1196,7 @@ async fn count_request_detail_erasure(
                     AND l.entity_id = $1
                     AND l.record_id = $2
                     AND l.link_kind IN
-                        ('request_create','request_patch','request_lifecycle','request_batch')
+                        ('request_create','request_patch','request-lifecycle','request_batch')
                     AND r.snapshot IS NOT NULL),
                 (SELECT count(*) FROM registry_internal.registry_outbox o
                    JOIN registry_internal.registry_revisions r
@@ -1213,7 +1213,7 @@ async fn count_request_detail_erasure(
                     AND l.entity_id = $1
                     AND l.record_id = $2
                     AND l.link_kind IN
-                        ('request_create','request_patch','request_lifecycle','request_batch')
+                        ('request_create','request_patch','request-lifecycle','request_batch')
                     AND o.payload IS NOT NULL),
                 (SELECT count(*) FROM registry_internal.registry_request_applications
                   WHERE request_entity_id = $1
@@ -1462,7 +1462,7 @@ async fn erase_request_detail_in_transaction(
                 AND l.entity_id = $1
                 AND l.record_id = $2
                 AND l.link_kind IN
-                    ('request_create','request_patch','request_lifecycle','request_batch')
+                    ('request_create','request_patch','request-lifecycle','request_batch')
                 AND o.payload IS NOT NULL",
             &[
                 &scope.request_entity_id,
@@ -1487,7 +1487,7 @@ async fn erase_request_detail_in_transaction(
                 AND l.entity_id = $1
                 AND l.record_id = $2
                 AND l.link_kind IN
-                    ('request_create','request_patch','request_lifecycle','request_batch')
+                    ('request_create','request_patch','request-lifecycle','request_batch')
                 AND r.snapshot IS NOT NULL",
             &[
                 &scope.request_entity_id,
@@ -1684,7 +1684,7 @@ fn detail_is_pinned(current_detail: bool, state: &str) -> bool {
 fn retention_mode_name(mode: CompiledChangeRequestRetentionMode) -> &'static str {
     match mode {
         CompiledChangeRequestRetentionMode::Retain => "retain",
-        CompiledChangeRequestRetentionMode::OperatorErase => "operator_erase",
+        CompiledChangeRequestRetentionMode::OperatorErase => "operator-erase",
     }
 }
 

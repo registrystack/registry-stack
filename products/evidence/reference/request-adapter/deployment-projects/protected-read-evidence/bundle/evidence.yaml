@@ -1,11 +1,12 @@
-version: 1
+apiVersion: id.registrystack.org/formats/evidence/bundle/v1
+kind: EvidenceBundle
 assuranceProfile: evidence-grade
 service:
   providerId: urn:gov:example:evidence:residence
   publicOrigin: https://evidence.example.org
   trustDomain: urn:gov:example:trust-domain:social-protection
 issuer:
-  id: urn:gov:example:issuer:residence-authority
+  uri: urn:gov:example:issuer:residence-authority
 # Inbound callers present access tokens from the deployment's operated OIDC
 # issuer. Evidence and the protected registry API verify that issuer under
 # their independently configured resource-server policies.
@@ -16,11 +17,13 @@ authentication:
     tokenTypes: [at+jwt]
     algorithms: [ES256]
     jwksSource:
-      kind: uri
+      type: uri
       uri: https://tokens.gov.example/.well-known/jwks.json
     principalClaim: sub
     requesterTagsClaim: evidence_tags
     evidenceAudienceClaim: evidence_audience
+    allowedClients: unrestricted
+    requiredScopes: unrestricted
     maximumTokenLifetimeSeconds: 300
     revokedKeyIds: []
 audit:
@@ -54,13 +57,13 @@ selectorProfiles:
         maximumBytes: 64
 sources:
   residence-register:
-    transport: http-json
+    type: http-json
     baseUrl: https://registry-api.gov.example
     # The protected read already restricts the response to the fields named in
     # the request, and this deployment's projection keeps only two of them.
     posture: field-projected
     authentication:
-      kind: oauth2-client-credentials
+      type: oauth2-client-credentials
       tokenEndpoint: https://tokens.gov.example/oauth2/token
       clientIdRef: secret:file/registry-api-client-id
       clientSecretRef: secret:file/registry-api-client-secret
@@ -95,9 +98,9 @@ sources:
         - /items/*/domainData/region
         - /pageInfo/nextCursor
       redirects: deny
-      timeoutMilliseconds: 3000
+      attemptTimeoutMilliseconds: 3000
       maximumResponseBytes: 65536
-      concurrencyLimit: 8
+      maximumConcurrency: 8
     # Shape contract for the projected response, checked before extraction runs.
     responseSchema: schemas/residence-region-response.schema.yaml
     extractScript: adapters/residence-region-extract.rhai
@@ -117,10 +120,10 @@ authorityProfiles:
             valueOrigin: request
 requirements:
   - handle: residence-region
-    id: urn:gov:example:requirement:residence-region:v1
+    uri: urn:gov:example:requirement:residence-region:v1
     kind: information-requirement
     acquisition:
-      kind: single
+      type: single
       source: residence-register
     purposes: [residence-verification]
     subjectRoles:
@@ -140,8 +143,8 @@ requirements:
       parameters: {}
     concepts:
       - handle: residence-region
-        id: urn:gov:example:concept:residence-region
-        form: controlled-code
+        uri: urn:gov:example:concept:residence-region
+        type: controlled-code
         required: true
         constraints:
           codelist: codelists/residence-regions.yaml

@@ -23,6 +23,8 @@ pub const MAXIMUM_CLOCK_STEPS: usize = 8;
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CalendarPolicy {
+    #[serde(deserialize_with = "crate::typed::local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
     pub timezone: String,
     #[serde(deserialize_with = "crate::typed::unique_list")]
@@ -61,9 +63,10 @@ impl From<WorkingWeekday> for Weekday {
     }
 }
 
-/// A named clock, chosen by its `scope` member. The shared reader's union
-/// helper decodes it so every error inside a variant keeps its position
-/// (CFG-SCHEMA-8); the wire form is unchanged.
+/// A named clock, chosen by its `type` member (CFG-ID-7). The shared reader's
+/// union helper decodes it so every error inside a variant keeps its position
+/// (CFG-SCHEMA-8). The authored file, the stored record, the digest input, and
+/// the HTTP description all carry this one spelling.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(
@@ -72,9 +75,11 @@ impl From<WorkingWeekday> for Weekday {
     rename_all_fields = "camelCase",
     deny_unknown_fields
 )]
-#[cfg_attr(feature = "schema", schemars(!remote, tag = "scope"))]
+#[cfg_attr(feature = "schema", schemars(!remote, tag = "type"))]
 pub enum ClockPolicy {
     Subject {
+        #[serde(deserialize_with = "crate::typed::local_id")]
+        #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
         id: String,
         anchor: SubjectClockAnchor,
         complete_on: SubjectClockCompletion,
@@ -87,6 +92,8 @@ pub enum ClockPolicy {
         pause_while: Vec<SubjectClockPause>,
     },
     Activity {
+        #[serde(deserialize_with = "crate::typed::local_id")]
+        #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
         id: String,
         anchor: ActivityClockAnchor,
         calendar: String,
@@ -100,14 +107,13 @@ pub enum ClockPolicy {
         steps: Vec<ClockStep>,
     },
 }
-registry_platform_yaml::tagged_union!(ClockPolicy, tag = "scope");
+registry_platform_yaml::tagged_union!(ClockPolicy);
 
-/// The serialized form of [`ClockPolicy`], kept byte-identical to the stored
-/// and published shape.
+/// The serialized form of [`ClockPolicy`]: the shape the reader accepts.
 #[derive(Serialize)]
 #[serde(
-    tag = "scope",
-    rename_all = "snake_case",
+    tag = "type",
+    rename_all = "kebab-case",
     rename_all_fields = "camelCase"
 )]
 enum ClockPolicyWire<'a> {
@@ -188,28 +194,28 @@ impl ClockPolicy {
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "kebab-case")]
 pub enum SubjectClockAnchor {
     FirstSubmittedAt,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "kebab-case")]
 pub enum SubjectClockCompletion {
     ReviewCompleted,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "kebab-case")]
 pub enum SubjectClockPause {
     AwaitingApplicant,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "kebab-case")]
 pub enum ActivityClockAnchor {
     StageEnteredAt,
 }
@@ -242,6 +248,8 @@ pub struct WorkingDaysBefore {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ClockReminder {
+    #[serde(deserialize_with = "crate::typed::local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
     #[serde(deserialize_with = "crate::typed::bounded_u32::<_, 1, MAXIMUM_WORKING_DAY_OFFSET>")]
     #[cfg_attr(
@@ -255,6 +263,8 @@ pub struct ClockReminder {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ClockStep {
+    #[serde(deserialize_with = "crate::typed::local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
     pub because: String,
     pub at: ClockStepInstant,
@@ -453,8 +463,8 @@ pub fn clock_policy_findings(
                     findings.push(
                         "casework.clock.unsupported-pause",
                         format!("{at}/pauseWhile"),
-                        "a subject clock pauses while awaitingApplicant and on nothing else",
-                        "Write pauseWhile: [awaitingApplicant].",
+                        "a subject clock pauses while awaiting-applicant and on nothing else",
+                        "Write pauseWhile: [awaiting-applicant].",
                     );
                 }
             }
@@ -762,14 +772,24 @@ fn valid_identifier(value: &str) -> bool {
     !bytes.is_empty()
         && bytes.len() <= 64
         && bytes[0].is_ascii_lowercase()
-        && bytes[1..]
-            .iter()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'-')
+        && bytes[1..].iter().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(*byte, b'-' | b'_')
+        })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cfg_id_1_an_identifier_follows_the_local_identifier_grammar() {
+        assert!(valid_identifier("first_review-2"));
+        assert!(valid_identifier(&format!("a{}", "b".repeat(63))));
+        for refused in ["", "First", "1st", "_first", "first.review", "first review"] {
+            assert!(!valid_identifier(refused));
+        }
+        assert!(!valid_identifier(&format!("a{}", "b".repeat(64))));
+    }
 
     fn instant(value: &str) -> DateTime<Utc> {
         DateTime::parse_from_rfc3339(value)
@@ -919,23 +939,35 @@ mod tests {
     fn clock_authoring_contract_is_closed_and_uses_the_documented_names() {
         let subject = read_clock(
             r#"id: response-budget
-scope: subject
-anchor: firstSubmittedAt
-completeOn: reviewCompleted
+type: subject
+anchor: first-submitted-at
+completeOn: review-completed
 after: {elapsed: PT48H}
-pauseWhile: [awaitingApplicant]
+pauseWhile: [awaiting-applicant]
 "#,
         )
         .expect("documented subject clock");
         assert!(matches!(subject, ClockPolicy::Subject { .. }));
 
+        let activity = read_clock(
+            r#"id: review-deadline
+type: activity
+anchor: stage-entered-at
+calendar: office
+after: {workingDays: 5}
+dueTime: "17:00"
+"#,
+        )
+        .expect("documented activity clock");
+        assert!(matches!(activity, ClockPolicy::Activity { .. }));
+
         let refused = read_clock(
             r#"id: response-budget
-scope: subject
-anchor: firstSubmittedAt
-completeOn: reviewCompleted
+type: subject
+anchor: first-submitted-at
+completeOn: review-completed
 after: {elapsed: PT48H}
-pauseWhile: [awaitingApplicant]
+pauseWhile: [awaiting-applicant]
 invented: true
 "#,
         )
@@ -944,5 +976,82 @@ invented: true
         assert_eq!(diagnostics.len(), 1);
         assert_eq!(diagnostics[0].code, "config.unknown-key");
         assert_eq!(diagnostics[0].path, "/invented");
+    }
+
+    const SUBJECT_CLOCK: &str = r#"id: response-budget
+type: subject
+anchor: first-submitted-at
+completeOn: review-completed
+after: {elapsed: PT48H}
+pauseWhile: [awaiting-applicant]
+"#;
+
+    #[test]
+    fn cfg_name_2_each_previous_clock_value_is_refused_and_the_current_one_named() {
+        for (current, previous, pointer) in [
+            (
+                "anchor: first-submitted-at",
+                "anchor: firstSubmittedAt",
+                "/anchor",
+            ),
+            (
+                "completeOn: review-completed",
+                "completeOn: reviewCompleted",
+                "/completeOn",
+            ),
+            (
+                "[awaiting-applicant]",
+                "[awaitingApplicant]",
+                "/pauseWhile/0",
+            ),
+        ] {
+            let authored = SUBJECT_CLOCK.replacen(current, previous, 1);
+            assert_ne!(authored, SUBJECT_CLOCK);
+            let report = read_clock(&authored).expect_err("the previous spelling is refused");
+            let diagnostics = report.diagnostics();
+            assert_eq!(diagnostics.len(), 1, "{pointer}");
+            assert_eq!(diagnostics[0].code, "config.unknown-variant");
+            assert_eq!(diagnostics[0].path, pointer);
+            let named = current.rsplit(' ').next().unwrap().trim_matches(['[', ']']);
+            assert!(
+                diagnostics[0].message.contains(named)
+                    || diagnostics[0].suggested_action.contains(named),
+                "{pointer} names {named}"
+            );
+        }
+        let report = read_clock(
+            r#"id: review-deadline
+type: activity
+anchor: stageEnteredAt
+calendar: office
+after: {workingDays: 5}
+dueTime: "17:00"
+"#,
+        )
+        .expect_err("the previous spelling is refused");
+        let diagnostics = report.diagnostics();
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].code, "config.unknown-variant");
+        assert_eq!(diagnostics[0].path, "/anchor");
+        assert!(
+            diagnostics[0].message.contains("stage-entered-at")
+                || diagnostics[0].suggested_action.contains("stage-entered-at")
+        );
+    }
+
+    #[test]
+    fn a_clock_is_written_in_the_spelling_it_is_read_in() {
+        let subject = read_clock(SUBJECT_CLOCK).expect("subject clock");
+        assert_eq!(
+            serde_json::to_value(&subject).expect("clock serializes"),
+            serde_json::json!({
+                "id": "response-budget",
+                "type": "subject",
+                "anchor": "first-submitted-at",
+                "completeOn": "review-completed",
+                "after": {"elapsed": "PT48H"},
+                "pauseWhile": ["awaiting-applicant"],
+            })
+        );
     }
 }

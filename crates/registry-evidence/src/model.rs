@@ -162,7 +162,7 @@ pub struct EvidenceDefinitions {
     /// Effective deployment ceiling for one holder-bound batch. Discovery
     /// publishes the bundle's configured value so a delivery adapter cannot
     /// advertise the wider compile-time request ceiling by mistake.
-    pub holder_bound_batch_max_size: u16,
+    pub maximum_holder_bound_batch_size: u16,
     pub definitions: Vec<EvidenceDefinition>,
 }
 
@@ -218,40 +218,30 @@ pub struct EvidenceDefinitionConcept {
     pub form: EvidenceDefinitionForm,
 }
 
-/// Verification-ready output form. Scalar forms serialize as a string; list
-/// forms carry the item kind and exact cardinality policy.
+/// Verification-ready output form: a mapping whose `type` member names it.
+/// Only the list form has members of its own, the item kind and the exact
+/// cardinality policy, written beside `type`.
 #[derive(Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema, ToSchema)]
-#[serde(untagged)]
+#[serde(
+    tag = "type",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
 pub enum EvidenceDefinitionForm {
-    Scalar(EvidenceDefinitionScalarForm),
-    List(EvidenceDefinitionListForm),
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema, ToSchema)]
-#[serde(rename_all = "kebab-case")]
-pub enum EvidenceDefinitionScalarForm {
-    Boolean,
-    Integer,
-    String,
-    DateBucket,
-    TimeBucket,
-    EntityReference,
-    Structured,
-}
-
-#[derive(Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema, ToSchema)]
-#[serde(deny_unknown_fields)]
-pub struct EvidenceDefinitionListForm {
-    pub list: EvidenceDefinitionList,
-}
-
-#[derive(Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema, ToSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct EvidenceDefinitionList {
-    pub items: EvidenceDefinitionListItemForm,
-    pub minimum_items: u64,
-    pub maximum_items: u64,
-    pub unique: bool,
+    Boolean {},
+    Integer {},
+    String {},
+    DateBucket {},
+    TimeBucket {},
+    EntityReference {},
+    Structured {},
+    List {
+        items: EvidenceDefinitionListItemForm,
+        minimum_items: u64,
+        maximum_items: u64,
+        unique: bool,
+    },
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema, ToSchema)]
@@ -562,7 +552,7 @@ mod tests {
             audience: "protected-discovery-audience-canary".to_owned(),
             issued_by: "protected-discovery-issuer-canary".to_owned(),
             provided_by: "protected-discovery-provider-canary".to_owned(),
-            holder_bound_batch_max_size: 4,
+            maximum_holder_bound_batch_size: 4,
             definitions: vec![EvidenceDefinition {
                 handle: "protected-discovery-handle-canary".to_owned(),
                 requirement: "protected-discovery-requirement-canary".to_owned(),

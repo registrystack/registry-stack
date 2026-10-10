@@ -289,58 +289,149 @@
           "form": {
             "oneOf": [
               {
-                "enum": [
-                  "boolean",
-                  "integer",
-                  "string",
-                  "date-bucket",
-                  "time-bucket",
-                  "entity-reference",
-                  "structured"
+                "additionalProperties": false,
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "boolean"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type"
                 ],
-                "type": "string"
+                "type": "object"
               },
               {
                 "additionalProperties": false,
                 "properties": {
-                  "list": {
-                    "additionalProperties": false,
-                    "properties": {
-                      "items": {
-                        "enum": [
-                          "string",
-                          "entity-reference"
-                        ],
-                        "type": "string"
-                      },
-                      "maximumItems": {
-                        "maximum": 64,
-                        "minimum": 1,
-                        "type": "integer"
-                      },
-                      "minimumItems": {
-                        "maximum": 64,
-                        "minimum": 1,
-                        "type": "integer"
-                      },
-                      "unique": {
-                        "enum": [
-                          true
-                        ],
-                        "type": "boolean"
-                      }
-                    },
-                    "required": [
-                      "items",
-                      "minimumItems",
-                      "maximumItems",
-                      "unique"
+                  "type": {
+                    "enum": [
+                      "integer"
                     ],
-                    "type": "object"
+                    "type": "string"
                   }
                 },
                 "required": [
-                  "list"
+                  "type"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "string"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "date-bucket"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "time-bucket"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "entity-reference"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "structured"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "items": {
+                    "enum": [
+                      "string",
+                      "entity-reference"
+                    ],
+                    "type": "string"
+                  },
+                  "maximumItems": {
+                    "maximum": 64,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "minimumItems": {
+                    "maximum": 64,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "type": {
+                    "enum": [
+                      "list"
+                    ],
+                    "type": "string"
+                  },
+                  "unique": {
+                    "enum": [
+                      true
+                    ],
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "type",
+                  "items",
+                  "minimumItems",
+                  "maximumItems",
+                  "unique"
                 ],
                 "type": "object"
               }
@@ -442,16 +533,16 @@
             "type": "array",
             "uniqueItems": true
           },
-          "holderBoundBatchMaxSize": {
-            "description": "The effective deployment ceiling for one holder-bound batch. A protocol adapter may advertise no larger batch than this value.",
-            "maximum": 16,
-            "minimum": 1,
-            "type": "integer"
-          },
           "issuedBy": {
             "format": "uri",
             "maxLength": 512,
             "type": "string"
+          },
+          "maximumHolderBoundBatchSize": {
+            "description": "The effective deployment ceiling for one holder-bound batch. A protocol adapter may advertise no larger batch than this value.",
+            "maximum": 16,
+            "minimum": 1,
+            "type": "integer"
           },
           "providedBy": {
             "format": "uri",
@@ -471,7 +562,7 @@
           "audience",
           "issuedBy",
           "providedBy",
-          "holderBoundBatchMaxSize",
+          "maximumHolderBoundBatchSize",
           "definitions"
         ],
         "title": "Requester-scoped Evidence definitions Version 1",
@@ -728,7 +819,7 @@
         "properties": {
           "result": {
             "enum": [
-              "evidence_not_available"
+              "evidence-not-available"
             ],
             "type": "string"
           }
@@ -1105,7 +1196,7 @@
             "properties": {
               "code": {
                 "enum": [
-                  "evidence.invalid_request"
+                  "evidence.invalid-request"
                 ],
                 "type": "string"
               },
@@ -1129,7 +1220,7 @@
               },
               "type": {
                 "enum": [
-                  "https://id.registrystack.org/problems/registry-evidence/evidence/invalid_request"
+                  "https://id.registrystack.org/problems/registry-evidence/evidence/invalid-request"
                 ],
                 "type": "string"
               }
@@ -1139,7 +1230,7 @@
             "properties": {
               "code": {
                 "enum": [
-                  "request.selector_invalid"
+                  "request.selector-invalid"
                 ],
                 "type": "string"
               },
@@ -1163,7 +1254,7 @@
               },
               "type": {
                 "enum": [
-                  "https://id.registrystack.org/problems/registry-evidence/request/selector_invalid"
+                  "https://id.registrystack.org/problems/registry-evidence/request/selector-invalid"
                 ],
                 "type": "string"
               }
@@ -1173,7 +1264,7 @@
             "properties": {
               "code": {
                 "enum": [
-                  "auth.invalid_credential"
+                  "auth.invalid-credential"
                 ],
                 "type": "string"
               },
@@ -1197,7 +1288,7 @@
               },
               "type": {
                 "enum": [
-                  "https://id.registrystack.org/problems/registry-evidence/auth/invalid_credential"
+                  "https://id.registrystack.org/problems/registry-evidence/auth/invalid-credential"
                 ],
                 "type": "string"
               }
@@ -1309,7 +1400,7 @@
             "properties": {
               "code": {
                 "enum": [
-                  "evidence.rate_limited"
+                  "evidence.rate-limited"
                 ],
                 "type": "string"
               },
@@ -1333,7 +1424,7 @@
               },
               "type": {
                 "enum": [
-                  "https://id.registrystack.org/problems/registry-evidence/evidence/rate_limited"
+                  "https://id.registrystack.org/problems/registry-evidence/evidence/rate-limited"
                 ],
                 "type": "string"
               }
@@ -1411,7 +1502,7 @@
             "properties": {
               "code": {
                 "enum": [
-                  "resource.not_found"
+                  "resource.not-found"
                 ],
                 "type": "string"
               },
@@ -1435,7 +1526,7 @@
               },
               "type": {
                 "enum": [
-                  "https://id.registrystack.org/problems/registry-evidence/resource/not_found"
+                  "https://id.registrystack.org/problems/registry-evidence/resource/not-found"
                 ],
                 "type": "string"
               }
@@ -1445,16 +1536,16 @@
         "properties": {
           "code": {
             "enum": [
-              "evidence.invalid_request",
-              "request.selector_invalid",
-              "auth.invalid_credential",
+              "evidence.invalid-request",
+              "request.selector-invalid",
+              "auth.invalid-credential",
               "evidence.denied",
               "format.unsupported",
               "evidence.unavailable",
-              "evidence.rate_limited",
+              "evidence.rate-limited",
               "source.unavailable",
               "service.unavailable",
-              "resource.not_found"
+              "resource.not-found"
             ],
             "type": "string"
           },
@@ -1507,16 +1598,16 @@
           },
           "type": {
             "enum": [
-              "https://id.registrystack.org/problems/registry-evidence/evidence/invalid_request",
-              "https://id.registrystack.org/problems/registry-evidence/request/selector_invalid",
-              "https://id.registrystack.org/problems/registry-evidence/auth/invalid_credential",
+              "https://id.registrystack.org/problems/registry-evidence/evidence/invalid-request",
+              "https://id.registrystack.org/problems/registry-evidence/request/selector-invalid",
+              "https://id.registrystack.org/problems/registry-evidence/auth/invalid-credential",
               "https://id.registrystack.org/problems/registry-evidence/evidence/denied",
               "https://id.registrystack.org/problems/registry-evidence/format/unsupported",
               "https://id.registrystack.org/problems/registry-evidence/evidence/unavailable",
-              "https://id.registrystack.org/problems/registry-evidence/evidence/rate_limited",
+              "https://id.registrystack.org/problems/registry-evidence/evidence/rate-limited",
               "https://id.registrystack.org/problems/registry-evidence/source/unavailable",
               "https://id.registrystack.org/problems/registry-evidence/service/unavailable",
-              "https://id.registrystack.org/problems/registry-evidence/resource/not_found"
+              "https://id.registrystack.org/problems/registry-evidence/resource/not-found"
             ],
             "type": "string"
           }
@@ -2444,7 +2535,7 @@
                           "properties": {
                             "code": {
                               "enum": [
-                                "evidence.invalid_request"
+                                "evidence.invalid-request"
                               ],
                               "type": "string"
                             },
@@ -2468,7 +2559,7 @@
                             },
                             "type": {
                               "enum": [
-                                "https://id.registrystack.org/problems/registry-evidence/evidence/invalid_request"
+                                "https://id.registrystack.org/problems/registry-evidence/evidence/invalid-request"
                               ],
                               "type": "string"
                             }
@@ -2486,7 +2577,7 @@
                           "properties": {
                             "code": {
                               "enum": [
-                                "request.selector_invalid"
+                                "request.selector-invalid"
                               ],
                               "type": "string"
                             },
@@ -2510,7 +2601,7 @@
                             },
                             "type": {
                               "enum": [
-                                "https://id.registrystack.org/problems/registry-evidence/request/selector_invalid"
+                                "https://id.registrystack.org/problems/registry-evidence/request/selector-invalid"
                               ],
                               "type": "string"
                             }
@@ -2564,7 +2655,7 @@
                       "properties": {
                         "code": {
                           "enum": [
-                            "auth.invalid_credential"
+                            "auth.invalid-credential"
                           ],
                           "type": "string"
                         },
@@ -2588,7 +2679,7 @@
                         },
                         "type": {
                           "enum": [
-                            "https://id.registrystack.org/problems/registry-evidence/auth/invalid_credential"
+                            "https://id.registrystack.org/problems/registry-evidence/auth/invalid-credential"
                           ],
                           "type": "string"
                         }
@@ -2874,7 +2965,7 @@
                       "properties": {
                         "code": {
                           "enum": [
-                            "evidence.rate_limited"
+                            "evidence.rate-limited"
                           ],
                           "type": "string"
                         },
@@ -2898,7 +2989,7 @@
                         },
                         "type": {
                           "enum": [
-                            "https://id.registrystack.org/problems/registry-evidence/evidence/rate_limited"
+                            "https://id.registrystack.org/problems/registry-evidence/evidence/rate-limited"
                           ],
                           "type": "string"
                         }
@@ -3121,7 +3212,7 @@
                       "properties": {
                         "code": {
                           "enum": [
-                            "evidence.invalid_request"
+                            "evidence.invalid-request"
                           ],
                           "type": "string"
                         },
@@ -3145,7 +3236,7 @@
                         },
                         "type": {
                           "enum": [
-                            "https://id.registrystack.org/problems/registry-evidence/evidence/invalid_request"
+                            "https://id.registrystack.org/problems/registry-evidence/evidence/invalid-request"
                           ],
                           "type": "string"
                         }
@@ -3188,7 +3279,7 @@
                       "properties": {
                         "code": {
                           "enum": [
-                            "auth.invalid_credential"
+                            "auth.invalid-credential"
                           ],
                           "type": "string"
                         },
@@ -3212,7 +3303,7 @@
                         },
                         "type": {
                           "enum": [
-                            "https://id.registrystack.org/problems/registry-evidence/auth/invalid_credential"
+                            "https://id.registrystack.org/problems/registry-evidence/auth/invalid-credential"
                           ],
                           "type": "string"
                         }
@@ -3261,7 +3352,7 @@
                       "properties": {
                         "code": {
                           "enum": [
-                            "evidence.rate_limited"
+                            "evidence.rate-limited"
                           ],
                           "type": "string"
                         },
@@ -3285,7 +3376,7 @@
                         },
                         "type": {
                           "enum": [
-                            "https://id.registrystack.org/problems/registry-evidence/evidence/rate_limited"
+                            "https://id.registrystack.org/problems/registry-evidence/evidence/rate-limited"
                           ],
                           "type": "string"
                         }
@@ -3466,7 +3557,7 @@
                           "properties": {
                             "code": {
                               "enum": [
-                                "evidence.invalid_request"
+                                "evidence.invalid-request"
                               ],
                               "type": "string"
                             },
@@ -3490,7 +3581,7 @@
                             },
                             "type": {
                               "enum": [
-                                "https://id.registrystack.org/problems/registry-evidence/evidence/invalid_request"
+                                "https://id.registrystack.org/problems/registry-evidence/evidence/invalid-request"
                               ],
                               "type": "string"
                             }
@@ -3508,7 +3599,7 @@
                           "properties": {
                             "code": {
                               "enum": [
-                                "request.selector_invalid"
+                                "request.selector-invalid"
                               ],
                               "type": "string"
                             },
@@ -3532,7 +3623,7 @@
                             },
                             "type": {
                               "enum": [
-                                "https://id.registrystack.org/problems/registry-evidence/request/selector_invalid"
+                                "https://id.registrystack.org/problems/registry-evidence/request/selector-invalid"
                               ],
                               "type": "string"
                             }
@@ -3586,7 +3677,7 @@
                       "properties": {
                         "code": {
                           "enum": [
-                            "auth.invalid_credential"
+                            "auth.invalid-credential"
                           ],
                           "type": "string"
                         },
@@ -3610,7 +3701,7 @@
                         },
                         "type": {
                           "enum": [
-                            "https://id.registrystack.org/problems/registry-evidence/auth/invalid_credential"
+                            "https://id.registrystack.org/problems/registry-evidence/auth/invalid-credential"
                           ],
                           "type": "string"
                         }
@@ -3820,7 +3911,7 @@
                       "properties": {
                         "code": {
                           "enum": [
-                            "evidence.rate_limited"
+                            "evidence.rate-limited"
                           ],
                           "type": "string"
                         },
@@ -3844,7 +3935,7 @@
                         },
                         "type": {
                           "enum": [
-                            "https://id.registrystack.org/problems/registry-evidence/evidence/rate_limited"
+                            "https://id.registrystack.org/problems/registry-evidence/evidence/rate-limited"
                           ],
                           "type": "string"
                         }

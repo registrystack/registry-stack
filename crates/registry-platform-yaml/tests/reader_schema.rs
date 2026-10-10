@@ -106,6 +106,40 @@ fn cfg_id_1_identifier_and_value_types_state_their_grammar() {
 }
 
 #[test]
+fn cfg_val_7_the_url_pattern_and_the_reader_refuse_the_same_characters() {
+    let schema = schema::<Limits>();
+    let url = property(&schema, "url");
+    let pattern = regex::Regex::new(url["pattern"].as_str().unwrap()).unwrap();
+    // Every whitespace and control character is below U+10000; the three
+    // above it stand for the rest.
+    let characters = (char::MIN..='\u{FFFF}').chain(['\u{10000}', '\u{E0001}', char::MAX]);
+    for character in characters {
+        let code = u32::from(character);
+        // After the authority the reader refuses a character only for being
+        // whitespace or a control character, so the two agree on every one.
+        let text = format!("https://a.example/x{character}y");
+        assert_eq!(
+            pattern.is_match(&text),
+            Url::new(text.as_str()).is_ok(),
+            "U+{code:04X} in the path"
+        );
+        if character.is_whitespace() || character.is_control() {
+            for (place, text) in [
+                ("before the scheme", format!("{character}https://a.example")),
+                ("in the scheme", format!("ht{character}tps://a.example")),
+                ("in the host", format!("https://a{character}.example")),
+                ("in the query", format!("https://a.example?x={character}")),
+                ("in the fragment", format!("https://a.example#x{character}")),
+                ("at the end", format!("https://a.example{character}")),
+            ] {
+                assert!(!pattern.is_match(&text), "U+{code:04X} {place}");
+                assert!(Url::new(text).is_err(), "U+{code:04X} {place}");
+            }
+        }
+    }
+}
+
+#[test]
 fn cfg_id_1_the_project_identity_is_closed() {
     let schema = schema::<ProjectIdentity>();
     assert_eq!(schema["additionalProperties"], false);

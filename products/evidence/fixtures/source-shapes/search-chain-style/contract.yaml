@@ -45,10 +45,10 @@ stages:
     role: search
     responses: responses/search
     validated_source_definition:
-      transport: http-json
+      type: http-json
       baseUrl: http://127.0.0.3:18084
       posture: record-transformed
-      authentication: {kind: static-authorization, tokenRef: secret:file/fixture-search-chain-search-token}
+      authentication: {type: static-authorization, tokenRef: secret:file/fixture-search-chain-search-token}
       request:
         method: POST
         path: /registry/records/search
@@ -75,9 +75,9 @@ stages:
           - /results/*/declaration/subject.reference
           - /results/*/declaration/subject.origin/code
         redirects: deny
-        timeoutMilliseconds: 3000
+        attemptTimeoutMilliseconds: 3000
         maximumResponseBytes: 65536
-        concurrencyLimit: 4
+        maximumConcurrency: 4
       responseSchema: schemas/search-response.schema.yaml
       extractScript: adapters/search.rhai
       factSchema: schemas/search-facts.schema.yaml
@@ -104,11 +104,11 @@ stages:
     fact_inputs: [subject_reference]
     responses: responses/member-dereference
     validated_source_definition:
-      transport: http-json
+      type: http-json
       baseUrl: http://127.0.0.3:18084
       posture: record-transformed
       authentication:
-        kind: oauth2-client-credentials
+        type: oauth2-client-credentials
         tokenEndpoint: http://127.0.0.3:18084/oauth/token
         clientIdRef: secret:file/fixture-search-chain-client-id
         clientSecretRef: secret:file/fixture-search-chain-client-secret
@@ -118,9 +118,9 @@ stages:
         assumedLifetimeSeconds: 600
       request:
         method: GET
-        pathTemplate: /registry/records/{record}
+        path: /registry/records/{record}
         pathBindings:
-          record: {from: prior-fact, field: subject_reference}
+          record: {type: prior-fact, field: subject_reference}
         fixedHeaders:
           - {name: Accept, value: application/json}
         selectorInputs: []
@@ -141,9 +141,9 @@ stages:
           - /matched
           - /record/status.setCompleteness
         redirects: deny
-        timeoutMilliseconds: 3000
+        attemptTimeoutMilliseconds: 3000
         maximumResponseBytes: 65536
-        concurrencyLimit: 4
+        maximumConcurrency: 4
       responseSchema: schemas/member-dereference-response.schema.yaml
       extractScript: adapters/member-dereference.rhai
       factSchema: schemas/member-dereference-facts.schema.yaml
@@ -164,10 +164,10 @@ stages:
     fact_inputs: [subject_reference]
     responses: responses/member-count
     validated_source_definition:
-      transport: http-json
+      type: http-json
       baseUrl: http://127.0.0.3:18084
       posture: record-transformed
-      authentication: {kind: static-authorization, tokenRef: secret:file/fixture-search-chain-relations-token}
+      authentication: {type: static-authorization, tokenRef: secret:file/fixture-search-chain-relations-token}
       request:
         method: POST
         path: /registry/relations/search
@@ -191,9 +191,9 @@ stages:
           - /total
           - /results/*/holder.relatedTotal
         redirects: deny
-        timeoutMilliseconds: 3000
+        attemptTimeoutMilliseconds: 3000
         maximumResponseBytes: 65536
-        concurrencyLimit: 4
+        maximumConcurrency: 4
       responseSchema: schemas/member-count-response.schema.yaml
       extractScript: adapters/member-count.rhai
       factSchema: schemas/member-count-facts.schema.yaml

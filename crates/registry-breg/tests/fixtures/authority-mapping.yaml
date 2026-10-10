@@ -1,6 +1,6 @@
-apiVersion: registry.registrystack.org/v1alpha1
-kind: RegistryProject
-registry: {id: authority-mapping, version: "1", defaultLanguage: en, canonicalBaseIri: https://authority.example.test}
+apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project: {id: authority-mapping, version: "1", defaultLanguage: en, canonicalBaseIri: https://authority.example.test}
 entities:
   - id: asset
     primaryDataset: test-dataset
@@ -9,12 +9,12 @@ entities:
     changeControl: {requiredFor: [patch]}
     classification: internal
     fields:
-      - {id: label, type: string, maxLength: 32, required: true, classification: internal}
+      - {id: label, type: string, maximumLength: 32, required: true, classification: internal}
     selectorProfiles:
       - id: label
         fields: [label]
     constraints:
-      - {kind: unique, fields: [label]}
+      - {type: unique, fields: [label]}
   - id: correction
     primaryDataset: test-dataset
     route: corrections
@@ -22,7 +22,7 @@ entities:
     classification: internal
     fields:
       - {id: asset, type: reference, target: asset, required: true, classification: internal}
-      - {id: label, type: string, maxLength: 32, required: true, classification: internal}
+      - {id: label, type: string, maximumLength: 32, required: true, classification: internal}
     changeRequest:
       effects:
         - id: relabel
@@ -30,6 +30,7 @@ entities:
           operation: patch
           set: {label: {fromField: label}}
       review:
+        type: required
         authority: casework-main
         policyId: correction-review
       onApproved: {mode: manual}
@@ -39,26 +40,28 @@ accessProfiles:
     principalClaim: registry_principal
     requiredScopes: unrestricted
     permissions:
-      - entity: asset
-        operations: [get, lookup]
-        readableFields: [label]
-        rowBoundaries: unrestricted
-        lookups:
-          - selector: label
-            valueOrigin: verified_claim
-            claimMapping: {label: lookup_label}
-        requestPresence:
-          - requestType: correction
-            rowBoundaries: [{field: label, claim: presence_label, operator: equals}]
+      entities:
+        - entity: asset
+          operations: [get, lookup]
+          readableFields: [label]
+          rowBoundaries: unrestricted
+          lookups:
+            - selector: label
+              valueOrigin: verified-claim
+              claimMapping: {label: lookup_label}
+          requestPresence:
+            - requestType: correction
+              rowBoundaries: [{field: label, claim: presence_label, operator: equals}]
   - id: reviewer
     default: true
     principalClaim: registry_principal
     requiredScopes: unrestricted
     permissions:
-      - entity: correction
-        operations: [get, submit_request, apply_request]
-        readableFields: [asset, label]
-        rowBoundaries: unrestricted
-        applyTargets:
-          - entity: asset
-            rowBoundaries: [{field: label, claim: apply_label, operator: equals}]
+      entities:
+        - entity: correction
+          operations: [get, submit-request, apply-request]
+          readableFields: [asset, label]
+          rowBoundaries: unrestricted
+          applyTargets:
+            - entity: asset
+              rowBoundaries: [{field: label, claim: apply_label, operator: equals}]

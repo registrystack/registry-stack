@@ -145,7 +145,7 @@ pub struct CompiledStatisticalDataset {
 #[serde(
     deny_unknown_fields,
     tag = "kind",
-    rename_all = "snake_case",
+    rename_all = "kebab-case",
     rename_all_fields = "camelCase"
 )]
 pub enum CompiledStatisticalPeriod {
@@ -165,7 +165,7 @@ pub enum CompiledStatisticalPeriod {
 #[serde(
     deny_unknown_fields,
     tag = "kind",
-    rename_all = "snake_case",
+    rename_all = "kebab-case",
     rename_all_fields = "camelCase"
 )]
 pub enum CompiledStatisticalValidity {
@@ -186,7 +186,7 @@ pub struct CompiledStatisticalDimension {
 #[serde(
     deny_unknown_fields,
     tag = "kind",
-    rename_all = "snake_case",
+    rename_all = "kebab-case",
     rename_all_fields = "camelCase"
 )]
 pub enum CompiledStatisticalDimensionDomain {
@@ -277,10 +277,10 @@ impl CompiledChangeRequest {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(untagged)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case", tag = "type")]
 pub enum CompiledChangeRequestReview {
     Required(CompiledChangeRequestReviewRequirement),
-    None(CompiledChangeRequestNoReview),
+    None,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -288,18 +288,6 @@ pub enum CompiledChangeRequestReview {
 pub struct CompiledChangeRequestReviewRequirement {
     pub authority: String,
     pub policy_id: String,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct CompiledChangeRequestNoReview {
-    pub mode: CompiledChangeRequestNoReviewMode,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CompiledChangeRequestNoReviewMode {
-    None,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
@@ -311,7 +299,7 @@ pub struct CompiledChangeRequestOnApproved {
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub enum CompiledChangeRequestOnApprovedMode {
     #[default]
     Manual,
@@ -368,7 +356,7 @@ pub struct CompiledChangeRequestPredicate {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "snake_case", tag = "kind")]
+#[serde(deny_unknown_fields, rename_all = "kebab-case", tag = "kind")]
 pub enum CompiledChangeRequestPredicateExpected {
     Literal {
         value: serde_json::Value,
@@ -388,7 +376,7 @@ pub enum CompiledChangeRequestPredicateExpected {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub enum CompiledCurrentDateRelation {
     OnOrAfter,
     OnOrBefore,
@@ -410,7 +398,7 @@ pub struct CompiledChangeRequestEvidenceSubject {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "snake_case", tag = "source")]
+#[serde(deny_unknown_fields, rename_all = "kebab-case", tag = "type")]
 pub enum CompiledChangeRequestSelector {
     RequestField { field: String },
     TargetField { target: String, field: String },
@@ -424,7 +412,7 @@ pub struct CompiledChangeRequestEvidenceRequirement {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "snake_case", tag = "kind")]
+#[serde(deny_unknown_fields, rename_all = "kebab-case", tag = "kind")]
 pub enum CompiledChangeRequestEvidenceExpected {
     Literal { value: serde_json::Value },
     RequestField { field: String },
@@ -450,7 +438,7 @@ pub struct CompiledChangeRequestPlanner {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub enum CompiledChangeRequestPlannerKind {
     Rhai,
 }
@@ -488,7 +476,7 @@ pub struct CompiledChangeRequestPlannerLimits {
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub enum CompiledChangeRequestRetentionMode {
     #[default]
     Retain,
@@ -513,14 +501,14 @@ pub struct CompiledChangeRequestTarget {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase", tag = "kind")]
+#[serde(deny_unknown_fields, rename_all = "kebab-case", tag = "kind")]
 pub enum CompiledChangeRequestTargetBinding {
     Existing { from_field: String },
     ReservedCreate { effect: String },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase", tag = "kind")]
+#[serde(deny_unknown_fields, rename_all = "kebab-case", tag = "kind")]
 pub enum CompiledChangeRequestMutation {
     Set {
         field: String,
@@ -532,7 +520,7 @@ pub enum CompiledChangeRequestMutation {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase", tag = "kind")]
+#[serde(deny_unknown_fields, rename_all = "kebab-case", tag = "kind")]
 pub enum CompiledChangeRequestValue {
     FromField {
         field: String,
@@ -544,7 +532,7 @@ pub enum CompiledChangeRequestValue {
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub enum ChangeRequestOperation {
     SubmitRequest,
     ReviseRequest,
@@ -654,7 +642,7 @@ pub struct CompiledActionRequirement {
 /// build with the `wasm` feature compiles and executes WASM handlers; a build
 /// without it refuses them at compile time.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub enum CompiledActionHandlerKind {
     Rhai,
     Wasm,
@@ -723,14 +711,14 @@ pub struct CompiledActionTarget {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase", tag = "kind")]
+#[serde(deny_unknown_fields, rename_all = "kebab-case", tag = "kind")]
 pub enum CompiledActionTargetBinding {
     Create,
     Existing { input: String },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase", tag = "kind")]
+#[serde(deny_unknown_fields, rename_all = "kebab-case", tag = "kind")]
 pub enum CompiledActionMutation {
     Set {
         field: String,
@@ -742,7 +730,7 @@ pub enum CompiledActionMutation {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase", tag = "kind")]
+#[serde(deny_unknown_fields, rename_all = "kebab-case", tag = "kind")]
 pub enum CompiledActionValue {
     Literal {
         value: serde_json::Value,
@@ -757,7 +745,7 @@ pub enum CompiledActionValue {
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub enum ActionRouteKind {
     Invoke,
     TargetConditions,
@@ -846,7 +834,7 @@ pub struct CompiledActionTargetUse {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase", tag = "kind")]
+#[serde(deny_unknown_fields, rename_all = "kebab-case", tag = "kind")]
 pub enum CompiledActionTargetUseSource {
     Effect { effect: String },
     Input { input: String },
@@ -870,7 +858,8 @@ pub struct CompiledConsentRecord {
     pub revokes: BTreeSet<String>,
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub refusals: BTreeSet<String>,
-    pub max_duration: CompiledConsentDuration,
+    /// The longest a give lasts, in whole days of 24 hours.
+    pub maximum_duration_days: u32,
 }
 
 impl CompiledConsentRecord {
@@ -883,21 +872,6 @@ impl CompiledConsentRecord {
             .cloned()
             .collect()
     }
-}
-
-/// A parsed ISO 8601 duration. Components are kept apart so PostgreSQL adds
-/// calendar months and years the way the adopter wrote them.
-#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct CompiledConsentDuration {
-    pub iso: String,
-    pub years: u32,
-    pub months: u32,
-    pub weeks: u32,
-    pub days: u32,
-    pub hours: u32,
-    pub minutes: u32,
-    pub seconds: u32,
 }
 
 /// One consent check of one gated profile.
@@ -993,7 +967,7 @@ pub(crate) fn leading_field_indexed(
 
 /// Whether a list read path can use an index leading with `field`. Beyond
 /// [`leading_field_indexed`], a unique constraint scoped to exactly
-/// `when: [active_lifecycle]` counts on an entity without a change request,
+/// `when: [active-lifecycle]` counts on an entity without a change request,
 /// because every select policy there already requires
 /// `record_lifecycle = 'active'`. A change request's select policy also
 /// admits tombstoned rows, and a reference index needs whole-table coverage
@@ -1301,7 +1275,7 @@ impl CompiledEventDelivery {
 /// reviewed program and runs it in the post-commit worker, so a local kind
 /// binds no destination and sends nothing.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub enum CompiledHookHandlerKind {
     Rhai,
     Wasm,
@@ -1342,13 +1316,13 @@ pub struct CompiledHookHandler {
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub enum CompiledWebhookDeliveryMode {
     AfterCommit,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub enum CompiledWebhookRetryProfile {
     RegistryV1,
 }
@@ -1363,7 +1337,7 @@ pub struct CompiledEventDeliveryInventory {
 pub const MAX_REVISION_HISTORY_RECORDS: u16 = 100;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub enum CompiledRevisionKind {
     List,
     Detail,
@@ -1416,7 +1390,7 @@ pub struct CompiledMetadataInventory {
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub enum CompiledQueryKind {
     List,
     Current,
@@ -1425,7 +1399,7 @@ pub enum CompiledQueryKind {
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub enum CompiledQueryFilterOperator {
     Equals,
     In,
@@ -1437,7 +1411,7 @@ pub enum CompiledQueryFilterOperator {
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub enum CompiledQuerySortDirection {
     Asc,
 }
@@ -1466,14 +1440,14 @@ pub struct CompiledQueryTemporalBinding {
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub enum CompiledQueryTemporalValueKind {
     Date,
     Timestamp,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub enum CompiledQueryTemporalSemantics {
     StartInclusiveEndExclusive,
 }

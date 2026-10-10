@@ -120,10 +120,10 @@ export type MessagingProblemCode =
   | 'template.locale-unavailable'
   | 'template.not-found'
   | 'template.render-refused'
-export type MessagingProtocolFailure = 'header_bounds' | 'trace_context' | 'media_type' | 'body' | 'problem' | 'status' | 'protocol'
+export type MessagingProtocolFailure = 'header-bounds' | 'trace-context' | 'media-type' | 'body' | 'problem' | 'status' | 'protocol'
 
 export class MessagingClientError extends Error {
-  readonly kind: 'configuration' | 'invalid_request' | 'transport' | 'problem' | 'protocol'
+  readonly kind: 'configuration' | 'invalid-request' | 'transport' | 'problem' | 'protocol'
   /**
    * Whether the request may have taken effect although this error was
    * raised: a timeout or broken exchange after sending, an unusable answer,

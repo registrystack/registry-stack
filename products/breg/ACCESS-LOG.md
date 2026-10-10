@@ -30,13 +30,13 @@ entities:
     fields:
       - id: citizen-id
         type: string
-        minLength: 1
-        maxLength: 128
+        minimumLength: 1
+        maximumLength: 128
         required: true
         classification: restricted
       - id: display-name
         type: string
-        maxLength: 200
+        maximumLength: 200
         required: true
         classification: restricted
     accessLog:
@@ -51,7 +51,7 @@ entities:
 
 `subjectField` names the entity field compared with the subject's verified
 principal when the subject retrieves the log. It must be a required,
-plaintext, stored `string` or `text` field with `maxLength` no greater than
+plaintext, stored `string` or `text` field with `maximumLength` no greater than
 512. A subject uses an authenticated access profile that currently grants
 `get` for the record, and BReg returns the access log only when the verified
 principal selected by that profile's `principalClaim` exactly equals the

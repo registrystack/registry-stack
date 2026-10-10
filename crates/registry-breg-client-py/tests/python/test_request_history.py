@@ -126,7 +126,7 @@ class RequestHistoryTests(unittest.TestCase):
         for value in candidates:
             with self.assertRaises(BaseRegistryClientError) as raised:
                 self.client.request_history(copy.deepcopy(value))
-            self.assertEqual(raised.exception.kind, "invalid_request")
+            self.assertEqual(raised.exception.kind, "invalid-request")
 
 
 if __name__ == "__main__":

@@ -14,7 +14,7 @@ an `apiVersion` and `kind` and is checked against its command-specific schema.
 
 ## Standalone unified reviews
 
-Create the source-free starter, then inspect its effective configuration:
+Create the source-free starter, then check and test it:
 
 ```sh
 caseworkctl init ./casework --template standalone-decision
@@ -22,10 +22,12 @@ caseworkctl check ./casework
 caseworkctl test ./casework
 ```
 
-Check reports `complete` or `incomplete` with field-addressed findings. Test
+Check reports `complete` or `incomplete` with field-addressed findings, and
+names the project and the profile it read; `caseworkctl check ./casework
+--format json` carries the effective configuration it resolved. Test
 repeats that authoring status and can still run the bounded synthetic fixtures
 while authoring is incomplete. A passing fixture report has the
-`offline_synthetic` proof boundary and `productionClosure: false`; it does not
+`offline-synthetic` proof boundary and `productionClosure: false`; it does not
 establish source reachability or deployment readiness.
 
 The maintained authored form is
@@ -114,7 +116,7 @@ value-free and may add the paired
 rejected values.
 
 Human reviewers use `/v1/review-tasks` to list, read, claim, assign, delegate,
-release, draft, and decide work. Its optional `ownership=assigned_to_me` filter
+release, draft, and decide work. Its optional `ownership=assigned-to-me` filter
 selects tasks held by the caller's effective issuer-qualified principal,
 including a delegated holding. `ownership=unclaimed` selects open tasks.
 Omitting `ownership` preserves the complete eligible active-task view. Casework
@@ -123,7 +125,7 @@ membership, served queue, pinned deciding profile, and source visibility. The
 filter grants no authority.
 
 ```text
-GET /v1/review-tasks?ownership=assigned_to_me&limit=50
+GET /v1/review-tasks?ownership=assigned-to-me&limit=50
 GET /v1/review-tasks?ownership=unclaimed&queue=decisions&limit=50
 ```
 
@@ -309,7 +311,7 @@ current Staff holder can delegate it. Casework resolves
 active absence cover at mutation time and records the assignment owner, acting
 person, and traversed absence ids. If the chain ends without an eligible staff
 member, the item remains open in its serving queue with
-`staffingDiagnostic: no_cover_available`; this staffing state is returned on
+`staffingDiagnostic: no-cover-available`; this staffing state is returned on
 the item rather than as a problem response. A source-backed item requires
 `Registry-Source-Profile`. Unified review-task assignment and delegation use
 the `/v1/review-tasks/{taskId}` routes and apply the same current membership,
@@ -323,7 +325,7 @@ Casework profile, optional source profile, and exact movement. Apply accepts 1
 through 100 distinct reviewed item ids with their expected revisions and one
 `Idempotency-Key`; it has no global
 `If-Match`. Each selection is processed atomically and returns `moved`,
-`not_visible`, `not_eligible`, `attempt_in_progress`, or `conflict`, so one
+`not-visible`, `not-eligible`, `attempt-in-progress`, or `conflict`, so one
 item cannot turn an undisclosed or stale item into a request-wide disclosure.
 
 ## Authored routing and clocks
@@ -342,7 +344,7 @@ The first matching rule wins, and the request's queue remains the fallback.
 `caseworkctl source add` validates projected logical field ids and predicate
 values against source-owned field schemas. Its generated BReg reader retains
 only `get` and `list`. The record reference is always readable; only the exact
-configured projection fields and `review_state` are added to request reads.
+configured projection fields and `review-state` are added to request reads.
 Lifecycle event projection remains record-only. Projection supplies bounded
 routing facts to Casework. It does not grant display, mutation, decision, or
 application authority to a Casework caller.
@@ -355,10 +357,10 @@ and the selected sort. Unified review tasks use their own bounded task list and
 do not participate in source work-item selectors or sorts.
 
 `GET /v1/work-items/next` returns the same `WorkItemPage` envelope with at most
-one item. Empty `complete` and `budget_exhausted` pages are successful `200`
+one item. Empty `complete` and `budget-exhausted` pages are successful `200`
 responses and retain `servedQueues`; callers follow `nextCursor` when present.
 Source discovery alone does not issue a cursor. If a source-backed page reports
-`budget_exhausted` without a cursor, retry the query without a cursor after
+`budget-exhausted` without a cursor, retry the query without a cursor after
 reconciliation. The retried walk starts from the first position and can return
 items earlier pages already returned: deduplicate work items by `itemId`, and
 replace holdings totals instead of adding to them. A caller serving no queue
@@ -367,7 +369,7 @@ An empty view over a source reconciled within the larger of twice its
 `reconciliationIntervalMilliseconds` and 2 minutes stays complete, and its
 successful availability probe does not requeue source subjects or clear
 completeness. Once that window has passed, the probe requeues the subjects it
-finds and the view reports `budget_exhausted` until reconciliation completes.
+finds and the view reports `budget-exhausted` until reconciliation completes.
 Its opaque cursor is bound to the actor, both selected profiles, optional queue,
 the next-item feed, and fixed `due` ordering.
 
@@ -375,8 +377,8 @@ the next-item feed, and fixed `due` ordering.
 calendar declares an IANA timezone, one or more distinct working weekdays, and
 a holiday-set id. Holiday dates and their immutable revision are supplied as a
 separate live document; they are not embedded in deployed policy. A subject
-clock uses `firstSubmittedAt`, completes on `reviewCompleted`, and pauses only
-while `awaitingApplicant`. An activity clock uses `stageEnteredAt`, a calendar,
+clock uses `first-submitted-at`, completes on `review-completed`, and pauses only
+while `awaiting-applicant`. An activity clock uses `stage-entered-at`, a calendar,
 1 through 3650 working days, a local `HH:MM` due time, and optional at-risk,
 reminder, and due-step policies. Each reminder and at-risk offset selects an
 earlier working date at the same local due time. The due-date count excludes
@@ -428,9 +430,9 @@ revision, and controlled fixtures. Run its offline checks with:
 caseworkctl check products/casework/examples/multi-stage-routing-clocks
 caseworkctl explain products/casework/examples/multi-stage-routing-clocks
 caseworkctl simulate products/casework/examples/multi-stage-routing-clocks \
-  --fixture products/casework/examples/multi-stage-routing-clocks/simulations/friday-review.yaml
+  --simulation products/casework/examples/multi-stage-routing-clocks/simulations/friday-review.yaml
 caseworkctl simulate products/casework/examples/multi-stage-routing-clocks \
-  --fixture products/casework/examples/multi-stage-routing-clocks/simulations/resubmitted-response.yaml
+  --simulation products/casework/examples/multi-stage-routing-clocks/simulations/resubmitted-response.yaml
 caseworkctl test products/casework/examples/multi-stage-routing-clocks
 caseworkctl package products/casework/examples/multi-stage-routing-clocks \
   --output ./casework-policy-package
@@ -467,7 +469,7 @@ that meets them while a later stage exists advances the stage; both return the
 request to `reviewing`, and the report carries them as their own edges.
 
 Which decision outcome a given review reaches, one of `approved`, `rejected`,
-`changes_requested`, or `answered`, is a policy decision, made by the project's
+`changes-requested`, or `answered`, is a policy decision, made by the project's
 stages, quorum, and exclusions. The other two terminal states are not policy
 decisions: `cancelled` is the requester withdrawing their own request, and
 `superseded` is applied automatically to a request still in `reviewing` when
@@ -515,14 +517,15 @@ revision other than its pin, naming the same commands.
 A source may declare up to 32 request entities from one register. `source add`
 pairs every declared entity in one pass: each gets its own lifecycle hook,
 `casework-lifecycle-v1-<entity>`, and its own permission on the shared
-`casework-reader` profile. A source with one entity imports a
-`casework-source-description/v1alpha1` description with a single `request`;
-several entities import `v1alpha2` with a `requests` array in
-declaration order. Requests that share a review authority must agree on its
-producer admission.
+`casework-reader` profile. The imported description carries the header
+`apiVersion: id.registrystack.org/formats/casework/breg-source-description/v1alpha1`
+and `kind: CaseworkBregSourceDescription`, and lists every paired entity in a
+`requests` array in declaration order, one entry for a source with one
+entity. Requests that share a review authority must agree on its producer
+admission.
 
-`check` and `test` are offline. Check prints effective inbox limits and the
-passive target default. When source metadata has been imported, it checks the
+`check` and `test` are offline. Check's `--format json` report carries
+effective inbox limits and the passive target default. When source metadata has been imported, it checks the
 Casework approval policy, producer admission, routing field schemas, and selected
 application contract. Test evaluates maintained synthetic fixtures against the
 same effective inputs.
@@ -610,7 +613,7 @@ Directory setup is an ordinary authenticated Administrator API call;
 administrator status does not grant BReg review or application authority.
 
 The `casework` runtime configuration uses `apiVersion:
-registry.registrystack.org/casework-runtime/v1alpha1` and `kind:
+id.registrystack.org/formats/casework/runtime/v1alpha1` and `kind:
 CaseworkRuntimeConfig`. Its package, file-secret, and audit paths are absolute.
 Each provider is explicitly enabled. A `secret:env/NAME` reference resolves
 only when `secretProviders.environment: {}` is also declared. The maintained
@@ -686,7 +689,7 @@ deployment is air-gapped, or when a test issuer's keys are pinned by hand:
 authentication:
   oidc:
     jwksSource:
-      kind: static
+      type: static
       documentRef: secret:file/jwks.json
 ```
 
@@ -747,7 +750,7 @@ confirmed the outcome. Only an uncertain attempt whose execution lease has
 expired can be settled. `not-applied` refuses the attempt and returns the work
 item to its holder; `applied` completes the attempt without a source receipt and
 leaves the work item synchronizing until the next source observation. Apply
-records an `attempt_settled` history event with the attempt, binding reference,
+records an `attempt-settled` history event with the attempt, binding reference,
 operation, outcome, reason, and decider, and no actor, in the same transaction
 as the state change. The command makes no BReg call.
 
@@ -757,7 +760,7 @@ cannot, `caseworkctl attempt mark-uncertain PROJECT [--runtime-config FILE]
 uncertain under the same migration database authority, and `--apply` records
 it. Only a pending attempt whose execution lease has expired can be marked.
 Apply rotates the execution token to fence the original executor, leaves the
-work item synchronizing, and records an `attempt_uncertain` history event with
+work item synchronizing, and records an `attempt-uncertain` history event with
 no actor whose detail carries the attempt, binding reference, operation,
 `operatorReason`, `decidedBy`, `originalActor`, and `originalProfileId`. The
 marking decides no source outcome and makes no BReg call; settle the attempt

@@ -79,11 +79,8 @@ impl EvidenceSourceConfig {
         trusted_keys_are_usable(&self.trusted_jwks).map_err(|_| invalid())?;
         revoked_key_ids_are_usable(&self.revoked_key_ids).map_err(|_| invalid())?;
         if request.method != HttpMethod::POST
-            || request.path_template.is_some()
-            || !request
-                .path
-                .as_deref()
-                .is_some_and(|path| path.ends_with("/v1/evidence"))
+            || request.path_is_template()
+            || !request.path.ends_with("/v1/evidence")
             || request.preparation_limits.query != PreparationChannelPolicy::Forbidden
             || request.preparation_limits.json_body != PreparationChannelPolicy::Required
             || request

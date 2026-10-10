@@ -76,7 +76,7 @@ pub const JOURNEYS_FORMAT: FormatSpec<'static> = FormatSpec {
         api_versions: &[ApiVersion::current(JOURNEYS_API_VERSION)],
         retired_api_versions: &[RetiredApiVersion {
             api_version: "registry.registrystack.org/breg-journeys/v1",
-            replacement: "Start the file with `apiVersion: id.registrystack.org/formats/breg/journeys/v1` and `kind: BRegJourneys`, write each request's `operation: <form>` as `type: <form>` in kebab case (`submit_request` becomes `submit-request`), and rename `recordRef`, `etagRef`, `proposalVersionRef`, `effectDigestRef`, and `conditionRef`, including the `recordRef` marker inside request data, to `recordCapture`, `etagCapture`, `proposalVersionCapture`, `effectDigestCapture`, and `conditionCapture`.",
+            replacement: "Start the file with `apiVersion: id.registrystack.org/formats/breg/journeys/v1` and `kind: BRegJourneys`, write each request's `operation: <form>` as `type: <form>` in kebab case (`submit-request` becomes `submit-request`), and rename `recordRef`, `etagRef`, `proposalVersionRef`, `effectDigestRef`, and `conditionRef`, including the `recordRef` marker inside request data, to `recordCapture`, `etagCapture`, `proposalVersionCapture`, `effectDigestCapture`, and `conditionCapture`.",
         }],
     },
     removed_keys: &[
@@ -584,7 +584,7 @@ impl ActionSource {
             Self::ReadPath { path, .. } => format!("path.{path}"),
             Self::Patch { .. } => "patch".to_owned(),
             Self::Batch { .. } => "batch".to_owned(),
-            Self::TargetConditions { .. } => "target_conditions".to_owned(),
+            Self::TargetConditions { .. } => "target-conditions".to_owned(),
             Self::Invoke { .. } => "invoke".to_owned(),
             Self::SubmitRequest { .. } => "request.submit".to_owned(),
             Self::ReviseRequest { .. } => "request.revise".to_owned(),
@@ -1251,7 +1251,7 @@ pub fn validate_fixture_journeys(
                         .iter()
                         .find(|grant| grant.profile_id == step.access_profile)
                         .ok_or(FixtureError::LogicalReferenceRefused)?;
-                    let profile = action_profile_from_grant(grant);
+                    let profile = action_profile_from_grant(grant)?;
                     validate_claims(&step.claims, &profile, step.expect.outcome)?;
                     validate_immediate_action_fields(
                         &step.request,
@@ -1662,11 +1662,10 @@ fn validate_claims(
     profile: &AccessProfileSource,
     outcome: ExpectedOutcome,
 ) -> Result<(), FixtureError> {
-    if profile.principal_claim.is_none()
-        || claims
-            .principal
-            .as_deref()
-            .is_none_or(|value| value.is_empty() || value.len() > MAX_BINDING_BYTES)
+    if claims
+        .principal
+        .as_deref()
+        .is_none_or(|value| value.is_empty() || value.len() > MAX_BINDING_BYTES)
         || !claims
             .scopes
             .iter()
@@ -1728,14 +1727,22 @@ fn immediate_action_route_kind(action: &ActionSource) -> Result<ActionRouteKind,
     }
 }
 
-fn action_profile_from_grant(grant: &CompiledActionPermission) -> AccessProfileSource {
-    AccessProfileSource {
+/// A compiled action permission that names no principal claim is refused: a
+/// fixture never stands in for a caller the registry could not identify.
+fn action_profile_from_grant(
+    grant: &CompiledActionPermission,
+) -> Result<AccessProfileSource, FixtureError> {
+    let principal_claim = grant
+        .principal_claim
+        .clone()
+        .ok_or(FixtureError::AuthorityWideningRefused)?;
+    Ok(AccessProfileSource {
         id: grant.profile_id.clone(),
         default: grant.default,
         actor_kind: grant.actor_kind,
         requester_clients: grant.requester_clients.clone().into(),
         task_grant: None,
-        principal_claim: grant.principal_claim.clone(),
+        principal_claim,
         required_scopes: grant.required_scopes.clone().into(),
         required_purposes: grant.required_purposes.clone().into(),
         operations: grant.operations.clone().into(),
@@ -1762,7 +1769,7 @@ fn action_profile_from_grant(grant: &CompiledActionPermission) -> AccessProfileS
         revision_access: false,
         provenance_fields: Vec::new(),
         allow_data_export: false,
-    }
+    })
 }
 
 fn validate_immediate_action_fields(
@@ -3888,7 +3895,7 @@ fn assert_exact_claims(
     scopes: &BTreeSet<String>,
 ) -> Result<(), FixtureError> {
     if scopes != &claims.scope_set()
-        || mapped.principal_claim() != profile.principal_claim.as_deref()
+        || mapped.principal_claim() != Some(profile.principal_claim.as_str())
         || mapped.principal() != claims.principal.as_deref()
         || mapped.purpose() != claims.purpose.as_deref()
     {
@@ -4397,10 +4404,10 @@ fn captured_request_action_if_match(
 
 fn request_action_name(action: &ActionSource) -> Result<&'static str, FixtureError> {
     match action {
-        ActionSource::SubmitRequest { .. } => Ok("submit_request"),
-        ActionSource::ReviseRequest { .. } => Ok("revise_request"),
-        ActionSource::CancelRequest { .. } => Ok("cancel_request"),
-        ActionSource::ApplyRequest { .. } => Ok("apply_request"),
+        ActionSource::SubmitRequest { .. } => Ok("submit-request"),
+        ActionSource::ReviseRequest { .. } => Ok("revise-request"),
+        ActionSource::CancelRequest { .. } => Ok("cancel-request"),
+        ActionSource::ApplyRequest { .. } => Ok("apply-request"),
         _ => Err(FixtureError::RequestConstructionRefused),
     }
 }
@@ -5041,14 +5048,10 @@ fn assert_request_proposal_shape(value: &Value) -> Result<(), FixtureError> {
         .get("review")
         .and_then(Value::as_object)
         .ok_or(FixtureError::ResponseShapeRefused)?;
-    if review.get("mode").and_then(Value::as_str) == Some("none") {
-        if review.len() == 1 {
-            return Ok(());
-        }
-        return Err(FixtureError::ResponseShapeRefused);
-    }
-    if review.len() != 2 {
-        return Err(FixtureError::ResponseShapeRefused);
+    match review.get("type").and_then(Value::as_str) {
+        Some("none") if review.len() == 1 => return Ok(()),
+        Some("required") if review.len() == 3 => {}
+        _ => return Err(FixtureError::ResponseShapeRefused),
     }
     let authority = review
         .get("authority")
@@ -7661,6 +7664,7 @@ journeys:
             .and_then(|project| project.remove("entities"))
             .expect("planner project has entities");
         let module_value = json!({
+            "apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule",
             "id": "person-module",
             "version": "0.1.0",
             "entities": entities,
@@ -8476,7 +8480,7 @@ journeys:
         let profile: AccessProfileSource = serde_json::from_value(json!({
             "id": "submitter",
             "principalClaim": "principal",
-            "operations": ["submit_request"],
+            "operations": ["submit-request"],
             "rowBoundaries": []
         }))
         .expect("test profile parses");
@@ -8524,7 +8528,7 @@ journeys:
                             "proposalVersion": 1,
                             "effectDigest": null,
                             "actions": [{
-                                "operation": "submit_request",
+                                "operation": "submit-request",
                                 "href": "/v1/records/requests/123e4567-e89b-12d3-a456-426614174000/actions/submit",
                                 "ifMatch": "\"breg-action-submit\""
                             }]
@@ -8674,7 +8678,7 @@ journeys:
         let profile: AccessProfileSource = serde_json::from_value(json!({
             "id": "submitter",
             "principalClaim": "principal",
-            "operations": ["submit_request"],
+            "operations": ["submit-request"],
             "rowBoundaries": []
         }))
         .expect("test profile parses");

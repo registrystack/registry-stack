@@ -9,8 +9,11 @@ The HTTP contract does not change. The public policy view, the appointment
 and hold documents, and the Rust, Node.js, and Python clients keep
 `maxRecipients`, `minutesBefore`, and `schedulingId`.
 
+The items of this fragment were written as each change was made, and where
+two of them disagree about a spelling or a diagnostic code, the one further
+down states what v0.40.0 reads and reports.
+
 ## BREAKING: the authored files are read by the shared configuration reader
-<!-- upgrade: scheduling-reader-refusals -->
 
 `scheduling.yaml`, `records.yaml`, and every fixture are read through the
 reader every Registry Stack product shares, wherever Scheduling reads them:
@@ -55,7 +58,6 @@ runtime file was already read by the shared reader.
   `*.yaml`.
 
 ## BREAKING: `scheduling.yaml` is a `SchedulingProject`
-<!-- upgrade: scheduling-project-keys, scheduling-project-version-and-channels -->
 
 Each old spelling is refused at its position as `config.removed-key`, and
 the message names its replacement; the old `apiVersion` is refused as
@@ -95,7 +97,6 @@ first line of every file it creates, and
 fixture, and runtime schemas for an editor.
 
 ## BREAKING: `records.yaml` and fixtures carry their own envelopes
-<!-- upgrade: scheduling-records-envelope, scheduling-fixture-keys, scheduling-fixture-policy-revision -->
 
 | Old spelling | New spelling | Migration |
 |---|---|---|
@@ -120,7 +121,6 @@ fixture names that is not a Scheduling problem code is refused at
 `/cases/N/expect/code`.
 
 ## BREAKING: the runtime file's keys and apiVersion are renamed
-<!-- upgrade: scheduling-runtime-keys, scheduling-runtime-null-members -->
 
 The `scheduling` runtime and every `schedulingctl` command that reads a
 runtime file (`check --runtime-config`, `plan`, `apply`, `status`, `records
@@ -146,7 +146,6 @@ The editor schema for the runtime file is published at
 `https://id.registrystack.org/schemas/scheduling/runtime/runtime.v1alpha1.schema.json`.
 
 ## BREAKING: runtime refusals carry their own codes and JSON Pointers
-<!-- upgrade: no-file -->
 
 `scheduling serve` prints `scheduling: the Scheduling runtime configuration
 was refused` and then every rule the runtime file breaks, in the shared
@@ -196,14 +195,12 @@ and pointer from the error:
 | the static OIDC signing keys could not be read | `scheduling.runtime.unreadable-jwks-secret` | `/authentication/oidc/jwksSource/documentRef` |
 
 ## BREAKING: `authentication.oidc.assertionIssuers: {}` is refused
-<!-- upgrade: scheduling-empty-assertion-issuers -->
 
 | Before | Now | Migration |
 |---|---|---|
 | `authentication.oidc.assertionIssuers: {}`, which applied no assertion-issuer rule | `config.invalid-value` at `/authentication/oidc/assertionIssuers` | Delete the member: omitting it applies no assertion-issuer rule. |
 
 ## BREAKING: Rust API
-<!-- upgrade: no-file -->
 
 `registry-scheduling`:
 
@@ -242,7 +239,6 @@ and pointer from the error:
   by `SchedulingPolicy::hook_declarations`.
 
 ## BREAKING: `schedulingctl check`, `test`, and their reports
-<!-- upgrade: no-file -->
 
 - A finding is an error: `check` exits 1 when it reports one, where a
   finding that was not a malformed value exited 0 with `status: incomplete`.
@@ -290,7 +286,6 @@ and pointer from the error:
   clean, 1 refused, 2 usage, 3 a file it needs could not be read.
 
 ## BREAKING: a repeated `id` is `config.duplicate-id`
-<!-- upgrade: scheduling-duplicate-id -->
 
 A repeated `id` in `services`, `offerings`, `holidaySets`, `openings`, or
 `hooks` of `scheduling.yaml`, or in `locations`, `pools`, `windows`, or
@@ -310,21 +305,22 @@ Migration: a script that matched the old code on an `id` path matches
 `id`.
 
 ## BREAKING: `authentication.oidc.allowedClients` is required in every file
-<!-- upgrade: scheduling-allowed-clients-required -->
 
-An omitted `allowedClients` and `allowedClients: []` are refused with
-`scheduling.runtime.allowed-clients-required` at
-`/authentication/oidc/allowedClients`, in every mode. Development loopback
-accepted both before, which admitted every client the issuer verifies; a
-development file copied toward production kept doing so. The generated
-runtime schema requires the member with at least one item.
+An omitted `allowedClients` and `allowedClients: []` are refused in every
+mode when the file is read: the omission as `config.missing-key` at
+`/authentication/oidc`, the empty list as `config.invalid-value` at
+`/authentication/oidc/allowedClients`. Development loopback accepted both
+before, which admitted every client the issuer verifies; a development file
+copied toward production kept doing so. The generated runtime schema requires
+the member with at least one item.
 
 Migration: add the member and list the client ids the deployment admits, for
 example `allowedClients: [scheduling-booking-agent]`. The shared
-`unrestricted` keyword is not accepted here.
+`unrestricted` keyword is not accepted here: it is refused with
+`scheduling.runtime.allowed-clients-required` at
+`/authentication/oidc/allowedClients`, in every mode.
 
 ## BREAKING: a database an earlier release wrote is not read
-<!-- upgrade: scheduling-database-restart -->
 
 The active policy, published windows, and environment records are retained
 in the database in the shape of the authored files, so a database an
@@ -336,3 +332,199 @@ Scheduling database written by v0.39.0: the product has no production
 deployment yet, so the operator-facing step is a restart. Migration: start
 from a new database, then run `schedulingctl apply` and `schedulingctl
 records apply` with the migrated files.
+
+## BREAKING: Protocol words
+
+Every word Scheduling itself defines and writes where something outside the
+process reads it follows the value convention the authored files follow:
+lowercase kebab-case, and each segment of a dotted identifier the same. The
+problem codes, appointment and hold states, hook event identifiers, task
+grant actions, and outbox states already did. The words below did not. Each
+old spelling is no longer written and is not read, and no file an operator
+writes changes. The hook delivery tables store five of these words: see
+"Stored hook delivery words" below.
+
+Hook delivery audit records (`event: scheduling.hook-delivery` under
+`registry-scheduling-audit/v1`). Migration: a query, alert, or report that
+matches one of these words in the audit file matches the new spelling for
+records written from this release on. Records already written keep the
+spelling they were written with and are never rewritten.
+
+| Member | Was | Now |
+|---|---|---|
+| `outcome` | `attempt_started` | `attempt-started` |
+| `outcome` | `destination_resolution_refused` | `destination-resolution-refused` |
+| `outcome` | `destination_transport_unavailable` | `destination-transport-unavailable` |
+| `outcome` | `payload_expired` | `payload-expired` |
+| `outcome` | `replay_requested` | `replay-requested` |
+| `outcome` | `replay_committed` | `replay-committed` |
+| `outcome` | `replay_refused` | `replay-refused` |
+| `outcome` | `replay_unfinished` | `replay-unfinished` |
+| `outcome` | `discard_requested` | `discard-requested` |
+| `outcome` | `discard_committed` | `discard-committed` |
+| `outcome` | `discard_refused` | `discard-refused` |
+| `outcome` | `discard_unfinished` | `discard-unfinished` |
+| `outcome` | `http_non_success` | `http-non-success` |
+| `outcome` | `destination_timeout` | `destination-timeout` |
+| `outcome` | `destination_policy_refused` | `destination-policy-refused` |
+| `outcome` | `destination_binding_refused` | `destination-binding-refused` |
+| `outcome` | `handler_binding_refused` | `handler-binding-refused` |
+| `outcome` | `handler_deadline` | `handler-deadline` |
+| `outcome` | `handler_resource` | `handler-resource` |
+| `outcome` | `handler_execution` | `handler-execution` |
+| `outcome` | `handler_source` | `handler-source` |
+| `outcome` | `handler_unavailable` | `handler-unavailable` |
+| `outcome` | `payload_refused` | `payload-refused` |
+| `outcome` | `worker_interrupted` | `worker-interrupted` |
+| `disposition` | `discard_pending` | `discard-pending` |
+| `disposition` | `retry_pending` | `retry-pending` |
+| `disposition` | `dead_lettered` | `dead-lettered` |
+| `disposition` | `replay_pending` | `replay-pending` |
+
+The `outcome` word `delivered` and the `disposition` words `leased`,
+`delivered`, `expired`, `discarded`, and `unknown` are single words and are
+unchanged.
+
+Stored hook delivery words. The delivery tables in the Scheduling schema
+store words the shared hook delivery crate defines, and they are spelled in
+kebab-case too. The old spellings are not read and no constraint accepts
+one.
+
+| Table and column | Was | Now |
+|---|---|---|
+| `registry_webhook_deliveries.authentication_profile` | `hmac_sha256_v1` | `hmac-sha256-v1` |
+| `registry_webhook_deliveries.delivery_mode` | `after_commit` | `after-commit` |
+| `registry_webhook_delivery_state.state` | `dead_lettered` | `dead-lettered` |
+| `registry_webhook_delivery_state.proposal_disposition` | `dead_lettered` | `dead-lettered` |
+| `registry_webhook_delivery_state.dead_letter_reason` | each of the 36 reasons, with underscores (`worker_interrupted`) | the same reason with hyphens (`worker-interrupted`) |
+
+Migration: no schema version rewrites a stored delivery word. v0.40.0 does
+not upgrade v0.39.0 state in place; apply to a new database. A query, alert,
+or dashboard that matches one of these words in SQL matches the new
+spelling.
+
+The refusal code retained with a delivery whose destination answered with a
+proposal, column `proposal_code` of `registry_webhook_delivery_state`, is
+`scheduling.hook.proposal-unsupported`; it was
+`scheduling.hook.proposal_unsupported`. The column is bounded free text that
+Scheduling never reads back and no constraint covers.
+
+`schedulingctl` reports, in `--format json` and in the text form that prints
+the same members. Migration: a script that compares one of these values
+compares the new spelling.
+
+| Member | Was | Now |
+|---|---|---|
+| `diagnostics[].artifact` | `scheduling_project` | `scheduling-project` |
+| `diagnostics[].artifact` | `runtime_configuration` | `runtime-configuration` |
+| `diagnostics[].artifact` | `command_arguments` | `command-arguments` |
+| `proofBoundary` (`schedulingctl test`) | `offline_synthetic` | `offline-synthetic` |
+
+### BREAKING: five client error words are written in kebab-case
+
+The Node.js and Python Scheduling clients name a failure with fixed words a
+caller branches on. Five of them carried an underscore (CFG-NAME-2): four
+are the client's own, and the transport word comes from the shared HTTP
+primitives, which respell it in this release.
+
+| Member of `SchedulingClientError` (Node.js, Python) | Old word | New word |
+|---|---|---|
+| `kind` | `invalid_request` | `invalid-request` |
+| `protocolFailure`, `protocol_failure` | `header_bounds` | `header-bounds` |
+| `protocolFailure`, `protocol_failure` | `trace_context` | `trace-context` |
+| `protocolFailure`, `protocol_failure` | `media_type` | `media-type` |
+| `transportKind`, `transport_kind` | `response_too_large` | `response-too-large` |
+
+The other words of the three members are unchanged, and so is the Rust
+client, whose errors are enum variants with no word of their own.
+`@registrystack/client` and `registry-stack-client` carry the same words.
+
+No file an adopter writes changes. To migrate, change what a consumer of a
+client error compares each of these members with.
+
+## Stable move
+
+The changes below move promised spellings to the form the configuration
+conventions give them. Each old spelling is refused with a diagnostic that
+names its replacement; no release reads both.
+
+### BREAKING: `authentication.oidc.jwksSource` is tagged by `type`
+
+The shared OIDC key source block is a union tagged by `type` (CFG-ID-7),
+where it was tagged by `kind`. The `scheduling` runtime and every command
+that reads a runtime file refuse `kind` under `jwksSource` as
+`config.removed-key` at `/authentication/oidc/jwksSource/kind`, and the
+message names `type`. The values and their members are unchanged.
+
+| Old spelling | New spelling | Migration |
+|---|---|---|
+| `authentication.oidc.jwksSource.kind` | `authentication.oidc.jwksSource.type` | Rename the key; keep the value (`discovery`, `uri`, or `static`). |
+
+`jwksSource: {kind: static, documentRef: secret:file/jwks}` becomes
+`jwksSource: {type: static, documentRef: secret:file/jwks}`. A file that
+omits `jwksSource` needs no change: the default is still `type: discovery`.
+`schedulingctl check PROJECT --runtime-config FILE` reports the old key at
+its line and column.
+
+### BREAKING: a client listed under `assertionIssuers` names at least one issuer
+
+`authentication.oidc.assertionIssuers` in the runtime file refuses a client
+written with an empty issuer list (CFG-EMPTY-2). The `scheduling` runtime and
+`schedulingctl check PROJECT --runtime-config FILE` report
+`config.invalid-value` at `/authentication/oidc/assertionIssuers/<client>`,
+and the runtime schema declares `minItems: 1` on the list.
+
+| Old spelling | New spelling | Migration |
+|---|---|---|
+| `assertionIssuers: {portal: [https://a.example], kiosk: []}` | `assertionIssuers: {portal: [https://a.example]}` | Remove the client that lists no issuer, or list its issuers. |
+
+A client that is not listed may exchange from no authority, which is what the
+empty list meant. Do not delete the whole member to get there unless no
+assertion-issuer rule is wanted.
+
+### BREAKING: the runtime file states which OAuth clients it admits
+
+`authentication.oidc.allowedClients` in the runtime file is required
+(CFG-EMPTY-2) and is a list of at least one client, none repeated
+(CFG-ID-6). The keyword `unrestricted`, which the shared block reads as
+every client the issuer verifies, is not accepted by Scheduling in any mode.
+The `scheduling` runtime and
+`schedulingctl check PROJECT --runtime-config FILE` refuse the other forms
+when the file is read.
+
+| Written | Before | Now |
+|---|---|---|
+| member omitted, development loopback | every client admitted | refused, `config.missing-key` at `/authentication/oidc` |
+| `allowedClients: []`, development loopback | every client admitted | refused, `config.invalid-value` at `/authentication/oidc/allowedClients` |
+| member omitted or `[]`, `operator-controlled-upstream` | refused, `scheduling.runtime.allowed-clients-required` | refused with the reader codes above |
+| `allowedClients: unrestricted`, either mode | refused | refused, `scheduling.runtime.allowed-clients-required` at `/authentication/oidc/allowedClients` |
+| `allowedClients: [a, b]` | only `a` and `b` admitted | unchanged |
+| `allowedClients: [a, b, a]` | only `a` and `b` admitted | refused, `config.duplicate-item` at `/authentication/oidc/allowedClients/2` |
+
+The diagnostic names the fix and never repeats what was written. Token
+verification does not change for a file that already listed its clients. A
+development loopback file that omitted the member or wrote `[]` admitted
+every client the issuer verifies; once it lists its clients, a token issued
+to any other client of the same issuer is refused. The maintained examples,
+which listen on development loopback, write
+`allowedClients: [scheduling-booking-agent]`.
+
+Migration:
+
+1. If `allowedClients` is missing or written `[]`, list the OAuth clients
+   that call this deployment.
+2. Write a client the list repeats once.
+3. Run `schedulingctl check PROJECT --runtime-config runtime.yaml`.
+
+### BREAKING: `schedulingctl test` reports `proofBoundary: offline-synthetic`
+
+The value of `proofBoundary` in the report `schedulingctl test` writes is
+lowercase kebab-case (CFG-NAME-2), the spelling `caseworkctl test` writes.
+The JSON report and the human output carry the same value.
+
+| Old spelling | New spelling | Migration |
+|---|---|---|
+| `proofBoundary: offline_synthetic` | `proofBoundary: offline-synthetic` | A script that compares the value reads the new spelling. |
+
+The member name, the other members of the report, and the exit status are
+unchanged. No file an adopter writes changes.

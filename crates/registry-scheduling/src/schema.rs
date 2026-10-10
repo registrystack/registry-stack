@@ -107,33 +107,22 @@ fn install_runtime_constraints(schema: &mut Value) {
     }
 }
 
-/// State that `authentication.oidc.allowedClients` is decided in every file:
-/// the member is required and lists at least one client. The shared block
-/// defaults it to an empty list, which the runtime refuses.
+/// State that `authentication.oidc.allowedClients` is a list in every file.
+/// The shared block requires the member and also admits the keyword
+/// `unrestricted`, which this runtime refuses in every mode, so the member
+/// is restated as the list alone and the shared definition is dropped.
 fn set_allowed_clients_constraints(schema: &mut Value) {
-    let Some(oidc) = schema
-        .pointer_mut("/$defs/OidcConfig")
-        .and_then(Value::as_object_mut)
-    else {
-        return;
-    };
-    if let Some(required) = oidc.get_mut("required").and_then(Value::as_array_mut) {
-        required.push(Value::String("allowedClients".to_owned()));
+    if let Some(clients) = schema.pointer_mut("/$defs/OidcConfig/properties/allowedClients") {
+        *clients = serde_json::json!({
+            "description": "Client identifiers whose access tokens are admitted. Required in every\nfile; an omitted or empty list, a repeated client, and `unrestricted`\nare refused.",
+            "type": "array",
+            "items": {"type": "string"},
+            "minItems": 1,
+            "uniqueItems": true,
+        });
     }
-    if let Some(clients) = oidc
-        .get_mut("properties")
-        .and_then(|properties| properties.get_mut("allowedClients"))
-        .and_then(Value::as_object_mut)
-    {
-        clients.remove("default");
-        clients.insert("minItems".to_owned(), Value::from(1));
-        clients.insert(
-            "description".to_owned(),
-            Value::String(
-                "Client identifiers whose access tokens are admitted. Required in every\nfile; an omitted or empty list is refused."
-                    .to_owned(),
-            ),
-        );
+    if let Some(definitions) = schema.pointer_mut("/$defs").and_then(Value::as_object_mut) {
+        definitions.remove("OidcAllowedClients");
     }
 }
 
@@ -279,15 +268,25 @@ mod tests {
             document["$defs"]["AuditConfig"]["properties"]["hashKeyRef"]["$ref"],
             "#/$defs/SecretReference"
         );
-        // `allowedClients` is decided in every file (CFG-EMPTY-2).
+        // `allowedClients` is decided in every file (CFG-EMPTY-2), and only
+        // as a list: the runtime refuses `unrestricted` in every mode.
         let oidc = &document["$defs"]["OidcConfig"];
-        assert!(oidc["required"]
-            .as_array()
-            .is_some_and(|required| required.contains(&Value::String("allowedClients".into()))));
-        assert!(oidc["properties"]["allowedClients"]
-            .get("default")
-            .is_none());
-        assert_eq!(oidc["properties"]["allowedClients"]["minItems"], 1);
+        assert_eq!(
+            oidc["required"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|member| *member == "allowedClients")
+                .count(),
+            1
+        );
+        let clients = &oidc["properties"]["allowedClients"];
+        assert!(clients.get("default").is_none());
+        assert!(clients.get("$ref").is_none(), "{clients}");
+        assert_eq!(clients["type"], "array");
+        assert_eq!(clients["minItems"], 1);
+        assert_eq!(clients["uniqueItems"], true);
+        assert!(document["$defs"].get("OidcAllowedClients").is_none());
         let assertion_issuers = &document["$defs"]["OidcConfig"]["properties"]["assertionIssuers"];
         assert_eq!(assertion_issuers["maxProperties"], 64);
         assert_eq!(assertion_issuers["propertyNames"]["maxLength"], 128);

@@ -64,7 +64,7 @@ operator repairs it. A store whose `quarantines` returns `true` has the core
 run each selected row's step inside a savepoint instead: a failing step is
 rolled back to it, including a statement PostgreSQL aborted, and the store's
 `quarantine` moves the row to a terminal state of its choosing and audits it
-in the same transaction. The core then checks the row is `dead_lettered`,
+in the same transaction. The core then checks the row is `dead-lettered`,
 `expired`, `unknown`, or `cancelled` and outside the expiry sweep, reports
 `DispatchEvent::JobQuarantined` with the failing step once the transaction
 commits, and goes on to the next row. Whether an operator may replay a
@@ -72,8 +72,8 @@ quarantined row is the consumer's `replayable` set. A quarantine that fails,
 or leaves the row selectable, fails the claim as it would have without one.
 
 Hooks does not opt in. Its delivery table's shape check admits
-`dead_lettered` only after an attempt, so a never-attempted row has no
-dead-letter state to land in; its expiry sweep takes `dead_lettered` rows, so
+`dead-lettered` only after an attempt, so a never-attempted row has no
+dead-letter state to land in; its expiry sweep takes `dead-lettered` rows, so
 that state is not outside the sweep until expiry stamps it; and recovery of a
 lapsed final attempt first recovers any committed proposal receipt, which a
 quarantine that skipped recovery would hide behind an empty proposal

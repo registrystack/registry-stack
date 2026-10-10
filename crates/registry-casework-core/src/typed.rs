@@ -8,7 +8,7 @@
 use std::{collections::BTreeMap, hash::Hash};
 
 use registry_platform_yaml::{
-    BoundedU32, BoundedU64, Digest, ExternalId, LocalId, UniqueList, Url,
+    BoundedU32, BoundedU64, Digest, ExternalId, Identified, LocalId, UniqueIdList, UniqueList, Url,
 };
 use serde::{Deserialize, Deserializer};
 
@@ -79,6 +79,16 @@ where
     UniqueList::<T>::deserialize(deserializer).map(UniqueList::into_vec)
 }
 
+/// Named items, unique by `id` (CFG-ID-5): a repeated id is refused at the
+/// second item's `id`.
+pub fn unique_id_list<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de> + Identified,
+{
+    UniqueIdList::<T>::deserialize(deserializer).map(UniqueIdList::into_vec)
+}
+
 /// An absolute `http` or `https` URL (CFG-VAL-7), kept as written.
 pub fn url<'de, D>(deserializer: D) -> Result<String, D::Error>
 where
@@ -113,6 +123,18 @@ where
     D: Deserializer<'de>,
 {
     LocalId::deserialize(deserializer).map(LocalId::into_string)
+}
+
+/// Whether `value` follows the local identifier grammar (CFG-ID-1), for a
+/// project built in memory rather than read.
+pub(crate) fn valid_local_identifier(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    !bytes.is_empty()
+        && bytes.len() <= 64
+        && bytes[0].is_ascii_lowercase()
+        && bytes[1..].iter().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(*byte, b'-' | b'_')
+        })
 }
 
 /// A mapping keyed by local identifiers (CFG-ID-1), keys kept as written.

@@ -92,7 +92,8 @@ As the operator, you decide which providers the index includes. `discovery-proje
 lists the URL of each approved description:
 
 ```yaml test-excerpt="discovery-project/origins.yaml"
-schemaVersion: registry-discovery/origins/v1alpha1
+apiVersion: id.registrystack.org/formats/discovery/origins/v1alpha1
+kind: DiscoveryOrigins
 origins:
   - originId: tutorial-evidence
     catalogUrl: http://127.0.0.1:38090/evidence.jsonld
@@ -105,7 +106,8 @@ You also decide which kind of evidence satisfies a requirement an application ma
 one Evidence type:
 
 ```yaml test-excerpt="discovery-project/mappings/adult-status.yaml"
-schemaVersion: registry-discovery/evidence-mapping/v1alpha1
+apiVersion: id.registrystack.org/formats/discovery/evidence-mapping/v1alpha1
+kind: DiscoveryEvidenceMapping
 mappingId: urn:example:mapping:adult-status
 mappingAuthorityId: urn:example:mapping-authority
 requirementId: urn:example:requirement:adult-status

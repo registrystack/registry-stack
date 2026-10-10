@@ -268,7 +268,7 @@ render_runtime_config() {
   local package_root=$4
   local listener=$5
   cat >"$output" <<EOF
-apiVersion: registry.registrystack.org/breg-runtime/v1alpha1
+apiVersion: id.registrystack.org/formats/breg/runtime/v1alpha1
 kind: BRegRuntimeConfig
 listener:
   bind: $listener
@@ -284,7 +284,7 @@ database:
   runtimeUrlRef: secret:file/$database_prefix-runtime-url
   migrationUrlRef: secret:file/$database_prefix-migration-url
   pool:
-    maxSize: 4
+    maximumConnections: 4
   roles:
     migration: $promotion_migration_role
     runtime: $promotion_runtime_role
@@ -299,10 +299,10 @@ authentication:
     scopeClaim: scope
     scopeSeparator: " "
     allowedClients: [generic-registry-client]
-    maxTokenLifetimeSeconds: 3600
+    maximumTokenLifetimeSeconds: 3600
     leewayMilliseconds: 30000
     jwksSource:
-      kind: static
+      type: static
       documentRef: secret:file/issuer-jwks
   authorityClaims:
     principal: registry_principal
@@ -522,7 +522,7 @@ source = path.read_text(encoding="utf-8")
 needle = "      - {id: status, type: vocabulary-code, vocabulary: record-status, classification: internal}\n"
 if needle not in source:
     raise SystemExit("record field insertion point was not found")
-path.write_text(source.replace(needle, needle + "      - {id: legacy-note, type: string, required: false, maxLength: 120, classification: internal}\n", 1), encoding="utf-8")
+path.write_text(source.replace(needle, needle + "      - {id: legacy-note, type: string, required: false, maximumLength: 120, classification: internal}\n", 1), encoding="utf-8")
 PY
 run_json "$temporary_root/check-1.json" check "$project_1" --production
 assert_json_ok "$temporary_root/check-1.json" check
@@ -625,7 +625,7 @@ import sys
 from pathlib import Path
 path = Path(sys.argv[1])
 source = path.read_text(encoding="utf-8")
-field = "      - {id: legacy-note, type: string, required: false, maxLength: 120, classification: internal}\n"
+field = "      - {id: legacy-note, type: string, required: false, maximumLength: 120, classification: internal}\n"
 if field not in source:
     raise SystemExit("the legacy field was not found")
 path.write_text(source.replace(field, "", 1), encoding="utf-8")
@@ -653,8 +653,8 @@ root, package = Path(sys.argv[1]), Path(sys.argv[2])
 prior_digest, prior_fingerprint, final_fingerprint, postgres_major = sys.argv[3:]
 changes = json.loads((root / "diff-2.json").read_text())["changes"]
 covers = [{"code": item["change"]["code"], "target": item["change"]["target"]}
-          for item in changes if item["change"]["class"] != "compatible_additive"]
-if [cover["code"] for cover in covers] != ["field_removed"]:
+          for item in changes if item["change"]["class"] != "compatible-additive"]
+if [cover["code"] for cover in covers] != ["field-removed"]:
     raise SystemExit(f"the successor did not remove exactly one field: {covers}")
 model = json.loads((package / "effective-model.json").read_text())
 entity = model["entities"]["record"]
@@ -673,8 +673,8 @@ fixture = b'{"fixture":"representative"}\n'
 descriptor = {
     "apiVersion": "id.registrystack.org/formats/breg/migration-descriptor/v1alpha1",
     "kind": "BRegMigrationDescriptor",
-    "id": "remove-legacy-note", "changeClass": "destructive_or_irreversible", "covers": covers,
-    "recovery": "exact_target_resume", "lockTimeoutMilliseconds": 1000,
+    "id": "remove-legacy-note", "changeClass": "destructive-or-irreversible", "covers": covers,
+    "recovery": "exact-target-resume", "lockTimeoutMilliseconds": 1000,
     "statementTimeoutMilliseconds": 60000,
     "steps": [{"type": "transactional-sql", "id": "drop", "sqlPath": f"{base}/steps/drop.sql",
                "objects": [{"schema": "registry_data", "table": table, "entity": "record",

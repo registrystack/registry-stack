@@ -65,23 +65,22 @@ pub enum Command {
     /// reads the runtime file, verifies the package `package.root` names,
     /// loads and compiles the bundle, reads each CA bundle a trust profile
     /// names, and checks every binding between the runtime file and the
-    /// bundle. Freezing, secret material, extract freshness, and runtime
-    /// dependencies are proved on the target host with
-    /// `--require-runtime-dependencies`.
+    /// bundle. It does not prove freezing, secret material, extract freshness,
+    /// or runtime dependencies: startup proves them, and so does this command
+    /// on the target host with --require-runtime-dependencies.
     Check {
-        /// The closed operator runtime file that binds the governed bundle.
+        /// The closed operator runtime file that binds the governed package.
         #[arg(long = "runtime-config", value_name = "FILE")]
         runtime_config: PathBuf,
-        /// Report for a person (`human`) or as one JSON document on standard
-        /// output (`json`).
+        /// Emit the selected command's report in this format.
         #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
         format: OutputFormat,
-        /// Exit 1 when the check reports a warning.
+        /// Exit 1 when a warning is reported.
         #[arg(long)]
         deny_warnings: bool,
-        /// Substitute `${...}` expressions from this process's environment, as
-        /// startup does, and check the values they fill. Without it an
-        /// expression is checked by its syntax and position only.
+        /// Fill `${NAME}` expressions in the runtime file from the process
+        /// environment and check the values they produce. Without it, each
+        /// expression is checked by syntax and position only.
         #[arg(long)]
         environment: bool,
         /// Also prove, on the target host, what startup proves: read-only
@@ -114,9 +113,30 @@ pub enum Command {
         #[arg(long, requires = "require_runtime_dependencies")]
         without_audit_lock: bool,
     },
+    /// Check one relying-procedure verification policy offline, and report
+    /// every problem found with its line and column.
+    ///
+    /// `verify` and `verify-presentation` read the policy exactly this way but
+    /// report only their closed `malformed` class; this command says where the
+    /// policy is wrong. No diagnostic repeats a value written in the policy.
+    #[command(group(ArgGroup::new("policy").required(true)))]
+    CheckPolicy {
+        /// A Version 1 policy, as `verify --policy` reads it.
+        #[arg(long, value_name = "FILE", group = "policy")]
+        verification_policy: Option<PathBuf>,
+        /// A holder-bound policy, as `verify-presentation --policy` reads it.
+        #[arg(long, value_name = "FILE", group = "policy")]
+        holder_bound_policy: Option<PathBuf>,
+        /// Emit the selected command's report in this format.
+        #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
+        format: OutputFormat,
+        /// Exit 1 when a warning is reported.
+        #[arg(long)]
+        deny_warnings: bool,
+    },
     /// Evaluate one bundle-owned fixture without source or credential access.
     Evaluate {
-        /// The closed operator runtime file that binds the governed bundle.
+        /// The closed operator runtime file that binds the governed package.
         #[arg(long = "runtime-config", value_name = "FILE")]
         runtime_config: PathBuf,
         /// Bundle-relative fixture path referenced by exactly one requirement.
@@ -176,7 +196,7 @@ pub enum Command {
     },
     /// Start the native Evidence Gateway HTTP service.
     Serve {
-        /// The closed operator runtime file that binds the governed bundle.
+        /// The closed operator runtime file that binds the governed package.
         #[arg(long = "runtime-config", value_name = "FILE")]
         runtime_config: PathBuf,
     },
@@ -232,32 +252,10 @@ pub enum Command {
         #[arg(long)]
         at: Option<String>,
     },
-    /// Check one relying-procedure verification policy offline, and report
-    /// every problem found with its line and column.
-    ///
-    /// `verify` and `verify-presentation` read the policy exactly this way but
-    /// report only their closed `malformed` class; this command says where the
-    /// policy is wrong. No diagnostic repeats a value written in the policy.
-    #[command(group(ArgGroup::new("policy").required(true)))]
-    CheckPolicy {
-        /// A Version 1 policy, as `verify --policy` reads it.
-        #[arg(long, value_name = "FILE", group = "policy")]
-        verification_policy: Option<PathBuf>,
-        /// A holder-bound policy, as `verify-presentation --policy` reads it.
-        #[arg(long, value_name = "FILE", group = "policy")]
-        holder_bound_policy: Option<PathBuf>,
-        /// Report for a person (`human`) or as one JSON document on standard
-        /// output (`json`).
-        #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
-        format: OutputFormat,
-        /// Exit 1 when the check reports a warning.
-        #[arg(long)]
-        deny_warnings: bool,
-    },
     /// Internal local-adopter seam for bearer-free relying-procedure closure.
     #[command(hide = true)]
     PrepareLocalRelyingProcedure {
-        /// The closed operator runtime file that binds the governed bundle.
+        /// The closed operator runtime file that binds the governed package.
         #[arg(long = "runtime-config", value_name = "FILE")]
         runtime_config: PathBuf,
         /// Owner-only JSON draft containing the request shape and audience.
@@ -267,7 +265,7 @@ pub enum Command {
     /// Internal stopped-service audit inspection seam.
     #[command(hide = true)]
     LocalAuditLastOperation {
-        /// The closed operator runtime file that binds the governed bundle.
+        /// The closed operator runtime file that binds the governed package.
         #[arg(long = "runtime-config", value_name = "FILE")]
         runtime_config: PathBuf,
     },

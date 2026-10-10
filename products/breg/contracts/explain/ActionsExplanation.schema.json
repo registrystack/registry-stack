@@ -7,6 +7,16 @@
   "additionalProperties": false,
   "required": ["apiVersion", "kind", "actions"],
   "$defs": {
+    "DerivedId": {
+      "description": "An identifier the compiler derives from local identifiers: two or more local identifiers joined by `.`. It is never authored.",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}(\\.[a-z][a-z0-9_-]{0,63})+$",
+      "type": "string"
+    },
+    "LocalId": {
+      "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+      "type": "string"
+    },
     "fieldType": {
       "type": "object",
       "description": "Passthrough of the compiled field type. Shape follows FieldTypeSource and is outside this contract version.",
@@ -36,8 +46,8 @@
     "operation": {
       "enum": [
         "create", "get", "lookup", "list", "patch", "tombstone", "batch",
-        "revisions", "snapshot", "submit_request", "revise_request",
-        "cancel_request", "apply_request", "invoke"
+        "revisions", "snapshot", "submit-request", "revise-request",
+        "cancel-request", "apply-request", "invoke"
       ]
     },
     "rowBoundary": {
@@ -55,18 +65,18 @@
         {
           "type": "object",
           "additionalProperties": false,
-          "required": ["kind", "effect"],
+          "required": ["type", "effect"],
           "properties": {
-            "kind": { "const": "effect" },
+            "type": { "const": "effect" },
             "effect": { "type": "string" }
           }
         },
         {
           "type": "object",
           "additionalProperties": false,
-          "required": ["kind", "input"],
+          "required": ["type", "input"],
           "properties": {
-            "kind": { "const": "input" },
+            "type": { "const": "input" },
             "input": { "$ref": "#/$defs/inputRef" }
           }
         }
@@ -80,8 +90,8 @@
         "defaultAccessProfile", "requiresIdempotencyKey"
       ],
       "properties": {
-        "id": { "type": "string" },
-        "kind": { "enum": ["invoke", "target_conditions"] },
+        "id": { "$ref": "#/$defs/DerivedId" },
+        "kind": { "enum": ["invoke", "target-conditions"] },
         "method": { "const": "POST" },
         "path": { "type": "string" },
         "operation": { "$ref": "#/$defs/operation" },
@@ -93,10 +103,10 @@
   },
   "properties": {
     "apiVersion": {
-      "const": "registry.registrystack.org/breg-explain/v1alpha4"
+      "const": "id.registrystack.org/formats/breg/actions-explanation/v1alpha4"
     },
     "kind": {
-      "const": "ActionsExplanation"
+      "const": "BRegActionsExplanation"
     },
     "actions": {
       "type": "array",
@@ -108,7 +118,7 @@
           "targets", "requiredConditionKeys", "permissions", "results", "bounds"
         ],
         "properties": {
-          "id": { "type": "string" },
+          "id": { "$ref": "#/$defs/LocalId" },
           "sourceModule": { "type": ["string", "null"] },
           "contractFingerprint": { "type": "string" },
           "routes": { "type": "array", "items": { "$ref": "#/$defs/route" } },
@@ -120,7 +130,7 @@
               "additionalProperties": false,
               "required": ["id", "operation", "target", "fields", "dependsOn"],
               "properties": {
-                "id": { "type": "string" },
+                "id": { "$ref": "#/$defs/LocalId" },
                 "operation": { "$ref": "#/$defs/operation" },
                 "target": {
                   "type": "object",
@@ -133,15 +143,15 @@
                         {
                           "type": "object",
                           "additionalProperties": false,
-                          "required": ["kind"],
-                          "properties": { "kind": { "const": "create" } }
+                          "required": ["type"],
+                          "properties": { "type": { "const": "create" } }
                         },
                         {
                           "type": "object",
                           "additionalProperties": false,
-                          "required": ["kind", "input"],
+                          "required": ["type", "input"],
                           "properties": {
-                            "kind": { "const": "existing" },
+                            "type": { "const": "existing" },
                             "input": { "type": "string" }
                           }
                         }
@@ -156,33 +166,33 @@
                       {
                         "type": "object",
                         "additionalProperties": false,
-                        "required": ["kind", "target", "value"],
+                        "required": ["type", "target", "value"],
                         "properties": {
-                          "kind": { "const": "set" },
+                          "type": { "const": "set" },
                           "target": { "$ref": "#/$defs/fieldRef" },
                           "value": {
                             "oneOf": [
                               {
                                 "type": "object",
                                 "additionalProperties": false,
-                                "required": ["kind"],
-                                "properties": { "kind": { "const": "computed" } }
+                                "required": ["type"],
+                                "properties": { "type": { "const": "computed" } }
                               },
                               {
                                 "type": "object",
                                 "additionalProperties": false,
-                                "required": ["kind", "input"],
+                                "required": ["type", "input"],
                                 "properties": {
-                                  "kind": { "const": "from_input" },
+                                  "type": { "const": "from-input" },
                                   "input": { "$ref": "#/$defs/inputRef" }
                                 }
                               },
                               {
                                 "type": "object",
                                 "additionalProperties": false,
-                                "required": ["kind", "effect", "targetEntity"],
+                                "required": ["type", "effect", "targetEntity"],
                                 "properties": {
-                                  "kind": { "const": "from_effect" },
+                                  "type": { "const": "from-effect" },
                                   "effect": { "type": "string" },
                                   "targetEntity": { "type": "string" }
                                 }
@@ -194,9 +204,9 @@
                       {
                         "type": "object",
                         "additionalProperties": false,
-                        "required": ["kind", "target"],
+                        "required": ["type", "target"],
                         "properties": {
-                          "kind": { "const": "clear" },
+                          "type": { "const": "clear" },
                           "target": { "$ref": "#/$defs/fieldRef" }
                         }
                       }
@@ -292,7 +302,7 @@
               "abi": { "type": "string" },
               "entrypoint": { "const": "handle" },
               "context": { "const": "ctx.inputs" },
-              "inputKeys": { "const": "authored_ids" },
+              "inputKeys": { "const": "authored-ids" },
               "possibleWrites": {
                 "type": "array",
                 "description": "Passthrough of the compiled handler's possible writes. Shape follows the compiled model and is outside this contract version.",
@@ -317,8 +327,8 @@
               },
               "omittedSlots": { "type": "string" },
               "evaluation": { "type": "string" },
-              "reads": { "const": "supplied_inputs_only" },
-              "replay": { "const": "recover_committed_result_without_handler_evaluation" },
+              "reads": { "const": "supplied-inputs-only" },
+              "replay": { "const": "recover-committed-result-without-handler-evaluation" },
               "scriptSha256": { "type": "string" },
               "rhaiVersion": { "type": "string" },
               "limits": {
@@ -351,7 +361,7 @@
             "additionalProperties": false,
             "required": [
               "capabilities", "maximumCalls", "maximumCallsPerCapability", "maximumConcurrentEvaluations",
-              "maximumRetainedBytes", "maximumResponseBytes", "retentionSeconds",
+              "maximumRetainedBytes", "maximumResponseBytes", "retentionDays",
               "maximumAssertionLifetimeSeconds", "clockSkewSeconds", "maximumObservationAgeSeconds",
               "defaultActionDeadlineMilliseconds", "deadline", "invocation", "disclosure", "lifecycle"
             ],
@@ -366,7 +376,7 @@
               "maximumConcurrentEvaluations": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
               "maximumRetainedBytes": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
               "maximumResponseBytes": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
-              "retentionSeconds": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+              "retentionDays": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
               "maximumAssertionLifetimeSeconds": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
               "clockSkewSeconds": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
               "maximumObservationAgeSeconds": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
@@ -390,7 +400,7 @@
                 "equals": {
                   "description": "Passthrough of an arbitrary compiled comparison value; any JSON type is valid."
                 },
-                "evaluated": { "const": "before_effects_under_target_lock" }
+                "evaluated": { "const": "before-effects-under-target-lock" }
               }
             }
           }

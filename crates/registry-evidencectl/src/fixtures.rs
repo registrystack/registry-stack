@@ -75,7 +75,7 @@ pub struct RunArgs {
     #[arg(long)]
     pub explain: bool,
 
-    /// Refuse a run whose fixture files carry any reader warning.
+    /// Exit 1 when a warning is reported.
     #[arg(long)]
     pub deny_warnings: bool,
 }

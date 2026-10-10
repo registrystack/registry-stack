@@ -142,12 +142,12 @@ Bind the matching provider key and version in `runtime.yaml`:
 
 ```yaml
 signer:
-  kind: transit
+  type: transit
   unixSocketPath: /run/registry-evidence/transit-proxy.sock
   mount: transit
   keyName: evidence-signing
   keyVersion: <nonzero-version>
-  timeoutMilliseconds: 2000
+  attemptTimeoutMilliseconds: 2000
 ```
 
 Do not put a provider token, auto-auth credential, or private JWK in this configuration.

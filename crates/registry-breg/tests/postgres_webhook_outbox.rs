@@ -602,7 +602,7 @@ async fn real_postgres_delivery_schema_refuses_a_delivered_row_that_keeps_raw_an
              VALUES ($1, 'case-created:webhook', 'url', $2,
                      'sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
                      $3, $4, 'urn:registrystack:test:answer-shape', 'restricted',
-                     'hmac_sha256_v1', 'after_commit', 5000, 1000, 8000, 2, 5,
+                     'hmac-sha256-v1', 'after-commit', 5000, 1000, 8000, 2, 5,
                      ARRAY[1000,2000,4000,8000]::bigint[], 1048576, $5, 5000, 5,
                      'required', true)",
             &[
@@ -709,45 +709,45 @@ async fn real_postgres_delivery_schema_refuses_a_delivered_row_that_keeps_raw_an
 fn compiled_registry() -> registry_breg::CompiledRegistry {
     let project = parse_project_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"webhook-outbox-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"webhook-outbox-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
             "id":"case","primaryDataset":"test-dataset","route":"cases","mutationMode":"mutable","classification":"restricted",
             "fields":[
-              {"id":"jurisdiction","type":"string","maxLength":32,"required":true,"classification":"public"},
-              {"id":"label","type":"string","maxLength":64,"required":true,"classification":"internal"},
-              {"id":"restricted_note","type":"string","maxLength":64,"required":true,"classification":"restricted"},
-              {"id":"payload","type":"structured","maxBytes":256,"required":true,"classification":"internal","schema":{"type":"object","additionalProperties":false,"properties":{"__bregEncryptedV1":{"type":"string"}},"required":["__bregEncryptedV1"]}}
+              {"id":"jurisdiction","type":"string","maximumLength":32,"required":true,"classification":"public"},
+              {"id":"label","type":"string","maximumLength":64,"required":true,"classification":"internal"},
+              {"id":"restricted_note","type":"string","maximumLength":64,"required":true,"classification":"restricted"},
+              {"id":"payload","type":"structured","maximumBytes":256,"required":true,"classification":"internal","schema":{"type":"object","additionalProperties":false,"properties":{"__bregEncryptedV1":{"type":"string"}},"required":["__bregEncryptedV1"]}}
             ],
             "hooks":[{
               "phase": "after",
               "id":"case-created","trigger":"created","projection":["label","payload","restricted_note"],
               "handler":{
-                "kind": "url",
+                "type": "url",
                 "destinationId":"case-operations"
               }
             },{
               "phase": "after",
               "id":"case-label-changed","trigger":"patched","projection":["label"],
               "when":{
-                "kind":"fields",
+                "type":"fields",
                 "changed":["label"],
                 "beforeEquals":{"label":"first"},
                 "afterEquals":{"restricted_note":"restricted-projection-canary"}
               },
-              "handler":{"kind":"url","destinationId":"case-operations"}
+              "handler":{"type":"url","destinationId":"case-operations"}
             }]
           }],
           "accessProfiles":[{
             "id":"operator","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "requiredPurposes":["case-management"],
-            "permissions":[{
+            "permissions":{"entities":[{
               "entity":"case","operations":["create","patch","get","list"],
               "readableFields":["jurisdiction","label","payload","restricted_note"],
               "writableFields":["jurisdiction","label","payload","restricted_note"],
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
-            }]
+            }]}
           }]
         }"#,
     )
@@ -977,8 +977,8 @@ fn assert_capture_matches(
     assert_eq!(actual.schema_fingerprint, identity.schema_fingerprint);
     assert_eq!(actual.data_schema, compiled.data_schema);
     assert_eq!(actual.classification_ceiling, "restricted");
-    assert_eq!(actual.authentication_profile, "hmac_sha256_v1");
-    assert_eq!(actual.delivery_mode, "after_commit");
+    assert_eq!(actual.authentication_profile, "hmac-sha256-v1");
+    assert_eq!(actual.delivery_mode, "after-commit");
     assert_eq!(
         actual.attempt_timeout_ms,
         i64::from(compiled.attempt_timeout_ms)
@@ -1319,7 +1319,7 @@ impl DestinationFixture {
             .display()
             .to_string();
         let raw = format!(
-            r#"apiVersion: registry.registrystack.org/breg-runtime/v1alpha1
+            r#"apiVersion: id.registrystack.org/formats/breg/runtime/v1alpha1
 kind: BRegRuntimeConfig
 listener:
   bind: 127.0.0.1:8080
@@ -1335,7 +1335,7 @@ database:
   runtimeUrlRef: secret:file/database-url
   migrationUrlRef: secret:file/migration-database-url
   pool:
-    maxSize: 4
+    maximumConnections: 4
     waitTimeoutMilliseconds: 1000
     createTimeoutMilliseconds: 1000
     recycleTimeoutMilliseconds: 1000
@@ -1354,14 +1354,14 @@ authentication:
     scopeSeparator: " "
     allowedClients: [registry-client]
     deniedKids: [denied-kid]
-    maxTokenLifetimeSeconds: 300
+    maximumTokenLifetimeSeconds: 300
     leewayMilliseconds: 60000
     jwksCache:
       cacheTtlSeconds: 600
       negativeCacheTtlSeconds: 60
       refreshCooldownSeconds: 30
-      maxDocumentBytes: 65536
-      requestTimeoutMilliseconds: 5000
+      maximumDocumentBytes: 65536
+      attemptTimeoutMilliseconds: 5000
       outageToleranceSeconds: 900
   authorityClaims:
     principal: registry_principal
@@ -1371,13 +1371,13 @@ audit:
   path: {audit_path}
 cursor:
   secretRef: secret:file/cursor-key
-  maxAgeSeconds: 300
+  maximumAgeSeconds: 300
 eventDestinations:
   {DESTINATION_ID}:
     origin: https://{ORIGIN_CANARY}/
     path: {PATH_CANARY}
-    networkProfile: productionHttps
-    dnsFamily: dualStackStrict
+    networkProfile: production-https
+    dnsFamily: dual-stack-strict
     allowedPrivateCidrs: []
     hmacSha256KeyRef: secret:file/{SECRET_REF_CANARY}
     classificationCeiling: restricted

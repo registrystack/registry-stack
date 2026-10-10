@@ -84,26 +84,33 @@ Registry Stack deliberately retains the `registry.evidence-definitions/v1`
 identity while evolving the closed response before v1.0. The current shape adds
 the effective audience, a stable complete-definition handle, effective response
 formats, stable concept handles, required-output status, and bounded-list form
-metadata. It also makes `holderBoundBatchMaxSize` explicit. This is a pre-1.0
+metadata. It also makes `maximumHolderBoundBatchSize` explicit, and it states a
+concept's `form` as a mapping named by `type`: `{type: boolean}`, or
+`{type: list, items: string, minimumItems: 1, maximumItems: 8, unique: true}`
+with the list's members beside the tag. This is a pre-1.0
 breaking product improvement. A strict client or validator built against the
 older schema rejects the added members because that schema has
 `additionalProperties: false`.
 
 The governed `bounded-identifier` concept form adds exact, source-owned JSON
 string outputs with an immutable prefix and byte bounds. Its discovery and
-client-contract form is the existing scalar `string`; relying parties that
+client-contract form is the existing `string`; relying parties that
 compare a request field must compare the complete value exactly. Existing
 controlled categories remain finite reviewed codelists. A deployment using the
 new form needs an Evidence Gateway and authoring-tool version that recognizes
 its bundle declaration.
 
 Upgrade Evidence Gateway and every Evidence client or protocol adapter that
-reads its definitions response together. The current Evidence client treats a
-missing `holderBoundBatchMaxSize` as `1`, which supports a staged rollback or a
-short interoperation window in which the client is upgraded before Evidence
-Gateway. That default does not make an older strict client able to read the new
-response or understand its new verification fields. Do not upgrade Evidence
-Gateway first while an older client or adapter remains in service.
+reads its definitions response together. The ceiling was published as
+`holderBoundBatchMaxSize` before the configuration conventions release and is
+`maximumHolderBoundBatchSize` from it on, with no alias on either side: the
+current Evidence client refuses a response carrying the old member as it
+refuses any unknown member, and an older strict client refuses the new one
+the same way. There is no interoperation window across that rename. The
+current client still reads a response with no ceiling member at all as `1`,
+the only safe inference for a deployment that predates batch-ceiling
+discovery; that default does not make any client able to read a response
+written for the other spelling.
 
 The fixed HTTP source contract also adds optional
 `forwardAccessAttribution`, defaulting to `false`. Enabling it requires a

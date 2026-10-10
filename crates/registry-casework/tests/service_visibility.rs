@@ -18,13 +18,14 @@ use registry_casework::{
 };
 use registry_casework_core::{
     AccessProfile, ActiveSubjectsPage, ActorContext, AttemptState, AuthoritativeObservation,
-    BootstrapDirectoryRequest, CallerSubjectView, CaseworkIdentity, CaseworkProject, CaseworkRole,
-    DiscoveryCursor, EphemeralCredential, EventRequest, ExecutePreparedRequest, InboxPolicy,
-    InboxView, IssuerPrincipal, OccurrenceKind, OccurrenceState, OperationName, PageStatus,
-    PrepareActionRequest, PreparedSourceAttempt, QueuePolicy, RecoveryEvidence, SourceAdapter,
-    SourceAdapterError, SourceBinding, SourcePolicy, SourceReceipt, SourceRequestPolicy,
-    SubjectRef, TransitionHint, ATTEMPT_REFERENCE_HEADER, CASEWORK_API_VERSION, CASEWORK_KIND,
-    CASEWORK_PROFILE_HEADER, IDEMPOTENCY_KEY_HEADER, IF_MATCH_HEADER, SOURCE_PROFILE_HEADER,
+    BootstrapDirectoryRequest, CallerSubjectView, CaseworkProject, CaseworkRole, DiscoveryCursor,
+    EphemeralCredential, EventRequest, ExecutePreparedRequest, InboxPolicy, InboxView,
+    IssuerPrincipal, OccurrenceKind, OccurrenceState, OperationName, PageStatus,
+    PrepareActionRequest, PreparedSourceAttempt, ProjectIdentity, QueuePolicy, RecoveryEvidence,
+    SourceAdapter, SourceAdapterError, SourceBinding, SourcePolicy, SourceReceipt,
+    SourceRequestPolicy, SubjectRef, TransitionHint, ATTEMPT_REFERENCE_HEADER,
+    CASEWORK_API_VERSION, CASEWORK_KIND, CASEWORK_PROFILE_HEADER, IDEMPOTENCY_KEY_HEADER,
+    IF_MATCH_HEADER, SOURCE_PROFILE_HEADER,
 };
 use registry_platform_config::{SecretProvider, SecretResolver};
 use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig, TokenVerifierConfig};
@@ -107,6 +108,8 @@ struct MockSource {
     advance_binding_on_success: bool,
     execution_error_after: Option<(usize, SourceAdapterError)>,
     approve_reads: HashSet<String>,
+    /// The actions a routing read offers the caller.
+    routing_operations: Vec<OperationName>,
 }
 
 impl MockSource {
@@ -136,6 +139,8 @@ impl MockSource {
             advance_binding_on_success: false,
             execution_error_after: None,
             approve_reads: HashSet::new(),
+            routing_operations: vec![OperationName::parse(OperationName::REQUEST_CORRECTION)
+                .expect("request correction operation")],
         }
     }
 
@@ -514,8 +519,7 @@ impl SourceAdapter for MockSource {
                     ("reasons".into(), json!([reason])),
                     ("readableFields".into(), json!(readable_fields)),
                 ]),
-                permitted_operations: vec![OperationName::parse("request_correction")
-                    .expect("request correction operation")],
+                permitted_operations: self.routing_operations.clone(),
             }),
             Some(CallerRead::Concealed) => Err(SourceAdapterError::Concealed),
             Some(CallerRead::Unavailable) => Err(SourceAdapterError::Unavailable),
@@ -731,8 +735,8 @@ fn project(inbox: InboxPolicy) -> CaseworkProject {
         task_templates: Vec::new(),
         api_version: CASEWORK_API_VERSION.into(),
         kind: CASEWORK_KIND.into(),
-        casework: CaseworkIdentity {
-            id: "visibility-tests".into(),
+        project: ProjectIdentity {
+            id: "visibility-tests".parse().unwrap(),
             version: "1".into(),
         },
         access_profiles: vec![
@@ -2978,7 +2982,7 @@ async fn reconciled_empty_inboxes_preserve_source_completeness() {
     for (principal, path, served) in [
         (
             "outsider",
-            "/v1/work-items?view=my_teams&limit=25",
+            "/v1/work-items?view=my-teams&limit=25",
             json!([]),
         ),
         ("staff", "/v1/work-items?view=mine&limit=25", json!([QUEUE])),
@@ -3008,7 +3012,7 @@ async fn reconciled_empty_inboxes_preserve_source_completeness() {
     let invalid_cursor = app
         .oneshot(authenticated_request(
             "GET",
-            "/v1/work-items?view=my_teams&cursor=invalid",
+            "/v1/work-items?view=my-teams&cursor=invalid",
             &access_token("outsider"),
             "staff",
             json!(null),
@@ -3971,7 +3975,7 @@ async fn request_correction_copy_is_persisted_then_filtered_for_the_caller() {
             claimed.item_id,
             claimed.revision,
             "reader",
-            OperationName::parse("request_correction").expect("request correction operation"),
+            OperationName::parse("request-correction").expect("request correction operation"),
             Some(reason),
             &["public".into(), "private".into(), "nested.path".into()],
             &claimed.binding,
@@ -4075,7 +4079,7 @@ async fn http_authentication_and_directory_authority_are_enforced() {
 
     let missing_source_profile = authenticated_request(
         "GET",
-        "/v1/work-items?view=my_teams",
+        "/v1/work-items?view=my-teams",
         &access_token("staff"),
         "staff",
         json!(null),
@@ -4100,7 +4104,7 @@ async fn http_authentication_and_directory_authority_are_enforced() {
     let response = app.clone().oneshot(next).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     let page = response_body(response).await;
-    assert_eq!(page["status"], "budget_exhausted");
+    assert_eq!(page["status"], "budget-exhausted");
     assert_eq!(page["items"].as_array().map(Vec::len), Some(1));
     assert!(page
         .get("nextCursor")
@@ -4109,7 +4113,7 @@ async fn http_authentication_and_directory_authority_are_enforced() {
     for profile in ["administrator", "supervisor"] {
         let list = authenticated_request(
             "GET",
-            "/v1/work-items?view=my_teams",
+            "/v1/work-items?view=my-teams",
             &access_token("staff"),
             profile,
             json!(null),

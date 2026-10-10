@@ -1,7 +1,8 @@
-version: 1
+apiVersion: id.registrystack.org/formats/evidence/bundle/v1
+kind: EvidenceBundle
 assuranceProfile: evidence-grade
 service: {providerId: urn:example:fixture:provider:evidence, publicOrigin: https://evidence.invalid, trustDomain: urn:example:fixture:trust-domain:acceptance}
-issuer: {id: urn:example:fixture:issuer:authority}
+issuer: {uri: urn:example:fixture:issuer:authority}
 publication: {serviceId: urn:example:fixture:service:evidence, title: Synthetic Evidence service, description: Synthetic minimum-disclosure assertions for acceptance testing, endpointUrl: https://evidence.example.invalid, jurisdictions: [urn:example:jurisdiction:acceptance]}
 authentication:
   oidc:
@@ -10,11 +11,13 @@ authentication:
     tokenTypes: [at+jwt]
     algorithms: [ES256]
     jwksSource:
-      kind: uri
+      type: uri
       uri: https://identity.invalid/.well-known/jwks.json
     principalClaim: sub
     requesterTagsClaim: evidence_tags
     evidenceAudienceClaim: evidence_audience
+    allowedClients: unrestricted
+    requiredScopes: unrestricted
     maximumTokenLifetimeSeconds: 300
     revokedKeyIds: []
 audit: {hashKeyRef: secret:file/audit-hash-key, hashKeyVersion: 1}
@@ -40,10 +43,10 @@ selectorProfiles:
       birth_date: {type: date}
 sources:
   source-a:
-    transport: http-json
+    type: http-json
     baseUrl: https://source.invalid
     posture: field-projected
-    authentication: {kind: static-authorization, tokenRef: secret:file/source-a-token}
+    authentication: {type: static-authorization, tokenRef: secret:file/source-a-token}
     request:
       method: POST
       path: /v1/facts
@@ -58,9 +61,9 @@ sources:
       preparationLimits: {query: forbidden, jsonBody: required, maximumJsonDepth: 8, maximumCollectionItems: 16, maximumStringBytes: 256, maximumNormalizedBytes: 4096}
       projection: [/total, /date_of_birth]
       redirects: deny
-      timeoutMilliseconds: 3000
+      attemptTimeoutMilliseconds: 3000
       maximumResponseBytes: 65536
-      concurrencyLimit: 8
+      maximumConcurrency: 8
     responseSchema: schemas/response.schema.yaml
     extractScript: adapters/source-a.rhai
     factSchema: schemas/facts.schema.yaml
@@ -76,10 +79,10 @@ authorityProfiles:
         subjects: [{role: subject, selectorProfile: person-demographics-v1, valueOrigin: request}]
 requirements:
   - handle: adult-status
-    id: urn:example:fixture:requirement:adult-status:v1
+    uri: urn:example:fixture:requirement:adult-status:v1
     kind: criterion
     acquisition:
-      kind: single
+      type: single
       source: source-a
     purposes: [fixture-eligibility]
     subjectRoles: [{role: subject, cardinality: one, selectorProfiles: [person-demographics-v1]}]
@@ -88,7 +91,7 @@ requirements:
     observationTimezone: Asia/Bangkok
     validitySeconds: 300
     derivation: {script: derivations/adult-status.rhai, parameters: {minimum_age_years: 18}}
-    concepts: [{handle: is_adult, id: urn:example:fixture:concept:adult-status, form: boolean, required: true, constraints: {}}]
+    concepts: [{handle: is_adult, uri: urn:example:fixture:concept:adult-status, type: boolean, required: true, constraints: {}}]
     fixtures: fixtures/cases.yaml
     disclosureGuard: {families: [urn:example:fixture:disclosure-family:adult-status]}
     existenceDisclosure: collapse-unresolved

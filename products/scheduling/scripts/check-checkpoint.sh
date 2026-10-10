@@ -54,7 +54,7 @@ echo "$check_output" | grep -q '^Authoring check passed.$'
 echo "$check_output" | grep -q '^0 errors, 0 warnings in 5 files$'
 test_output=$("$schedulingctl_bin" test "$work/standalone-exact-time")
 echo "$test_output" | grep -q '^Offline synthetic fixtures passed.$'
-echo "$test_output" | grep -q '^proofBoundary: offline_synthetic$'
+echo "$test_output" | grep -q '^proofBoundary: offline-synthetic$'
 
 # A refused value is an error at its position: check exits 1 and names the
 # file, line, and pointer on stderr, and the JSON envelope is a domain

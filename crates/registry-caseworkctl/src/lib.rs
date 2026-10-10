@@ -49,7 +49,8 @@ enum Command {
     Init(InitArgs),
     /// Connect an authored source through its owning public tooling.
     Source(SourceArgs),
-    /// Validate authored inputs offline and print effective defaults.
+    /// Check a project and, with --runtime-config, a runtime file, offline, and
+    /// print effective defaults.
     Check(CheckArgs),
     /// Explain the running policy from validated local inputs.
     Explain(ProjectArgs),
@@ -148,7 +149,7 @@ struct CheckArgs {
     /// Require every declared source import and all deployment policy inputs.
     #[arg(long)]
     production: bool,
-    /// Exit 1 when the check reports any warning.
+    /// Exit 1 when a warning is reported.
     #[arg(long)]
     deny_warnings: bool,
     /// Closed Base Registry Engine (BReg) package whose rederived registry
@@ -163,12 +164,15 @@ struct CheckArgs {
     /// bregctl binary of the same release that verifies the package.
     #[arg(long, env = "BREGCTL_BIN", default_value = "bregctl")]
     bregctl_bin: PathBuf,
-    /// Runtime configuration to check offline against PROJECT, as casework
-    /// serve reads it, with no package, database, network, or secret material.
+    /// Runtime file to check offline against PROJECT, as `casework serve`
+    /// reads it, with no package, database, network, or secret material
+    /// (`package.root` is not read; `casework serve` verifies the package at
+    /// startup).
     #[arg(long, value_name = "FILE")]
     runtime_config: Option<PathBuf>,
-    /// Fill the runtime file's ${NAME} expressions from this process's
-    /// environment and check the values they produce.
+    /// Fill `${NAME}` expressions in the runtime file from the process
+    /// environment and check the values they produce. Without it, each
+    /// expression is checked by syntax and position only.
     #[arg(long, requires = "runtime_config")]
     environment: bool,
 }
@@ -185,9 +189,9 @@ struct SimulateArgs {
     /// Authored Casework project directory.
     #[arg(value_name = "PROJECT")]
     project: PathBuf,
-    /// Simulation file (CaseworkSimulation) with source facts and a controlled clock.
+    /// Simulation file (`CaseworkSimulation`) with source facts and a controlled clock.
     #[arg(long, value_name = "FILE")]
-    fixture: PathBuf,
+    simulation: PathBuf,
 }
 
 #[derive(Debug, Args)]
@@ -374,7 +378,7 @@ impl From<SettleOutcome> for AttemptSettlementOutcome {
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, ValueEnum)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 enum OutputFormat {
     #[default]
     Human,
@@ -386,7 +390,29 @@ use report::{OPERATIONAL_FAILURE_EXIT, USAGE_EXIT};
 /// The next step for a command line clap refused.
 const USAGE_ACTION: &str =
     "Run caseworkctl --help, or the command with --help, and retry with the documented arguments.";
-const CLI_API_VERSION: &str = "registry.registrystack.org/caseworkctl/v1alpha3";
+/// The version every report format carries. The reports move together: a
+/// breaking change to any pinned field bumps the version of them all.
+const CLI_REPORT_VERSION: &str = "v1alpha3";
+
+/// The report's name inside its `kind`: `CaseworkCheckReport` is the
+/// `CheckReport`.
+fn report_name(kind: &str) -> &str {
+    kind.strip_prefix("Casework").unwrap_or(kind)
+}
+
+/// The `apiVersion` of one report kind. Each report is its own format, named
+/// by its kind in kebab case: `CaseworkCheckReport` is
+/// `id.registrystack.org/formats/casework/check-report/v1alpha3`.
+fn cli_api_version(kind: &str) -> String {
+    let mut format = String::new();
+    for (index, character) in report_name(kind).chars().enumerate() {
+        if character.is_ascii_uppercase() && index > 0 {
+            format.push('-');
+        }
+        format.push(character.to_ascii_lowercase());
+    }
+    format!("id.registrystack.org/formats/casework/{format}/{CLI_REPORT_VERSION}")
+}
 
 pub fn main_entry() -> ExitCode {
     main_entry_from(
@@ -468,7 +494,7 @@ where
     let command_kind = command_kind(&cli.command);
     let report_kind = cli_report_kind(&cli.command);
     match run(cli) {
-        Ok(report) if report_kind == "PlanReport" && report["ok"] == false => {
+        Ok(report) if report_kind == "CaseworkPlanReport" && report["ok"] == false => {
             // A plan that names a refusal is the evidence and the refusal at
             // once: the report goes to stdout and the exit code signals it.
             let report = machine_report(format, report_kind, report, DOMAIN_REFUSAL_EXIT);
@@ -530,7 +556,7 @@ fn write_usage_report(
 ) {
     write_failure(
         &json_report(
-            "UsageReport",
+            "CaseworkUsageReport",
             json!({"ok":false,"command":"usage","diagnostics":[diagnostic(
                 code, "arguments", message, action
             )]}),
@@ -565,15 +591,14 @@ fn usage_refusal(command: &Command) -> Option<(&'static str, String, &'static st
     }
 }
 
-/// Every public JSON report carries one top-level envelope. The version covers
-/// all report kinds as one contract: a breaking change to any pinned field
-/// requires a version bump for the complete `caseworkctl` surface.
+/// Every public JSON report carries one top-level envelope naming its own
+/// format.
 fn cli_report_envelope(kind: &'static str, mut report: Value) -> Value {
     report
         .as_object_mut()
         .expect("every caseworkctl report serializes as an object")
         .extend([
-            ("apiVersion".to_owned(), Value::from(CLI_API_VERSION)),
+            ("apiVersion".to_owned(), Value::from(cli_api_version(kind))),
             ("kind".to_owned(), Value::from(kind)),
         ]);
     report
@@ -599,9 +624,9 @@ fn json_report(kind: &'static str, mut report: Value, exit: u8) -> Value {
     }
     if report.get("status").is_none() {
         let status = match exit {
-            0 if kind == "TestReport" => "passed",
+            0 if kind == "CaseworkTestReport" => "passed",
             0 => "complete",
-            _ if kind == "PlanReport" && report.get("refusals").is_some() => "refused",
+            _ if kind == "CaseworkPlanReport" && report.get("refusals").is_some() => "refused",
             exit => report::failure_status(exit),
         };
         report["status"] = json!(status);
@@ -612,27 +637,27 @@ fn json_report(kind: &'static str, mut report: Value, exit: u8) -> Value {
 /// The command path each report kind names, as its schema pins it.
 fn report_command(kind: &str) -> &'static str {
     match kind {
-        "AttemptSettlementReport" => "attempt settle",
-        "AttemptUncertainMarkingReport" => "attempt mark-uncertain",
-        "CheckReport" => "check",
-        "PlanReport" => "plan",
-        "ApplyReport" => "apply",
-        "StatusReport" => "status",
-        "DoctorReport" => "doctor",
-        "ExplainReport" => "explain",
-        "InitReport" => "init",
-        "LifecycleReport" => "lifecycle",
-        "PackageReport" => "package",
-        "RetentionEraseReport" => "retention erase",
-        "SimulationReport" => "simulate",
-        "SourceAddReport" => "source add",
-        "TestReport" => "test",
-        "DevReport" => "dev",
-        "DevEventsReport" => "dev events",
-        "DevGrantReport" => "dev grant",
-        "DevIdentityReport" => "dev identity",
-        "DevTokenReport" => "dev token",
-        "UsageReport" => "usage",
+        "CaseworkAttemptSettlementReport" => "attempt settle",
+        "CaseworkAttemptUncertainMarkingReport" => "attempt mark-uncertain",
+        "CaseworkCheckReport" => "check",
+        "CaseworkPlanReport" => "plan",
+        "CaseworkApplyReport" => "apply",
+        "CaseworkStatusReport" => "status",
+        "CaseworkDoctorReport" => "doctor",
+        "CaseworkExplainReport" => "explain",
+        "CaseworkInitReport" => "init",
+        "CaseworkLifecycleReport" => "lifecycle",
+        "CaseworkPackageReport" => "package",
+        "CaseworkRetentionEraseReport" => "retention erase",
+        "CaseworkSimulationReport" => "simulate",
+        "CaseworkSourceAddReport" => "source add",
+        "CaseworkTestReport" => "test",
+        "CaseworkDevReport" => "dev",
+        "CaseworkDevEventsReport" => "dev events",
+        "CaseworkDevGrantReport" => "dev grant",
+        "CaseworkDevIdentityReport" => "dev identity",
+        "CaseworkDevTokenReport" => "dev token",
+        "CaseworkUsageReport" => "usage",
         other => unreachable!("{other} is not a caseworkctl report kind"),
     }
 }
@@ -640,25 +665,25 @@ fn report_command(kind: &str) -> &'static str {
 fn cli_report_kind(command: &Command) -> &'static str {
     match command {
         Command::Attempt(args) => match args.command {
-            AttemptCommand::Settle(_) => "AttemptSettlementReport",
-            AttemptCommand::MarkUncertain(_) => "AttemptUncertainMarkingReport",
+            AttemptCommand::Settle(_) => "CaseworkAttemptSettlementReport",
+            AttemptCommand::MarkUncertain(_) => "CaseworkAttemptUncertainMarkingReport",
         },
-        Command::Check(_) => "CheckReport",
-        Command::Plan(_) => "PlanReport",
-        Command::Apply(_) => "ApplyReport",
-        Command::Status(_) => "StatusReport",
-        Command::Db(_) => "UsageReport",
-        Command::Doctor(_) => "DoctorReport",
-        Command::Explain(_) => "ExplainReport",
-        Command::Init(_) => "InitReport",
-        Command::Lifecycle => "LifecycleReport",
-        Command::Package(_) => "PackageReport",
-        Command::Retention(_) => "RetentionEraseReport",
-        Command::Simulate(_) => "SimulationReport",
-        Command::Source(_) => "SourceAddReport",
-        Command::Test(_) => "TestReport",
+        Command::Check(_) => "CaseworkCheckReport",
+        Command::Plan(_) => "CaseworkPlanReport",
+        Command::Apply(_) => "CaseworkApplyReport",
+        Command::Status(_) => "CaseworkStatusReport",
+        Command::Db(_) => "CaseworkUsageReport",
+        Command::Doctor(_) => "CaseworkDoctorReport",
+        Command::Explain(_) => "CaseworkExplainReport",
+        Command::Init(_) => "CaseworkInitReport",
+        Command::Lifecycle => "CaseworkLifecycleReport",
+        Command::Package(_) => "CaseworkPackageReport",
+        Command::Retention(_) => "CaseworkRetentionEraseReport",
+        Command::Simulate(_) => "CaseworkSimulationReport",
+        Command::Source(_) => "CaseworkSourceAddReport",
+        Command::Test(_) => "CaseworkTestReport",
         Command::Dev(args) => args.report_kind(),
-        Command::DevSupervisor(_) | Command::DevServiceGuard(_) => "DevReport",
+        Command::DevSupervisor(_) | Command::DevServiceGuard(_) => "CaseworkDevReport",
     }
 }
 
@@ -707,7 +732,7 @@ fn classify_failure(kind: CommandKind, error: &anyhow::Error) -> (u8, Value) {
             OPERATIONAL_FAILURE_EXIT,
             json!({
                 "severity":"error", "code":"casework.doctor.check-failed",
-                "artifact":"runtime_dependency", "path":format!("doctor:/checks/{}", check.check),
+                "artifact":"runtime-dependency", "path":format!("doctor:/checks/{}", check.check),
                 "message":check.message, "suggestedAction":check.action
             }),
         );
@@ -722,7 +747,7 @@ fn classify_failure(kind: CommandKind, error: &anyhow::Error) -> (u8, Value) {
         return (
             OPERATIONAL_FAILURE_EXIT,
             json!({
-                "severity":"error", "code":code, "artifact":"dev_session", "path":path,
+                "severity":"error", "code":code, "artifact":"dev-session", "path":path,
                 "message":message, "suggestedAction":action
             }),
         );
@@ -752,22 +777,22 @@ fn classify_failure(kind: CommandKind, error: &anyhow::Error) -> (u8, Value) {
     } else if let Some(runtime) = runtime_error {
         (
             if runtime_dependency_unavailable {
-                "runtime_dependency"
+                "runtime-dependency"
             } else {
-                "runtime_configuration"
+                "runtime-configuration"
             },
             format!("runtime.yaml:{}", runtime.pointer()),
             runtime.suggested_action(),
         )
     } else if matches!(kind, CommandKind::Authoring) {
         (
-            "authoring_input",
+            "authoring-input",
             "authoring".to_owned(),
             "Correct the authored input named by the refusal, then retry.".to_owned(),
         )
     } else {
         (
-            "runtime_dependency",
+            "runtime-dependency",
             "runtime".to_owned(),
             "Correct the unavailable runtime dependency, then retry.".to_owned(),
         )
@@ -895,7 +920,7 @@ fn operator_refusal(kind: CommandKind, error: &anyhow::Error) -> Option<Value> {
                 return Some(json!({
                     "severity": "error",
                     "code": "casework.activation.ledger-unreadable",
-                    "artifact": "operator_action",
+                    "artifact": "operator-action",
                     "path": "runtime.yaml:/database/runtimeUrlRef",
                     "message": store.to_string(),
                     "suggestedAction": "Run caseworkctl apply --runtime-config FILE with the \
@@ -921,7 +946,7 @@ fn operator_refusal(kind: CommandKind, error: &anyhow::Error) -> Option<Value> {
     Some(json!({
         "severity": "error",
         "code": code,
-        "artifact": "operator_action",
+        "artifact": "operator-action",
         "path": path,
         "message": message,
         "suggestedAction": action,
@@ -963,7 +988,7 @@ fn activation_failure(error: &anyhow::Error) -> Option<(u8, Value)> {
         json!([{
             "severity": "error",
             "code": code,
-            "artifact": "runtime_dependency",
+            "artifact": "runtime-dependency",
             "path": "runtime.yaml:/audit",
             "message": message,
             "suggestedAction": action,
@@ -1039,7 +1064,7 @@ fn activation_refusal_diagnostics(refusals: &[registry_casework::ActivationRefus
             json!({
                 "severity": "error",
                 "code": refusal.code,
-                "artifact": "operator_action",
+                "artifact": "operator-action",
                 "path": refusal.path,
                 "message": refusal.message,
                 "suggestedAction": action,
@@ -1052,7 +1077,7 @@ fn diagnostic(code: &str, path: &str, message: String, suggested_action: &str) -
     json!({
         "severity": "error",
         "code": code,
-        "artifact": "command_arguments",
+        "artifact": "command-arguments",
         "path": path,
         "message": message,
         "suggestedAction": suggested_action,
@@ -1157,6 +1182,9 @@ fn write_configuration_report(
 
 fn render_human(report: &Value, stdout: &mut dyn io::Write) -> io::Result<()> {
     let command = report["command"].as_str().unwrap_or("command");
+    if command == "init" && report["ok"] == true {
+        return render_init(report, stdout);
+    }
     let lead = match (
         command,
         report["status"].as_str(),
@@ -1177,7 +1205,9 @@ fn render_human(report: &Value, stdout: &mut dyn io::Write) -> io::Result<()> {
     } else {
         writeln!(stdout, "{lead}")?;
     }
-    if let Some(fields) = report.as_object() {
+    if command == "check" && report["ok"] == true {
+        render_checked(report, stdout)?;
+    } else if let Some(fields) = report.as_object() {
         for (key, value) in fields {
             if matches!(
                 key.as_str(),
@@ -1195,6 +1225,38 @@ fn render_human(report: &Value, stdout: &mut dyn io::Write) -> io::Result<()> {
     }
     if let Some(diagnostics) = checked_diagnostics(report)? {
         write!(stdout, "{}", diagnostics.render_human())?;
+    }
+    Ok(())
+}
+
+/// What a check read, one line each. The effective configuration it resolved
+/// is the `--format json` report's to carry.
+fn render_checked(report: &Value, stdout: &mut dyn io::Write) -> io::Result<()> {
+    for (label, member) in [
+        ("project", "project"),
+        ("runtime config", "runtimeConfig"),
+        ("profile", "profile"),
+    ] {
+        if let Some(value) = report[member].as_str() {
+            writeln!(stdout, "{label}: {value}")?;
+        }
+    }
+    Ok(())
+}
+
+/// The project `init` wrote: its directory, each entry it created, and the
+/// step that follows.
+fn render_init(report: &Value, stdout: &mut dyn io::Write) -> io::Result<()> {
+    writeln!(
+        stdout,
+        "created: {}",
+        report["project"].as_str().unwrap_or_default()
+    )?;
+    for entry in report["created"].as_array().into_iter().flatten() {
+        writeln!(stdout, "  {}", entry.as_str().unwrap_or_default())?;
+    }
+    for next in report["next"].as_array().into_iter().flatten() {
+        writeln!(stdout, "next: {}", next.as_str().unwrap_or_default())?;
     }
     Ok(())
 }
@@ -1255,7 +1317,7 @@ fn run(cli: Cli) -> Result<Value> {
             Some(output) => project::package(&args.project, &output, args.revision.as_deref()),
             None => project::package_dry_run(&args.project, args.revision.as_deref()),
         },
-        Command::Simulate(args) => project::simulate(&args.project, &args.fixture),
+        Command::Simulate(args) => project::simulate(&args.project, &args.simulation),
         Command::Test(args) => project::test(&args.project),
         Command::Doctor(args) => project::doctor(&args.runtime_config),
         Command::Plan(args) => project::plan(&args.runtime_config),
@@ -1394,6 +1456,27 @@ mod tests {
 
         let cli = Cli::try_parse_from([
             "caseworkctl",
+            "simulate",
+            "/tmp/project",
+            "--simulation",
+            "/tmp/simulation.yaml",
+        ])
+        .unwrap();
+        let Command::Simulate(args) = cli.command else {
+            panic!("expected simulate")
+        };
+        assert_eq!(args.simulation, PathBuf::from("/tmp/simulation.yaml"));
+        assert!(Cli::try_parse_from([
+            "caseworkctl",
+            "simulate",
+            "/tmp/project",
+            "--fixture",
+            "/tmp/simulation.yaml",
+        ])
+        .is_err());
+
+        let cli = Cli::try_parse_from([
+            "caseworkctl",
             "--format",
             "json",
             "doctor",
@@ -1461,6 +1544,18 @@ mod tests {
     }
 
     #[test]
+    fn a_report_api_version_names_the_report_format_in_kebab_case() {
+        assert_eq!(
+            cli_api_version("CaseworkAttemptUncertainMarkingReport"),
+            "id.registrystack.org/formats/casework/attempt-uncertain-marking-report/v1alpha3"
+        );
+        assert_eq!(
+            cli_api_version("CaseworkDevReport"),
+            "id.registrystack.org/formats/casework/dev-report/v1alpha3"
+        );
+    }
+
+    #[test]
     fn usage_json_has_the_common_diagnostic_fields_and_exit_two() {
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
@@ -1472,8 +1567,11 @@ mod tests {
         assert_eq!(exit, ExitCode::from(2));
         assert!(stderr.is_empty());
         let report: Value = serde_json::from_slice(&stdout).unwrap();
-        assert_eq!(report["apiVersion"], CLI_API_VERSION);
-        assert_eq!(report["kind"], "UsageReport");
+        assert_eq!(
+            report["apiVersion"],
+            "id.registrystack.org/formats/casework/usage-report/v1alpha3"
+        );
+        assert_eq!(report["kind"], "CaseworkUsageReport");
         let diagnostic = &report["diagnostics"][0];
         for field in [
             "severity",
@@ -1485,7 +1583,7 @@ mod tests {
         ] {
             assert!(diagnostic.get(field).is_some(), "missing {field}");
         }
-        assert_eq!(diagnostic["artifact"], "command_arguments");
+        assert_eq!(diagnostic["artifact"], "command-arguments");
 
         stdout.clear();
         let exit = main_entry_from(["caseworkctl", "doctor"], &mut stdout, &mut stderr);
@@ -1532,8 +1630,11 @@ mod tests {
         assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT));
         assert!(stderr.is_empty());
         let report: Value = serde_json::from_slice(&stdout).unwrap();
-        assert_eq!(report["apiVersion"], CLI_API_VERSION);
-        assert_eq!(report["kind"], "TestReport");
+        assert_eq!(
+            report["apiVersion"],
+            "id.registrystack.org/formats/casework/test-report/v1alpha3"
+        );
+        assert_eq!(report["kind"], "CaseworkTestReport");
         let diagnostic = &report["diagnostics"][0];
         assert_eq!(diagnostic["code"], "casework.test.no-fixtures", "{report}");
         assert_eq!(diagnostic["path"], "");
@@ -1636,7 +1737,7 @@ mod tests {
         let regional_path = project.join("sources/regional-register.json");
         let mut regional: Value =
             serde_json::from_slice(&std::fs::read(&regional_path).unwrap()).unwrap();
-        regional["request"]["review"]["policyId"] = json!("missing-review-kind");
+        regional["requests"][0]["review"]["policyId"] = json!("missing-review-kind");
         std::fs::write(&regional_path, serde_json::to_vec(&regional).unwrap()).unwrap();
 
         let mut stdout = Vec::new();
@@ -1671,7 +1772,10 @@ mod tests {
             diagnostic["related"][0]["file"],
             regional_path.display().to_string()
         );
-        assert_eq!(diagnostic["related"][0]["path"], "/request/review/policyId");
+        assert_eq!(
+            diagnostic["related"][0]["path"],
+            "/requests/0/review/policyId"
+        );
     }
 
     #[test]
@@ -1998,6 +2102,43 @@ mod tests {
     }
 
     #[test]
+    fn check_names_the_header_of_a_simulation_file_that_lacks_it() {
+        let root = crate::canonical_tempdir();
+        let project = root.path().join("standalone");
+        project::init(&project, "standalone-decision").unwrap();
+        let simulations = project.join("simulations");
+        std::fs::create_dir_all(&simulations).unwrap();
+        std::fs::write(simulations.join("no-header.yaml"), "id: example\n").unwrap();
+
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let exit = main_entry_from(
+            [
+                OsString::from("caseworkctl"),
+                OsString::from("check"),
+                project.as_os_str().to_owned(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        );
+        let stderr = String::from_utf8(stderr).unwrap();
+
+        assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT));
+        assert!(stdout.is_empty());
+        assert!(
+            stderr.contains("error[config.missing-envelope] "),
+            "{stderr}"
+        );
+        assert!(
+            stderr.contains(
+                "Start the file with `apiVersion: id.registrystack.org/formats/casework/simulation/v1alpha1` and `kind: CaseworkSimulation`.\n"
+            ),
+            "{stderr}"
+        );
+        assert!(!stderr.contains("for one of"), "{stderr}");
+    }
+
+    #[test]
     fn check_leaves_a_deferred_runtime_value_out_unless_asked_to_substitute() {
         let root = crate::canonical_tempdir();
         let project = root.path().join("standalone");
@@ -2156,14 +2297,14 @@ mod tests {
         let runtime = root.path().join("runtime.yaml");
         std::fs::write(
             &runtime,
-            format!("apiVersion: registry.registrystack.org/casework-runtime/v1alpha1\nkind: CaseworkRuntimeConfig\ndatabase:\n  testOnlyPlaintext: {REJECTED_VALUE}\n"),
+            format!("apiVersion: id.registrystack.org/formats/casework/runtime/v1alpha1\nkind: CaseworkRuntimeConfig\ndatabase:\n  testOnlyPlaintext: {REJECTED_VALUE}\n"),
         )
         .unwrap();
         let project = root.path().join("project");
         std::fs::create_dir(&project).unwrap();
         std::fs::write(
             project.join("casework.yaml"),
-            format!("apiVersion: registry.registrystack.org/casework/v1alpha1\nkind: CaseworkProject\nsources: {REJECTED_VALUE}\n"),
+            format!("apiVersion: id.registrystack.org/formats/casework/project/v1alpha1\nkind: CaseworkProject\nsources: {REJECTED_VALUE}\n"),
         )
         .unwrap();
 
@@ -2287,6 +2428,20 @@ mod tests {
         );
     }
 
+    /// A diagnostic about something that is not a document names it with a
+    /// word of the tool's own, spelled as every other value is: kebab-case.
+    #[test]
+    fn a_diagnostic_about_no_document_names_its_artifact_in_kebab_case() {
+        let runtime = anyhow::Error::new(RuntimeConfigError::AllowedClientsRequired);
+        let (_, diagnostic) = classify_failure(CommandKind::Operational, &runtime);
+        assert_eq!(diagnostic["artifact"], "runtime-configuration");
+
+        let authoring = anyhow::anyhow!("the fixture names no request");
+        let (exit, diagnostic) = classify_failure(CommandKind::Authoring, &authoring);
+        assert_eq!(exit, DOMAIN_REFUSAL_EXIT);
+        assert_eq!(diagnostic["artifact"], "authoring-input");
+    }
+
     #[test]
     fn unavailable_oidc_dependency_uses_operational_exit_and_safe_diagnostic() {
         let error = anyhow::Error::new(RuntimeConfigError::Oidc);
@@ -2297,7 +2452,7 @@ mod tests {
             diagnostic["code"],
             "casework.runtime-dependency.unavailable"
         );
-        assert_eq!(diagnostic["artifact"], "runtime_dependency");
+        assert_eq!(diagnostic["artifact"], "runtime-dependency");
         assert_eq!(diagnostic["path"], "runtime.yaml:/authentication/oidc");
         assert_eq!(
             diagnostic["message"],
@@ -2336,7 +2491,7 @@ mod tests {
         let (exit, diagnostic) = classify_failure(CommandKind::Retention, &corrupt);
         assert_eq!(exit, OPERATIONAL_FAILURE_EXIT);
         assert_eq!(diagnostic["code"], "caseworkctl.operational-failure");
-        assert_eq!(diagnostic["artifact"], "runtime_dependency");
+        assert_eq!(diagnostic["artifact"], "runtime-dependency");
         assert_eq!(diagnostic["path"], "runtime");
         assert_eq!(
             diagnostic["message"],
@@ -2386,7 +2541,7 @@ mod tests {
         assert_eq!(exit, ExitCode::from(2));
         assert!(stderr.is_empty(), "{stderr}");
         let report: Value = serde_json::from_str(&stdout).unwrap();
-        assert_eq!(report["kind"], "UsageReport");
+        assert_eq!(report["kind"], "CaseworkUsageReport");
         assert_eq!(report["ok"], false);
         assert_eq!(report["diagnostics"][0]["code"], "usage.removed-command");
         assert_eq!(report["diagnostics"][0]["path"], "arguments");
@@ -2533,7 +2688,7 @@ mod tests {
         let mut actions = std::collections::BTreeSet::new();
         for (diagnostic, code) in diagnostics.iter().zip(codes) {
             assert_eq!(diagnostic["code"], format!("casework.activation.{code}"));
-            assert_eq!(diagnostic["artifact"], "operator_action");
+            assert_eq!(diagnostic["artifact"], "operator-action");
             assert_eq!(diagnostic["path"], "database");
             assert_eq!(diagnostic["message"], format!("{code} message"));
             let action = diagnostic["suggestedAction"].as_str().unwrap();
@@ -2668,7 +2823,7 @@ mod tests {
         let (exit, diagnostic) = classify_failure(doctor, &unmigrated);
         assert_eq!(exit, OPERATIONAL_FAILURE_EXIT);
         assert_eq!(diagnostic["code"], "casework.doctor.check-failed");
-        assert_eq!(diagnostic["artifact"], "runtime_dependency");
+        assert_eq!(diagnostic["artifact"], "runtime-dependency");
         assert_eq!(diagnostic["path"], "doctor:/checks/database");
         assert_eq!(
             diagnostic["message"],
@@ -2833,7 +2988,7 @@ mod tests {
                 "authoringStatus":"incomplete",
                 "filesChecked":2,
                 "diagnostics":[warning],
-                "proofBoundary":"offline_synthetic",
+                "proofBoundary":"offline-synthetic",
                 "productionClosure":false
             }),
             &mut test_output,
@@ -2842,9 +2997,119 @@ mod tests {
         let test_output = String::from_utf8(test_output).unwrap();
         assert!(test_output
             .starts_with("Offline synthetic fixtures passed with incomplete authored inputs."));
-        assert!(test_output.contains("proofBoundary: offline_synthetic"));
+        assert!(test_output.contains("proofBoundary: offline-synthetic"));
         assert!(test_output.contains("productionClosure: false"));
         assert!(test_output.ends_with("0 errors, 1 warning in 2 files\n"));
+    }
+
+    #[test]
+    fn a_checked_project_is_summarized_in_lines_and_the_report_is_left_to_json() {
+        let checked = json!({
+            "ok":true,
+            "command":"check",
+            "status":"complete",
+            "project":"work/casework",
+            "effective":{"projectId":"example","mode":"standalone","sourceConnections":0},
+            "profile":"authoring",
+            "filesChecked":3,
+            "diagnostics":[],
+            "networkAccess":false,
+            "databaseAccess":false
+        });
+        let mut output = Vec::new();
+        render_human(&checked, &mut output).unwrap();
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            "Authoring check passed with complete inputs.\n\
+             project: work/casework\n\
+             profile: authoring\n\
+             0 errors, 0 warnings in 3 files\n"
+        );
+
+        let mut with_runtime = checked;
+        with_runtime["runtimeConfig"] = json!("work/runtime.yaml");
+        with_runtime["profile"] = json!("production");
+        with_runtime["filesChecked"] = json!(4);
+        let mut output = Vec::new();
+        render_human(&with_runtime, &mut output).unwrap();
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            "Authoring check passed with complete inputs.\n\
+             project: work/casework\n\
+             runtime config: work/runtime.yaml\n\
+             profile: production\n\
+             0 errors, 0 warnings in 4 files\n"
+        );
+    }
+
+    #[test]
+    fn check_and_init_print_no_report_member_in_the_human_format() {
+        let root = crate::canonical_tempdir();
+        let project = root.path().join("casework");
+        let project_argument = project.to_str().unwrap();
+        let run = |arguments: &[&str]| {
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+            let mut full = vec![OsString::from("caseworkctl")];
+            full.extend(arguments.iter().map(OsString::from));
+            let exit = main_entry_from(full, &mut stdout, &mut stderr);
+            (
+                exit,
+                String::from_utf8(stdout).unwrap(),
+                String::from_utf8(stderr).unwrap(),
+            )
+        };
+
+        let (exit, stdout, stderr) = run(&[
+            "init",
+            project_argument,
+            "--template",
+            "standalone-decision",
+        ]);
+        assert_eq!(exit, ExitCode::SUCCESS, "{stderr}");
+        assert_eq!(
+            stdout,
+            format!(
+                "created: {project_argument}\n  \
+                 casework.yaml\n  \
+                 runtime.example.yaml\n  \
+                 dev-clients.yaml\n  \
+                 fixtures/standalone-decision.yaml\n  \
+                 sources/\n  \
+                 .casework/schemas/project.schema.json\n  \
+                 .casework/schemas/runtime.schema.json\n  \
+                 .casework/schemas/fixture.schema.json\n  \
+                 .casework/schemas/dev-clients.schema.json\n  \
+                 .vscode/settings.json\n\
+                 next: Run caseworkctl check and test, then caseworkctl dev to start a local \
+                 Casework runtime, its database and its token issuer, with the directory in \
+                 dev-clients.yaml already seeded.\n"
+            )
+        );
+
+        let (exit, stdout, stderr) = run(&["check", project_argument]);
+        assert_eq!(exit, ExitCode::SUCCESS, "{stderr}");
+        let lines = stdout.lines().collect::<Vec<_>>();
+        assert_eq!(lines[0], "Authoring check passed with complete inputs.");
+        assert_eq!(lines[1], format!("project: {project_argument}"));
+        assert_eq!(lines[2], "profile: authoring");
+        assert!(lines.last().unwrap().starts_with("0 errors, "), "{stdout}");
+        for member in ["effective", "status", "networkAccess", "databaseAccess"] {
+            assert!(
+                !lines
+                    .iter()
+                    .any(|line| line.starts_with(&format!("{member}:"))),
+                "{stdout}"
+            );
+        }
+
+        // The whole report stays one `--format json` away.
+        let (exit, stdout, _) = run(&["--format=json", "check", project_argument]);
+        assert_eq!(exit, ExitCode::SUCCESS);
+        let report: Value = serde_json::from_str(&stdout).unwrap();
+        assert_eq!(report["effective"]["mode"], "standalone");
+        assert_eq!(report["networkAccess"], false);
+        assert_eq!(report["databaseAccess"], false);
     }
 
     const ATTEMPT_ID: &str = "7c9e6679-7425-40de-944b-e07fc1f90ae7";
@@ -3063,10 +3328,13 @@ mod tests {
         let cli = Cli::try_parse_from(attempt_mark_uncertain_arguments()).unwrap();
         assert_eq!(
             cli_report_kind(&cli.command),
-            "AttemptUncertainMarkingReport"
+            "CaseworkAttemptUncertainMarkingReport"
         );
         let cli = Cli::try_parse_from(attempt_settle_arguments()).unwrap();
-        assert_eq!(cli_report_kind(&cli.command), "AttemptSettlementReport");
+        assert_eq!(
+            cli_report_kind(&cli.command),
+            "CaseworkAttemptSettlementReport"
+        );
     }
 
     #[test]

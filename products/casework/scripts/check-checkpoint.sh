@@ -57,9 +57,9 @@ multistage="$repo_root/products/casework/examples/multi-stage-routing-clocks"
 "$caseworkctl_bin" check "$multistage" >/dev/null
 "$caseworkctl_bin" explain "$multistage" >/dev/null
 "$caseworkctl_bin" simulate "$multistage" \
-  --fixture "$multistage/simulations/friday-review.yaml" >/dev/null
+  --simulation "$multistage/simulations/friday-review.yaml" >/dev/null
 "$caseworkctl_bin" simulate "$multistage" \
-  --fixture "$multistage/simulations/resubmitted-response.yaml" >/dev/null
+  --simulation "$multistage/simulations/resubmitted-response.yaml" >/dev/null
 "$caseworkctl_bin" test "$multistage" >/dev/null
 "$caseworkctl_bin" --format json package "$multistage" \
   --output "$work/multistage-package" >"$work/multistage-package.json"

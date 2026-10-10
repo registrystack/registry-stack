@@ -284,7 +284,7 @@ pub(super) struct LocalReviewAuthority {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct LocalReviewExecutor {
-    /// The one service-only apply_request profile selected by the worker.
+    /// The one service-only apply-request profile selected by the worker.
     pub access_profile: String,
     /// Logical client from this same closed file. Its retained issuer key is
     /// copied into the private runtime secret tree.
@@ -2001,13 +2001,13 @@ pub(super) fn runtime(root: &Path, state: &State, clients: &Clients, test: bool)
         ("migration-database-url", MIGRATION_ROLE)
     };
     let mut runtime = json!({
-        "apiVersion":"registry.registrystack.org/breg-runtime/v1alpha1","kind":"BRegRuntimeConfig",
+        "apiVersion":"id.registrystack.org/formats/breg/runtime/v1alpha1","kind":"BRegRuntimeConfig",
         "listener":{"bind":format!("127.0.0.1:{}",state.breg_port),"publicOrigin":state.breg_origin()},
         "identity":{"environment":"local","instanceId":state.instance_id,"databaseId":DATABASE_ID,"databaseInitializationEnvironment":"local"},
         "secretProviders":{"file":{"root":final_root.join("secrets")}},
-        "database":{"runtimeUrlRef":format!("secret:file/{runtime_url}"),"migrationUrlRef":format!("secret:file/{prefix}migration-database-url"),"pool":{"maxSize":4},"roles":{"migration":MIGRATION_ROLE,"runtime":runtime_role}},
+        "database":{"runtimeUrlRef":format!("secret:file/{runtime_url}"),"migrationUrlRef":format!("secret:file/{prefix}migration-database-url"),"pool":{"maximumConnections":4},"roles":{"migration":MIGRATION_ROLE,"runtime":runtime_role}},
         "package":{"root":final_root.join(if test {"empty-package"}else{"build/package"})},
-        "authentication":{"oidc":{"issuer":state.issuer_origin(),"audience":state.audience(),"allowedAlgorithm":"RS256","accessTokenType":"at+jwt","scopeClaim":"scope","scopeSeparator":" ","allowedClients":allowed_clients,"assertionIssuers":&assertion_issuers,"deniedKids":[],"maxTokenLifetimeSeconds":300,"leewayMilliseconds":30000,"jwksSource":{"kind":"static","documentRef":"secret:file/issuer-jwks"}},"authorityClaims":{"principal":"registry_principal","purpose":"registry_purpose"}},
+        "authentication":{"oidc":{"issuer":state.issuer_origin(),"audience":state.audience(),"allowedAlgorithm":"RS256","accessTokenType":"at+jwt","scopeClaim":"scope","scopeSeparator":" ","allowedClients":allowed_clients,"assertionIssuers":&assertion_issuers,"maximumTokenLifetimeSeconds":300,"leewayMilliseconds":30000,"jwksSource":{"type":"static","documentRef":"secret:file/issuer-jwks"}},"authorityClaims":{"principal":"registry_principal","purpose":"registry_purpose"}},
         "audit":{"hashKeyRef":"secret:file/audit-key","destination":"file","path":final_root.join("audit").join(format!("{prefix}audit.jsonl"))},"cursor":{"secretRef":"secret:file/cursor-key"},"eventDestinations":destinations,
         "evidenceProviders":clients.evidence_providers.iter().map(|(id, provider)| (id.clone(), json!({
             "baseUrl":provider.base_url,
@@ -2126,13 +2126,11 @@ fn local_review_executors(
                         && selected_purpose
                             .as_ref()
                             .is_none_or(|purpose| !profile.required_purposes.contains(purpose)))
-                    || profile.principal_claim.as_ref().is_some_and(|claim| {
-                        claim != "sub"
-                            && claims
-                                .get(claim)
-                                .and_then(Value::as_str)
-                                .is_none_or(str::is_empty)
-                    })
+                    || (profile.principal_claim != "sub"
+                        && claims
+                            .get(&profile.principal_claim)
+                            .and_then(Value::as_str)
+                            .is_none_or(str::is_empty))
                 {
                     bail!("local review executor {id} does not satisfy its service apply profile");
                 }
@@ -2239,7 +2237,7 @@ pub(super) fn external_event_destinations(
         let binding = &bindings[id];
         (id.clone(), json!({
             "origin":binding.origin,"path":binding.path,
-            "networkProfile":"loopbackDevelopmentHttp","dnsFamily":"dualStackStrict",
+            "networkProfile":"loopback-development-http","dnsFamily":"dual-stack-strict",
             "allowedPrivateCidrs":[],"hmacSha256KeyRef":format!("secret:file/webhook-{id}"),
             "classificationCeiling":classification,
             "deliveryCeilings":{"attemptTimeoutMilliseconds":timeout,"maximumAttempts":attempts}
@@ -2276,7 +2274,7 @@ fn event_destinations(compiled: &registry_breg::CompiledRegistry, port: u16) -> 
     Value::Object(destinations.into_iter().map(|(id, (classification, timeout, attempts))| {
         (id.clone(), json!({
             "origin":format!("http://127.0.0.1:{port}"),"path":"/events",
-            "networkProfile":"loopbackDevelopmentHttp","dnsFamily":"dualStackStrict",
+            "networkProfile":"loopback-development-http","dnsFamily":"dual-stack-strict",
             "allowedPrivateCidrs":[],"hmacSha256KeyRef":"secret:file/webhook-key",
             "classificationCeiling":classification,
             "deliveryCeilings":{"attemptTimeoutMilliseconds":timeout,"maximumAttempts":attempts}

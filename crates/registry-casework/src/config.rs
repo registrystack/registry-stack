@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::{IpAddr, Ipv6Addr, SocketAddr};
 use std::path::{Path, PathBuf};
@@ -16,7 +15,7 @@ use registry_platform_config::{
     is_sha256_label, sha256_uri, ConfigBlockError, ConfigBlockErrorKind, PackageConfig,
     PackageDigestMismatch, PackageError, PackageErrorKind, PackageLimits, RemovedKey,
     RuntimeConfigLoader, RuntimeEnvelope, RuntimeFileCheck, SecretReference, SecretResolver,
-    VerifiedPackage, DEFAULT_STAND_IN, REMOVED_OIDC_JWKS_URI,
+    VerifiedPackage, DEFAULT_STAND_IN, REMOVED_OIDC_JWKS_SOURCE_KIND, REMOVED_OIDC_JWKS_URI,
 };
 pub use registry_platform_config::{
     AuditKeyConfig, DatabaseConfig, EnvironmentSecretProviderConfig, FileSecretProviderConfig,
@@ -27,7 +26,7 @@ use registry_platform_oidc::{
     access_token_typ_set, fetch_discovery, parse_static_jwks, JwksFetcher, JwksFetcherConfig,
     OidcDiscoveryConfig, TokenVerifierConfig,
 };
-use registry_platform_yaml::{escape_pointer_segment, Diagnostic, Report};
+use registry_platform_yaml::{escape_pointer_segment, Diagnostic, Report, RetiredApiVersion};
 use serde::{Deserialize, Deserializer};
 use thiserror::Error;
 
@@ -36,7 +35,11 @@ pub const PACKAGE_COMMAND: &str = "caseworkctl package";
 /// The manifest earlier Casework packages carried. A package root holding it
 /// is refused, naming the command that writes the current package.
 pub const RETIRED_PACKAGE_MANIFEST_FILE: &str = "casework.package.json";
-pub const RUNTIME_CONFIG_API_VERSION: &str = "registry.registrystack.org/casework-runtime/v1alpha1";
+pub const RUNTIME_CONFIG_API_VERSION: &str =
+    "id.registrystack.org/formats/casework/runtime/v1alpha1";
+/// The apiVersion an earlier Casework runtime configuration carried.
+pub const RETIRED_RUNTIME_CONFIG_API_VERSION: &str =
+    "registry.registrystack.org/casework-runtime/v1alpha1";
 pub const RUNTIME_CONFIG_KIND: &str = "CaseworkRuntimeConfig";
 pub const POLICY_FILE: &str = "casework.yaml";
 
@@ -46,13 +49,38 @@ pub const CASEWORK_RUNTIME_ENVELOPE: RuntimeEnvelope = RuntimeEnvelope {
     kind: RUNTIME_CONFIG_KIND,
 };
 
+/// The apiVersions an earlier Casework runtime configuration carried, each
+/// refused with the one that replaced it.
+pub const CASEWORK_RETIRED_RUNTIME_API_VERSIONS: &[RetiredApiVersion<'static>] =
+    &[RetiredApiVersion {
+        api_version: RETIRED_RUNTIME_CONFIG_API_VERSION,
+        replacement: "Write apiVersion: id.registrystack.org/formats/casework/runtime/v1alpha1.",
+    }];
+
 /// Keys an earlier Casework runtime configuration accepted, each refused with
 /// the key that replaced it.
 pub const CASEWORK_REMOVED_KEYS: &[RemovedKey] = &[
     REMOVED_OIDC_JWKS_URI,
+    REMOVED_OIDC_JWKS_SOURCE_KIND,
     RemovedKey {
         path: "authentication.oidc.principalClaim",
         replacement: "declare accessProfiles[].principalClaim in casework.yaml",
+    },
+    RemovedKey {
+        path: "audit.retainDays",
+        replacement: "Rename audit.retainDays to audit.retentionDays",
+    },
+    RemovedKey {
+        path: "sources.*.requestTimeoutMilliseconds",
+        replacement: "Rename requestTimeoutMilliseconds to attemptTimeoutMilliseconds",
+    },
+    RemovedKey {
+        path: "reviewCompletionDestinations.*.timeoutMilliseconds",
+        replacement: "Rename timeoutMilliseconds to attemptTimeoutMilliseconds",
+    },
+    RemovedKey {
+        path: "reviewCompletionDestinations.*.retrySeconds",
+        replacement: "Rename retrySeconds to retryDelaySeconds",
     },
     RemovedKey {
         path: "package.expectedPolicyDigest",
@@ -248,9 +276,30 @@ pub struct RuntimeConfig {
     pub audit: AuditConfig,
     #[serde(default)]
     pub task_authority: Option<TaskAuthorityConfig>,
-    #[serde(default)]
+    /// Source bindings keyed by the source id `casework.yaml` declares.
+    #[serde(
+        default,
+        deserialize_with = "registry_casework_core::typed::local_id_keys"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            with = "BTreeMap<registry_platform_yaml::LocalId, registry_casework_breg::BregBinding>"
+        )
+    )]
     pub sources: BTreeMap<String, registry_casework_breg::BregBinding>,
-    #[serde(default)]
+    /// Completion destinations keyed by the destination id a review producer
+    /// names in `casework.yaml`, kept as written.
+    #[serde(
+        default,
+        deserialize_with = "registry_casework_core::typed::external_id_keys"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            with = "BTreeMap<registry_platform_yaml::ExternalId, ReviewCompletionRuntimeConfig>"
+        )
+    )]
     pub review_completion_destinations: BTreeMap<String, ReviewCompletionRuntimeConfig>,
 }
 
@@ -332,7 +381,7 @@ pub struct ReviewCompletionRuntimeConfig {
             max = MAXIMUM_REVIEW_COMPLETION_TIMEOUT_MILLISECONDS
         ))
     )]
-    pub timeout_milliseconds: u64,
+    pub attempt_timeout_milliseconds: u64,
     #[serde(
         default = "default_review_completion_attempts",
         deserialize_with = "registry_casework_core::typed::bounded_u32::<_, MINIMUM_REVIEW_COMPLETION_ATTEMPTS, MAXIMUM_REVIEW_COMPLETION_ATTEMPTS>"
@@ -356,7 +405,7 @@ pub struct ReviewCompletionRuntimeConfig {
             max = MAXIMUM_REVIEW_COMPLETION_RETRY_SECONDS
         ))
     )]
-    pub retry_seconds: u64,
+    pub retry_delay_seconds: u64,
 }
 
 /// How a completion destination presents its secret. Without `header` the
@@ -511,6 +560,11 @@ pub struct TaskAuthorityConfig {
     #[cfg_attr(feature = "schema", schemars(with = "SecretReference"))]
     pub signing_key_ref: String,
     /// Service client IDs mapped to their one protected resource audience.
+    #[serde(deserialize_with = "registry_casework_core::typed::external_id_keys")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "BTreeMap<registry_platform_yaml::ExternalId, String>")
+    )]
     pub status_clients: BTreeMap<String, String>,
 }
 
@@ -693,7 +747,7 @@ pub struct AuditConfig {
         deserialize_with = "registry_casework_core::typed::optional_bounded_u32::<_, 1, MAX_AUDIT_RETAIN_DAYS>"
     )]
     #[cfg_attr(feature = "schema", schemars(range(min = 1, max = MAX_AUDIT_RETAIN_DAYS)))]
-    pub retain_days: Option<u32>,
+    pub retention_days: Option<u32>,
 }
 
 impl AuditConfig {
@@ -703,7 +757,7 @@ impl AuditConfig {
             self.destination,
             self.path.clone(),
             self.rotate_bytes,
-            self.retain_days,
+            self.retention_days,
         )
         .map_err(|error| match error {
             AuditDestinationError::RelativePath => {
@@ -723,11 +777,13 @@ impl RuntimeConfig {
         Ok(loaded.config)
     }
 
-    /// The shared runtime configuration loader under Casework's envelope and
-    /// removed keys.
+    /// The shared runtime configuration loader under Casework's envelope,
+    /// removed keys, and retired apiVersions.
     #[must_use]
     pub const fn loader() -> RuntimeConfigLoader {
-        RuntimeConfigLoader::new(CASEWORK_RUNTIME_ENVELOPE).removed_keys(CASEWORK_REMOVED_KEYS)
+        RuntimeConfigLoader::new(CASEWORK_RUNTIME_ENVELOPE)
+            .removed_keys(CASEWORK_REMOVED_KEYS)
+            .retired_api_versions(CASEWORK_RETIRED_RUNTIME_API_VERSIONS)
     }
 
     #[must_use]
@@ -1009,10 +1065,10 @@ impl RuntimeConfig {
         if let Err(error) = oidc.clients.check("authentication.oidc") {
             findings.push(error.into());
         }
-        // An empty client list admits every client the issuer verifies, so a
-        // deployment that simply forgot the field would accept a token minted
-        // for an unrelated application in the same realm. Development loopback
-        // keeps that convenience; a deployment behind an operator-controlled
+        // `allowedClients: unrestricted` admits every client the issuer
+        // verifies, so the deployment would accept a token minted for an
+        // unrelated application in the same realm. Development loopback keeps
+        // that convenience; a deployment behind an operator-controlled
         // terminator must name the clients it admits.
         if self.listener.tls_termination == TlsTermination::OperatorControlledUpstream
             && oidc.clients.allowed_clients.is_empty()
@@ -1633,9 +1689,9 @@ mod tests {
         }
     }
 
-    const SOURCE_PROJECT: &str = r#"apiVersion: registry.registrystack.org/casework/v1alpha1
+    const SOURCE_PROJECT: &str = r#"apiVersion: id.registrystack.org/formats/casework/project/v1alpha1
 kind: CaseworkProject
-casework: {id: packaged-review, version: "1"}
+project: {id: packaged-review, version: "1"}
 accessProfiles:
   - {id: staff, principalClaim: sub, requiredScopes: [staff], role: staff}
   - {id: supervisor, principalClaim: sub, requiredScopes: [supervisor], role: supervisor}
@@ -1648,9 +1704,9 @@ sources:
     requests: [{entity: correction, queue: review}]
 "#;
 
-    const SOURCE_CONTEXT_REVIEW_PROJECT: &str = r#"apiVersion: registry.registrystack.org/casework/v1alpha1
+    const SOURCE_CONTEXT_REVIEW_PROJECT: &str = r#"apiVersion: id.registrystack.org/formats/casework/project/v1alpha1
 kind: CaseworkProject
-casework: {id: packaged-review, version: "1"}
+project: {id: packaged-review, version: "1"}
 accessProfiles:
   - {id: staff, principalClaim: sub, requiredScopes: [staff], role: staff}
   - {id: supervisor, principalClaim: sub, requiredScopes: [supervisor], role: supervisor}
@@ -1686,21 +1742,21 @@ reviewProducers:
 "#;
 
     const SOURCE_DESCRIPTION: &str = r#"{
-  "apiVersion":"registry.registrystack.org/casework-source-description/v1alpha1",
-  "kind":"BRegCaseworkSourceDescription",
+  "apiVersion":"id.registrystack.org/formats/casework/breg-source-description/v1alpha1",
+  "kind":"CaseworkBregSourceDescription",
   "origin":"bregctl explain change-requests",
   "authority":"none",
   "sourceId":"professional",
   "sourceRevision":"sha256:source-revision",
-  "request":{
+  "requests":[{
     "requestEntity":"correction",
     "requestRoute":"corrections",
-    "review":{"authority":"casework-main","policyId":"registry-correction"},
+    "review":{"type":"required","authority":"casework-main","policyId":"registry-correction"},
     "onApproved":{"mode":"manual"},
     "fields":[],
     "contractFingerprint":"sha256:contract",
     "application":{}
-  }
+  }]
 }
 "#;
 
@@ -1731,7 +1787,7 @@ reviewProducers:
     }
 
     /// A production fixture names the one client it admits, as a production
-    /// deployment must; a loopback fixture leaves the list empty.
+    /// deployment must; a loopback fixture admits every client.
     fn operator_value(package: &Path, tls: &str) -> serde_json::Value {
         let root = package.parent().expect("package parent");
         let mut document = serde_json::json!({
@@ -1747,7 +1803,8 @@ reviewProducers:
             },
             "authentication": {"oidc": {
                 "issuer": "https://identity.example.test",
-                "audience": "urn:example:casework"
+                "audience": "urn:example:casework",
+                "allowedClients": "unrestricted"
             }},
             "audit": {"path": root.join("audit.ndjson"), "hashKeyRef": "secret:file/audit"},
             "sources": {"professional": {
@@ -1794,7 +1851,7 @@ reviewProducers:
 
         let mut document = operator_value(&package, "operator-controlled-upstream");
         document["authentication"]["oidc"]["jwksSource"] =
-            serde_json::json!({"kind": "static", "documentRef": "secret:file/jwks.json"});
+            serde_json::json!({"type": "static", "documentRef": "secret:file/jwks.json"});
         let operator = root.path().join("operator.yaml");
         std::fs::write(&operator, serde_norway::to_string(&document).unwrap()).unwrap();
 
@@ -1861,7 +1918,7 @@ reviewProducers:
         std::fs::create_dir(&secrets_root).unwrap();
         let mut document = operator_value(&package, "development-loopback");
         document["authentication"]["oidc"]["jwksSource"] =
-            serde_json::json!({"kind": "static", "documentRef": "secret:file/jwks.json"});
+            serde_json::json!({"type": "static", "documentRef": "secret:file/jwks.json"});
         let config = RuntimeConfig::load(write_operator(root.path(), &document)).unwrap();
         let secrets = config.secret_providers.resolver().unwrap();
         let jwks = secrets_root.join("jwks.json");
@@ -1896,7 +1953,7 @@ reviewProducers:
                 matches!(error, RuntimeConfigError::Oidc),
                 "{case}: {error}"
             );
-            assert_eq!(error.path(), "authentication.oidc", "{case}");
+            assert_eq!(error.pointer(), "/authentication/oidc", "{case}");
         }
     }
 
@@ -1912,7 +1969,7 @@ reviewProducers:
         let mut document = operator_value(&package, "development-loopback");
         document["listener"].as_object_mut().unwrap().remove("bind");
         let error = RuntimeConfig::load(write_operator(root.path(), &document)).unwrap_err();
-        assert_eq!(error.path(), "listener");
+        assert_eq!(error.pointer(), "/listener");
         assert!(error.to_string().contains("bind"), "{error}");
     }
 
@@ -2094,7 +2151,7 @@ reviewProducers:
         document["authentication"]["oidc"]["jwksUri"] =
             serde_json::json!("https://identity.example.test/jwks");
         let error = RuntimeConfig::load(write_operator(root.path(), &document)).unwrap_err();
-        assert_eq!(error.path(), "authentication.oidc.jwksUri");
+        assert_eq!(error.pointer(), "/authentication/oidc/jwksUri");
         assert!(
             error.to_string().contains("authentication.oidc.jwksSource"),
             "{error}"
@@ -2102,11 +2159,111 @@ reviewProducers:
 
         let mut document = operator_value(&package, "development-loopback");
         document["authentication"]["oidc"]["jwksSource"] =
-            serde_json::json!({"kind": "uri", "uri": "https://identity.example.test/jwks"});
+            serde_json::json!({"type": "uri", "uri": "https://identity.example.test/jwks"});
         let config = RuntimeConfig::load(write_operator(root.path(), &document)).unwrap();
         assert_eq!(
             config.authentication.oidc.provider.jwks_source.uri(),
             Some("https://identity.example.test/jwks")
+        );
+    }
+
+    #[test]
+    fn renamed_runtime_keys_name_their_replacements() {
+        let destination = serde_json::json!({
+            "url": "https://payments.example.test/review-completed",
+            "bearerTokenRef": "secret:file/payment-completion-token"
+        });
+        for (parent, old, pointer, replacement) in [
+            (
+                &["audit"][..],
+                "retainDays",
+                "/audit/retainDays",
+                "audit.retentionDays",
+            ),
+            (
+                &["sources", "professional"][..],
+                "requestTimeoutMilliseconds",
+                "/sources/professional/requestTimeoutMilliseconds",
+                "attemptTimeoutMilliseconds",
+            ),
+            (
+                &["reviewCompletionDestinations", "payment-results"][..],
+                "timeoutMilliseconds",
+                "/reviewCompletionDestinations/payment-results/timeoutMilliseconds",
+                "attemptTimeoutMilliseconds",
+            ),
+            (
+                &["reviewCompletionDestinations", "payment-results"][..],
+                "retrySeconds",
+                "/reviewCompletionDestinations/payment-results/retrySeconds",
+                "retryDelaySeconds",
+            ),
+        ] {
+            let root = canonical_tempdir();
+            let package = root.path().join("package");
+            std::fs::create_dir(&package).unwrap();
+            write_package(&package);
+            let mut document = operator_value(&package, "development-loopback");
+            document["reviewCompletionDestinations"]["payment-results"] = destination.clone();
+            let mut target = &mut document;
+            for segment in parent {
+                target = &mut target[*segment];
+            }
+            target[old] = serde_json::json!(7);
+            let error = RuntimeConfig::load(write_operator(root.path(), &document)).unwrap_err();
+            assert_eq!(error.code(), "config.removed-key", "{old}: {error}");
+            assert_eq!(error.pointer(), pointer);
+            assert!(
+                error.to_string().contains(replacement),
+                "{old} does not name {replacement}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_retired_runtime_api_version_names_its_replacement() {
+        let root = canonical_tempdir();
+        let package = root.path().join("package");
+        std::fs::create_dir(&package).unwrap();
+        write_package(&package);
+        let mut document = operator_value(&package, "development-loopback");
+        assert_eq!(
+            document["apiVersion"],
+            "id.registrystack.org/formats/casework/runtime/v1alpha1"
+        );
+        document["apiVersion"] = serde_json::json!(RETIRED_RUNTIME_CONFIG_API_VERSION);
+        let error = RuntimeConfig::load(write_operator(root.path(), &document)).unwrap_err();
+        assert_eq!(error.code(), "config.retired-api-version");
+        assert_eq!(error.pointer(), "/apiVersion");
+        assert!(
+            error
+                .suggested_action()
+                .contains(RUNTIME_CONFIG_API_VERSION),
+            "{}",
+            error.suggested_action()
+        );
+    }
+
+    #[test]
+    fn a_jwks_source_tagged_by_kind_names_type() {
+        let root = canonical_tempdir();
+        let package = root.path().join("package");
+        std::fs::create_dir(&package).unwrap();
+        write_package(&package);
+        let mut document = operator_value(&package, "development-loopback");
+        document["authentication"]["oidc"]["jwksSource"] =
+            serde_json::json!({"kind": "uri", "uri": "https://identity.example.test/jwks"});
+        let error = RuntimeConfig::load(write_operator(root.path(), &document)).unwrap_err();
+        assert_eq!(error.pointer(), "/authentication/oidc/jwksSource/kind");
+        assert!(
+            error
+                .to_string()
+                .contains("authentication.oidc.jwksSource.type"),
+            "{error}"
+        );
+        assert!(
+            !error.to_string().contains("identity.example.test"),
+            "{error}"
         );
     }
 
@@ -2121,7 +2278,7 @@ reviewProducers:
         document["authentication"]["oidc"]["issuer"] =
             serde_json::json!("http://identity.example.test");
         let error = RuntimeConfig::load(write_operator(root.path(), &document)).unwrap_err();
-        assert_eq!(error.path(), "authentication.oidc.issuer");
+        assert_eq!(error.pointer(), "/authentication/oidc/issuer");
 
         let mut document = operator_value(&package, "operator-controlled-upstream");
         document["authentication"]["oidc"]["issuerr"] =
@@ -2145,10 +2302,7 @@ reviewProducers:
             "urn:example:substituted"
         );
 
-        for (pointer, field) in [
-            ("/database/runtimeUrlRef", "database.runtimeUrlRef"),
-            ("/audit/hashKeyRef", "audit.hashKeyRef"),
-        ] {
+        for pointer in ["/database/runtimeUrlRef", "/audit/hashKeyRef"] {
             let mut document = operator_value(&package, "development-loopback");
             *document.pointer_mut(pointer).unwrap() =
                 serde_json::json!("${CASEWORK_TEST_REFERENCE:-secret:env/RUNTIME}");
@@ -2161,7 +2315,7 @@ reviewProducers:
                 ),
                 "{error}"
             );
-            assert_eq!(error.path(), field);
+            assert_eq!(error.pointer(), pointer);
         }
     }
 
@@ -2188,7 +2342,7 @@ reviewProducers:
             )],
             "{error}"
         );
-        assert_eq!(error.path(), "package.root/casework.yaml");
+        assert_eq!(error.pointer(), "/package/root");
     }
 
     /// The `code` and `path` of every diagnostic of a refused project.
@@ -2241,17 +2395,47 @@ reviewProducers:
         write_package(&package);
 
         let mut document = operator_value(&package, "operator-controlled-upstream");
-        document["authentication"]["oidc"]["allowedClients"] = serde_json::json!([]);
+        document["authentication"]["oidc"]["allowedClients"] = serde_json::json!("unrestricted");
         let error = RuntimeConfig::load(write_operator(root.path(), &document)).unwrap_err();
         assert!(
             matches!(error, RuntimeConfigError::AllowedClientsRequired),
             "{error}"
         );
-        assert_eq!(error.path(), "authentication.oidc.allowedClients");
+        assert_eq!(error.pointer(), "/authentication/oidc/allowedClients");
         assert!(
             error.to_string().contains("operator-controlled-upstream"),
             "{error}"
         );
+
+        // The decision is written in every file, in either listener mode: an
+        // omitted member and an empty list are refused by the reader.
+        for tls in ["operator-controlled-upstream", "development-loopback"] {
+            let mut omitted = operator_value(&package, tls);
+            omitted["authentication"]["oidc"]
+                .as_object_mut()
+                .unwrap()
+                .remove("allowedClients");
+            let error = RuntimeConfig::load(write_operator(root.path(), &omitted)).unwrap_err();
+            assert_eq!(error.code(), "config.missing-key", "{tls}: {error}");
+            assert!(error.to_string().contains("allowedClients"), "{error}");
+
+            let mut empty = operator_value(&package, tls);
+            empty["authentication"]["oidc"]["allowedClients"] = serde_json::json!([]);
+            let error = RuntimeConfig::load(write_operator(root.path(), &empty)).unwrap_err();
+            assert_eq!(error.code(), "config.invalid-value", "{tls}: {error}");
+            assert_eq!(error.pointer(), "/authentication/oidc/allowedClients");
+            assert!(
+                error.suggested_action().contains("write unrestricted"),
+                "{error}"
+            );
+
+            let mut repeated = operator_value(&package, tls);
+            repeated["authentication"]["oidc"]["allowedClients"] =
+                serde_json::json!(["casework-console", "casework-console"]);
+            let error = RuntimeConfig::load(write_operator(root.path(), &repeated)).unwrap_err();
+            assert_eq!(error.code(), "config.duplicate-item", "{tls}: {error}");
+            assert_eq!(error.pointer(), "/authentication/oidc/allowedClients/1");
+        }
 
         document["authentication"]["oidc"]["allowedClients"] =
             serde_json::json!(["casework-console"]);
@@ -2267,7 +2451,7 @@ reviewProducers:
             root.path(),
             &operator_value(&package, "development-loopback"),
         ))
-        .expect("development loopback keeps an empty client list");
+        .expect("development loopback admits every client when it says so");
         assert!(config
             .authentication
             .oidc
@@ -2280,7 +2464,7 @@ reviewProducers:
     #[test]
     fn static_source_uses_document_ref_camel_case() {
         let source: JwksSource =
-            serde_json::from_str(r#"{"kind":"static","documentRef":"secret:file/keys.json"}"#)
+            serde_json::from_str(r#"{"type":"static","documentRef":"secret:file/keys.json"}"#)
                 .expect("static source");
         assert!(
             matches!(source,JwksSource::Static{document_ref} if document_ref=="secret:file/keys.json")
@@ -2297,6 +2481,49 @@ reviewProducers:
             .map_err(RuntimeConfigError::Load)
     }
 
+    /// The keys of the three id-keyed runtime maps are typed: a source id is
+    /// a local identifier, and a completion destination or a status client is
+    /// accepted as its owner writes it, so only an unusable key is refused.
+    #[test]
+    fn id_keyed_runtime_maps_refuse_a_malformed_key_at_its_pointer() {
+        let root = canonical_tempdir();
+        let base = operator_value(&root.path().join("package"), "development-loopback");
+        let destination = serde_json::json!({
+            "url": "https://payments.example.test/review-completed",
+            "bearerTokenRef": "secret:file/payment-completion-token"
+        });
+        let task_authority = |client: &str| {
+            serde_json::json!({
+                "issuer": "https://casework.example.test",
+                "exchangeAudience": "urn:example:casework:exchange",
+                "signingKeyRef": "secret:file/task-authority",
+                "statusClients": {client: "urn:example:status"}
+            })
+        };
+
+        let mut accepted = base.clone();
+        accepted["reviewCompletionDestinations"]["Payment.Results:v1"] = destination.clone();
+        accepted["taskAuthority"] = task_authority("Status Client 1");
+        parse_runtime(&accepted).expect("external identifiers are kept as written");
+
+        let mut source = base.clone();
+        let binding = source["sources"]["professional"].take();
+        source["sources"] = serde_json::json!({"Professional Registry": binding});
+        let mut completion = base.clone();
+        completion["reviewCompletionDestinations"][""] = destination;
+        let mut status_client = base;
+        status_client["taskAuthority"] = task_authority("");
+        for (document, pointer) in [
+            (source, "/sources/Professional Registry"),
+            (completion, "/reviewCompletionDestinations/"),
+            (status_client, "/taskAuthority/statusClients/"),
+        ] {
+            let error = parse_runtime(&document).expect_err("a malformed key is refused");
+            assert_eq!(error.pointer(), pointer, "{error}");
+            assert_eq!(error.code(), "config.invalid-value", "{error}");
+        }
+    }
+
     #[test]
     fn an_empty_assertion_issuer_map_is_refused_at_its_pointer() {
         let root = canonical_tempdir();
@@ -2304,6 +2531,20 @@ reviewProducers:
         document["authentication"]["oidc"]["assertionIssuers"] = serde_json::json!({});
         let error = parse_runtime(&document).expect_err("an empty map is refused");
         assert_eq!(error.pointer(), "/authentication/oidc/assertionIssuers");
+    }
+
+    #[test]
+    fn a_listed_client_with_no_assertion_issuers_is_refused_at_that_client() {
+        let root = canonical_tempdir();
+        let mut document = operator_value(&root.path().join("package"), "development-loopback");
+        document["authentication"]["oidc"]["assertionIssuers"] =
+            serde_json::json!({"case-portal": []});
+        let error = parse_runtime(&document).expect_err("an empty issuer list is refused");
+        assert_eq!(error.code(), "config.invalid-value", "{error}");
+        assert_eq!(
+            error.pointer(),
+            "/authentication/oidc/assertionIssuers/case-portal"
+        );
     }
 
     #[test]
@@ -2408,20 +2649,16 @@ reviewProducers:
         null_path["audit"]["path"] = serde_json::Value::Null;
         let mut null_scope_claim = document.clone();
         null_scope_claim["authentication"]["oidc"]["scopeClaim"] = serde_json::Value::Null;
-        for (nulled, member, pointer) in [
-            (null_path, "/audit/path", "audit.path"),
-            (
-                null_scope_claim,
-                "/authentication/oidc/scopeClaim",
-                "authentication.oidc.scopeClaim",
-            ),
+        for (nulled, member) in [
+            (null_path, "/audit/path"),
+            (null_scope_claim, "/authentication/oidc/scopeClaim"),
         ] {
             let error = parse_runtime(&nulled).expect_err("an explicit null is refused");
-            let RuntimeConfigError::Load(load) = &error else {
-                panic!("{member}: {error:?}");
-            };
-            assert_eq!(load.deciding_diagnostic().path, member, "{error}");
-            assert_eq!(error.path(), pointer, "{error}");
+            assert!(
+                matches!(error, RuntimeConfigError::Load(_)),
+                "{member}: {error:?}"
+            );
+            assert_eq!(error.pointer(), member, "{error}");
         }
     }
 
@@ -2452,7 +2689,7 @@ reviewProducers:
 
         let mut document = operator_value(&package, "development-loopback");
         document["authentication"]["oidc"]["jwksSource"] =
-            serde_json::json!({"kind": "static", "documentRef": "secret:file/jwks.json"});
+            serde_json::json!({"type": "static", "documentRef": "secret:file/jwks.json"});
         if let Some(assertion_issuers) = assertion_issuers {
             document["authentication"]["oidc"]["assertionIssuers"] = assertion_issuers;
         }
@@ -2660,7 +2897,7 @@ reviewProducers:
             matches!(error, RuntimeConfigError::MissingIdentity),
             "{error:?}"
         );
-        assert_eq!(error.path(), "identity.databaseId");
+        assert_eq!(error.pointer(), "/identity");
         let message = error.to_string();
         assert!(
             message.contains("identity:") && message.contains("databaseId:"),
@@ -2685,7 +2922,7 @@ reviewProducers:
                 matches!(error, RuntimeConfigError::InvalidDatabaseId),
                 "{invalid:?}: {error:?}"
             );
-            assert_eq!(error.path(), "identity.databaseId");
+            assert_eq!(error.pointer(), "/identity/databaseId");
         }
         let root = canonical_tempdir();
         let package = root.path().join("package");
@@ -2709,7 +2946,7 @@ reviewProducers:
 
         std::fs::write(package.join("sources/professional.json"), b"changed").unwrap();
         let error = RuntimeConfig::load(&operator).expect_err("a changed file is refused");
-        assert_eq!(error.path(), "package.root");
+        assert_eq!(error.pointer(), "/package/root");
         let message = error.to_string();
         assert!(
             message.contains("changed: sources/professional.json"),
@@ -2857,7 +3094,7 @@ reviewProducers:
 
             let refusal = |expected: &str| {
                 let error = RuntimeConfig::load(&operator).expect_err(expected);
-                assert_eq!(error.path(), "package.root", "{tls}: {error}");
+                assert_eq!(error.pointer(), "/package/root", "{tls}: {error}");
                 let message = error.to_string();
                 assert!(message.contains(expected), "{tls}: {message}");
                 assert!(message.contains(PACKAGE_COMMAND), "{tls}: {message}");
@@ -2922,7 +3159,7 @@ reviewProducers:
             RuntimeConfigError::PackageDigest(PackageDigestMismatch { expected, found })
                 if expected == &pinned && found == verified.digest()
         ));
-        assert_eq!(error.path(), "package.expectedDigest");
+        assert_eq!(error.pointer(), "/package/expectedDigest");
         assert_eq!(
             error.to_string(),
             PackageDigestMismatch {
@@ -2948,7 +3185,7 @@ reviewProducers:
             RuntimeConfigError::Package(error)
                 if matches!(error.kind(), PackageErrorKind::SumFileMissing)
         ));
-        assert_eq!(error.path(), "package.root");
+        assert_eq!(error.pointer(), "/package/root");
     }
 
     #[test]
@@ -3057,7 +3294,7 @@ reviewProducers:
             &error,
             RuntimeConfigError::InactiveReviewSourceNamespace
         ));
-        assert_eq!(error.path(), "package.root/casework.yaml");
+        assert_eq!(error.pointer(), "/sources");
         assert!(!error.to_string().contains(canary));
 
         let project = project.replace("contextStrategy: source", "contextStrategy: submitted");
@@ -3189,8 +3426,8 @@ reviewProducers:
             }))
             .expect_err(header);
             assert_eq!(
-                refused.path(),
-                "reviewCompletionDestinations.receiver.auth.header",
+                refused.pointer(),
+                "/reviewCompletionDestinations/receiver/auth/header",
                 "{header}"
             );
         }
@@ -3203,7 +3440,10 @@ reviewProducers:
             }),
         ] {
             let refused = load(destination).expect_err("exactly one credential");
-            assert_eq!(refused.path(), "reviewCompletionDestinations.receiver.auth");
+            assert_eq!(
+                refused.pointer(),
+                "/reviewCompletionDestinations/receiver/auth"
+            );
         }
         let unknown = load(serde_json::json!({
             "url": url,
@@ -3267,7 +3507,7 @@ reviewProducers:
                 matches!(error, RuntimeConfigError::InvalidMetricsListener),
                 "{refused} beside {listener}: {error}"
             );
-            assert_eq!(error.path(), "metricsListener.bind");
+            assert_eq!(error.pointer(), "/metricsListener/bind");
         }
         assert!(load(
             Some(serde_json::json!({"bind": "10.0.0.5:8100"})),
@@ -3294,8 +3534,8 @@ reviewProducers:
         let omitted_bind = valid.replace("  bind: 127.0.0.1:8100\n", "");
         std::fs::write(&operator, &omitted_bind).unwrap();
         assert_eq!(
-            RuntimeConfig::load(&operator).unwrap_err().path(),
-            "listener"
+            RuntimeConfig::load(&operator).unwrap_err().pointer(),
+            "/listener"
         );
 
         assert!(matches!(
@@ -3342,7 +3582,7 @@ reviewProducers:
             &error,
             RuntimeConfigError::Load(load) if load.deciding_diagnostic().code == "config.removed-key"
         ));
-        assert_eq!(error.path(), "authentication.oidc.principalClaim");
+        assert_eq!(error.pointer(), "/authentication/oidc/principalClaim");
         assert!(error
             .to_string()
             .contains("accessProfiles[].principalClaim"));
@@ -3377,7 +3617,7 @@ reviewProducers:
             ),
             "the refusal does not name {expected}: {error:?}"
         );
-        assert_eq!(error.path(), expected);
+        assert_eq!(error.pointer(), format!("/sources/professional/{member}"));
         let message = error.to_string();
         assert!(
             !message.contains("accepted range"),
@@ -3409,7 +3649,7 @@ reviewProducers:
             panic!("the reader did not refuse {field}: {error:?}");
         };
         assert_eq!(load.deciding_diagnostic().code, code, "{error}");
-        assert_eq!(error.path(), field);
+        assert_eq!(error.pointer(), format!("/{}", field.replace('.', "/")));
         // The rendered refusal also names the file, whose temporary name is
         // random, so the withheld values are looked for in the wording only.
         for diagnostic in load.diagnostics() {
@@ -3446,11 +3686,11 @@ reviewProducers:
 
     #[test]
     fn a_request_timeout_shorter_than_the_connect_timeout_names_that_rule() {
-        let error = source_binding_refusal("requestTimeoutMilliseconds", serde_json::json!(9_000));
+        let error = source_binding_refusal("attemptTimeoutMilliseconds", serde_json::json!(9_000));
         assert_source_binding_rule(
             &error,
-            "requestTimeoutMilliseconds",
-            &["requestTimeoutMilliseconds", "connectTimeoutMilliseconds"],
+            "attemptTimeoutMilliseconds",
+            &["attemptTimeoutMilliseconds", "connectTimeoutMilliseconds"],
             &["9000"],
         );
     }
@@ -3472,9 +3712,9 @@ reviewProducers:
     fn an_out_of_range_source_binding_timeout_names_its_bounds() {
         for (member, value, withheld) in [
             ("connectTimeoutMilliseconds", 0, &[][..]),
-            ("requestTimeoutMilliseconds", 0, &[][..]),
+            ("attemptTimeoutMilliseconds", 0, &[][..]),
             ("connectTimeoutMilliseconds", 300_001, &["300001"][..]),
-            ("requestTimeoutMilliseconds", 300_001, &["300001"][..]),
+            ("attemptTimeoutMilliseconds", 300_001, &["300001"][..]),
         ] {
             let error = source_binding_refusal(member, serde_json::json!(value));
             assert_reader_refusal(
@@ -3600,7 +3840,7 @@ reviewProducers:
             RuntimeConfigError::Block(block)
                 if block.kind() == registry_platform_config::ConfigBlockErrorKind::SecretProviderDisabled
         ));
-        assert_eq!(error.path(), "database.runtimeUrlRef");
+        assert_eq!(error.pointer(), "/database/runtimeUrlRef");
     }
 
     /// The task signing key is resolved at startup, so the offline check must
@@ -3635,7 +3875,7 @@ reviewProducers:
             .filter(|finding| finding.code() == "casework.runtime.secret-provider-disabled")
             .collect();
         assert_eq!(secret_findings.len(), 1, "{secret_findings:?}");
-        assert_eq!(secret_findings[0].path(), "taskAuthority.signingKeyRef");
+        assert_eq!(secret_findings[0].pointer(), "/taskAuthority/signingKeyRef");
     }
 
     /// RFC 9068 gives the access token one media type spelled two ways,
@@ -3666,8 +3906,8 @@ reviewProducers:
 
     /// `serde_path_to_error` renders a refusal it never attributed to a
     /// member as `.`, which names nothing an operator can look up. A document
-    /// refused whole is reported at `/`, the root every other whole-document
-    /// refusal here already names.
+    /// refused whole is reported at the empty pointer, the root every other
+    /// whole-document refusal here already names.
     #[test]
     fn a_document_refused_whole_is_reported_at_its_root() {
         let root = canonical_tempdir();
@@ -3675,7 +3915,7 @@ reviewProducers:
         std::fs::write(&runtime, "a scalar, not a runtime configuration\n").unwrap();
         let error = RuntimeConfig::load(&runtime).unwrap_err();
         assert!(matches!(error, RuntimeConfigError::Load(_)));
-        assert_eq!(error.path(), "/");
+        assert_eq!(error.pointer(), "");
     }
 
     #[test]
@@ -3692,7 +3932,7 @@ reviewProducers:
         );
         std::fs::write(&runtime, document).unwrap();
         let error = RuntimeConfig::load(&runtime).unwrap_err();
-        assert_eq!(error.path(), "database.testOnlyPlaintext");
+        assert_eq!(error.pointer(), "/database/testOnlyPlaintext");
         assert!(!error.to_string().contains(canary));
     }
 
@@ -3762,7 +4002,7 @@ pub enum RuntimeConfigError {
         #[source]
         error: ConfigBlockError,
     },
-    #[error("unsupported Casework runtime apiVersion; expected registry.registrystack.org/casework-runtime/v1alpha1")]
+    #[error("unsupported Casework runtime apiVersion; expected id.registrystack.org/formats/casework/runtime/v1alpha1")]
     InvalidApiVersion,
     #[error("unsupported Casework runtime kind; expected CaseworkRuntimeConfig")]
     InvalidKind,
@@ -3827,7 +4067,7 @@ pub enum RuntimeConfigError {
     )]
     PrincipalClaimConflict,
     #[error(
-        "authentication.oidc.allowedClients must name every client the deployment admits under operator-controlled-upstream; an empty list admits every client the issuer verifies"
+        "authentication.oidc.allowedClients must name every client the deployment admits under operator-controlled-upstream; unrestricted admits every client the issuer verifies"
     )]
     AllowedClientsRequired,
     #[error("{path} {reason}")]
@@ -3841,7 +4081,7 @@ pub enum RuntimeConfigError {
         "database.runtimeUrlRef and database.migrationUrlRef must be non-empty secret references"
     )]
     InvalidDatabaseReference,
-    #[error("{0}")]
+    #[error("{}", audit_message(.0))]
     InvalidAuditDestination(#[source] AuditDestinationError),
     #[error("sources must bind exactly the source ids casework.yaml declares")]
     InvalidSourceBindings,
@@ -3881,32 +4121,16 @@ pub enum RuntimeConfigError {
 const REBUILD_PACKAGE: &str =
     "Rebuild the package with `caseworkctl package`, then point package.root at it.";
 
-/// An RFC 6901 pointer as the dotted member path; `/` for the whole document.
-fn dotted(pointer: &str) -> String {
-    match pointer.strip_prefix('/') {
-        None => "/".to_owned(),
-        Some(rest) => rest
-            .split('/')
-            .map(|segment| segment.replace("~1", "/").replace("~0", "~"))
-            .collect::<Vec<_>>()
-            .join("."),
-    }
-}
-
 impl RuntimeConfigError {
-    #[must_use]
-    pub fn path(&self) -> Cow<'_, str> {
-        Cow::Borrowed(match self {
-            Self::Load(error) => return Cow::Owned(dotted(&error.deciding_diagnostic().path)),
-            Self::Block(error) | Self::BindingSecret { error, .. } => error.field(),
+    /// The dotted member path of a refusal that carries no pointer of its
+    /// own; [`Self::pointer`] is the location every caller reads.
+    fn member(&self) -> &str {
+        match self {
+            Self::Block(error) => error.field(),
             Self::InvalidApiVersion => "apiVersion",
             Self::InvalidKind => "kind",
-            Self::MissingIdentity | Self::InvalidDatabaseId => "identity.databaseId",
+            Self::InvalidDatabaseId => "identity.databaseId",
             Self::RelativeOperatedPath(path) => path,
-            Self::InvalidReviewCompletionAuth { path, .. }
-            | Self::InvalidReviewCompletionDestination { path, .. }
-            | Self::InvalidTaskAuthority { path, .. }
-            | Self::InvalidSourceBinding { path, .. } => path,
             Self::InvalidOidcClaim { path, .. } => path,
             Self::PrincipalClaimConflict => "authentication.oidc.humanIdentity.claim",
             Self::Oidc => "authentication.oidc",
@@ -3917,19 +4141,28 @@ impl RuntimeConfigError {
             Self::InvalidDatabaseReference => "database",
             Self::PlaintextDatabase => "database.testOnlyPlaintext",
             Self::InvalidAuditDestination(error) => audit_field(error),
-            Self::InvalidSourceBindings | Self::SourceDescription => "sources",
+            Self::InvalidSourceBindings => "sources",
             Self::UnconfiguredReviewCompletionDestination => "reviewCompletionDestinations",
-            Self::InactiveReviewSourceNamespace => "package.root/casework.yaml",
-            Self::Project(_) => "package.root/casework.yaml",
-            Self::PolicyUnreadable => "package.root/casework.yaml",
-            Self::Package(_)
-            | Self::PackageContents { .. }
-            | Self::PackageFileChanged { .. }
-            | Self::RetiredPackageManifest => "package.root",
             Self::PackageDigest(_) => "package.expectedDigest",
             Self::InvalidStrandedWorkAcknowledgement => "package.acknowledgeStrandedWork",
-            Self::Invalid => "/",
-        })
+            // Located by `pointer` itself.
+            Self::Load(_)
+            | Self::BindingSecret { .. }
+            | Self::InvalidReviewCompletionAuth { .. }
+            | Self::InvalidReviewCompletionDestination { .. }
+            | Self::InvalidTaskAuthority { .. }
+            | Self::InvalidSourceBinding { .. }
+            | Self::MissingIdentity
+            | Self::InactiveReviewSourceNamespace
+            | Self::Project(_)
+            | Self::PolicyUnreadable
+            | Self::Package(_)
+            | Self::PackageContents { .. }
+            | Self::PackageFileChanged { .. }
+            | Self::RetiredPackageManifest
+            | Self::SourceDescription
+            | Self::Invalid => "",
+        }
     }
 
     /// The JSON Pointer, in the runtime file, of the member this refusal
@@ -3954,7 +4187,7 @@ impl RuntimeConfigError {
             | Self::RetiredPackageManifest
             | Self::SourceDescription => "/package/root".to_owned(),
             Self::Invalid => String::new(),
-            _ => pointer_to(&self.path().split('.').collect::<Vec<_>>()),
+            _ => pointer_to(&self.member().split('.').collect::<Vec<_>>()),
         }
     }
 
@@ -4016,7 +4249,7 @@ impl RuntimeConfigError {
             Self::Load(error) => return error.deciding_diagnostic().suggested_action.clone(),
             Self::Block(error) | Self::BindingSecret { error, .. } => block_finding(error).1,
             Self::InvalidApiVersion => {
-                "Write apiVersion: registry.registrystack.org/casework-runtime/v1alpha1."
+                "Write apiVersion: id.registrystack.org/formats/casework/runtime/v1alpha1."
             }
             Self::InvalidKind => "Write kind: CaseworkRuntimeConfig.",
             Self::MissingIdentity => {
@@ -4130,10 +4363,26 @@ fn audit_field(error: &AuditDestinationError) -> &'static str {
         AuditDestinationError::FileOnlyField {
             field: "retainDays",
         }
-        | AuditDestinationError::RetainDaysOutOfRange { .. } => "audit.retainDays",
+        | AuditDestinationError::RetainDaysOutOfRange { .. } => "audit.retentionDays",
         AuditDestinationError::InvalidProcessRole
         | AuditDestinationError::ProcessRoleOverlapsStream => "audit",
         _ => "audit.path",
+    }
+}
+
+/// An audit destination refusal in Casework's own member names. Casework
+/// names the retention member `retentionDays` (CFG-NAME-5), so this and
+/// [`audit_field`] say so rather than repeat the shared text.
+fn audit_message(error: &AuditDestinationError) -> String {
+    match error {
+        AuditDestinationError::FileOnlyField { .. } => format!(
+            "{} applies only when audit.destination is file",
+            audit_field(error)
+        ),
+        AuditDestinationError::RetainDaysOutOfRange { maximum } => {
+            format!("audit.retentionDays must be between 1 and {maximum}")
+        }
+        error => error.to_string(),
     }
 }
 

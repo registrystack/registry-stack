@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 //! `evidencectl check --file`: check one tooling file on its own.
 //!
-//! The file's `kind` names its format; a client profile and a reviewed
-//! contracts file carry no `kind`, so their `schema` member names theirs. The
+//! The file's `kind` names its format. A client profile or a reviewed
+//! contracts file that still opens with the removed `schema` header is handed
+//! to its reader, which refuses the header and names what to write. The
 //! check reads the file with the reader its format has, applies the rules that
 //! hold without a project, a session, a network or a secret, and reports what
 //! it found in the shared diagnostic shape (CFG-DIAG-1, CFG-DIAG-2). It
@@ -17,8 +18,8 @@ use std::{
 };
 
 use registry_evidence_client::{
-    read_client_profile, read_reviewed_contracts, EVIDENCE_CLIENT_CONTRACTS_SCHEMA_V1,
-    EVIDENCE_CLIENT_PROFILE_SCHEMA_V1,
+    read_client_profile, read_reviewed_contracts, EVIDENCE_CLIENT_CONTRACTS_KIND,
+    EVIDENCE_CLIENT_PROFILE_KIND,
 };
 use registry_platform_yaml::{
     Diagnostic, NodeValue, Reader, Report, Source, MAXIMUM_DOCUMENT_BYTES,
@@ -27,61 +28,47 @@ use serde_json::{json, Value};
 
 use crate::{dev, report, source_import, OutputFormat};
 
-/// How a format names itself in the file.
-#[derive(Clone, Copy)]
-enum Names {
-    /// The root `kind` member.
-    Kind(&'static str),
-    /// The root `schema` member, for a format with no `kind`.
-    Schema(&'static str),
-}
-
 type Check = fn(&str, &[u8]) -> Result<(), Failure>;
 
-/// Every format the command reads, how the file names it, whether the file
+/// The `schema` header a client profile and a reviewed contracts file opened
+/// with before the envelope, and the reader that refuses it by name.
+const REMOVED_SCHEMA_HEADERS: [(&str, Check); 2] = [
+    ("registry.evidence-client-contracts/v1", |file, bytes| {
+        Ok(read_reviewed_contracts(file, bytes).map(drop)?)
+    }),
+    ("registry.evidence-client-profile/v1", |file, bytes| {
+        Ok(read_client_profile(file, bytes).map(drop)?)
+    }),
+];
+
+/// Every format the command reads, the `kind` that names it, whether the file
 /// may exceed the shared reader's document bound, and its check. The two
 /// source-import files embed project content, so the importer bounds them
 /// itself and the reader never sees them.
-const FORMATS: [(Names, bool, Check); 7] = [
-    (
-        Names::Schema(EVIDENCE_CLIENT_CONTRACTS_SCHEMA_V1),
-        false,
-        |file, bytes| Ok(read_reviewed_contracts(file, bytes).map(drop)?),
-    ),
-    (
-        Names::Schema(EVIDENCE_CLIENT_PROFILE_SCHEMA_V1),
-        false,
-        |file, bytes| Ok(read_client_profile(file, bytes).map(drop)?),
-    ),
-    (Names::Kind(dev::DEV_STATE_KIND), false, |file, bytes| {
+const FORMATS: [(&str, bool, Check); 7] = [
+    (EVIDENCE_CLIENT_CONTRACTS_KIND, false, |file, bytes| {
+        Ok(read_reviewed_contracts(file, bytes).map(drop)?)
+    }),
+    (EVIDENCE_CLIENT_PROFILE_KIND, false, |file, bytes| {
+        Ok(read_client_profile(file, bytes).map(drop)?)
+    }),
+    (dev::DEV_STATE_KIND, false, |file, bytes| {
         Ok(dev::check_state_document(file, bytes)?)
     }),
-    (
-        Names::Kind(source_import::JOURNAL_KIND),
-        true,
-        |file, bytes| {
-            let text = utf8(file, bytes)?;
-            source_import_refusal(file, source_import::check_journal_file(text))
-        },
-    ),
-    (
-        Names::Kind(source_import::STATE_KIND),
-        true,
-        |file, bytes| {
-            let text = utf8(file, bytes)?;
-            source_import_refusal(file, source_import::check_state_file(text))
-        },
-    ),
-    (
-        Names::Kind(source_import::RESOLUTION_KIND),
-        false,
-        |file, bytes| Ok(source_import::check_resolution_file(file, bytes)?),
-    ),
-    (
-        Names::Kind(source_import::EXPORT_KIND),
-        false,
-        |file, bytes| Ok(source_import::check_export_manifest(file, bytes)?),
-    ),
+    (source_import::JOURNAL_KIND, true, |file, bytes| {
+        let text = utf8(file, bytes)?;
+        source_import_refusal(file, source_import::check_journal_file(text))
+    }),
+    (source_import::STATE_KIND, true, |file, bytes| {
+        let text = utf8(file, bytes)?;
+        source_import_refusal(file, source_import::check_state_file(text))
+    }),
+    (source_import::RESOLUTION_KIND, false, |file, bytes| {
+        Ok(source_import::check_resolution_file(file, bytes)?)
+    }),
+    (source_import::EXPORT_KIND, false, |file, bytes| {
+        Ok(source_import::check_export_manifest(file, bytes)?)
+    }),
 ];
 
 /// Why a check produced no verdict of "passed".
@@ -175,11 +162,18 @@ fn check(file: &Path, label: &str) -> Result<(), Failure> {
             .and_then(|document| document["kind"].as_str().map(str::to_owned));
         (kind, None)
     };
-    let found = FORMATS.iter().find(|(names, ..)| match names {
-        Names::Kind(wanted) => kind.as_deref() == Some(wanted),
-        Names::Schema(wanted) => kind.is_none() && schema.as_deref() == Some(wanted),
-    });
+    let found = FORMATS
+        .iter()
+        .find(|(wanted, ..)| kind.as_deref() == Some(wanted));
     let Some((_, may_exceed_reader_bound, check)) = found else {
+        if kind.is_none() {
+            let removed = REMOVED_SCHEMA_HEADERS
+                .iter()
+                .find(|(header, _)| schema.as_deref() == Some(header));
+            if let Some((_, refuse)) = removed {
+                return refuse(label, &bytes);
+            }
+        }
         if bytes.len() > MAXIMUM_DOCUMENT_BYTES {
             // The reader refuses a document over its bound, naming the bound.
             Reader::new(label).scan(&bytes)?;
@@ -192,21 +186,18 @@ fn check(file: &Path, label: &str) -> Result<(), Failure> {
     check(label, &bytes)
 }
 
-/// The diagnostic for a file whose `kind` or `schema` names no format this
-/// command reads. It lists the names it does read.
+/// The diagnostic for a file whose `kind` names no format this command
+/// reads. It lists the kinds it does read.
 fn unknown_format(label: &str) -> Diagnostic {
     let known: Vec<String> = FORMATS
         .iter()
-        .map(|(names, ..)| match names {
-            Names::Kind(kind) => format!("kind {kind}"),
-            Names::Schema(schema) => format!("schema {schema}"),
-        })
+        .map(|(kind, ..)| format!("kind {kind}"))
         .collect();
     in_file(
         Diagnostic::error(
             "evidence.check.unknown-format",
             "",
-            "the file's root `kind` (or, for a client profile or reviewed contracts file, `schema`) names no format this command checks",
+            "the file's root `kind` names no format this command checks",
             format!(
                 "Name one of: {}. To check an authoring project, pass its directory without --file.",
                 known.join(", ")

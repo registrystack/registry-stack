@@ -43,7 +43,7 @@ function input(overrides = {}) {
 
 function assertRefusal(code) {
   return (error) => error instanceof BaseRegistryClientError
-    && error.kind === 'webhook_verification'
+    && error.kind === 'webhook-verification'
     && error.code === code
     && !error.message.includes(signature)
     && !error.message.includes(key.toString());
@@ -70,33 +70,33 @@ test('accepts the fixed BReg signing vector and returns exact delivery values', 
 test('refuses a tampered signed header', () => {
   assert.throws(() => verifyWebhookDelivery(input({
     headers: { ...headers(), 'ce-type': 'case-patched-v1' },
-  })), assertRefusal('signature_mismatch'));
+  })), assertRefusal('signature-mismatch'));
 });
 
 test('refuses a tampered body', () => {
   assert.throws(
     () => verifyWebhookDelivery(input({ body: Buffer.from('{"tampered":true}') })),
-    assertRefusal('signature_mismatch'),
+    assertRefusal('signature-mismatch'),
   );
 });
 
 test('refuses the wrong key', () => {
   assert.throws(
     () => verifyWebhookDelivery(input({ key: Buffer.alloc(32, 0x6b) })),
-    assertRefusal('signature_mismatch'),
+    assertRefusal('signature-mismatch'),
   );
 });
 
 test('refuses a truncated signature', () => {
   assert.throws(() => verifyWebhookDelivery(input({
     headers: { ...headers(), 'x-registry-signature': 'v1=truncated' },
-  })), assertRefusal('malformed_signature'));
+  })), assertRefusal('malformed-signature'));
 });
 
 test('refuses an unknown signature version', () => {
   assert.throws(() => verifyWebhookDelivery(input({
     headers: { ...headers(), 'x-registry-signature': signature.replace('v1=', 'v2=') },
-  })), assertRefusal('unsupported_version'));
+  })), assertRefusal('unsupported-version'));
 });
 
 test('refuses a missing signed header', () => {
@@ -104,7 +104,7 @@ test('refuses a missing signed header', () => {
   delete deliveryHeaders['ce-time'];
   assert.throws(
     () => verifyWebhookDelivery(input({ headers: deliveryHeaders })),
-    assertRefusal('missing_header'),
+    assertRefusal('missing-header'),
   );
 });
 
@@ -114,7 +114,7 @@ test('refuses shared backing stores before native verification', () => {
     value.copy(shared);
     assert.throws(
       () => verifyWebhookDelivery(input({ [field]: shared })),
-      (error) => error instanceof BaseRegistryClientError && error.kind === 'invalid_request',
+      (error) => error instanceof BaseRegistryClientError && error.kind === 'invalid-request',
     );
   }
 });

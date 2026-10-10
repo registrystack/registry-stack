@@ -126,7 +126,7 @@ from the package root. Its `kind` is always present; `status`, `code`,
 `traceId`, `retryAfterSeconds`, `transportKind`, and `tokenKind` are present
 when the underlying failure carries them. `message` is human prose, not JSON:
 read it, do not parse it. `kind` is one of: `configuration`, `nonce`, `token`,
-`transport`, `denied`, `not_available`, `protocol`, `verification`.
+`transport`, `denied`, `not-available`, `protocol`, `verification`.
 
 Underneath, the native layer throws every mapped failure as a plain
 `napi::Error` whose `message` is a JSON-stringified envelope; `client.js`
@@ -147,7 +147,7 @@ as a generic protocol failure, or vice versa. See
 `registry-evidence-client`'s `problem.rs` for the authoritative mapping table.
 
 A response that exceeds its size bound maps to `kind: "transport"` with
-`transportKind: "response_too_large"`, not `kind: "protocol"`, even when the
+`transportKind: "response-too-large"`, not `kind: "protocol"`, even when the
 response status itself was a plain 200: the size limit is enforced against the
 transport, before any attempt to interpret the body as a problem response.
 

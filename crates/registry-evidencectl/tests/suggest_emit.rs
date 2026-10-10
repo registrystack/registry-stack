@@ -565,8 +565,8 @@ fn a_method_outside_the_runtime_enum_is_refused_by_name() {
     );
 }
 
-/// A templated OpenAPI path cannot be a `path:`, which the runtime rejects on
-/// `{` and `}`. It becomes a `pathTemplate:` without inventing bindings.
+/// A templated OpenAPI path is written as the `path:` it is, a template the
+/// author still has to bind: the draft invents no bindings.
 #[test]
 fn a_templated_path_becomes_a_path_template_without_bindings() {
     let mut inputs = base_inputs();
@@ -578,8 +578,8 @@ fn a_templated_path_becomes_a_path_template_without_bindings() {
         serde_norway::from_str(block).expect("source block parses as YAML");
     assert!(parsed.is_mapping());
 
-    assert!(block.contains("pathTemplate: /v1/records/{id}"), "{block}");
-    assert!(!block.contains("path: /v1/records/{id}"), "{block}");
+    assert!(block.contains("path: /v1/records/{id}"), "{block}");
+    assert!(!block.contains("pathTemplate"), "{block}");
     assert!(!block.contains("pathBindings:"), "{block}");
 }
 
@@ -608,9 +608,7 @@ fn a_server_path_prefix_moves_onto_a_path_template_too() {
     let artifacts = emit::draft(&inputs).expect("draft");
 
     assert!(
-        artifacts
-            .source_block
-            .contains("pathTemplate: /v1/records/{id}"),
+        artifacts.source_block.contains("path: /v1/records/{id}"),
         "{}",
         artifacts.source_block
     );

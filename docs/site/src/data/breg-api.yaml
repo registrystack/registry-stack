@@ -30,7 +30,7 @@
     - ['`GET /v1/records/{route}:current`', '`list`', 'Entity declares `temporal`', 'Collection of the records valid now.']
     - ['`GET /v1/records/{route}:as-of`', '`list`', 'Entity declares `temporal`', 'Collection of the records valid at `asOf`.']
     - ['`GET /v1/records/{route}/{recordId}/{readPath}`', '`list` through `readPaths[]`', 'Entity declares `readPaths`', 'Collection of related records.']
-    - ['`POST /v1/records/{route}/{recordId}/actions/{action}`', '`submit_request`, `revise_request`, `cancel_request`, `apply_request`', 'Entity declares `changeRequest`', 'Request action result. Requires `If-Match` and `Idempotency-Key`.']
+    - ['`POST /v1/records/{route}/{recordId}/actions/{action}`', '`submit-request`, `revise-request`, `cancel-request`, `apply-request`', 'Entity declares `changeRequest`', 'Request action result. Requires `If-Match` and `Idempotency-Key`.']
     - ['`POST /v1/actions/{action}/target-conditions`', '`invoke`', 'Registry declares `actions[]`', '`{"preconditions": {...}}` for the targets the input names.']
     - ['`POST /v1/actions/{action}`', '`invoke`', 'Registry declares `actions[]`', '`{"action", "applicationId", "results"}`. Requires `Idempotency-Key`.']
     - ['`POST /v1/review-completions`', 'review completion receiver', 'A review authority configures a completion token and recipient binding', '204 after durable acceptance or an exact replay. Requires bearer authentication, `Registry-Recipient-Binding`, and an `Idempotency-Key` equal to the completion event ID.']
@@ -50,7 +50,7 @@
     - ['`$orderby`', 'Collection reads', 'One field from `sortableFields`, ascending. A `desc` direction is refused with `query.invalid`.', 'One field.']
     - ['`$top`', 'Collection reads', 'Page size.', '100.']
     - ['`$count`', 'Collection reads', 'Adds the matching count. Refused unless the grant sets `allowCount`.', 'Grant flag.']
-    - ['`$skiptoken`', 'Collection reads', 'Continuation from `pageInfo.nextCursor`. It carries the original query, so repeating `snapshot` or `validAt` beside it is refused.', 'Expires after `cursor.maxAgeSeconds`.']
+    - ['`$skiptoken`', 'Collection reads', 'Continuation from `pageInfo.nextCursor`. It carries the original query, so repeating `snapshot` or `validAt` beside it is refused.', 'Expires after `cursor.maximumAgeSeconds`.']
     - ['`bbox`', '`list` on entities with a `crs84-point` field', '`west,south,east,north` in CRS84 degrees, permitted by `spatialQueries.bbox` on the grant.', '256 bytes, plus the span limits on the grant.']
     - ['`asOf`', '`:as-of`', 'The valid-time instant to evaluate, in the type of the entity''s valid-time fields.', 'One value.']
     - ['`snapshot`', '`:snapshot`', 'A `data.snapshot` value returned by an earlier mutation.', '4096 bytes.']
@@ -104,8 +104,8 @@
   columns: [Field type, JSON encoding, Notes]
   rows:
     - ['`boolean`', '`true` or `false`', '']
-    - ['`string`', 'string', '`minLength` and `maxLength` from the field.']
-    - ['`text`', 'string', '`maxLength` from the field.']
+    - ['`string`', 'string', '`minimumLength` and `maximumLength` from the field.']
+    - ['`text`', 'string', '`maximumLength` from the field.']
     - ['`int64`', 'integer', 'Full 64-bit range; clients that parse JSON numbers as doubles lose precision above 2^53.']
     - ['`decimal`', 'string', 'Decimal digits with the declared `precision` and `scale`, never a JSON number.']
     - ['`date`', 'string', 'RFC 3339 full date.']
@@ -114,7 +114,7 @@
     - ['`vocabulary-code`', 'string', 'One of the vocabulary values; the schema carries them as an enum with `x-registry-vocabulary`.']
     - ['`reference`', 'string', 'The target record identifier as a UUID.']
     - ['`crs84-point`', 'object', 'GeoJSON Point, `{"type": "Point", "coordinates": [longitude, latitude]}`.']
-    - ['`structured`', 'object', 'Validated against the declared schema, bounded by `maxBytes`, advertised as `x-registry-maxBytes`.']
+    - ['`structured`', 'object', 'Validated against the declared schema, bounded by `maximumBytes`, advertised as `x-registry-maxBytes`.']
 - id: statistical-dataset-routes
   title: Statistical dataset routes
   columns: [Route, Profile grant, Result]

@@ -1,4 +1,4 @@
-apiVersion: registry.registrystack.org/evidence-runtime/v1alpha1
+apiVersion: id.registrystack.org/formats/evidence/runtime/v1alpha1
 kind: EvidenceRuntimeConfig
 package:
   root: /etc/registry-evidence/bundle
@@ -14,12 +14,12 @@ secretProviders:
   file:
     root: /run/secrets/registry-evidence
 signer:
-  kind: transit
+  type: transit
   unixSocketPath: /run/registry-evidence/transit-proxy.sock
   mount: transit
   keyName: evidence-signing
   keyVersion: 7
-  timeoutMilliseconds: 2000
+  attemptTimeoutMilliseconds: 2000
 audit:
   path: /var/lib/registry-evidence/audit/evidence.jsonl
 # This project makes no outbound request at all, so no trust profile is

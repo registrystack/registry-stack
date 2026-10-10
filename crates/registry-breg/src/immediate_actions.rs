@@ -178,7 +178,7 @@ fn compile_action(
     if permissions.is_empty() {
         errors.push(Diagnostic::error(
             "breg.action.permission-missing",
-            "project.accessProfiles[].permissions",
+            "project.accessProfiles[].permissions.actions",
             "an immediate action requires at least one explicit invoke permission",
         ));
     }
@@ -236,8 +236,8 @@ fn compile_handler(
         // into a handler that never runs.
         errors.push(Diagnostic::error(
             "breg.action.handler-kind-unsupported",
-            format!("{path}.kind"),
-            "an action handler runs in the registry; declare handler kind rhai or wasm",
+            format!("{path}.type"),
+            "an action handler runs in the registry; declare handler type rhai or wasm",
         ));
         return None;
     };
@@ -260,7 +260,7 @@ fn compile_handler(
         // validation could misreport the module.
         errors.push(Diagnostic::error(
             "breg.action.handler-wasm-abi-unsupported",
-            format!("{path}.kind"),
+            format!("{path}.type"),
             "WASM action handlers do not support the Evidence-enabled v2 ABI in this release",
         ));
         return None;
@@ -272,7 +272,7 @@ fn compile_handler(
         // compiler support.
         errors.push(Diagnostic::error(
             "breg.action.handler-wasm-build-unsupported",
-            format!("{path}.kind"),
+            format!("{path}.type"),
             "this build of the compiler does not admit WASM action handlers",
         ));
         return None;
@@ -327,9 +327,9 @@ fn compile_handler(
             {
                 errors.push(Diagnostic::error(
                     "breg.action.handler-input-string-bound",
-                    format!("{input_path}.maxLength"),
+                    format!("{input_path}.maximumLength"),
                     &format!(
-                        "{} input strings support at most {} UTF-8 bytes; set maxLength to {} or less so every Unicode value fits",
+                        "{} input strings support at most {} UTF-8 bytes; set maximumLength to {} or less so every Unicode value fits",
                         abi,
                         crate::rhai_planner::MAXIMUM_STRING_BYTES,
                         crate::rhai_planner::MAXIMUM_STRING_BYTES / 4,
@@ -860,8 +860,10 @@ fn compile_requirements(
             continue;
         }
         let choices = usize::from(requirement.equals.is_some())
+            + usize::from(requirement.is_null)
             + usize::from(requirement.equals_input.is_some());
-        let literal_invalid = requirement.equals.as_ref().is_some_and(|equals| {
+        let literal = requirement.literal();
+        let literal_invalid = literal.as_ref().is_some_and(|equals| {
             equals.is_array()
                 || equals.is_object()
                 || if equals.is_null() {
@@ -894,7 +896,7 @@ fn compile_requirements(
             errors.push(Diagnostic::error(
                 "breg.action.requires-value-invalid",
                 "actions[].requires[]",
-                "an action requirement must declare exactly one compatible scalar literal or action input",
+                "an action requirement must declare exactly one compatible scalar literal, isNull, or action input",
             ));
             continue;
         }
@@ -902,7 +904,7 @@ fn compile_requirements(
             input: requirement.input.clone(),
             entity_id: target.clone(),
             field: requirement.field.clone(),
-            equals: requirement.equals.clone(),
+            equals: literal,
             equals_input: requirement.equals_input.clone(),
         });
     }
@@ -1632,46 +1634,33 @@ fn compile_permissions(
     for profile in profiles {
         for grant in profile
             .permissions
+            .actions
             .iter()
-            .filter(|grant| grant.action.as_deref() == Some(action.id.as_str()))
+            .filter(|grant| grant.action == action.id)
         {
             if !profile_action.insert((profile.id.as_str(), action.id.as_str())) {
                 errors.push(Diagnostic::error(
                     "breg.action.permission-duplicate",
-                    "project.accessProfiles[].permissions[].action",
+                    "project.accessProfiles[].permissions.actions[].action",
                     "an access profile cannot grant the same action more than once",
                 ));
             }
             crate::consent::validate_action_permission(profile, grant, entities, errors);
-            if !grant.entity.is_empty() {
-                errors.push(Diagnostic::error(
-                    "breg.action.permission-exclusive",
-                    "project.accessProfiles[].permissions[]",
-                    "an access permission must name either one entity or one action",
-                ));
-            }
-            if grant.operations != BTreeSet::from([Operation::Invoke]) {
+            if *grant.operations != BTreeSet::from([Operation::Invoke]) {
                 errors.push(Diagnostic::error(
                     "breg.action.permission-operation-invalid",
-                    "project.accessProfiles[].permissions[].operations",
+                    "project.accessProfiles[].permissions.actions[].operations",
                     "immediate-action permissions support only the invoke operation",
-                ));
-            }
-            if !entity_permission_fields_empty(grant) {
-                errors.push(Diagnostic::error(
-                    "breg.action.permission-entity-fields-forbidden",
-                    "project.accessProfiles[].permissions[]",
-                    "action permissions cannot declare entity projection, query, request, or writable fields",
                 ));
             }
             let target_locks = compile_permission_targets(entities, profile, grant, errors);
             validate_permission_covers_uses(&target_locks, target_uses, errors);
             let targets = discriminate_permission_targets(&target_locks, target_uses, errors);
-            for result in &grant.results {
+            for result in grant.results.iter() {
                 if !result_effects.contains(result) {
                     errors.push(Diagnostic::error(
                         "breg.action.permission-result-unknown",
-                        "project.accessProfiles[].permissions[].results",
+                        "project.accessProfiles[].permissions.actions[].results",
                         "action result permissions must name declared effect identifiers",
                     ));
                 }
@@ -1681,12 +1670,12 @@ fn compile_permissions(
                 default: profile.default,
                 actor_kind: profile.actor_kind,
                 requester_clients: profile.requester_clients.as_set().clone(),
-                principal_claim: profile.principal_claim.clone(),
+                principal_claim: Some(profile.principal_claim.clone()),
                 required_scopes: profile.required_scopes.as_set().clone(),
                 required_purposes: profile.required_purposes.as_set().clone(),
-                operations: grant.operations.clone(),
+                operations: grant.operations.clone().into_set(),
                 targets,
-                results: grant.results.clone(),
+                results: grant.results.clone().into_set(),
             });
         }
     }
@@ -1700,26 +1689,13 @@ fn validate_action_permission_sources(
     errors: &mut Vec<Diagnostic>,
 ) {
     for profile in profiles {
-        for grant in &profile.permissions {
-            match (grant.entity.is_empty(), grant.action.as_deref()) {
-                (true, None) => errors.push(Diagnostic::error(
-                    "breg.access-profile.permission-target-missing",
-                    "project.accessProfiles[].permissions[]",
-                    "an access permission must name one entity, one action, or one statistical dataset",
-                )),
-                (false, Some(_)) => errors.push(Diagnostic::error(
-                    "breg.access-profile.permission-target-exclusive",
-                    "project.accessProfiles[].permissions[]",
-                    "an access permission must name either one entity or one action",
-                )),
-                (true, Some(action)) if !actions.contains_key(action) => {
-                    errors.push(Diagnostic::error(
-                        "breg.action.permission-action-unknown",
-                        "project.accessProfiles[].permissions[].action",
-                        "an action permission refers to an unknown action",
-                    ));
-                }
-                _ => {}
+        for grant in &profile.permissions.actions {
+            if !actions.contains_key(&grant.action) {
+                errors.push(Diagnostic::error(
+                    "breg.action.permission-action-unknown",
+                    "project.accessProfiles[].permissions.actions[].action",
+                    "an action permission refers to an unknown action",
+                ));
             }
         }
     }
@@ -1735,7 +1711,7 @@ struct PermissionTargetLock {
 fn compile_permission_targets(
     entities: &BTreeMap<String, CompiledEntity>,
     profile: &ProjectAccessProfileSource,
-    grant: &crate::contract::AccessPermissionSource,
+    grant: &crate::contract::ActionPermissionSource,
     errors: &mut Vec<Diagnostic>,
 ) -> Vec<PermissionTargetLock> {
     let mut seen = BTreeSet::new();
@@ -1744,14 +1720,14 @@ fn compile_permission_targets(
         if !seen.insert(target.entity.as_str()) {
             errors.push(Diagnostic::error(
                 "breg.action.permission-target-duplicate",
-                "project.accessProfiles[].permissions[].targets[].entity",
+                "project.accessProfiles[].permissions.actions[].targets[].entity",
                 "action target permissions must be unique per entity",
             ));
         }
         let Some(entity) = entities.get(&target.entity) else {
             errors.push(Diagnostic::error(
                 "breg.action.permission-target-unknown",
-                "project.accessProfiles[].permissions[].targets[].entity",
+                "project.accessProfiles[].permissions.actions[].targets[].entity",
                 "an action target grant refers to an unknown entity",
             ));
             continue;
@@ -1759,14 +1735,14 @@ fn compile_permission_targets(
         validate_row_boundaries(
             entity,
             &target.row_boundaries,
-            "project.accessProfiles[].permissions[].targets[].rowBoundaries",
+            "project.accessProfiles[].permissions.actions[].targets[].rowBoundaries",
             errors,
         );
         validate_permission_access_requirements(
             entity,
             profile,
             &target.row_boundaries,
-            "project.accessProfiles[].permissions[].targets",
+            "project.accessProfiles[].permissions.actions[].targets",
             errors,
         );
         targets.push(PermissionTargetLock {
@@ -1801,7 +1777,7 @@ fn discriminate_permission_targets(
         if !matched {
             errors.push(Diagnostic::error(
                 "breg.action.permission-targets-unused",
-                "project.accessProfiles[].permissions[].targets",
+                "project.accessProfiles[].permissions.actions[].targets",
                 "action permission targets must name an entity the action creates, patches, or references",
             ));
         }
@@ -1821,7 +1797,7 @@ fn validate_permission_covers_uses(
         {
             errors.push(Diagnostic::error(
                 "breg.action.permission-targets-incomplete",
-                "project.accessProfiles[].permissions[].targets",
+                "project.accessProfiles[].permissions.actions[].targets",
                 "action permissions must cover every created, patched, and referenced target entity",
             ));
         }
@@ -1956,7 +1932,7 @@ fn compile_action_routes(
     }];
     if let Some(path) = &action.condition_route {
         routes.push(CompiledActionRoute {
-            id: format!("actions.{}.target_conditions", action.id),
+            id: format!("actions.{}.target-conditions", action.id),
             action_id: action.id.clone(),
             kind: ActionRouteKind::TargetConditions,
             method: HttpMethod::Post,
@@ -1989,24 +1965,6 @@ fn route_default_profile<'a>(
         ));
     }
     defaults.first().copied()
-}
-
-fn entity_permission_fields_empty(grant: &crate::contract::AccessPermissionSource) -> bool {
-    grant.readable_fields.is_empty()
-        && crate::contract::is_default_readable_request_fields(&grant.readable_request_fields)
-        && grant.writable_fields.is_empty()
-        && grant.filterable_fields.is_empty()
-        && grant.sortable_fields.is_empty()
-        && grant.membership_boundaries.is_empty()
-        && grant.require_consent.is_empty()
-        && grant.lookups.is_empty()
-        && grant.read_paths.is_empty()
-        && grant.apply_targets.is_empty()
-        && grant.submitter_targets.is_empty()
-        && grant.request_presence.is_empty()
-        && !grant.allow_count
-        && !grant.revision_access
-        && !grant.allow_data_export
 }
 
 /// Whether `after` differs from `before` only by vocabulary codes added to its
@@ -2133,17 +2091,6 @@ fn contract_fingerprint(
                 .map(|entity| ((*entity_id).to_owned(), entity_contract_payload(entity)))
         })
         .collect::<BTreeMap<_, _>>();
-    // A permission once carried an `anonymous` member, always false on an
-    // action grant. It stays in the fingerprint input, so an engine upgrade
-    // keeps the identity of every action whose project did not change.
-    let permissions = permissions
-        .iter()
-        .map(|permission| {
-            let mut permission = json!(permission);
-            permission["anonymous"] = json!(false);
-            permission
-        })
-        .collect::<Vec<_>>();
     let mut payload = json!({
         "version": 1,
         "id": action_id,

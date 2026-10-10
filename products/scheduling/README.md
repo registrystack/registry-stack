@@ -57,7 +57,7 @@ and `kind: SchedulingCtlReport`;
 report check writes for the exact-time example. `--runtime-config FILE` checks
 a runtime file offline as well. Test runs the same checks and replays the
 project's bounded synthetic fixtures offline; a passing report carries the
-`offline_synthetic` proof
+`offline-synthetic` proof
 boundary and `productionClosure: false`, so it does not establish source
 reachability or deployment readiness. Explain publishes what the runtime would
 serve: identity, policy digest, offerings, the operator-published windows with

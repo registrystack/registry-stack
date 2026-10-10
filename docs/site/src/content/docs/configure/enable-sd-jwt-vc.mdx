@@ -70,8 +70,8 @@ To make the direct fields of a reviewed structure independently encoded disclosu
 
 ```yaml
 concepts:
-  - id: urn:example:concept:business-registration:v1
-    form: reviewed-structured-value
+  - uri: urn:example:concept:business-registration:v1
+    type: reviewed-structured-value
     required: true
     constraints:
       schema: urn:example:schema:business-registration:v1
@@ -137,7 +137,7 @@ tilde, is verified by a separate command against its own closed policy document:
 evidence verify-presentation \
   --sd-jwt-vc-presentation presentation.sd-jwt \
   --jwks trusted-issuer-keys.json \
-  --policy holder-bound-policy.yaml
+  --policy holder-bound.policy.yaml
 ```
 
 Neither command accepts the other's document. Both open no network connection, and both accept

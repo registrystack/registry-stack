@@ -37,7 +37,7 @@ and every slot the script may emit:
 
 ```yaml
 handler:
-  kind: rhai
+  type: rhai
   script: scripts/register-person.rhai
   abi: registry.action-handler/v1
   refusals:
@@ -69,7 +69,7 @@ rather than in the request. Execution deadlines keep `503 service.unavailable`.
 `registry.action-handler/v1` accepts scalar inputs, including references encoded as record-ID
 strings, and keeps decimal inputs in their canonical JSON string form. The compiler rejects
 `crs84-point` and `structured` inputs for this ABI; an action needing those types uses fixed
-effects. String and text inputs declare `maxLength` of at most 4,096 Unicode scalar values, which
+effects. String and text inputs declare `maximumLength` of at most 4,096 Unicode scalar values, which
 keeps every value inside Rhai's 16,384-byte UTF-8 string budget. Admission rejects any input string
 above 16,384 bytes with `400 request.invalid` before the script runs.
 

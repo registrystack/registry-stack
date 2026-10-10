@@ -1017,11 +1017,14 @@ pub(super) fn operator(state: &State) -> Value {
         "authentication": {"oidc": {
             "issuer": state.issuer_origin(),
             "audience": state.audience(),
+            // The session's integrations replace this with the clients they
+            // admit before the file is written.
+            "allowedClients": "unrestricted",
             // The local issuer emits one space-delimited scope claim.
             "scopeClaim": "scope",
             // The local issuer's keys are generated beside this file, so the
             // runtime reads them directly instead of racing discovery.
-            "jwksSource": {"kind": "static", "documentRef": "secret:file/issuer-jwks"},
+            "jwksSource": {"type": "static", "documentRef": "secret:file/issuer-jwks"},
             "humanIdentity": {"claim": HUMAN_CLAIM, "value": HUMAN_VALUE}
         }},
         "audit": {

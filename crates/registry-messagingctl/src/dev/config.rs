@@ -298,7 +298,7 @@ fn runtime_members(
             "allowedClients": allowed_clients,
             // The session's signing key is generated beside this file, so
             // the runtime reads its key set directly.
-            "jwksSource": {"kind": "static", "documentRef": "secret:file/jwks.json"},
+            "jwksSource": {"type": "static", "documentRef": "secret:file/jwks.json"},
         }},
         "audit": {
             "destination": "file",

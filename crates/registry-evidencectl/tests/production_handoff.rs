@@ -547,7 +547,7 @@ fn production_build_checks_and_evaluates_every_neutral_authoring_shape() {
         .iter()
         .map(|requirement| {
             (
-                requirement["id"]
+                requirement["uri"]
                     .as_str()
                     .expect("stable requirement identifier"),
                 requirement,
@@ -833,7 +833,7 @@ impl Fixture {
             https_ready: root.join("https-ready"),
             response: root.join("response.jws.json"),
             evidence_jwks: root.join("evidence.jwks.json"),
-            policy: root.join("verification-policy.yaml"),
+            policy: root.join("verification.policy.yaml"),
             https_port: ports[0],
             evidence_port: ports[1],
             issuer_port: ports[2],
@@ -892,10 +892,10 @@ maximumAggregateBytes: 200\nfields:\n  person_id: {type: string, minimumBytes: 1
                 format!(
                     r#"apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1
 kind: EvidenceSource
-transport: http-json
+type: http-json
 baseUrl: {source_origin}
 posture: field-projected
-authentication: {{kind: static-authorization, tokenRef: 'secret:file/source-token'}}
+authentication: {{type: static-authorization, tokenRef: 'secret:file/source-token'}}
 request:
   method: POST
   path: /v1/facts
@@ -910,9 +910,9 @@ request:
   preparationLimits: {{query: forbidden, jsonBody: required, maximumJsonDepth: 8, maximumCollectionItems: 16, maximumStringBytes: 256, maximumNormalizedBytes: 4096}}
   projection: [/total, /date_of_birth]
   redirects: deny
-  timeoutMilliseconds: 3000
+  attemptTimeoutMilliseconds: 3000
   maximumResponseBytes: 65536
-  concurrencyLimit: 8
+  maximumConcurrency: 8
 responseSchema: schemas/people-response.schema.yaml
 extractScript: adapters/people-extract.rhai
 factSchema: schemas/people-facts.schema.yaml
@@ -1094,10 +1094,10 @@ maximumAggregateBytes: 200\nfields:\n  {field}: {{type: string, minimumBytes: 1,
             format!(
                 r#"apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1
 kind: EvidenceSource
-transport: http-json
+type: http-json
 baseUrl: {source_origin}
 posture: field-projected
-authentication: {{kind: static-authorization, tokenRef: 'secret:file/source-token'}}
+authentication: {{type: static-authorization, tokenRef: 'secret:file/source-token'}}
 request:
   method: POST
   path: /v1/immunizations
@@ -1112,9 +1112,9 @@ request:
   preparationLimits: {{query: forbidden, jsonBody: required, maximumJsonDepth: 8, maximumCollectionItems: 16, maximumStringBytes: 256, maximumNormalizedBytes: 4096}}
   projection: [/total, /dose_count]
   redirects: deny
-  timeoutMilliseconds: 3000
+  attemptTimeoutMilliseconds: 3000
   maximumResponseBytes: 65536
-  concurrencyLimit: 8
+  maximumConcurrency: 8
 responseSchema: schemas/immunizations-response.schema.yaml
 extractScript: adapters/immunizations-extract.rhai
 factSchema: schemas/immunizations-facts.schema.yaml
@@ -1127,10 +1127,10 @@ factSchema: schemas/immunizations-facts.schema.yaml
             format!(
                 r#"apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1
 kind: EvidenceSource
-transport: http-json
+type: http-json
 baseUrl: {source_origin}
 posture: field-projected
-authentication: {{kind: static-authorization, tokenRef: 'secret:file/source-token'}}
+authentication: {{type: static-authorization, tokenRef: 'secret:file/source-token'}}
 request:
   method: POST
   path: /v1/relationships
@@ -1148,9 +1148,9 @@ request:
   preparationLimits: {{query: forbidden, jsonBody: required, maximumJsonDepth: 8, maximumCollectionItems: 16, maximumStringBytes: 256, maximumNormalizedBytes: 4096}}
   projection: [/total, /relationship_confirmed]
   redirects: deny
-  timeoutMilliseconds: 3000
+  attemptTimeoutMilliseconds: 3000
   maximumResponseBytes: 65536
-  concurrencyLimit: 8
+  maximumConcurrency: 8
 responseSchema: schemas/relationships-response.schema.yaml
 extractScript: adapters/relationships-extract.rhai
 factSchema: schemas/relationships-facts.schema.yaml
@@ -1647,17 +1647,19 @@ privacy_expectation:
                 r#"version: 1
 assuranceProfile: production
 service: {{providerId: urn:example:providers:evidence, trustDomain: urn:example:trust-domains:acceptance, publicOrigin: https://evidence.example.test}}
-issuer: {{id: urn:example:issuers:evidence}}
+issuer: {{uri: urn:example:issuers:evidence}}
 authentication:
   oidc:
     issuer: {identity}
     audience: {TOKEN_AUDIENCE}
-    jwksSource: {{kind: uri, uri: {identity}/.well-known/jwks.json}}
+    jwksSource: {{type: uri, uri: {identity}/.well-known/jwks.json}}
     tokenTypes: [at+jwt]
     algorithms: [ES256]
     principalClaim: sub
     requesterTagsClaim: evidence_tags
     evidenceAudienceClaim: evidence_audience
+    allowedClients: unrestricted
+    requiredScopes: unrestricted
     maximumTokenLifetimeSeconds: 300
     revokedKeyIds: []
 audit: {{hashKeyRef: 'secret:file/audit-hmac-key', hashKeyVersion: 1}}
@@ -1690,7 +1692,7 @@ authorityProfiles:
         fs::write(
             &self.target_runtime,
             format!(
-                "apiVersion: registry.registrystack.org/evidence-runtime/v1alpha1\nkind: EvidenceRuntimeConfig\npackage:\n  root: {bundle}\nlistener:\n  bind: 127.0.0.1:{port}\n  tlsTermination: operator-controlled-upstream\n  trustProxyIdentityHeaders: false\n  maximumRequestBytes: 65536\n  maximumConcurrentRequests: 64\n  requestTimeoutMilliseconds: 10000\n  shutdownGraceMilliseconds: 5000\nsecretProviders:\n  file:\n    root: {secrets}\nsigner:\n  kind: transit\n  unixSocketPath: {transit_socket}\n  mount: transit\n  keyName: evidence-signing\n  keyVersion: 1\n  timeoutMilliseconds: 2000\naudit:\n  path: {audit}\noutboundTls:\n  systemRoots: true\n  trustProfiles: {{}}\n",
+                "apiVersion: id.registrystack.org/formats/evidence/runtime/v1alpha1\nkind: EvidenceRuntimeConfig\npackage:\n  root: {bundle}\nlistener:\n  bind: 127.0.0.1:{port}\n  tlsTermination: operator-controlled-upstream\n  trustProxyIdentityHeaders: false\n  maximumRequestBytes: 65536\n  maximumConcurrentRequests: 64\n  requestTimeoutMilliseconds: 10000\n  shutdownGraceMilliseconds: 5000\nsecretProviders:\n  file:\n    root: {secrets}\nsigner:\n  type: transit\n  unixSocketPath: {transit_socket}\n  mount: transit\n  keyName: evidence-signing\n  keyVersion: 1\n  attemptTimeoutMilliseconds: 2000\naudit:\n  path: {audit}\noutboundTls:\n  systemRoots: true\n  trustProfiles: {{}}\n",
                 bundle = self.candidate.clone().display(),
                 port = self.evidence_port,
                 secrets = self.secrets.display(),
@@ -1828,7 +1830,7 @@ authorityProfiles:
         fs::write(
             &runtime,
             format!(
-                "apiVersion: registry.registrystack.org/evidence-runtime/v1alpha1\nkind: EvidenceRuntimeConfig\npackage:\n  root: {bundle}\nlistener:\n  bind: 127.0.0.1:{port}\n  tlsTermination: operator-controlled-upstream\n  trustProxyIdentityHeaders: false\n  maximumRequestBytes: 131072\n  maximumConcurrentRequests: 32\n  requestTimeoutMilliseconds: 15000\n  shutdownGraceMilliseconds: 10000\nsecretProviders:\n  file:\n    root: {secrets}\nsigner:\n  kind: transit\n  unixSocketPath: {transit_socket}\n  mount: transit\n  keyName: evidence-signing\n  keyVersion: 1\n  timeoutMilliseconds: 2000\naudit:\n  path: {audit}\noutboundTls:\n  systemRoots: true\n  trustProfiles: {{}}\n",
+                "apiVersion: id.registrystack.org/formats/evidence/runtime/v1alpha1\nkind: EvidenceRuntimeConfig\npackage:\n  root: {bundle}\nlistener:\n  bind: 127.0.0.1:{port}\n  tlsTermination: operator-controlled-upstream\n  trustProxyIdentityHeaders: false\n  maximumRequestBytes: 131072\n  maximumConcurrentRequests: 32\n  requestTimeoutMilliseconds: 15000\n  shutdownGraceMilliseconds: 10000\nsecretProviders:\n  file:\n    root: {secrets}\nsigner:\n  type: transit\n  unixSocketPath: {transit_socket}\n  mount: transit\n  keyName: evidence-signing\n  keyVersion: 1\n  attemptTimeoutMilliseconds: 2000\naudit:\n  path: {audit}\noutboundTls:\n  systemRoots: true\n  trustProfiles: {{}}\n",
                 // This absolute host path stands for the unchanged read-only
                 // candidate package mount in the container execution context.
                 bundle = self.candidate.clone().display(),
@@ -1953,7 +1955,7 @@ authorityProfiles:
             // first transaction. Every other expectation is independently
             // controlled by the target and retained request in this fixture.
             "expectedSubjects": [{"role":"subject","binding":binding}],
-            "expectedOutputs": [{"concept":CONCEPT,"form":"boolean"}],
+            "expectedOutputs": [{"concept":CONCEPT,"form":{"type":"boolean"}}],
             "revokedKeyIds": [],
             "maximumAssertionLifetimeSeconds": 86400,
             "clockSkewSeconds": 30,
@@ -2218,7 +2220,7 @@ fn assert_requirement_forms(
         .as_array()
         .expect("compiled concepts")
         .iter()
-        .map(|concept| concept["form"].as_str().expect("compiled concept form"))
+        .map(|concept| concept["type"].as_str().expect("compiled concept form"))
         .collect::<Vec<_>>();
     assert_eq!(forms, expected_forms);
     assert_eq!(

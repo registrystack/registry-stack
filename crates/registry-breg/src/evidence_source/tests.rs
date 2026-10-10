@@ -7,19 +7,19 @@ use crate::{
 };
 
 fn project() -> Value {
-    json!({"apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject",
-        "registry":{"id":"example","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://registry.example.test"},
+    json!({"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
+        "project":{"id":"example","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://registry.example.test"},
         "entities":[{"id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"mutable","fields":[
-            {"id":"code","type":"string","minLength":1,"maxLength":32,"required":true,"classification":"internal"},
-            {"id":"registration-number","type":"string","minLength":1,"maxLength":32,"classification":"internal"},
-            {"id":"status","type":"string","maxLength":16,"classification":"internal"},
-            {"id":"tenant","type":"string","maxLength":16,"classification":"internal"}],
+            {"id":"code","type":"string","minimumLength":1,"maximumLength":32,"required":true,"classification":"internal"},
+            {"id":"registration-number","type":"string","minimumLength":1,"maximumLength":32,"classification":"internal"},
+            {"id":"status","type":"string","maximumLength":16,"classification":"internal"},
+            {"id":"tenant","type":"string","maximumLength":16,"classification":"internal"}],
             "selectorProfiles":[{"id":"by-code","fields":["code"]},{"id":"by-registration-number","fields":["registration-number"]}],
             "derived":[{"id":"status-read","sql":"status.sql","key":"id","execution":"live","fields":[{"id":"active","type":"boolean","classification":"internal"}]}]}],
-        "accessProfiles":[{"id":"evidence-source","principalClaim":"principal","requiredScopes":["registry.read"],"permissions":[{
+        "accessProfiles":[{"id":"evidence-source","principalClaim":"principal","requiredScopes":["registry.read"],"permissions":{"entities":[{
             "entity":"record","operations":["lookup"],"readableFields":["code","registration-number","status","active"],
             "lookups":[{"selector":"by-code","valueOrigin":"request"},{"selector":"by-registration-number","valueOrigin":"request"}],
-            "rowBoundaries":[{"field":"tenant","claim":"tenant","operator":"equals"}]}]}]})
+            "rowBoundaries":[{"field":"tenant","claim":"tenant","operator":"equals"}]}]}}]})
 }
 
 fn compiled(project: &Value, sql: &str) -> CompiledRegistry {
@@ -142,6 +142,18 @@ fn alternatives_keep_one_route_and_selected_identity_with_stable_inventories() {
 }
 
 #[test]
+fn the_source_is_spelled_as_evidence_reads_it() {
+    let registry = compiled(&project(), SQL);
+    let export = export_evidence_source(&registry, &options()).unwrap();
+    let source = yaml(&export, "sources/registry-status.yaml");
+    assert_eq!(source["type"], "http-json");
+    assert_eq!(source["request"]["attemptTimeoutMilliseconds"], 5000);
+    // Evidence refuses each of these in a source as config.removed-key.
+    assert!(source.get("transport").is_none());
+    assert!(source["request"].get("timeoutMilliseconds").is_none());
+}
+
+#[test]
 fn logged_entity_export_enables_attribution_and_binds_policy_into_behavior_revision() {
     let original = project();
     let before = export_evidence_source(&compiled(&original, SQL), &options()).unwrap();
@@ -166,7 +178,7 @@ fn consumed_behavior_ignores_unselected_fields_but_reaches_sql_and_authority() {
     unrelated["entities"][0]["fields"]
         .as_array_mut()
         .unwrap()
-        .push(json!({"id":"note","type":"string","maxLength":64,"classification":"internal"}));
+        .push(json!({"id":"note","type":"string","maximumLength":64,"classification":"internal"}));
     let after = export_evidence_source(&compiled(&unrelated, SQL), &options()).unwrap();
     assert_eq!(before.behavior_revision, after.behavior_revision);
     let before_provenance = &yaml(&before, "source-export.json")["provenance"];
@@ -201,7 +213,7 @@ fn consumed_behavior_ignores_unselected_fields_but_reaches_sql_and_authority() {
             .behavior_revision
     );
     let mut authority = original.clone();
-    authority["accessProfiles"][0]["permissions"][0]["rowBoundaries"][0]["claim"] =
+    authority["accessProfiles"][0]["permissions"]["entities"][0]["rowBoundaries"][0]["claim"] =
         json!("other_tenant");
     assert_ne!(
         before.behavior_revision,
@@ -218,16 +230,16 @@ fn membership_project() -> Value {
     }));
     source["entities"].as_array_mut().unwrap().extend([
         json!({"id":"organization","route":"organizations","primaryDataset":"test-dataset","mutationMode":"mutable","fields":[
-            {"id":"name","type":"string","maxLength":80,"classification":"internal"}]}),
+            {"id":"name","type":"string","maximumLength":80,"classification":"internal"}]}),
         json!({"id":"membership","route":"memberships","primaryDataset":"test-dataset","mutationMode":"mutable","fields":[
             {"id":"organization","type":"reference","target":"organization","classification":"internal"},
             {"id":"other-organization","type":"reference","target":"organization","classification":"internal"},
-            {"id":"principal","type":"string","maxLength":80,"classification":"restricted"},
-            {"id":"other-principal","type":"string","maxLength":80,"classification":"restricted"},
+            {"id":"principal","type":"string","maximumLength":80,"classification":"restricted"},
+            {"id":"other-principal","type":"string","maximumLength":80,"classification":"restricted"},
             {"id":"active","type":"boolean","classification":"internal"},
             {"id":"other-active","type":"boolean","classification":"internal"}]}),
     ]);
-    source["accessProfiles"][0]["permissions"][0]["membershipBoundaries"] = json!([{
+    source["accessProfiles"][0]["permissions"]["entities"][0]["membershipBoundaries"] = json!([{
         "field":"organization","membershipEntity":"membership","membershipKeyField":"organization",
         "principalField":"principal","activeField":"active"
     }]);
@@ -245,8 +257,8 @@ fn membership_behavior_reaches_helper_semantics_source_fields_and_select_authori
         ("membershipKeyField", "other-organization"),
     ] {
         let mut changed = original.clone();
-        changed["accessProfiles"][0]["permissions"][0]["membershipBoundaries"][0][name] =
-            json!(value);
+        changed["accessProfiles"][0]["permissions"]["entities"][0]["membershipBoundaries"][0]
+            [name] = json!(value);
         let after_registry = compiled(&changed, SQL);
         assert_eq!(
             select_policies(&registry, &registry.entities()["record"], "evidence-source"),
@@ -266,7 +278,7 @@ fn membership_behavior_reaches_helper_semantics_source_fields_and_select_authori
         );
     }
     let mut changed_field = original.clone();
-    changed_field["entities"][2]["fields"][2]["maxLength"] = json!(64);
+    changed_field["entities"][2]["fields"][2]["maximumLength"] = json!(64);
     assert_ne!(
         before.behavior_revision,
         export_evidence_source(&compiled(&changed_field, SQL), &options())
@@ -275,7 +287,7 @@ fn membership_behavior_reaches_helper_semantics_source_fields_and_select_authori
         "the principal field contract is consumed even when helper SQL stays the same"
     );
     let mut changed_policy = original.clone();
-    changed_policy["accessProfiles"][0]["permissions"].as_array_mut().unwrap().push(json!({
+    changed_policy["accessProfiles"][0]["permissions"]["entities"].as_array_mut().unwrap().push(json!({
         "entity":"membership","operations":["get"],"readableFields":["active"],"rowBoundaries":"unrestricted"
     }));
     assert_ne!(
@@ -290,7 +302,7 @@ fn membership_behavior_reaches_helper_semantics_source_fields_and_select_authori
         .as_array_mut()
         .unwrap()
         .push(json!({
-            "id":"private-note","type":"string","maxLength":80,"classification":"restricted"
+            "id":"private-note","type":"string","maximumLength":80,"classification":"restricted"
         }));
     assert_eq!(
         before.behavior_revision,
@@ -308,18 +320,18 @@ fn membership_behavior_reaches_helper_semantics_source_fields_and_select_authori
 #[test]
 fn reached_derived_source_consumes_its_membership_helper() {
     let mut original = membership_project();
-    let boundary = original["accessProfiles"][0]["permissions"][0]
+    let boundary = original["accessProfiles"][0]["permissions"]["entities"][0]
         .as_object_mut()
         .unwrap()
         .remove("membershipBoundaries")
         .unwrap();
     original["entities"].as_array_mut().unwrap().push(json!({
         "id":"flag","route":"flags","primaryDataset":"test-dataset","mutationMode":"mutable","fields":[
-            {"id":"code","type":"string","maxLength":32,"classification":"internal"},
+            {"id":"code","type":"string","maximumLength":32,"classification":"internal"},
             {"id":"organization","type":"reference","target":"organization","classification":"internal"},
             {"id":"enabled","type":"boolean","classification":"internal"}]
     }));
-    original["accessProfiles"][0]["permissions"].as_array_mut().unwrap().push(json!({
+    original["accessProfiles"][0]["permissions"]["entities"].as_array_mut().unwrap().push(json!({
         "entity":"flag","operations":["get"],"readableFields":["code","enabled"],"rowBoundaries":"unrestricted",
         "membershipBoundaries":boundary
     }));
@@ -327,8 +339,8 @@ fn reached_derived_source_consumes_its_membership_helper() {
     let mut selection = options();
     selection.fields = vec!["active".into()];
     let before = export_evidence_source(&compiled(&original, sql), &selection).unwrap();
-    original["accessProfiles"][0]["permissions"][1]["membershipBoundaries"][0]["principalField"] =
-        json!("other-principal");
+    original["accessProfiles"][0]["permissions"]["entities"][1]["membershipBoundaries"][0]
+        ["principalField"] = json!("other-principal");
     assert_ne!(
         before.behavior_revision,
         export_evidence_source(&compiled(&original, sql), &selection)
@@ -341,11 +353,12 @@ fn reached_derived_source_consumes_its_membership_helper() {
 #[test]
 fn refuses_ungiven_authority_and_incompatible_selector_semantics() {
     let mut hidden = project();
-    hidden["accessProfiles"][0]["permissions"][0]["readableFields"] = json!(["status", "active"]);
+    hidden["accessProfiles"][0]["permissions"]["entities"][0]["readableFields"] =
+        json!(["status", "active"]);
     assert!(export_evidence_source(&compiled(&hidden, SQL), &options()).is_err());
     let mut claims = project();
-    claims["accessProfiles"][0]["permissions"][0]["lookups"][0] =
-        json!({"selector":"by-code","valueOrigin":"verified_claim","claimMapping":{"code":"code"}});
+    claims["accessProfiles"][0]["permissions"]["entities"][0]["lookups"][0] =
+        json!({"selector":"by-code","valueOrigin":"verified-claim","claimMapping":{"code":"code"}});
     assert!(export_evidence_source(&compiled(&claims, SQL), &options()).is_err());
     assert!(selector_schema(&FieldTypeSource::Int64).is_err());
     assert!(selector_schema(&FieldTypeSource::String {
@@ -377,13 +390,13 @@ fn refuses_a_string_selector_field_that_accepts_the_empty_value() {
     })
     .is_err());
     let mut empty_allowed = project();
-    // Omitting `minLength` defaults it to 0, so `code` accepts the empty value.
-    empty_allowed["entities"][0]["fields"][0] = json!({"id":"code","type":"string","maxLength":32,"required":true,"classification":"internal"});
+    // Omitting `minimumLength` defaults it to 0, so `code` accepts the empty value.
+    empty_allowed["entities"][0]["fields"][0] = json!({"id":"code","type":"string","maximumLength":32,"required":true,"classification":"internal"});
     let diagnostic = refused(&compiled(&empty_allowed, SQL), &options());
     assert_eq!(diagnostic.code, "breg.evidence-source.refused");
-    assert!(diagnostic.message.contains("minLength"));
+    assert!(diagnostic.message.contains("minimumLength"));
     // `alternatives_keep_one_route_and_selected_identity_with_stable_inventories`
-    // exports the same fixture with `code` declared at `minLength: 1`, so an
+    // exports the same fixture with `code` declared at `minimumLength: 1`, so an
     // exact selector field that excludes the empty value still exports.
 }
 
@@ -391,14 +404,14 @@ fn refuses_a_string_selector_field_that_accepts_the_empty_value() {
 fn reached_source_select_authority_is_part_of_consumed_behavior() {
     let mut original = project();
     original["entities"].as_array_mut().unwrap().push(json!({"id":"flag","primaryDataset":"test-dataset","route":"flags","mutationMode":"mutable","fields":[
-        {"id":"code","type":"string","maxLength":32,"classification":"internal"},
+        {"id":"code","type":"string","maximumLength":32,"classification":"internal"},
         {"id":"enabled","type":"boolean","classification":"internal"}]}));
-    original["accessProfiles"][0]["permissions"].as_array_mut().unwrap().push(json!({"entity":"flag","operations":["get"],"readableFields":["code","enabled"],"rowBoundaries":"unrestricted"}));
+    original["accessProfiles"][0]["permissions"]["entities"].as_array_mut().unwrap().push(json!({"entity":"flag","operations":["get"],"readableFields":["code","enabled"],"rowBoundaries":"unrestricted"}));
     let sql="SELECT r.id AS id, f.enabled AS active FROM registry_source.record r JOIN registry_source.flag f ON f.code = r.code";
     let mut selection = options();
     selection.fields = vec!["active".into()];
     let before = export_evidence_source(&compiled(&original, sql), &selection).unwrap();
-    original["accessProfiles"][0]["permissions"][1] = json!({"entity":"flag","operations":["create"],"writableFields":["code","enabled"],"rowBoundaries":"unrestricted"});
+    original["accessProfiles"][0]["permissions"]["entities"][1] = json!({"entity":"flag","operations":["create"],"writableFields":["code","enabled"],"rowBoundaries":"unrestricted"});
     let after = export_evidence_source(&compiled(&original, sql), &selection).unwrap();
     assert_ne!(
         before.behavior_revision, after.behavior_revision,
@@ -449,8 +462,10 @@ fn refuses_alternative_union_that_exceeds_runtime_projection_bound() {
             original["entities"][0]["fields"]
                 .as_array_mut()
                 .unwrap()
-                .push(json!({"id":id,"type":"string","maxLength":1,"classification":"internal"}));
-            original["accessProfiles"][0]["permissions"][0]["readableFields"]
+                .push(
+                    json!({"id":id,"type":"string","maximumLength":1,"classification":"internal"}),
+                );
+            original["accessProfiles"][0]["permissions"]["entities"][0]["readableFields"]
                 .as_array_mut()
                 .unwrap()
                 .push(json!(id));
@@ -460,7 +475,7 @@ fn refuses_alternative_union_that_exceeds_runtime_projection_bound() {
             .as_array_mut()
             .unwrap()
             .push(json!({"id":selector,"fields":fields}));
-        original["accessProfiles"][0]["permissions"][0]["lookups"]
+        original["accessProfiles"][0]["permissions"]["entities"][0]["lookups"]
             .as_array_mut()
             .unwrap()
             .push(json!({"selector":selector,"valueOrigin":"request"}));
@@ -498,24 +513,24 @@ fn refuses_change_request_lifecycle_entities() {
     original["entities"].as_array_mut().unwrap().push(json!({
         "id":"record-request","primaryDataset":"test-dataset","route":"record-requests","mutationMode":"mutable",
         "fields":[
-            {"id":"code","type":"string","minLength":1,"maxLength":32,"required":true,"classification":"internal"},
+            {"id":"code","type":"string","minimumLength":1,"maximumLength":32,"required":true,"classification":"internal"},
             {"id":"subject","type":"reference","target":"record","required":true,"classification":"internal"},
-            {"id":"new-status","type":"string","maxLength":16,"required":true,"classification":"internal"}],
+            {"id":"new-status","type":"string","maximumLength":16,"required":true,"classification":"internal"}],
         "selectorProfiles":[{"id":"by-code","fields":["code"]}],
         "changeRequest":{
             "effects":[{"target":{"fromField":"subject"},"operation":"patch","set":{"status":{"fromField":"new-status"}}}],
-            "review":{"authority":"casework-main","policyId":"request-review"},
+            "review":{"type":"required","authority":"casework-main","policyId":"request-review"},
             "onApproved":{"mode":"manual"}}}));
     original["accessProfiles"]
         .as_array_mut()
         .unwrap()
         .push(json!({"id":"record-request-steward","principalClaim":"principal","requiredScopes":["registry.write"],
-            "permissions":[{"entity":"record-request","rowBoundaries":"unrestricted",
-                "operations":["create","get","submit_request","apply_request"],
+            "permissions":{"entities":[{"entity":"record-request","rowBoundaries":"unrestricted",
+                "operations":["create","get","submit-request","apply-request"],
                 "readableFields":["code","subject","new-status"],
                 "writableFields":["code","subject","new-status"],
-                "applyTargets":[{"entity":"record","rowBoundaries":"unrestricted"}]}]}));
-    original["accessProfiles"][0]["permissions"]
+                "applyTargets":[{"entity":"record","rowBoundaries":"unrestricted"}]}]}}));
+    original["accessProfiles"][0]["permissions"]["entities"]
         .as_array_mut()
         .unwrap()
         .push(
@@ -538,8 +553,8 @@ fn refuses_change_request_lifecycle_entities() {
 #[test]
 fn refuses_a_profile_that_does_not_grant_lookup() {
     let mut original = project();
-    original["accessProfiles"][0]["permissions"][0]["operations"] = json!(["get"]);
-    original["accessProfiles"][0]["permissions"][0]["lookups"] = json!([]);
+    original["accessProfiles"][0]["permissions"]["entities"][0]["operations"] = json!(["get"]);
+    original["accessProfiles"][0]["permissions"]["entities"][0]["lookups"] = json!([]);
     let diagnostic = refused(&compiled(&original, SQL), &options());
     assert_eq!(diagnostic.code, "breg.evidence-source.refused");
     assert_eq!(
@@ -580,11 +595,12 @@ fn long_eligible_selector_names_export_as_stable_distinct_bounded_profiles() {
         .as_object_mut()
         .unwrap()
         .remove("derived");
-    original["accessProfiles"][0]["permissions"][0]["entity"] = json!(entity);
-    original["accessProfiles"][0]["permissions"][0]["readableFields"] = json!(["code", "status"]);
+    original["accessProfiles"][0]["permissions"]["entities"][0]["entity"] = json!(entity);
+    original["accessProfiles"][0]["permissions"]["entities"][0]["readableFields"] =
+        json!(["code", "status"]);
     original["entities"][0]["selectorProfiles"] = json!([
         {"id":first,"fields":["code"]},{"id":second,"fields":["code"]}]);
-    original["accessProfiles"][0]["permissions"][0]["lookups"] = json!([
+    original["accessProfiles"][0]["permissions"]["entities"][0]["lookups"] = json!([
         {"selector":first,"valueOrigin":"request"},{"selector":second,"valueOrigin":"request"}]);
     let source = parse_project_json(&serde_json::to_vec(&original).unwrap()).unwrap();
     let registry =
@@ -629,8 +645,8 @@ fn refuses_a_composite_selector_beyond_the_aggregate_selector_bound() {
         original["entities"][0]["fields"]
             .as_array_mut()
             .unwrap()
-            .push(json!({"id":id,"type":"string","minLength":1,"maxLength":1000,"classification":"internal"}));
-        original["accessProfiles"][0]["permissions"][0]["readableFields"]
+            .push(json!({"id":id,"type":"string","minimumLength":1,"maximumLength":1000,"classification":"internal"}));
+        original["accessProfiles"][0]["permissions"]["entities"][0]["readableFields"]
             .as_array_mut()
             .unwrap()
             .push(json!(id));
@@ -640,7 +656,7 @@ fn refuses_a_composite_selector_beyond_the_aggregate_selector_bound() {
         .as_array_mut()
         .unwrap()
         .push(json!({"id":"by-parts","fields":fields}));
-    original["accessProfiles"][0]["permissions"][0]["lookups"]
+    original["accessProfiles"][0]["permissions"]["entities"][0]["lookups"]
         .as_array_mut()
         .unwrap()
         .push(json!({"selector":"by-parts","valueOrigin":"request"}));

@@ -634,11 +634,11 @@ test('shared Evidence source keys describe every accepted branch', async () => {
   const byPath = new Map(bundle.fields.map((field) => [field.key_path, field]));
   const cases = [
     [
-      'sources.*.transport',
+      'sources.*.type',
       ['`http-json`', 'fixed HTTPS origin', '`sqlite-extract`', 'read-only SQLite extract'],
     ],
     [
-      'sources.*.request.timeoutMilliseconds',
+      'sources.*.request.attemptTimeoutMilliseconds',
       ['`http-json`', 'HTTP exchange', '`sqlite-extract`', 'statement execution'],
     ],
     [
@@ -646,7 +646,7 @@ test('shared Evidence source keys describe every accepted branch', async () => {
       ['`http-json`', 'preparation script', '`sqlite-extract`', 'parameter bindings'],
     ],
     [
-      'sources.*.request.parameterBindings.*.kind',
+      'sources.*.request.parameterBindings.*.type',
       ['`selector`', 'authorized selector field', '`prepared`', 'filled by the preparation script'],
     ],
   ];

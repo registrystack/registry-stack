@@ -312,7 +312,7 @@ impl BregAdapter {
             || !operation
                 .readable_request_fields()
                 .iter()
-                .any(|field| field == "review_state")
+                .any(|field| field == "review-state")
         {
             return Err(SourceAdapterError::Denied);
         }
@@ -1072,7 +1072,7 @@ impl SourceAdapter for BregAdapter {
             return Err(SourceAdapterError::Invalid);
         }
         let body = envelope.data;
-        if body.get("trigger").and_then(Value::as_str) != Some("request_lifecycle") {
+        if body.get("trigger").and_then(Value::as_str) != Some("request-lifecycle") {
             return Err(SourceAdapterError::Invalid);
         }
         let entry = self.request_entry(
@@ -1608,8 +1608,14 @@ mod tests {
 
     #[test]
     fn open_core_operation_names_do_not_expand_breg_authority() {
-        let custom = OperationName::parse("verify_documents").expect("custom core operation");
-        assert_eq!(source_operation(&custom), Err(SourceAdapterError::Denied));
+        for name in ["verify_documents", "apply-request", "request-correction"] {
+            let custom = OperationName::parse(name).expect("custom core operation");
+            assert_eq!(
+                source_operation(&custom),
+                Err(SourceAdapterError::Denied),
+                "{name}"
+            );
+        }
     }
 
     #[test]

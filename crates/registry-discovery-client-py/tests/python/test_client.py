@@ -181,7 +181,54 @@ class Handler(http.server.BaseHTTPRequestHandler):
         pass
 
 
+class ProblemHandler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self) -> None:
+        name = self.path.split("/")[1]
+        status, title = PROBLEMS[name]
+        body = json.dumps({
+            "type": f"https://id.registrystack.org/problems/registry-discovery/{name}",
+            "title": title,
+            "status": status,
+        }).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/problem+json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, format: str, *args: object) -> None:
+        pass
+
+
+PROBLEMS = {
+    "not-found": (404, "Not found"),
+    "invalid-request": (400, "Invalid request"),
+    "result-bound-exceeded": (422, "Result bound exceeded"),
+}
+
+
 class DiscoveryClientTests(unittest.TestCase):
+    def test_a_problem_names_its_kind_in_kebab_case(self) -> None:
+        for name, (status, _title) in PROBLEMS.items():
+            server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), ProblemHandler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                client = DiscoveryClient(
+                    f"http://127.0.0.1:{server.server_port}/{name}/"
+                )
+                with self.assertRaises(DiscoveryClientError) as caught:
+                    client.search_evidence_services({
+                        "evidenceTypeId": "urn:example:evidence-type",
+                    })
+                self.assertEqual(caught.exception.kind, "problem")
+                self.assertEqual(caught.exception.status, status)
+                self.assertEqual(caught.exception.problem, name)
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join()
+
     def test_search_resolve_and_inert_selection(self) -> None:
         server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -299,7 +346,7 @@ class DiscoveryClientTests(unittest.TestCase):
                     rejected_events.append("credential-construction")
                     _ = accepted_candidate.endpoint_url
                     rejected_events.append("native-io")
-                self.assertEqual(caught.exception.kind, "local_acceptance_refused")
+                self.assertEqual(caught.exception.kind, "local-acceptance-refused")
                 self.assertEqual(rejected_events, ["local-acceptance"])
 
     def test_renewal_only_updates_provenance_for_the_same_accepted_subject(self) -> None:
@@ -382,7 +429,7 @@ class DiscoveryClientTests(unittest.TestCase):
                 DiscoveryClientError
             ) as caught:
                 continue_after_renewal(previous, candidate)
-            self.assertEqual(caught.exception.kind, "selection_changed")
+            self.assertEqual(caught.exception.kind, "selection-changed")
 
         reselected = changed_subjects["issuer"]
         new_pins = copy.deepcopy(EVIDENCE_ACCEPTANCE_PINS)
@@ -408,7 +455,7 @@ class DiscoveryClientTests(unittest.TestCase):
             token_constructions += 1
             native_calls += 1
             _ = reselected
-        self.assertEqual(caught.exception.kind, "no_matching_service")
+        self.assertEqual(caught.exception.kind, "no-matching-service")
         self.assertEqual(token_constructions, 0)
         self.assertEqual(native_calls, 0)
 

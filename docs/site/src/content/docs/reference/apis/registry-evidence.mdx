@@ -112,7 +112,7 @@ token supplies the common audience, and `holderKeys` are not accepted.
 The response preserves request order. Each item is one of these closed results:
 
 - `evidence`, with one signed flattened JWS in the `evidence` member.
-- `evidence_not_available`, when the corresponding singular evaluation produced `no_match`,
+- `evidence-not-available`, when the corresponding singular evaluation produced `no_match`,
   `ambiguous`, `required_fact_missing`, `derivation_input_unresolved`, or an exact
   source-declared unresolved outcome at a singular or search stage.
 

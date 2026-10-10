@@ -216,7 +216,7 @@ accepted = accept_selection(renewed, accepts_expected_evidence)
 
 A changed service identity, endpoint, issuer/provider, profile, jurisdiction,
 capability, origin, or mapping context raises
-`DiscoveryClientError(kind="selection_changed")`. A withdrawn record fails the
+`DiscoveryClientError(kind="selection-changed")`. A withdrawn record fails the
 fresh selection. Both cases require explicit reselection and a new local
 acceptance decision; renewal never switches to another service or Evidence
 alternative automatically.

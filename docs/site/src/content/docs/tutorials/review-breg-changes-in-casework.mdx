@@ -32,7 +32,7 @@ applies only an exact approved result, and only through current source authoriza
 ## Create and connect the projects
 
 Use the paired starters. Their shared source namespace is `professional-licences`; Casework
-requires its source id to equal BReg's `registry.id` so submission and source-context reads address
+requires its source id to equal BReg's `project.id` so submission and source-context reads address
 the same record.
 
 ```sh
@@ -96,12 +96,13 @@ changeRequest:
       set:
         licensed-activities: {fromField: licensed-activities}
   review:
+    type: required
     authority: casework
     policyId: scope-correction
   onApproved:
     mode: manual
   retention:
-    mode: operator_erase
+    mode: operator-erase
 ```
 
 The submitter permission needs only source lifecycle operations. The application permission is
@@ -109,20 +110,21 @@ ordinary BReg authority:
 
 ```yaml
 permissions:
-  - entity: scope-correction
-    operations: [create, get, patch, submit_request, revise_request, cancel_request]
-    readableFields: [record, licensed-activities]
-    writableFields: [record, licensed-activities]
-    requestVisibility: owner
-    rowBoundaries: unrestricted
-  - entity: scope-correction
-    operations: [get, apply_request]
-    readableFields: [record, licensed-activities]
-    readableRequestFields: [review_state]
-    applyTargets:
-      - entity: professional-license
-        rowBoundaries: unrestricted
-    rowBoundaries: unrestricted
+  entities:
+    - entity: scope-correction
+      operations: [create, get, patch, submit-request, revise-request, cancel-request]
+      readableFields: [record, licensed-activities]
+      writableFields: [record, licensed-activities]
+      requestVisibility: owner
+      rowBoundaries: unrestricted
+    - entity: scope-correction
+      operations: [get, apply-request]
+      readableFields: [record, licensed-activities]
+      readableRequestFields: [review-state]
+      applyTargets:
+        - entity: professional-license
+          rowBoundaries: unrestricted
+      rowBoundaries: unrestricted
 ```
 
 Casework reviewer profiles and stages belong in the Casework project. Do not duplicate them as
@@ -197,7 +199,7 @@ setup. It does not report the progress of a submitted review. Use the resources 
 
 ## Submit and observe the exact binding
 
-Create the request as its owner, read its advertised `submit_request` action, and send the returned
+Create the request as its owner, read its advertised `submit-request` action, and send the returned
 `ifMatch` with a fresh `Idempotency-Key`. Submit as a person: the starter's `editor` client carries
 the human actor marker, because the review stage excludes the request's initiator and BReg names an
 initiator only for a human caller. A service or agent submission is refused with
@@ -214,12 +216,12 @@ BReg durably records the submission job before contacting Casework. The worker u
 idempotency key and expected submission digest until it receives the exact accepted binding.
 Ambiguous responses are recovered with the same request rather than creating a second review.
 
-A profile with `readableRequestFields: [review_state]` receives
+A profile with `readableRequestFields: [review-state]` receives
 `data.request.review`. Its closed sections are `submission`, `result`, `delivery`, `application`,
 and `recovery`. Optional identifiers and timestamps are omitted until known. These fields report
 reconciliation state. They grant neither a Casework decision nor a BReg write.
 
-Follow the `submit_request` action advertised on the BReg request instead of constructing an
+Follow the `submit-request` action advertised on the BReg request instead of constructing an
 internal route. Keep its `ifMatch` and use a new `Idempotency-Key`. Then follow the identifiers the
 response and request projection return.
 
@@ -249,8 +251,8 @@ The starter's review stage excludes the submitter, so the person who submitted t
 claim, be assigned, or decide its review. A reviewer either approves or chooses the
 `changes-requested` outcome ("Request changes") with a reason. A send-back reaches BReg as a
 `changesRequested` review result. The request stays `submitted`, and BReg now offers its owner only
-`revise_request`, carrying `rebase: false`, and `cancel_request`. The submitter follows the
-`revise_request` action with the `rebase` value it carries, and BReg records the new draft as a
+`revise-request`, carrying `rebase: false`, and `cancel-request`. The submitter follows the
+`revise-request` action with the `rebase` value it carries, and BReg records the new draft as a
 revision. The submitter then patches the draft and submits it again, and Casework opens a fresh
 review for the new proposal version.
 
@@ -261,7 +263,7 @@ or unmatched completion remains in the bounded inbox for reconciliation. Redeliv
 ## Apply at BReg
 
 For manual application, read the request under the BReg applier profile and follow the advertised
-`apply_request` action. Send its `ifMatch`, a stable idempotency key, and the displayed proposal
+`apply-request` action. Send its `ifMatch`, a stable idempotency key, and the displayed proposal
 binding:
 
 ```json
@@ -282,7 +284,7 @@ does not borrow the submitter, reviewer, or completion sender's authority.
 
 Automatic application is opt-in. Change the authored request to
 `onApproved: {mode: automatic, executor: registry-automatic}`, grant one ordinary BReg
-`apply_request` profile, repeat `bregctl check`, `bregctl explain change-requests`, and both
+`apply-request` profile, repeat `bregctl check`, `bregctl explain change-requests`, and both
 `source add` runs, then provision the generated `reviewExecutors.registry-automatic` credential.
 The executor still passes the current profile, target authority, revision, and precondition checks
 at the time it applies.

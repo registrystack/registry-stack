@@ -75,7 +75,7 @@ pub fn preview_access(
         .and_then(|entity| entity.access_profiles.get(&scenario.access_profile));
     let claims = synthetic_claims(registry, scenario.claims, entity.zip(profile))?;
     let reason = match profile {
-        None => Some("entity_or_profile_not_found"),
+        None => Some("entity-or-profile-not-found"),
         Some(profile) => {
             let operation_granted = if let Some(path) = &scenario.read_path {
                 scenario.operation == Operation::List
@@ -85,17 +85,17 @@ pub fn preview_access(
                     && (scenario.operation != Operation::Revisions || profile.revision_access)
             };
             if !operation_granted {
-                Some("operation_not_granted")
+                Some("operation-not-granted")
             } else {
                 authorize_profile_claims(profile, &claims).err()
             }
         }
     };
     Ok(AccessPreview {
-        mode: "offline_synthetic",
+        mode: "offline-synthetic",
         admitted: reason.is_none(),
         reason: reason.unwrap_or("profile_requirements_satisfied"),
-        record_access: "not_evaluated",
+        record_access: "not-evaluated",
         credentials_verified: false,
         authority_issued: false,
         row_values_disclosed: false,

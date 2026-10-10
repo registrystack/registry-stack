@@ -4,9 +4,9 @@
 # the reasoning behind these choices. canonicalBaseIri below is a
 # reserved example.org name standing in for your registry's real
 # identity; replace it before you build a production package.
-apiVersion: registry.registrystack.org/v1alpha1
-kind: RegistryProject
-registry:
+apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
   id: professional-licences
   canonicalBaseIri: https://professional-licences.example.org
   version: 0.1.0
@@ -80,29 +80,29 @@ entities:
         required: true
         classification: restricted
         apiName: localIdentifier
-        minLength: 1
-        maxLength: 160
+        minimumLength: 1
+        maximumLength: 160
       - id: person-reference
         type: string
         required: true
         classification: restricted
         apiName: personReference
-        minLength: 1
-        maxLength: 500
+        minimumLength: 1
+        maximumLength: 500
       - id: regulator-reference
         type: string
         required: true
         classification: restricted
         apiName: regulatorReference
-        minLength: 1
-        maxLength: 500
+        minimumLength: 1
+        maximumLength: 500
       - id: jurisdiction-reference
         type: string
         required: true
         classification: restricted
         apiName: jurisdictionReference
-        minLength: 1
-        maxLength: 500
+        minimumLength: 1
+        maximumLength: 500
       - id: profession-code
         type: vocabulary-code
         required: true
@@ -137,7 +137,7 @@ entities:
         required: true
         classification: restricted
         apiName: licensedActivities
-        maxBytes: 512
+        maximumBytes: 512
         schema:
           type: array
           items:
@@ -154,17 +154,17 @@ entities:
         required: true
         classification: restricted
         apiName: authorizationConditions
-        maxLength: 500
+        maximumLength: 500
     changeControl:
       requiredFor:
         - patch
     constraints:
-      - kind: unique
+      - type: unique
         fields:
           - local-identifier
-      - kind: compare
+      - type: compare
         left: valid-from
-        operator: less_than_or_equal
+        operator: less-than-or-equal
         right: valid-to
   - id: scope-correction
     primaryDataset: directory
@@ -182,7 +182,7 @@ entities:
         required: true
         classification: restricted
         apiName: licensedActivities
-        maxBytes: 512
+        maximumBytes: 512
         schema:
           type: array
           items:
@@ -199,20 +199,20 @@ entities:
         required: true
         classification: restricted
         apiName: authorizationConditions
-        maxLength: 500
+        maximumLength: 500
       - id: reason
         type: string
         required: true
         classification: restricted
-        maxLength: 500
-        minLength: 1
+        maximumLength: 500
+        minimumLength: 1
       - id: supporting-reference
         type: string
         required: true
         classification: restricted
         apiName: supportingReference
-        maxLength: 500
-        minLength: 1
+        maximumLength: 500
+        minimumLength: 1
     changeRequest:
       effects:
         - target:
@@ -224,12 +224,13 @@ entities:
             authorization-conditions:
               fromField: authorization-conditions
       review:
+        type: required
         authority: casework
         policyId: scope-correction
       onApproved:
         mode: manual
       retention:
-        mode: operator_erase
+        mode: operator-erase
 accessProfiles:
   - id: reader
     default: false
@@ -239,17 +240,18 @@ accessProfiles:
     requiredPurposes:
       - starter-learning
     permissions:
-      - entity: professional-license
-        operations:
-          - get
-          - list
-        readableFields:
-          - profession-code
-          - jurisdiction-reference
-          - licence-status
-          - valid-from
-          - valid-to
-        rowBoundaries: unrestricted
+      entities:
+        - entity: professional-license
+          operations:
+            - get
+            - list
+          readableFields:
+            - profession-code
+            - jurisdiction-reference
+            - licence-status
+            - valid-from
+            - valid-to
+          rowBoundaries: unrestricted
   - id: editor
     default: true
     principalClaim: registry_principal
@@ -258,64 +260,65 @@ accessProfiles:
     requiredPurposes:
       - starter-learning
     permissions:
-      - entity: professional-license
-        operations:
-          - get
-          - list
-          - revisions
-          - create
-        readableFields:
-          - local-identifier
-          - person-reference
-          - regulator-reference
-          - jurisdiction-reference
-          - profession-code
-          - licence-status
-          - valid-from
-          - valid-to
-          - licensed-activities
-          - authorization-conditions
-        rowBoundaries: unrestricted
-        revisionAccess: true
-        writableFields:
-          - local-identifier
-          - person-reference
-          - regulator-reference
-          - jurisdiction-reference
-          - profession-code
-          - licence-status
-          - valid-from
-          - valid-to
-          - licensed-activities
-          - authorization-conditions
-        filterableFields:
-          - local-identifier
-      - entity: scope-correction
-        operations:
-          - create
-          - get
-          - patch
-          - submit_request
-          - revise_request
-          - cancel_request
-          - list
-        readableFields:
-          - record
-          - licensed-activities
-          - authorization-conditions
-          - reason
-          - supporting-reference
-        writableFields:
-          - record
-          - licensed-activities
-          - authorization-conditions
-          - reason
-          - supporting-reference
-        requestVisibility: owner
-        rowBoundaries: unrestricted
-        readableRequestFields:
-          - reason
-          - review_state
+      entities:
+        - entity: professional-license
+          operations:
+            - get
+            - list
+            - revisions
+            - create
+          readableFields:
+            - local-identifier
+            - person-reference
+            - regulator-reference
+            - jurisdiction-reference
+            - profession-code
+            - licence-status
+            - valid-from
+            - valid-to
+            - licensed-activities
+            - authorization-conditions
+          rowBoundaries: unrestricted
+          revisionAccess: true
+          writableFields:
+            - local-identifier
+            - person-reference
+            - regulator-reference
+            - jurisdiction-reference
+            - profession-code
+            - licence-status
+            - valid-from
+            - valid-to
+            - licensed-activities
+            - authorization-conditions
+          filterableFields:
+            - local-identifier
+        - entity: scope-correction
+          operations:
+            - create
+            - get
+            - patch
+            - submit-request
+            - revise-request
+            - cancel-request
+            - list
+          readableFields:
+            - record
+            - licensed-activities
+            - authorization-conditions
+            - reason
+            - supporting-reference
+          writableFields:
+            - record
+            - licensed-activities
+            - authorization-conditions
+            - reason
+            - supporting-reference
+          requestVisibility: owner
+          rowBoundaries: unrestricted
+          readableRequestFields:
+            - reason
+            - review-state
   - id: reviewer
     default: false
     principalClaim: registry_principal
@@ -324,46 +327,47 @@ accessProfiles:
     requiredPurposes:
       - starter-learning
     permissions:
-      - entity: professional-license
-        operations:
-          - get
-          - list
-          - revisions
-        readableFields:
-          - local-identifier
-          - person-reference
-          - regulator-reference
-          - jurisdiction-reference
-          - profession-code
-          - licence-status
-          - valid-from
-          - valid-to
-          - licensed-activities
-          - authorization-conditions
-        rowBoundaries: unrestricted
-        revisionAccess: true
-        filterableFields:
-          - local-identifier
-      - entity: scope-correction
-        operations:
-          - get
-          - apply_request
-          - list
-        readableFields:
-          - record
-          - licensed-activities
-          - authorization-conditions
-          - reason
-          - supporting-reference
-        filterableFields:
-          - record
-        rowBoundaries: unrestricted
-        applyTargets:
-          - entity: professional-license
-            rowBoundaries: unrestricted
-        readableRequestFields:
-          - reason
-          - review_state
+      entities:
+        - entity: professional-license
+          operations:
+            - get
+            - list
+            - revisions
+          readableFields:
+            - local-identifier
+            - person-reference
+            - regulator-reference
+            - jurisdiction-reference
+            - profession-code
+            - licence-status
+            - valid-from
+            - valid-to
+            - licensed-activities
+            - authorization-conditions
+          rowBoundaries: unrestricted
+          revisionAccess: true
+          filterableFields:
+            - local-identifier
+        - entity: scope-correction
+          operations:
+            - get
+            - apply-request
+            - list
+          readableFields:
+            - record
+            - licensed-activities
+            - authorization-conditions
+            - reason
+            - supporting-reference
+          filterableFields:
+            - record
+          rowBoundaries: unrestricted
+          applyTargets:
+            - entity: professional-license
+              rowBoundaries: unrestricted
+          readableRequestFields:
+            - reason
+            - review-state
     actorKind: human
     requesterClients:
       - staff
@@ -376,52 +380,53 @@ accessProfiles:
     requiredPurposes:
       - starter-learning
     permissions:
-      - entity: professional-license
-        operations:
-          - get
-          - list
-        readableFields:
-          - local-identifier
-          - person-reference
-          - regulator-reference
-          - jurisdiction-reference
-          - profession-code
-          - licence-status
-          - valid-from
-          - valid-to
-          - licensed-activities
-          - authorization-conditions
-        rowBoundaries:
-          - field: person-reference
-            claim: person_reference
-            operator: equals
-        filterableFields:
-          - local-identifier
-      - entity: scope-correction
-        operations:
-          - create
-          - get
-          - patch
-          - submit_request
-          - revise_request
-          - cancel_request
-          - list
-        readableFields:
-          - record
-          - licensed-activities
-          - authorization-conditions
-          - reason
-          - supporting-reference
-        writableFields:
-          - record
-          - licensed-activities
-          - authorization-conditions
-          - reason
-          - supporting-reference
-        requestVisibility: owner
-        rowBoundaries: unrestricted
-        submitterTargets:
-          - professional-license
-        readableRequestFields:
-          - reason
-          - review_state
+      entities:
+        - entity: professional-license
+          operations:
+            - get
+            - list
+          readableFields:
+            - local-identifier
+            - person-reference
+            - regulator-reference
+            - jurisdiction-reference
+            - profession-code
+            - licence-status
+            - valid-from
+            - valid-to
+            - licensed-activities
+            - authorization-conditions
+          rowBoundaries:
+            - field: person-reference
+              claim: person_reference
+              operator: equals
+          filterableFields:
+            - local-identifier
+        - entity: scope-correction
+          operations:
+            - create
+            - get
+            - patch
+            - submit-request
+            - revise-request
+            - cancel-request
+            - list
+          readableFields:
+            - record
+            - licensed-activities
+            - authorization-conditions
+            - reason
+            - supporting-reference
+          writableFields:
+            - record
+            - licensed-activities
+            - authorization-conditions
+            - reason
+            - supporting-reference
+          requestVisibility: owner
+          rowBoundaries: unrestricted
+          submitterTargets:
+            - professional-license
+          readableRequestFields:
+            - reason
+            - review-state

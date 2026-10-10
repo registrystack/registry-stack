@@ -34,28 +34,32 @@ statisticalDatasets:
       roundingBase: 5
 ```
 
-The declaration names no profile. Each access profile grants the dataset in
-its own `permissions`, beside its record grants:
+The declaration names no profile. Each access profile grants the dataset
+under its own `permissions.datasets`, beside the record grants it holds under
+`permissions.entities`:
 
 ```yaml
 accessProfiles:
   - id: facility-operator
     permissions:
-      - dataset: monthly-discharge-reports
-        operations:
-          - read-live
-          - read-releases
+      datasets:
+        - dataset: monthly-discharge-reports
+          operations:
+            - read-live
+            - read-releases
   - id: statistics-publisher
     permissions:
-      - dataset: monthly-discharge-reports
-        operations:
-          - publish
-          - read-releases
+      datasets:
+        - dataset: monthly-discharge-reports
+          operations:
+            - publish
+            - read-releases
   - id: statistics-reader
     permissions:
-      - dataset: monthly-discharge-reports
-        operations:
-          - read-releases
+      datasets:
+        - dataset: monthly-discharge-reports
+          operations:
+            - read-releases
 ```
 
 The unit is a mutable entity. Population expressions use the typed read-filter

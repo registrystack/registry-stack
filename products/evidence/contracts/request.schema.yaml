@@ -106,5 +106,5 @@ $comment: >-
   thumbprint, so the same coordinates carrying a different kid or a different
   alg are one key wearing two names and are refused before source access. The
   array is bounded by a compile-time maximum, this schema's maxItems, and the
-  deployment's declared holderBoundBatchMaxSize, in that order of increasing
+  deployment's declared maximumHolderBoundBatchSize, in that order of increasing
   strictness.

@@ -260,7 +260,7 @@ class NativeRequestTests(unittest.TestCase):
             with self.subTest(key=key[:12]):
                 with self.assertRaises(MessagingClientError) as raised:
                     self.client.submit("one-call-token", key, SUBMISSION)
-                self.assertEqual(raised.exception.kind, "invalid_request")
+                self.assertEqual(raised.exception.kind, "invalid-request")
         self.assertEqual(_Handler.observations, [])
 
     def test_message_reads_the_view(self) -> None:
@@ -275,7 +275,7 @@ class NativeRequestTests(unittest.TestCase):
     def test_message_refuses_a_non_canonical_identifier_before_io(self) -> None:
         with self.assertRaises(MessagingClientError) as raised:
             self.client.message("one-call-token", MESSAGE_ID.upper())
-        self.assertEqual(raised.exception.kind, "invalid_request")
+        self.assertEqual(raised.exception.kind, "invalid-request")
         self.assertEqual(_Handler.observations, [])
 
     def test_reused_idempotency_key_is_the_mapped_problem(self) -> None:
@@ -343,7 +343,7 @@ class NativeRequestTests(unittest.TestCase):
             with self.subTest(message_id=message_id):
                 with self.assertRaises(MessagingClientError) as raised:
                     self.client.cancel("one-call-token", message_id)
-                self.assertEqual(raised.exception.kind, "invalid_request")
+                self.assertEqual(raised.exception.kind, "invalid-request")
         self.assertEqual(_Handler.observations, [])
 
     def test_a_cancellation_that_lost_the_race_is_the_mapped_conflict(self) -> None:
@@ -374,10 +374,10 @@ class NativeRequestTests(unittest.TestCase):
             with self.subTest(template_id=template_id, version=version):
                 with self.assertRaises(MessagingClientError) as raised:
                     self.client.preview("one-call-token", template_id, version, PREVIEW_REQUEST)
-                self.assertEqual(raised.exception.kind, "invalid_request")
+                self.assertEqual(raised.exception.kind, "invalid-request")
         with self.assertRaises(MessagingClientError) as raised:
             self.client.preview("one-call-token", "reminder", "1", {**PREVIEW_REQUEST, "channel": "sms"})
-        self.assertEqual(raised.exception.kind, "invalid_request")
+        self.assertEqual(raised.exception.kind, "invalid-request")
         self.assertEqual(_Handler.observations, [])
 
     def test_a_template_refusal_is_the_mapped_problem(self) -> None:

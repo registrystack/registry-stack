@@ -49,14 +49,14 @@ All responses use `Cache-Control: no-store`.
 
 | Code | Status | Title | Detail | Recovery |
 | --- | --- | --- | --- | --- |
-| `evidence.invalid_request` | 400 | Evidence request is invalid | the Evidence request is invalid | Correct the request body or headers. |
-| `request.selector_invalid` | 400 | Selector is invalid | selector does not match an available request profile | Fetch authenticated definitions and use an available selector profile. A value the deployment places in a source request path must also fit one path segment: not empty, not `.` or `..`, and free of `/`, `\`, `%`, and control characters. This code is returned before any source is contacted, never as `source.unavailable`. |
-| `auth.invalid_credential` | 401 | Bearer access token is invalid | bearer access token validation failed | Supply one valid Bearer access token. The response also carries `WWW-Authenticate: Bearer realm="registry-evidence"`. |
+| `evidence.invalid-request` | 400 | Evidence request is invalid | the Evidence request is invalid | Correct the request body or headers. |
+| `request.selector-invalid` | 400 | Selector is invalid | selector does not match an available request profile | Fetch authenticated definitions and use an available selector profile. A value the deployment places in a source request path must also fit one path segment: not empty, not `.` or `..`, and free of `/`, `\`, `%`, and control characters. This code is returned before any source is contacted, never as `source.unavailable`. |
+| `auth.invalid-credential` | 401 | Bearer access token is invalid | bearer access token validation failed | Supply one valid Bearer access token. The response also carries `WWW-Authenticate: Bearer realm="registry-evidence"`. |
 | `evidence.denied` | 403 | Evidence request is not permitted | the Evidence request is not permitted | Obtain an appropriate entitlement. The response does not identify the failed authorization condition. |
-| `resource.not_found` | 404 | Requested resource was not found | the requested resource was not found | Check the route and HTTP method. Unknown paths and unsupported methods use this code. |
+| `resource.not-found` | 404 | Requested resource was not found | the requested resource was not found | Check the route and HTTP method. Unknown paths and unsupported methods use this code. |
 | `format.unsupported` | 406 | Requested format is not supported | the requested format is not supported | Send one exact supported `Accept` value. |
 | `evidence.unavailable` | 422 | Evidence could not be produced | evidence could not be produced for this request | Do not infer the cause or retry blindly. Retry after request inputs or authoritative source state may have changed, or follow operator guidance. The service does not disclose the unavailable class. |
-| `evidence.rate_limited` | 429 | Evidence request rate is exhausted | the Evidence request rate is exhausted | Wait one second, as stated in `Retry-After: 1`, then retry. |
+| `evidence.rate-limited` | 429 | Evidence request rate is exhausted | the Evidence request rate is exhausted | Wait one second, as stated in `Retry-After: 1`, then retry. |
 | `source.unavailable` | 503 | Authoritative source is unavailable | the authoritative source is unavailable | Retry with backoff or contact the source operator. |
 | `service.unavailable` | 503 | Service is unavailable | the request could not be served | Retry with backoff or contact the Evidence Gateway operator. |
 
@@ -67,7 +67,7 @@ All responses use `Cache-Control: no-store`.
 `POST /v1/evidence/batch` uses the same outer problem contract for any failure
 that aborts the batch.
 Its successful envelope keeps the item discriminator
-`evidence_not_available` unchanged for the closed unavailable outcome.
+`evidence-not-available` unchanged for the closed unavailable outcome.
 It is not the outer `evidence.unavailable` problem code.
 
 ## Source

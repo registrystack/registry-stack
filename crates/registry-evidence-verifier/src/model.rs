@@ -318,7 +318,7 @@ pub enum EvidenceRequestBatchResponseType {
 /// member carries no assertion and therefore supplies nothing that can be
 /// mistaken for verified evidence.
 #[derive(Clone, PartialEq, Eq, Serialize, JsonSchema, ToSchema)]
-#[serde(tag = "result", rename_all = "snake_case")]
+#[serde(tag = "result", rename_all = "kebab-case")]
 pub enum EvidenceRequestBatchResponseItem {
     Evidence { evidence: FlattenedJws },
     EvidenceNotAvailable,
@@ -330,7 +330,7 @@ impl<'de> Deserialize<'de> for EvidenceRequestBatchResponseItem {
         D: Deserializer<'de>,
     {
         #[derive(Deserialize)]
-        #[serde(tag = "result", rename_all = "snake_case", deny_unknown_fields)]
+        #[serde(tag = "result", rename_all = "kebab-case", deny_unknown_fields)]
         enum StrictItem {
             Evidence { evidence: FlattenedJws },
             // A struct variant is intentional here. Serde ignores unknown
@@ -546,7 +546,7 @@ mod tests {
                         "signature": "signature"
                     }
                 },
-                {"result": "evidence_not_available"}
+                {"result": "evidence-not-available"}
             ]
         }))
         .expect("the closed response shape parses");
@@ -574,10 +574,20 @@ mod tests {
                             "signature": "signature"
                         }
                     },
-                    {"result": "evidence_not_available"}
+                    {"result": "evidence-not-available"}
                 ]
             })
         );
+    }
+
+    #[test]
+    fn request_batch_response_refuses_the_underscore_result_word() {
+        let refused = serde_json::from_value::<EvidenceRequestBatchResponse>(serde_json::json!({
+            "schema": crate::EVIDENCE_REQUEST_BATCH_SCHEMA_V1,
+            "type": "EvidenceRequestBatchResponse",
+            "items": [{"result": "evidence_not_available"}]
+        }));
+        assert!(refused.is_err());
     }
 
     #[test]
@@ -597,7 +607,7 @@ mod tests {
             serde_json::json!({
                 "schema": crate::EVIDENCE_REQUEST_BATCH_SCHEMA_V1,
                 "type": "EvidenceRequestBatchResponse",
-                "items": [{"result": "evidence_not_available", "extra": true}]
+                "items": [{"result": "evidence-not-available", "extra": true}]
             }),
             serde_json::json!({
                 "schema": crate::EVIDENCE_REQUEST_BATCH_SCHEMA_V1,

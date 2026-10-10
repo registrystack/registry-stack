@@ -20,34 +20,34 @@ use serde_json::{json, Value};
 
 fn project(loader_operations: &[&str]) -> Value {
     json!({
-      "apiVersion":"registry.registrystack.org/v1alpha1",
-      "kind":"RegistryProject",
-      "registry":{"id":"import-admission","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+      "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+      "kind":"BRegProject",
+      "project":{"id":"import-admission","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
       "entities":[{
         "id":"enrollment","primaryDataset":"test-dataset","route":"enrollments","mutationMode":"mutable",
         "batch":{"maximumItems":2,"maximumBytes":4096},
         "changeControl":{"requiredFor":["patch"]},
-        "fields":[{"id":"label","type":"string","maxLength":32,"required":true,"classification":"internal"}]
+        "fields":[{"id":"label","type":"string","maximumLength":32,"required":true,"classification":"internal"}]
       },{
         "id":"enrollment-change","primaryDataset":"test-dataset","route":"enrollment-changes","mutationMode":"mutable",
         "fields":[
           {"id":"enrollment","type":"reference","target":"enrollment","required":true,"classification":"internal"},
-          {"id":"label","type":"string","maxLength":32,"required":true,"classification":"internal"}
+          {"id":"label","type":"string","maximumLength":32,"required":true,"classification":"internal"}
         ],
         "changeRequest":{"effects":[{"id":"apply-label","target":{"fromField":"enrollment"},"operation":"patch","set":{"label":{"fromField":"label"}}}],
-          "review":{"authority":"casework-main","policyId":"request-review"},"onApproved":{"mode":"manual"}}
+          "review":{"type":"required","authority":"casework-main","policyId":"request-review"},"onApproved":{"mode":"manual"}}
       }],
       "accessProfiles":[{
-        "id":"loader","principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
+        "id":"loader","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
           "entity":"enrollment","operations":loader_operations,"readableFields":["label"],"writableFields":["label"],
           "rowBoundaries": "unrestricted"
-        }]
+        }]}
       },{
-        "id":"reviewer","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
-          "entity":"enrollment-change","operations":["get","submit_request","apply_request"],"readableFields":["enrollment","label"],
+        "id":"reviewer","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
+          "entity":"enrollment-change","operations":["get","submit-request","apply-request"],"readableFields":["enrollment","label"],
           "applyTargets":[{"entity":"enrollment", "rowBoundaries": "unrestricted"}],
           "rowBoundaries": "unrestricted"
-        }]
+        }]}
       }]
     })
 }

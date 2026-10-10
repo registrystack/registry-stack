@@ -502,13 +502,19 @@ jobs:
         with:
           tool: cargo-deny@0.19.8
 
+      - name: Install uv
+        if: needs.changes.outputs.release_tool != 'true'
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: "0.11.16"
+
       - name: Gate inventory
         if: needs.changes.outputs.release_tool != 'true'
         run: python3 release/scripts/check-gates-inventory.py
 
       - name: Test gate inventory
         if: needs.changes.outputs.release_tool != 'true'
-        run: python3 -m unittest release/scripts/test_check_gates_inventory.py
+        run: uv run --no-project --with PyYAML==6.0.2 python3 -m unittest release/scripts/test_check_gates_inventory.py
 
       - name: Cargo deny
         run: cargo deny check
@@ -664,8 +670,13 @@ jobs:
       - name: Enforce Evidence verifier portability
         run: products/evidence/scripts/check-verifier-portability.sh
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: "0.11.16"
+
       - name: Self-test the Evidence configuration key-path gate
-        run: python3 products/evidence/scripts/test_evidence_config_key_paths.py
+        run: uv run --no-project --with PyYAML==6.0.2 python3 products/evidence/scripts/test_evidence_config_key_paths.py
 
       - name: Enforce Evidence configuration reference parity
         run: products/evidence/scripts/check-config-key-paths.sh
@@ -1005,6 +1016,22 @@ jobs:
         env:
           DISPATCH_TEST_DATABASE_URL: postgresql://scheduling:scheduling_test@localhost:${{ job.services.postgres.ports['5432'] }}/dispatch
         run: cargo test --locked -p registry-platform-dispatch --features postgres-test
+      - name: Create isolated hook-delivery test database
+        env:
+          POSTGRES_CONTAINER_ID: ${{ job.services.postgres.id }}
+        run: docker exec "$POSTGRES_CONTAINER_ID" createdb -U scheduling hooks
+      - name: Verify the shared hook delivery schema installs and upgrades
+        # These tests are ignored without a database, and a run that selects
+        # nothing still exits 0, so the step fails unless at least one passes.
+        shell: bash
+        env:
+          HOOKS_TEST_DATABASE_URL: postgresql://scheduling:scheduling_test@localhost:${{ job.services.postgres.ports['5432'] }}/hooks
+        run: |
+          set -euo pipefail
+          cargo test --locked -p registry-platform-hooks --features postgres --lib \
+            -- --ignored \
+            | tee "${RUNNER_TEMP}/platform-hooks-postgres.log"
+          grep -Eq 'test result: ok\. [1-9][0-9]* passed' "${RUNNER_TEMP}/platform-hooks-postgres.log" || { echo "::error::expected at least one passing PostgreSQL test for registry-platform-hooks"; exit 1; }
 
   messaging-contracts:
     name: Messaging product contracts and vendor neutrality
@@ -1545,23 +1572,28 @@ jobs:
           fetch-depth: 0
           submodules: false
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: "0.11.16"
+
       - name: Test release helper
-        run: python3 -m unittest release/scripts/test_registry_release.py
+        run: uv run --no-project --with PyYAML==6.0.2 python3 -m unittest release/scripts/test_registry_release.py
 
       - name: Test release scheduling
-        run: python3 -m unittest release/scripts/test_release_ci_overlap.py
+        run: uv run --no-project --with PyYAML==6.0.2 python3 -m unittest release/scripts/test_release_ci_overlap.py
 
       - name: Test release docs scheduling
-        run: python3 -m unittest release/scripts/test_release_docs_scheduling.py
+        run: uv run --no-project --with PyYAML==6.0.2 python3 -m unittest release/scripts/test_release_docs_scheduling.py
 
       - name: Test release-note drafting
-        run: python3 -m unittest release/scripts/test_release_notes.py
+        run: uv run --no-project --with PyYAML==6.0.2 python3 -m unittest release/scripts/test_release_notes.py
 
       - name: Test release planning commands
-        run: python3 -m unittest release/scripts/test_registry_release_plans.py
+        run: uv run --no-project --with PyYAML==6.0.2 python3 -m unittest release/scripts/test_registry_release_plans.py
 
       - name: Test documentation release preparation
-        run: python3 -m unittest release/scripts/test_prepare_release_docs.py
+        run: uv run --no-project --with PyYAML==6.0.2 python3 -m unittest release/scripts/test_prepare_release_docs.py
 
       - name: Test version-selected release roster
         run: python3 -m unittest release/scripts/test_release_roster.py
@@ -1600,18 +1632,10 @@ jobs:
         run: python3 -m unittest release/scripts/test_release_repeatability_workflow.py
 
       - name: Test release rehearsal workflow
-        run: python3 -m unittest release/scripts/test_release_rehearsal.py
+        run: uv run --no-project --with PyYAML==6.0.2 python3 -m unittest release/scripts/test_release_rehearsal.py
 
       - name: Test release upgrade rehearsal
-        run: python3 -m unittest release/scripts/test_rehearse_upgrade.py
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
-        with:
-          version: "0.11.16"
-
-      - name: Test release upgrade steps
-        run: uv run --no-project --with PyYAML==6.0.2 python3 -m unittest release/scripts/test_upgrade_steps.py
+        run: uv run --no-project --with PyYAML==6.0.2 python3 -m unittest release/scripts/test_rehearse_upgrade.py
 
       - name: Test rehearsal advisory evidence collector
         run: python3 -m unittest release/scripts/test_collect_rehearsal_advisory_evidence.py
@@ -1620,7 +1644,7 @@ jobs:
         run: python3 -m unittest release/scripts/test_image_exposure.py
 
       - name: Test advisory baseline renewal
-        run: python3 -m unittest release/scripts/test_advisory_renewal.py
+        run: uv run --no-project --with PyYAML==6.0.2 python3 -m unittest release/scripts/test_advisory_renewal.py
 
       - name: Test Linux Node client release build helper
         run: python3 -m unittest release/scripts/test_build_linux_node_client.py
@@ -1650,10 +1674,10 @@ jobs:
         run: python3 -m unittest release/scripts/test_nightly_installers.py
 
       - name: Test nightly workflow trust boundaries
-        run: python3 -m unittest release/scripts/test_nightly_release_workflow.py
+        run: uv run --no-project --with PyYAML==6.0.2 python3 -m unittest release/scripts/test_nightly_release_workflow.py
 
       - name: Test release workflow structure
-        run: python3 -m unittest release/scripts/test_release_workflow_structure.py
+        run: uv run --no-project --with PyYAML==6.0.2 python3 -m unittest release/scripts/test_release_workflow_structure.py
 
       - name: Test release workflow guard
         run: python3 -m unittest release/scripts/test_release_workflow_guard.py
@@ -1677,7 +1701,7 @@ jobs:
         run: python3 release/scripts/check-gates-inventory.py
 
       - name: Test gate inventory
-        run: python3 -m unittest release/scripts/test_check_gates_inventory.py
+        run: uv run --no-project --with PyYAML==6.0.2 python3 -m unittest release/scripts/test_check_gates_inventory.py
 
       - name: Validate release manifest
         run: release/scripts/registry-release validate-current
@@ -1731,11 +1755,16 @@ jobs:
           fetch-depth: 0
           submodules: false
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: "0.11.16"
+
       - name: Check monorepo source model
         run: REGISTRY_RELEASE_SOURCE_MODE=monorepo release/scripts/check-release-source-model.sh
 
       - name: Test source model checker
-        run: python3 -m unittest release/scripts/test_check_release_source_model.py
+        run: uv run --no-project --with PyYAML==6.0.2 python3 -m unittest release/scripts/test_check_release_source_model.py
 
   release-source-proof-required:
     # Branch protection requires this exact context. Keep it successful for

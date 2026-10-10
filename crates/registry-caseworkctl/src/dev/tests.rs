@@ -352,6 +352,21 @@ fn integrations_read_identifiers_and_urls_through_shared_types() {
             )])
         );
     }
+    // The runtime's current name for the attempt timeout was never a key of
+    // this file, so it is an unknown key.
+    let timeout = refused(
+        integrations(
+            "  sources:\n    source:\n      baseUrl: http://127.0.0.1:8080\n      readerProfile: casework-reader\n      tokenEndpoint: http://127.0.0.1:8093/oauth2/token\n      clientIdRef: secret:file/service-reader-id\n      clientAssertionKeyRef: secret:file/service-reader-key\n      webhookSecretRef: secret:file/source-webhook\n      eventSource: urn:example:source\n      attemptTimeoutMilliseconds: 5000\n",
+        )
+        .as_bytes(),
+    );
+    assert_eq!(
+        timeout,
+        expected(&[(
+            "config.unknown-key",
+            "/integrations/sources/source/attemptTimeoutMilliseconds"
+        )])
+    );
 }
 
 #[test]
@@ -3537,13 +3552,13 @@ fn explicit_local_integrations_render_only_governed_authority_and_bind_the_sourc
     )
     .unwrap();
     fs::write(project.join("source.json"), serde_json::to_vec(&json!({
-        "apiVersion":"registry.registrystack.org/casework-source-description/v1alpha1",
-        "kind":"BRegCaseworkSourceDescription","origin":"bregctl explain change-requests","authority":"none",
+        "apiVersion":"id.registrystack.org/formats/casework/breg-source-description/v1alpha1",
+        "kind":"CaseworkBregSourceDescription","origin":"bregctl explain change-requests","authority":"none",
         "sourceId":"source","sourceRevision":"sha256:source",
-        "request":{"requestEntity":"correction","requestRoute":"corrections",
+        "requests":[{"requestEntity":"correction","requestRoute":"corrections",
             "fields":[],"contractFingerprint":"sha256:contract",
-            "review":{"authority":"casework-main","policyId":"registry-correction"},
-            "onApproved":{"mode":"manual"},"application":{}}
+            "review":{"type":"required","authority":"casework-main","policyId":"registry-correction"},
+            "onApproved":{"mode":"manual"},"application":{}}]
     })).unwrap()).unwrap();
     let client_bytes = serde_norway::to_string(&clients).unwrap();
     assert!(capture_with_sources(
@@ -4000,7 +4015,7 @@ fn a_borrowed_task_authority_connection_pairs_the_task_exchange_clients() {
             &serde_json::to_vec(&json!({"issuer":{"exchangeIssuers":[{
                 "issuer":"https://casework.local.example",
                 "jwksEndpoint":"http://host.docker.internal:8801/oauth2/jwks",
-                "mapping":"institutional_grant","clients":paired
+                "mapping":"institutional-grant","clients":paired
             }]}}))
             .unwrap(),
         )
@@ -4034,7 +4049,9 @@ impl RegistrySession {
         fs::write(
             project.join("registry.yaml"),
             serde_json::to_vec(&json!({
-                "registry": {"id": "professional-licences"},
+                "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
+                "kind": "BRegProject",
+                "project": {"id": "professional-licences"},
                 "package": {}
             }))
             .unwrap(),
@@ -4659,7 +4676,7 @@ fn a_start_on_an_occupied_port_names_the_port() {
         diagnostic["code"], "caseworkctl.dev.port-occupied",
         "{report}"
     );
-    assert_eq!(diagnostic["artifact"], "dev_session");
+    assert_eq!(diagnostic["artifact"], "dev-session");
     assert_eq!(diagnostic["path"], format!("dev:/ports/{port}"));
     assert_eq!(
         diagnostic["message"],
@@ -4696,7 +4713,7 @@ fn an_edited_project_over_retained_records_names_dev_stop_remove() {
         diagnostic["code"], "caseworkctl.dev.inputs-changed",
         "{report}"
     );
-    assert_eq!(diagnostic["artifact"], "dev_session");
+    assert_eq!(diagnostic["artifact"], "dev-session");
     assert_eq!(diagnostic["path"], ".casework/dev");
     assert!(
         diagnostic["message"]
@@ -4739,7 +4756,7 @@ fn a_retained_audit_stream_from_an_earlier_release_names_the_directory_to_move()
         diagnostic["code"], "caseworkctl.dev.audit-format-unsupported",
         "{report}"
     );
-    assert_eq!(diagnostic["artifact"], "dev_session");
+    assert_eq!(diagnostic["artifact"], "dev-session");
     assert_eq!(diagnostic["path"], ".casework/dev/audit");
     let message = diagnostic["message"].as_str().unwrap();
     assert!(message.contains(".casework/dev/audit"), "{report}");
@@ -4855,7 +4872,7 @@ fn a_failed_supervised_start_names_the_log_directory_without_its_cause() {
 
     assert_eq!(exit, 3);
     assert_eq!(diagnostic["code"], "caseworkctl.dev.start-failed");
-    assert_eq!(diagnostic["artifact"], "dev_session");
+    assert_eq!(diagnostic["artifact"], "dev-session");
     assert_eq!(diagnostic["path"], ".casework/dev/logs");
     let rendered = diagnostic.to_string();
     assert!(

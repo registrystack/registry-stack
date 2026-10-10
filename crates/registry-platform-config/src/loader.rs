@@ -82,7 +82,14 @@ pub struct RemovedKey {
 pub const REMOVED_OIDC_JWKS_URI: RemovedKey = RemovedKey {
     path: "authentication.oidc.jwksUri",
     replacement:
-        "Declare `authentication.oidc.jwksSource` with `kind: uri` and `uri` set to the https URL.",
+        "Declare `authentication.oidc.jwksSource` with `type: uri` and `uri` set to the https URL.",
+};
+
+/// The `kind` tag of the shared `jwksSource` union, which is tagged by `type`
+/// (CFG-ID-7), for a runtime whose issuer block sits at `authentication.oidc`.
+pub const REMOVED_OIDC_JWKS_SOURCE_KIND: RemovedKey = RemovedKey {
+    path: "authentication.oidc.jwksSource.kind",
+    replacement: "Write `authentication.oidc.jwksSource.type` with the same value.",
 };
 
 /// Codes of the refusals the loader reports itself, before the reader runs

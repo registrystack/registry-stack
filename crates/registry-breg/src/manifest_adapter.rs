@@ -292,7 +292,12 @@ fn project_manifest(
 fn localized_text(source: &ManifestProjectionTextSource) -> LocalizedText {
     match source {
         ManifestProjectionTextSource::Plain(value) => LocalizedText::Plain(value.clone()),
-        ManifestProjectionTextSource::Localized(values) => LocalizedText::Localized(values.clone()),
+        ManifestProjectionTextSource::Localized(values) => LocalizedText::Localized(
+            values
+                .iter()
+                .map(|(language, text)| (language.as_str().to_owned(), text.clone()))
+                .collect(),
+        ),
     }
 }
 
@@ -556,7 +561,7 @@ fn project_codelists(
                 version: metadata.version.clone(),
                 valid_from: None,
                 valid_to: None,
-                external_ref: metadata.external_ref.clone(),
+                external_ref: metadata.external_reference.clone(),
                 concepts,
             })
         })
@@ -660,9 +665,9 @@ mod tests {
         // protected field also admits `sealed-by-court`. `sealing-reason` is
         // used only by the protected dataset.
         let project = json!({
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"shared-codes","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://shared-codes.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"shared-codes","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://shared-codes.example.test"},
           "manifestProjection":{
             "accessProfile":"public-reader",
             "classificationCeiling":"public",
@@ -691,17 +696,17 @@ mod tests {
             {"id":"sealing-reason","values":["witness-protection"]}
           ],
           "entities":[
-            {"id":"public-case","primaryDataset":"public-cases","route":"public-cases","mutationMode":"create_only","classification":"public",
+            {"id":"public-case","primaryDataset":"public-cases","route":"public-cases","mutationMode":"create-only","classification":"public",
              "fields":[{"id":"status","type":"vocabulary-code","vocabulary":"case-status","values":["open"],"classification":"public"}]},
-            {"id":"protected-case","primaryDataset":"protected-cases","route":"protected-cases","mutationMode":"create_only","classification":"restricted",
+            {"id":"protected-case","primaryDataset":"protected-cases","route":"protected-cases","mutationMode":"create-only","classification":"restricted",
              "fields":[
                {"id":"status","type":"vocabulary-code","vocabulary":"case-status","classification":"restricted"},
                {"id":"sealing-reason","type":"vocabulary-code","vocabulary":"sealing-reason","classification":"restricted"}
              ]}
           ],
           "accessProfiles":[
-            {"id":"public-reader","principalClaim":"sub","requiredScopes":["public.read"],"permissions":[{"entity":"public-case","operations":["get"],"readableFields":["status"],"rowBoundaries":"unrestricted"}]},
-            {"id":"protected-reader","principalClaim":"sub","requiredScopes":["protected.read"],"permissions":[{"entity":"protected-case","operations":["get"],"readableFields":["status","sealing-reason"],"rowBoundaries":"unrestricted"}]}
+            {"id":"public-reader","principalClaim":"sub","requiredScopes":["public.read"],"permissions":{"entities":[{"entity":"public-case","operations":["get"],"readableFields":["status"],"rowBoundaries":"unrestricted"}]}},
+            {"id":"protected-reader","principalClaim":"sub","requiredScopes":["protected.read"],"permissions":{"entities":[{"entity":"protected-case","operations":["get"],"readableFields":["status","sealing-reason"],"rowBoundaries":"unrestricted"}]}}
           ]
         });
         let project =

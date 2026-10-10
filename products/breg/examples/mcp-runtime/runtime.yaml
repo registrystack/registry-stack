@@ -12,7 +12,7 @@ resourceServer:
   resource: https://gateway.example.test/mcp
   issuer: https://login.example.test
   jwksSource:
-    kind: uri
+    type: uri
     uri: https://login.example.test/jwks.json
   algorithms: [EdDSA, ES256]
   allowedClients: [chat-host]

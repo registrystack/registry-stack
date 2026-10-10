@@ -1,7 +1,10 @@
-id: urn:example:fixture:codelist:region-map
+apiVersion: id.registrystack.org/formats/evidence/codelist/v1alpha1
+kind: EvidenceCodelist
+uri: urn:example:fixture:codelist:region-map
 version: '2026-01'
+type: mapping
 entries:
   R-101: REGION-NORTH
   R-102: REGION-NORTH
   R-201: REGION-SOUTH
-allowed_outputs: [REGION-NORTH, REGION-SOUTH]
+allowedOutputs: [REGION-NORTH, REGION-SOUTH]

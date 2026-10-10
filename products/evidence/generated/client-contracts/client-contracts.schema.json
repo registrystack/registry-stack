@@ -8,13 +8,6 @@
       ],
       "type": "string"
     },
-    "ContractsSchema": {
-      "description": "The `schema` of a reviewed contracts file.",
-      "enum": [
-        "registry.evidence-client-contracts/v1"
-      ],
-      "type": "string"
-    },
     "UriIdentity": {
       "description": "An absolute URI the service states as an identity, compared exactly.",
       "format": "uri",
@@ -28,6 +21,9 @@
   "additionalProperties": false,
   "description": "A reviewed snapshot of the definitions an Evidence service publishes for\none requester, written by `evidencectl client contracts fetch` and\npromoted after review. It holds no source plan, script, credential,\nrequester tag, authority profile, selector value, codelist, or internal\nconstraint.",
   "properties": {
+    "apiVersion": {
+      "const": "id.registrystack.org/formats/evidence/client-contracts/v1"
+    },
     "assuranceProfile": {
       "$ref": "#/$defs/AssuranceProfile",
       "description": "The assurance profile the service states."
@@ -49,17 +45,17 @@
       "$ref": "#/$defs/UriIdentity",
       "description": "The service that issues assertions for the definitions."
     },
+    "kind": {
+      "const": "EvidenceClientContracts"
+    },
     "providedBy": {
       "$ref": "#/$defs/UriIdentity",
       "description": "The provider the definitions describe."
-    },
-    "schema": {
-      "$ref": "#/$defs/ContractsSchema",
-      "description": "The contracts format and its version."
     }
   },
   "required": [
-    "schema",
+    "apiVersion",
+    "kind",
     "assuranceProfile",
     "audience",
     "issuedBy",

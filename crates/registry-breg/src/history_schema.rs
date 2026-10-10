@@ -1211,7 +1211,7 @@ mod tests {
             ),
             (
                 with_note_field(string(0, 200)),
-                "a string maxLength is its column type",
+                "a string maximumLength is its column type",
             ),
         ] {
             assert_eq!(
@@ -1652,6 +1652,111 @@ mod tests {
                 .expect("note field exists")
                 .encrypted
         );
+    }
+
+    /// The canonical JSON of `descriptor` with each stored field's bounds
+    /// written as `minLength`, `maxLength`, and `maxBytes`.
+    fn with_earlier_bound_names(descriptor: &HistorySchemaDescriptor) -> Vec<u8> {
+        let bytes = serialize_descriptor(descriptor).expect("descriptor serializes");
+        let mut earlier = serde_json::from_slice::<Value>(&bytes).expect("descriptor is JSON");
+        for entity in earlier["entities"]
+            .as_object_mut()
+            .expect("entities object")
+            .values_mut()
+        {
+            for field in entity["storedFields"]
+                .as_object_mut()
+                .expect("stored fields object")
+                .values_mut()
+            {
+                let field_type = field["fieldType"].as_object_mut().expect("field type");
+                for (current, earlier) in [
+                    ("minimumLength", "minLength"),
+                    ("maximumLength", "maxLength"),
+                    ("maximumBytes", "maxBytes"),
+                ] {
+                    if let Some(bound) = field_type.remove(current) {
+                        field_type.insert(earlier.to_owned(), bound);
+                    }
+                }
+            }
+        }
+        canonicalize_json(&earlier).expect("earlier descriptor canonicalizes")
+    }
+
+    fn bounded_fields_entity() -> CompiledEntity {
+        let mut entity = with_note_field(FieldTypeSource::Text { max_length: 256 });
+        entity.stored_fields.push(stored(
+            "detail",
+            "detail",
+            FieldTypeSource::Structured {
+                max_bytes: 512,
+                schema: json!({
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {"label": {"type": "string", "maxLength": 16}}
+                }),
+            },
+            false,
+            None,
+        ));
+        entity
+    }
+
+    #[test]
+    fn descriptors_are_written_with_full_bound_names_and_refused_under_the_shorter_ones() {
+        let descriptor = descriptor_for(&bounded_fields_entity());
+        let bytes = serialize_descriptor(&descriptor).expect("descriptor serializes");
+        let written = serde_json::from_slice::<Value>(&bytes).expect("descriptor is JSON");
+        let fields = &written["entities"]["membership"]["storedFields"];
+        assert_eq!(
+            fields["household"]["fieldType"],
+            json!({"type": "string", "minimumLength": 1, "maximumLength": 64})
+        );
+        assert_eq!(
+            fields["note"]["fieldType"],
+            json!({"type": "text", "maximumLength": 256})
+        );
+        assert_eq!(fields["detail"]["fieldType"]["maximumBytes"], json!(512));
+        assert_eq!(
+            fields["detail"]["fieldType"]["schema"]["properties"]["label"]["maxLength"],
+            json!(16),
+            "a structured field's schema keeps its JSON Schema keywords"
+        );
+        assert_eq!(
+            parse_descriptor(&bytes).expect("a descriptor this release wrote parses"),
+            descriptor
+        );
+
+        // The shorter names are not part of the descriptor format.
+        let earlier = with_earlier_bound_names(&descriptor);
+        assert_ne!(earlier, bytes);
+        assert_eq!(
+            parse_descriptor(&earlier).expect_err("a shorter bound name is refused"),
+            HistorySchemaError::MalformedDescriptor
+        );
+    }
+
+    #[test]
+    fn a_descriptor_that_states_one_bound_under_both_names_is_refused() {
+        let descriptor = descriptor_for(&bounded_fields_entity());
+        let bytes = serialize_descriptor(&descriptor).expect("descriptor serializes");
+        for (field, earlier) in [
+            ("household", "minLength"),
+            ("household", "maxLength"),
+            ("note", "maxLength"),
+            ("detail", "maxBytes"),
+        ] {
+            let mut doubled = serde_json::from_slice::<Value>(&bytes).expect("descriptor is JSON");
+            doubled["entities"]["membership"]["storedFields"][field]["fieldType"][earlier] =
+                json!(1);
+            let doubled = canonicalize_json(&doubled).expect("doubled descriptor canonicalizes");
+            assert_eq!(
+                parse_descriptor(&doubled).expect_err("one bound has one value"),
+                HistorySchemaError::MalformedDescriptor,
+                "{field} {earlier}"
+            );
+        }
     }
 
     #[test]

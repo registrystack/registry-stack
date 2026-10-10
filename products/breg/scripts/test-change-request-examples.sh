@@ -448,7 +448,7 @@ render_runtime_config() {
   local migration_role=$6
   local runtime_role=$7
   cat >"$output" <<EOF_RUNTIME
-apiVersion: registry.registrystack.org/breg-runtime/v1alpha1
+apiVersion: id.registrystack.org/formats/breg/runtime/v1alpha1
 kind: BRegRuntimeConfig
 listener:
   bind: 127.0.0.1:0
@@ -464,7 +464,7 @@ database:
   runtimeUrlRef: $runtime_ref
   migrationUrlRef: $migration_ref
   pool:
-    maxSize: 4
+    maximumConnections: 4
     waitTimeoutMilliseconds: 1000
     createTimeoutMilliseconds: 1000
     recycleTimeoutMilliseconds: 1000
@@ -482,18 +482,17 @@ authentication:
     scopeClaim: scope
     scopeSeparator: " "
     allowedClients: [registry-change-request-example]
-    deniedKids: []
-    maxTokenLifetimeSeconds: 3600
+    maximumTokenLifetimeSeconds: 3600
     leewayMilliseconds: 60000
     jwksCache:
       cacheTtlSeconds: 600
       negativeCacheTtlSeconds: 60
       refreshCooldownSeconds: 30
-      maxDocumentBytes: 65536
-      requestTimeoutMilliseconds: 5000
+      maximumDocumentBytes: 65536
+      attemptTimeoutMilliseconds: 5000
       outageToleranceSeconds: 0
     jwksSource:
-      kind: static
+      type: static
       documentRef: secret:file/oidc-jwks
   authorityClaims:
     principal: registry_principal
@@ -503,7 +502,7 @@ audit:
   path: $temporary_root/audit/audit.jsonl
 cursor:
   secretRef: secret:file/cursor-key
-  maxAgeSeconds: 300
+  maximumAgeSeconds: 300
 eventDestinations: {}
 operationalTimeouts:
   httpRequestMilliseconds: 10000
@@ -626,8 +625,8 @@ config = yaml.safe_load(path.read_text(encoding="utf-8"))
 config["eventDestinations"] = {"person-events": {
     "origin": "https://person-events.example.invalid/",
     "path": "/events",
-    "networkProfile": "productionHttps",
-    "dnsFamily": "dualStackStrict",
+    "networkProfile": "production-https",
+    "dnsFamily": "dual-stack-strict",
     "allowedPrivateCidrs": [],
     "hmacSha256KeyRef": "secret:file/person-events-key",
     "classificationCeiling": "internal",

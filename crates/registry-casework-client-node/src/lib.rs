@@ -104,7 +104,7 @@ impl CaseworkClient {
         let token = bearer(token)?;
         let request: ReviewCreateRequest = input(request)?;
         let digest = SubmissionDigest::parse(&expected_submission_digest)
-            .map_err(|_| binding_error("invalid_request", "the submission digest is invalid"))?;
+            .map_err(|_| binding_error("invalid-request", "the submission digest is invalid"))?;
         outcome(
             self.inner
                 .create_or_recover_review_request(
@@ -1441,7 +1441,7 @@ fn optional_source_auth<'a>(
 
 fn bearer(value: String) -> Result<registry_casework_client::BearerToken> {
     registry_casework_client::BearerToken::new(value)
-        .map_err(|_| binding_error("invalid_request", "the bearer token is invalid"))
+        .map_err(|_| binding_error("invalid-request", "the bearer token is invalid"))
 }
 
 fn auth<'a>(
@@ -1453,7 +1453,7 @@ fn auth<'a>(
 }
 
 fn uuid(value: &str) -> Result<Uuid> {
-    Uuid::parse_str(value).map_err(|_| binding_error("invalid_request", "the UUID is invalid"))
+    Uuid::parse_str(value).map_err(|_| binding_error("invalid-request", "the UUID is invalid"))
 }
 
 fn safe_revision(value: i64) -> Result<()> {
@@ -1461,7 +1461,7 @@ fn safe_revision(value: i64) -> Result<()> {
         Ok(())
     } else {
         Err(binding_error(
-            "invalid_request",
+            "invalid-request",
             "the revision is outside the JavaScript safe integer range",
         ))
     }
@@ -1470,12 +1470,12 @@ fn safe_revision(value: i64) -> Result<()> {
 fn input<T: serde::de::DeserializeOwned>(value: Value) -> Result<T> {
     if contains_unsafe_integer(&value) {
         return Err(binding_error(
-            "invalid_request",
+            "invalid-request",
             "Casework client arguments are invalid",
         ));
     }
     serde_json::from_value(value)
-        .map_err(|_| binding_error("invalid_request", "Casework client arguments are invalid"))
+        .map_err(|_| binding_error("invalid-request", "Casework client arguments are invalid"))
 }
 
 fn outcome<T: Serialize>(
@@ -1555,7 +1555,7 @@ fn client_error(error: CaseworkClientError) -> NapiError {
             "message": "Casework client configuration is invalid",
         }),
         CaseworkClientError::InvalidRequest { .. } => json!({
-            "kind": "invalid_request",
+            "kind": "invalid-request",
             "message": "Casework client arguments are invalid",
         }),
         CaseworkClientError::Transport { kind } => json!({
@@ -1614,9 +1614,9 @@ fn protocol_failure(failure: registry_casework_client::CaseworkProtocolFailure) 
     use registry_casework_client::CaseworkProtocolFailure;
 
     match failure {
-        CaseworkProtocolFailure::HeaderBounds => "header_bounds",
-        CaseworkProtocolFailure::TraceContext => "trace_context",
-        CaseworkProtocolFailure::MediaType => "media_type",
+        CaseworkProtocolFailure::HeaderBounds => "header-bounds",
+        CaseworkProtocolFailure::TraceContext => "trace-context",
+        CaseworkProtocolFailure::MediaType => "media-type",
         CaseworkProtocolFailure::Body => "body",
         CaseworkProtocolFailure::Problem => "problem",
         CaseworkProtocolFailure::Status => "status",
@@ -1662,15 +1662,15 @@ mod tests {
 
         assert_eq!(
             protocol_failure(CaseworkProtocolFailure::HeaderBounds),
-            "header_bounds"
+            "header-bounds"
         );
         assert_eq!(
             protocol_failure(CaseworkProtocolFailure::TraceContext),
-            "trace_context"
+            "trace-context"
         );
         assert_eq!(
             protocol_failure(CaseworkProtocolFailure::MediaType),
-            "media_type"
+            "media-type"
         );
         assert_eq!(protocol_failure(CaseworkProtocolFailure::Body), "body");
         assert_eq!(

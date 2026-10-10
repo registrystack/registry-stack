@@ -59,10 +59,22 @@ Path("trusted-issuer-keys.json").write_text(
     json.dumps(context["trustedJwks"], indent=2) + "\n"
 )
 Path("verification-policy.json").write_text(
-    json.dumps(context["verificationPolicy"], indent=2) + "\n"
+    json.dumps(
+        {
+            "apiVersion": "id.registrystack.org/formats/evidence/verification-policy/v1",
+            "kind": "EvidenceVerificationPolicy",
+            **context["verificationPolicy"],
+        },
+        indent=2,
+    )
+    + "\n"
 )
 PY
 ```
+
+A verification policy file opens with `apiVersion` and `kind`, which name the format
+`evidence verify` reads. The retained context holds the policy object alone, so the step writes
+those two members first.
 
 You now have:
 

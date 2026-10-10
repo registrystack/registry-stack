@@ -63,11 +63,13 @@ const METADATA_PATH: &str = "/v1/transit/keys/breg-field-dek";
 const DATAKEY_PATH: &str = "/v1/transit/datakey/plaintext/breg-field-dek";
 const DECRYPT_PATH: &str = "/v1/transit/decrypt/breg-field-dek";
 
-const MODULE_SOURCE: &str = "id: field-encryption-core\nversion: 1.0.0\n";
+const MODULE_SOURCE: &str =
+    "apiVersion: id.registrystack.org/formats/breg/module/v1alpha1\nkind: BRegModule\n\
+     id: field-encryption-core\nversion: 1.0.0\n";
 
-const PROJECT_TEMPLATE: &str = r#"apiVersion: registry.registrystack.org/v1alpha1
-kind: RegistryProject
-registry:
+const PROJECT_TEMPLATE: &str = r#"apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
   id: field-encryption-fixture
   canonicalBaseIri: https://field-encryption.invalid
   version: 1.0.0
@@ -108,21 +110,21 @@ entities:
     selectorProfiles:
       - {id: by-secret, fields: [secret]}
     fields:
-      - {id: jurisdiction, type: string, maxLength: 32, required: true, classification: public}
-      - {id: label, type: string, maxLength: 128, required: true, classification: public}
-      - {id: secret, type: string, maxLength: 256, required: true, classification: restricted, encrypted: true,
+      - {id: jurisdiction, type: string, maximumLength: 32, required: true, classification: public}
+      - {id: label, type: string, maximumLength: 128, required: true, classification: public}
+      - {id: secret, type: string, maximumLength: 256, required: true, classification: restricted, encrypted: true,
          lookup: {normalization: [trim, uppercase], unique: true}}
-      - {id: code, type: string, maxLength: 32, classification: restricted, encrypted: true}
-      - {id: big, type: string, maxLength: 16384, classification: restricted, encrypted: true}
+      - {id: code, type: string, maximumLength: 32, classification: restricted, encrypted: true}
+      - {id: big, type: string, maximumLength: 16384, classification: restricted, encrypted: true}
     constraints:
-      - {kind: unique, fields: [label]}
+      - {type: unique, fields: [label]}
   - id: note
     primaryDataset: fixture-registry
     route: notes
-    mutationMode: create_only
+    mutationMode: create-only
     classification: restricted
     fields:
-      - {id: text, type: string, maxLength: 200, required: true, classification: restricted}
+      - {id: text, type: string, maximumLength: 200, required: true, classification: restricted}
   - id: dossier
     primaryDataset: fixture-registry
     route: dossiers
@@ -130,20 +132,20 @@ entities:
     changeControl: {requiredFor: [patch]}
     classification: restricted
     fields:
-      - {id: jurisdiction, type: string, maxLength: 32, required: true, classification: public}
-      - {id: label, type: string, maxLength: 128, required: true, classification: public}
-      - {id: code, type: string, maxLength: 32, classification: restricted, encrypted: true}
+      - {id: jurisdiction, type: string, maximumLength: 32, required: true, classification: public}
+      - {id: label, type: string, maximumLength: 128, required: true, classification: public}
+      - {id: code, type: string, maximumLength: 32, classification: restricted, encrypted: true}
   - id: dossier-request
     primaryDataset: fixture-registry
     route: dossier-requests
     mutationMode: mutable
     classification: restricted
     fields:
-      - {id: jurisdiction, type: string, maxLength: 32, required: true, classification: public}
-      - {id: reason, type: string, maxLength: 128, required: true, classification: public}
+      - {id: jurisdiction, type: string, maximumLength: 32, required: true, classification: public}
+      - {id: reason, type: string, maximumLength: 128, required: true, classification: public}
       - {id: dossier, type: reference, target: dossier, required: true, classification: public}
-      - {id: code, type: string, maxLength: 32, required: true, classification: public}
-      - {id: secret, type: string, maxLength: 32, required: true, classification: restricted, encrypted: true}
+      - {id: code, type: string, maximumLength: 32, required: true, classification: public}
+      - {id: secret, type: string, maximumLength: 32, required: true, classification: restricted, encrypted: true}
     attachments:
       - {id: evidence, required: true, maximumBytes: 1024, contentTypes: [application/octet-stream], classification: restricted}
     changeRequest:
@@ -153,9 +155,9 @@ entities:
           operation: patch
           set: {label: {fromField: reason}}
       review:
-        mode: none
+        type: none
       onApproved: {mode: manual}
-      retention: {mode: operator_erase}
+      retention: {mode: operator-erase}
 accessProfiles:
   - id: operator
     default: true
@@ -163,53 +165,55 @@ accessProfiles:
     requiredScopes: unrestricted
     requiredPurposes: [case-management]
     permissions:
-      - entity: holder
-        operations: [create, get, list, patch, batch, lookup, revisions, snapshot]
-        revisionAccess: true
-        allowCount: true
-        readableFields: [jurisdiction, label, secret, code, big]
-        writableFields: [jurisdiction, label, secret, code, big]
-        lookups:
-          - {selector: by-secret, valueOrigin: request}
-        rowBoundaries:
-          - {field: jurisdiction, claim: jurisdiction, operator: equals}
-      - entity: note
-        rowBoundaries: unrestricted
-        operations: [create, get, list]
-        readableFields: [text]
-        writableFields: [text]
-      - entity: dossier
-        operations: [create, get, list]
-        readableFields: [jurisdiction, label, code]
-        writableFields: [jurisdiction, label, code]
-        rowBoundaries:
-          - {field: jurisdiction, claim: jurisdiction, operator: equals}
-      - entity: dossier-request
-        operations: [create, get, list, patch, submit_request, cancel_request, apply_request]
-        readableFields: [jurisdiction, reason, dossier, code, secret, evidence]
-        writableFields: [jurisdiction, reason, dossier, code, secret, evidence]
-        rowBoundaries:
-          - {field: jurisdiction, claim: jurisdiction, operator: equals}
-        requestVisibility: owner
-        applyTargets:
-          - entity: dossier
-            rowBoundaries:
-              - {field: jurisdiction, claim: jurisdiction, operator: equals}
+      entities:
+        - entity: holder
+          operations: [create, get, list, patch, batch, lookup, revisions, snapshot]
+          revisionAccess: true
+          allowCount: true
+          readableFields: [jurisdiction, label, secret, code, big]
+          writableFields: [jurisdiction, label, secret, code, big]
+          lookups:
+            - {selector: by-secret, valueOrigin: request}
+          rowBoundaries:
+            - {field: jurisdiction, claim: jurisdiction, operator: equals}
+        - entity: note
+          rowBoundaries: unrestricted
+          operations: [create, get, list]
+          readableFields: [text]
+          writableFields: [text]
+        - entity: dossier
+          operations: [create, get, list]
+          readableFields: [jurisdiction, label, code]
+          writableFields: [jurisdiction, label, code]
+          rowBoundaries:
+            - {field: jurisdiction, claim: jurisdiction, operator: equals}
+        - entity: dossier-request
+          operations: [create, get, list, patch, submit-request, cancel-request, apply-request]
+          readableFields: [jurisdiction, reason, dossier, code, secret, evidence]
+          writableFields: [jurisdiction, reason, dossier, code, secret, evidence]
+          rowBoundaries:
+            - {field: jurisdiction, claim: jurisdiction, operator: equals}
+          requestVisibility: owner
+          applyTargets:
+            - entity: dossier
+              rowBoundaries:
+                - {field: jurisdiction, claim: jurisdiction, operator: equals}
   - id: applier
     principalClaim: registry_principal
     requiredScopes: unrestricted
     requiredPurposes: [case-management]
     permissions:
-      - entity: dossier-request
-        operations: [get, apply_request]
-        readableFields: [jurisdiction, reason, dossier, code, secret, evidence]
-        writableFields: []
-        rowBoundaries:
-          - {field: jurisdiction, claim: jurisdiction, operator: equals}
-        applyTargets:
-          - entity: dossier
-            rowBoundaries:
-              - {field: jurisdiction, claim: jurisdiction, operator: equals}
+      entities:
+        - entity: dossier-request
+          operations: [get, apply-request]
+          readableFields: [jurisdiction, reason, dossier, code, secret, evidence]
+          writableFields: []
+          rowBoundaries:
+            - {field: jurisdiction, claim: jurisdiction, operator: equals}
+          applyTargets:
+            - entity: dossier
+              rowBoundaries:
+                - {field: jurisdiction, claim: jurisdiction, operator: equals}
 "#;
 
 const JOURNEY_SOURCE: &str = r#"journeys:
@@ -369,7 +373,7 @@ fn write_runtime_config(booted: &BootedDatabase, field_encryption: Option<String
     fs::write(
         &path,
         format!(
-            r#"apiVersion: registry.registrystack.org/breg-runtime/v1alpha1
+            r#"apiVersion: id.registrystack.org/formats/breg/runtime/v1alpha1
 kind: BRegRuntimeConfig
 listener:
   bind: 127.0.0.1:9
@@ -385,7 +389,7 @@ database:
   runtimeUrlRef: secret:file/database-url
   migrationUrlRef: secret:file/migration-database-url
   pool:
-    maxSize: 4
+    maximumConnections: 4
     waitTimeoutMilliseconds: 2000
     createTimeoutMilliseconds: 2000
     recycleTimeoutMilliseconds: 2000
@@ -403,17 +407,17 @@ authentication:
     scopeClaim: scope
     scopeSeparator: " "
     allowedClients: unrestricted
-    maxTokenLifetimeSeconds: 3600
+    maximumTokenLifetimeSeconds: 3600
     leewayMilliseconds: 60000
     jwksSource:
-      kind: static
+      type: static
       documentRef: secret:file/oidc-jwks
     jwksCache:
       cacheTtlSeconds: 60
       negativeCacheTtlSeconds: 1
       refreshCooldownSeconds: 1
-      maxDocumentBytes: 65536
-      requestTimeoutMilliseconds: 5000
+      maximumDocumentBytes: 65536
+      attemptTimeoutMilliseconds: 5000
       outageToleranceSeconds: 0
   authorityClaims:
     principal: registry_principal
@@ -423,7 +427,7 @@ audit:
   path: {audit_path}
 cursor:
   secretRef: secret:file/cursor-key
-  maxAgeSeconds: 300
+  maximumAgeSeconds: 300
 operationalTimeouts:
   httpRequestMilliseconds: 5000
   shutdownGraceMilliseconds: 1000
@@ -545,7 +549,7 @@ async fn local_file_data_key_is_bound_during_apply_and_prepares_ready() {
     let config = write_runtime_config(
         &booted,
         Some(
-            "fieldEncryption:\n  provider:\n    kind: localFile\n    dekRef: secret:file/field-dek\n"
+            "fieldEncryption:\n  provider:\n    type: local-file\n    dekRef: secret:file/field-dek\n"
                 .to_owned(),
         ),
     );
@@ -638,7 +642,7 @@ async fn transit_provider_activates_the_first_key_row_and_restart_unwraps_it() {
     let config = write_runtime_config(
         &booted,
         Some(format!(
-            "fieldEncryption:\n  provider:\n    kind: transit\n    unixSocketPath: {}\n    mount: transit\n    keyName: breg-field-dek\n    timeoutMilliseconds: 2000\n",
+            "fieldEncryption:\n  provider:\n    type: transit\n    unixSocketPath: {}\n    mount: transit\n    keyName: breg-field-dek\n    attemptTimeoutMilliseconds: 2000\n",
             first.socket_path.display()
         )),
     );
@@ -687,7 +691,7 @@ async fn transit_provider_activates_the_first_key_row_and_restart_unwraps_it() {
     let restart_config = write_runtime_config(
         &booted,
         Some(format!(
-            "fieldEncryption:\n  provider:\n    kind: transit\n    unixSocketPath: {}\n    mount: transit\n    keyName: breg-field-dek\n    timeoutMilliseconds: 2000\n",
+            "fieldEncryption:\n  provider:\n    type: transit\n    unixSocketPath: {}\n    mount: transit\n    keyName: breg-field-dek\n    attemptTimeoutMilliseconds: 2000\n",
             second.socket_path.display()
         )),
     );
@@ -709,7 +713,7 @@ async fn transit_provider_activates_the_first_key_row_and_restart_unwraps_it() {
     let unreachable = write_runtime_config(
         &booted,
         Some(
-            "fieldEncryption:\n  provider:\n    kind: transit\n    unixSocketPath: /nonexistent/transit-proxy.sock\n    mount: transit\n    keyName: breg-field-dek\n"
+            "fieldEncryption:\n  provider:\n    type: transit\n    unixSocketPath: /nonexistent/transit-proxy.sock\n    mount: transit\n    keyName: breg-field-dek\n"
                 .to_owned(),
         ),
     );
@@ -910,7 +914,7 @@ fn decrypt_reply_with_plaintext(plaintext: [u8; 32]) -> TransitReply {
 // ---------------------------------------------------------------------------
 
 const LOCAL_FILE_FIELD_ENCRYPTION: &str =
-    "fieldEncryption:\n  provider:\n    kind: localFile\n    dekRef: secret:file/field-dek\n";
+    "fieldEncryption:\n  provider:\n    type: local-file\n    dekRef: secret:file/field-dek\n";
 const AUTHORITY_KID: &str = "registry-platform-testing-ed25519-1";
 // Each prepared server owns the process-global configured WASM runtime.
 static WASM_RUNTIME_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
@@ -2227,7 +2231,7 @@ async fn submitted_dossier_request(server: &LiveServer, dossier_id: &str) -> Str
     .await;
     assert_eq!(after.status(), StatusCode::OK);
     let after = body_json(after).await;
-    let submit = find_action(&after, "submit_request");
+    let submit = find_action(&after, "submit-request");
     let submitted = send_as(
         server,
         Method::POST,

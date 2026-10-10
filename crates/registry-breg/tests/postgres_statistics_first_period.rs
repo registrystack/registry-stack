@@ -33,10 +33,10 @@ use zeroize::Zeroizing;
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn moving_first_period_forward_hides_old_releases_without_changing_the_definition() {
     let mut source = json!({
-        "apiVersion":"registry.registrystack.org/v1alpha1", "kind":"RegistryProject",
-        "registry":{"id":"statistics-load","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://load.example.test"},
+        "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
+        "project":{"id":"statistics-load","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://load.example.test"},
         "entities":[{"id":"unit","route":"units","primaryDataset":"load","mutationMode":"mutable","fields":[{"id":"active","type":"boolean","required":true,"classification":"internal"},{"id":"event-date","type":"date","required":true,"classification":"internal"}]}],
-        "accessProfiles":[{"id":"publisher","principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{"entity":"unit","operations":["list"],"allowCount":true,"rowBoundaries":"unrestricted","readableFields":["active","event-date"],"filterableFields":["active","event-date"]},{"dataset":"units-by-category","operations":["read-live","publish","read-releases"]}]},{"id":"reader","principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{"dataset":"units-by-category","operations":["read-releases"]}]}],
+        "accessProfiles":[{"id":"publisher","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{"entity":"unit","operations":["list"],"allowCount":true,"rowBoundaries":"unrestricted","readableFields":["active","event-date"],"filterableFields":["active","event-date"]}],"datasets":[{"dataset":"units-by-category","operations":["read-live","publish","read-releases"]}]}},{"id":"reader","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"datasets":[{"dataset":"units-by-category","operations":["read-releases"]}]}}],
         "statisticalDatasets":[{"id":"units-by-category","unit":"unit","population":"active ne null","period":{"type":"flow","field":"event-date","granularity":"month","firstPeriod":"2025-01"},"dimensions":["active"],"disclosure":{"minimumCount":5,"roundingBase":5}}]
     });
     let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();

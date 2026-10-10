@@ -3,12 +3,13 @@
 //! reads it, and the offline check `discoveryctl check --runtime-config` runs.
 
 use std::path::Path;
+use std::time::Duration;
 
 use registry_platform_config::{
-    ConfigBlockError, ConfigBlockErrorKind, ListenerConfig, PackageConfig, RemovedKey,
+    ConfigBlockError, ConfigBlockErrorKind, ListenerBind, PackageConfig, RemovedKey,
     RuntimeConfigLoader, RuntimeEnvelope,
 };
-use registry_platform_yaml::{escape_pointer_segment, BoundedU64, Diagnostic};
+use registry_platform_yaml::{escape_pointer_segment, BoundedU64, Diagnostic, RetiredApiVersion};
 use serde::Deserialize;
 
 use crate::model::{
@@ -16,8 +17,15 @@ use crate::model::{
     MINIMUM_HTTP_RESPONSE_BYTES,
 };
 
-pub const RUNTIME_API_VERSION: &str = "registry.registrystack.org/discovery-runtime/v1alpha1";
+pub const RUNTIME_API_VERSION: &str = "id.registrystack.org/formats/discovery/runtime/v1alpha1";
 pub const RUNTIME_KIND: &str = "DiscoveryRuntimeConfig";
+
+/// The apiVersions an earlier Discovery runtime file carried, each refused
+/// with the one that replaced it.
+const RETIRED_RUNTIME_API_VERSIONS: &[RetiredApiVersion<'static>] = &[RetiredApiVersion {
+    api_version: "registry.registrystack.org/discovery-runtime/v1alpha1",
+    replacement: "Write apiVersion: id.registrystack.org/formats/discovery/runtime/v1alpha1.",
+}];
 
 const RUNTIME_ENVELOPE: RuntimeEnvelope = RuntimeEnvelope {
     api_version: RUNTIME_API_VERSION,
@@ -27,7 +35,7 @@ const RUNTIME_ENVELOPE: RuntimeEnvelope = RuntimeEnvelope {
 const REMOVED_RUNTIME_KEYS: &[RemovedKey] = &[
     RemovedKey {
         path: "schemaVersion",
-        replacement: "declare apiVersion registry.registrystack.org/discovery-runtime/v1alpha1 \
+        replacement: "declare apiVersion id.registrystack.org/formats/discovery/runtime/v1alpha1 \
                       and kind DiscoveryRuntimeConfig instead",
     },
     RemovedKey {
@@ -38,13 +46,43 @@ const REMOVED_RUNTIME_KEYS: &[RemovedKey] = &[
         path: "indexPath",
         replacement: "declare package.root instead and build it with `discoveryctl package`",
     },
+    RemovedKey {
+        path: "limits.requestTimeoutSeconds",
+        replacement: "declare listener.requestTimeoutMilliseconds instead, with the value \
+                      multiplied by 1000",
+    },
+    RemovedKey {
+        path: "limits.shutdownTimeoutSeconds",
+        replacement: "declare limits.shutdownGraceMilliseconds instead, with the value \
+                      multiplied by 1000",
+    },
 ];
 
 const MAXIMUM_BODY_BYTES: u64 = MAXIMUM_HTTP_BODY_BYTES as u64;
 const MINIMUM_RESPONSE_BYTES: u64 = MINIMUM_HTTP_RESPONSE_BYTES as u64;
 const MAXIMUM_RECORDS: u64 = MAXIMUM_RESULT_RECORDS as u64;
 const MAXIMUM_ALTERNATIVES: u64 = MAXIMUM_RESULT_ALTERNATIVES as u64;
-const MAXIMUM_TIMEOUT_SECONDS: u64 = 300;
+const MINIMUM_TIMEOUT_MILLISECONDS: u64 = 1_000;
+const MAXIMUM_TIMEOUT_MILLISECONDS: u64 = 300_000;
+
+/// The address the service listens on and the time it gives one request.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct RuntimeListener {
+    pub bind: ListenerBind,
+    /// Time allowed to handle one inbound request, in milliseconds.
+    pub request_timeout_milliseconds:
+        BoundedU64<MINIMUM_TIMEOUT_MILLISECONDS, MAXIMUM_TIMEOUT_MILLISECONDS>,
+}
+
+impl RuntimeListener {
+    /// `requestTimeoutMilliseconds` as a duration.
+    #[must_use]
+    pub fn request_timeout(&self) -> Duration {
+        Duration::from_millis(self.request_timeout_milliseconds.get())
+    }
+}
 
 /// The bounds the service applies to every request and response.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -60,10 +98,9 @@ pub struct RuntimeLimits {
     pub maximum_result_records: BoundedU64<1, MAXIMUM_RECORDS>,
     /// Most evidence-type alternatives one response returns.
     pub maximum_result_alternatives: BoundedU64<1, MAXIMUM_ALTERNATIVES>,
-    /// Time allowed to handle one inbound request, in seconds.
-    pub request_timeout_seconds: BoundedU64<1, MAXIMUM_TIMEOUT_SECONDS>,
-    /// Time allowed to drain in-flight requests on shutdown, in seconds.
-    pub shutdown_timeout_seconds: BoundedU64<1, MAXIMUM_TIMEOUT_SECONDS>,
+    /// Time allowed to drain in-flight requests on shutdown, in milliseconds.
+    pub shutdown_grace_milliseconds:
+        BoundedU64<MINIMUM_TIMEOUT_MILLISECONDS, MAXIMUM_TIMEOUT_MILLISECONDS>,
 }
 
 impl RuntimeLimits {
@@ -90,6 +127,12 @@ impl RuntimeLimits {
     pub fn result_alternatives(&self) -> usize {
         to_length(self.maximum_result_alternatives.get())
     }
+
+    /// `shutdownGraceMilliseconds` as a duration.
+    #[must_use]
+    pub fn shutdown_grace(&self) -> Duration {
+        Duration::from_millis(self.shutdown_grace_milliseconds.get())
+    }
 }
 
 /// Every bound above is at most 16 MiB, which fits `usize` on every target
@@ -105,7 +148,7 @@ fn to_length(value: u64) -> usize {
 pub struct RuntimeConfig {
     pub api_version: String,
     pub kind: String,
-    pub listener: ListenerConfig,
+    pub listener: RuntimeListener,
     /// The package directory `discoveryctl package` built.
     pub package: PackageConfig,
     pub limits: RuntimeLimits,
@@ -122,10 +165,13 @@ pub enum LogLevel {
     Info,
 }
 
-/// The loader for the Discovery runtime file, with its removed keys.
+/// The loader for the Discovery runtime file, with its removed keys and its
+/// retired apiVersions.
 #[must_use]
 pub const fn runtime_loader() -> RuntimeConfigLoader {
-    RuntimeConfigLoader::new(RUNTIME_ENVELOPE).removed_keys(REMOVED_RUNTIME_KEYS)
+    RuntimeConfigLoader::new(RUNTIME_ENVELOPE)
+        .removed_keys(REMOVED_RUNTIME_KEYS)
+        .retired_api_versions(RETIRED_RUNTIME_API_VERSIONS)
 }
 
 /// What an offline check of one runtime file found.
@@ -238,9 +284,9 @@ mod tests {
     use std::fs;
 
     const RUNTIME: &str = "\
-apiVersion: registry.registrystack.org/discovery-runtime/v1alpha1
+apiVersion: id.registrystack.org/formats/discovery/runtime/v1alpha1
 kind: DiscoveryRuntimeConfig
-listener: { bind: 127.0.0.1:8080 }
+listener: { bind: 127.0.0.1:8080, requestTimeoutMilliseconds: 10000 }
 package:
   root: /tmp/registry-discovery-package
 limits:
@@ -248,8 +294,7 @@ limits:
   maximumResponseBytes: 1048576
   maximumResultRecords: 100
   maximumResultAlternatives: 100
-  requestTimeoutSeconds: 10
-  shutdownTimeoutSeconds: 10
+  shutdownGraceMilliseconds: 10000
 logLevel: info
 ";
 
@@ -276,11 +321,99 @@ logLevel: info
     }
 
     #[test]
+    fn cfg_env_2_the_runtime_file_names_its_format_identifier() {
+        assert_eq!(
+            RUNTIME_API_VERSION,
+            "id.registrystack.org/formats/discovery/runtime/v1alpha1"
+        );
+        assert!(RUNTIME.contains(RUNTIME_API_VERSION));
+    }
+
+    #[test]
+    fn cfg_change_2_the_retired_api_version_names_its_replacement() {
+        let check = check(
+            &RUNTIME.replace(
+                RUNTIME_API_VERSION,
+                "registry.registrystack.org/discovery-runtime/v1alpha1",
+            ),
+            false,
+        );
+        assert_eq!(
+            codes(&check),
+            [("config.retired-api-version", "/apiVersion")]
+        );
+        let action = check.diagnostics[0].suggested_action.as_str();
+        assert!(action.contains(RUNTIME_API_VERSION), "{action}");
+    }
+
+    #[test]
+    fn cfg_name_5_the_timeouts_are_read_in_milliseconds() {
+        let temporary = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
+        let path = temporary.path().join("runtime.yaml");
+        fs::write(&path, RUNTIME).unwrap();
+        let runtime = load_runtime_config(&path).unwrap();
+        assert_eq!(runtime.listener.request_timeout(), Duration::from_secs(10));
+        assert_eq!(runtime.limits.shutdown_grace(), Duration::from_secs(10));
+
+        // A value written in seconds under the millisecond name is below the
+        // floor, so a file that renamed the key and kept the number is told.
+        let check = check(
+            &RUNTIME.replace(
+                "requestTimeoutMilliseconds: 10000",
+                "requestTimeoutMilliseconds: 10",
+            ),
+            false,
+        );
+        assert_eq!(
+            codes(&check),
+            [(
+                "config.out-of-range",
+                "/listener/requestTimeoutMilliseconds"
+            )]
+        );
+        assert!(
+            check.diagnostics[0].message.contains("1000 to 300000"),
+            "{}",
+            check.diagnostics[0].message
+        );
+    }
+
+    #[test]
+    fn cfg_change_2_the_second_valued_timeouts_name_their_replacements() {
+        // The request timeout moved to the listener it bounds; the shutdown
+        // grace stays among the limits under its shared name.
+        for (old, new) in [
+            (
+                "requestTimeoutSeconds",
+                "listener.requestTimeoutMilliseconds",
+            ),
+            ("shutdownTimeoutSeconds", "limits.shutdownGraceMilliseconds"),
+        ] {
+            let check = check(
+                &RUNTIME.replace(
+                    "  shutdownGraceMilliseconds: 10000",
+                    &format!("  shutdownGraceMilliseconds: 10000\n  {old}: 10"),
+                ),
+                false,
+            );
+            assert_eq!(
+                codes(&check),
+                [("config.removed-key", format!("/limits/{old}").as_str())]
+            );
+            let action = check.diagnostics[0].suggested_action.as_str();
+            assert!(action.contains(new), "{action}");
+        }
+    }
+
+    #[test]
     fn cfg_qty_4_a_limit_outside_its_bounds_is_refused_at_the_member() {
         let check = check(
             &RUNTIME
                 .replace("maximumRequestBytes: 65536", "maximumRequestBytes: 0")
-                .replace("requestTimeoutSeconds: 10", "requestTimeoutSeconds: 301"),
+                .replace(
+                    "shutdownGraceMilliseconds: 10000",
+                    "shutdownGraceMilliseconds: 300001",
+                ),
             false,
         );
         // Decoding stops at the first value it refuses.

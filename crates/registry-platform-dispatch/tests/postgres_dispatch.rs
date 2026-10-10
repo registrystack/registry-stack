@@ -429,7 +429,7 @@ impl DispatchStore for TestStore {
             match audit.outcome {
                 ReplayOutcome::Refused => audit.from.as_str(),
                 ReplayOutcome::Unfinished => "unknown",
-                ReplayOutcome::Requested | ReplayOutcome::Committed => "replay_pending",
+                ReplayOutcome::Requested | ReplayOutcome::Committed => "replay-pending",
             },
         )
         .await
@@ -813,7 +813,7 @@ async fn refuse_intent(harness: &Harness, key: &JobKey, point: &str) {
         .admin
         .batch_execute(&format!(
             "ALTER TABLE {}.test_intent_audit
-                 ADD CONSTRAINT refuse_{point}
+                 ADD CONSTRAINT \"refuse_{point}\"
                  CHECK (message_id <> '{}' OR point <> '{point}')",
             harness.schema,
             key.id()
@@ -827,7 +827,7 @@ async fn refuse_direct_audit(harness: &Harness, key: &JobKey, point: &str) {
         .admin
         .batch_execute(&format!(
             "ALTER TABLE {}.test_audit
-                 ADD CONSTRAINT refuse_{point}
+                 ADD CONSTRAINT \"refuse_{point}\"
                  CHECK (message_id <> '{}' OR point <> '{point}')",
             harness.schema,
             key.id()
@@ -1046,7 +1046,7 @@ async fn a_lapsed_lease_on_a_hold_job_is_unknown_and_never_retried() {
     assert_eq!(reaped.lease_token, None);
     assert_eq!(
         audit_trail(&harness, &key).await,
-        vec!["attempt_started:leased:g1:a1", "lease_lapsed:unknown:g1:a1"]
+        vec!["attempt_started:leased:g1:a1", "lease-lapsed:unknown:g1:a1"]
     );
 
     let transport = ScriptedTransport::new(|_| accepted());
@@ -1094,7 +1094,7 @@ async fn a_lapsed_lease_on_a_retry_job_is_rescheduled() {
         audit_trail(&harness, &key).await,
         vec![
             "attempt_started:leased:g1:a1",
-            "lease_lapsed:retry_pending:g1:a1"
+            "lease-lapsed:retry-pending:g1:a1"
         ]
     );
 }
@@ -1293,7 +1293,7 @@ async fn a_permanent_failure_stops_without_a_retry() {
         "four attempts remain and none is used"
     );
     let row = state_row(&harness, &key).await;
-    assert_eq!(row.state, "dead_lettered");
+    assert_eq!(row.state, "dead-lettered");
     assert_eq!(row.failure_code.as_deref(), Some("recipient.rejected"));
 }
 
@@ -1366,7 +1366,7 @@ async fn a_maybe_sent_answer_with_no_attempt_left_follows_the_job_policy() {
         outcomes,
         BTreeSet::from(["DeadLettered".to_owned(), "Unknown".to_owned()])
     );
-    assert_eq!(state_row(&harness, &retried).await.state, "dead_lettered");
+    assert_eq!(state_row(&harness, &retried).await.state, "dead-lettered");
     let row = state_row(&harness, &held).await;
     assert_eq!((row.state.as_str(), row.attempt), ("unknown", 1));
     assert_eq!(
@@ -1464,7 +1464,7 @@ async fn a_lapsed_lease_on_a_retry_then_hold_job_with_no_attempt_left_is_unknown
     assert_eq!((row.state.as_str(), row.attempt), ("unknown", 1));
     assert_eq!(
         audit_trail(&harness, &key).await,
-        vec!["attempt_started:leased:g1:a1", "lease_lapsed:unknown:g1:a1"]
+        vec!["attempt_started:leased:g1:a1", "lease-lapsed:unknown:g1:a1"]
     );
 }
 
@@ -1518,7 +1518,7 @@ async fn an_exhausted_transient_failure_dead_letters() {
         DispatchOutcome::DeadLettered
     );
     let row = state_row(&harness, &key).await;
-    assert_eq!(row.state, "dead_lettered");
+    assert_eq!(row.state, "dead-lettered");
     assert_eq!(row.attempt, 2);
 }
 
@@ -1567,9 +1567,9 @@ async fn a_retry_then_hold_job_is_held_unknown_when_later_failures_exhaust_it_af
         audit_trail(&harness, &transiently).await,
         vec![
             "attempt_started:leased:g1:a1",
-            "attempt_finished:retry_pending:g1:a1",
+            "attempt_finished:retry-pending:g1:a1",
             "attempt_started:leased:g1:a2",
-            "attempt_finished:retry_pending:g1:a2",
+            "attempt_finished:retry-pending:g1:a2",
             "attempt_started:leased:g1:a3",
             "attempt_finished:unknown:g1:a3"
         ]
@@ -1666,7 +1666,7 @@ async fn a_failure_without_an_earlier_uncertain_attempt_or_under_plain_retry_sti
         dispatcher.dispatch_once(&transport).await,
         Ok(DispatchOutcome::DeadLettered)
     );
-    assert_eq!(state_row(&harness, &spent).await.state, "dead_lettered");
+    assert_eq!(state_row(&harness, &spent).await.state, "dead-lettered");
 
     let refused = enqueue_message(
         &harness,
@@ -1683,7 +1683,7 @@ async fn a_failure_without_an_earlier_uncertain_attempt_or_under_plain_retry_sti
         dispatcher.dispatch_once(&transport).await,
         Ok(DispatchOutcome::DeadLettered)
     );
-    assert_eq!(state_row(&harness, &refused).await.state, "dead_lettered");
+    assert_eq!(state_row(&harness, &refused).await.state, "dead-lettered");
 
     let retried = enqueue_message(
         &harness,
@@ -1711,7 +1711,7 @@ async fn a_failure_without_an_earlier_uncertain_attempt_or_under_plain_retry_sti
         Ok(DispatchOutcome::DeadLettered)
     );
     let row = state_row(&harness, &retried).await;
-    assert_eq!((row.state.as_str(), row.attempt), ("dead_lettered", 2));
+    assert_eq!((row.state.as_str(), row.attempt), ("dead-lettered", 2));
 }
 
 #[tokio::test]
@@ -1787,7 +1787,7 @@ async fn by_default_a_pending_retry_of_an_attempted_job_is_not_cancelled() {
         audit_trail(&harness, &key).await,
         vec![
             "attempt_started:leased:g1:a1",
-            "attempt_finished:retry_pending:g1:a1"
+            "attempt_finished:retry-pending:g1:a1"
         ],
         "a refused cancel writes nothing"
     );
@@ -2005,7 +2005,7 @@ async fn a_stale_fence_cannot_write_after_the_lease_is_reclaimed() {
         audit_trail(&harness, &key).await,
         vec![
             "attempt_started:leased:g1:a1",
-            "lease_lapsed:retry_pending:g1:a1",
+            "lease-lapsed:retry-pending:g1:a1",
             "attempt_started:leased:g1:a2"
         ],
         "the refused write left no audit behind"
@@ -2135,9 +2135,9 @@ async fn operator_replay_bumps_the_generation_and_refuses_a_stale_replay() {
         audit_trail(&harness, &key).await,
         vec![
             "attempt_started:leased:g1:a1",
-            "attempt_finished:dead_lettered:g1:a1",
-            "replay_requested:replay_pending:g2:a0",
-            "replay_committed:replay_pending:g2:a0",
+            "attempt_finished:dead-lettered:g1:a1",
+            "replay_requested:replay-pending:g2:a0",
+            "replay_committed:replay-pending:g2:a0",
             "attempt_started:leased:g2:a1",
             "attempt_finished:delivered:g2:a1"
         ]
@@ -2201,8 +2201,8 @@ async fn a_replay_whose_reset_changes_no_row_is_refused() {
     assert_eq!(state_row(&harness, &key).await.generation, 1);
     let audit = audit_trail(&harness, &key).await;
     assert!(audit.ends_with(&[
-        "replay_requested:replay_pending:g2:a0".to_owned(),
-        "replay_refused:dead_lettered:g2:a0".to_owned(),
+        "replay_requested:replay-pending:g2:a0".to_owned(),
+        "replay_refused:dead-lettered:g2:a0".to_owned(),
     ]));
 }
 
@@ -2251,7 +2251,7 @@ async fn a_replay_whose_commit_cannot_be_read_back_is_unfinished() {
     assert_eq!(state_row(&harness, &key).await.generation, 1);
     let audit = audit_trail(&harness, &key).await;
     assert!(audit.ends_with(&[
-        "replay_requested:replay_pending:g2:a0".to_owned(),
+        "replay_requested:replay-pending:g2:a0".to_owned(),
         "replay_unfinished:unknown:g2:a0".to_owned(),
     ]));
 }
@@ -2561,7 +2561,7 @@ async fn another_invocations_generation_does_not_resolve_a_failed_replay_commit(
     assert_eq!(state_row(&harness, &key).await.generation, 2);
     let audit = audit_trail(&harness, &key).await;
     assert!(audit.ends_with(&[
-        "replay_requested:replay_pending:g2:a0".to_owned(),
+        "replay_requested:replay-pending:g2:a0".to_owned(),
         "replay_unfinished:unknown:g2:a0".to_owned(),
     ]));
 }
@@ -2771,7 +2771,7 @@ async fn a_swept_retry_after_a_maybe_sent_attempt_is_held_unknown_not_expired() 
         audit_trail(&harness, &key).await,
         vec![
             "attempt_started:leased:g1:a1",
-            "attempt_finished:retry_pending:g1:a1",
+            "attempt_finished:retry-pending:g1:a1",
             "expired:unknown:g1:a1"
         ]
     );
@@ -2802,7 +2802,7 @@ async fn a_retry_after_a_maybe_sent_attempt_past_its_policy_expiry_is_held_unkno
         audit_trail(&harness, &key).await,
         vec![
             "attempt_started:leased:g1:a1",
-            "attempt_finished:retry_pending:g1:a1",
+            "attempt_finished:retry-pending:g1:a1",
             "expired:unknown:g1:a1"
         ]
     );
@@ -2893,7 +2893,7 @@ async fn a_scheduled_retry_past_its_policy_expiry_is_expired_at_claim() {
         audit_trail(&harness, &key).await,
         vec![
             "attempt_started:leased:g1:a1",
-            "attempt_finished:retry_pending:g1:a1",
+            "attempt_finished:retry-pending:g1:a1",
             "expired:expired:g1:a1"
         ]
     );
@@ -3105,7 +3105,7 @@ async fn a_lapsed_lease_the_database_refuses_is_rolled_back_to_its_savepoint_and
         .leased()
         .expect("due");
     lapse_lease(&harness, &poisoned).await;
-    refuse_transition(&harness, &poisoned, "lease_lapsed").await;
+    refuse_transition(&harness, &poisoned, "lease-lapsed").await;
     let healthy = enqueue_message(&harness, &Message::default()).await;
     let transport = ScriptedTransport::new(|_| accepted());
     assert_eq!(
@@ -3119,7 +3119,7 @@ async fn a_lapsed_lease_the_database_refuses_is_rolled_back_to_its_savepoint_and
         audit_trail(&harness, &poisoned).await,
         vec![
             "attempt_started:leased:g1:a1",
-            "lease_lapsed_refused:leased:g1:a1",
+            "lease-lapsed_refused:leased:g1:a1",
             "quarantined:unknown:g1:a1"
         ]
     );
@@ -3230,7 +3230,7 @@ async fn refused_direct_intents_prevent_every_protected_operator_and_claim_path_
         .leased()
         .expect("due");
     lapse_lease(&recovery, &recovery_key).await;
-    refuse_intent(&recovery, &recovery_key, "lease_lapsed_requested").await;
+    refuse_intent(&recovery, &recovery_key, "lease-lapsed_requested").await;
     assert!(recovery_dispatcher.claim().await.is_err());
     assert_eq!(state_row(&recovery, &recovery_key).await.state, "leased");
 
@@ -3300,7 +3300,7 @@ async fn refused_direct_intents_prevent_every_protected_operator_and_claim_path_
     let replay_row = state_row(&replay, &replay_key).await;
     assert_eq!(
         (replay_row.state.as_str(), replay_row.generation),
-        ("dead_lettered", 1)
+        ("dead-lettered", 1)
     );
 
     assert!(intent_trail(&recovery, &recovery_key).await.is_empty());

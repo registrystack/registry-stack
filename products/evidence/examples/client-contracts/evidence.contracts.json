@@ -1,5 +1,6 @@
 {
-  "schema": "registry.evidence-client-contracts/v1",
+  "apiVersion": "id.registrystack.org/formats/evidence/client-contracts/v1",
+  "kind": "EvidenceClientContracts",
   "assuranceProfile": "production",
   "audience": "https://relying-party.example.org",
   "issuedBy": "https://evidence.example.org",
@@ -32,7 +33,7 @@
           "handle": "adult",
           "concept": "https://example.org/concepts/adult",
           "required": true,
-          "form": "boolean"
+          "form": {"type": "boolean"}
         }
       ]
     }

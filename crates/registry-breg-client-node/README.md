@@ -56,9 +56,9 @@ retries within one delivery generation; an effect that must remain once-only
 across operator replay uses a durable apply-once operation keyed by authenticated
 `source` plus `id`, or by an application business key, before acting on `body`.
 
-Refusal throws `BaseRegistryClientError` with kind `webhook_verification` and a
-code from `missing_header`, `malformed_signature`, `signature_mismatch`, or
-`unsupported_version`. The message never includes a header value, body, or key.
+Refusal throws `BaseRegistryClientError` with kind `webhook-verification` and a
+code from `missing-header`, `malformed-signature`, `signature-mismatch`, or
+`unsupported-version`. The message never includes a header value, body, or key.
 
 ## Exact values and application metadata
 
@@ -193,7 +193,7 @@ fetches new ones. `executeRecoveredAction` is the explicit send under the
 original key. The saved bytes contain input values and must be treated as
 private application state.
 
-Use `action.withReason(text)` on a promoted `apply_request` action to add an
+Use `action.withReason(text)` on a promoted `apply-request` action to add an
 optional application explanation. It returns a copy and validates before network effects. The
 original action omits the reason. Text
 is preserved exactly, allows an empty string, and is limited to 4096 Unicode
@@ -226,7 +226,7 @@ the record's current ETag and a caller-chosen idempotency key, exactly like
 record envelope as exact JSON text.
 
 `slot.valueIn(record)` reads the engine-owned projection of the slot out of one
-record envelope: `{kind: 'not_selected' | 'empty' | 'filled'}` with a `value`
+record envelope: `{kind: 'not-selected' | 'empty' | 'filled'}` with a `value`
 holding `proposalVersion`, `byteSize`, `sha256`, `contentType`, `uploadedAt`,
 `uploadedBy`, `erased`, and `verificationStatus` when the slot is filled.
 

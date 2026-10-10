@@ -3,14 +3,14 @@ $id: https://registrystack.org/schemas/evidence/definitions-v1.json
 title: Requester-scoped Evidence definitions Version 1
 type: object
 additionalProperties: false
-required: [schema, assuranceProfile, audience, issuedBy, providedBy, holderBoundBatchMaxSize, definitions]
+required: [schema, assuranceProfile, audience, issuedBy, providedBy, maximumHolderBoundBatchSize, definitions]
 properties:
   schema: {const: registry.evidence-definitions/v1}
   assuranceProfile: {enum: [local, production, evidence-grade]}
   audience: {type: string, format: uri, maxLength: 512}
   issuedBy: {type: string, format: uri, maxLength: 512}
   providedBy: {type: string, format: uri, maxLength: 512}
-  holderBoundBatchMaxSize:
+  maximumHolderBoundBatchSize:
     description: >-
       The effective deployment ceiling for one holder-bound batch. A protocol
       adapter may advertise no larger batch than this value.
@@ -157,20 +157,50 @@ $defs:
       required: {type: boolean}
       form:
         oneOf:
-          - enum: [boolean, integer, string, date-bucket, time-bucket, entity-reference, structured]
           - type: object
             additionalProperties: false
-            required: [list]
+            required: [type]
             properties:
-              list:
-                type: object
-                additionalProperties: false
-                required: [items, minimumItems, maximumItems, unique]
-                properties:
-                  items: {enum: [string, entity-reference]}
-                  minimumItems: {type: integer, minimum: 1, maximum: 64}
-                  maximumItems: {type: integer, minimum: 1, maximum: 64}
-                  unique: {const: true}
+              type: {const: boolean}
+          - type: object
+            additionalProperties: false
+            required: [type]
+            properties:
+              type: {const: integer}
+          - type: object
+            additionalProperties: false
+            required: [type]
+            properties:
+              type: {const: string}
+          - type: object
+            additionalProperties: false
+            required: [type]
+            properties:
+              type: {const: date-bucket}
+          - type: object
+            additionalProperties: false
+            required: [type]
+            properties:
+              type: {const: time-bucket}
+          - type: object
+            additionalProperties: false
+            required: [type]
+            properties:
+              type: {const: entity-reference}
+          - type: object
+            additionalProperties: false
+            required: [type]
+            properties:
+              type: {const: structured}
+          - type: object
+            additionalProperties: false
+            required: [type, items, minimumItems, maximumItems, unique]
+            properties:
+              type: {const: list}
+              items: {enum: [string, entity-reference]}
+              minimumItems: {type: integer, minimum: 1, maximum: 64}
+              maximumItems: {type: integer, minimum: 1, maximum: 64}
+              unique: {const: true}
 $comment: >-
   The authenticated response contains only complete request shapes that match
   exactly one configured authority path. It never exposes source plans,

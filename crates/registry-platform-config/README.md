@@ -86,8 +86,8 @@ change it.
   and a reference to an undeclared provider is refused.
 - `DatabaseConfig`: `runtimeUrlRef`, `migrationUrlRef`, and an optional
   `trustedRootCertificateRef`.
-- `JwksSource`: `kind: discovery` (the default) with no other member,
-  `kind: uri` with `uri`, or `kind: static` with `documentRef`.
+- `JwksSource`: `type: discovery` (the default) with no other member,
+  `type: uri` with `uri`, or `type: static` with `documentRef`.
 - `PackageConfig`: an absolute `root` and an optional `expectedDigest` pin.
 - `ListenerConfig` and `PrivateListenerConfig`: `bind` as `host:port` with an
   IP address host, and for private listeners the declared TLS termination and

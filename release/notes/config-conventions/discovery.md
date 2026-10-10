@@ -3,11 +3,10 @@
 Track: small products (Discovery, Render, Manifest, platform tooling files).
 
 ## BREAKING changes
-<!-- upgrade: 1=discovery-reader-refusals; 2=discovery-reader-refusals; 3=discovery-reader-refusals; 4=discovery-reader-refusals; 5=discovery-index-rebuild; 6=no-file -->
 
 Each change below refuses a file that was already wrong, or normalizes the
-unpromised index. Promised spellings are unchanged in this release; the
-section "Respellings held for the stable release" lists them.
+unpromised index. The promised spellings that change are listed in the
+section "Stable move".
 
 1. **`origins.yaml` and mapping files refuse `${...}`** with
    `config.substitution-not-allowed` (CFG-SEC-2). Authored files never
@@ -104,15 +103,95 @@ are unchanged.
 | clap usage error (free text) | `discovery.usage.invalid-arguments` |
 | (index file checks, new) | `discovery.index.unreadable`, `discovery.index.not-a-regular-file` |
 
-## Respellings held for the stable release (WP11)
+## Protocol words
 
-These promised spellings stay as they are now; the stable release moves them
-and refuses the old spelling with a diagnostic naming the new one.
+1. **The Node and Python bindings spell their error kinds in kebab-case.**
+   `DiscoveryClientError.kind` and the `problem` member (`problem` in both
+   bindings) follow the spelling the Discovery server already writes in its
+   problem types. The Rust client and the Discovery runtime are unchanged.
+   Migration: compare against the new words.
 
-| Format | Now | Stable release |
-|---|---|---|
-| `origins.yaml` | `schemaVersion: registry-discovery/origins/v1alpha1` | `apiVersion: id.registrystack.org/formats/discovery/origins/v1alpha1`, `kind: DiscoveryOrigins` |
-| mapping files | `schemaVersion: registry-discovery/evidence-mapping/v1alpha1` | `apiVersion: id.registrystack.org/formats/discovery/evidence-mapping/v1alpha1`, `kind: DiscoveryEvidenceMapping` |
-| `runtime.yaml` | `apiVersion: registry.registrystack.org/discovery-runtime/v1alpha1` | `apiVersion: id.registrystack.org/formats/discovery/runtime/v1alpha1` |
-| `runtime.yaml` | `limits.requestTimeoutSeconds` | `limits.requestTimeoutMilliseconds` |
-| `runtime.yaml` | `limits.shutdownTimeoutSeconds` | `limits.shutdownGraceMilliseconds` |
+   | Member | Before | Now |
+   |---|---|---|
+   | `kind` | `no_matching_service` | `no-matching-service` |
+   | `kind` | `ambiguous_selection` | `ambiguous-selection` |
+   | `kind` | `no_matching_alternative` | `no-matching-alternative` |
+   | `kind` | `ambiguous_alternative` | `ambiguous-alternative` |
+   | `kind` | `capability_mismatch` | `capability-mismatch` |
+   | `kind` | `local_acceptance_refused` | `local-acceptance-refused` |
+   | `kind` | `selection_changed` | `selection-changed` |
+   | `problem` | `invalid_request` | `invalid-request` |
+   | `problem` | `not_found` | `not-found` |
+   | `problem` | `result_bound_exceeded` | `result-bound-exceeded` |
+
+2. **The transport word for an oversized response is `response-too-large`.**
+   `transportKind` in Node.js and `transport_kind` in Python carry the word
+   the shared HTTP primitives give a transport failure, which respell
+   `response_too_large` in this release. The other transport words
+   (`connect`, `timeout`, `exchange`) are unchanged. Migration: compare
+   against the new word.
+
+## Stable move
+
+The changes below move promised spellings to the form the configuration
+conventions give them. Each old spelling is refused with a diagnostic that
+names its replacement; no release reads both.
+
+### BREAKING: `runtime.yaml` names its format in `apiVersion`
+
+The runtime file declares
+`apiVersion: id.registrystack.org/formats/discovery/runtime/v1alpha1`
+(CFG-ENV-2). `discovery` and `discoveryctl check --runtime-config` refuse
+`registry.registrystack.org/discovery-runtime/v1alpha1` as
+`config.retired-api-version` at `/apiVersion`, and the message names the
+replacement. `kind: DiscoveryRuntimeConfig` and every other member are
+unchanged.
+
+Migration: in every `runtime.yaml`, replace the `apiVersion` line with
+`apiVersion: id.registrystack.org/formats/discovery/runtime/v1alpha1`.
+
+### BREAKING: the `runtime.yaml` timeouts are written in milliseconds
+
+`limits.requestTimeoutSeconds` is `listener.requestTimeoutMilliseconds`:
+the time allowed for one inbound request sits with the listener it
+bounds, as in every Registry Stack runtime (CFG-NAME-5).
+`limits.shutdownTimeoutSeconds` is `limits.shutdownGraceMilliseconds`.
+Each takes an integer from 1000 to 300000, the same range as before in
+the new unit, and both stay required. `discovery` and
+`discoveryctl check --runtime-config` refuse each old key as
+`config.removed-key` at its own position, and the message names the
+replacement.
+
+Migration, in every `runtime.yaml`:
+
+1. Remove `requestTimeoutSeconds` from `limits` and add
+   `requestTimeoutMilliseconds` under `listener`, with the value multiplied
+   by 1000 (`10` becomes `10000`).
+2. Under `limits`, rename `shutdownTimeoutSeconds` to
+   `shutdownGraceMilliseconds` and multiply its value by 1000.
+
+A value left in seconds is below the floor and is refused as
+`config.out-of-range`.
+
+### BREAKING: `origins.yaml` and mapping files open with `apiVersion` and `kind`
+
+Both authored files carry the envelope every Registry Stack file carries
+(CFG-ENV-1) in place of `schemaVersion`:
+
+| File | Header |
+|---|---|
+| `origins.yaml` | `apiVersion: id.registrystack.org/formats/discovery/origins/v1alpha1`, `kind: DiscoveryOrigins` |
+| `mappings/*.yaml` | `apiVersion: id.registrystack.org/formats/discovery/evidence-mapping/v1alpha1`, `kind: DiscoveryEvidenceMapping` |
+
+`discoveryctl check` and `discoveryctl package` refuse a file that still
+writes `schemaVersion` as `config.missing-envelope` with
+`config.removed-key` at `/schemaVersion`, and the second message names the
+two lines to write. A file of one kind where the other is expected is
+refused as `config.wrong-kind` at `/kind`, and an `apiVersion` the reader
+does not know as `config.unsupported-api-version` at `/apiVersion`. Every
+other member is unchanged, and so is the packaged index: the header of an
+authored file never reaches it, so no package is rebuilt and no
+`package.expectedDigest` is repinned for this change alone.
+
+Migration: in `origins.yaml` and in every file under `mappings/`, replace
+the `schemaVersion` line with the two header lines of the table.

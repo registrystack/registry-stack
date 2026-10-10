@@ -37,16 +37,16 @@ async function clientAndPrepared(stub) {
 
 function problemBody(status, code, traceId) {
   const [title, detail] = {
-    'evidence.invalid_request': ['Evidence request is invalid', 'the Evidence request is invalid'],
-    'request.selector_invalid': ['Selector is invalid', 'selector does not match an available request profile'],
-    'auth.invalid_credential': ['Bearer access token is invalid', 'bearer access token validation failed'],
+    'evidence.invalid-request': ['Evidence request is invalid', 'the Evidence request is invalid'],
+    'request.selector-invalid': ['Selector is invalid', 'selector does not match an available request profile'],
+    'auth.invalid-credential': ['Bearer access token is invalid', 'bearer access token validation failed'],
     'evidence.denied': ['Evidence request is not permitted', 'the Evidence request is not permitted'],
     'format.unsupported': ['Requested format is not supported', 'the requested format is not supported'],
     'evidence.unavailable': ['Evidence could not be produced', 'evidence could not be produced for this request'],
-    'evidence.rate_limited': ['Evidence request rate is exhausted', 'the Evidence request rate is exhausted'],
+    'evidence.rate-limited': ['Evidence request rate is exhausted', 'the Evidence request rate is exhausted'],
     'source.unavailable': ['Authoritative source is unavailable', 'the authoritative source is unavailable'],
     'service.unavailable': ['Service is unavailable', 'the request could not be served'],
-    'resource.not_found': ['Requested resource was not found', 'the requested resource was not found'],
+    'resource.not-found': ['Requested resource was not found', 'the requested resource was not found'],
   }[code];
   return JSON.stringify({
     type: `https://id.registrystack.org/problems/registry-evidence/${code.replaceAll('.', '/')}`,
@@ -75,13 +75,13 @@ test('401 with the registered code maps to a denied failure', async () => {
   const stub = await startStubServer({
     'POST /v1/evidence': (req, res) => {
       res.writeHead(401, { 'content-type': 'application/problem+json', traceparent: TRACEPARENT });
-      res.end(problemBody(401, 'auth.invalid_credential', TRACE_ID));
+      res.end(problemBody(401, 'auth.invalid-credential', TRACE_ID));
     },
   });
   await assertMappedFailure(stub, (mapped) => {
     assert.equal(mapped.kind, 'denied');
     assert.equal(mapped.status, 401);
-    assert.equal(mapped.code, 'auth.invalid_credential');
+    assert.equal(mapped.code, 'auth.invalid-credential');
     assert.equal(mapped.traceId, TRACE_ID);
     assert.equal(mapped.retryAfterSeconds, undefined);
   });
@@ -111,13 +111,13 @@ test('429 with a Retry-After header maps to a denied failure carrying the wait',
         traceparent: TRACEPARENT,
         'retry-after': '30',
       });
-      res.end(problemBody(429, 'evidence.rate_limited', TRACE_ID));
+      res.end(problemBody(429, 'evidence.rate-limited', TRACE_ID));
     },
   });
   await assertMappedFailure(stub, (mapped) => {
     assert.equal(mapped.kind, 'denied');
     assert.equal(mapped.status, 429);
-    assert.equal(mapped.code, 'evidence.rate_limited');
+    assert.equal(mapped.code, 'evidence.rate-limited');
     assert.equal(mapped.traceId, TRACE_ID);
     assert.equal(mapped.retryAfterSeconds, 30);
   });
@@ -134,7 +134,7 @@ test('422 with the not-available code maps to its own failure, with no status fi
     },
   });
   await assertMappedFailure(stub, (mapped) => {
-    assert.equal(mapped.kind, 'not_available');
+    assert.equal(mapped.kind, 'not-available');
     assert.equal(mapped.status, undefined);
     assert.equal(mapped.traceId, TRACE_ID);
   });
@@ -147,13 +147,13 @@ test('400 with an ordinary contract code maps to a protocol failure', async () =
         'content-type': 'application/problem+json',
         traceparent: TRACEPARENT,
       });
-      res.end(problemBody(400, 'evidence.invalid_request', TRACE_ID));
+      res.end(problemBody(400, 'evidence.invalid-request', TRACE_ID));
     },
   });
   await assertMappedFailure(stub, (mapped) => {
     assert.equal(mapped.kind, 'protocol');
     assert.equal(mapped.status, 400);
-    assert.equal(mapped.code, 'evidence.invalid_request');
+    assert.equal(mapped.code, 'evidence.invalid-request');
     assert.equal(mapped.traceId, TRACE_ID);
     assert.equal(mapped.retryAfterSeconds, undefined);
   });
@@ -196,7 +196,7 @@ test('a response over maxResponseBytes is refused as a transport failure, not a 
     await assert.rejects(client.send(prepared), (error) => {
       assert.ok(error instanceof EvidenceClientError);
       assert.equal(error.kind, 'transport');
-      assert.equal(error.transportKind, 'response_too_large');
+      assert.equal(error.transportKind, 'response-too-large');
       return true;
     });
   } finally {

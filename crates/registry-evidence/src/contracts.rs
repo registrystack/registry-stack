@@ -71,19 +71,19 @@ const PROBLEM_TYPE_BASE: &str = "https://id.registrystack.org/problems/registry-
 const HOLDER_KEY_COORDINATE_PATTERN: &str = "^[A-Za-z0-9_-]{43}$";
 const PROBLEM_VARIANTS: [(&str, u16, &str, &str); 10] = [
     (
-        "evidence.invalid_request",
+        "evidence.invalid-request",
         400,
         "Evidence request is invalid",
         "the Evidence request is invalid",
     ),
     (
-        "request.selector_invalid",
+        "request.selector-invalid",
         400,
         "Selector is invalid",
         "selector does not match an available request profile",
     ),
     (
-        "auth.invalid_credential",
+        "auth.invalid-credential",
         401,
         "Bearer access token is invalid",
         "bearer access token validation failed",
@@ -107,7 +107,7 @@ const PROBLEM_VARIANTS: [(&str, u16, &str, &str); 10] = [
         "evidence could not be produced for this request",
     ),
     (
-        "evidence.rate_limited",
+        "evidence.rate-limited",
         429,
         "Evidence request rate is exhausted",
         "the Evidence request rate is exhausted",
@@ -125,7 +125,7 @@ const PROBLEM_VARIANTS: [(&str, u16, &str, &str); 10] = [
         "the request could not be served",
     ),
     (
-        "resource.not_found",
+        "resource.not-found",
         404,
         "Requested resource was not found",
         "the requested resource was not found",
@@ -509,7 +509,7 @@ fn request_batch_response_schema() -> Value {
             "unavailable-result": {
                 "type": "object", "additionalProperties": false,
                 "required": ["result"],
-                "properties": {"result": {"const": "evidence_not_available"}}
+                "properties": {"result": {"const": "evidence-not-available"}}
             },
             "flattened-jws": {
                 "type": "object", "additionalProperties": false,
@@ -521,7 +521,7 @@ fn request_batch_response_schema() -> Value {
                 }
             }
         },
-        "$comment": "Results are positional and one-for-one with the request. Available members are ordinary signed flattened JWS responses. Singular unavailable conditions become evidence_not_available. Mixed and all-unavailable envelopes return HTTP 200. Every other failure aborts the outer request, and a response above 1048576 serialized bytes is never released."
+        "$comment": "Results are positional and one-for-one with the request. Available members are ordinary signed flattened JWS responses. Singular unavailable conditions become evidence-not-available. Mixed and all-unavailable envelopes return HTTP 200. Every other failure aborts the outer request, and a response above 1048576 serialized bytes is never released."
     })
 }
 
@@ -534,7 +534,7 @@ fn definitions_schema() -> Value {
         "additionalProperties": false,
         "required": [
             "schema", "assuranceProfile", "audience", "issuedBy", "providedBy",
-            "holderBoundBatchMaxSize", "definitions"
+            "maximumHolderBoundBatchSize", "definitions"
         ],
         "properties": {
             "schema": {"const": "registry.evidence-definitions/v1"},
@@ -542,7 +542,7 @@ fn definitions_schema() -> Value {
             "audience": {"type": "string", "format": "uri", "maxLength": 512},
             "issuedBy": {"type": "string", "format": "uri", "maxLength": 512},
             "providedBy": {"type": "string", "format": "uri", "maxLength": 512},
-            "holderBoundBatchMaxSize": {
+            "maximumHolderBoundBatchSize": {
                 "description": "The effective deployment ceiling for one holder-bound batch. A protocol adapter may advertise no larger batch than this value.",
                 "type": "integer", "minimum": 1, "maximum": MAXIMUM_HOLDER_BOUND_BATCH_SIZE
             },
@@ -668,19 +668,23 @@ fn definitions_schema() -> Value {
                     "required": {"type": "boolean"},
                     "form": {
                         "oneOf": [
-                            {"enum": ["boolean", "integer", "string", "date-bucket", "time-bucket", "entity-reference", "structured"]},
+                            {"type": "object", "additionalProperties": false, "required": ["type"], "properties": {"type": {"const": "boolean"}}},
+                            {"type": "object", "additionalProperties": false, "required": ["type"], "properties": {"type": {"const": "integer"}}},
+                            {"type": "object", "additionalProperties": false, "required": ["type"], "properties": {"type": {"const": "string"}}},
+                            {"type": "object", "additionalProperties": false, "required": ["type"], "properties": {"type": {"const": "date-bucket"}}},
+                            {"type": "object", "additionalProperties": false, "required": ["type"], "properties": {"type": {"const": "time-bucket"}}},
+                            {"type": "object", "additionalProperties": false, "required": ["type"], "properties": {"type": {"const": "entity-reference"}}},
+                            {"type": "object", "additionalProperties": false, "required": ["type"], "properties": {"type": {"const": "structured"}}},
                             {
-                                "type": "object", "additionalProperties": false, "required": ["list"],
-                                "properties": {"list": {
-                                    "type": "object", "additionalProperties": false,
-                                    "required": ["items", "minimumItems", "maximumItems", "unique"],
-                                    "properties": {
-                                        "items": {"enum": ["string", "entity-reference"]},
-                                        "minimumItems": {"type": "integer", "minimum": 1, "maximum": 64},
-                                        "maximumItems": {"type": "integer", "minimum": 1, "maximum": 64},
-                                        "unique": {"const": true}
-                                    }
-                                }}
+                                "type": "object", "additionalProperties": false,
+                                "required": ["type", "items", "minimumItems", "maximumItems", "unique"],
+                                "properties": {
+                                    "type": {"const": "list"},
+                                    "items": {"enum": ["string", "entity-reference"]},
+                                    "minimumItems": {"type": "integer", "minimum": 1, "maximum": 64},
+                                    "maximumItems": {"type": "integer", "minimum": 1, "maximum": 64},
+                                    "unique": {"const": true}
+                                }
                             }
                         ]
                     }
@@ -761,16 +765,16 @@ fn problem_schema() -> Value {
             "type": {
                 "type": "string",
                 "enum": [
-                    "https://id.registrystack.org/problems/registry-evidence/evidence/invalid_request",
-                    "https://id.registrystack.org/problems/registry-evidence/request/selector_invalid",
-                    "https://id.registrystack.org/problems/registry-evidence/auth/invalid_credential",
+                    "https://id.registrystack.org/problems/registry-evidence/evidence/invalid-request",
+                    "https://id.registrystack.org/problems/registry-evidence/request/selector-invalid",
+                    "https://id.registrystack.org/problems/registry-evidence/auth/invalid-credential",
                     "https://id.registrystack.org/problems/registry-evidence/evidence/denied",
                     "https://id.registrystack.org/problems/registry-evidence/format/unsupported",
                     "https://id.registrystack.org/problems/registry-evidence/evidence/unavailable",
-                    "https://id.registrystack.org/problems/registry-evidence/evidence/rate_limited",
+                    "https://id.registrystack.org/problems/registry-evidence/evidence/rate-limited",
                     "https://id.registrystack.org/problems/registry-evidence/source/unavailable",
                     "https://id.registrystack.org/problems/registry-evidence/service/unavailable",
-                    "https://id.registrystack.org/problems/registry-evidence/resource/not_found"
+                    "https://id.registrystack.org/problems/registry-evidence/resource/not-found"
                 ]
             },
             "title": {"type": "string", "enum": [
@@ -781,9 +785,9 @@ fn problem_schema() -> Value {
             ]},
             "status": {"type": "integer", "enum": [400, 401, 403, 404, 406, 422, 429, 503]},
             "code": {"type": "string", "enum": [
-                "evidence.invalid_request", "request.selector_invalid", "auth.invalid_credential",
+                "evidence.invalid-request", "request.selector-invalid", "auth.invalid-credential",
                 "evidence.denied", "format.unsupported", "evidence.unavailable",
-                "evidence.rate_limited", "source.unavailable", "service.unavailable", "resource.not_found"
+                "evidence.rate-limited", "source.unavailable", "service.unavailable", "resource.not-found"
             ]},
             "detail": {"type": "string", "enum": [
                 "the Evidence request is invalid", "selector does not match an available request profile",
@@ -1277,12 +1281,12 @@ fn openapi_document(
                         "400": {
                             "description": "Malformed request or invalid selector",
                             "headers": evidence_response_headers(None),
-                            "content": problem_content(&["evidence.invalid_request", "request.selector_invalid"])
+                            "content": problem_content(&["evidence.invalid-request", "request.selector-invalid"])
                         },
                         "401": {
                             "description": "Authentication failed",
                             "headers": evidence_response_headers(Some(("WWW-Authenticate", authentication_challenge_header()))),
-                            "content": problem_content(&["auth.invalid_credential"])
+                            "content": problem_content(&["auth.invalid-credential"])
                         },
                         "403": {
                             "description": "Request is not authorized, including a recognized response format the bundle or matched grant does not permit",
@@ -1304,7 +1308,7 @@ fn openapi_document(
                             "headers": evidence_response_headers(Some(("Retry-After", json!({
                                 "schema": {"type": "string", "enum": ["1"]}
                             })))),
-                            "content": problem_content(&["evidence.rate_limited"])
+                            "content": problem_content(&["evidence.rate-limited"])
                         },
                         "503": {
                             "description": "Dependency or service temporarily unavailable",
@@ -1335,12 +1339,12 @@ fn openapi_document(
                         "400": {
                             "description": "Malformed batch request or invalid selector",
                             "headers": evidence_response_headers(None),
-                            "content": problem_content(&["evidence.invalid_request", "request.selector_invalid"])
+                            "content": problem_content(&["evidence.invalid-request", "request.selector-invalid"])
                         },
                         "401": {
                             "description": "Authentication failed",
                             "headers": evidence_response_headers(Some(("WWW-Authenticate", authentication_challenge_header()))),
-                            "content": problem_content(&["auth.invalid_credential"])
+                            "content": problem_content(&["auth.invalid-credential"])
                         },
                         "403": {
                             "description": "At least one batch item is not authorized for signed audience-scoped evidence",
@@ -1357,7 +1361,7 @@ fn openapi_document(
                             "headers": evidence_response_headers(Some(("Retry-After", json!({
                                 "schema": {"type": "string", "enum": ["1"]}
                             })))),
-                            "content": problem_content(&["evidence.rate_limited"])
+                            "content": problem_content(&["evidence.rate-limited"])
                         },
                         "503": {
                             "description": "A dependency, protocol, signing, serialization, or audit failure aborted the complete request",
@@ -1381,19 +1385,19 @@ fn openapi_document(
                         "400": {
                             "description": "Malformed discovery request",
                             "headers": response_headers(None),
-                            "content": problem_content(&["evidence.invalid_request"])
+                            "content": problem_content(&["evidence.invalid-request"])
                         },
                         "401": {
                             "description": "Authentication failed",
                             "headers": response_headers(Some(("WWW-Authenticate", authentication_challenge_header()))),
-                            "content": problem_content(&["auth.invalid_credential"])
+                            "content": problem_content(&["auth.invalid-credential"])
                         },
                         "429": {
                             "description": "Request rate exceeded",
                             "headers": response_headers(Some(("Retry-After", json!({
                                 "schema": {"type": "string", "enum": ["1"]}
                             })))),
-                            "content": problem_content(&["evidence.rate_limited"])
+                            "content": problem_content(&["evidence.rate-limited"])
                         },
                         "503": {
                             "description": "Service temporarily unavailable",
@@ -1585,13 +1589,13 @@ mod tests {
             .as_array()
             .expect("definitions required members are an array")
             .iter()
-            .any(|member| member == "holderBoundBatchMaxSize"));
+            .any(|member| member == "maximumHolderBoundBatchSize"));
         assert_eq!(
-            schema["properties"]["holderBoundBatchMaxSize"]["minimum"],
+            schema["properties"]["maximumHolderBoundBatchSize"]["minimum"],
             json!(1)
         );
         assert_eq!(
-            schema["properties"]["holderBoundBatchMaxSize"]["maximum"],
+            schema["properties"]["maximumHolderBoundBatchSize"]["maximum"],
             json!(MAXIMUM_HOLDER_BOUND_BATCH_SIZE)
         );
 
@@ -1606,19 +1610,19 @@ mod tests {
             "audience": "urn:example:audience",
             "issuedBy": "urn:example:issuer",
             "providedBy": "urn:example:provider",
-            "holderBoundBatchMaxSize": 1,
+            "maximumHolderBoundBatchSize": 1,
             "definitions": []
         });
         assert!(compiled.is_valid(&document));
         document
             .as_object_mut()
             .expect("definitions document is an object")
-            .remove("holderBoundBatchMaxSize");
+            .remove("maximumHolderBoundBatchSize");
         assert!(
             !compiled.is_valid(&document),
             "the retained v1 identity intentionally has a new required member"
         );
-        document["holderBoundBatchMaxSize"] = json!(17);
+        document["maximumHolderBoundBatchSize"] = json!(17);
         assert!(!compiled.is_valid(&document));
     }
 
@@ -1635,7 +1639,7 @@ mod tests {
             "audience": "https://client.example.test",
             "issuedBy": "urn:example:issuer",
             "providedBy": "https://evidence.example.test",
-            "holderBoundBatchMaxSize": 1,
+            "maximumHolderBoundBatchSize": 1,
             "definitions": [{
                 "handle": "membership",
                 "requirement": "urn:example:requirement:membership:v1",
@@ -1658,21 +1662,92 @@ mod tests {
                     "handle": "categories",
                     "concept": "urn:example:concept:categories",
                     "required": false,
-                    "form": {"list": {
+                    "form": {
+                        "type": "list",
                         "items": "string",
                         "minimumItems": 1,
                         "maximumItems": 3,
                         "unique": true
-                    }}
+                    }
                 }]
             }]
         });
         assert!(compiled.is_valid(&document));
-        document["definitions"][0]["concepts"][0]["form"]["list"]["unique"] = json!(false);
+        document["definitions"][0]["concepts"][0]["form"]["unique"] = json!(false);
         assert!(!compiled.is_valid(&document));
-        document["definitions"][0]["concepts"][0]["form"]["list"]["unique"] = json!(true);
+        document["definitions"][0]["concepts"][0]["form"]["unique"] = json!(true);
         document["definitions"][0]["concepts"][0]["internalConstraint"] = json!("protected");
         assert!(!compiled.is_valid(&document));
+    }
+
+    /// Every form is a mapping named by `type`, and each refuses what it does
+    /// not declare.
+    #[test]
+    fn definitions_publish_each_concept_form_tagged_by_type() {
+        let compiled = JSONSchema::options()
+            .with_draft(Draft::Draft202012)
+            .should_validate_formats(true)
+            .compile(&definitions_schema())
+            .expect("definitions schema compiles");
+        let document = |form: Value| {
+            json!({
+                "schema": "registry.evidence-definitions/v1",
+                "assuranceProfile": "production",
+                "audience": "https://client.example.test",
+                "issuedBy": "urn:example:issuer",
+                "providedBy": "https://evidence.example.test",
+                "maximumHolderBoundBatchSize": 1,
+                "definitions": [{
+                    "handle": "membership",
+                    "requirement": "urn:example:requirement:membership:v1",
+                    "configurationRevision": format!("sha256:{}", "0".repeat(64)),
+                    "kind": "information-requirement",
+                    "evidenceType": "urn:example:evidence-type:membership:v1",
+                    "purpose": "casework",
+                    "responseFormats": ["signed-jws"],
+                    "referenceFrameworks": ["urn:example:framework:v1"],
+                    "subjects": [{
+                        "role": "subject",
+                        "cardinality": "one",
+                        "selector": {
+                            "profile": "person-v1",
+                            "valueOrigin": "request",
+                            "fields": [{"type": "string", "name": "person_id", "minimumBytes": 1, "maximumBytes": 96}]
+                        }
+                    }],
+                    "concepts": [{
+                        "handle": "member",
+                        "concept": "urn:example:concept:member",
+                        "required": true,
+                        "form": form
+                    }]
+                }]
+            })
+        };
+        for form in [
+            "boolean",
+            "integer",
+            "string",
+            "date-bucket",
+            "time-bucket",
+            "entity-reference",
+            "structured",
+        ] {
+            assert!(
+                compiled.is_valid(&document(json!({"type": form}))),
+                "{form}"
+            );
+            assert!(!compiled.is_valid(&document(json!(form))), "{form}");
+            assert!(
+                !compiled.is_valid(&document(json!({"type": form, "unique": true}))),
+                "{form}"
+            );
+        }
+        let list = json!({"items": "string", "minimumItems": 1, "maximumItems": 3, "unique": true});
+        assert!(!compiled.is_valid(&document(json!({"list": list}))));
+        assert!(!compiled.is_valid(&document(list)));
+        assert!(!compiled.is_valid(&document(json!({"type": "decimal"}))));
+        assert!(!compiled.is_valid(&document(json!({}))));
     }
 
     #[test]
@@ -1840,7 +1915,7 @@ mod tests {
         assert_eq!(
             document["paths"]["/v1/evidence"]["post"]["responses"]["401"]["content"]
                 ["application/problem+json"]["schema"]["allOf"][1]["properties"]["code"]["enum"],
-            json!(["auth.invalid_credential"])
+            json!(["auth.invalid-credential"])
         );
         assert_eq!(
             document["paths"]["/ready"]["get"]["responses"]["503"]["content"]
@@ -1952,7 +2027,7 @@ mod tests {
                                 "signature": "a".repeat(86)
                             }
                         },
-                        {"result": "evidence_not_available"}
+                        {"result": "evidence-not-available"}
                     ]
                 }),
             ),
@@ -1993,7 +2068,7 @@ mod tests {
                     "audience": "urn:example:audience",
                     "issuedBy": "urn:example:issuer",
                     "providedBy": "urn:example:provider",
-                    "holderBoundBatchMaxSize": 4,
+                    "maximumHolderBoundBatchSize": 4,
                     "definitions": [{
                         "handle": "case-check",
                         "requirement": "urn:example:requirement:v1",
@@ -2021,7 +2096,7 @@ mod tests {
                             "handle": "eligible",
                             "concept": "urn:example:concept",
                             "required": true,
-                            "form": "boolean"
+                            "form": {"type": "boolean"}
                         }]
                     }]
                 }),

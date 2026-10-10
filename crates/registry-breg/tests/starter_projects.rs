@@ -44,7 +44,7 @@ fn published_starters_compile_with_reviewed_update_policy() {
             .iter_mut()
             .find(|profile| profile["id"] == "editor")
             .unwrap();
-        editor["permissions"][0]["operations"]
+        editor["permissions"]["entities"][0]["operations"]
             .as_sequence_mut()
             .unwrap()
             .push("patch".into());

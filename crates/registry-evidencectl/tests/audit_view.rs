@@ -157,7 +157,7 @@ fn standalone_authorization_refusal_prints_only_the_safe_reason() {
     assert_success(&output);
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
-        format!("ACCESS REFUSED requester={PSEUDONYM} reason=not_authorized\n")
+        format!("ACCESS REFUSED requester={PSEUDONYM} reason=not-authorized\n")
     );
     assert!(output.stderr.is_empty());
 
@@ -195,7 +195,7 @@ fn structured_sd_jwt_release_uses_the_same_minimized_audit_view() {
     let bundle_path = fixture.root.join(".evidence/dev/bundle/evidence.yaml");
     let mut bundle: Value =
         serde_norway::from_slice(&fs::read(&bundle_path).expect("bundle")).expect("bundle YAML");
-    bundle["requirements"][1]["concepts"][0]["form"] = json!("reviewed-structured-value");
+    bundle["requirements"][1]["concepts"][0]["type"] = json!("reviewed-structured-value");
     fs::set_permissions(&bundle_path, fs::Permissions::from_mode(0o600))
         .expect("unseal bundle for fixture update");
     fs::write(
@@ -252,12 +252,12 @@ fn multi_concept_release_requires_and_prints_the_exact_declared_list() {
         serde_norway::from_slice(&fs::read(&bundle_path).expect("bundle")).expect("bundle YAML");
     bundle["requirements"][1]["concepts"] = json!([
         {
-            "id": "urn:registrystack:evidence:local:concept:adult-status:is_adult",
-            "form": "boolean"
+            "uri": "urn:registrystack:evidence:local:concept:adult-status:is_adult",
+            "type": "boolean"
         },
         {
-            "id": "urn:registrystack:evidence:local:concept:adult-status:age_years",
-            "form": "bounded-integer"
+            "uri": "urn:registrystack:evidence:local:concept:adult-status:age_years",
+            "type": "bounded-integer"
         }
     ]);
     fs::set_permissions(&bundle_path, fs::Permissions::from_mode(0o600))
@@ -432,19 +432,19 @@ fn a_denial_or_transient_failure_after_access_renders_its_outcome() {
         (
             "transient-failure",
             "dependency-failure",
-            "TRANSIENT FAILURE reason=dependency_failure",
+            "TRANSIENT FAILURE reason=dependency-failure",
         ),
         (
             "transient-failure",
             "evaluation-failure",
-            "TRANSIENT FAILURE reason=evaluation_failure",
+            "TRANSIENT FAILURE reason=evaluation-failure",
         ),
         (
             "transient-failure",
             "signing-failure",
-            "TRANSIENT FAILURE reason=signing_failure",
+            "TRANSIENT FAILURE reason=signing-failure",
         ),
-        ("denial", "no-match", "DISCLOSURE DENIED reason=no_match"),
+        ("denial", "no-match", "DISCLOSURE DENIED reason=no-match"),
         ("denial", "ambiguous", "DISCLOSURE DENIED reason=ambiguous"),
         (
             "denial",
@@ -454,7 +454,7 @@ fn a_denial_or_transient_failure_after_access_renders_its_outcome() {
         (
             "denial",
             "fact-missing",
-            "DISCLOSURE DENIED reason=fact_missing",
+            "DISCLOSURE DENIED reason=fact-missing",
         ),
     ] {
         fixture.write_core_json(&terminal_view(phase, decision));
@@ -791,27 +791,27 @@ impl Fixture {
             },
             "requirements": [
                 {
-                    "id": "urn:registrystack:evidence:local:requirement:age-bracket",
+                    "uri": "urn:registrystack:evidence:local:requirement:age-bracket",
                     "purposes": ["service-path-selection"],
                     "subjectRoles": [{
                         "role": "person",
                         "selectorProfiles": ["local-subject-age-bracket-v1"]
                     }],
                     "concepts": [{
-                        "id": "urn:registrystack:evidence:local:concept:age-bracket:age_bracket",
-                        "form": "controlled-category"
+                        "uri": "urn:registrystack:evidence:local:concept:age-bracket:age_bracket",
+                        "type": "controlled-category"
                     }]
                 },
                 {
-                    "id": "urn:registrystack:evidence:local:requirement:adult-status",
+                    "uri": "urn:registrystack:evidence:local:requirement:adult-status",
                     "purposes": ["age-check"],
                     "subjectRoles": [{
                         "role": "person",
                         "selectorProfiles": ["local-subject-adult-status-v1"]
                     }],
                     "concepts": [{
-                        "id": "urn:registrystack:evidence:local:concept:adult-status:is_adult",
-                        "form": "boolean"
+                        "uri": "urn:registrystack:evidence:local:concept:adult-status:is_adult",
+                        "type": "boolean"
                     }]
                 }
             ]

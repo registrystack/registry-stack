@@ -36,11 +36,11 @@
       "role": "requester"
     }
   ],
-  "apiVersion": "registry.registrystack.org/caseworkctl/v1alpha3",
+  "apiVersion": "id.registrystack.org/formats/casework/explain-report/v1alpha3",
   "calendars": [],
   "clocks": [],
   "databaseAccess": false,
-  "kind": "ExplainReport",
+  "kind": "CaseworkExplainReport",
   "networkAccess": false,
   "policyVersion": "1",
   "projectId": "standalone-decision",

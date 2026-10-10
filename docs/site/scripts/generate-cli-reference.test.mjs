@@ -126,22 +126,22 @@ test('renders required groups and conditional requirements', () => {
   const evidencectl = catalog.binaries.find((binary) => binary.name === 'evidencectl');
   evidencectl.constraints.push(
     {
-      kind: 'required_exactly_one',
+      kind: 'required-exactly-one',
       when: null,
       arguments: ['--left', '--right'],
     },
     {
-      kind: 'requires_all',
+      kind: 'requires-all',
       when: '--right',
       arguments: ['--detail'],
     },
     {
-      kind: 'required_one_or_more',
+      kind: 'required-one-or-more',
       when: null,
       arguments: ['--scope', '--role'],
     },
     {
-      kind: 'mutually_exclusive',
+      kind: 'mutually-exclusive',
       when: null,
       arguments: ['--left', '--right'],
     },
@@ -218,7 +218,7 @@ test('rejects empty public help and unstable conflict pairs', () => {
 
   const unsortedConflict = fixtureCatalog();
   unsortedConflict.binaries[0].constraints.push({
-    kind: 'mutually_exclusive',
+    kind: 'mutually-exclusive',
     when: null,
     arguments: ['--right', '--left'],
   });
@@ -281,7 +281,7 @@ test('every public catalog content change invalidates review, including version-
     binary => { binary.options[0].repeatable = true; },
     binary => { binary.options[0].always_required = true; },
     binary => { binary.arguments.push(argument('<FILE>')); },
-    binary => { binary.constraints.push({ kind: 'required_exactly_one', when: null, arguments: ['--left', '--right'] }); },
+    binary => { binary.constraints.push({ kind: 'required-exactly-one', when: null, arguments: ['--left', '--right'] }); },
     binary => { binary.subcommands[0].subcommands[0].about = 'Nested help'; },
     binary => { binary.subcommands.push(command('extra', 'evidencectl')); },
   ];

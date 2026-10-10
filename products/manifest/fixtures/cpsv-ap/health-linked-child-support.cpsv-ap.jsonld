@@ -345,9 +345,9 @@
           },
           "registry_manifest:fieldName": "supportType",
           "registry_manifest:fulfillmentMode": [
-            "manual_input"
+            "manual-input"
           ],
-          "registry_manifest:preferredFulfillmentMode": "manual_input",
+          "registry_manifest:preferredFulfillmentMode": "manual-input",
           "registry_manifest:required": true,
           "registry_manifest:widgetType": "select"
         },
@@ -379,13 +379,13 @@
           },
           "registry_manifest:fieldName": "childIdentifier",
           "registry_manifest:fulfillmentMode": [
-            "manual_input",
-            "registry_lookup",
-            "oots_evidence_exchange"
+            "manual-input",
+            "registry-lookup",
+            "oots-evidence-exchange"
           ],
           "registry_manifest:maxOccurs": 1,
           "registry_manifest:minOccurs": 1,
-          "registry_manifest:preferredFulfillmentMode": "registry_lookup",
+          "registry_manifest:preferredFulfillmentMode": "registry-lookup",
           "registry_manifest:required": true,
           "registry_manifest:supportsRequirement": {
             "@id": "https://child-support.example.gov/requirements/child-health-coverage"
@@ -433,13 +433,13 @@
               },
               "registry_manifest:fieldName": "childIdentifier",
               "registry_manifest:fulfillmentMode": [
-                "manual_input",
-                "registry_lookup",
-                "oots_evidence_exchange"
+                "manual-input",
+                "registry-lookup",
+                "oots-evidence-exchange"
               ],
               "registry_manifest:maxOccurs": 1,
               "registry_manifest:minOccurs": 1,
-              "registry_manifest:preferredFulfillmentMode": "registry_lookup",
+              "registry_manifest:preferredFulfillmentMode": "registry-lookup",
               "registry_manifest:required": true,
               "registry_manifest:supportsRequirement": {
                 "@id": "https://child-support.example.gov/requirements/child-health-coverage"

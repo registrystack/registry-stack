@@ -119,8 +119,8 @@ fn occurrence_state_id(state: OccurrenceState) -> &'static str {
     match state {
         OccurrenceState::Open => "open",
         OccurrenceState::Claimed => "claimed",
-        OccurrenceState::WaitingApplicant => "waiting_applicant",
-        OccurrenceState::WaitingApplication => "waiting_application",
+        OccurrenceState::WaitingApplicant => "waiting-applicant",
+        OccurrenceState::WaitingApplication => "waiting-application",
         OccurrenceState::Synchronizing => "synchronizing",
         OccurrenceState::Completed => "completed",
         OccurrenceState::Superseded => "superseded",
@@ -134,13 +134,13 @@ fn occurrence_event_id(event: OccurrenceEvent) -> &'static str {
     match event {
         OccurrenceEvent::Claim => "claim",
         OccurrenceEvent::Release => "release",
-        OccurrenceEvent::AttemptReserved => "attempt_reserved",
-        OccurrenceEvent::AttemptUncertain => "attempt_uncertain",
-        OccurrenceEvent::AttemptCompleted => "attempt_completed",
-        OccurrenceEvent::AttemptRefused => "attempt_refused",
-        OccurrenceEvent::ObserveOpen => "observe_open",
-        OccurrenceEvent::ObserveWaitingApplicant => "observe_waiting_applicant",
-        OccurrenceEvent::ObserveWaitingApplication => "observe_waiting_application",
+        OccurrenceEvent::AttemptReserved => "attempt-reserved",
+        OccurrenceEvent::AttemptUncertain => "attempt-uncertain",
+        OccurrenceEvent::AttemptCompleted => "attempt-completed",
+        OccurrenceEvent::AttemptRefused => "attempt-refused",
+        OccurrenceEvent::ObserveOpen => "observe-open",
+        OccurrenceEvent::ObserveWaitingApplicant => "observe-waiting-applicant",
+        OccurrenceEvent::ObserveWaitingApplication => "observe-waiting-application",
         OccurrenceEvent::Complete => "complete",
         OccurrenceEvent::Supersede => "supersede",
         OccurrenceEvent::Cancel => "cancel",
@@ -177,23 +177,23 @@ fn occurrence_guard(event: OccurrenceEvent) -> &'static str {
 const CALLER_EVENTS: &[&str] = &[
     "claim",
     "release",
-    "attempt_reserved",
-    "attempt_uncertain",
-    "attempt_completed",
-    "attempt_refused",
+    "attempt-reserved",
+    "attempt-uncertain",
+    "attempt-completed",
+    "attempt-refused",
 ];
 
 /// Every occurrence event, in `OccurrenceEvent::ALL` order.
 const EVERY_OCCURRENCE_EVENT: &[&str] = &[
     "claim",
     "release",
-    "attempt_reserved",
-    "attempt_uncertain",
-    "attempt_completed",
-    "attempt_refused",
-    "observe_open",
-    "observe_waiting_applicant",
-    "observe_waiting_application",
+    "attempt-reserved",
+    "attempt-uncertain",
+    "attempt-completed",
+    "attempt-refused",
+    "observe-open",
+    "observe-waiting-applicant",
+    "observe-waiting-application",
     "complete",
     "supersede",
     "cancel",
@@ -213,42 +213,42 @@ const EVERY_OCCURRENCE_EVENT: &[&str] = &[
 fn occurrence_enforcement() -> Vec<EnforcementLayer> {
     vec![
         EnforcementLayer {
-            id: "caller_authentication",
+            id: "caller-authentication",
             description: "The bearer token, the selected Casework profile, and its scopes verify; a token that impersonates or carries a registry grant is refused for any non-Requester profile, and the session must be a verified human. Gates the human paths only: the clock-driven release, the operator marking of an expired pending attempt, the operator settlement of an uncertain attempt, and every observation carry no caller.",
             events: CALLER_EVENTS,
         },
         EnforcementLayer {
-            id: "caller_revision_precondition",
+            id: "caller-revision-precondition",
             description: "The If-Match header is present and well formed before any row is read, and inside the transaction the locked item row still carries the revision, source binding, and activity the caller saw. Only the header check happens at this position. The comparison against the locked row runs much later: on the claim and release paths it follows both the idempotency admission and the holder-state refusals below, so an exact retry of an operation that already succeeded is answered from its record rather than refused for the revision having moved since; on the reservation path it follows the holder and queue checks and precedes the reducer. Neither recover route carries an If-Match, and neither the operator marking nor any attempt settlement compares the item revision.",
-            events: &["claim", "release", "attempt_reserved"],
+            events: &["claim", "release", "attempt-reserved"],
         },
         EnforcementLayer {
-            id: "erased_item_idempotency_preflight",
+            id: "erased-item-idempotency-preflight",
             description: "Before the source is re-read, a retry naming an item that has already been erased is answered from the retained idempotency record alone: a recorded request hash differing from this one is refused as a conflict, and a record whose response has been retained away is refused as expired. A reservation is stricter: any recorded hash matching this one is refused as expired, because an erased item can no longer be reserved even where the stored response survives. It runs only against an erased item and only for a caller who currently serves that item's queue in the role the operation needs, so a live item passes it and reaches the source and queue layers below.",
-            events: &["claim", "release", "attempt_reserved"],
+            events: &["claim", "release", "attempt-reserved"],
         },
         EnforcementLayer {
-            id: "source_authorization",
+            id: "source-authorization",
             description: "The caller can see the item's queue, and the source, re-read as this caller, still discloses the subject under the binding the item holds. A subject the source no longer discloses is reported as absent, and that holds on every caller event named here, the recovery settlements included, because the shared caller read settles it before this layer's own comparisons begin. The binding comparison is narrower than it reads: that same shared read returns the item untouched as soon as this caller holds a pending or uncertain attempt on it, skipping both the generation refusal and the active-occurrence refusal, so a moved binding refuses the paths that start an action but not the recovery of such an attempt. The decision path escapes that skip only because it runs a live-attempt check of its own immediately afterwards and refuses an uncertain attempt outright; a recovery has no equivalent and can have none, the live attempt being the one it exists to settle. Standing in this layer's place there is the source adapter's own comparison at execution, which refuses a saved binding that no longer matches the prepared one or the current generation. The further check that the source still offers the operation being attempted is narrower still, and holds only on the reservation, the one path that chooses an operation. A recovery re-executes the operation its attempt already prepared and never re-tests it against the set the source offers now; standing in its place is the saved preparation itself, matched on the recorded binding and idempotency key and executed under a single-flight lease. The operator settlement of an uncertain attempt raises two of these events and the operator marking of an expired pending attempt raises one, both with no caller and reading no source, so those paths pass this layer without being checked here.",
             events: CALLER_EVENTS,
         },
         EnforcementLayer {
-            id: "queue_and_holder_authority",
+            id: "queue-and-holder-authority",
             description: "The actor is a staff member of a team serving the item's queue; a supervisor serving that queue may release another person's holding but may not claim or reserve. A claim refuses an item already held. A release refuses an item nobody holds, and refuses a staff member who is not the recorded holder, but the supervisor above may release whoever holds it. A reservation refuses anyone but the recorded holder. On the claim and release paths this layer straddles the idempotency admission below: the queue membership check runs before that admission and the holder-state refusals after it, so an exact retry of a claim that already succeeded is answered from its record rather than refused for the item now being held. A reservation sits on neither side of that split, being admitted by no record at all, and meets the holder check before the queue check.",
-            events: &["claim", "release", "attempt_reserved"],
+            events: &["claim", "release", "attempt-reserved"],
         },
         EnforcementLayer {
-            id: "idempotency_admission",
+            id: "idempotency-admission",
             description: "With the item row locked, a retried claim or release is answered from its recorded idempotency record: a recorded request hash differing from this one is refused as a conflict, and a retry whose stored response retention has erased, including the item itself, is refused as expired. Against an already erased item the preflight layer above has answered this before the source was read. A reservation is admitted by its own key check below instead, and neither the operator marking nor any attempt settlement reaches an idempotency record on any path.",
             events: &["claim", "release"],
         },
         EnforcementLayer {
-            id: "source_binding_currency",
+            id: "source-binding-currency",
             description: "An observation is applied only when it is the newest authoritative reading of the subject under the current binding generation: a stale generation is refused, an older revision is dropped, and an unchanged revision and etag reconciles clocks only. A source may never assert the claimed or synchronizing state. A clock effect additionally requires the subject, the observation, and its own recorded generation, revision, and etag to all be current.",
             events: &[
-                "observe_open",
-                "observe_waiting_applicant",
-                "observe_waiting_application",
+                "observe-open",
+                "observe-waiting-applicant",
+                "observe-waiting-application",
                 "complete",
                 "supersede",
                 "cancel",
@@ -256,22 +256,22 @@ fn occurrence_enforcement() -> Vec<EnforcementLayer> {
             ],
         },
         EnforcementLayer {
-            id: "reservation_key_admission",
+            id: "reservation-key-admission",
             description: "A retried reservation is admitted by its own key lookup rather than by the idempotency record above, and that lookup straddles the layers between. It reads the attempt row recorded for this item and key before the source is re-read, comparing the actor, the caller's casework profile, and the request hash the row carries, but its outcome is taken only after the source layer above has run: a difference in any of those is refused as a conflict, an item erased since is refused as expired, and an exact match returns the stored attempt with whatever receipt it holds. A retried reservation is therefore answered from its record, and returns before the holder, operation-offered, and fence checks below are reached. Only where that lookup found no row does the reservation itself lock the row and compare the actor, both profiles, the displayed binding, the recovery evidence, and the operation field by field, refusing a difference as a conflict and an exact match as a still-pending attempt. That locked compare reads no request hash, and is reachable only by a concurrent caller who inserted under the same key in between, so it decides a race and never an ordinary retry.",
-            events: &["attempt_reserved"],
+            events: &["attempt-reserved"],
         },
         EnforcementLayer {
-            id: "attempt_fence",
+            id: "attempt-fence",
             description: "No occurrence changes while a pending or uncertain attempt is live on the item: a claim, release, or reservation is refused, and a clock effect is deferred. An observation is fenced wider than that and requeued rather than refused, because its check spans every item the source, subject kind, and subject identifier select: a live attempt on one of a subject's occurrences requeues an observation that would have updated another, and the subject stays queued for reconciliation. An attempt settlement is fenced by the execution token recorded on the attempt; a refusal by the executor also requires its lease to be live, recovery requires it to have expired, and the operator marking of a pending attempt and the operator settlement of an uncertain attempt each require an expired lease and then issue a fresh token that fences the original executor out.",
             events: EVERY_OCCURRENCE_EVENT,
         },
         EnforcementLayer {
-            id: "lifecycle_transition",
+            id: "lifecycle-transition",
             description: "The edge's own guard, run by the reducer: the (state, event) pair is in the fixed table. In practice this refuses every event against a completed, superseded, or cancelled occurrence and every caller event raised from the wrong active state. The position reported here is where every event but one reaches it. The reservation is the exception: its reducer runs before the key check and the attempt fence above, so a reservation against a state the table refuses is refused before either of them.",
             events: EVERY_OCCURRENCE_EVENT,
         },
         EnforcementLayer {
-            id: "persist_serialization",
+            id: "persist-serialization",
             description: "Every write runs in a transaction that already holds a row lock on the item, and on the subject or clock occurrence where one is involved, so a concurrent writer is serialized behind this one rather than filtered at write time; the clock path claims its effect once only. The first authoritative observation of an unseen occurrence is the exception: it inserts the item, so there is no item row to lock and the subject lock is the whole of its serialization. There is no row-level security and no persist-time state filter on this machine.",
             events: EVERY_OCCURRENCE_EVENT,
         },
@@ -282,7 +282,7 @@ fn occurrence_enforcement() -> Vec<EnforcementLayer> {
 /// The first authoritative observation for an unseen occurrence is inserted
 /// with the state it reports, so a record can begin in any of these without
 /// ever passing through `open`.
-const OCCURRENCE_INITIAL_STATES: &[&str] = &["open", "waiting_applicant", "waiting_application"];
+const OCCURRENCE_INITIAL_STATES: &[&str] = &["open", "waiting-applicant", "waiting-application"];
 
 /// Describe the occurrence lifecycle by generating its transition table from
 /// the real reducer: every `(state, event)` pair is tried against
@@ -324,7 +324,7 @@ fn review_lifecycle_state_id(state: ReviewRequestLifecycle) -> &'static str {
         ReviewRequestLifecycle::Reviewing => "reviewing",
         ReviewRequestLifecycle::Approved => "approved",
         ReviewRequestLifecycle::Rejected => "rejected",
-        ReviewRequestLifecycle::ChangesRequested => "changes_requested",
+        ReviewRequestLifecycle::ChangesRequested => "changes-requested",
         ReviewRequestLifecycle::Answered => "answered",
         ReviewRequestLifecycle::Cancelled => "cancelled",
         ReviewRequestLifecycle::Superseded => "superseded",
@@ -332,8 +332,8 @@ fn review_lifecycle_state_id(state: ReviewRequestLifecycle) -> &'static str {
 }
 
 const REVIEW_SETTLE_EVENT: &str = "settle";
-const REVIEW_RECORD_EVENT: &str = "record_decision";
-const REVIEW_ADVANCE_EVENT: &str = "advance_stage";
+const REVIEW_RECORD_EVENT: &str = "record-decision";
+const REVIEW_ADVANCE_EVENT: &str = "advance-stage";
 
 const EVERY_REVIEW_EVENT: &[&str] = &[
     REVIEW_RECORD_EVENT,
@@ -351,62 +351,62 @@ const EVERY_REVIEW_EVENT: &[&str] = &[
 fn review_enforcement() -> Vec<EnforcementLayer> {
     macro_rules! decision_path_only {
         ($text:literal) => {
-            concat!($text, " Gates the decision path only: record_decision, advance_stage, and the settle to approved, rejected, changes_requested, or answered, not cancelled or superseded.")
+            concat!($text, " Gates the decision path only: record-decision, advance-stage, and the settle to approved, rejected, changes-requested, or answered, not cancelled or superseded.")
         };
     }
     vec![
         EnforcementLayer {
-            id: "caller_authentication",
+            id: "caller-authentication",
             description: "The bearer token, the selected Casework profile, and its scopes verify. A reviewer profile additionally refuses a token that impersonates or carries a registry grant and any session that is not a verified human; a Requester producer profile is exempt from both.",
             events: EVERY_REVIEW_EVENT,
         },
         EnforcementLayer {
-            id: "producer_or_reviewer_admission",
+            id: "producer-or-reviewer-admission",
             description: "The caller's role and profile are admitted for the path: a decision requires a human staff member or supervisor, while cancellation and creation require a Requester whose profile, issuer, and subject match a declared review producer covering the request's kind and source namespace. A source-profile header is refused outright on the creation and cancellation routes, and on a decision it is refused or required according to the policy's context strategy.",
             events: EVERY_REVIEW_EVENT,
         },
         EnforcementLayer {
-            id: "review_source_preflight",
+            id: "review-source-preflight",
             description: decision_path_only!("Where the review kind takes its context from a source, the subject re-read as the deciding caller must still be the subject, binding version, and integrity digest pinned on the request, its disclosure must pass the policy's display rules, and the authoritative occurrence must still be reviewable: active or completed, never synchronizing. A record whose result has been erased or has expired is refused as well."),
             events: EVERY_REVIEW_EVENT,
         },
         EnforcementLayer {
-            id: "producer_submission_idempotency",
+            id: "producer-submission-idempotency",
             description: "A producer submitting a new review is admitted here, before any request row is locked. An advisory lock over the producer, the subject, and the review kind serializes that producer's concurrent submissions, and the submission's own idempotency record answers a retry under it: a recorded request hash differing from this one is refused as a conflict, and a record whose response has been retained away is refused as expired. The producer's priors that this submission supersedes are selected and locked only after that, so the settlements a supersession raises reach the request lock below having already passed this admission, not the one under the lock. The recovery route is admitted from its idempotency record too, and takes no request lock where that record answers it. It is not lock-free in general: the reservation it falls back to is keyed on the producer, the subject, and the kind alone, with no idempotency key among them, so a retry of an identical submission under a fresh key misses the record, finds the reservation, and locks the request row it names before rebuilding the response.",
             events: &["settle"],
         },
         EnforcementLayer {
-            id: "request_lock_and_lifecycle",
+            id: "request-lock-and-lifecycle",
             description: "On the decision, stage, and cancellation routes the review request row is locked before anything is decided, and an event against a request not still in reviewing is refused; a repeated cancellation returns the terminal result already recorded rather than settling twice. Only the lock is taken at this position: it precedes both layers below, while the reviewing check itself runs after them, so a retry recorded while the request was still reviewing is replayed from its record rather than refused for having settled since. Cancellation also refuses a subject that is not the one the caller named, at that later position. A supersession reaches this lock through the producer's submission above, which selects only that producer's own reviewing requests.",
             events: EVERY_REVIEW_EVENT,
         },
         EnforcementLayer {
-            id: "reviewer_queue_authority",
+            id: "reviewer-queue-authority",
             description: decision_path_only!("The reviewer's role is neither Administrator nor Requester, their profile appears in at least one stage's deciding profiles, and they are a staff or supervisor member of a team serving a task this request holds at one of those stages; the task, queue-service, and membership rows are locked together so a concurrent membership change cannot race the decision. That half runs under the request lock and before the idempotency admission below, so a retry whose recorded response is still stored is refused for lost authority rather than replayed. The other half runs later, after the task revision below: the queue the locked task actually carries is re-checked against this reviewer's membership, so a task moved to a queue they do not serve is refused even though the first half passed."),
             events: EVERY_REVIEW_EVENT,
         },
         EnforcementLayer {
-            id: "request_idempotency_admission",
+            id: "request-idempotency-admission",
             description: "With the request row locked and the reviewer admitted above, a retry on the decision, stage, or cancellation route is answered from its recorded idempotency record before any revision, holder, or decision check runs: a recorded request hash differing from this one is refused as a conflict, and a record whose response has been retained away is refused as expired. A settlement raised by a producer's submission or by the recover route was admitted by the producer submission layer above instead, without this lock.",
             events: EVERY_REVIEW_EVENT,
         },
         EnforcementLayer {
-            id: "task_revision_and_holder",
+            id: "task-revision-and-holder",
             description: decision_path_only!("Three checks at three positions, not one. The If-Match header is mandatory, and its syntax is settled by the HTTP layer before the decision call is entered at all: a missing or empty value is refused as precondition-required, and an unquoted, non-numeric, or non-positive one as an invalid request, each ahead of the source preflight, the request lock, the reviewer authority, and the idempotency admission above. A caller malformed here and unauthorized below is therefore told only that the header was malformed. The value that parse produced is compared against the locked task row's revision much later, immediately after that admission, and a decision on a task another operation has advanced is refused there as a revision conflict. The holder check runs later still, after the queue re-check above has confirmed the queue the locked task actually carries: an unheld task, a task held by someone else, and a task already decided are each refused."),
             events: EVERY_REVIEW_EVENT,
         },
         EnforcementLayer {
-            id: "decision_eligibility",
+            id: "decision-eligibility",
             description: decision_path_only!("Everything the engine checks before it counts the decision as a vote: the policy verifies, the request is not already settled, the stage, request, and task identities agree, the deciding profile is listed by both the stage and the task, neither this task nor this reviewer has already decided in the stage, the initiator and previous-stage-reviewer exclusions hold, and the decision kind is one the stage's purpose allows, with its outcome validated against the policy."),
             events: EVERY_REVIEW_EVENT,
         },
         EnforcementLayer {
-            id: "stage_quorum_progression",
+            id: "stage-quorum-progression",
             description: decision_path_only!("The edge's own guard, run by the engine once it has accepted the decision: a non-approving decision settles the request at once, and an approval is counted against the stage's required approvals to decide whether the request stays in the stage, advances, or settles as approved."),
             events: EVERY_REVIEW_EVENT,
         },
         EnforcementLayer {
-            id: "settlement_persist_filter",
+            id: "settlement-persist-filter",
             description: "The terminal write updates the request row only where its lifecycle is still reviewing, closes every open or claimed task on the request, and applies the settled status's clock effects. Every caller reaches it holding the row lock and having compared the lifecycle above, so the filter is a backstop rather than the check that refuses.",
             events: &[REVIEW_SETTLE_EVENT],
         },
@@ -418,7 +418,7 @@ fn review_enforcement() -> Vec<EnforcementLayer> {
 ///
 /// Six of the eight are raised by a reviewer's decision, and only four of
 /// those settle the request. Which of `approved`, `rejected`,
-/// `changes_requested`, or `answered` a given review reaches is decided by
+/// `changes-requested`, or `answered` a given review reaches is decided by
 /// `record_review_decision` against the adopter's configured review policy.
 /// The guards state the arithmetic that engine runs once it has accepted a
 /// decision, and nothing it checks before accepting one; that is
@@ -500,7 +500,7 @@ pub fn review_lifecycle() -> LifecycleDescription {
         },
     ];
     describe(
-        "review_request",
+        "review-request",
         "Casework review request lifecycle",
         &[reviewing],
         &state_ids,
@@ -605,7 +605,7 @@ mod tests {
     /// observation reports, not always in `open`: the store inserts
     /// `state_name(observation.state)` directly for an occurrence it has not
     /// seen before. Reporting `open` as the only initial state would tell a
-    /// reader that `waiting_applicant` is reachable only by transition, which
+    /// reader that `waiting-applicant` is reachable only by transition, which
     /// is not how a record in that state actually comes to exist.
     #[test]
     fn every_directly_constructible_occurrence_state_is_reported_initial() {
@@ -618,8 +618,118 @@ mod tests {
             .collect();
         assert_eq!(
             initial,
-            BTreeSet::from(["open", "waiting_applicant", "waiting_application"])
+            BTreeSet::from(["open", "waiting-applicant", "waiting-application"])
         );
+    }
+
+    /// The lifecycle names a state exactly as a file, a stored row, and a
+    /// response do.
+    #[test]
+    fn every_occurrence_state_id_is_the_spelling_the_state_is_written_in() {
+        for state in OccurrenceState::ALL {
+            assert_eq!(
+                serde_json::to_value(state).unwrap(),
+                serde_json::json!(occurrence_state_id(state))
+            );
+        }
+        assert_eq!(
+            occurrence_state_id(OccurrenceState::WaitingApplicant),
+            "waiting-applicant"
+        );
+        assert_eq!(
+            occurrence_state_id(OccurrenceState::WaitingApplication),
+            "waiting-application"
+        );
+    }
+
+    /// An enforcement layer id is a word the lifecycle report prints, so it
+    /// is spelled as every other value is: lowercase kebab-case.
+    #[test]
+    fn every_enforcement_layer_id_is_lowercase_kebab_case() {
+        for description in [occurrence_lifecycle(), review_lifecycle()] {
+            for layer in &description.enforcement {
+                let mut characters = layer.id.chars();
+                assert!(
+                    characters
+                        .next()
+                        .is_some_and(|first| first.is_ascii_lowercase())
+                        && characters.all(|character| character.is_ascii_lowercase()
+                            || character.is_ascii_digit()
+                            || character == '-'),
+                    "{} layer {}",
+                    description.id,
+                    layer.id
+                );
+            }
+        }
+    }
+
+    /// A state id and an event id are words the lifecycle report prints, in
+    /// the table and in every layer's `events` list, so they are spelled as
+    /// every other value is: lowercase kebab-case.
+    #[test]
+    fn every_state_and_event_id_is_lowercase_kebab_case() {
+        fn kebab(word: &str) -> bool {
+            let mut characters = word.chars();
+            characters
+                .next()
+                .is_some_and(|first| first.is_ascii_lowercase())
+                && characters.all(|character| {
+                    character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-'
+                })
+        }
+        for description in [occurrence_lifecycle(), review_lifecycle()] {
+            for state in &description.states {
+                assert!(kebab(state.id), "{} state {}", description.id, state.id);
+            }
+            for edge in &description.transitions {
+                for word in [edge.from, edge.event, edge.to] {
+                    assert!(kebab(word), "{} transition word {word}", description.id);
+                }
+            }
+            for layer in &description.enforcement {
+                for event in layer.events {
+                    assert!(
+                        kebab(event),
+                        "{} layer {} event {event}",
+                        description.id,
+                        layer.id
+                    );
+                }
+                assert!(
+                    !layer.description.contains("record_decision")
+                        && !layer.description.contains("advance_stage")
+                        && !layer.description.contains("changes_requested"),
+                    "{} layer {} names a word in a spelling the report does not print",
+                    description.id,
+                    layer.id
+                );
+            }
+        }
+        assert_eq!(
+            occurrence_event_id(OccurrenceEvent::ObserveWaitingApplicant),
+            "observe-waiting-applicant"
+        );
+    }
+
+    /// The lifecycle names a review state exactly as a stored row and a
+    /// response do.
+    #[test]
+    fn every_review_state_id_is_the_spelling_the_state_is_written_in() {
+        for state in [
+            ReviewRequestLifecycle::Reviewing,
+            ReviewRequestLifecycle::Approved,
+            ReviewRequestLifecycle::Rejected,
+            ReviewRequestLifecycle::ChangesRequested,
+            ReviewRequestLifecycle::Answered,
+            ReviewRequestLifecycle::Cancelled,
+            ReviewRequestLifecycle::Superseded,
+        ] {
+            assert_eq!(
+                serde_json::to_value(state).unwrap(),
+                serde_json::json!(review_lifecycle_state_id(state))
+            );
+        }
     }
 
     fn layer<'a>(description: &'a LifecycleDescription, id: &str) -> &'a EnforcementLayer {
@@ -682,11 +792,11 @@ mod tests {
             BTreeSet::from(["the occurrence is open"])
         );
         assert_eq!(
-            by_event("attempt_completed"),
+            by_event("attempt-completed"),
             BTreeSet::from(["the occurrence is synchronizing"])
         );
         assert_eq!(
-            by_event("observe_open"),
+            by_event("observe-open"),
             BTreeSet::from([
                 "the occurrence is in any active state; a claimed occurrence keeps its holding through an open readback",
             ])
@@ -708,17 +818,17 @@ mod tests {
         assert_eq!(
             ids,
             vec![
-                "caller_authentication",
-                "caller_revision_precondition",
-                "erased_item_idempotency_preflight",
-                "source_authorization",
-                "queue_and_holder_authority",
-                "idempotency_admission",
-                "source_binding_currency",
-                "reservation_key_admission",
-                "attempt_fence",
-                "lifecycle_transition",
-                "persist_serialization",
+                "caller-authentication",
+                "caller-revision-precondition",
+                "erased-item-idempotency-preflight",
+                "source-authorization",
+                "queue-and-holder-authority",
+                "idempotency-admission",
+                "source-binding-currency",
+                "reservation-key-admission",
+                "attempt-fence",
+                "lifecycle-transition",
+                "persist-serialization",
             ]
         );
         let events = declared_events(&description);
@@ -746,51 +856,51 @@ mod tests {
         let caller_events = [
             "claim",
             "release",
-            "attempt_reserved",
-            "attempt_uncertain",
-            "attempt_completed",
-            "attempt_refused",
+            "attempt-reserved",
+            "attempt-uncertain",
+            "attempt-completed",
+            "attempt-refused",
         ];
         let observation_events = [
-            "observe_open",
-            "observe_waiting_applicant",
-            "observe_waiting_application",
+            "observe-open",
+            "observe-waiting-applicant",
+            "observe-waiting-application",
             "complete",
             "supersede",
             "cancel",
         ];
         assert_eq!(
-            layer(&description, "caller_authentication").events,
+            layer(&description, "caller-authentication").events,
             caller_events
         );
         assert_eq!(
-            layer(&description, "caller_revision_precondition").events,
-            ["claim", "release", "attempt_reserved"]
+            layer(&description, "caller-revision-precondition").events,
+            ["claim", "release", "attempt-reserved"]
         );
         assert_eq!(
-            layer(&description, "erased_item_idempotency_preflight").events,
-            ["claim", "release", "attempt_reserved"]
+            layer(&description, "erased-item-idempotency-preflight").events,
+            ["claim", "release", "attempt-reserved"]
         );
         assert_eq!(
-            layer(&description, "source_authorization").events,
+            layer(&description, "source-authorization").events,
             caller_events
         );
         assert_eq!(
-            layer(&description, "queue_and_holder_authority").events,
-            ["claim", "release", "attempt_reserved"]
+            layer(&description, "queue-and-holder-authority").events,
+            ["claim", "release", "attempt-reserved"]
         );
         assert_eq!(
-            layer(&description, "idempotency_admission").events,
+            layer(&description, "idempotency-admission").events,
             ["claim", "release"]
         );
         assert_eq!(
-            layer(&description, "reservation_key_admission").events,
-            ["attempt_reserved"]
+            layer(&description, "reservation-key-admission").events,
+            ["attempt-reserved"]
         );
         let mut currency = observation_events.to_vec();
         currency.push("release");
         assert_eq!(
-            layer(&description, "source_binding_currency").events,
+            layer(&description, "source-binding-currency").events,
             currency
         );
         let every: Vec<&str> = OccurrenceEvent::ALL
@@ -798,21 +908,21 @@ mod tests {
             .map(occurrence_event_id)
             .collect();
         for id in [
-            "attempt_fence",
-            "lifecycle_transition",
-            "persist_serialization",
+            "attempt-fence",
+            "lifecycle-transition",
+            "persist-serialization",
         ] {
             assert_eq!(layer(&description, id).events, every, "{id}");
         }
         for event in observation_events {
             for id in [
-                "caller_authentication",
-                "caller_revision_precondition",
-                "erased_item_idempotency_preflight",
-                "source_authorization",
-                "queue_and_holder_authority",
-                "idempotency_admission",
-                "reservation_key_admission",
+                "caller-authentication",
+                "caller-revision-precondition",
+                "erased-item-idempotency-preflight",
+                "source-authorization",
+                "queue-and-holder-authority",
+                "idempotency-admission",
+                "reservation-key-admission",
             ] {
                 assert!(
                     !layer(&description, id).events.contains(&event),
@@ -830,18 +940,18 @@ mod tests {
     #[test]
     fn layers_name_the_caller_free_paths_they_do_not_gate() {
         let description = occurrence_lifecycle();
-        let authentication = layer(&description, "caller_authentication").description;
+        let authentication = layer(&description, "caller-authentication").description;
         assert!(authentication.contains("clock"), "{authentication}");
         assert!(authentication.contains("operator"), "{authentication}");
-        let revision = layer(&description, "caller_revision_precondition").description;
+        let revision = layer(&description, "caller-revision-precondition").description;
         assert!(revision.contains("recover"), "{revision}");
-        let fence = layer(&description, "attempt_fence").description;
+        let fence = layer(&description, "attempt-fence").description;
         assert!(fence.contains("execution token"), "{fence}");
         assert!(fence.contains("lease"), "{fence}");
         // The operator settlement reaches this layer's events without a caller
         // and without a source read, so the layer has to say so rather than
         // report a source check that path never runs.
-        let source = layer(&description, "source_authorization").description;
+        let source = layer(&description, "source-authorization").description;
         assert!(source.contains("operator"), "{source}");
     }
 
@@ -863,9 +973,9 @@ mod tests {
                 .position(|layer| layer.id == id)
                 .unwrap_or_else(|| panic!("enforcement layer {id} declared"))
         };
-        assert!(index("attempt_fence") < index("lifecycle_transition"));
-        assert!(index("reservation_key_admission") < index("attempt_fence"));
-        let reducer = layer(&description, "lifecycle_transition").description;
+        assert!(index("attempt-fence") < index("lifecycle-transition"));
+        assert!(index("reservation-key-admission") < index("attempt-fence"));
+        let reducer = layer(&description, "lifecycle-transition").description;
         assert!(reducer.contains("reservation"), "{reducer}");
         assert!(reducer.contains("attempt fence"), "{reducer}");
     }
@@ -879,12 +989,12 @@ mod tests {
     #[test]
     fn the_reservation_key_lookup_answers_a_retry_from_its_record() {
         let description = occurrence_lifecycle();
-        let idempotency = layer(&description, "idempotency_admission");
+        let idempotency = layer(&description, "idempotency-admission");
         assert!(
-            !idempotency.events.contains(&"attempt_reserved"),
+            !idempotency.events.contains(&"attempt-reserved"),
             "{idempotency:?}"
         );
-        let reservation = layer(&description, "reservation_key_admission").description;
+        let reservation = layer(&description, "reservation-key-admission").description;
         assert!(
             reservation.contains("answered from its record"),
             "a retried reservation is answered, not refused: {reservation}"
@@ -902,7 +1012,7 @@ mod tests {
     #[test]
     fn the_operation_offered_check_is_scoped_to_the_reservation() {
         let description = occurrence_lifecycle();
-        let source = layer(&description, "source_authorization").description;
+        let source = layer(&description, "source-authorization").description;
         assert!(
             source.contains("holds only on the reservation"),
             "the operation check is not run on recovery and must say so: {source}"
@@ -926,7 +1036,7 @@ mod tests {
     #[test]
     fn the_binding_check_names_the_live_attempt_skip() {
         let description = occurrence_lifecycle();
-        let source = layer(&description, "source_authorization").description;
+        let source = layer(&description, "source-authorization").description;
         for phrase in [
             "returns the item untouched",
             "pending or uncertain attempt",
@@ -947,7 +1057,7 @@ mod tests {
     #[test]
     fn the_observation_fence_is_subject_wide() {
         let description = occurrence_lifecycle();
-        let fence = layer(&description, "attempt_fence").description;
+        let fence = layer(&description, "attempt-fence").description;
         assert!(
             fence.contains("fenced wider than that"),
             "the observation fence is not item-local: {fence}"
@@ -968,7 +1078,7 @@ mod tests {
     #[test]
     fn the_recovery_route_names_the_lock_it_takes_on_a_fresh_key() {
         let description = review_lifecycle();
-        let admission = layer(&description, "producer_submission_idempotency").description;
+        let admission = layer(&description, "producer-submission-idempotency").description;
         assert!(
             !admission.contains("takes no lock at all"),
             "the recovery route is not unconditionally lock-free: {admission}"
@@ -986,7 +1096,7 @@ mod tests {
     #[test]
     fn the_decision_layer_puts_the_header_syntax_before_the_call() {
         let description = review_lifecycle();
-        let revision = layer(&description, "task_revision_and_holder").description;
+        let revision = layer(&description, "task-revision-and-holder").description;
         assert!(
             revision.contains("before the decision call is entered at all"),
             "the header syntax is settled outside the service call: {revision}"
@@ -1008,7 +1118,7 @@ mod tests {
     #[test]
     fn the_persist_layer_names_the_write_that_holds_no_item_lock() {
         let description = occurrence_lifecycle();
-        let persist = layer(&description, "persist_serialization").description;
+        let persist = layer(&description, "persist-serialization").description;
         assert!(persist.contains("no item row"), "{persist}");
         assert!(persist.contains("subject"), "{persist}");
     }
@@ -1029,14 +1139,14 @@ mod tests {
                 .position(|layer| layer.id == id)
                 .unwrap_or_else(|| panic!("enforcement layer {id} declared"))
         };
-        assert!(index("producer_submission_idempotency") < index("request_lock_and_lifecycle"));
-        assert!(index("request_lock_and_lifecycle") < index("reviewer_queue_authority"));
-        assert!(index("reviewer_queue_authority") < index("request_idempotency_admission"));
+        assert!(index("producer-submission-idempotency") < index("request-lock-and-lifecycle"));
+        assert!(index("request-lock-and-lifecycle") < index("reviewer-queue-authority"));
+        assert!(index("reviewer-queue-authority") < index("request-idempotency-admission"));
         assert_eq!(
-            layer(&description, "producer_submission_idempotency").events,
+            layer(&description, "producer-submission-idempotency").events,
             ["settle"]
         );
-        let admission = layer(&description, "request_idempotency_admission").description;
+        let admission = layer(&description, "request-idempotency-admission").description;
         assert!(admission.contains("recover"), "{admission}");
     }
 
@@ -1046,7 +1156,7 @@ mod tests {
     #[test]
     fn the_holder_layer_keeps_the_supervisor_release_exception() {
         let description = occurrence_lifecycle();
-        let holder = layer(&description, "queue_and_holder_authority").description;
+        let holder = layer(&description, "queue-and-holder-authority").description;
         assert!(holder.contains("supervisor"), "{holder}");
         assert!(
             !holder.contains("a release or reservation refuses anyone but the recorded holder"),
@@ -1090,7 +1200,7 @@ mod tests {
         for id in [
             "approved",
             "rejected",
-            "changes_requested",
+            "changes-requested",
             "answered",
             "cancelled",
             "superseded",
@@ -1122,7 +1232,7 @@ mod tests {
             .filter(|edge| edge.to == "reviewing")
             .collect();
         let events: Vec<&str> = staying.iter().map(|edge| edge.event).collect();
-        assert_eq!(events, vec!["record_decision", "advance_stage"]);
+        assert_eq!(events, vec!["record-decision", "advance-stage"]);
         assert!(
             staying[0].guard.contains("short of the stage's required"),
             "{:?}",
@@ -1205,10 +1315,10 @@ mod tests {
                 .unwrap_or_else(|| panic!("no {event} edge to {to}"))
                 .guard
         };
-        assert!(guard("reviewing", "record_decision").contains("approval"));
-        assert!(guard("reviewing", "advance_stage").contains("later stage remains"));
+        assert!(guard("reviewing", "record-decision").contains("approval"));
+        assert!(guard("reviewing", "advance-stage").contains("later stage remains"));
         assert!(guard("approved", "settle").contains("last stage"));
-        for to in ["rejected", "changes_requested", "answered"] {
+        for to in ["rejected", "changes-requested", "answered"] {
             let guard = guard(to, "settle");
             assert!(guard.contains("regardless of quorum"), "{to}: {guard}");
         }
@@ -1249,17 +1359,17 @@ mod tests {
         assert_eq!(
             ids,
             vec![
-                "caller_authentication",
-                "producer_or_reviewer_admission",
-                "review_source_preflight",
-                "producer_submission_idempotency",
-                "request_lock_and_lifecycle",
-                "reviewer_queue_authority",
-                "request_idempotency_admission",
-                "task_revision_and_holder",
-                "decision_eligibility",
-                "stage_quorum_progression",
-                "settlement_persist_filter",
+                "caller-authentication",
+                "producer-or-reviewer-admission",
+                "review-source-preflight",
+                "producer-submission-idempotency",
+                "request-lock-and-lifecycle",
+                "reviewer-queue-authority",
+                "request-idempotency-admission",
+                "task-revision-and-holder",
+                "decision-eligibility",
+                "stage-quorum-progression",
+                "settlement-persist-filter",
             ]
         );
         let events = declared_events(&description);
@@ -1283,7 +1393,7 @@ mod tests {
     #[test]
     fn the_revision_layer_separates_the_header_check_from_the_locked_comparison() {
         let description = occurrence_lifecycle();
-        let revision = layer(&description, "caller_revision_precondition").description;
+        let revision = layer(&description, "caller-revision-precondition").description;
         assert!(
             revision.contains("Only the header check happens at this position"),
             "the two halves stopped being distinguished: {revision}"
@@ -1302,7 +1412,7 @@ mod tests {
     #[test]
     fn the_queue_and_holder_layer_names_the_admission_it_straddles() {
         let description = occurrence_lifecycle();
-        let authority = layer(&description, "queue_and_holder_authority").description;
+        let authority = layer(&description, "queue-and-holder-authority").description;
         assert!(
             authority.contains("straddles the idempotency admission below"),
             "the straddle stopped being reported: {authority}"
@@ -1327,8 +1437,8 @@ mod tests {
                 .position(|layer| layer.id == id)
                 .unwrap_or_else(|| panic!("enforcement layer {id} declared"))
         };
-        assert!(index("reviewer_queue_authority") < index("request_idempotency_admission"));
-        let authority = layer(&description, "reviewer_queue_authority").description;
+        assert!(index("reviewer-queue-authority") < index("request-idempotency-admission"));
+        let authority = layer(&description, "reviewer-queue-authority").description;
         assert!(
             authority.contains("before the idempotency admission below"),
             "the authority layer stopped naming where it sits: {authority}"
@@ -1338,7 +1448,7 @@ mod tests {
             "the authority layer straddles the record and must say so: {authority}"
         );
         assert!(
-            layer(&description, "request_lock_and_lifecycle")
+            layer(&description, "request-lock-and-lifecycle")
                 .description
                 .contains("Only the lock is taken at this position"),
             "the lock layer stopped naming that its reviewing check runs later"
@@ -1353,20 +1463,20 @@ mod tests {
     #[test]
     fn decision_only_layers_say_which_settlements_they_gate() {
         let description = review_lifecycle();
-        let every = ["record_decision", "advance_stage", "settle"];
+        let every = ["record-decision", "advance-stage", "settle"];
         for id in [
-            "caller_authentication",
-            "producer_or_reviewer_admission",
-            "request_lock_and_lifecycle",
+            "caller-authentication",
+            "producer-or-reviewer-admission",
+            "request-lock-and-lifecycle",
         ] {
             assert_eq!(layer(&description, id).events, every, "{id}");
         }
         for id in [
-            "review_source_preflight",
-            "reviewer_queue_authority",
-            "task_revision_and_holder",
-            "decision_eligibility",
-            "stage_quorum_progression",
+            "review-source-preflight",
+            "reviewer-queue-authority",
+            "task-revision-and-holder",
+            "decision-eligibility",
+            "stage-quorum-progression",
         ] {
             let layer = layer(&description, id);
             assert_eq!(layer.events, every, "{id}");
@@ -1377,7 +1487,7 @@ mod tests {
             );
         }
         assert_eq!(
-            layer(&description, "settlement_persist_filter").events,
+            layer(&description, "settlement-persist-filter").events,
             ["settle"]
         );
     }

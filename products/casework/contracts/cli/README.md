@@ -8,8 +8,8 @@ carries this top-level envelope:
   "ok": true,
   "command": "check",
   "status": "complete",
-  "apiVersion": "registry.registrystack.org/caseworkctl/v1alpha3",
-  "kind": "CheckReport"
+  "apiVersion": "id.registrystack.org/formats/casework/check-report/v1alpha3",
+  "kind": "CaseworkCheckReport"
 }
 ```
 
@@ -23,15 +23,20 @@ that names its refusals, and otherwise the exit class of the failure:
 (exit 3). A report that is not ok carries a non-empty `diagnostics` array, and
 each diagnostic names a `suggestedAction`.
 
-`apiVersion` versions the complete CLI surface. `kind` selects one of the
-draft 2020-12 schemas in this directory. Each is published in the
-identifier catalog under the `kind` in kebab case: `CheckReport.schema.json`
-is
+Each report is its own format. `apiVersion` names it,
+`id.registrystack.org/formats/casework/<report>/v1alpha3`, where `<report>`
+is the report's name in kebab case, and `kind` is the same name behind the
+product's: `CaseworkCheckReport` is the format `casework/check-report`. The
+reports carry one version and move together: a breaking change to any pinned
+field bumps the version of them all. `kind` selects one of the draft 2020-12
+schemas in this directory, each in a file named for the report without the
+product prefix and published in the identifier catalog under the report's
+name in kebab case: `CheckReport.schema.json` is
 `https://id.registrystack.org/schemas/casework/check-report/check-report.v1alpha3.schema.json`. The schemas cover successful reports and the diagnostic
 refusal a parsed command can emit. Argument parsing failures use
-`UsageReport`.
+`CaseworkUsageReport`.
 
-`ExplainReport` and `CheckReport` carry part of the authored project and refer
+`CaseworkExplainReport` and `CaseworkCheckReport` carry part of the authored project and refer
 to the project schema's definitions of it,
 `../project/project.v1alpha1.schema.json`, rather than copying them. A
 validator for those two loads
@@ -45,27 +50,27 @@ wire contract.
 
 | Command | `kind` | Schema |
 |---|---|---|
-| `attempt settle` | `AttemptSettlementReport` | `AttemptSettlementReport.schema.json` |
-| `attempt mark-uncertain` | `AttemptUncertainMarkingReport` | `AttemptUncertainMarkingReport.schema.json` |
-| `apply` | `ApplyReport` | `ApplyReport.schema.json` |
-| `check` | `CheckReport` | `CheckReport.schema.json` |
-| `doctor` | `DoctorReport` | `DoctorReport.schema.json` |
-| `explain` | `ExplainReport` | `ExplainReport.schema.json` |
-| `init` | `InitReport` | `InitReport.schema.json` |
-| `lifecycle` | `LifecycleReport` | `LifecycleReport.schema.json` |
-| `package` and `package --dry-run` | `PackageReport` | `PackageReport.schema.json` |
-| `plan` | `PlanReport` | `PlanReport.schema.json` |
-| `retention erase` | `RetentionEraseReport` | `RetentionEraseReport.schema.json` |
-| `simulate` | `SimulationReport` | `SimulationReport.schema.json` |
-| `source add` | `SourceAddReport` | `SourceAddReport.schema.json` |
-| `status` | `StatusReport` | `StatusReport.schema.json` |
-| `test` | `TestReport` | `TestReport.schema.json` |
-| `dev`, `dev start`, and `dev stop` | `DevReport` | `DevReport.schema.json` |
-| `dev events` | `DevEventsReport` | `DevEventsReport.schema.json` |
-| `dev grant` | `DevGrantReport` | `DevGrantReport.schema.json` |
-| `dev identity` | `DevIdentityReport` | `DevIdentityReport.schema.json` |
-| `dev token` | `DevTokenReport` | `DevTokenReport.schema.json` |
-| invalid command arguments, and the removed `db migrate` | `UsageReport` | `UsageReport.schema.json` |
+| `attempt settle` | `CaseworkAttemptSettlementReport` | `AttemptSettlementReport.schema.json` |
+| `attempt mark-uncertain` | `CaseworkAttemptUncertainMarkingReport` | `AttemptUncertainMarkingReport.schema.json` |
+| `apply` | `CaseworkApplyReport` | `ApplyReport.schema.json` |
+| `check` | `CaseworkCheckReport` | `CheckReport.schema.json` |
+| `doctor` | `CaseworkDoctorReport` | `DoctorReport.schema.json` |
+| `explain` | `CaseworkExplainReport` | `ExplainReport.schema.json` |
+| `init` | `CaseworkInitReport` | `InitReport.schema.json` |
+| `lifecycle` | `CaseworkLifecycleReport` | `LifecycleReport.schema.json` |
+| `package` and `package --dry-run` | `CaseworkPackageReport` | `PackageReport.schema.json` |
+| `plan` | `CaseworkPlanReport` | `PlanReport.schema.json` |
+| `retention erase` | `CaseworkRetentionEraseReport` | `RetentionEraseReport.schema.json` |
+| `simulate` | `CaseworkSimulationReport` | `SimulationReport.schema.json` |
+| `source add` | `CaseworkSourceAddReport` | `SourceAddReport.schema.json` |
+| `status` | `CaseworkStatusReport` | `StatusReport.schema.json` |
+| `test` | `CaseworkTestReport` | `TestReport.schema.json` |
+| `dev`, `dev start`, and `dev stop` | `CaseworkDevReport` | `DevReport.schema.json` |
+| `dev events` | `CaseworkDevEventsReport` | `DevEventsReport.schema.json` |
+| `dev grant` | `CaseworkDevGrantReport` | `DevGrantReport.schema.json` |
+| `dev identity` | `CaseworkDevIdentityReport` | `DevIdentityReport.schema.json` |
+| `dev token` | `CaseworkDevTokenReport` | `DevTokenReport.schema.json` |
+| invalid command arguments, and the removed `db migrate` | `CaseworkUsageReport` | `UsageReport.schema.json` |
 
 The dev-only reports are included. They are local operator surfaces, but shell
 tools still parse them and need the same explicit drift signal as adopter
@@ -86,11 +91,11 @@ or unconstrained JSON value. These nodes pass through a type owned by the
 Casework engine, a source adapter, or another product. Their interior is not a
 promise made by this CLI contract:
 
-- the `target` of each request in `CheckReport.effective.sources`
-- `SimulationReport.clock`
-- `SourceAddReport.bregAuthoringChanges`, `bregAuthoringPatch`, and
+- the `target` of each request in `CaseworkCheckReport.effective.sources`
+- `CaseworkSimulationReport.clock`
+- `CaseworkSourceAddReport.bregAuthoringChanges`, `bregAuthoringPatch`, and
   `candidateRuntimeBinding`
-- `DevReport.sources` and `DevReport.clients`
+- `CaseworkDevReport.sources` and `CaseworkDevReport.clients`
 
 Consumers of an opaque node must validate the fields they read. A stable
 `caseworkctl` `apiVersion` does not say that an opaque engine-owned structure

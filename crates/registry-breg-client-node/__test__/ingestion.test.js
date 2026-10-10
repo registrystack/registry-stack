@@ -154,18 +154,18 @@ test('encodeIngestionChunk derives the chunk digest in Rust', () => {
 
 test('encodeIngestionChunk refuses broken planning inputs without echoing values', () => {
   assert.throws(() => encodeIngestionChunk(0, [], PREFIX_DIGEST), (error) => (
-    error instanceof BaseRegistryClientError && error.kind === 'invalid_request'
+    error instanceof BaseRegistryClientError && error.kind === 'invalid-request'
   ));
   assert.throws(() => encodeIngestionChunk(0, ['not-an-object'], PREFIX_DIGEST), (error) => (
-    error instanceof BaseRegistryClientError && error.kind === 'invalid_request'
+    error instanceof BaseRegistryClientError && error.kind === 'invalid-request'
   ));
   assert.throws(() => encodeIngestionChunk(0, ITEMS, 'not-a-digest'), (error) => (
     error instanceof BaseRegistryClientError
-    && error.kind === 'invalid_request'
+    && error.kind === 'invalid-request'
     && !error.message.includes('not-a-digest')
   ));
   assert.throws(() => encodeIngestionChunk(1.5, ITEMS, PREFIX_DIGEST), (error) => (
-    error instanceof BaseRegistryClientError && error.kind === 'invalid_request'
+    error instanceof BaseRegistryClientError && error.kind === 'invalid-request'
   ));
 });
 
@@ -219,21 +219,21 @@ test('createIngestionRun refuses unsupported, missing, and broken fields', async
     chunkAlgorithmVersion: 'greedy-canonical-http-batch-v1',
   };
   await assert.rejects(client.createIngestionRun('people', { ...valid, extra: 1 }), (error) => (
-    error instanceof BaseRegistryClientError && error.kind === 'invalid_request'
+    error instanceof BaseRegistryClientError && error.kind === 'invalid-request'
   ));
   const missingItemCount = { ...valid };
   delete missingItemCount.itemCount;
   await assert.rejects(client.createIngestionRun('people', missingItemCount), (error) => (
-    error instanceof BaseRegistryClientError && error.kind === 'invalid_request'
+    error instanceof BaseRegistryClientError && error.kind === 'invalid-request'
   ));
   await assert.rejects(client.createIngestionRun('people', { ...valid, operation: 'delete' }), (error) => (
-    error instanceof BaseRegistryClientError && error.kind === 'invalid_request'
+    error instanceof BaseRegistryClientError && error.kind === 'invalid-request'
   ));
   await assert.rejects(client.createIngestionRun('people', { ...valid, inputDigest: 'aaaa' }), (error) => (
-    error instanceof BaseRegistryClientError && error.kind === 'invalid_request'
+    error instanceof BaseRegistryClientError && error.kind === 'invalid-request'
   ));
   await assert.rejects(client.createIngestionRun('people', { ...valid, chunkAlgorithmVersion: 'greedy-canonical-http-batch-v2' }), (error) => (
-    error instanceof BaseRegistryClientError && error.kind === 'invalid_request'
+    error instanceof BaseRegistryClientError && error.kind === 'invalid-request'
   ));
 });
 
@@ -257,21 +257,21 @@ test('listIngestionRuns sends contract filters in order and returns the page', a
   assert.equal(query.get('inputDigest'), INPUT_DIGEST);
 
   await assert.rejects(client.listIngestionRuns('people', { status: 'archived' }), (error) => (
-    error instanceof BaseRegistryClientError && error.kind === 'invalid_request'
+    error instanceof BaseRegistryClientError && error.kind === 'invalid-request'
   ));
   await assert.rejects(client.listIngestionRuns('people', { limit: 0 }), (error) => (
-    error instanceof BaseRegistryClientError && error.kind === 'invalid_request'
+    error instanceof BaseRegistryClientError && error.kind === 'invalid-request'
   ));
   await assert.rejects(client.listIngestionRuns('people', { inputDigest: 'xyz' }), (error) => (
-    error instanceof BaseRegistryClientError && error.kind === 'invalid_request'
+    error instanceof BaseRegistryClientError && error.kind === 'invalid-request'
   ));
   // The engine parses the after pair as a canonical run id, so a cursor it
   // could never issue is refused before it is sent.
   await assert.rejects(client.listIngestionRuns('people', { after: 'cursor+/=' }), (error) => (
-    error instanceof BaseRegistryClientError && error.kind === 'invalid_request'
+    error instanceof BaseRegistryClientError && error.kind === 'invalid-request'
   ));
   await assert.rejects(client.listIngestionRuns('people', { accessProfile: 'x\n' }), (error) => (
-    error instanceof BaseRegistryClientError && error.kind === 'invalid_request'
+    error instanceof BaseRegistryClientError && error.kind === 'invalid-request'
   ));
   const unfiltered = await client.listIngestionRuns('people');
   assert.equal(unfiltered.value.runs.length, 1);
@@ -287,7 +287,7 @@ test('readIngestionRun and cancelIngestionRun address one run', async () => {
   assert.equal(profiled.value.status, 'cancelled');
   assert.equal(seen.at(-1).url, `/v1/records/people/ingestion-runs/${RUN_ID}?accessProfile=importer.v1`);
   await assert.rejects(client.readIngestionRun('people', 'not-a-uuid'), (error) => (
-    error instanceof BaseRegistryClientError && error.kind === 'invalid_request'
+    error instanceof BaseRegistryClientError && error.kind === 'invalid-request'
   ));
 
   const cancelled = await client.cancelIngestionRun('people', RUN_ID);
@@ -321,7 +321,7 @@ test('submitIngestionChunk sends the encoded chunk under the run profile', async
   });
   await assert.rejects(
     client.submitIngestionChunk('people', RUN_ID, chunk, 'Invalid Profile'),
-    (error) => error instanceof BaseRegistryClientError && error.kind === 'invalid_request',
+    (error) => error instanceof BaseRegistryClientError && error.kind === 'invalid-request',
   );
 });
 

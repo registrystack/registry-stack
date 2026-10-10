@@ -166,7 +166,7 @@ database:
   runtimeUrlRef: secret:env/BREG_RUNTIME_CONFIG_DATABASE_URL
   migrationUrlRef: secret:env/BREG_RUNTIME_CONFIG_MIGRATION_DATABASE_URL
   pool:
-    maxSize: 4
+    maximumConnections: 4
     waitTimeoutMilliseconds: 1000
     createTimeoutMilliseconds: 1000
     recycleTimeoutMilliseconds: 1000
@@ -185,14 +185,14 @@ authentication:
     scopeSeparator: " "
     allowedClients: [registry-client]
     deniedKids: [denied-kid]
-    maxTokenLifetimeSeconds: 300
+    maximumTokenLifetimeSeconds: 300
     leewayMilliseconds: 60000
     jwksCache:
       cacheTtlSeconds: 600
       negativeCacheTtlSeconds: 60
       refreshCooldownSeconds: 30
-      maxDocumentBytes: 65536
-      requestTimeoutMilliseconds: 5000
+      maximumDocumentBytes: 65536
+      attemptTimeoutMilliseconds: 5000
       outageToleranceSeconds: 900
   authorityClaims:
     principal: registry_principal
@@ -202,7 +202,7 @@ audit:
   path: {audit_path}
 cursor:
   secretRef: secret:file/cursor-key
-  maxAgeSeconds: 300
+  maximumAgeSeconds: 300
 eventDestinations: {{}}
 operationalTimeouts:
   httpRequestMilliseconds: 10000
@@ -349,8 +349,8 @@ fn event_destination_binding(
         r#"  {logical_id}:
     origin: {origin}
     path: {path}
-    networkProfile: productionHttps
-    dnsFamily: dualStackStrict
+    networkProfile: production-https
+    dnsFamily: dual-stack-strict
     allowedPrivateCidrs: []
     hmacSha256KeyRef: {key_ref}
     classificationCeiling: restricted
@@ -373,13 +373,13 @@ fn compiled_webhooks(destinations: &[(&str, u32, u8)]) -> registry_breg::Compile
                     "trigger": if index == 0 { "created" } else { "patched" },
                     "projection": ["label"],
                     "handler": {
-                        "kind": "url",
+                        "type": "url",
                         "destinationId": destination_id
                     }
                 });
                 if index == 0 {
                     event["when"] = json!({
-                        "kind": "fields",
+                        "type": "fields",
                         "afterEquals": {"eligibility": "eligible"}
                     });
                 }
@@ -388,9 +388,9 @@ fn compiled_webhooks(destinations: &[(&str, u32, u8)]) -> registry_breg::Compile
         )
         .collect::<Vec<Value>>();
     let project = json!({
-        "apiVersion": "registry.registrystack.org/v1alpha1",
-        "kind": "RegistryProject",
-        "registry": {"id": "runtime-event-destinations", "version": "1", "defaultLanguage": "en", "canonicalBaseIri": "https://authoring.example.test"},
+        "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
+        "kind": "BRegProject",
+        "project": {"id": "runtime-event-destinations", "version": "1", "defaultLanguage": "en", "canonicalBaseIri": "https://authoring.example.test"},
         "entities": [{
             "id": "case",
             "primaryDataset": "test-dataset",
@@ -399,8 +399,8 @@ fn compiled_webhooks(destinations: &[(&str, u32, u8)]) -> registry_breg::Compile
             "tombstone": true,
             "classification": "internal",
             "fields": [
-                {"id": "label", "type": "string", "maxLength": 64, "classification": "internal"},
-                {"id": "eligibility", "type": "string", "maxLength": 32, "classification": "restricted"}
+                {"id": "label", "type": "string", "maximumLength": 64, "classification": "internal"},
+                {"id": "eligibility", "type": "string", "maximumLength": 32, "classification": "restricted"}
             ],
             "hooks": events
         }]
@@ -664,7 +664,7 @@ fn runtime_document_identity_is_required_and_exact() {
     let unsupported = parse_runtime_config_with_env(
         &base.replace(
             RUNTIME_CONFIG_API_VERSION,
-            "registry.registrystack.org/breg-runtime/v2",
+            "id.registrystack.org/formats/breg/runtime/v2",
         ),
         env_lookup,
     )
@@ -672,6 +672,33 @@ fn runtime_document_identity_is_required_and_exact() {
     assert_eq!(
         reader_refusal(&unsupported),
         ("config.unsupported-api-version", "/apiVersion")
+    );
+    assert_eq!(
+        RUNTIME_CONFIG_API_VERSION,
+        "id.registrystack.org/formats/breg/runtime/v1alpha1"
+    );
+    let retired = parse_runtime_config_with_env(
+        &base.replace(
+            RUNTIME_CONFIG_API_VERSION,
+            "registry.registrystack.org/breg-runtime/v1alpha1",
+        ),
+        env_lookup,
+    )
+    .expect_err("the retired apiVersion is refused");
+    assert_eq!(
+        reader_refusal(&retired),
+        ("config.retired-api-version", "/apiVersion")
+    );
+    let RuntimeConfigError::Reader(refusal) = &retired else {
+        panic!("the shared reader decides this refusal: {retired:?}");
+    };
+    assert!(
+        refusal
+            .deciding_diagnostic()
+            .suggested_action
+            .contains("id.registrystack.org/formats/breg/runtime/v1alpha1"),
+        "the refusal names the replacement: {:?}",
+        refusal.deciding_diagnostic()
     );
     let wrong_kind = parse_runtime_config_with_env(
         &base.replace(RUNTIME_CONFIG_KIND, "RegistryProject"),
@@ -723,7 +750,7 @@ fn audit_destination_defaults_to_a_rotated_file_and_refuses_incomplete_settings(
 
     let tuned = base.replace(
         &path_line,
-        &format!("{path_line}  rotateBytes: 2097152\n  retainDays: 7\n"),
+        &format!("{path_line}  rotateBytes: 2097152\n  retentionDays: 7\n"),
     );
     let config = parse_runtime_config_with_env(&tuned, env_lookup)
         .expect("explicit rotation and retention validate");
@@ -757,7 +784,7 @@ fn audit_destination_defaults_to_a_rotated_file_and_refuses_incomplete_settings(
             "stdout refuses a file path",
         ),
         (
-            base.replace(&path_line, "  destination: stdout\n  retainDays: 7\n"),
+            base.replace(&path_line, "  destination: stdout\n  retentionDays: 7\n"),
             "stdout refuses file retention",
         ),
     ] {
@@ -773,8 +800,8 @@ fn audit_destination_defaults_to_a_rotated_file_and_refuses_incomplete_settings(
             "/audit/rotateBytes",
         ),
         (
-            base.replace(&path_line, &format!("{path_line}  retainDays: 0\n")),
-            "/audit/retainDays",
+            base.replace(&path_line, &format!("{path_line}  retentionDays: 0\n")),
+            "/audit/retentionDays",
         ),
     ] {
         let error = parse_runtime_config_with_env(&document, env_lookup)
@@ -821,10 +848,10 @@ fn operational_defaults_materialize_without_defaulting_authority() {
         "",
     )
     .replace(
-        "    jwksCache:\n      cacheTtlSeconds: 600\n      negativeCacheTtlSeconds: 60\n      refreshCooldownSeconds: 30\n      maxDocumentBytes: 65536\n      requestTimeoutMilliseconds: 5000\n      outageToleranceSeconds: 900\n",
+        "    jwksCache:\n      cacheTtlSeconds: 600\n      negativeCacheTtlSeconds: 60\n      refreshCooldownSeconds: 30\n      maximumDocumentBytes: 65536\n      attemptTimeoutMilliseconds: 5000\n      outageToleranceSeconds: 900\n",
         "",
     )
-    .replace("  maxAgeSeconds: 300\n", "")
+    .replace("  maximumAgeSeconds: 300\n", "")
     .replace(
         "operationalTimeouts:\n  httpRequestMilliseconds: 10000\n  shutdownGraceMilliseconds: 30000\n  recordLockMilliseconds: 5000\n  migrationLockMilliseconds: 30000\n  migrationStatementMilliseconds: 60000\n",
         "",
@@ -881,8 +908,8 @@ fn operational_defaults_materialize_without_defaulting_authority() {
 
     let partial_raw = base
         .replace(
-            "    jwksCache:\n      cacheTtlSeconds: 600\n      negativeCacheTtlSeconds: 60\n      refreshCooldownSeconds: 30\n      maxDocumentBytes: 65536\n      requestTimeoutMilliseconds: 5000\n      outageToleranceSeconds: 900\n",
-            "    jwksCache:\n      requestTimeoutMilliseconds: 5000\n",
+            "    jwksCache:\n      cacheTtlSeconds: 600\n      negativeCacheTtlSeconds: 60\n      refreshCooldownSeconds: 30\n      maximumDocumentBytes: 65536\n      attemptTimeoutMilliseconds: 5000\n      outageToleranceSeconds: 900\n",
+            "    jwksCache:\n      attemptTimeoutMilliseconds: 5000\n",
         )
         .replace(
             "operationalTimeouts:\n  httpRequestMilliseconds: 10000\n  shutdownGraceMilliseconds: 30000\n  recordLockMilliseconds: 5000\n  migrationLockMilliseconds: 30000\n  migrationStatementMilliseconds: 60000\n",
@@ -1104,7 +1131,7 @@ fn wasm_execution_budgets_default_below_the_structural_module_ceiling() {
     );
 
     let configured = format!(
-        "{base}wasmExecution:\n  maxModuleBytes: {}\n  maxGuestMemoryBytes: 536870912\n",
+        "{base}wasmExecution:\n  maximumModuleBytes: {}\n  maximumGuestMemoryBytes: 536870912\n",
         registry_breg::wasm_handler::MAXIMUM_WASM_MODULE_BYTES
     );
     let config =
@@ -1123,8 +1150,8 @@ fn wasm_execution_budgets_default_below_the_structural_module_ceiling() {
 fn wasm_execution_budgets_refuse_out_of_range_values() {
     let fixture = RuntimeFixture::new();
     let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
-    let module = "/wasmExecution/maxModuleBytes";
-    let memory = "/wasmExecution/maxGuestMemoryBytes";
+    let module = "/wasmExecution/maximumModuleBytes";
+    let memory = "/wasmExecution/maximumGuestMemoryBytes";
     for (module_bytes, memory_bytes, pointer) in [
         (0_u64, 32 * 1024 * 1024_u64, module),
         (1023, 32 * 1024 * 1024, module),
@@ -1134,7 +1161,7 @@ fn wasm_execution_budgets_refuse_out_of_range_values() {
         (2 * 1024 * 1024, 1024 * 1024 * 1024 + 1, memory),
     ] {
         let configured = format!(
-            "{base}wasmExecution:\n  maxModuleBytes: {module_bytes}\n  maxGuestMemoryBytes: {memory_bytes}\n"
+            "{base}wasmExecution:\n  maximumModuleBytes: {module_bytes}\n  maximumGuestMemoryBytes: {memory_bytes}\n"
         );
         let error = parse_runtime_config(&configured)
             .expect_err("out-of-range WASM execution budget is refused");
@@ -1180,7 +1207,8 @@ fn wasm_execution_backend_refuses_unknown_values() {
 fn wasm_execution_section_refuses_unknown_members() {
     let fixture = RuntimeFixture::new();
     let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
-    let configured = format!("{base}wasmExecution:\n  maxModuleBytes: 2097152\n  engine: native\n");
+    let configured =
+        format!("{base}wasmExecution:\n  maximumModuleBytes: 2097152\n  engine: native\n");
     assert_eq!(
         refusal(
             parse_runtime_config(&configured)
@@ -1347,9 +1375,9 @@ fn a_document_refusal_names_its_field_and_never_echoes_the_refused_value() {
     );
     for (from, to, (code, path), value) in [
         (
-            "    maxSize: 4\n".to_owned(),
-            "    maxSize: .nan\n".to_owned(),
-            ("yaml.ambiguous-number", "/database/pool/maxSize"),
+            "    maximumConnections: 4\n".to_owned(),
+            "    maximumConnections: .nan\n".to_owned(),
+            ("yaml.ambiguous-number", "/database/pool/maximumConnections"),
             ".nan",
         ),
         (
@@ -1371,8 +1399,8 @@ fn a_document_refusal_names_its_field_and_never_echoes_the_refused_value() {
             "18446744073709551615",
         ),
         (
-            "  maxAgeSeconds: 300\n".to_owned(),
-            "  maxAgeSeconds: 300\n  runtimeMemberCanary: runtime-value-canary\n".to_owned(),
+            "  maximumAgeSeconds: 300\n".to_owned(),
+            "  maximumAgeSeconds: 300\n  runtimeMemberCanary: runtime-value-canary\n".to_owned(),
             ("config.unknown-key", "/cursor/runtimeMemberCanary"),
             "runtime-value-canary",
         ),
@@ -1757,6 +1785,277 @@ fn metrics_listener_refuses_unknown_members() {
     );
 }
 
+/// Every bound, attempt timeout, and retention member is read under the
+/// shared spelling, and the spelling it replaced is refused with the key to
+/// write instead.
+#[test]
+fn bounds_timeouts_and_retention_are_read_under_the_shared_spellings() {
+    let fixture = RuntimeFixture::new();
+    let base = valid_runtime(&fixture.secret_root, &fixture.package_root)
+        .replace(
+            "      attemptTimeoutMilliseconds: 5000\n",
+            "      attemptTimeoutMilliseconds: 5001\n",
+        )
+        .replace("cursor:\n", "  retentionDays: 7\ncursor:\n");
+    let current = format!(
+        "{base}wasmExecution:\n  maximumModuleBytes: 2097152\n  maximumGuestMemoryBytes: 33554432\n\
+         fieldEncryption:\n  provider:\n    type: transit\n    unixSocketPath: /run/transit/proxy.sock\n    mount: transit\n    keyName: breg-field-dek\n    attemptTimeoutMilliseconds: 5002\n\
+         attachmentStorage:\n  type: s3\n  endpoint: https://storage.example\n  bucket: test-bucket\n  region: us-east-1\n  accessKeyIdRef: secret:file/access\n  secretAccessKeyRef: secret:file/key\n  attemptTimeoutMilliseconds: 5003\n\
+         attachmentVerification:\n  type: http\n  endpoint: https://scanner.example/verify\n  policyId: scanner-rules-v1\n  authorizationRef: secret:file/verifier-token\n  attemptTimeoutMilliseconds: 5004\n"
+    );
+    parse_runtime_config_with_env(&current, env_lookup).expect("the shared spellings are read");
+
+    for (current_line, retired_line, pointer, replacement) in [
+        (
+            "maximumConnections: 4",
+            "maxSize: 4",
+            "/database/pool/maxSize",
+            "database.pool.maximumConnections",
+        ),
+        (
+            "maximumTokenLifetimeSeconds: 300",
+            "maxTokenLifetimeSeconds: 300",
+            "/authentication/oidc/maxTokenLifetimeSeconds",
+            "authentication.oidc.maximumTokenLifetimeSeconds",
+        ),
+        (
+            "maximumDocumentBytes: 65536",
+            "maxDocumentBytes: 65536",
+            "/authentication/oidc/jwksCache/maxDocumentBytes",
+            "authentication.oidc.jwksCache.maximumDocumentBytes",
+        ),
+        (
+            "attemptTimeoutMilliseconds: 5001",
+            "requestTimeoutMilliseconds: 5001",
+            "/authentication/oidc/jwksCache/requestTimeoutMilliseconds",
+            "authentication.oidc.jwksCache.attemptTimeoutMilliseconds",
+        ),
+        (
+            "retentionDays: 7",
+            "retainDays: 7",
+            "/audit/retainDays",
+            "audit.retentionDays",
+        ),
+        (
+            "maximumAgeSeconds: 300",
+            "maxAgeSeconds: 300",
+            "/cursor/maxAgeSeconds",
+            "cursor.maximumAgeSeconds",
+        ),
+        (
+            "maximumModuleBytes: 2097152",
+            "maxModuleBytes: 2097152",
+            "/wasmExecution/maxModuleBytes",
+            "wasmExecution.maximumModuleBytes",
+        ),
+        (
+            "maximumGuestMemoryBytes: 33554432",
+            "maxGuestMemoryBytes: 33554432",
+            "/wasmExecution/maxGuestMemoryBytes",
+            "wasmExecution.maximumGuestMemoryBytes",
+        ),
+        (
+            "attemptTimeoutMilliseconds: 5002",
+            "timeoutMilliseconds: 5002",
+            "/fieldEncryption/provider/timeoutMilliseconds",
+            "fieldEncryption.provider.attemptTimeoutMilliseconds",
+        ),
+        (
+            "attemptTimeoutMilliseconds: 5003",
+            "timeoutMilliseconds: 5003",
+            "/attachmentStorage/timeoutMilliseconds",
+            "attachmentStorage.attemptTimeoutMilliseconds",
+        ),
+        (
+            "attemptTimeoutMilliseconds: 5004",
+            "timeoutMilliseconds: 5004",
+            "/attachmentVerification/timeoutMilliseconds",
+            "attachmentVerification.attemptTimeoutMilliseconds",
+        ),
+    ] {
+        assert_eq!(current.matches(current_line).count(), 1, "{current_line}");
+        let retired = current.replace(current_line, retired_line);
+        let error = parse_runtime_config_with_env(&retired, env_lookup)
+            .expect_err("the replaced spelling is refused");
+        assert_eq!(
+            reader_refusal(&error),
+            ("config.removed-key", pointer),
+            "{retired_line}"
+        );
+        let rendered = format!("{error} {}", error.render_human(None));
+        assert!(rendered.contains(replacement), "{rendered}");
+    }
+}
+
+/// CFG-ID-7: each union of the runtime file names its variant in a `type`
+/// member, and the variant words are kebab-case. The `kind` member an earlier
+/// release read is refused with the member to write instead.
+#[test]
+fn a_map_key_is_read_as_the_identifier_its_member_names() {
+    let fixture = RuntimeFixture::new();
+    let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
+    let claims = "    principal: registry_principal\n    purpose: registry_purpose\n";
+    let with_actors = |key: &str| {
+        base.replace(
+            claims,
+            &format!("{claims}    trustedActors:\n      {key}: gateway-actor\n"),
+        )
+    };
+    let with_issuers = |key: &str| {
+        base.replace(
+            "deniedKids: [denied-kid]",
+            &format!(
+                "deniedKids: [denied-kid]\n    assertionIssuers:\n      {key}:\n        - https://issuer-a.example"
+            ),
+        )
+    };
+    let with_destination = |key: &str| {
+        runtime_with_event_destinations(
+            &fixture,
+            &event_destination_binding(
+                "case-operations",
+                "https://events.example/",
+                "/hooks/registry",
+                "secret:file/event-hmac-key",
+                4_000,
+                4,
+            ),
+        )
+        .replace("  case-operations:\n", &format!("  {key}:\n"))
+    };
+
+    // A client identifier another system issues is kept exactly as written.
+    let urn = "urn:example:client:Gateway_1";
+    for raw in [
+        with_actors(urn),
+        with_issuers(urn),
+        with_destination("case_operations-2"),
+    ] {
+        parse_runtime_config_with_env(&raw, env_lookup).expect("the keys read");
+    }
+
+    // An event destination is named by a local identifier this file defines.
+    for key in ["Case-operations", "2nd", "case.operations", &"c".repeat(65)] {
+        let error = parse_runtime_config_with_env(&with_destination(key), env_lookup)
+            .expect_err("a destination key that is not a local identifier is refused");
+        let (code, pointer) = reader_refusal(&error);
+        assert_eq!(code, "config.invalid-value", "{key}");
+        assert!(pointer.starts_with("/eventDestinations"), "{pointer}");
+    }
+
+    // A client key is an external identifier: 1 to 512 characters, none of
+    // them a control character. The shared reader refuses a control
+    // character in any mapping key before the member is decoded.
+    let long = "c".repeat(513);
+    for (key, refusal) in [
+        ("\"gateway\\u0001client\"", "yaml.control-character"),
+        (long.as_str(), "config.invalid-value"),
+    ] {
+        for (raw, member) in [
+            (
+                with_actors(key),
+                "/authentication/authorityClaims/trustedActors",
+            ),
+            (with_issuers(key), "/authentication/oidc/assertionIssuers"),
+        ] {
+            let error = parse_runtime_config_with_env(&raw, env_lookup)
+                .expect_err("a client key that is not an external identifier is refused");
+            let (code, pointer) = reader_refusal(&error);
+            assert_eq!(code, refusal, "{member}");
+            assert!(pointer.starts_with(member), "{member}");
+        }
+    }
+}
+
+#[test]
+fn the_issuer_key_source_names_its_variant_in_a_type_member() {
+    let fixture = RuntimeFixture::new();
+    let current = runtime_with_discovery_source(&fixture);
+    parse_runtime_config_with_env(&current, env_lookup).expect("the type member is read");
+
+    let retired = current.replace("      type: discovery\n", "      kind: discovery\n");
+    assert_ne!(retired, current);
+    let error = parse_runtime_config_with_env(&retired, env_lookup)
+        .expect_err("the kind member is refused");
+    assert_eq!(
+        reader_refusal(&error),
+        ("config.removed-key", "/authentication/oidc/jwksSource/kind")
+    );
+    let rendered = format!("{error} {}", error.render_human(None));
+    assert!(
+        rendered.contains("authentication.oidc.jwksSource.type"),
+        "{rendered}"
+    );
+}
+
+#[test]
+fn a_runtime_union_names_its_variant_in_a_type_member() {
+    let fixture = RuntimeFixture::new();
+    let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
+    let current = format!(
+        "{base}\nfieldEncryption:\n  provider:\n    type: transit\n    unixSocketPath: /run/transit/proxy.sock\n    mount: transit\n    keyName: breg-field-dek\n\
+         attachmentStorage:\n  type: s3\n  endpoint: https://storage.example\n  bucket: test-bucket\n  region: us-east-1\n  accessKeyIdRef: secret:file/access\n  secretAccessKeyRef: secret:file/key\n\
+         attachmentVerification:\n  type: http\n  endpoint: https://scanner.example/verify\n  policyId: scanner-rules-v1\n  authorizationRef: secret:file/verifier-token\n"
+    );
+    parse_runtime_config_with_env(&current, env_lookup).expect("the type member is read");
+
+    for (current_line, retired_line, pointer, replacement) in [
+        (
+            "    type: transit\n",
+            "    kind: transit\n",
+            "/fieldEncryption/provider/kind",
+            "fieldEncryption.provider.type",
+        ),
+        (
+            "  type: s3\n",
+            "  kind: s3\n",
+            "/attachmentStorage/kind",
+            "attachmentStorage.type",
+        ),
+        (
+            "  type: http\n",
+            "  kind: http\n",
+            "/attachmentVerification/kind",
+            "attachmentVerification.type",
+        ),
+    ] {
+        assert_eq!(current.matches(current_line).count(), 1, "{current_line}");
+        let retired = current.replace(current_line, retired_line);
+        let error = parse_runtime_config_with_env(&retired, env_lookup)
+            .expect_err("the kind member is refused");
+        assert_eq!(
+            reader_refusal(&error),
+            ("config.removed-key", pointer),
+            "{retired_line}"
+        );
+        let rendered = format!("{error} {}", error.render_human(None));
+        assert!(rendered.contains(replacement), "{rendered}");
+    }
+
+    // The variants with no members read the same way.
+    for block in [
+        "attachmentStorage: {type: database}\n",
+        "attachmentVerification: {type: disabled}\n",
+        "fieldEncryption:\n  provider:\n    type: local-file\n    dekRef: secret:file/breg-field-dek\n",
+    ] {
+        parse_runtime_config_with_env(&format!("{base}\n{block}"), env_lookup)
+            .unwrap_or_else(|error| panic!("{block}: {error:?}"));
+    }
+
+    // The camelCase variant word an earlier release read is not a variant.
+    let camel = format!(
+        "{base}\nfieldEncryption:\n  provider:\n    type: localFile\n    dekRef: secret:file/breg-field-dek\n"
+    );
+    let error = parse_runtime_config_with_env(&camel, env_lookup)
+        .expect_err("the camelCase variant word is refused");
+    assert_eq!(
+        reader_refusal(&error),
+        ("config.unknown-variant", "/fieldEncryption/provider/type")
+    );
+    let rendered = format!("{error} {}", error.render_human(None));
+    assert!(rendered.contains("local-file"), "{rendered}");
+}
+
 #[test]
 fn raw_database_urls_inline_secrets_and_plaintext_posture_are_refused() {
     let fixture = RuntimeFixture::new();
@@ -1924,12 +2223,12 @@ fn one_role_may_serve_as_runtime_and_migration_role() {
 fn invalid_bounds_roles_paths_and_oidc_inputs_are_refused() {
     let fixture = RuntimeFixture::new();
     let oversized_pool = valid_runtime(&fixture.secret_root, &fixture.package_root)
-        .replace("maxSize: 4", "maxSize: 129");
+        .replace("maximumConnections: 4", "maximumConnections: 129");
     let error = parse_runtime_config_with_env(&oversized_pool, env_lookup)
         .expect_err("the pool size is bounded");
     assert_eq!(
         reader_refusal(&error),
-        ("config.out-of-range", "/database/pool/maxSize")
+        ("config.out-of-range", "/database/pool/maximumConnections")
     );
     for (raw, expected) in [
         (
@@ -2116,7 +2415,7 @@ fn invalid_assertion_issuer_shapes_are_refused() {
                 "      \"\":\n",
                 "        - https://issuer-a.example\n",
             )),
-            Refusal::Runtime(RuntimeConfigError::InvalidOidc),
+            READER,
         ),
         (
             "over-long client key",
@@ -2124,7 +2423,7 @@ fn invalid_assertion_issuer_shapes_are_refused() {
                 "    assertionIssuers:\n      {}:\n        - https://issuer-a.example\n",
                 "c".repeat(513)
             )),
-            Refusal::Runtime(RuntimeConfigError::InvalidOidc),
+            READER,
         ),
         (
             "over-long issuer value",
@@ -2172,9 +2471,10 @@ fn invalid_assertion_issuer_shapes_are_refused() {
         "the refusal names its fix"
     );
 
-    // One client's list grants authorities, so `[]` grants none, as leaving
-    // the client out does.
-    let config = parse_runtime_config_with_env(
+    // CFG-EMPTY-2: a listed client names at least one authority. A client
+    // that may exchange from none is left out, so `[]` is refused at the
+    // client rather than read as a second way to write that.
+    let error = parse_runtime_config_with_env(
         &insert(concat!(
             "    assertionIssuers:\n",
             "      registry-client: []\n",
@@ -2183,15 +2483,48 @@ fn invalid_assertion_issuer_shapes_are_refused() {
         )),
         env_lookup,
     )
-    .expect("an empty per-client list is accepted");
-    let verifier = config.authentication().oidc().token_verifier_config();
+    .expect_err("an empty per-client list is refused");
     assert_eq!(
-        verifier
-            .assertion_issuers
-            .get("registry-client")
-            .map(Vec::len),
-        Some(0)
+        reader_refusal(&error),
+        (
+            "config.invalid-value",
+            "/authentication/oidc/assertionIssuers/registry-client"
+        )
     );
+    let rendered = error.render_human(None);
+    assert!(
+        rendered.contains("assertion issuer") && rendered.contains("remove the client"),
+        "the refusal names its fix: {rendered}"
+    );
+}
+
+#[test]
+fn an_empty_denied_key_list_is_refused_and_omitting_it_denies_no_key() {
+    let fixture = RuntimeFixture::new();
+    let baseline = valid_runtime(&fixture.secret_root, &fixture.package_root);
+
+    // CFG-EMPTY-2: deniedKids withdraws signing keys, so a list that names
+    // none is refused; deleting the member is how a file denies no key.
+    let error = parse_runtime_config_with_env(
+        &baseline.replace("deniedKids: [denied-kid]", "deniedKids: []"),
+        env_lookup,
+    )
+    .expect_err("an empty denied key list is refused");
+    assert_eq!(
+        reader_refusal(&error),
+        ("config.invalid-value", "/authentication/oidc/deniedKids")
+    );
+    assert!(
+        error.render_human(None).contains("delete deniedKids"),
+        "the refusal names its fix"
+    );
+
+    let omitted = baseline.replace("    deniedKids: [denied-kid]\n", "");
+    assert!(!omitted.contains("deniedKids"));
+    let config = parse_runtime_config_with_env(&omitted, env_lookup)
+        .expect("a runtime file with no deniedKids member is accepted");
+    let verifier = config.authentication().oidc().token_verifier_config();
+    assert!(verifier.denied_kids.is_empty());
 }
 
 #[test]
@@ -2202,8 +2535,8 @@ fn explicit_subject_principal_and_operator_selected_token_lifetime_are_admitted(
         let raw = baseline
             .replace("principal: registry_principal", "principal: sub")
             .replace(
-                "maxTokenLifetimeSeconds: 300",
-                &format!("maxTokenLifetimeSeconds: {seconds}"),
+                "maximumTokenLifetimeSeconds: 300",
+                &format!("maximumTokenLifetimeSeconds: {seconds}"),
             );
         let config =
             parse_runtime_config_with_env(&raw, env_lookup).expect("explicit issuer contract");
@@ -2218,8 +2551,8 @@ fn explicit_subject_principal_and_operator_selected_token_lifetime_are_admitted(
     }
     for seconds in [0, 7201] {
         let raw = baseline.replace(
-            "maxTokenLifetimeSeconds: 300",
-            &format!("maxTokenLifetimeSeconds: {seconds}"),
+            "maximumTokenLifetimeSeconds: 300",
+            &format!("maximumTokenLifetimeSeconds: {seconds}"),
         );
         assert!(parse_runtime_config_with_env(&raw, env_lookup).is_err());
     }
@@ -2271,8 +2604,8 @@ fn jwks_source_is_a_strict_tagged_oidc_member() {
 
     for raw in [
         runtime_with_discovery_source(&fixture).replace(
-            "      kind: discovery\n",
-            "      kind: discovery\n      documentRef: secret:file/oidc-jwks\n",
+            "      type: discovery\n",
+            "      type: discovery\n      documentRef: secret:file/oidc-jwks\n",
         ),
         runtime_with_static_jwks_ref(&fixture, "secret:file/oidc-jwks")
             .replace("      documentRef:", "      keys: []\n      documentRef:"),
@@ -2281,7 +2614,7 @@ fn jwks_source_is_a_strict_tagged_oidc_member() {
         runtime_with_static_jwks_ref(&fixture, "secret:file/oidc-jwks")
             .replace("secret:file/oidc-jwks", "secret:file/../jwks"),
         runtime_with_static_jwks_ref(&fixture, "secret:file/oidc-jwks")
-            .replace("kind: static", "kind: remote"),
+            .replace("type: static", "type: remote"),
     ] {
         assert!(
             parse_runtime_config_with_env(&raw, env_lookup).is_err(),
@@ -2687,7 +3020,7 @@ fn substituted_values_stay_strings() {
     assert_eq!(
         refusal(
             parse_runtime_config_with_env(
-                &base.replace("maxSize: 4", "maxSize: ${POOL_SIZE}"),
+                &base.replace("maximumConnections: 4", "maximumConnections: ${POOL_SIZE}"),
                 lookup
             )
             .expect_err("a substitution never becomes a number")
@@ -2735,7 +3068,7 @@ fn jwks_source_uri_kind_skips_discovery_under_the_shared_rules() {
     let with_uri = |uri: &str| {
         valid_runtime(&fixture.secret_root, &fixture.package_root).replace(
             "    jwksCache:\n",
-            &format!("    jwksSource:\n      kind: uri\n      uri: {uri}\n    jwksCache:\n"),
+            &format!("    jwksSource:\n      type: uri\n      uri: {uri}\n    jwksCache:\n"),
         )
     };
     let config =
@@ -3120,7 +3453,6 @@ fn invalid_event_destination_ids_origins_paths_cidrs_refs_and_ceilings_are_refus
         ),
     );
     let invalid_bindings = [
-        valid.replace("  case-operations:\n", "  Case-operations:\n"),
         valid.replace("https://events.example/", "not-a-url"),
         valid.replace("https://events.example/", "http://events.example/"),
         valid.replace("https://events.example/", "https://events.example/path"),
@@ -3216,8 +3548,8 @@ fn invalid_event_destination_ids_origins_paths_cidrs_refs_and_ceilings_are_refus
     assert!(!rendered.contains("../event-hmac-key"), "{rendered}");
 
     for raw in [
-        valid.replace("productionHttps", "privateServiceHttp"),
-        valid.replace("dualStackStrict", "resolverDefault"),
+        valid.replace("production-https", "private-service-http"),
+        valid.replace("dual-stack-strict", "resolver-default"),
     ] {
         assert_eq!(
             refusal(
@@ -3243,7 +3575,7 @@ fn pinned_loopback_https_event_profile_is_absent_without_postgres_test() {
             2_500,
             3,
         )
-        .replace("productionHttps", "pinnedLoopbackHttpsTest"),
+        .replace("production-https", "pinned-loopback-https-test"),
     );
 
     assert_eq!(
@@ -3269,7 +3601,7 @@ async fn pinned_loopback_https_event_profile_activates_with_exact_test_tls_and_c
         2_500,
         3,
     )
-    .replace("productionHttps", "pinnedLoopbackHttpsTest");
+    .replace("production-https", "pinned-loopback-https-test");
     let raw = runtime_with_event_destinations(&fixture, &binding);
     let compiled = compiled_webhooks(&[(DESTINATION, 5_000, 5)]);
 
@@ -3299,7 +3631,7 @@ async fn pinned_loopback_https_event_profile_activates_with_exact_test_tls_and_c
             .binding_digest()
     );
 
-    let production = activate(&raw.replace("pinnedLoopbackHttpsTest", "productionHttps"));
+    let production = activate(&raw.replace("pinned-loopback-https-test", "production-https"));
     assert_ne!(first.binding_digest(), production.binding_digest());
     assert_ne!(
         destination.binding_digest(),
@@ -3528,6 +3860,104 @@ fn runtime_destination_classification_ceiling_cannot_widen_compiled_event_disclo
             .expect_err("runtime destination cannot accept a higher-classified event"),
         EventDestinationActivationError::DeliveryCeilingWidening
     );
+}
+
+#[test]
+fn event_destination_profiles_are_written_in_kebab_case_and_keep_their_binding_digest() {
+    const DESTINATION: &str = "case-operations";
+    let fixture = RuntimeFixture::new();
+    fixture.write_secret("event-hmac-key", &[0x41; 32]);
+    let compiled = compiled_webhooks(&[(DESTINATION, 5_000, 5)]);
+    let production = event_destination_binding(
+        DESTINATION,
+        "https://events.example/",
+        "/hooks/registry",
+        "secret:file/event-hmac-key",
+        2_500,
+        3,
+    );
+    let loopback = event_destination_binding(
+        DESTINATION,
+        "http://localhost:8100/",
+        "/hooks/registry",
+        "secret:file/event-hmac-key",
+        2_500,
+        3,
+    )
+    .replace("production-https", "loopback-development-http")
+    .replace("dual-stack-strict", "ipv4-only");
+    assert!(loopback.contains("networkProfile: loopback-development-http"));
+    assert!(loopback.contains("dnsFamily: ipv4-only"));
+
+    // The digest of a binding is stored with every delivery it queued, so
+    // the words it is computed over do not follow the authored spelling.
+    for (binding, digest) in [
+        (
+            &production,
+            "sha256:687eba190a76e7ad3d9d977beece7c1bd55b2acf82ad8dd40d3e98d37b574718",
+        ),
+        (
+            &loopback,
+            "sha256:13cc2c37e06901c8b28e879028fc62ee3b03dc47c9b13b9f09e3652f49ce855d",
+        ),
+    ] {
+        let activated = parse_runtime_config_with_env(
+            &runtime_with_event_destinations(&fixture, binding),
+            env_lookup,
+        )
+        .expect("kebab-case event profiles parse")
+        .activate_event_destinations(&compiled)
+        .expect("kebab-case event profiles activate");
+        assert_eq!(
+            activated
+                .lookup(DESTINATION)
+                .expect("the destination is active")
+                .binding_digest(),
+            digest
+        );
+    }
+
+    for (current, retired, member, spellings) in [
+        (
+            "networkProfile: production-https",
+            "networkProfile: productionHttps",
+            "networkProfile",
+            ["production-https", "loopback-development-http"],
+        ),
+        (
+            "networkProfile: production-https",
+            "networkProfile: loopbackDevelopmentHttp",
+            "networkProfile",
+            ["production-https", "loopback-development-http"],
+        ),
+        (
+            "dnsFamily: dual-stack-strict",
+            "dnsFamily: dualStackStrict",
+            "dnsFamily",
+            ["dual-stack-strict", "ipv4-only"],
+        ),
+        (
+            "dnsFamily: dual-stack-strict",
+            "dnsFamily: ipv4Only",
+            "dnsFamily",
+            ["dual-stack-strict", "ipv4-only"],
+        ),
+    ] {
+        assert!(production.contains(current), "{current}");
+        let raw = runtime_with_event_destinations(&fixture, &production.replace(current, retired));
+        let error = parse_runtime_config_with_env(&raw, env_lookup)
+            .expect_err("a camelCase event profile word is refused");
+        let pointer = format!("/eventDestinations/{DESTINATION}/{member}");
+        assert_eq!(
+            reader_refusal(&error),
+            ("config.unknown-variant", pointer.as_str()),
+            "{retired}"
+        );
+        let rendered = error.render_human(None);
+        for spelling in spellings {
+            assert!(rendered.contains(spelling), "{retired}: {rendered}");
+        }
+    }
 }
 
 #[test]
@@ -3777,7 +4207,7 @@ fn env_lookup(name: &str) -> Option<String> {
 fn runtime_with_discovery_source(fixture: &RuntimeFixture) -> String {
     valid_runtime(&fixture.secret_root, &fixture.package_root).replace(
         "    jwksCache:\n",
-        "    jwksSource:\n      kind: discovery\n    jwksCache:\n",
+        "    jwksSource:\n      type: discovery\n    jwksCache:\n",
     )
 }
 
@@ -3785,7 +4215,7 @@ fn runtime_with_static_jwks_ref(fixture: &RuntimeFixture, document_ref: &str) ->
     valid_runtime(&fixture.secret_root, &fixture.package_root)
     .replace(
         "    jwksCache:\n",
-        &format!("    jwksSource:\n      kind: static\n      documentRef: {document_ref}\n    jwksCache:\n"),
+        &format!("    jwksSource:\n      type: static\n      documentRef: {document_ref}\n    jwksCache:\n"),
     )
 }
 
@@ -3938,7 +4368,7 @@ async fn attachment_storage_defaults_to_database_and_validates_operator_binding(
         AttachmentStorage::Database
     ));
     let explicit =
-        parse_runtime_config(&format!("{base}\nattachmentStorage: {{kind: database}}\n")).unwrap();
+        parse_runtime_config(&format!("{base}\nattachmentStorage: {{type: database}}\n")).unwrap();
     assert!(matches!(
         explicit
             .activate_attachment_storage("registry")
@@ -3946,7 +4376,7 @@ async fn attachment_storage_defaults_to_database_and_validates_operator_binding(
             .unwrap(),
         AttachmentStorage::Database
     ));
-    let invalid = format!("{base}\nattachmentStorage:\n  kind: s3\n  endpoint: http://public.example\n  bucket: test-bucket\n  region: us-east-1\n  accessKeyIdRef: secret:file/access\n  secretAccessKeyRef: secret:file/key\n");
+    let invalid = format!("{base}\nattachmentStorage:\n  type: s3\n  endpoint: http://public.example\n  bucket: test-bucket\n  region: us-east-1\n  accessKeyIdRef: secret:file/access\n  secretAccessKeyRef: secret:file/key\n");
     let error = parse_runtime_config(&invalid).unwrap_err();
     assert_eq!(error, RuntimeConfigError::InvalidAttachmentStorage);
     assert_eq!(path_of(&error), "/attachmentStorage");
@@ -3970,14 +4400,14 @@ fn attachment_verification_defaults_off_and_validates_operator_binding() {
     ));
     assert!(matches!(
         parse_runtime_config(&format!(
-            "{base}\nattachmentVerification: {{kind: disabled}}\n"
+            "{base}\nattachmentVerification: {{type: disabled}}\n"
         ))
         .unwrap()
         .activate_attachment_verification()
         .unwrap(),
         AttachmentVerification::Disabled
     ));
-    let invalid = format!("{base}\nattachmentVerification:\n  kind: http\n  endpoint: http://public.example/verify\n  policyId: scanner-rules-v1\n  authorizationRef: secret:file/verifier-token\n");
+    let invalid = format!("{base}\nattachmentVerification:\n  type: http\n  endpoint: http://public.example/verify\n  policyId: scanner-rules-v1\n  authorizationRef: secret:file/verifier-token\n");
     let error = parse_runtime_config(&invalid).unwrap_err();
     assert_eq!(error, RuntimeConfigError::InvalidAttachmentVerification);
     assert_eq!(path_of(&error), "/attachmentVerification");
@@ -4006,7 +4436,7 @@ fn field_encryption_is_absent_by_default_and_validates_operator_binding() {
         "field encryption is unconfigured by default"
     );
 
-    let transit = format!("{base}\nfieldEncryption:\n  provider:\n    kind: transit\n    unixSocketPath: /run/transit/proxy.sock\n    mount: transit\n    keyName: breg-field-dek\n");
+    let transit = format!("{base}\nfieldEncryption:\n  provider:\n    type: transit\n    unixSocketPath: /run/transit/proxy.sock\n    mount: transit\n    keyName: breg-field-dek\n");
     let config = parse_runtime_config(&transit).unwrap();
     assert!(matches!(
         config.field_encryption().provider(),
@@ -4019,7 +4449,7 @@ fn field_encryption_is_absent_by_default_and_validates_operator_binding() {
     );
     assert!(!rendered.contains("breg-field-dek"), "no key name in debug");
 
-    let local = format!("{base}\nfieldEncryption:\n  provider:\n    kind: localFile\n    dekRef: secret:file/breg-field-dek\n");
+    let local = format!("{base}\nfieldEncryption:\n  provider:\n    type: local-file\n    dekRef: secret:file/breg-field-dek\n");
     let config = parse_runtime_config(&local).unwrap();
     assert!(matches!(
         config.field_encryption().provider(),
@@ -4028,9 +4458,9 @@ fn field_encryption_is_absent_by_default_and_validates_operator_binding() {
 
     for invalid in [
         // A relative socket path never reaches a provider.
-        format!("{base}\nfieldEncryption:\n  provider:\n    kind: transit\n    unixSocketPath: transit.sock\n    mount: transit\n    keyName: breg-field-dek\n"),
+        format!("{base}\nfieldEncryption:\n  provider:\n    type: transit\n    unixSocketPath: transit.sock\n    mount: transit\n    keyName: breg-field-dek\n"),
         // The local data key must come from a secret file.
-        format!("{base}\nfieldEncryption:\n  provider:\n    kind: localFile\n    dekRef: secret:env/BREG_FIELD_DEK\n"),
+        format!("{base}\nfieldEncryption:\n  provider:\n    type: local-file\n    dekRef: secret:env/BREG_FIELD_DEK\n"),
     ] {
         let error = parse_runtime_config(&invalid).unwrap_err();
         assert_eq!(error, RuntimeConfigError::InvalidFieldEncryption);
@@ -4040,21 +4470,21 @@ fn field_encryption_is_absent_by_default_and_validates_operator_binding() {
     // The request timeout stays above zero and at or below the provider
     // maximum, refused at decode where the member is.
     for timeout in ["0", "30001"] {
-        let invalid = format!("{base}\nfieldEncryption:\n  provider:\n    kind: transit\n    unixSocketPath: /run/transit/proxy.sock\n    mount: transit\n    keyName: breg-field-dek\n    timeoutMilliseconds: {timeout}\n");
+        let invalid = format!("{base}\nfieldEncryption:\n  provider:\n    type: transit\n    unixSocketPath: /run/transit/proxy.sock\n    mount: transit\n    keyName: breg-field-dek\n    attemptTimeoutMilliseconds: {timeout}\n");
         let error = parse_runtime_config(&invalid).unwrap_err();
         assert_eq!(
             reader_refusal(&error),
             (
                 "config.out-of-range",
-                "/fieldEncryption/provider/timeoutMilliseconds"
+                "/fieldEncryption/provider/attemptTimeoutMilliseconds"
             )
         );
     }
-    // An unknown provider kind never parses as a document at all, so it is
+    // An unknown provider type never parses as a document at all, so it is
     // refused before field-encryption validation runs.
-    let unknown_kind = format!("{base}\nfieldEncryption:\n  provider:\n    kind: kms\n");
+    let unknown_type = format!("{base}\nfieldEncryption:\n  provider:\n    type: kms\n");
     assert_eq!(
-        refusal(parse_runtime_config(&unknown_kind).unwrap_err()),
+        refusal(parse_runtime_config(&unknown_type).unwrap_err()),
         READER
     );
 }

@@ -1,6 +1,6 @@
-apiVersion: registry.registrystack.org/v1alpha1
-kind: RegistryProject
-registry:
+apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
   id: asset-registration-actions
   canonicalBaseIri: https://asset-registration-actions.example.gov
   version: 0.1.0
@@ -34,7 +34,7 @@ manifestProjection:
 modules:
   - id: "asset-registration-actions-core"
     version: "0.1.0"
-    digest: "sha256:5c2dd239d182e7df2792028a685cda57ae9a25a6b770391490913349b3855583"
+    digest: "sha256:d976130c91124983bf822cf301cecb07f8170754ea1c6c994ce747dd528dbf45"
 
 entities: []
 accessProfiles:
@@ -44,33 +44,35 @@ accessProfiles:
     requiredScopes: [registry:asset:register]
     requiredPurposes: [asset-registration]
     permissions:
-      - action: register-asset-with-inspection
-        operations: [invoke]
-        targets:
-          - entity: asset
-            rowBoundaries:
-              - {field: jurisdiction, claim: jurisdiction, operator: equals}
-          - entity: asset-inspection
-            rowBoundaries:
-              - {field: jurisdiction, claim: jurisdiction, operator: equals}
-        results: [asset]
+      actions:
+        - action: register-asset-with-inspection
+          operations: [invoke]
+          targets:
+            - entity: asset
+              rowBoundaries:
+                - {field: jurisdiction, claim: jurisdiction, operator: equals}
+            - entity: asset-inspection
+              rowBoundaries:
+                - {field: jurisdiction, claim: jurisdiction, operator: equals}
+          results: [asset]
   - id: asset-auditor
     principalClaim: registry_principal
     requiredScopes: [registry:asset:audit]
     requiredPurposes: [asset-audit]
     permissions:
-      - entity: asset
-        operations: [get, list]
-        readableFields: [asset-code, label, asset-type, jurisdiction]
-        filterableFields: [asset-code, jurisdiction]
-        rowBoundaries:
-          - {field: jurisdiction, claim: jurisdiction, operator: equals}
-      - entity: asset-inspection
-        operations: [get, list]
-        readableFields: [asset, observed-at, result, jurisdiction]
-        filterableFields: [asset, jurisdiction]
-        rowBoundaries:
-          - {field: jurisdiction, claim: jurisdiction, operator: equals}
+      entities:
+        - entity: asset
+          operations: [get, list]
+          readableFields: [asset-code, label, asset-type, jurisdiction]
+          filterableFields: [asset-code, jurisdiction]
+          rowBoundaries:
+            - {field: jurisdiction, claim: jurisdiction, operator: equals}
+        - entity: asset-inspection
+          operations: [get, list]
+          readableFields: [asset, observed-at, result, jurisdiction]
+          filterableFields: [asset, jurisdiction]
+          rowBoundaries:
+            - {field: jurisdiction, claim: jurisdiction, operator: equals}
 vocabularies:
   - id: asset-type
     values: [equipment, vehicle, furniture]

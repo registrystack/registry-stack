@@ -17,12 +17,14 @@ use clap::{ArgGroup, Args, Subcommand};
 use registry_evidence_client::private_key_jwt::{
     valid_scope_token, MAXIMUM_REQUESTED_SCOPES, MAXIMUM_REQUESTED_SCOPE_BYTES,
 };
-use registry_evidence_client::{EvidenceClient, EvidenceClientProfile};
+use registry_evidence_client::{
+    EvidenceClient, EvidenceClientProfile, EVIDENCE_CLIENT_PROFILE_API_VERSION,
+    EVIDENCE_CLIENT_PROFILE_KIND,
+};
 use registry_platform_crypto::canonicalize_json;
 use serde::Serialize;
 use url::Url;
 
-pub(crate) const CLIENT_PROFILE_SCHEMA_V1: &str = "registry.evidence-client-profile/v1";
 const PRIVATE_FILE_MODE: u32 = 0o600;
 const MAX_CLIENT_ID_BYTES: usize = 256;
 
@@ -141,7 +143,8 @@ pub struct ContractsFetchArgs {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct ClientProfile {
-    pub(crate) schema: String,
+    pub(crate) api_version: String,
+    pub(crate) kind: String,
     pub(crate) base_url: String,
     pub(crate) client_id: String,
     pub(crate) private_key: PrivateKeyReference,
@@ -170,7 +173,7 @@ pub(crate) struct ClientOauthProfile {
 }
 
 #[derive(Debug, Clone, Serialize)]
-#[serde(tag = "source", rename_all = "kebab-case", deny_unknown_fields)]
+#[serde(tag = "type", rename_all = "kebab-case", deny_unknown_fields)]
 pub(crate) enum PrivateKeyReference {
     File { path: PathBuf },
     Environment { variable: String },
@@ -325,7 +328,8 @@ fn create_profile(args: ProfileCreateArgs) -> Result<ExitCode> {
         .then_some(oauth)
     };
     let profile = ClientProfile {
-        schema: CLIENT_PROFILE_SCHEMA_V1.to_owned(),
+        api_version: EVIDENCE_CLIENT_PROFILE_API_VERSION.to_owned(),
+        kind: EVIDENCE_CLIENT_PROFILE_KIND.to_owned(),
         base_url: args.base_url.as_str().trim_end_matches('/').to_owned(),
         client_id: args.client_id,
         private_key,

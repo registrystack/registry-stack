@@ -182,13 +182,13 @@
             "path": {
               "$ref": "#/$defs/ProfilePath"
             },
-            "source": {
+            "type": {
               "const": "file",
               "type": "string"
             }
           },
           "required": [
-            "source",
+            "type",
             "path"
           ],
           "type": "object"
@@ -197,7 +197,7 @@
           "additionalProperties": false,
           "description": "An environment variable holding the key.",
           "properties": {
-            "source": {
+            "type": {
               "const": "environment",
               "type": "string"
             },
@@ -206,7 +206,7 @@
             }
           },
           "required": [
-            "source",
+            "type",
             "variable"
           ],
           "type": "object"
@@ -218,13 +218,6 @@
       "maxLength": 4096,
       "minLength": 1,
       "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
-      "type": "string"
-    },
-    "ProfileSchema": {
-      "description": "The client profile format version.",
-      "enum": [
-        "registry.evidence-client-profile/v1"
-      ],
       "type": "string"
     },
     "Purpose": {
@@ -302,10 +295,10 @@
       "type": "string"
     },
     "Url": {
-      "description": "An absolute http or https URL with a host and no user information.",
+      "description": "An absolute http or https URL with a host, no user information, and no whitespace or control character.",
       "format": "uri",
       "maxLength": 2048,
-      "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://[^/?#@]+([/?#].*)?$",
+      "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://[^/?#@\\u0000-\\u0020\\u007F-\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]+([/?#][^\\u0000-\\u0020\\u007F-\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*)?$",
       "type": "string"
     },
     "VerificationMember": {
@@ -334,6 +327,9 @@
   "additionalProperties": false,
   "description": "An Evidence relying-party client profile: where the Evidence service is,\nhow this client authenticates to it, which keys and contracts it trusts,\nand what it expects the service to assert.",
   "properties": {
+    "apiVersion": {
+      "const": "id.registrystack.org/formats/evidence/client-profile/v1"
+    },
     "baseUrl": {
       "$ref": "#/$defs/Url",
       "description": "The Evidence service origin: scheme, host, and port, with no path,\nquery, fragment, or trailing slash, in lowercase. It uses `https`,\nexcept `http://127.0.0.1:<port>` under `local-loopback-discovery`\ntrust. Under `https-discovery` and `pinned-jwks` trust the host is not\na loopback, private, link-local, unspecified, or cloud metadata\naddress."
@@ -350,6 +346,9 @@
       "$ref": "#/$defs/ExpectedMember",
       "description": "What the client expects the service to state about itself and about\nthe definitions it requests."
     },
+    "kind": {
+      "const": "EvidenceClientProfile"
+    },
     "maximumMetadataCacheSeconds": {
       "description": "How long the client keeps the service's discovery metadata, in\nseconds. Omitted, it is 600.",
       "format": "uint64",
@@ -365,10 +364,6 @@
       "$ref": "#/$defs/PrivateKeyMember",
       "description": "Where the client's private signing key, a JSON Web Key, is read from."
     },
-    "schema": {
-      "$ref": "#/$defs/ProfileSchema",
-      "description": "The profile format and its version."
-    },
     "trust": {
       "$ref": "#/$defs/TrustMember",
       "description": "How the client learns the keys that sign Evidence responses. Omitted,\nit fetches the service's published keys over https."
@@ -379,7 +374,8 @@
     }
   },
   "required": [
-    "schema",
+    "apiVersion",
+    "kind",
     "baseUrl",
     "clientId",
     "privateKey"

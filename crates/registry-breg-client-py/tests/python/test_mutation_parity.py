@@ -168,9 +168,9 @@ def metadata() -> dict:
         "sortableFields": [],
         "allowCount": False,
         "defaultPageSize": 25,
-        "maxPageSize": 100,
-        "maxFilterClauses": 8,
-        "maxInValues": 16,
+        "maximumPageSize": 100,
+        "maximumFilterClauses": 8,
+        "maximumInValues": 16,
         "pagination": {
             "parameter": "$skiptoken",
             "responsePath": "pageInfo.nextCursor",
@@ -250,6 +250,7 @@ def metadata() -> dict:
                         },
                     ],
                     "review": {
+                        "type": "required",
                         "authority": "casework",
                         "policyId": "address-review",
                     },
@@ -289,7 +290,7 @@ def metadata() -> dict:
                         "required": True,
                         "nullable": False,
                         "classification": "internal",
-                        "fieldType": {"type": "string", "minLength": 1, "maxLength": 120},
+                        "fieldType": {"type": "string", "minimumLength": 1, "maximumLength": 120},
                     },
                 ],
                 "referenceInputs": [
@@ -312,7 +313,7 @@ def metadata() -> dict:
                     "targetConditions": {
                         "method": "POST",
                         "path": "/v1/actions/rename-company/target-conditions",
-                        "operationId": "actions.rename-company.target_conditions",
+                        "operationId": "actions.rename-company.target-conditions",
                         "requiresIdempotencyKey": False,
                         "inputSchema": "action-rename-company-target-conditions-input",
                         "responseSchema": "action-rename-company-target-conditions-response",
@@ -489,7 +490,7 @@ class MutationParityTests(unittest.TestCase):
         )
         self.assertEqual(
             capability["review"],
-            {"authority": "casework", "policy_id": "address-review"},
+            {"type": "required", "authority": "casework", "policy_id": "address-review"},
         )
         self.assertEqual(
             capability["on_approved"],
@@ -524,7 +525,7 @@ class MutationParityTests(unittest.TestCase):
                 {"targetId": RECORD_ID, "legalName": ""},
                 "rename-invalid",
             )
-        self.assertEqual(invalid.exception.kind, "invalid_request")
+        self.assertEqual(invalid.exception.kind, "invalid-request")
         self.assertEqual(len(self.requests), before)
 
         conditions = self.client.action_target_conditions(binding, {"targetId": RECORD_ID})
@@ -585,25 +586,25 @@ class MutationParityTests(unittest.TestCase):
         for invalid in (b"{}", b"!" + evidence[1:]):
             with self.assertRaises(BaseRegistryClientError) as refused:
                 BRegPreparedAction.from_bytes(invalid)
-            self.assertEqual(refused.exception.kind, "invalid_request")
+            self.assertEqual(refused.exception.kind, "invalid-request")
         for changed_inputs, key in (
             (inputs, "another-key"),
             ({"targetId": RECORD_ID, "legalName": "Changed Ltd"}, "rename-lost"),
         ):
             with self.assertRaises(BaseRegistryClientError) as mismatch:
                 restarted.recover_action(restarted_binding, restored, changed_inputs, key)
-            self.assertEqual(mismatch.exception.kind, "invalid_request")
+            self.assertEqual(mismatch.exception.kind, "invalid-request")
         foreign = BaseRegistryClient("https://other.example.invalid")
         with self.assertRaises(BaseRegistryClientError) as foreign_recovery:
             foreign.recover_action(restarted_binding, restored, inputs, "rename-lost")
-        self.assertEqual(foreign_recovery.exception.kind, "invalid_request")
+        self.assertEqual(foreign_recovery.exception.kind, "invalid-request")
         recovered = restarted.recover_action(
             restarted_binding, restored, inputs, "rename-lost"
         )
         self.assertEqual(repr(recovered), "BRegRecoveredAction(<redacted>)")
         with self.assertRaises(BaseRegistryClientError) as foreign_execution:
             foreign.execute_recovered_action(restarted_binding, recovered)
-        self.assertEqual(foreign_execution.exception.kind, "invalid_request")
+        self.assertEqual(foreign_execution.exception.kind, "invalid-request")
         self.assertEqual(len(self.requests), before_recovery)
 
         receipt = restarted.execute_recovered_action(restarted_binding, recovered)

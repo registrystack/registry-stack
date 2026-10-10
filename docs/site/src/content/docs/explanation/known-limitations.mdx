@@ -237,7 +237,7 @@ assertions, and no caller input selects a mode.
 
 {/* Evidence: products/evidence/contracts/holder-bound-profile.yaml;
     products/evidence/contracts/supported-value-forms.yaml;
-    products/evidence/contracts/bundle.schema.yaml, holderBoundBatchMaxSize;
+    products/evidence/contracts/bundle.schema.yaml, maximumHolderBoundBatchSize;
     products/evidence/contracts/oid4vci-profile.yaml;
     products/evidence/scripts/compat/inji-oid4vci.sh. */}
 
@@ -286,7 +286,7 @@ Read the full security boundary in the [security model](../../spec/rs-sec-g/).
 - Audit retention is not audit completeness: the local audit log of Evidence, Render,
   Base Registry Engine, Casework, and Scheduling is not chained or signed, so it provides no
   cryptographic tamper evidence for retained history. A running writer detects external changes to
-  its active file and fails closed, while each runtime deletes sealed files after `retainDays`.
+  its active file and fails closed, while each runtime deletes sealed files after `retentionDays`.
   None of them ships sealed history for you;
   tamper evidence and completeness come only from the append-only storage the operator ships audit
   entries to.

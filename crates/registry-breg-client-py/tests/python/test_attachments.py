@@ -117,7 +117,7 @@ class AttachmentTests(unittest.TestCase):
         self.assertEqual(self.slot.value_in(emptied()), {"kind": "empty", "value": None})
         unselected = emptied()
         del unselected["data"]["domainData"]["supporting-file"]
-        self.assertEqual(self.slot.value_in(unselected), {"kind": "not_selected", "value": None})
+        self.assertEqual(self.slot.value_in(unselected), {"kind": "not-selected", "value": None})
         self.assertEqual(len(self.requests), 1)
 
     def test_an_upload_the_slot_cannot_accept_never_reaches_the_engine(self):
@@ -131,7 +131,7 @@ class AttachmentTests(unittest.TestCase):
         ):
             with self.assertRaises(BaseRegistryClientError) as error:
                 self.slot.prepare_upload(content_type, body)
-            self.assertEqual(error.exception.kind, "invalid_request")
+            self.assertEqual(error.exception.kind, "invalid-request")
         self.assertEqual(len(self.requests), 1)
 
     def test_the_three_exchanges_use_the_engine_routes_and_governed_headers(self):
@@ -168,17 +168,17 @@ class AttachmentTests(unittest.TestCase):
         before = len(self.requests)
         with self.assertRaises(BaseRegistryClientError) as error:
             other.download_attachment(self.slot, RECORD_ID, 1)
-        self.assertEqual(error.exception.kind, "invalid_request")
+        self.assertEqual(error.exception.kind, "invalid-request")
         with self.assertRaises(BaseRegistryClientError) as error:
             self.client.download_attachment(self.slot, RECORD_ID, 0)
-        self.assertEqual(error.exception.kind, "invalid_request")
+        self.assertEqual(error.exception.kind, "invalid-request")
         for entity, profile, code in (
-            ("missing-entity", "company-writer", "not_found"),
-            ("company", "auditor", "profile_mismatch"),
+            ("missing-entity", "company-writer", "not-found"),
+            ("company", "auditor", "profile-mismatch"),
         ):
             with self.assertRaises(BaseRegistryClientError) as error:
                 self.metadata.select_attachments(entity, profile)
-            self.assertEqual(error.exception.kind, "metadata_selection")
+            self.assertEqual(error.exception.kind, "metadata-selection")
             self.assertEqual(error.exception.code, code)
         self.assertEqual(len(self.requests), before)
 

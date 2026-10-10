@@ -99,23 +99,23 @@ pub fn corpus() -> Vec<FixtureCase> {
 pub fn phone_project() -> Value {
     serde_json::from_str(
         r#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"wasm-template-proof","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"wasm-template-proof","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
             "id":"person","primaryDataset":"proof-dataset","route":"people","mutationMode":"mutable",
             "fields":[
-              {"id":"phone","apiName":"phone","type":"string","maxLength":32,"required":true,"classification":"restricted"}
+              {"id":"phone","apiName":"phone","type":"string","maximumLength":32,"required":true,"classification":"restricted"}
             ]
           }],
           "actions":[{
             "id":"normalize-phone",
             "inputs":[
-              {"id":"raw-phone","apiName":"rawPhone","type":"string","maxLength":64,"required":true,"classification":"restricted"},
-              {"id":"default-region","apiName":"defaultRegion","type":"string","maxLength":64,"required":true,"classification":"restricted"}
+              {"id":"raw-phone","apiName":"rawPhone","type":"string","maximumLength":64,"required":true,"classification":"restricted"},
+              {"id":"default-region","apiName":"defaultRegion","type":"string","maximumLength":64,"required":true,"classification":"restricted"}
             ],
             "handler":{
-              "kind":"wasm","module":"wasm/handler.wasm","abi":"registry.action-handler/v1",
+              "type":"wasm","module":"wasm/handler.wasm","abi":"registry.action-handler/v1",
               "refusals":[
                 {"code":"invalid-phone","label":"The phone number is not a valid phone number."},
                 {"code":"invalid-region","label":"The region is not a usable phone region."}
@@ -128,11 +128,11 @@ pub fn phone_project() -> Value {
           }],
           "accessProfiles":[{
             "id":"registrar","default":true,"principalClaim":"registry_principal",
-            "permissions":[{
+            "permissions":{"actions":[{
               "action":"normalize-phone","operations":["invoke"],
               "targets":[{"entity":"person","rowBoundaries":[]}],
               "results":["phone"]
-            }]
+            }]}
           }]
         }"#,
     )

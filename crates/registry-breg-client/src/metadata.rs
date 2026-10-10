@@ -115,10 +115,10 @@ impl BRegOperationKind {
             Self::Batch => "batch",
             Self::Revisions => "revisions",
             Self::Snapshot => "snapshot",
-            Self::SubmitRequest => "submit_request",
-            Self::ReviseRequest => "revise_request",
-            Self::CancelRequest => "cancel_request",
-            Self::ApplyRequest => "apply_request",
+            Self::SubmitRequest => "submit-request",
+            Self::ReviseRequest => "revise-request",
+            Self::CancelRequest => "cancel-request",
+            Self::ApplyRequest => "apply-request",
             Self::Invoke => "invoke",
             Self::Unknown(value) => value,
         }
@@ -135,10 +135,10 @@ impl BRegOperationKind {
             "batch" => Self::Batch,
             "revisions" => Self::Revisions,
             "snapshot" => Self::Snapshot,
-            "submit_request" => Self::SubmitRequest,
-            "revise_request" => Self::ReviseRequest,
-            "cancel_request" => Self::CancelRequest,
-            "apply_request" => Self::ApplyRequest,
+            "submit-request" => Self::SubmitRequest,
+            "revise-request" => Self::ReviseRequest,
+            "cancel-request" => Self::CancelRequest,
+            "apply-request" => Self::ApplyRequest,
             "invoke" => Self::Invoke,
             _ => Self::Unknown(value),
         }
@@ -938,9 +938,9 @@ pub struct BRegQueryDescriptor {
     pub sortable_fields: Vec<BRegQueryField>,
     pub allow_count: bool,
     pub default_page_size: u64,
-    pub max_page_size: u64,
-    pub max_filter_clauses: u64,
-    pub max_in_values: u64,
+    pub maximum_page_size: u64,
+    pub maximum_filter_clauses: u64,
+    pub maximum_in_values: u64,
     pub pagination: BRegQueryPagination,
     pub temporal: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1083,7 +1083,7 @@ impl BRegMetadataOperation {
     }
 
     /// Change-request metadata this operation's profile may read, such as
-    /// `review_state`. Empty when the profile holds no such grant, so a caller
+    /// `review-state`. Empty when the profile holds no such grant, so a caller
     /// that needs one refuses rather than assumes it.
     #[must_use]
     pub fn readable_request_fields(&self) -> &[String] {
@@ -1994,16 +1994,16 @@ fn action_field_type(value: Value) -> Result<(), BRegMetadataError> {
     match kind.as_str() {
         "boolean" | "int64" | "date" | "timestamp" | "uuid" => {}
         "string" => {
-            let minimum = required(&mut field_type, "minLength")?
+            let minimum = required(&mut field_type, "minimumLength")?
                 .as_u64()
                 .ok_or_else(|| metadata_error(BRegMetadataErrorKind::Shape))?;
-            let maximum = positive_integer(required(&mut field_type, "maxLength")?)?;
+            let maximum = positive_integer(required(&mut field_type, "maximumLength")?)?;
             if maximum > 1_000_000 || minimum > maximum {
                 return Err(metadata_error(BRegMetadataErrorKind::Shape));
             }
         }
         "text" => {
-            if positive_integer(required(&mut field_type, "maxLength")?)? > 10_000_000 {
+            if positive_integer(required(&mut field_type, "maximumLength")?)? > 10_000_000 {
                 return Err(metadata_error(BRegMetadataErrorKind::Shape));
             }
         }
@@ -2056,7 +2056,7 @@ fn action_field_type(value: Value) -> Result<(), BRegMetadataError> {
             }
         }
         "structured" => {
-            let max_bytes = positive_integer(required(&mut field_type, "maxBytes")?)?;
+            let max_bytes = positive_integer(required(&mut field_type, "maximumBytes")?)?;
             if max_bytes > 1_048_576
                 || !valid_action_structured_schema(required(&mut field_type, "schema")?)
             {
@@ -2987,11 +2987,13 @@ fn parse_change_request_review(
     value: Value,
 ) -> Result<BRegChangeRequestReviewRequirement, BRegMetadataError> {
     let mut review = object(value)?;
-    if review.len() == 1 && review.remove("mode") == Some(Value::String("none".to_owned())) {
-        return Ok(BRegChangeRequestReviewRequirement::None);
-    }
-    if review.len() != 2 {
-        return Err(metadata_error(BRegMetadataErrorKind::Shape));
+    match required(&mut review, "type")?.as_str() {
+        Some("none") => {
+            finish(review)?;
+            return Ok(BRegChangeRequestReviewRequirement::None);
+        }
+        Some("required") => {}
+        _ => return Err(metadata_error(BRegMetadataErrorKind::Shape)),
     }
     let authority = identifier(required(&mut review, "authority")?)?;
     let policy_id = identifier(required(&mut review, "policyId")?)?;
@@ -3326,7 +3328,7 @@ fn parse_request_metadata_fields(value: Value) -> Result<Vec<String>, BRegMetada
     if fields.iter().any(|field| {
         !matches!(
             field.as_str(),
-            "actor_reference" | "reason" | "review_state"
+            "actor-reference" | "reason" | "review-state"
         )
     }) {
         return Err(metadata_error(BRegMetadataErrorKind::Shape));
@@ -3498,7 +3500,7 @@ fn parse_selectors(value: Value) -> Result<Vec<BRegLookupSelectorDescriptor>, BR
         }
         let label = bounded_text(required(&mut selector, "label")?)?;
         let value_origin = identifier(required(&mut selector, "valueOrigin")?)?;
-        if !matches!(value_origin.as_str(), "request" | "verified_claim") {
+        if !matches!(value_origin.as_str(), "request" | "verified-claim") {
             return Err(metadata_error(BRegMetadataErrorKind::Shape));
         }
         let mut api_names = BTreeSet::new();
@@ -3533,7 +3535,7 @@ fn parse_selectors(value: Value) -> Result<Vec<BRegLookupSelectorDescriptor>, BR
         }
         finish(selector)?;
         if (value_origin == "request" && request_fields.len() != fields.len())
-            || (value_origin == "verified_claim" && !request_fields.is_empty())
+            || (value_origin == "verified-claim" && !request_fields.is_empty())
         {
             return Err(metadata_error(BRegMetadataErrorKind::Shape));
         }
@@ -3567,9 +3569,9 @@ fn validate_query(value: Value, slots: &BTreeSet<&str>) -> Result<(), BRegMetada
     )?;
     boolean(required(&mut query, "allowCount")?)?;
     positive_integer(required(&mut query, "defaultPageSize")?)?;
-    positive_integer(required(&mut query, "maxPageSize")?)?;
-    positive_integer(required(&mut query, "maxFilterClauses")?)?;
-    positive_integer(required(&mut query, "maxInValues")?)?;
+    positive_integer(required(&mut query, "maximumPageSize")?)?;
+    positive_integer(required(&mut query, "maximumFilterClauses")?)?;
+    positive_integer(required(&mut query, "maximumInValues")?)?;
     validate_pagination(required(&mut query, "pagination")?)?;
     validate_temporal(required(&mut query, "temporal")?)?;
     if let Some(spatial) = query.remove("spatialQueries") {
@@ -3655,7 +3657,7 @@ fn validate_temporal(value: Value) -> Result<(), BRegMetadataError> {
     let mode = identifier(required(&mut temporal, "mode")?)?;
     match mode.as_str() {
         "current" => {}
-        "as_of" => {
+        "as-of" => {
             bounded_text(required(&mut temporal, "parameter")?)?;
             boolean(required(&mut temporal, "required")?)?;
             validate_schema_object(required(&mut temporal, "schema")?)?;
@@ -3811,7 +3813,7 @@ fn parse_immediate_actions(
             Value::Null => None,
             value => Some(parse_immediate_action_route(
                 value,
-                &format!("actions.{id}.target_conditions"),
+                &format!("actions.{id}.target-conditions"),
                 false,
                 &format!("action-{id}-target-conditions-input"),
                 &format!("action-{id}-target-conditions-response"),

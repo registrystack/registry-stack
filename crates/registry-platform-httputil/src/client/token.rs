@@ -155,17 +155,18 @@ impl TokenError {
     /// an enum this crate may extend: a metric label, a structured log field, or
     /// a language binding that carries the discriminant across a boundary. The
     /// rendered message is for people and may be reworded; these names are part
-    /// of the crate's contract and will not be renamed. A variant added later
+    /// of the crate's contract, written in kebab-case, and a change to one is
+    /// a breaking change recorded in the changelog. A variant added later
     /// brings a new name rather than reusing one of these.
     #[must_use]
     pub fn kind(&self) -> &'static str {
         match self {
             Self::Unavailable => "unavailable",
-            Self::Invalid { .. } => "invalid_credential",
+            Self::Invalid { .. } => "invalid-credential",
             Self::Configuration { .. } => "configuration",
             Self::Transport { .. } => "transport",
             Self::Refused { .. } => "refused",
-            Self::ScopeNarrowed => "scope_narrowed",
+            Self::ScopeNarrowed => "scope-narrowed",
             Self::Protocol { .. } => "protocol",
         }
     }
@@ -195,7 +196,8 @@ pub enum OAuthErrorCode {
 
 impl OAuthErrorCode {
     /// The registered spelling, or a fixed name for a code from outside the
-    /// section 5.2 set.
+    /// section 5.2 set. The registered words are RFC 6749's and keep its
+    /// spelling; the fixed name is this crate's own and is kebab-case.
     #[must_use]
     pub fn as_str(&self) -> &'static str {
         match self {
@@ -205,7 +207,7 @@ impl OAuthErrorCode {
             Self::UnauthorizedClient => "unauthorized_client",
             Self::UnsupportedGrantType => "unsupported_grant_type",
             Self::InvalidScope => "invalid_scope",
-            Self::Other => "unregistered_error_code",
+            Self::Other => "unregistered-error-code",
         }
     }
 
@@ -294,7 +296,7 @@ mod tests {
                 TokenError::Refused {
                     code: OAuthErrorCode::Other,
                 },
-                "the authorization server declined to issue a token: unregistered_error_code",
+                "the authorization server declined to issue a token: unregistered-error-code",
             ),
             (
                 TokenError::ScopeNarrowed,
@@ -327,7 +329,7 @@ mod tests {
                 TokenError::Invalid {
                     reason: "a bearer credential must be non-empty and within the accepted length",
                 },
-                "invalid_credential",
+                "invalid-credential",
             ),
             (
                 TokenError::Configuration {
@@ -347,7 +349,7 @@ mod tests {
                 },
                 "refused",
             ),
-            (TokenError::ScopeNarrowed, "scope_narrowed"),
+            (TokenError::ScopeNarrowed, "scope-narrowed"),
             (TokenError::Protocol { status: 500 }, "protocol"),
         ];
         for (error, kind) in &cases {
@@ -390,6 +392,27 @@ mod tests {
             let code = OAuthErrorCode::from_wire(candidate);
             assert_eq!(code, OAuthErrorCode::Other, "{candidate}");
             assert!(!code.to_string().contains("canary"), "{candidate}");
+        }
+        assert_eq!(OAuthErrorCode::Other.as_str(), "unregistered-error-code");
+    }
+
+    /// The registered codes are RFC 6749 section 5.2 words and keep the
+    /// spelling the specification gives them.
+    #[test]
+    fn registered_error_codes_keep_the_specification_spelling() {
+        for (code, word) in [
+            (OAuthErrorCode::InvalidRequest, "invalid_request"),
+            (OAuthErrorCode::InvalidClient, "invalid_client"),
+            (OAuthErrorCode::InvalidGrant, "invalid_grant"),
+            (OAuthErrorCode::UnauthorizedClient, "unauthorized_client"),
+            (
+                OAuthErrorCode::UnsupportedGrantType,
+                "unsupported_grant_type",
+            ),
+            (OAuthErrorCode::InvalidScope, "invalid_scope"),
+        ] {
+            assert_eq!(code.as_str(), word);
+            assert_eq!(OAuthErrorCode::from_wire(word), code);
         }
     }
 

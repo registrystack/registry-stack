@@ -172,17 +172,17 @@ fn core_enum_members(name: &str) -> Vec<String> {
         .lines()
         .map(str::trim)
         .filter(|line| !line.is_empty() && !line.starts_with("//") && !line.starts_with('#'))
-        .map(|line| snake_case(line.trim_end_matches(',')))
+        .map(|line| kebab_case(line.trim_end_matches(',')))
         .collect()
 }
 
-/// One variant name under the `snake_case` rename the core model serializes by.
-fn snake_case(variant: &str) -> String {
+/// One variant name under the `kebab-case` rename the core model serializes by.
+fn kebab_case(variant: &str) -> String {
     let mut name = String::new();
     for (index, character) in variant.char_indices() {
         if character.is_ascii_uppercase() {
             if index > 0 {
-                name.push('_');
+                name.push('-');
             }
             name.push(character.to_ascii_lowercase());
         } else {

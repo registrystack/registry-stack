@@ -26,10 +26,10 @@
   ],
   "properties": {
     "apiVersion": {
-      "const": "registry.registrystack.org/breg-explain/v1alpha4"
+      "const": "id.registrystack.org/formats/breg/access-explanation/v1alpha4"
     },
     "kind": {
-      "const": "AccessExplanation"
+      "const": "BRegAccessExplanation"
     },
     "scopeMatching": { "type": "string" },
     "purposeMatching": { "type": "string" },
@@ -82,13 +82,13 @@
       "type": ["string", "null"],
       "description": "The compiled authority inventory's failure, or null when the inventory was built. AuthorityInventoryError is a value-free enum serialized as one of these snake_case strings; the vocabulary is pinned and grows only with an apiVersion bump.",
       "enum": [
-        "principal_claim_missing",
-        "target_entity_not_compiled",
-        "boundary_field_not_compiled",
-        "lookup_selector_not_compiled",
-        "lookup_claim_mapping_incomplete",
-        "lookup_field_not_compiled",
-        "conflicting_claim_expectation",
+        "principal-claim-missing",
+        "target-entity-not-compiled",
+        "boundary-field-not-compiled",
+        "lookup-selector-not-compiled",
+        "lookup-claim-mapping-incomplete",
+        "lookup-field-not-compiled",
+        "conflicting-claim-expectation",
         null
       ]
     },
@@ -138,7 +138,7 @@
             ],
             "properties": {
               "id": {
-                "type": "string"
+                "$ref": "#/$defs/LocalId"
               },
               "name": {
                 "type": "string"
@@ -174,7 +174,7 @@
             ],
             "properties": {
               "id": {
-                "type": "string"
+                "$ref": "#/$defs/LocalId"
               },
               "name": {
                 "type": "string"
@@ -207,7 +207,7 @@
             "additionalProperties": false,
             "required": [
               "entity",
-              "maxDuration",
+              "maximumDurationDays",
               "gives",
               "revokes",
               "refusals",
@@ -218,8 +218,10 @@
               "entity": {
                 "type": "string"
               },
-              "maxDuration": {
-                "type": "string"
+              "maximumDurationDays": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 3652
               },
               "gives": {
                 "type": "array",
@@ -268,7 +270,7 @@
               "condition",
               "purposes",
               "scope",
-              "maxDuration",
+              "maximumDurationDays",
               "probeFunction",
               "indexes",
               "readableFields",
@@ -303,8 +305,10 @@
               "scope": {
                 "type": "string"
               },
-              "maxDuration": {
-                "type": "string"
+              "maximumDurationDays": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 3652
               },
               "probeFunction": {
                 "type": "string"
@@ -402,6 +406,11 @@
     }
   },
   "$defs": {
+    "LocalId": {
+      "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+      "type": "string"
+    },
     "consentIssuer": {
       "type": "object",
       "additionalProperties": false,

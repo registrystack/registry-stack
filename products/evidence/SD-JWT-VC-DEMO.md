@@ -231,7 +231,7 @@ Offline re-verification needs three files and no network:
 cargo run --locked -p registry-evidence -- verify \
   --sd-jwt-vc products/evidence/.sd-jwt-vc-demo/credential.txt \
   --jwks products/evidence/.sd-jwt-vc-demo/trusted.jwks.json \
-  --policy products/evidence/.sd-jwt-vc-demo/verification-policy.yaml
+  --policy products/evidence/.sd-jwt-vc-demo/verification.policy.yaml
 ```
 
 The format is named by the operator. The command never infers a format from a
@@ -251,7 +251,8 @@ configurationRevision: sha256:bcfc829bb1...
 evidenceType: urn:example:fixture:evidence-type:adult-status:v1
 expectedOutputs:
   - concept: urn:example:fixture:concept:adult-status
-    form: boolean
+    form:
+      type: boolean
 expectedSubjects:
   - binding: urn:evidence:subject:v1_3QKF0SHXxkQ9...
     role: subject

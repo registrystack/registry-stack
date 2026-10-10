@@ -1,6 +1,6 @@
-apiVersion: registry.registrystack.org/v1alpha1
-kind: RegistryProject
-registry:
+apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
   id: household-contact-actions
   canonicalBaseIri: https://household-contact-actions.example.gov
   version: 0.1.0
@@ -34,7 +34,7 @@ manifestProjection:
 modules:
   - id: "household-contact-actions-core"
     version: "0.1.0"
-    digest: "sha256:8146b4628f43272da518326a46ba33c2df9044376e696751930b5b513d0f9c15"
+    digest: "sha256:ef998d6643e8d86e8f2f3c735da854e16d4b6693f769c1d257a300ba6cf01c05"
 
 entities: []
 accessProfiles:
@@ -44,58 +44,61 @@ accessProfiles:
     requiredScopes: [registry:household:operate]
     requiredPurposes: [household-administration]
     permissions:
-      - entity: household
-        operations: [create, get]
-        readableFields: [household-code, household-name, district, contact-person]
-        writableFields: [household-code, household-name, district]
-        rowBoundaries:
-          - {field: district, claim: district, operator: equals}
-      - entity: service-center
-        operations: [create, get]
-        readableFields: [center-code, label, district]
-        writableFields: [center-code, label, district]
-        rowBoundaries:
-          - {field: district, claim: district, operator: equals}
-      - entity: person
-        operations: [get]
-        readableFields: [person-code, legal-name, district]
-        rowBoundaries:
-          - {field: district, claim: district, operator: equals}
-      - entity: group-membership
-        operations: [get, list]
-        readableFields: [person, household, registration-site, district]
-        filterableFields: [household, person]
-        rowBoundaries:
-          - {field: district, claim: district, operator: equals}
+      entities:
+        - entity: household
+          operations: [create, get]
+          readableFields: [household-code, household-name, district, contact-person]
+          writableFields: [household-code, household-name, district]
+          rowBoundaries:
+            - {field: district, claim: district, operator: equals}
+        - entity: service-center
+          operations: [create, get]
+          readableFields: [center-code, label, district]
+          writableFields: [center-code, label, district]
+          rowBoundaries:
+            - {field: district, claim: district, operator: equals}
+        - entity: person
+          operations: [get]
+          readableFields: [person-code, legal-name, district]
+          rowBoundaries:
+            - {field: district, claim: district, operator: equals}
+        - entity: group-membership
+          operations: [get, list]
+          readableFields: [person, household, registration-site, district]
+          filterableFields: [household, person]
+          rowBoundaries:
+            - {field: district, claim: district, operator: equals}
   - id: household-maintainer
     principalClaim: registry_principal
     requiredScopes: [registry:household:maintain]
     requiredPurposes: [household-maintenance]
     permissions:
-      - entity: household
-        operations: [get, patch]
-        readableFields: [household-code, household-name, district, contact-person]
-        writableFields: [household-name]
-        rowBoundaries:
-          - {field: district, claim: district, operator: equals}
+      entities:
+        - entity: household
+          operations: [get, patch]
+          readableFields: [household-code, household-name, district, contact-person]
+          writableFields: [household-name]
+          rowBoundaries:
+            - {field: district, claim: district, operator: equals}
   - id: contact-registrar
     principalClaim: registry_principal
     requiredScopes: [registry:contact:register]
     requiredPurposes: [contact-registration]
     permissions:
-      - action: register-household-contact
-        operations: [invoke]
-        targets:
-          - entity: household
-            rowBoundaries:
-              - {field: district, claim: district, operator: equals}
-          - entity: person
-            rowBoundaries:
-              - {field: district, claim: district, operator: equals}
-          - entity: group-membership
-            rowBoundaries:
-              - {field: district, claim: district, operator: equals}
-          - entity: service-center
-            rowBoundaries:
-              - {field: district, claim: district, operator: equals}
-        results: [person, membership, household]
+      actions:
+        - action: register-household-contact
+          operations: [invoke]
+          targets:
+            - entity: household
+              rowBoundaries:
+                - {field: district, claim: district, operator: equals}
+            - entity: person
+              rowBoundaries:
+                - {field: district, claim: district, operator: equals}
+            - entity: group-membership
+              rowBoundaries:
+                - {field: district, claim: district, operator: equals}
+            - entity: service-center
+              rowBoundaries:
+                - {field: district, claim: district, operator: equals}
+          results: [person, membership, household]

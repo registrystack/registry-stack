@@ -121,11 +121,7 @@ pub(crate) fn check_description(
     path: &Path,
     description: &Value,
 ) -> Result<()> {
-    let described = match description.get("requests").and_then(Value::as_array) {
-        Some(requests) => requests.iter().collect::<Vec<_>>(),
-        None => vec![&description["request"]],
-    };
-    for request in described {
+    for request in description["requests"].as_array().into_iter().flatten() {
         check_described_request(policy, source, path, request)?;
     }
     Ok(())

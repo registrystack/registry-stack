@@ -48,19 +48,19 @@ const REVISION: &str = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 const SOURCE: &str = "https://casework.example";
 const ACTOR: &str = "00000000-0000-4000-8000-0000000000aa";
 const PROJECT: &str = r#"{
-  "apiVersion":"registry.registrystack.org/v1alpha1",
-  "kind":"RegistryProject",
-  "registry":{"id":"task-authority-http","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+  "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+  "kind":"BRegProject",
+  "project":{"id":"task-authority-http","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
   "entities":[
     {
       "id":"asset-site",
       "primaryDataset":"test-dataset",
       "route":"sites",
-      "mutationMode":"create_only",
+      "mutationMode":"create-only",
       "classification":"internal",
       "fields":[
-        {"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"},
-        {"id":"name","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"}
+        {"id":"tenant","type":"string","minimumLength":1,"maximumLength":64,"required":true,"classification":"internal"},
+        {"id":"name","type":"string","minimumLength":1,"maximumLength":64,"required":true,"classification":"internal"}
       ]
     },
     {
@@ -71,7 +71,7 @@ const PROJECT: &str = r#"{
       "classification":"internal",
       "changeControl":{"requiredFor":["patch"]},
       "fields":[
-        {"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"},
+        {"id":"tenant","type":"string","minimumLength":1,"maximumLength":64,"required":true,"classification":"internal"},
         {"id":"site","type":"reference","target":"asset-site","required":true,"classification":"internal"}
       ]
     },
@@ -82,14 +82,14 @@ const PROJECT: &str = r#"{
       "mutationMode":"mutable",
       "classification":"internal",
       "fields":[
-        {"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"},
+        {"id":"tenant","type":"string","minimumLength":1,"maximumLength":64,"required":true,"classification":"internal"},
         {"id":"placement","type":"reference","target":"asset-placement","required":true,"classification":"internal"},
         {"id":"proposed-site","type":"reference","target":"asset-site","required":true,"classification":"internal"},
-        {"id":"reason","type":"text","maxLength":1000,"required":true,"classification":"internal"}
+        {"id":"reason","type":"text","maximumLength":1000,"required":true,"classification":"internal"}
       ],
       "changeRequest":{
         "effects":[{"target":{"fromField":"placement"},"operation":"patch","set":{"site":{"fromField":"proposed-site"}}}],
-        "review":{"mode":"none"},
+        "review":{"type":"none"},
         "onApproved":{"mode":"manual"}
       }
     }
@@ -98,8 +98,8 @@ const PROJECT: &str = r#"{
     {
       "id":"name-site",
       "inputs":[
-        {"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"},
-        {"id":"name","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"}
+        {"id":"tenant","type":"string","minimumLength":1,"maximumLength":64,"required":true,"classification":"internal"},
+        {"id":"name","type":"string","minimumLength":1,"maximumLength":64,"required":true,"classification":"internal"}
       ],
       "effects":[
         {"id":"site","target":{"entity":"asset-site"},"operation":"create",
@@ -113,46 +113,52 @@ const PROJECT: &str = r#"{
       "default":true,
       "principalClaim":"sub",
       "requiredScopes":"unrestricted",
-      "permissions":[
-        {
-          "entity":"asset-site",
-          "operations":["create","get","list"],
-          "readableFields":["tenant","name"],
-          "writableFields":["tenant","name"],
-          "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]
-        },
-        {
-          "entity":"asset-placement",
-          "operations":["create","get","list","revisions"],
-          "revisionAccess":true,
-          "readableFields":["tenant","site"],
-          "writableFields":["tenant","site"],
-          "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}],
-          "requestPresence":[{"requestType":"correction-request","rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]}]
-        },
-        {
-          "action":"name-site",
-          "operations":["invoke"],
-          "targets":[{"entity":"asset-site","rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]}],
-          "results":["site"]
-        }
-      ]
+      "permissions":{
+        "entities":[
+          {
+            "entity":"asset-site",
+            "operations":["create","get","list"],
+            "readableFields":["tenant","name"],
+            "writableFields":["tenant","name"],
+            "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]
+          },
+          {
+            "entity":"asset-placement",
+            "operations":["create","get","list","revisions"],
+            "revisionAccess":true,
+            "readableFields":["tenant","site"],
+            "writableFields":["tenant","site"],
+            "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}],
+            "requestPresence":[{"requestType":"correction-request","rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]}]
+          }
+        ],
+        "actions":[
+          {
+            "action":"name-site",
+            "operations":["invoke"],
+            "targets":[{"entity":"asset-site","rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]}],
+            "results":["site"]
+          }
+        ]
+      }
     },
     {
       "id":"submitter",
       "default":true,
       "principalClaim":"sub",
       "requiredScopes":"unrestricted",
-      "permissions":[
-        {
-          "entity":"correction-request",
-          "operations":["create","get","list","revisions","patch","submit_request","revise_request","cancel_request"],
-          "revisionAccess":true,
-          "readableFields":["tenant","placement","proposed-site","reason"],
-          "writableFields":["tenant","placement","proposed-site","reason"],
-          "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]
-        }
-      ],
+      "permissions":{
+        "entities":[
+          {
+            "entity":"correction-request",
+            "operations":["create","get","list","revisions","patch","submit-request","revise-request","cancel-request"],
+            "revisionAccess":true,
+            "readableFields":["tenant","placement","proposed-site","reason"],
+            "writableFields":["tenant","placement","proposed-site","reason"],
+            "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]
+          }
+        ]
+      },
       "actorKind":"agent",
       "requesterClients":["task-agent"],
       "requiredPurposes":["review"],
@@ -162,15 +168,17 @@ const PROJECT: &str = r#"{
       "id":"standing-agent",
       "principalClaim":"sub",
       "requiredScopes":"unrestricted",
-      "permissions":[
-        {
-          "entity":"correction-request",
-          "operations":["create","get","patch"],
-          "readableFields":["tenant","placement","proposed-site","reason"],
-          "writableFields":["tenant","placement","proposed-site","reason"],
-          "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]
-        }
-      ],
+      "permissions":{
+        "entities":[
+          {
+            "entity":"correction-request",
+            "operations":["create","get","patch"],
+            "readableFields":["tenant","placement","proposed-site","reason"],
+            "writableFields":["tenant","placement","proposed-site","reason"],
+            "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]
+          }
+        ]
+      },
       "actorKind":"agent",
       "requesterClients":["citizen-agent"]
     },
@@ -179,29 +187,33 @@ const PROJECT: &str = r#"{
       "principalClaim":"sub",
       "requiredScopes":"unrestricted",
       "requiredPurposes":["review"],
-      "permissions":[
-        {
-          "entity":"correction-request",
-          "operations":["get","list"],
-          "readableFields":["tenant","placement","proposed-site","reason"],
-          "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]
-        }
-      ]
+      "permissions":{
+        "entities":[
+          {
+            "entity":"correction-request",
+            "operations":["get","list"],
+            "readableFields":["tenant","placement","proposed-site","reason"],
+            "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]
+          }
+        ]
+      }
     },
     {
       "id":"applier",
       "principalClaim":"sub",
       "requiredScopes":"unrestricted",
       "requiredPurposes":["apply"],
-      "permissions":[
-        {
-          "entity":"correction-request",
-          "operations":["get","apply_request"],
-          "readableFields":["tenant","placement","proposed-site","reason"],
-          "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}],
-          "applyTargets":[{"entity":"asset-placement","rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]}]
-        }
-      ]
+      "permissions":{
+        "entities":[
+          {
+            "entity":"correction-request",
+            "operations":["get","apply-request"],
+            "readableFields":["tenant","placement","proposed-site","reason"],
+            "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}],
+            "applyTargets":[{"entity":"asset-placement","rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]}]
+          }
+        ]
+      }
     }
   ]
 }"#;
@@ -448,7 +460,7 @@ fn agent(idp: &MockIdp, status: &Status) -> (String, String) {
         .unwrap()
         .iter()
         .find(|p| p["id"] == "submitter")
-        .unwrap()["permissions"]
+        .unwrap()["permissions"]["entities"]
         .as_array()
         .unwrap();
     let bounds = json!({"type":"breg","permissions":permissions.iter().map(|p|json!({"collection":"correction-requests","operations":p["operations"]})).collect::<Vec<_>>()});
@@ -1079,7 +1091,7 @@ async fn task_http_to_postgres_preserves_original_authority_and_completed_receip
         assert_grant_audit(&db, &grant, "terminal", "allowed").await;
         let record = id(&draft);
         let read = get(&app, &record, "submitter", &token).await;
-        let submit = action(&read, "submit_request");
+        let submit = action(&read, "submit-request");
         let (other_grant, other_token) = agent(&idp, &status);
         let same_read = get(&app, &record, "submitter", &other_token).await;
         assert_eq!(
@@ -1191,7 +1203,7 @@ async fn task_http_to_postgres_preserves_original_authority_and_completed_receip
         assert_eq!(stored["principal"], "agent-subject");
         let apply = action(
             &get(&app, &record, "applier", &applier).await,
-            "apply_request",
+            "apply-request",
         );
         if phase == "submitted" {
             status.revoke(&grant);
@@ -1301,7 +1313,7 @@ async fn task_http_to_postgres_preserves_original_authority_and_completed_receip
 async fn external_review_submission_preserves_exact_task_grant_and_refuses_substitution() {
     let mut project: Value = serde_json::from_str(PROJECT).unwrap();
     project["entities"][2]["changeRequest"]["review"] =
-        json!({"authority":"casework-a","policyId":"correction-review"});
+        json!({"type":"required","authority":"casework-a","policyId":"correction-review"});
     project["entities"][2]["changeRequest"]["onApproved"] = json!({"mode":"manual"});
     project["accessProfiles"]
         .as_array_mut()
@@ -1366,7 +1378,7 @@ async fn external_review_submission_preserves_exact_task_grant_and_refuses_subst
     let record = id(&draft);
     let submit = action(
         &get(&app, &record, "submitter", &token).await,
-        "submit_request",
+        "submit-request",
     );
     let submitted = perform(&app, &submit, &token, "external-submit").await;
     assert_eq!(submitted.status, StatusCode::OK, "{}", submitted.body);
@@ -1453,7 +1465,7 @@ async fn evidence_apply_checks_original_task_before_disclosure_and_before_commit
             "id":"farmer-status", "provider":"farmer-registry",
             "requirement":"urn:example:farmer:status-v1",
             "subjects":{"farmer":{"profile":"farmer-number-v1",
-                "selectors":{"farmer-number":{"source":"request_field","field":"tenant"}}}},
+                "selectors":{"farmer-number":{"type":"request-field","field":"tenant"}}}},
             "requires":[{"output":"active","equals":true}],
             "maximumObservationAgeSeconds":60
         }]}
@@ -1527,13 +1539,13 @@ async fn evidence_apply_checks_original_task_before_disclosure_and_before_commit
         let record = id(&draft);
         let submit = action(
             &get(&app, &record, "submitter", &token).await,
-            "submit_request",
+            "submit-request",
         );
         let submitted = perform(&app, &submit, &token, &format!("{phase}-submit")).await;
         assert_eq!(submitted.status, StatusCode::OK, "{}", submitted.body);
         let apply = action(
             &get(&app, &record, "applier", &applier).await,
-            "apply_request",
+            "apply-request",
         );
         match phase {
             "revoked" => status.revoke(&grant),
@@ -1584,7 +1596,7 @@ async fn evidence_apply_checks_original_task_before_disclosure_and_before_commit
 async fn review_apply_checks_original_task_before_authority_and_before_commit() {
     let mut project: Value = serde_json::from_str(PROJECT).unwrap();
     project["entities"][2]["changeRequest"]["review"] =
-        json!({"authority":"casework-a","policyId":"correction-review"});
+        json!({"type":"required","authority":"casework-a","policyId":"correction-review"});
     project["entities"][2]["changeRequest"]["onApproved"] = json!({"mode":"manual"});
     project["accessProfiles"]
         .as_array_mut()
@@ -1657,7 +1669,7 @@ async fn review_apply_checks_original_task_before_authority_and_before_commit() 
         let record = id(&draft);
         let submit = action(
             &get(&app, &record, "submitter", &token).await,
-            "submit_request",
+            "submit-request",
         );
         let submitted = perform(&app, &submit, &token, &format!("{phase}-submit")).await;
         assert_eq!(submitted.status, StatusCode::OK, "{}", submitted.body);
@@ -1689,7 +1701,7 @@ async fn review_apply_checks_original_task_before_authority_and_before_commit() 
 
         let apply = action(
             &get(&app, &record, "applier", &applier).await,
-            "apply_request",
+            "apply-request",
         );
         match phase {
             "revoked" => status.revoke(&grant),

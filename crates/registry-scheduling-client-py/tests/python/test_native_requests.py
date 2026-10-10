@@ -276,7 +276,7 @@ class NativeRequestTests(unittest.TestCase):
             with self.subTest(call=index):
                 with self.assertRaises(SchedulingClientError) as raised:
                     call()
-                self.assertEqual(raised.exception.kind, "invalid_request")
+                self.assertEqual(raised.exception.kind, "invalid-request")
         self.assertEqual(_Handler.observations, [])
 
     def test_get_scheduling_answers_the_deployment_with_the_answered_trace(self) -> None:

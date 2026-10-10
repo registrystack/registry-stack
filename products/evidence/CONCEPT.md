@@ -588,7 +588,8 @@ inconsistent, mutable, or cannot be validated.
 Illustrative YAML:
 
 ```yaml
-version: 1
+apiVersion: id.registrystack.org/formats/evidence/bundle/v1
+kind: EvidenceBundle
 
 service:
   provider_id: urn:example:data-service:evidence
@@ -615,12 +616,12 @@ selector_profiles:
 
 sources:
   civil-registry:
-    transport: http-json
+    type: http-json
     base_url: https://civil-registry.internal
     posture: field-projected
     tls_trust_profile: government-internal-pki
     authentication:
-      kind: static-authorization
+      type: static-authorization
       token_ref: secret:file/civil-registry-token
     request:
       method: POST
@@ -655,7 +656,7 @@ requirements:
     kind: criterion
     name: Adult status
     acquisition:
-      kind: single
+      type: single
       source: civil-registry
     purposes:
       - benefit-eligibility
@@ -774,7 +775,7 @@ authentication form, credential placement, audience, optional RFC 8707 resource
 indicator, token lifetime handling, bounds, and redaction. Rhai sees neither
 the credential flow, the signing key, nor the resulting token.
 
-The explicit local assurance profile may additionally use `kind: none` for a
+The explicit local assurance profile may additionally use `type: none` for a
 source at one canonical numeric-loopback HTTP origin with an explicit non-zero
 port. Rust sends no authentication header in that mode. Production and
 evidence-grade bundles reject it, so this tutorial convenience is not an
@@ -827,7 +828,7 @@ Illustrative YAML, beside the HTTP source of the same bundle:
 ```yaml
 sources:
   subject-extract:
-    transport: sqlite-extract
+    type: sqlite-extract
     extractProfile: subject-registry-extract
     posture: source-derived
     maximumExtractAgeSeconds: 86400
@@ -840,7 +841,7 @@ sources:
               fields: [given_name, family_name, birth_date]
       parameterBindings:
         birth_date:
-          kind: selector
+          type: selector
           role: subject
           profile: person-demographics-v1
           field: birth_date
@@ -1296,8 +1297,8 @@ allowed clock skew during planned rotation. Emergency revocation removes it
 immediately, and denylisting takes precedence over cached key selection.
 
 Runtime signing is a separate process-local binding. Local assurance resolves
-one P-256 private JWK through `signer.kind: local-jwk`. Production and
-evidence-grade use `signer.kind: transit` over a workload-local Unix socket,
+one P-256 private JWK through `signer.type: local-jwk`. Production and
+evidence-grade use `signer.type: transit` over a workload-local Unix socket,
 with a pinned nonzero Vault/OpenBao Transit key version and no provider token
 in Evidence. Transit reports `ecdsa-p256`, signing enabled, `derived=false`,
 `exportable=false`, and `allow_plaintext_backup=false`. The provider public key
@@ -1497,7 +1498,7 @@ The response is the closed `registry.evidence-request-batch/v1`
 `EvidenceRequestBatchResponse`. Its `items` are in exact request order. An
 available result carries one flattened JWS under the ordinary signed Evidence
 profile. Every condition that singular evaluation already exposes as
-`evidence_not_available` becomes that closed outcome for the item, including
+`evidence-not-available` becomes that closed outcome for the item, including
 `no_match`, `ambiguous`, required-fact-missing, and
 derivation-input-unresolved, plus an exact source-declared unresolved outcome
 from a singular or search stage. Mixed and all-unavailable
@@ -1760,7 +1761,7 @@ Version one must preserve these invariants:
     of any such gate starts no acquisition and releases no partial result.
 35. Each request-batch item is evaluated in request order and produces exactly
     one ordered response member. Every class the singular collapse contract
-    exposes as `evidence_not_available` becomes that item outcome; every other
+    exposes as `evidence-not-available` becomes that item outcome; every other
     failure aborts the outer request through the existing safe problem
     contract.
 36. Optional source batching has two independent authorizers, the governed
@@ -2747,7 +2748,7 @@ This concept fixes the following decisions:
     or past its package-declared maximum age is refused before any row is read.
 27. `POST /v1/evidence/batch` is a bounded audience-scoped evaluation envelope,
     not the holder-bound issuance batch. It returns ordered signed JWS or
-    `evidence_not_available` outcomes, applies all admission gates before I/O,
+    `evidence-not-available` outcomes, applies all admission gates before I/O,
     and never releases a partial envelope.
 28. A fixed-path HTTP JSON source may declare an optional one-call batch
     optimization. It requires bundle and runtime `source-batch` capability,

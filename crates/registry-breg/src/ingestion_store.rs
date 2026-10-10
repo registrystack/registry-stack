@@ -1624,25 +1624,25 @@ mod tests {
 
     fn bindings_registry() -> crate::model::CompiledRegistry {
         let fixture = r#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"bindings-test","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"bindings-test","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
             "id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable","classification":"internal",
             "fields":[
-              {"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"},
-              {"id":"serial-code","apiName":"serialNumber","type":"string","maxLength":64,"classification":"internal"}
+              {"id":"tenant","type":"string","minimumLength":1,"maximumLength":64,"required":true,"classification":"internal"},
+              {"id":"serial-code","apiName":"serialNumber","type":"string","maximumLength":64,"classification":"internal"}
             ]
           }],
           "accessProfiles":[{
             "id":"operator","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "requiredPurposes":["review"],
-            "permissions":[{
+            "permissions":{"entities":[{
               "entity":"entry","operations":["create"],
               "readableFields":["tenant","serial-code"],
               "writableFields":["tenant","serial-code"],
               "rowBoundaries":"unrestricted"
-            }]
+            }]}
           }]
         }"#;
         let project =
@@ -1744,7 +1744,7 @@ mod tests {
             .zip(&api_names)
             .map(|(id, api_name)| {
                 format!(
-                    r#"{{"id":"{id}","apiName":"{api_name}","type":"string","maxLength":1,"classification":"internal"}}"#
+                    r#"{{"id":"{id}","apiName":"{api_name}","type":"string","maximumLength":1,"classification":"internal"}}"#
                 )
             })
             .collect::<Vec<_>>()
@@ -1756,9 +1756,9 @@ mod tests {
             .join(",");
         let fixture = format!(
             r#"{{
-              "apiVersion":"registry.registrystack.org/v1alpha1",
-              "kind":"RegistryProject",
-              "registry":{{"id":"bindings-test","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
+              "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+              "kind":"BRegProject",
+              "project":{{"id":"bindings-test","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
               "entities":[{{
                 "id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable","classification":"internal",
                 "fields":[{fields}]
@@ -1766,12 +1766,12 @@ mod tests {
               "accessProfiles":[{{
                 "id":"operator","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
                 "requiredPurposes":["review"],
-                "permissions":[{{
+                "permissions":{{"entities":[{{
                   "entity":"entry","operations":["create"],
                   "readableFields":[{readable}],
                   "writableFields":[{readable}],
                   "rowBoundaries":"unrestricted"
-                }}]
+                }}]}}
               }}]
             }}"#
         );

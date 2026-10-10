@@ -142,7 +142,7 @@ async fn agent_drafts_and_the_review_page_submits_with_the_current_if_match() {
         .await;
     assert_eq!(agent_view.status, StatusCode::OK, "{}", agent_view.body);
     assert!(
-        !offered_operations(&agent_view.body).contains(&"submit_request".to_owned()),
+        !offered_operations(&agent_view.body).contains(&"submit-request".to_owned()),
         "the agent profile is never offered submission: {}",
         agent_view.body
     );
@@ -150,7 +150,7 @@ async fn agent_drafts_and_the_review_page_submits_with_the_current_if_match() {
     let before = fixture
         .request_view(&draft, "citizen-review", &review)
         .await;
-    let submit = action(&before, "submit_request");
+    let submit = action(&before, "submit-request");
     let agent_submit = fixture
         .call(
             Method::POST,
@@ -246,7 +246,7 @@ async fn agent_drafts_and_the_review_page_submits_with_the_current_if_match() {
     let current = fixture
         .request_view(&draft, "citizen-review", &review)
         .await;
-    let submit = action(&current, "submit_request");
+    let submit = action(&current, "submit-request");
     let submitted = fixture
         .call(
             Method::POST,
@@ -300,7 +300,7 @@ async fn another_citizen_cannot_read_patch_or_submit_the_draft() {
             &fixture.review_page_token(CITIZEN_A),
         )
         .await;
-    let submit = action(&owner_view, "submit_request");
+    let submit = action(&owner_view, "submit-request");
 
     let other_agent = fixture.agent_token(CITIZEN_B);
     let other_review = fixture.review_page_token(CITIZEN_B);
@@ -445,7 +445,7 @@ async fn address_changes_only_after_approval_and_apply() {
     let view = fixture
         .request_view(&draft, "citizen-review", &review)
         .await;
-    let submit = action(&view, "submit_request");
+    let submit = action(&view, "submit-request");
     let submitted = fixture
         .call(
             Method::POST,
@@ -468,7 +468,7 @@ async fn address_changes_only_after_approval_and_apply() {
 
     let applier = fixture.staff_token("synthetic-applier", APPLY_SCOPE);
     let pending = fixture.request_view(&draft, "applier", &applier).await;
-    let early = action(&pending, "apply_request");
+    let early = action(&pending, "apply-request");
     let refused = fixture
         .call(
             Method::POST,
@@ -492,7 +492,7 @@ async fn address_changes_only_after_approval_and_apply() {
     fixture.approve(&draft.id).await;
     assert_eq!(fixture.steward_address(&citizen.address).await, original);
     let approved = fixture.request_view(&draft, "applier", &applier).await;
-    let apply = action(&approved, "apply_request");
+    let apply = action(&approved, "apply-request");
     let applied = fixture
         .call(
             Method::POST,
@@ -659,7 +659,7 @@ async fn create_and_submit_retries_produce_one_effect() {
     let view = fixture
         .request_view(&first, "citizen-review", &review)
         .await;
-    let submit = action(&view, "submit_request");
+    let submit = action(&view, "submit-request");
     let mut answers = Vec::new();
     for _ in 0..2 {
         let answer = fixture
@@ -1391,7 +1391,7 @@ impl TestPackage {
             .package
             .as_ref()
             .expect("acceptance project declares package identity");
-        let database_id = format!("{}-database", sources.project.registry.id);
+        let database_id = format!("{}-database", sources.project.project.id);
         let prepared = prepare_package(PackageBuildRequest {
             from_package_digest: None,
             compiler_source_revision: identity.source_revision.clone(),
@@ -1468,7 +1468,7 @@ impl TestPackage {
         fs::write(
             &path,
             format!(
-                r#"apiVersion: registry.registrystack.org/breg-runtime/v1alpha1
+                r#"apiVersion: id.registrystack.org/formats/breg/runtime/v1alpha1
 kind: BRegRuntimeConfig
 listener:
   bind: 127.0.0.1:9
@@ -1484,7 +1484,7 @@ database:
   runtimeUrlRef: secret:file/database-url
   migrationUrlRef: secret:file/migration-database-url
   pool:
-    maxSize: 8
+    maximumConnections: 8
     waitTimeoutMilliseconds: 2000
     createTimeoutMilliseconds: 2000
     recycleTimeoutMilliseconds: 2000
@@ -1502,17 +1502,17 @@ authentication:
     scopeClaim: scope
     scopeSeparator: " "
     allowedClients: [{GATEWAY_CLIENT}, {REVIEW_PAGE_CLIENT}, {STAFF_CLIENT}]
-    maxTokenLifetimeSeconds: 3600
+    maximumTokenLifetimeSeconds: 3600
     leewayMilliseconds: 60000
     jwksSource:
-      kind: static
+      type: static
       documentRef: secret:file/oidc-jwks
     jwksCache:
       cacheTtlSeconds: 60
       negativeCacheTtlSeconds: 1
       refreshCooldownSeconds: 1
-      maxDocumentBytes: 65536
-      requestTimeoutMilliseconds: 5000
+      maximumDocumentBytes: 65536
+      attemptTimeoutMilliseconds: 5000
       outageToleranceSeconds: 0
   authorityClaims:
     principal: sub
@@ -1530,7 +1530,7 @@ audit:
   path: {audit_path}
 cursor:
   secretRef: secret:file/cursor-key
-  maxAgeSeconds: 300
+  maximumAgeSeconds: 300
 operationalTimeouts:
   httpRequestMilliseconds: 5000
   shutdownGraceMilliseconds: 1000

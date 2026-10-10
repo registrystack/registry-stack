@@ -24,9 +24,9 @@ fn compile(
 
 fn project_with_entities(entities: Value) -> Value {
     json!({
-        "apiVersion": "registry.registrystack.org/v1alpha1",
-        "kind": "RegistryProject",
-        "registry": {
+        "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
+        "kind": "BRegProject",
+        "project": {
             "id": "logical-sql-names",
             "version": "1",
             "defaultLanguage": "en",

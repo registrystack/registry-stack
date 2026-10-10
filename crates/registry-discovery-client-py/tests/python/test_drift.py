@@ -187,7 +187,7 @@ class DriftTest(unittest.TestCase):
                     "legalIssuerId": "urn:example:legal-issuer:other",
                 },
             )
-        self.assertEqual(caught.exception.kind, "selection_changed")
+        self.assertEqual(caught.exception.kind, "selection-changed")
 
     def test_error_attributes_and_inheritance_are_pinned(self) -> None:
         self.assertEqual(

@@ -1,6 +1,6 @@
-apiVersion: registry.registrystack.org/v1alpha1
-kind: RegistryProject
-registry:
+apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
   id: access-review
   canonicalBaseIri: https://registry.example.com
   version: 0.1.0
@@ -30,9 +30,9 @@ entities:
     mutationMode: mutable
     classification: internal
     fields:
-      - {id: code, type: string, required: true, maxLength: 32, classification: internal}
-      - {id: label, type: string, required: true, maxLength: 100, classification: internal}
-      - {id: district, type: string, required: true, maxLength: 32, classification: internal}
+      - {id: code, type: string, required: true, maximumLength: 32, classification: internal}
+      - {id: label, type: string, required: true, maximumLength: 100, classification: internal}
+      - {id: district, type: string, required: true, maximumLength: 32, classification: internal}
     indexes:
       - {id: by-code, fields: [code]}
       - {id: by-district, fields: [district]}
@@ -47,9 +47,10 @@ accessProfiles:
     requiredScopes: [record:read]
     requiredPurposes: [record-administration]
     permissions:
-      - entity: record
-        operations: [get, list]
-        readableFields: [code, label, district]
-        filterableFields: [code, district]
-        rowBoundaries:
-          - {field: district, claim: assigned_districts, operator: in}
+      entities:
+        - entity: record
+          operations: [get, list]
+          readableFields: [code, label, district]
+          filterableFields: [code, district]
+          rowBoundaries:
+            - {field: district, claim: assigned_districts, operator: in}

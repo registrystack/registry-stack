@@ -146,12 +146,14 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_value(query).expect("serialize query"),
-            json!({"ownership": "assigned_to_me"})
+            json!({"ownership": "assigned-to-me"})
         );
-        assert!(serde_json::from_value::<ReviewTaskQuery>(json!({
-            "ownership": "someone_elses"
-        }))
-        .is_err());
+        for refused in ["someone-elses", "assigned_to_me"] {
+            assert!(serde_json::from_value::<ReviewTaskQuery>(json!({
+                "ownership": refused
+            }))
+            .is_err());
+        }
     }
 
     #[test]
@@ -176,7 +178,7 @@ mod tests {
         );
         for wire in [
             json!({"cursor": "not-a-uuid"}),
-            json!({"ownership": "assigned_to_me"}),
+            json!({"ownership": "assigned-to-me"}),
             json!({"author": "colleague"}),
             json!({"limit": -1}),
         ] {

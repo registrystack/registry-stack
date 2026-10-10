@@ -89,24 +89,24 @@ fn sha256(bytes: &[u8]) -> String {
 fn wasm_project() -> Value {
     serde_json::from_str(
         r#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"wasm-admission","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"wasm-admission","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
             "id":"person","primaryDataset":"test-dataset","route":"people","mutationMode":"mutable",
             "fields":[
-              {"id":"person-code","apiName":"personCode","type":"string","maxLength":64,"required":true,"classification":"restricted"},
-              {"id":"legal-name","apiName":"legalName","type":"string","maxLength":160,"required":true,"classification":"restricted"}
+              {"id":"person-code","apiName":"personCode","type":"string","maximumLength":64,"required":true,"classification":"restricted"},
+              {"id":"legal-name","apiName":"legalName","type":"string","maximumLength":160,"required":true,"classification":"restricted"}
             ]
           }],
           "actions":[{
             "id":"register-person",
             "inputs":[
-              {"id":"person-code","apiName":"personCode","type":"string","maxLength":64,"required":true,"classification":"restricted"},
-              {"id":"legal-name","apiName":"legalName","type":"string","maxLength":160,"required":true,"classification":"restricted"}
+              {"id":"person-code","apiName":"personCode","type":"string","maximumLength":64,"required":true,"classification":"restricted"},
+              {"id":"legal-name","apiName":"legalName","type":"string","maximumLength":160,"required":true,"classification":"restricted"}
             ],
             "handler":{
-              "kind":"wasm","module":"wasm/handler.wasm","abi":"registry.action-handler/v1",
+              "type":"wasm","module":"wasm/handler.wasm","abi":"registry.action-handler/v1",
               "writes":[{
                 "id":"person","target":{"entity":"person"},"operation":"create",
                 "fields":["person-code","legal-name"]
@@ -115,11 +115,11 @@ fn wasm_project() -> Value {
           }],
           "accessProfiles":[{
             "id":"registrar","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
-            "permissions":[{
+            "permissions":{"actions":[{
               "action":"register-person","operations":["invoke"],
               "targets":[{"entity":"person","rowBoundaries":"unrestricted"}],
               "results":["person"]
-            }]
+            }]}
           }]
         }"#,
     )
@@ -400,7 +400,7 @@ fn the_v2_abi_stays_refused_for_wasm_handlers_under_the_feature() {
         .map(|_| ())
         .expect_err("the Evidence-enabled v2 ABI stays out of scope for WASM");
     let diagnostic = first_code(&failure, "breg.action.handler-wasm-abi-unsupported");
-    assert_eq!(diagnostic.path, "actions[register-person].handler.kind");
+    assert_eq!(diagnostic.path, "actions[register-person].handler.type");
 }
 
 #[test]
@@ -415,11 +415,11 @@ fn the_per_package_wasm_module_count_is_bounded() {
         actions.push(json!({
             "id": id,
             "inputs":[
-              {"id":"person-code","type":"string","maxLength":64,"required":true,"classification":"restricted"},
-              {"id":"legal-name","type":"string","maxLength":160,"required":true,"classification":"restricted"}
+              {"id":"person-code","type":"string","maximumLength":64,"required":true,"classification":"restricted"},
+              {"id":"legal-name","type":"string","maximumLength":160,"required":true,"classification":"restricted"}
             ],
             "handler":{
-              "kind":"wasm","module":"wasm/handler.wasm","abi":"registry.action-handler/v1",
+              "type":"wasm","module":"wasm/handler.wasm","abi":"registry.action-handler/v1",
               "writes":[{"id":"person","target":{"entity":"person"},"operation":"create","fields":["person-code","legal-name"]}]
             }
         }));
@@ -430,7 +430,7 @@ fn the_per_package_wasm_module_count_is_bounded() {
         }));
     }
     project["actions"] = Value::Array(actions);
-    project["accessProfiles"][0]["permissions"] = Value::Array(permissions);
+    project["accessProfiles"][0]["permissions"] = json!({ "actions": permissions });
     let failure = compile_with_module(project, "wasm/handler.wasm", binary(MINIMAL_ABI_WAT))
         .map(|_| ())
         .expect_err("a package beyond the module-count ceiling is refused");

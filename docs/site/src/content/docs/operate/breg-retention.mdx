@@ -195,7 +195,7 @@ that changed outside the server's write path, so the journal never recorded the 
 ## Erase change-request detail
 
 Change-request proposals and application receipts keep their own retention. A request entity
-whose `changeRequest.retention.mode` is `operator_erase` allows the operator to erase the payload
+whose `changeRequest.retention.mode` is `operator-erase` allows the operator to erase the payload
 detail of one proposal version while keeping its value-free lifecycle rows; the default `retain`
 mode refuses erasure. List the retained rows, then count what one erasure would remove:
 
@@ -420,12 +420,12 @@ entry could not be written, the command reports `request_retention.erasure.unaud
 gone, so restore the audit destination and reconcile the erased request against the database. An
 event delivery's attempt is recorded inside the transaction that leases it, before its request
 leaves. If that lease transaction does not commit, no request leaves and the attempt is answered
-`worker_interrupted`, so an attempt entry does not prove a request was sent. An attempt's terminal
+`worker-interrupted`, so an attempt entry does not prove a request was sent. An attempt's terminal
 outcome is recorded only once the delivery's state has committed. When that commit fails and whether
-it committed cannot be read back, the attempt is answered `worker_interrupted` with disposition
+it committed cannot be read back, the attempt is answered `worker-interrupted` with disposition
 `unknown`, which claims no delivery state; read the delivery's state to learn it. Lease-expiry
 recovery answers the attempt again if its lease survived. An operator replay is recorded as a request
-before the reset and a response once it commits or is refused, or `replay_unfinished` when its
+before the reset and a response once it commits or is refused, or `replay-unfinished` when its
 commit failed and whether the reset committed cannot be read back; read the delivery's state before
 replaying it again.
 
@@ -454,7 +454,7 @@ audit:
   destination: file
   path: /var/lib/breg/audit/breg.jsonl
   rotateBytes: 104857600
-  retainDays: 90
+  retentionDays: 90
 ```
 
 The file path is absolute and belongs to one process. Give each runtime instance its own path;
@@ -462,7 +462,7 @@ The file path is absolute and belongs to one process. Give each runtime instance
 those companion streams as well as the service stream. Local development keeps its files under
 `.breg/dev/audit`, including after `bregctl dev stop --remove`.
 
-The writer rotates at `rotateBytes` and removes sealed segments older than `retainDays` when it
+The writer rotates at `rotateBytes` and removes sealed segments older than `retentionDays` when it
 opens or rotates. Ship sealed segments to append-only storage before expiry and verify receipt in
 your log pipeline. Do not rename, truncate, or replace the active file or its lock while the writer
 runs. See [Audit retention](../retention-and-persistent-state/#audit-retention) for shipping and

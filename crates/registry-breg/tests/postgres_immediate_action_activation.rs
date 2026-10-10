@@ -1244,9 +1244,9 @@ fn project_bytes(variant: Variant) -> Vec<u8> {
             "id":"register-household-contact",
             "inputs":[
               {"id":"household","apiName":"householdId","type":"reference","target":"household","required":true,"classification":"restricted"},
-              {"id":"person-code","apiName":"personCode","type":"string","maxLength":64,"required":true,"classification":"restricted"},
-              {"id":"legal-name","apiName":"legalName","type":"string","maxLength":160,"required":true,"classification":"restricted"},
-              {"id":"jurisdiction","apiName":"jurisdiction","type":"string","maxLength":64,"required":true,"classification":"restricted"}
+              {"id":"person-code","apiName":"personCode","type":"string","maximumLength":64,"required":true,"classification":"restricted"},
+              {"id":"legal-name","apiName":"legalName","type":"string","maximumLength":160,"required":true,"classification":"restricted"},
+              {"id":"jurisdiction","apiName":"jurisdiction","type":"string","maximumLength":64,"required":true,"classification":"restricted"}
             ],
             "effects":[
               {"id":"person","target":{"entity":"person"},"operation":"create",
@@ -1271,7 +1271,7 @@ fn project_bytes(variant: Variant) -> Vec<u8> {
                   "principalClaim":"registry_principal",
                   "requiredScopes":["{scope}"],
                   "requiredPurposes":["contact-registration"],
-                  "permissions":[{{
+                  "permissions":{{"actions":[{{
                     "action":"register-household-contact",
                     "operations":["invoke"],
                     "targets":[
@@ -1280,30 +1280,30 @@ fn project_bytes(variant: Variant) -> Vec<u8> {
                       {{"entity":"group-membership","rowBoundaries":[{{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}}]}}
                     ],
                     "results":["person","membership","household"]
-                  }}]
+                  }}]}}
                 }}]"#
             )
         },
     );
     format!(
         r#"{{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{{"id":"{PACKAGE_ID}","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{{"id":"{PACKAGE_ID}","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
           "package":{{"sourceRevision":"{SOURCE_REVISION}"}},
           "entities":[{{
             "id":"person","primaryDataset":"test-dataset","route":"people","mutationMode":"mutable",
-            "constraints":[{{"kind":"unique","fields":["person-code"]}}],
+            "constraints":[{{"type":"unique","fields":["person-code"]}}],
             "fields":[
-              {{"id":"person-code","apiName":"personCode","type":"string","maxLength":64,"required":true,"classification":"restricted"}},
-              {{"id":"legal-name","apiName":"legalName","type":"string","maxLength":160,"required":true,"classification":"restricted"}},
-              {{"id":"jurisdiction","apiName":"jurisdiction","type":"string","maxLength":64,"required":true,"classification":"restricted"}}
+              {{"id":"person-code","apiName":"personCode","type":"string","maximumLength":64,"required":true,"classification":"restricted"}},
+              {{"id":"legal-name","apiName":"legalName","type":"string","maximumLength":160,"required":true,"classification":"restricted"}},
+              {{"id":"jurisdiction","apiName":"jurisdiction","type":"string","maximumLength":64,"required":true,"classification":"restricted"}}
             ]
           }},{{
             "id":"household","primaryDataset":"test-dataset","route":"households","mutationMode":"mutable",
             "fields":[
-              {{"id":"household-code","type":"string","maxLength":64,"required":true,"classification":"restricted"}},
-              {{"id":"jurisdiction","apiName":"jurisdiction","type":"string","maxLength":64,"required":true,"classification":"restricted"}},
+              {{"id":"household-code","type":"string","maximumLength":64,"required":true,"classification":"restricted"}},
+              {{"id":"jurisdiction","apiName":"jurisdiction","type":"string","maximumLength":64,"required":true,"classification":"restricted"}},
               {{"id":"contact-person","apiName":"contactPerson","type":"reference","target":"person","classification":"restricted"}}
             ]
           }},{{
@@ -1311,7 +1311,7 @@ fn project_bytes(variant: Variant) -> Vec<u8> {
             "fields":[
               {{"id":"person","type":"reference","target":"person","required":true,"classification":"restricted"}},
               {{"id":"household","type":"reference","target":"household","required":true,"classification":"restricted"}},
-              {{"id":"jurisdiction","apiName":"jurisdiction","type":"string","maxLength":64,"required":true,"classification":"restricted"}}
+              {{"id":"jurisdiction","apiName":"jurisdiction","type":"string","maximumLength":64,"required":true,"classification":"restricted"}}
             ]
           }}],
           {actions}
@@ -1332,7 +1332,7 @@ fn consent_project_bytes(with_new_recipient: bool) -> Vec<u8> {
             .expect("consent fixture parses"),
     ))
     .expect("consent fixture source is JSON");
-    project["registry"]["id"] = json!(PACKAGE_ID);
+    project["project"]["id"] = json!(PACKAGE_ID);
     project["package"] = json!({
         "sourceRevision": SOURCE_REVISION,
     });

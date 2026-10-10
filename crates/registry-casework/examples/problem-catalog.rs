@@ -186,7 +186,7 @@ fn review_wire_examples() -> Result<BTreeMap<&'static str, Vec<Value>>, serde_js
             "ReviewCancelResponse",
             typed_examples::<ReviewCancelResponse>(vec![
                 json!({"outcome":"cancelled","result":cancelled}),
-                json!({"outcome":"already_terminal","result":result}),
+                json!({"outcome":"already-terminal","result":result}),
             ])?,
         ),
         (
@@ -216,7 +216,7 @@ fn review_wire_examples() -> Result<BTreeMap<&'static str, Vec<Value>>, serde_js
             typed_examples::<ReviewTaskDecisionRequest>(vec![
                 json!({"decision":{"type":"approve"}}),
                 json!({"decision":{"type":"reject","outcome":"not-supported","reason":"reason","result":{"field":"value"}}}),
-                json!({"decision":{"type":"changes_requested","outcome":"needs-change"}}),
+                json!({"decision":{"type":"changes-requested","outcome":"needs-change"}}),
                 json!({"decision":{"type":"answer","outcome":"answered","result":{"answer":true}}}),
             ])?,
         ),

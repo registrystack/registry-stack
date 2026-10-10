@@ -369,7 +369,7 @@ pub(crate) fn create_local_target(
             "maximumRequestBytes": 65536, "maximumConcurrentRequests": 64,
             "requestTimeoutMilliseconds": 10000, "shutdownGraceMilliseconds": 30000,
         },
-        "signer": {"kind": "local-jwk", "privateKeyRef": "secret:file/signing-p256-private-jwk"},
+        "signer": {"type": "local-jwk", "privateKeyRef": "secret:file/signing-p256-private-jwk"},
         "audit": {"destination": "file"},
         "outboundTls": {"systemRoots": true, "trustProfiles": {}},
     });
@@ -1111,7 +1111,7 @@ governance:
   service:
     publicOrigin: http://127.0.0.1:8080
   issuer:
-    id: urn:example:issuer
+    uri: urn:example:issuer
   authentication:
     oidc:
       issuer: https://issuer.example
@@ -1127,7 +1127,7 @@ governance:
     local:
       kind: explicit-request
 runtime:
-  apiVersion: registry.registrystack.org/evidence-runtime/v1alpha1
+  apiVersion: id.registrystack.org/formats/evidence/runtime/v1alpha1
   kind: EvidenceRuntimeConfig
   package:
     root: /tmp/evidence/bundle
@@ -1137,7 +1137,7 @@ runtime:
     file:
       root: /tmp/evidence/secrets
   signer:
-    kind: transit
+    type: transit
   audit:
     path: /tmp/evidence/audit.jsonl
   outboundTls:
@@ -1608,7 +1608,7 @@ governance:
   service:
     publicOrigin: http://127.0.0.1:8080
   issuer:
-    id: urn:example:issuer
+    uri: urn:example:issuer
   authentication:
     oidc:
       issuer: https://issuer.example
@@ -1625,7 +1625,7 @@ governance:
     local:
       kind: explicit-request
 runtime:
-  apiVersion: registry.registrystack.org/evidence-runtime/v1alpha1
+  apiVersion: id.registrystack.org/formats/evidence/runtime/v1alpha1
   kind: EvidenceRuntimeConfig
 publicKeys:
   _QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo.jwk.json: active.jwk.json
@@ -1661,7 +1661,7 @@ governance:
   service:
     publicOrigin: http://127.0.0.1:8080
   issuer:
-    id: urn:example:issuer
+    uri: urn:example:issuer
   authentication:
     oidc:
       issuer: https://issuer.example
@@ -1679,7 +1679,7 @@ governance:
       kind: explicit-request
   unexpectedField: true
 runtime:
-  apiVersion: registry.registrystack.org/evidence-runtime/v1alpha1
+  apiVersion: id.registrystack.org/formats/evidence/runtime/v1alpha1
   kind: EvidenceRuntimeConfig
 "#,
         )
@@ -1819,7 +1819,7 @@ governance:
   service:
     publicOrigin: http://127.0.0.1:8080
   issuer:
-    id: urn:example:issuer
+    uri: urn:example:issuer
   authentication:
     oidc:
       issuer: https://issuer.example
@@ -1836,7 +1836,7 @@ governance:
     local:
       kind: explicit-request
 runtime:
-  apiVersion: registry.registrystack.org/evidence-runtime/v1alpha1
+  apiVersion: id.registrystack.org/formats/evidence/runtime/v1alpha1
   kind: EvidenceRuntimeConfig
 "#,
         )
@@ -1891,6 +1891,48 @@ runtime:
         )
         .expect("governance parses");
         assert_eq!(governance["assuranceProfile"], "local");
+    }
+
+    #[test]
+    fn target_new_refuses_the_retired_runtime_api_version_with_the_replacement_named() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let key_path = temporary.path().join("active.jwk.json");
+        let settings_path = temporary.path().join("settings.yaml");
+        let target = temporary.path().join("target");
+        fs::write(&key_path, ES256_PUBLIC_JWK).expect("public key");
+        let settings = target_settings(
+            "    activePublicJwkFile: public-keys/_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo.jwk.json\n    publishedPublicJwkFiles: []",
+            "publicKeys:\n  _QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo.jwk.json: active.jwk.json\n",
+        );
+        let retired = settings.replace(
+            EVIDENCE_RUNTIME_API_VERSION,
+            "registry.registrystack.org/evidence-runtime/v1alpha1",
+        );
+        assert_ne!(retired, settings, "the retired value is written");
+        fs::write(&settings_path, retired).expect("settings");
+
+        let error = new(NewArgs {
+            directory: target.clone(),
+            settings: Some(settings_path),
+            project: None,
+            local: false,
+            signing_public_key: None,
+        })
+        .expect_err("the retired runtime apiVersion is refused");
+
+        let diagnostic = error
+            .chain()
+            .find_map(|cause| cause.downcast_ref::<SettingsDiagnostic>())
+            .expect("the refusal names the member at fault");
+        assert_eq!(diagnostic.pointer, "/runtime/apiVersion");
+        assert!(
+            diagnostic.message.contains(EVIDENCE_RUNTIME_API_VERSION),
+            "the refusal names the apiVersion to write"
+        );
+        assert!(
+            !target.exists(),
+            "failed target creation must be create-only"
+        );
     }
 
     #[test]

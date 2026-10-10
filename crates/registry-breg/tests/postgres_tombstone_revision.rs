@@ -586,27 +586,27 @@ fn compiled_registry(tombstone: bool) -> registry_breg::CompiledRegistry {
     let project = parse_project_json(
         format!(
             r#"{{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{{"id":"tombstone-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{{"id":"tombstone-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
           "entities":[{{
             "id":"widget","primaryDataset":"test-dataset","route":"widgets","mutationMode":"mutable"{tombstone_fragment},"classification":"public",
             "fields":[
-              {{"id":"jurisdiction","type":"string","maxLength":32,"required":true,"classification":"public"}},
-              {{"id":"label","type":"string","maxLength":128,"required":true,"classification":"public"}},
+              {{"id":"jurisdiction","type":"string","maximumLength":32,"required":true,"classification":"public"}},
+              {{"id":"label","type":"string","maximumLength":128,"required":true,"classification":"public"}},
               {{"id":"quantity","type":"int64","required":true,"classification":"public"}}
             ]{events}
           }},{{
-            "id":"log","primaryDataset":"test-dataset","route":"logs","mutationMode":"create_only","classification":"public",
+            "id":"log","primaryDataset":"test-dataset","route":"logs","mutationMode":"create-only","classification":"public",
             "fields":[
-              {{"id":"jurisdiction","type":"string","maxLength":32,"required":true,"classification":"public"}},
-              {{"id":"message","type":"string","maxLength":128,"required":true,"classification":"public"}}
+              {{"id":"jurisdiction","type":"string","maximumLength":32,"required":true,"classification":"public"}},
+              {{"id":"message","type":"string","maximumLength":128,"required":true,"classification":"public"}}
             ]
           }}],
           "accessProfiles":[{{
             "id":"operator","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "requiredPurposes":["case-management"],
-            "permissions":[{{
+            "permissions":{{"entities":[{{
               "entity":"widget","operations":[{operations}],
               "readableFields":["jurisdiction","label","quantity"],
               "writableFields":["jurisdiction","label","quantity"],
@@ -616,7 +616,7 @@ fn compiled_registry(tombstone: bool) -> registry_breg::CompiledRegistry {
               "readableFields":["jurisdiction","message"],
               "writableFields":["jurisdiction","message"],
               "rowBoundaries":[{{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}}]
-            }}]
+            }}]}}
           }}]
         }}"#
         )

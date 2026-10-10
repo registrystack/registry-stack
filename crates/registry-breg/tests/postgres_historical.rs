@@ -997,17 +997,17 @@ fn compiled_timestamp_registry() -> registry_breg::CompiledRegistry {
 
 fn compiled_registry_for_temporal_type(temporal_type: &str) -> registry_breg::CompiledRegistry {
     let project = r#"{
-      "apiVersion":"registry.registrystack.org/v1alpha1",
-      "kind":"RegistryProject",
-      "registry":{"id":"history-demo","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+      "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+      "kind":"BRegProject",
+      "project":{"id":"history-demo","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
       "entities":[{
         "id":"membership","primaryDataset":"test-dataset","route":"memberships","mutationMode":"mutable","classification":"internal",
         "fields":[
-          {"id":"household-code","type":"string","minLength":2,"maxLength":32,"required":true,"classification":"internal"},
+          {"id":"household-code","type":"string","minimumLength":2,"maximumLength":32,"required":true,"classification":"internal"},
           {"id":"jurisdiction","type":"vocabulary-code","vocabulary":"jurisdiction","values":["zone-a","zone-b"],"required":true,"classification":"internal"},
           {"id":"valid-from","type":"date","required":true,"classification":"internal"},
           {"id":"valid-to","type":"date","classification":"internal"},
-          {"id":"case-note","type":"string","maxLength":64,"classification":"internal"}
+          {"id":"case-note","type":"string","maximumLength":64,"classification":"internal"}
         ],
         "temporal":{"startField":"valid-from","endField":"valid-to"},
         "derived":[{
@@ -1018,19 +1018,19 @@ fn compiled_registry_for_temporal_type(temporal_type: &str) -> registry_breg::Co
       "accessProfiles":[{
         "id":"historian","default":true,"principalClaim":"registry_principal",
         "requiredScopes":["registry.read"],"requiredPurposes":["case-management"],
-        "permissions":[{
+        "permissions":{"entities":[{
           "entity":"membership","operations":["snapshot"],"readableFields":["household-code","jurisdiction","valid-from","valid-to","case-note","member-count"],
           "filterableFields":["household-code","jurisdiction"],"sortableFields":["household-code"],"allowCount":true,
           "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdictions","operator":"in"}]
-        }]
+        }]}
       },{
         "id":"archivist","principalClaim":"registry_principal",
         "requiredScopes":["registry.read"],"requiredPurposes":["case-management"],
-        "permissions":[{
+        "permissions":{"entities":[{
           "entity":"membership","operations":["snapshot"],"readableFields":["household-code","jurisdiction","valid-from","valid-to","case-note"],
           "filterableFields":["household-code","jurisdiction"],"sortableFields":["household-code"],"allowCount":true,
           "rowBoundaries": "unrestricted"
-        }]
+        }]}
       }]
     }"#
     .replace("\"type\":\"date\"", &format!("\"type\":\"{temporal_type}\""));

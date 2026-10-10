@@ -532,7 +532,7 @@ impl EventDestinationDeliveryCeilings {
 
 #[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
 #[derive(Clone, Copy, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "kebab-case")]
 enum EventDestinationNetworkProfile {
     ProductionHttps,
     LoopbackDevelopmentHttp,
@@ -551,6 +551,9 @@ impl EventDestinationNetworkProfile {
         }
     }
 
+    /// The word the binding digest is computed over. The digest is stored
+    /// with every delivery the binding queued, so this word is independent
+    /// of the spelling the runtime file writes.
     fn as_str(self) -> &'static str {
         match self {
             Self::ProductionHttps => "productionHttps",
@@ -563,7 +566,7 @@ impl EventDestinationNetworkProfile {
 
 #[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
 #[derive(Clone, Copy, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "kebab-case")]
 enum EventDestinationDnsFamily {
     DualStackStrict,
     Ipv4Only,
@@ -577,6 +580,9 @@ impl EventDestinationDnsFamily {
         }
     }
 
+    /// The word the binding digest is computed over. The digest is stored
+    /// with every delivery the binding queued, so this word is independent
+    /// of the spelling the runtime file writes.
     fn as_str(self) -> &'static str {
         match self {
             Self::DualStackStrict => "dualStackStrict",

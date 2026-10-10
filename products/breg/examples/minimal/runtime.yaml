@@ -5,7 +5,7 @@
 #
 # The check reads no package, database, network endpoint, or secret, so the
 # absolute paths below need not exist where it runs.
-apiVersion: registry.registrystack.org/breg-runtime/v1alpha1
+apiVersion: id.registrystack.org/formats/breg/runtime/v1alpha1
 kind: BRegRuntimeConfig
 listener:
   bind: 127.0.0.1:8080
@@ -21,7 +21,7 @@ database:
   runtimeUrlRef: secret:file/runtime-database-url
   migrationUrlRef: secret:file/migration-database-url
   pool:
-    maxSize: 4
+    maximumConnections: 4
   roles:
     migration: breg_migration
     runtime: breg_runtime
@@ -36,7 +36,7 @@ authentication:
     scopeClaim: scope
     scopeSeparator: " "
     allowedClients: [minimal-client]
-    maxTokenLifetimeSeconds: 3600
+    maximumTokenLifetimeSeconds: 3600
     leewayMilliseconds: 60000
   authorityClaims:
     principal: registry_principal

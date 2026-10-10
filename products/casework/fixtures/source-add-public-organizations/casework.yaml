@@ -5,9 +5,9 @@
 # leaves a project bregctl check accepts, with its own lifecycle hook per
 # entity: BReg refuses two hooks sharing one identifier as
 # breg.event.id-registry-duplicate.
-apiVersion: registry.registrystack.org/casework/v1alpha1
+apiVersion: id.registrystack.org/formats/casework/project/v1alpha1
 kind: CaseworkProject
-casework:
+project:
   id: public-organizations-review
   version: "1"
 accessProfiles:

@@ -1,6 +1,6 @@
-apiVersion: registry.registrystack.org/v1alpha1
-kind: RegistryProject
-registry:
+apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
   id: spatial-service-sites
   canonicalBaseIri: "https://spatial-service-sites.example.gov"
   version: 0.1.0
@@ -54,7 +54,7 @@ manifestProjection:
 modules:
   - id: "spatial-service-sites-core"
     version: "0.1.0"
-    digest: "sha256:d463d2d2789c99330c6329109282807565a09a602d6711d57dc5a7643e507b51"
+    digest: "sha256:96fd2663297a6a019995a7f5b03e905789b06c4a8cb63fae389ced796266131c"
 
 entities:
   - id: service-site
@@ -65,17 +65,17 @@ entities:
     batch: {maximumItems: 100, maximumBytes: 262144}
     fields:
       - {id: native-id, type: uuid, required: true, classification: public}
-      - {id: site-code, type: string, required: true, maxLength: 64, classification: public}
-      - {id: label, type: string, required: true, maxLength: 160, classification: public}
+      - {id: site-code, type: string, required: true, maximumLength: 64, classification: public}
+      - {id: label, type: string, required: true, maximumLength: 160, classification: public}
       - {id: zone, type: vocabulary-code, vocabulary: service-zone, required: true, classification: public}
       - {id: service-kind, type: vocabulary-code, vocabulary: service-kind, required: true, classification: public}
-      - {id: installation-client-id, type: string, required: true, maxLength: 96, classification: internal}
+      - {id: installation-client-id, type: string, required: true, maximumLength: 96, classification: internal}
       - {id: location, type: crs84-point, precision: 9, bbox: {west: "100.450000000", south: "13.600000000", east: "100.700000000", north: "13.900000000"}, required: false, classification: public}
     geojson:
       geometryField: location
     constraints:
-      - {kind: unique, fields: [native-id]}
-      - {kind: unique, fields: [site-code]}
+      - {type: unique, fields: [native-id]}
+      - {type: unique, fields: [site-code]}
     indexes:
       - {id: by-label, fields: [label]}
       - {id: by-zone, fields: [zone]}
@@ -87,79 +87,85 @@ accessProfiles:
     requiredScopes: [service-sites:seed]
     requiredPurposes: [service-site-administration]
     permissions:
-      - entity: service-site
-        rowBoundaries: unrestricted
-        operations: [create, get, list, patch, batch]
-        readableFields: [native-id, site-code, label, zone, service-kind, location, map-label]
-        writableFields: [native-id, site-code, label, zone, service-kind, installation-client-id, location]
-        filterableFields: [native-id, site-code, zone, service-kind]
-        sortableFields: [site-code, label]
-        allowCount: true
+      entities:
+        - entity: service-site
+          rowBoundaries: unrestricted
+          operations: [create, get, list, patch, batch]
+          readableFields: [native-id, site-code, label, zone, service-kind, location, map-label]
+          writableFields: [native-id, site-code, label, zone, service-kind, installation-client-id, location]
+          filterableFields: [native-id, site-code, zone, service-kind]
+          sortableFields: [site-code, label]
+          allowCount: true
   - id: map-reader
     principalClaim: registry_principal
     requiredScopes: [service-sites:public.read]
     requiredPurposes: [service-site-public-map]
     permissions:
-      - entity: service-site
-        rowBoundaries: unrestricted
-        operations: [get, list]
-        readableFields: [native-id, site-code, label, zone, service-kind, location]
-        filterableFields: [site-code, zone, service-kind]
-        sortableFields: [site-code, label]
-        allowCount: true
-        spatialQueries:
-          bbox:
-            maximumLongitudeSpanDegrees: 0.25
-            maximumLatitudeSpanDegrees: 0.20
+      entities:
+        - entity: service-site
+          rowBoundaries: unrestricted
+          operations: [get, list]
+          readableFields: [native-id, site-code, label, zone, service-kind, location]
+          filterableFields: [site-code, zone, service-kind]
+          sortableFields: [site-code, label]
+          allowCount: true
+          spatialQueries:
+            bbox:
+              maximumLongitudeSpanDegrees: 0.25
+              maximumLatitudeSpanDegrees: 0.20
   - id: installation-map-reader
     principalClaim: registry_principal
     requiredScopes: [service-sites:map.read]
     requiredPurposes: [service-site-map]
     permissions:
-      - entity: service-site
-        operations: [get, list]
-        readableFields: [native-id, site-code, label, zone, service-kind, location, map-label]
-        filterableFields: [site-code, zone, service-kind]
-        sortableFields: [site-code, label]
-        allowCount: true
-        rowBoundaries:
-          - {field: zone, claim: service_zones, operator: equals}
-        spatialQueries:
-          bbox:
-            maximumLongitudeSpanDegrees: 0.25
-            maximumLatitudeSpanDegrees: 0.20
+      entities:
+        - entity: service-site
+          operations: [get, list]
+          readableFields: [native-id, site-code, label, zone, service-kind, location, map-label]
+          filterableFields: [site-code, zone, service-kind]
+          sortableFields: [site-code, label]
+          allowCount: true
+          rowBoundaries:
+            - {field: zone, claim: service_zones, operator: equals}
+          spatialQueries:
+            bbox:
+              maximumLongitudeSpanDegrees: 0.25
+              maximumLatitudeSpanDegrees: 0.20
   - id: directory-reader
     principalClaim: registry_principal
     requiredScopes: [service-sites:public.read]
     requiredPurposes: [service-site-public-directory]
     permissions:
-      - entity: service-site
-        rowBoundaries: unrestricted
-        operations: [get, list]
-        readableFields: [native-id, site-code, label, zone, service-kind]
-        filterableFields: [site-code, zone, service-kind]
-        sortableFields: [site-code, label]
-        allowCount: true
+      entities:
+        - entity: service-site
+          rowBoundaries: unrestricted
+          operations: [get, list]
+          readableFields: [native-id, site-code, label, zone, service-kind]
+          filterableFields: [site-code, zone, service-kind]
+          sortableFields: [site-code, label]
+          allowCount: true
   - id: hidden-geometry-reader
     principalClaim: registry_principal
     requiredScopes: [service-sites:directory.read]
     requiredPurposes: [service-site-directory]
     permissions:
-      - entity: service-site
-        rowBoundaries: unrestricted
-        operations: [get, list]
-        readableFields: [native-id, site-code, label, zone, service-kind, map-label]
-        filterableFields: [site-code, zone, service-kind]
-        sortableFields: [site-code, label]
+      entities:
+        - entity: service-site
+          rowBoundaries: unrestricted
+          operations: [get, list]
+          readableFields: [native-id, site-code, label, zone, service-kind, map-label]
+          filterableFields: [site-code, zone, service-kind]
+          sortableFields: [site-code, label]
   - id: get-only-map-reader
     principalClaim: registry_principal
     requiredScopes: [service-sites:site.read]
     requiredPurposes: [service-site-map]
     permissions:
-      - entity: service-site
-        rowBoundaries: unrestricted
-        operations: [get]
-        readableFields: [native-id, site-code, label, zone, service-kind, location, map-label]
+      entities:
+        - entity: service-site
+          rowBoundaries: unrestricted
+          operations: [get]
+          readableFields: [native-id, site-code, label, zone, service-kind, location, map-label]
 vocabularies:
   - {id: service-zone, values: [north, central, south, edge]}
   - {id: service-kind, values: [clinic, school, water-point, depot]}

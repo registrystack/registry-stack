@@ -347,10 +347,10 @@ evidencectl audit show --last-operation
 
 ```text test-expect
 Local Evidence stopped
-ACCESS REFUSED requester=<pseudonym> reason=not_authorized
+ACCESS REFUSED requester=<pseudonym> reason=not-authorized
 ```
 
-The privacy-safe refusal event contains a requester pseudonym and the closed `not_authorized`
+The privacy-safe refusal event contains a requester pseudonym and the closed `not-authorized`
 reason. It does not contain the rejected requirement, purpose, selector, authority, response format,
 client identifier, or access token.
 

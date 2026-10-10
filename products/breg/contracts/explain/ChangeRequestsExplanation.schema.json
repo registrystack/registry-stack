@@ -7,6 +7,11 @@
   "additionalProperties": false,
   "required": ["apiVersion", "kind", "requests", "controlledWrites"],
   "$defs": {
+    "LocalId": {
+      "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+      "type": "string"
+    },
     "fieldRef": {
       "type": "object",
       "additionalProperties": false,
@@ -19,8 +24,8 @@
     "operation": {
       "enum": [
         "create", "get", "lookup", "list", "patch", "tombstone", "batch",
-        "revisions", "snapshot", "submit_request", "revise_request",
-        "cancel_request", "apply_request", "invoke"
+        "revisions", "snapshot", "submit-request", "revise-request",
+        "cancel-request", "apply-request", "invoke"
       ]
     },
     "rowBoundary": {
@@ -36,10 +41,10 @@
   },
   "properties": {
     "apiVersion": {
-      "const": "registry.registrystack.org/breg-explain/v1alpha4"
+      "const": "id.registrystack.org/formats/breg/change-requests-explanation/v1alpha4"
     },
     "kind": {
-      "const": "ChangeRequestsExplanation"
+      "const": "BRegChangeRequestsExplanation"
     },
     "controlledWrites": {
       "type": "array",
@@ -102,9 +107,9 @@
               {
                 "type": "object",
                 "additionalProperties": false,
-                "required": ["kind", "abi"],
+                "required": ["type", "abi"],
                 "properties": {
-                  "kind": { "const": "declarative" },
+                  "type": { "const": "declarative" },
                   "abi": { "type": "string" }
                 }
               },
@@ -112,11 +117,11 @@
                 "type": "object",
                 "additionalProperties": false,
                 "required": [
-                  "kind", "abi", "rhaiVersion", "scriptSha256", "declaringOrigin",
+                  "type", "abi", "rhaiVersion", "scriptSha256", "declaringOrigin",
                   "requestFields", "limits", "possibleWrites"
                 ],
                 "properties": {
-                  "kind": { "const": "rhai" },
+                  "type": { "const": "rhai" },
                   "abi": { "type": "string" },
                   "rhaiVersion": { "type": "string" },
                   "scriptSha256": { "type": "string" },
@@ -125,16 +130,16 @@
                       {
                         "type": "object",
                         "additionalProperties": false,
-                        "required": ["kind"],
-                        "properties": { "kind": { "const": "project" } }
+                        "required": ["type"],
+                        "properties": { "type": { "const": "project" } }
                       },
                       {
                         "type": "object",
                         "additionalProperties": false,
-                        "required": ["kind", "id"],
+                        "required": ["type", "id"],
                         "properties": {
-                          "kind": { "const": "module" },
-                          "id": { "type": "string" }
+                          "type": { "const": "module" },
+                          "id": { "$ref": "#/$defs/LocalId" }
                         }
                       }
                     ]
@@ -175,9 +180,9 @@
                             {
                               "type": "object",
                               "additionalProperties": false,
-                              "required": ["kind", "entity", "fromField"],
+                              "required": ["type", "entity", "fromField"],
                               "properties": {
-                                "kind": { "const": "existing" },
+                                "type": { "const": "existing" },
                                 "entity": { "type": "string" },
                                 "fromField": { "$ref": "#/$defs/fieldRef" }
                               }
@@ -185,9 +190,9 @@
                             {
                               "type": "object",
                               "additionalProperties": false,
-                              "required": ["kind", "entity"],
+                              "required": ["type", "entity"],
                               "properties": {
-                                "kind": { "const": "reserved_create" },
+                                "type": { "const": "reserved-create" },
                                 "entity": { "type": "string" }
                               }
                             }
@@ -207,8 +212,9 @@
               {
                 "type": "object",
                 "additionalProperties": false,
-                "required": ["authority", "policyId"],
+                "required": ["type", "authority", "policyId"],
                 "properties": {
+                  "type": { "const": "required" },
                   "authority": { "type": "string" },
                   "policyId": { "type": "string" }
                 }
@@ -216,9 +222,9 @@
               {
                 "type": "object",
                 "additionalProperties": false,
-                "required": ["mode"],
+                "required": ["type"],
                 "properties": {
-                  "mode": { "const": "none" }
+                  "type": { "const": "none" }
                 }
               }
             ]
@@ -240,7 +246,7 @@
               "additionalProperties": false,
               "required": ["id", "operation", "target", "fields", "dependsOn"],
               "properties": {
-                "id": { "type": "string" },
+                "id": { "$ref": "#/$defs/LocalId" },
                 "operation": { "$ref": "#/$defs/operation" },
                 "target": {
                   "type": "object",
@@ -253,18 +259,18 @@
                         {
                           "type": "object",
                           "additionalProperties": false,
-                          "required": ["kind", "fromField"],
+                          "required": ["type", "fromField"],
                           "properties": {
-                            "kind": { "const": "existing" },
+                            "type": { "const": "existing" },
                             "fromField": { "$ref": "#/$defs/fieldRef" }
                           }
                         },
                         {
                           "type": "object",
                           "additionalProperties": false,
-                          "required": ["kind", "effect"],
+                          "required": ["type", "effect"],
                           "properties": {
-                            "kind": { "const": "reserved_create" },
+                            "type": { "const": "reserved-create" },
                             "effect": { "type": "string" }
                           }
                         }
@@ -279,27 +285,27 @@
                       {
                         "type": "object",
                         "additionalProperties": false,
-                        "required": ["kind", "target", "value"],
+                        "required": ["type", "target", "value"],
                         "properties": {
-                          "kind": { "const": "set" },
+                          "type": { "const": "set" },
                           "target": { "$ref": "#/$defs/fieldRef" },
                           "value": {
                             "oneOf": [
                               {
                                 "type": "object",
                                 "additionalProperties": false,
-                                "required": ["kind", "field"],
+                                "required": ["type", "field"],
                                 "properties": {
-                                  "kind": { "const": "from_field" },
+                                  "type": { "const": "from-field" },
                                   "field": { "$ref": "#/$defs/fieldRef" }
                                 }
                               },
                               {
                                 "type": "object",
                                 "additionalProperties": false,
-                                "required": ["kind", "effect", "targetEntity"],
+                                "required": ["type", "effect", "targetEntity"],
                                 "properties": {
-                                  "kind": { "const": "from_effect" },
+                                  "type": { "const": "from-effect" },
                                   "effect": { "type": "string" },
                                   "targetEntity": { "type": "string" }
                                 }
@@ -311,9 +317,9 @@
                       {
                         "type": "object",
                         "additionalProperties": false,
-                        "required": ["kind", "target"],
+                        "required": ["type", "target"],
                         "properties": {
-                          "kind": { "const": "clear" },
+                          "type": { "const": "clear" },
                           "target": { "$ref": "#/$defs/fieldRef" }
                         }
                       }

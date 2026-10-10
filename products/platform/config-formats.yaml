@@ -73,8 +73,8 @@ formats:
     stability: promised
     topLevel: project
     current:
-      apiVersion: registry.registrystack.org/v1alpha1
-      kind: RegistryProject
+      apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+      kind: BRegProject
       checkedBy:
         file: crates/registry-breg/src/compiler.rs
         symbol: AUTHORING_API_VERSION
@@ -95,13 +95,13 @@ formats:
     check: bregctl check {project}
     example: products/breg/examples/minimal/registry.yaml
     conformance:
-      requiredText: /registry/id
+      requiredText: /project/id
       optionalText: /manifestProjection/catalog/description
       integer: /entities/0/batch/maximumItems
       boolean: /accessProfiles/0/default
       idList: /entities
       set: /accessProfiles/0/requiredPurposes
-      reference: /accessProfiles/0/permissions/0/entity
+      reference: /accessProfiles/0/permissions/entities/0/entity
     securityMembers:
       - pointer: /accessProfiles/*/requiredScopes
         whenOmitted: refused
@@ -120,9 +120,11 @@ formats:
     audience: authored
     stability: promised
     current:
-      apiVersion: none
-      kind: none
-      checkedBy: none
+      apiVersion: id.registrystack.org/formats/breg/module/v1alpha1
+      kind: BRegModule
+      checkedBy:
+        file: crates/registry-breg/src/contract.rs
+        symbol: MODULE_API_VERSION
     target:
       apiVersion: id.registrystack.org/formats/breg/module/v1alpha1
       kind: BRegModule
@@ -154,7 +156,7 @@ formats:
     audience: operator
     stability: promised
     current:
-      apiVersion: registry.registrystack.org/breg-runtime/v1alpha1
+      apiVersion: id.registrystack.org/formats/breg/runtime/v1alpha1
       kind: BRegRuntimeConfig
       checkedBy:
         file: crates/registry-breg/src/runtime_config.rs
@@ -178,7 +180,7 @@ formats:
     conformance:
       requiredText: /identity/instanceId
       optionalText: /authentication/authorityClaims/purpose
-      integer: /database/pool/maxSize
+      integer: /database/pool/maximumConnections
       boolean: none
     securityMembers:
       - pointer: /listener/bind
@@ -642,7 +644,12 @@ formats:
     target:
       apiVersion: id.registrystack.org/formats/breg/migration-descriptor/v1alpha1
       kind: BRegMigrationDescriptor
-    schema: none
+    schema:
+      path: products/breg/generated/tools/migration-descriptor.v1alpha1.schema.json
+      id: https://id.registrystack.org/schemas/breg/migration-descriptor/migration-descriptor.v1alpha1.schema.json
+      origin: generated
+      generator: cargo run -p registry-bregctl --features schema --example tool-schema -- --output products/breg/generated/tools
+      driftCheck: products/breg/scripts/check-tool-schemas.sh
     reader:
       crate: registry-breg
       file: crates/registry-breg/src/migration_plan.rs
@@ -857,11 +864,11 @@ formats:
     audience: generated
     stability: promised
     current:
-      apiVersion: registry.registrystack.org/breg-explain/v1alpha4
-      kind: AccessExplanation
+      apiVersion: id.registrystack.org/formats/breg/access-explanation/v1alpha4
+      kind: BRegAccessExplanation
       checkedBy:
         file: crates/registry-bregctl/src/lib.rs
-        symbol: EXPLAIN_API_VERSION
+        symbol: ACCESS_EXPLANATION
     target:
       apiVersion: id.registrystack.org/formats/breg/access-explanation/v1alpha4
       kind: BRegAccessExplanation
@@ -873,7 +880,7 @@ formats:
     reader: none
     emittedBy:
       file: crates/registry-bregctl/src/lib.rs
-      symbol: EXPLAIN_API_VERSION
+      symbol: ACCESS_EXPLANATION
     check: none
     example: products/breg/examples/formats/explain/access-explanation.json
     conformance: none
@@ -887,11 +894,11 @@ formats:
     audience: generated
     stability: promised
     current:
-      apiVersion: registry.registrystack.org/breg-explain/v1alpha4
-      kind: AccessPreview
+      apiVersion: id.registrystack.org/formats/breg/access-preview/v1alpha4
+      kind: BRegAccessPreview
       checkedBy:
         file: crates/registry-bregctl/src/lib.rs
-        symbol: EXPLAIN_API_VERSION
+        symbol: ACCESS_PREVIEW
     target:
       apiVersion: id.registrystack.org/formats/breg/access-preview/v1alpha4
       kind: BRegAccessPreview
@@ -903,7 +910,7 @@ formats:
     reader: none
     emittedBy:
       file: crates/registry-bregctl/src/lib.rs
-      symbol: EXPLAIN_API_VERSION
+      symbol: ACCESS_PREVIEW
     check: none
     example: products/breg/examples/formats/explain/access-preview.json
     conformance: none
@@ -917,11 +924,11 @@ formats:
     audience: generated
     stability: promised
     current:
-      apiVersion: registry.registrystack.org/breg-explain/v1alpha4
-      kind: ActionsExplanation
+      apiVersion: id.registrystack.org/formats/breg/actions-explanation/v1alpha4
+      kind: BRegActionsExplanation
       checkedBy:
         file: crates/registry-bregctl/src/lib.rs
-        symbol: EXPLAIN_API_VERSION
+        symbol: ACTIONS_EXPLANATION
     target:
       apiVersion: id.registrystack.org/formats/breg/actions-explanation/v1alpha4
       kind: BRegActionsExplanation
@@ -933,7 +940,7 @@ formats:
     reader: none
     emittedBy:
       file: crates/registry-bregctl/src/lib.rs
-      symbol: EXPLAIN_API_VERSION
+      symbol: ACTIONS_EXPLANATION
     check: none
     example: products/breg/examples/formats/explain/actions-explanation.json
     conformance: none
@@ -947,11 +954,11 @@ formats:
     audience: generated
     stability: promised
     current:
-      apiVersion: registry.registrystack.org/breg-explain/v1alpha4
-      kind: ChangeRequestsExplanation
+      apiVersion: id.registrystack.org/formats/breg/change-requests-explanation/v1alpha4
+      kind: BRegChangeRequestsExplanation
       checkedBy:
         file: crates/registry-bregctl/src/lib.rs
-        symbol: EXPLAIN_API_VERSION
+        symbol: CHANGE_REQUESTS_EXPLANATION
     target:
       apiVersion: id.registrystack.org/formats/breg/change-requests-explanation/v1alpha4
       kind: BRegChangeRequestsExplanation
@@ -963,7 +970,7 @@ formats:
     reader: none
     emittedBy:
       file: crates/registry-bregctl/src/lib.rs
-      symbol: EXPLAIN_API_VERSION
+      symbol: CHANGE_REQUESTS_EXPLANATION
     check: none
     example: products/breg/examples/formats/explain/change-requests-explanation.json
     conformance: none
@@ -977,11 +984,11 @@ formats:
     audience: generated
     stability: promised
     current:
-      apiVersion: registry.registrystack.org/breg-explain/v1alpha4
-      kind: EventsExplanation
+      apiVersion: id.registrystack.org/formats/breg/events-explanation/v1alpha4
+      kind: BRegEventsExplanation
       checkedBy:
         file: crates/registry-bregctl/src/lib.rs
-        symbol: EXPLAIN_API_VERSION
+        symbol: EVENTS_EXPLANATION
     target:
       apiVersion: id.registrystack.org/formats/breg/events-explanation/v1alpha4
       kind: BRegEventsExplanation
@@ -993,7 +1000,7 @@ formats:
     reader: none
     emittedBy:
       file: crates/registry-bregctl/src/lib.rs
-      symbol: EXPLAIN_API_VERSION
+      symbol: EVENTS_EXPLANATION
     check: none
     example: products/breg/examples/formats/explain/events-explanation.json
     conformance: none
@@ -1007,11 +1014,11 @@ formats:
     audience: generated
     stability: promised
     current:
-      apiVersion: registry.registrystack.org/breg-explain/v1alpha4
-      kind: LifecycleExplanation
+      apiVersion: id.registrystack.org/formats/breg/lifecycle-explanation/v1alpha4
+      kind: BRegLifecycleExplanation
       checkedBy:
         file: crates/registry-bregctl/src/lib.rs
-        symbol: EXPLAIN_API_VERSION
+        symbol: LIFECYCLE_EXPLANATION
     target:
       apiVersion: id.registrystack.org/formats/breg/lifecycle-explanation/v1alpha4
       kind: BRegLifecycleExplanation
@@ -1023,7 +1030,7 @@ formats:
     reader: none
     emittedBy:
       file: crates/registry-bregctl/src/lib.rs
-      symbol: EXPLAIN_API_VERSION
+      symbol: LIFECYCLE_EXPLANATION
     check: none
     example: products/breg/examples/formats/explain/lifecycle-explanation.json
     conformance: none
@@ -1037,11 +1044,11 @@ formats:
     audience: generated
     stability: promised
     current:
-      apiVersion: registry.registrystack.org/breg-explain/v1alpha4
-      kind: ModelExplanation
+      apiVersion: id.registrystack.org/formats/breg/model-explanation/v1alpha4
+      kind: BRegModelExplanation
       checkedBy:
         file: crates/registry-bregctl/src/lib.rs
-        symbol: EXPLAIN_API_VERSION
+        symbol: MODEL_EXPLANATION
     target:
       apiVersion: id.registrystack.org/formats/breg/model-explanation/v1alpha4
       kind: BRegModelExplanation
@@ -1053,7 +1060,7 @@ formats:
     reader: none
     emittedBy:
       file: crates/registry-bregctl/src/lib.rs
-      symbol: EXPLAIN_API_VERSION
+      symbol: MODEL_EXPLANATION
     check: none
     example: products/breg/examples/formats/explain/model-explanation.json
     conformance: none
@@ -1067,11 +1074,11 @@ formats:
     audience: generated
     stability: promised
     current:
-      apiVersion: registry.registrystack.org/breg-explain/v1alpha4
-      kind: QueriesExplanation
+      apiVersion: id.registrystack.org/formats/breg/queries-explanation/v1alpha4
+      kind: BRegQueriesExplanation
       checkedBy:
         file: crates/registry-bregctl/src/lib.rs
-        symbol: EXPLAIN_API_VERSION
+        symbol: QUERIES_EXPLANATION
     target:
       apiVersion: id.registrystack.org/formats/breg/queries-explanation/v1alpha4
       kind: BRegQueriesExplanation
@@ -1083,7 +1090,7 @@ formats:
     reader: none
     emittedBy:
       file: crates/registry-bregctl/src/lib.rs
-      symbol: EXPLAIN_API_VERSION
+      symbol: QUERIES_EXPLANATION
     check: none
     example: products/breg/examples/formats/explain/queries-explanation.json
     conformance: none
@@ -1097,11 +1104,11 @@ formats:
     audience: generated
     stability: promised
     current:
-      apiVersion: registry.registrystack.org/breg-explain/v1alpha4
-      kind: RoutesExplanation
+      apiVersion: id.registrystack.org/formats/breg/routes-explanation/v1alpha4
+      kind: BRegRoutesExplanation
       checkedBy:
         file: crates/registry-bregctl/src/lib.rs
-        symbol: EXPLAIN_API_VERSION
+        symbol: ROUTES_EXPLANATION
     target:
       apiVersion: id.registrystack.org/formats/breg/routes-explanation/v1alpha4
       kind: BRegRoutesExplanation
@@ -1113,7 +1120,7 @@ formats:
     reader: none
     emittedBy:
       file: crates/registry-bregctl/src/lib.rs
-      symbol: EXPLAIN_API_VERSION
+      symbol: ROUTES_EXPLANATION
     check: none
     example: products/breg/examples/formats/explain/routes-explanation.json
     conformance: none
@@ -1127,9 +1134,11 @@ formats:
     audience: generated
     stability: promised
     current:
-      apiVersion: none
-      kind: none
-      checkedBy: none
+      apiVersion: id.registrystack.org/formats/breg/ctl-report/v1alpha1
+      kind: BRegCtlReport
+      checkedBy:
+        file: crates/registry-bregctl/src/lib.rs
+        symbol: CTL_REPORT_API_VERSION
     target:
       apiVersion: id.registrystack.org/formats/breg/ctl-report/v1alpha1
       kind: BRegCtlReport
@@ -1137,7 +1146,7 @@ formats:
     reader: none
     emittedBy:
       file: crates/registry-bregctl/src/lib.rs
-      symbol: write_failure
+      symbol: write_ctl_report
     check: none
     example: products/breg/examples/formats/ctl-report.json
     conformance: none
@@ -1182,7 +1191,7 @@ formats:
     stability: promised
     topLevel: project
     current:
-      apiVersion: registry.registrystack.org/casework/v1alpha1
+      apiVersion: id.registrystack.org/formats/casework/project/v1alpha1
       kind: CaseworkProject
       checkedBy:
         file: crates/registry-casework-core/src/config.rs
@@ -1204,7 +1213,7 @@ formats:
     check: caseworkctl check {project}
     example: products/casework/examples/payment-review/casework.yaml
     conformance:
-      requiredText: /casework/id
+      requiredText: /project/id
       optionalText: none
       integer: /reviewKinds/0/retention/terminalDays
       boolean: none
@@ -1223,7 +1232,7 @@ formats:
     audience: operator
     stability: promised
     current:
-      apiVersion: registry.registrystack.org/casework-runtime/v1alpha1
+      apiVersion: id.registrystack.org/formats/casework/runtime/v1alpha1
       kind: CaseworkRuntimeConfig
       checkedBy:
         file: crates/registry-casework/src/config.rs
@@ -1255,12 +1264,12 @@ formats:
       - pointer: /metricsListener/bind
         whenOmitted: open
       - pointer: /authentication/oidc/allowedClients
-        whenOmitted: open
+        whenOmitted: refused
       - pointer: /authentication/oidc/assertionIssuers
         whenOmitted: open
       - pointer: /package/expectedDigest
         whenOmitted: open
-    restrictingMembers: [/authentication/oidc/assertionIssuers]
+    restrictingMembers: [/authentication/oidc/allowedClients, /authentication/oidc/assertionIssuers]
   - id: casework/fixture
     product: casework
     title: Casework fixture
@@ -1446,8 +1455,8 @@ formats:
     audience: generated
     stability: promised
     current:
-      apiVersion: registry.registrystack.org/casework-source-description/v1alpha2
-      kind: BRegCaseworkSourceDescription
+      apiVersion: id.registrystack.org/formats/casework/breg-source-description/v1alpha1
+      kind: CaseworkBregSourceDescription
       checkedBy:
         file: crates/registry-casework-breg/src/config.rs
         symbol: DESCRIPTION_KIND
@@ -1469,20 +1478,20 @@ formats:
       boolean: none
     securityMembers: []
     restrictingMembers: []
-    notes: Read at two versions (v1alpha1 and v1alpha2). The kind carries the BReg prefix while Casework owns the reader.
+    notes: Written by `caseworkctl source add` from `bregctl explain change-requests`. One version is read; every paired entity is an entry of `requests`. The two apiVersions earlier releases wrote are refused as retired and the description is imported again.
   - id: casework/apply-report
     product: casework
-    title: caseworkctl --format json output (ApplyReport)
+    title: caseworkctl --format json output (CaseworkApplyReport)
     files: []
     syntax: json
     audience: generated
     stability: promised
     current:
-      apiVersion: registry.registrystack.org/caseworkctl/v1alpha3
-      kind: ApplyReport
+      apiVersion: id.registrystack.org/formats/casework/apply-report/v1alpha3
+      kind: CaseworkApplyReport
       checkedBy:
         file: crates/registry-caseworkctl/src/lib.rs
-        symbol: CLI_API_VERSION
+        symbol: cli_api_version
     target:
       apiVersion: id.registrystack.org/formats/casework/apply-report/v1alpha3
       kind: CaseworkApplyReport
@@ -1494,7 +1503,7 @@ formats:
     reader: none
     emittedBy:
       file: crates/registry-caseworkctl/src/lib.rs
-      symbol: CLI_API_VERSION
+      symbol: cli_api_version
     check: none
     example: products/casework/examples/formats/reports/apply-report.json
     conformance: none
@@ -1502,17 +1511,17 @@ formats:
     restrictingMembers: []
   - id: casework/attempt-settlement-report
     product: casework
-    title: caseworkctl --format json output (AttemptSettlementReport)
+    title: caseworkctl --format json output (CaseworkAttemptSettlementReport)
     files: []
     syntax: json
     audience: generated
     stability: promised
     current:
-      apiVersion: registry.registrystack.org/caseworkctl/v1alpha3
-      kind: AttemptSettlementReport
+      apiVersion: id.registrystack.org/formats/casework/attempt-settlement-report/v1alpha3
+      kind: CaseworkAttemptSettlementReport
       checkedBy:
         file: crates/registry-caseworkctl/src/lib.rs
-        symbol: CLI_API_VERSION
+        symbol: cli_api_version
     target:
       apiVersion: id.registrystack.org/formats/casework/attempt-settlement-report/v1alpha3
       kind: CaseworkAttemptSettlementReport
@@ -1524,7 +1533,7 @@ formats:
     reader: none
     emittedBy:
       file: crates/registry-caseworkctl/src/lib.rs
-      symbol: CLI_API_VERSION
+      symbol: cli_api_version
     check: none
     example: products/casework/examples/formats/reports/attempt-settlement-report.json
     conformance: none
@@ -1532,17 +1541,17 @@ formats:
     restrictingMembers: []
   - id: casework/attempt-uncertain-marking-report
     product: casework
-    title: caseworkctl --format json output (AttemptUncertainMarkingReport)
+    title: caseworkctl --format json output (CaseworkAttemptUncertainMarkingReport)
     files: []
     syntax: json
     audience: generated
     stability: promised
     current:
-      apiVersion: registry.registrystack.org/caseworkctl/v1alpha3
-      kind: AttemptUncertainMarkingReport
+      apiVersion: id.registrystack.org/formats/casework/attempt-uncertain-marking-report/v1alpha3
+      kind: CaseworkAttemptUncertainMarkingReport
       checkedBy:
         file: crates/registry-caseworkctl/src/lib.rs
-        symbol: CLI_API_VERSION
+        symbol: cli_api_version
     target:
       apiVersion: id.registrystack.org/formats/casework/attempt-uncertain-marking-report/v1alpha3
       kind: CaseworkAttemptUncertainMarkingReport
@@ -1554,7 +1563,7 @@ formats:
     reader: none
     emittedBy:
       file: crates/registry-caseworkctl/src/lib.rs
-      symbol: CLI_API_VERSION
+      symbol: cli_api_version
     check: none
     example: products/casework/examples/formats/reports/attempt-uncertain-marking-report.json
     conformance: none
@@ -1562,17 +1571,17 @@ formats:
     restrictingMembers: []
   - id: casework/check-report
     product: casework
-    title: caseworkctl --format json output (CheckReport)
+    title: caseworkctl --format json output (CaseworkCheckReport)
     files: []
     syntax: json
     audience: generated
     stability: promised
     current:
-      apiVersion: registry.registrystack.org/caseworkctl/v1alpha3
-      kind: CheckReport
+      apiVersion: id.registrystack.org/formats/casework/check-report/v1alpha3
+      kind: CaseworkCheckReport
       checkedBy:
         file: crates/registry-caseworkctl/src/lib.rs
-        symbol: CLI_API_VERSION
+        symbol: cli_api_version
     target:
       apiVersion: id.registrystack.org/formats/casework/check-report/v1alpha3
       kind: CaseworkCheckReport
@@ -1584,7 +1593,7 @@ formats:
     reader: none
     emittedBy:
       file: crates/registry-caseworkctl/src/lib.rs
-      symbol: CLI_API_VERSION
+      symbol: cli_api_version
     check: none
     example: products/casework/examples/formats/reports/check-report.json
     conformance: none
@@ -1592,17 +1601,17 @@ formats:
     restrictingMembers: []
   - id: casework/dev-events-report
     product: casework
-    title: caseworkctl --format json output (DevEventsReport)
+    title: caseworkctl --format json output (CaseworkDevEventsReport)
     files: []
     syntax: json
     audience: generated
     stability: promised
     current:
-      apiVersion: registry.registrystack.org/caseworkctl/v1alpha3
-      kind: DevEventsReport
+      apiVersion: id.registrystack.org/formats/casework/dev-events-report/v1alpha3
+      kind: CaseworkDevEventsReport
       checkedBy:
         file: crates/registry-caseworkctl/src/lib.rs
-        symbol: CLI_API_VERSION
+        symbol: cli_api_version
     target:
       apiVersion: id.registrystack.org/formats/casework/dev-events-report/v1alpha3
       kind: CaseworkDevEventsReport
@@ -1614,7 +1623,7 @@ formats:
     reader: none
     emittedBy:
       file: crates/registry-caseworkctl/src/lib.rs
-      symbol: CLI_API_VERSION
+      symbol: cli_api_version
     check: none
     example: products/casework/examples/formats/reports/dev-events-report.json
     conformance: none
@@ -1622,17 +1631,17 @@ formats:
     restrictingMembers: []
   - id: casework/dev-grant-report
     product: casework
-    title: caseworkctl --format json output (DevGrantReport)
+    title: caseworkctl --format json output (CaseworkDevGrantReport)
     files: []
     syntax: json
     audience: generated
     stability: promised
     current:
-      apiVersion: registry.registrystack.org/caseworkctl/v1alpha3
-      kind: DevGrantReport
+      apiVersion: id.registrystack.org/formats/casework/dev-grant-report/v1alpha3
+      kind: CaseworkDevGrantReport
       checkedBy:
         file: crates/registry-caseworkctl/src/lib.rs
-        symbol: CLI_API_VERSION
+        symbol: cli_api_version
     target:
       apiVersion: id.registrystack.org/formats/casework/dev-grant-report/v1alpha3
       kind: CaseworkDevGrantReport
@@ -1644,7 +1653,7 @@ formats:
     reader: none
     emittedBy:
       file: crates/registry-caseworkctl/src/lib.rs
-      symbol: CLI_API_VERSION
+      symbol: cli_api_version
     check: none
     example: products/casework/examples/formats/reports/dev-grant-report.json
     conformance: none
@@ -1652,17 +1661,17 @@ formats:
     restrictingMembers: []
   - id: casework/dev-identity-report
     product: casework
-    title: caseworkctl --format json output (DevIdentityReport)
+    title: caseworkctl --format json output (CaseworkDevIdentityReport)
     files: []
     syntax: json
     audience: generated
     stability: promised
     current:
-      apiVersion: registry.registrystack.org/caseworkctl/v1alpha3
-      kind: DevIdentityReport
+      apiVersion: id.registrystack.org/formats/casework/dev-identity-report/v1alpha3
+      kind: CaseworkDevIdentityReport
       checkedBy:
         file: crates/registry-caseworkctl/src/lib.rs
-        symbol: CLI_API_VERSION
+        symbol: cli_api_version
     target:
       apiVersion: id.registrystack.org/formats/casework/dev-identity-report/v1alpha3
       kind: CaseworkDevIdentityReport
@@ -1674,7 +1683,7 @@ formats:
     reader: none
     emittedBy:
       file: crates/registry-caseworkctl/src/lib.rs
-      symbol: CLI_API_VERSION
+      symbol: cli_api_version
     check: none
     example: products/casework/examples/formats/reports/dev-identity-report.json
     conformance: none
@@ -1682,17 +1691,17 @@ formats:
     restrictingMembers: []
   - id: casework/dev-report
     product: casework
-    title: caseworkctl --format json output (DevReport)
+    title: caseworkctl --format json output (CaseworkDevReport)
     files: []
     syntax: json
     audience: generated
     stability: promised
     current:
-      apiVersion: registry.registrystack.org/caseworkctl/v1alpha3
-      kind: DevReport
+      apiVersion: id.registrystack.org/formats/casework/dev-report/v1alpha3
+      kind: CaseworkDevReport
       checkedBy:
         file: crates/registry-caseworkctl/src/lib.rs
-        symbol: CLI_API_VERSION
+        symbol: cli_api_version
     target:
       apiVersion: id.registrystack.org/formats/casework/dev-report/v1alpha3
       kind: CaseworkDevReport
@@ -1704,7 +1713,7 @@ formats:
     reader: none
     emittedBy:
       file: crates/registry-caseworkctl/src/lib.rs
-      symbol: CLI_API_VERSION
+      symbol: cli_api_version
     check: none
     example: products/casework/examples/formats/reports/dev-report.json
     conformance: none
@@ -1712,17 +1721,17 @@ formats:
     restrictingMembers: []
   - id: casework/dev-token-report
     product: casework
-    title: caseworkctl --format json output (DevTokenReport)
+    title: caseworkctl --format json output (CaseworkDevTokenReport)
     files: []
     syntax: json
     audience: generated
     stability: promised
     current:
-      apiVersion: registry.registrystack.org/caseworkctl/v1alpha3
-      kind: DevTokenReport
+      apiVersion: id.registrystack.org/formats/casework/dev-token-report/v1alpha3
+      kind: CaseworkDevTokenReport
       checkedBy:
         file: crates/registry-caseworkctl/src/lib.rs
-        symbol: CLI_API_VERSION
+        symbol: cli_api_version
     target:
       apiVersion: id.registrystack.org/formats/casework/dev-token-report/v1alpha3
       kind: CaseworkDevTokenReport
@@ -1734,7 +1743,7 @@ formats:
     reader: none
     emittedBy:
       file: crates/registry-caseworkctl/src/lib.rs
-      symbol: CLI_API_VERSION
+      symbol: cli_api_version
     check: none
     example: products/casework/examples/formats/reports/dev-token-report.json
     conformance: none
@@ -1742,17 +1751,17 @@ formats:
     restrictingMembers: []
   - id: casework/doctor-report
     product: casework
-    title: caseworkctl --format json output (DoctorReport)
+    title: caseworkctl --format json output (CaseworkDoctorReport)
     files: []
     syntax: json
     audience: generated
     stability: promised
     current:
-      apiVersion: registry.registrystack.org/caseworkctl/v1alpha3
-      kind: DoctorReport
+      apiVersion: id.registrystack.org/formats/casework/doctor-report/v1alpha3
+      kind: CaseworkDoctorReport
       checkedBy:
         file: crates/registry-caseworkctl/src/lib.rs
-        symbol: CLI_API_VERSION
+        symbol: cli_api_version
     target:
       apiVersion: id.registrystack.org/formats/casework/doctor-report/v1alpha3
       kind: CaseworkDoctorReport
@@ -1764,7 +1773,7 @@ formats:
     reader: none
     emittedBy:
       file: crates/registry-caseworkctl/src/lib.rs
-      symbol: CLI_API_VERSION
+      symbol: cli_api_version
     check: none
     example: products/casework/examples/formats/reports/doctor-report.json
     conformance: none
@@ -1772,17 +1781,17 @@ formats:
     restrictingMembers: []
   - id: casework/explain-report
     product: casework
-    title: caseworkctl --format json output (ExplainReport)
+    title: caseworkctl --format json output (CaseworkExplainReport)
     files: []
     syntax: json
     audience: generated
     stability: promised
     current:
-      apiVersion: registry.registrystack.org/caseworkctl/v1alpha3
-      kind: ExplainReport
+      apiVersion: id.registrystack.org/formats/casework/explain-report/v1alpha3
+      kind: CaseworkExplainReport
       checkedBy:
         file: crates/registry-caseworkctl/src/lib.rs
-        symbol: CLI_API_VERSION
+        symbol: cli_api_version
     target:
       apiVersion: id.registrystack.org/formats/casework/explain-report/v1alpha3
       kind: CaseworkExplainReport
@@ -1794,7 +1803,7 @@ formats:
     reader: none
     emittedBy:
       file: crates/registry-caseworkctl/src/lib.rs
-      symbol: CLI_API_VERSION
+      symbol: cli_api_version
     check: none
     example: products/casework/examples/formats/reports/explain-report.json
     conformance: none
@@ -1802,17 +1811,17 @@ formats:
     restrictingMembers: []
   - id: casework/init-report
     product: casework
-    title: caseworkctl --format json output (InitReport)
+    title: caseworkctl --format json output (CaseworkInitReport)
     files: []
     syntax: json
     audience: generated
     stability: promised
     current:
-      apiVersion: registry.registrystack.org/caseworkctl/v1alpha3
-      kind: InitReport
+      apiVersion: id.registrystack.org/formats/casework/init-report/v1alpha3
+      kind: CaseworkInitReport
       checkedBy:
         file: crates/registry-caseworkctl/src/lib.rs
-        symbol: CLI_API_VERSION
+        symbol: cli_api_version
     target:
       apiVersion: id.registrystack.org/formats/casework/init-report/v1alpha3
       kind: CaseworkInitReport
@@ -1824,7 +1833,7 @@ formats:
     reader: none
     emittedBy:
       file: crates/registry-caseworkctl/src/lib.rs
-      symbol: CLI_API_VERSION
+      symbol: cli_api_version
     check: none
     example: products/casework/examples/formats/reports/init-report.json
     conformance: none
@@ -1832,17 +1841,17 @@ formats:
     restrictingMembers: []
   - id: casework/lifecycle-report
     product: casework
-    title: caseworkctl --format json output (LifecycleReport)
+    title: caseworkctl --format json output (CaseworkLifecycleReport)
     files: []
     syntax: json
     audience: generated
     stability: promised
     current:
-      apiVersion: registry.registrystack.org/caseworkctl/v1alpha3
-      kind: LifecycleReport
+      apiVersion: id.registrystack.org/formats/casework/lifecycle-report/v1alpha3
+      kind: CaseworkLifecycleReport
       checkedBy:
         file: crates/registry-caseworkctl/src/lib.rs
-        symbol: CLI_API_VERSION
+        symbol: cli_api_version
     target:
       apiVersion: id.registrystack.org/formats/casework/lifecycle-report/v1alpha3
       kind: CaseworkLifecycleReport
@@ -1854,7 +1863,7 @@ formats:
     reader: none
     emittedBy:
       file: crates/registry-caseworkctl/src/lib.rs
-      symbol: CLI_API_VERSION
+      symbol: cli_api_version
     check: none
     example: products/casework/examples/formats/reports/lifecycle-report.json
     conformance: none
@@ -1862,17 +1871,17 @@ formats:
     restrictingMembers: []
   - id: casework/package-report
     product: casework
-    title: caseworkctl --format json output (PackageReport)
+    title: caseworkctl --format json output (CaseworkPackageReport)
     files: []
     syntax: json
     audience: generated
     stability: promised
     current:
-      apiVersion: registry.registrystack.org/caseworkctl/v1alpha3
-      kind: PackageReport
+      apiVersion: id.registrystack.org/formats/casework/package-report/v1alpha3
+      kind: CaseworkPackageReport
       checkedBy:
         file: crates/registry-caseworkctl/src/lib.rs
-        symbol: CLI_API_VERSION
+        symbol: cli_api_version
     target:
       apiVersion: id.registrystack.org/formats/casework/package-report/v1alpha3
       kind: CaseworkPackageReport
@@ -1884,7 +1893,7 @@ formats:
     reader: none
     emittedBy:
       file: crates/registry-caseworkctl/src/lib.rs
-      symbol: CLI_API_VERSION
+      symbol: cli_api_version
     check: none
     example: products/casework/examples/formats/reports/package-report.json
     conformance: none
@@ -1892,17 +1901,17 @@ formats:
     restrictingMembers: []
   - id: casework/plan-report
     product: casework
-    title: caseworkctl --format json output (PlanReport)
+    title: caseworkctl --format json output (CaseworkPlanReport)
     files: []
     syntax: json
     audience: generated
     stability: promised
     current:
-      apiVersion: registry.registrystack.org/caseworkctl/v1alpha3
-      kind: PlanReport
+      apiVersion: id.registrystack.org/formats/casework/plan-report/v1alpha3
+      kind: CaseworkPlanReport
       checkedBy:
         file: crates/registry-caseworkctl/src/lib.rs
-        symbol: CLI_API_VERSION
+        symbol: cli_api_version
     target:
       apiVersion: id.registrystack.org/formats/casework/plan-report/v1alpha3
       kind: CaseworkPlanReport
@@ -1914,7 +1923,7 @@ formats:
     reader: none
     emittedBy:
       file: crates/registry-caseworkctl/src/lib.rs
-      symbol: CLI_API_VERSION
+      symbol: cli_api_version
     check: none
     example: products/casework/examples/formats/reports/plan-report.json
     conformance: none
@@ -1922,17 +1931,17 @@ formats:
     restrictingMembers: []
   - id: casework/retention-erase-report
     product: casework
-    title: caseworkctl --format json output (RetentionEraseReport)
+    title: caseworkctl --format json output (CaseworkRetentionEraseReport)
     files: []
     syntax: json
     audience: generated
     stability: promised
     current:
-      apiVersion: registry.registrystack.org/caseworkctl/v1alpha3
-      kind: RetentionEraseReport
+      apiVersion: id.registrystack.org/formats/casework/retention-erase-report/v1alpha3
+      kind: CaseworkRetentionEraseReport
       checkedBy:
         file: crates/registry-caseworkctl/src/lib.rs
-        symbol: CLI_API_VERSION
+        symbol: cli_api_version
     target:
       apiVersion: id.registrystack.org/formats/casework/retention-erase-report/v1alpha3
       kind: CaseworkRetentionEraseReport
@@ -1944,7 +1953,7 @@ formats:
     reader: none
     emittedBy:
       file: crates/registry-caseworkctl/src/lib.rs
-      symbol: CLI_API_VERSION
+      symbol: cli_api_version
     check: none
     example: products/casework/examples/formats/reports/retention-erase-report.json
     conformance: none
@@ -1952,17 +1961,17 @@ formats:
     restrictingMembers: []
   - id: casework/simulation-report
     product: casework
-    title: caseworkctl --format json output (SimulationReport)
+    title: caseworkctl --format json output (CaseworkSimulationReport)
     files: []
     syntax: json
     audience: generated
     stability: promised
     current:
-      apiVersion: registry.registrystack.org/caseworkctl/v1alpha3
-      kind: SimulationReport
+      apiVersion: id.registrystack.org/formats/casework/simulation-report/v1alpha3
+      kind: CaseworkSimulationReport
       checkedBy:
         file: crates/registry-caseworkctl/src/lib.rs
-        symbol: CLI_API_VERSION
+        symbol: cli_api_version
     target:
       apiVersion: id.registrystack.org/formats/casework/simulation-report/v1alpha3
       kind: CaseworkSimulationReport
@@ -1974,7 +1983,7 @@ formats:
     reader: none
     emittedBy:
       file: crates/registry-caseworkctl/src/lib.rs
-      symbol: CLI_API_VERSION
+      symbol: cli_api_version
     check: none
     example: products/casework/examples/formats/reports/simulation-report.json
     conformance: none
@@ -1982,17 +1991,17 @@ formats:
     restrictingMembers: []
   - id: casework/source-add-report
     product: casework
-    title: caseworkctl --format json output (SourceAddReport)
+    title: caseworkctl --format json output (CaseworkSourceAddReport)
     files: []
     syntax: json
     audience: generated
     stability: promised
     current:
-      apiVersion: registry.registrystack.org/caseworkctl/v1alpha3
-      kind: SourceAddReport
+      apiVersion: id.registrystack.org/formats/casework/source-add-report/v1alpha3
+      kind: CaseworkSourceAddReport
       checkedBy:
         file: crates/registry-caseworkctl/src/lib.rs
-        symbol: CLI_API_VERSION
+        symbol: cli_api_version
     target:
       apiVersion: id.registrystack.org/formats/casework/source-add-report/v1alpha3
       kind: CaseworkSourceAddReport
@@ -2004,7 +2013,7 @@ formats:
     reader: none
     emittedBy:
       file: crates/registry-caseworkctl/src/lib.rs
-      symbol: CLI_API_VERSION
+      symbol: cli_api_version
     check: none
     example: products/casework/examples/formats/reports/source-add-report.json
     conformance: none
@@ -2012,17 +2021,17 @@ formats:
     restrictingMembers: []
   - id: casework/status-report
     product: casework
-    title: caseworkctl --format json output (StatusReport)
+    title: caseworkctl --format json output (CaseworkStatusReport)
     files: []
     syntax: json
     audience: generated
     stability: promised
     current:
-      apiVersion: registry.registrystack.org/caseworkctl/v1alpha3
-      kind: StatusReport
+      apiVersion: id.registrystack.org/formats/casework/status-report/v1alpha3
+      kind: CaseworkStatusReport
       checkedBy:
         file: crates/registry-caseworkctl/src/lib.rs
-        symbol: CLI_API_VERSION
+        symbol: cli_api_version
     target:
       apiVersion: id.registrystack.org/formats/casework/status-report/v1alpha3
       kind: CaseworkStatusReport
@@ -2034,7 +2043,7 @@ formats:
     reader: none
     emittedBy:
       file: crates/registry-caseworkctl/src/lib.rs
-      symbol: CLI_API_VERSION
+      symbol: cli_api_version
     check: none
     example: products/casework/examples/formats/reports/status-report.json
     conformance: none
@@ -2042,17 +2051,17 @@ formats:
     restrictingMembers: []
   - id: casework/test-report
     product: casework
-    title: caseworkctl --format json output (TestReport)
+    title: caseworkctl --format json output (CaseworkTestReport)
     files: []
     syntax: json
     audience: generated
     stability: promised
     current:
-      apiVersion: registry.registrystack.org/caseworkctl/v1alpha3
-      kind: TestReport
+      apiVersion: id.registrystack.org/formats/casework/test-report/v1alpha3
+      kind: CaseworkTestReport
       checkedBy:
         file: crates/registry-caseworkctl/src/lib.rs
-        symbol: CLI_API_VERSION
+        symbol: cli_api_version
     target:
       apiVersion: id.registrystack.org/formats/casework/test-report/v1alpha3
       kind: CaseworkTestReport
@@ -2064,7 +2073,7 @@ formats:
     reader: none
     emittedBy:
       file: crates/registry-caseworkctl/src/lib.rs
-      symbol: CLI_API_VERSION
+      symbol: cli_api_version
     check: none
     example: products/casework/examples/formats/reports/test-report.json
     conformance: none
@@ -2072,17 +2081,17 @@ formats:
     restrictingMembers: []
   - id: casework/usage-report
     product: casework
-    title: caseworkctl --format json output (UsageReport)
+    title: caseworkctl --format json output (CaseworkUsageReport)
     files: []
     syntax: json
     audience: generated
     stability: promised
     current:
-      apiVersion: registry.registrystack.org/caseworkctl/v1alpha3
-      kind: UsageReport
+      apiVersion: id.registrystack.org/formats/casework/usage-report/v1alpha3
+      kind: CaseworkUsageReport
       checkedBy:
         file: crates/registry-caseworkctl/src/lib.rs
-        symbol: CLI_API_VERSION
+        symbol: cli_api_version
     target:
       apiVersion: id.registrystack.org/formats/casework/usage-report/v1alpha3
       kind: CaseworkUsageReport
@@ -2094,7 +2103,7 @@ formats:
     reader: none
     emittedBy:
       file: crates/registry-caseworkctl/src/lib.rs
-      symbol: CLI_API_VERSION
+      symbol: cli_api_version
     check: none
     example: products/casework/examples/formats/reports/usage-report.json
     conformance: none
@@ -2260,7 +2269,7 @@ formats:
         whenOmitted: open
       - pointer: /package/expectedDigest
         whenOmitted: open
-    restrictingMembers: [/authentication/oidc/assertionIssuers]
+    restrictingMembers: [/authentication/oidc/allowedClients, /authentication/oidc/assertionIssuers]
   - id: scheduling/ctl-report
     product: scheduling
     title: schedulingctl --format json report
@@ -2451,7 +2460,7 @@ formats:
         whenOmitted: open
       - pointer: /package/expectedDigest
         whenOmitted: open
-    restrictingMembers: [/authentication/oidc/assertionIssuers]
+    restrictingMembers: [/authentication/oidc/allowedClients, /authentication/oidc/assertionIssuers]
   - id: messaging/template-schema
     product: messaging
     title: Messaging template data schema
@@ -2516,12 +2525,11 @@ formats:
     audience: authored
     stability: promised
     current:
-      apiVersion: none
-      kind: none
-      otherHeader: 'schemaVersion: registry-discovery/origins/v1alpha1'
+      apiVersion: id.registrystack.org/formats/discovery/origins/v1alpha1
+      kind: DiscoveryOrigins
       checkedBy:
         file: crates/registry-discoveryctl/src/project.rs
-        symbol: ORIGINS_SCHEMA
+        symbol: ORIGINS_API_VERSION
     target:
       apiVersion: id.registrystack.org/formats/discovery/origins/v1alpha1
       kind: DiscoveryOrigins
@@ -2554,12 +2562,11 @@ formats:
     audience: authored
     stability: promised
     current:
-      apiVersion: none
-      kind: none
-      otherHeader: 'schemaVersion: registry-discovery/evidence-mapping/v1alpha1'
+      apiVersion: id.registrystack.org/formats/discovery/evidence-mapping/v1alpha1
+      kind: DiscoveryEvidenceMapping
       checkedBy:
         file: crates/registry-discoveryctl/src/project.rs
-        symbol: MAPPING_SCHEMA
+        symbol: MAPPING_API_VERSION
     target:
       apiVersion: id.registrystack.org/formats/discovery/evidence-mapping/v1alpha1
       kind: DiscoveryEvidenceMapping
@@ -2593,7 +2600,7 @@ formats:
     audience: operator
     stability: promised
     current:
-      apiVersion: registry.registrystack.org/discovery-runtime/v1alpha1
+      apiVersion: id.registrystack.org/formats/discovery/runtime/v1alpha1
       kind: DiscoveryRuntimeConfig
       checkedBy:
         file: crates/registry-discovery/src/runtime_config.rs
@@ -2875,10 +2882,11 @@ formats:
     stability: promised
     topLevel: bundle
     current:
-      apiVersion: none
-      kind: none
-      otherHeader: 'version: 1'
-      checkedBy: none
+      apiVersion: id.registrystack.org/formats/evidence/bundle/v1
+      kind: EvidenceBundle
+      checkedBy:
+        file: crates/registry-evidence/src/config.rs
+        symbol: EVIDENCE_BUNDLE_API_VERSION
     target:
       apiVersion: id.registrystack.org/formats/evidence/bundle/v1
       kind: EvidenceBundle
@@ -2895,19 +2903,21 @@ formats:
     check: evidence check --runtime-config {runtime}
     example: products/evidence/reference/request-adapter/deployment-projects/opencrvs-family-evidence/bundle/evidence.yaml
     conformance:
-      requiredText: /issuer/id
+      requiredText: /issuer/uri
       optionalText: /requirements/0/observationTimezone
       integer: /rateLimits/burstPerPrincipal
       boolean: /requirements/0/concepts/0/required
-      idList: /requirements
+      idList: none
       set: /requirements/0/purposes
       relativePath: /sources/registered-birth-date/extractScript
     securityMembers:
       - pointer: /authentication/oidc/allowedClients
         whenOmitted: refused
+      - pointer: /authentication/oidc/requiredScopes
+        whenOmitted: refused
       - pointer: /authentication/oidc/assertionIssuers
-        whenOmitted: unclassified
-    restrictingMembers: [/authentication/oidc/assertionIssuers]
+        whenOmitted: open
+    restrictingMembers: [/authentication/oidc/allowedClients, /authentication/oidc/requiredScopes, /authentication/oidc/assertionIssuers]
   - id: evidence/runtime
     product: evidence
     title: Evidence runtime configuration
@@ -2916,7 +2926,7 @@ formats:
     audience: operator
     stability: promised
     current:
-      apiVersion: registry.registrystack.org/evidence-runtime/v1alpha1
+      apiVersion: id.registrystack.org/formats/evidence/runtime/v1alpha1
       kind: EvidenceRuntimeConfig
       checkedBy:
         file: crates/registry-evidence/src/config.rs
@@ -2957,9 +2967,11 @@ formats:
     audience: authored
     stability: promised
     current:
-      apiVersion: none
-      kind: none
-      checkedBy: none
+      apiVersion: id.registrystack.org/formats/evidence/codelist/v1alpha1
+      kind: EvidenceCodelist
+      checkedBy:
+        file: crates/registry-evidence/src/codelist.rs
+        symbol: EVIDENCE_CODELIST_API_VERSION
     target:
       apiVersion: id.registrystack.org/formats/evidence/codelist/v1alpha1
       kind: EvidenceCodelist
@@ -3410,9 +3422,11 @@ formats:
     audience: operator
     stability: promised
     current:
-      apiVersion: none
-      kind: none
-      checkedBy: none
+      apiVersion: id.registrystack.org/formats/evidence/verification-policy/v1
+      kind: EvidenceVerificationPolicy
+      checkedBy:
+        file: crates/registry-evidence/src/verification_policy.rs
+        symbol: VERIFICATION_POLICY_API_VERSION
     target:
       apiVersion: id.registrystack.org/formats/evidence/verification-policy/v1
       kind: EvidenceVerificationPolicy
@@ -3443,9 +3457,11 @@ formats:
     audience: operator
     stability: promised
     current:
-      apiVersion: none
-      kind: none
-      checkedBy: none
+      apiVersion: id.registrystack.org/formats/evidence/holder-bound-verification-policy/v1
+      kind: EvidenceHolderBoundVerificationPolicy
+      checkedBy:
+        file: crates/registry-evidence/src/verification_policy.rs
+        symbol: HOLDER_BOUND_POLICY_API_VERSION
     target:
       apiVersion: id.registrystack.org/formats/evidence/holder-bound-verification-policy/v1
       kind: EvidenceHolderBoundVerificationPolicy
@@ -3524,12 +3540,11 @@ formats:
     audience: operator
     stability: promised
     current:
-      apiVersion: none
-      kind: none
-      otherHeader: 'schema: registry.evidence-client-profile/v1'
+      apiVersion: id.registrystack.org/formats/evidence/client-profile/v1
+      kind: EvidenceClientProfile
       checkedBy:
         file: crates/registry-evidence-client/src/profile.rs
-        symbol: EVIDENCE_CLIENT_PROFILE_SCHEMA_V1
+        symbol: EVIDENCE_CLIENT_PROFILE_API_VERSION
     target:
       apiVersion: id.registrystack.org/formats/evidence/client-profile/v1
       kind: EvidenceClientProfile
@@ -3561,12 +3576,11 @@ formats:
     audience: generated
     stability: promised
     current:
-      apiVersion: none
-      kind: none
-      otherHeader: 'schema: registry.evidence-client-contracts/v1'
+      apiVersion: id.registrystack.org/formats/evidence/client-contracts/v1
+      kind: EvidenceClientContracts
       checkedBy:
         file: crates/registry-evidence-client/src/profile.rs
-        symbol: EVIDENCE_CLIENT_CONTRACTS_SCHEMA_V1
+        symbol: EVIDENCE_CLIENT_CONTRACTS_API_VERSION
     target:
       apiVersion: id.registrystack.org/formats/evidence/client-contracts/v1
       kind: EvidenceClientContracts

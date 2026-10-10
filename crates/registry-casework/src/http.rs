@@ -397,8 +397,8 @@ async fn description(
 ) -> Result<Json<Description>, HttpError> {
     let (actor, _) = authenticate(&state, &headers).await?;
     Ok(Json(Description {
-        project_id: state.project.casework.id.clone(),
-        policy_version: state.project.casework.version.clone(),
+        project_id: state.project.project.id.to_string(),
+        policy_version: state.project.project.version.clone(),
         queues: state
             .project
             .queues
@@ -2189,20 +2189,20 @@ fn problem_response(
 
 fn review_validation_reason(reason: ReviewValidationReason) -> &'static str {
     match reason {
-        ReviewValidationReason::KindNotAllowed => "kind_not_allowed",
-        ReviewValidationReason::ReferenceInvalid => "reference_invalid",
-        ReviewValidationReason::ObjectRequired => "object_required",
-        ReviewValidationReason::MaximumBytesExceeded => "maximum_bytes_exceeded",
-        ReviewValidationReason::MaximumDepthExceeded => "maximum_depth_exceeded",
-        ReviewValidationReason::SchemaMismatch => "schema_mismatch",
-        ReviewValidationReason::OutcomeNotDeclared => "outcome_not_declared",
-        ReviewValidationReason::ReasonRequired => "reason_required",
-        ReviewValidationReason::TextInvalid => "text_invalid",
-        ReviewValidationReason::ResultNotDeclared => "result_not_declared",
-        ReviewValidationReason::ResultRequired => "result_required",
-        ReviewValidationReason::FieldNotDeclared => "field_not_declared",
-        ReviewValidationReason::ConstraintInvalid => "constraint_invalid",
-        ReviewValidationReason::ConstraintViolated => "constraint_violated",
+        ReviewValidationReason::KindNotAllowed => "kind-not-allowed",
+        ReviewValidationReason::ReferenceInvalid => "reference-invalid",
+        ReviewValidationReason::ObjectRequired => "object-required",
+        ReviewValidationReason::MaximumBytesExceeded => "maximum-bytes-exceeded",
+        ReviewValidationReason::MaximumDepthExceeded => "maximum-depth-exceeded",
+        ReviewValidationReason::SchemaMismatch => "schema-mismatch",
+        ReviewValidationReason::OutcomeNotDeclared => "outcome-not-declared",
+        ReviewValidationReason::ReasonRequired => "reason-required",
+        ReviewValidationReason::TextInvalid => "text-invalid",
+        ReviewValidationReason::ResultNotDeclared => "result-not-declared",
+        ReviewValidationReason::ResultRequired => "result-required",
+        ReviewValidationReason::FieldNotDeclared => "field-not-declared",
+        ReviewValidationReason::ConstraintInvalid => "constraint-invalid",
+        ReviewValidationReason::ConstraintViolated => "constraint-violated",
     }
 }
 
@@ -2629,6 +2629,37 @@ mod tests {
                 "{name}"
             );
             assert_eq!(calls.load(Ordering::Relaxed), 0, "{name}");
+        }
+    }
+
+    /// The validation reason header carries the word the SDK type
+    /// serializes to, so a reader of either sees one spelling.
+    #[test]
+    fn every_validation_reason_header_is_the_kebab_case_word_of_its_type() {
+        let reasons = [
+            ReviewValidationReason::KindNotAllowed,
+            ReviewValidationReason::ReferenceInvalid,
+            ReviewValidationReason::ObjectRequired,
+            ReviewValidationReason::MaximumBytesExceeded,
+            ReviewValidationReason::MaximumDepthExceeded,
+            ReviewValidationReason::SchemaMismatch,
+            ReviewValidationReason::OutcomeNotDeclared,
+            ReviewValidationReason::ReasonRequired,
+            ReviewValidationReason::TextInvalid,
+            ReviewValidationReason::ResultNotDeclared,
+            ReviewValidationReason::ResultRequired,
+            ReviewValidationReason::FieldNotDeclared,
+            ReviewValidationReason::ConstraintInvalid,
+            ReviewValidationReason::ConstraintViolated,
+        ];
+        for reason in reasons {
+            let word = review_validation_reason(reason);
+            assert_eq!(serde_json::to_value(reason).expect("reason"), word);
+            assert!(
+                word.bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte == b'-'),
+                "{word}"
+            );
         }
     }
 }

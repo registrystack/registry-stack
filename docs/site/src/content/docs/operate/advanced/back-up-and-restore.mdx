@@ -417,7 +417,9 @@ or production systems. Test credentials alone do not prevent delivery to a real 
    [Upgrade in this order](../upgrade-and-retire/#upgrade-in-this-order) gives the sequence. Then
    use that `messagingctl` to run `plan --runtime-config FILE` and `apply --runtime-config FILE`
    on the drill copy, and inspect `status`, `messages list`, and `messages show` again with that
-   file. Configure its providers to use the isolated capture sinks.
+   file. When the notes have you apply to a new database, as the v0.40.0 notes do for a database
+   v0.39.0 wrote, the restored copy has no upgrade to rehearse. Configure its providers to use the
+   isolated capture sinks.
    For a local plaintext SMTP sink, use a loopback listener with `tlsTermination:
    development-loopback`, and set the provider's `tls: development-loopback` and explicit `port`.
    An HTTP sink may use a loopback `http` base URL. After checking the activation, dispatch state,
@@ -431,8 +433,8 @@ or production systems. Test credentials alone do not prevent delivery to a real 
 
 {/* Evidence: products/messaging/RUNTIME-CONFIG.md, Keys and Providers;
     release/notes/config-conventions/messaging.md, "BREAKING: the runtime file's keys and
-    apiVersion are renamed" (a package the previous release built is refused);
-    release/scripts/rehearse-upgrade.py, repackage();
+    apiVersion are renamed" (a package the previous release built is refused, apply to a new
+    database);
     crates/registry-messaging/src/config.rs, TlsTermination::DevelopmentLoopback;
     crates/registry-messaging/src/runtime.rs, assemble() and Listeners::serve_until();
     crates/registry-messaging/src/http.rs, Readiness and ready(). */}

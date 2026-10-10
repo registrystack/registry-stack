@@ -152,7 +152,7 @@ class RuntimeConfigTest(unittest.TestCase):
             "migrationUrlRef: secret:file/db-url",
             f"issuer: {demo.DEMO_ISSUER}",
             f"audience: {demo.DEMO_AUDIENCE}",
-            "kind: static",
+            "type: static",
             "documentRef: secret:file/jwks",
             "path: /run/audit",
             "hashKeyRef: secret:file/audit-key",

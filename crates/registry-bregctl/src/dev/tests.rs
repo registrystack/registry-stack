@@ -2587,18 +2587,19 @@ fn a_comment_in_a_handler_script_is_a_change_because_the_package_ships_its_bytes
     let (_temporary, project) = write_init_project();
     edit_authored(
         &project.join("registry.yaml"),
-        "    permissions:\n      - entity: record-group\n        rowBoundaries: unrestricted\n        \
-         operations: [create, get, list]\n",
-        "    permissions:\n      - action: create-record-group\n        operations: [invoke]\n        \
-         targets: [{entity: record-group, rowBoundaries: unrestricted}]\n        results: [group]\n      \
-         - entity: record-group\n        rowBoundaries: unrestricted\n        \
-         operations: [create, get, list]\n",
+        "    permissions:\n      entities:\n        - entity: record-group\n          \
+         rowBoundaries: unrestricted\n          operations: [create, get, list]\n",
+        "    permissions:\n      actions:\n        - action: create-record-group\n          \
+         operations: [invoke]\n          \
+         targets: [{entity: record-group, rowBoundaries: unrestricted}]\n          \
+         results: [group]\n      entities:\n        - entity: record-group\n          \
+         rowBoundaries: unrestricted\n          operations: [create, get, list]\n",
     );
     append_comment(
         &project.join("registry.yaml"),
         "\nactions:\n  - id: create-record-group\n    inputs:\n      \
-         - {id: code, type: string, required: true, maxLength: 64, classification: public}\n    \
-         handler:\n      kind: rhai\n      script: scripts/create-record-group.rhai\n      \
+         - {id: code, type: string, required: true, maximumLength: 64, classification: public}\n    \
+         handler:\n      type: rhai\n      script: scripts/create-record-group.rhai\n      \
          abi: registry.action-handler/v1\n      writes:\n        - id: group\n          \
          target: {entity: record-group}\n          operation: create\n          \
          fields: [code, label]\n",
@@ -3100,9 +3101,9 @@ fn declared_events_receive_exact_private_bindings_in_rehearsal_and_runtime() {
         .find(|entity| entity["id"] == "record")
         .unwrap();
     entity["hooks"] = json!([
-        {"phase":"after","id":"record-created-v1","trigger":"created","projection":["code"],"handler":{"kind":"url","destinationId":"local-hook"}},
-        {"phase":"after","id":"record-patched-v1","trigger":"patched","projection":["label"],"handler":{"kind":"url","destinationId":"local-hook"}},
-        {"phase":"after","id":"record-second-v1","trigger":"created","projection":["code"],"handler":{"kind":"url","destinationId":"second-hook"}}
+        {"phase":"after","id":"record-created-v1","trigger":"created","projection":["code"],"handler":{"type":"url","destinationId":"local-hook"}},
+        {"phase":"after","id":"record-patched-v1","trigger":"patched","projection":["label"],"handler":{"type":"url","destinationId":"local-hook"}},
+        {"phase":"after","id":"record-second-v1","trigger":"created","projection":["code"],"handler":{"type":"url","destinationId":"second-hook"}}
     ]);
     fs::write(&module, serde_norway::to_string(&source).unwrap()).unwrap();
     let bytes = fs::read(project.join("dev-clients.yaml")).unwrap();
@@ -3131,7 +3132,7 @@ fn declared_events_receive_exact_private_bindings_in_rehearsal_and_runtime() {
         assert_eq!(value["eventDestinations"].as_object().unwrap().len(), 2);
         for binding in value["eventDestinations"].as_object().unwrap().values() {
             assert_eq!(binding["origin"], "http://127.0.0.1:18996");
-            assert_eq!(binding["networkProfile"], "loopbackDevelopmentHttp");
+            assert_eq!(binding["networkProfile"], "loopback-development-http");
             assert_eq!(binding["classificationCeiling"], "internal");
             assert_eq!(binding["deliveryCeilings"]["maximumAttempts"], 5);
             assert_eq!(
@@ -3163,7 +3164,7 @@ fn explicit_local_event_destinations_bind_exact_compiled_inventory() {
     entity["hooks"] = json!([{
         "phase": "after",
         "id":"record-created-v1","trigger":"created","projection":["code"],
-        "handler":{"kind":"url","destinationId":"openfn"}
+        "handler":{"type":"url","destinationId":"openfn"}
     }]);
     fs::write(&module, serde_norway::to_string(&source).unwrap()).unwrap();
     let bytes = fs::read(project.join("dev-clients.yaml")).unwrap();
@@ -3776,8 +3777,8 @@ fn local_review_executor_uses_refreshing_service_identity_for_this_registry() {
         "classification": "internal",
         "changeControl": {"requiredFor":["create"]},
         "fields": [
-            {"id":"code", "type":"string", "required":true, "minLength":1, "maxLength":64, "classification":"internal"},
-            {"id":"label", "type":"string", "required":true, "maxLength":200, "classification":"internal"}
+            {"id":"code", "type":"string", "required":true, "minimumLength":1, "maximumLength":64, "classification":"internal"},
+            {"id":"label", "type":"string", "required":true, "maximumLength":200, "classification":"internal"}
         ]
     }));
     definition["entities"].as_array_mut().unwrap().push(json!({
@@ -3787,8 +3788,8 @@ fn local_review_executor_uses_refreshing_service_identity_for_this_registry() {
         "mutationMode": "mutable",
         "classification": "internal",
         "fields": [
-            {"id":"code", "type":"string", "required":true, "minLength":1, "maxLength":64, "classification":"internal"},
-            {"id":"label", "type":"string", "required":true, "maxLength":200, "classification":"internal"}
+            {"id":"code", "type":"string", "required":true, "minimumLength":1, "maximumLength":64, "classification":"internal"},
+            {"id":"label", "type":"string", "required":true, "maximumLength":200, "classification":"internal"}
         ],
         "changeRequest": {
             "effects": [{
@@ -3797,9 +3798,9 @@ fn local_review_executor_uses_refreshing_service_identity_for_this_registry() {
                 "operation": "create",
                 "set": {"code":{"fromField":"code"}, "label":{"fromField":"label"}}
             }],
-            "review": {"authority":"casework", "policyId":"record-approval"},
+            "review": {"type": "required", "authority":"casework", "policyId":"record-approval"},
             "onApproved": {"mode":"automatic", "executor":"automatic-applier"},
-            "retention": {"mode":"operator_erase"}
+            "retention": {"mode":"operator-erase"}
         }
     }));
     let operator = definition["accessProfiles"]
@@ -3808,14 +3809,17 @@ fn local_review_executor_uses_refreshing_service_identity_for_this_registry() {
         .iter_mut()
         .find(|profile| profile["id"] == "operator")
         .unwrap();
-    operator["permissions"].as_array_mut().unwrap().push(json!({
-        "entity":"record-change",
-        "operations":["create", "get", "patch", "submit_request"],
-        "readableFields":["code", "label"],
-        "writableFields":["code", "label"],
-        "requestVisibility":"owner",
-        "rowBoundaries":"unrestricted"
-    }));
+    operator["permissions"]["entities"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "entity":"record-change",
+            "operations":["create", "get", "patch", "submit-request"],
+            "readableFields":["code", "label"],
+            "writableFields":["code", "label"],
+            "requestVisibility":"owner",
+            "rowBoundaries":"unrestricted"
+        }));
     definition["accessProfiles"]
         .as_array_mut()
         .unwrap()
@@ -3826,14 +3830,14 @@ fn local_review_executor_uses_refreshing_service_identity_for_this_registry() {
             "principalClaim":"sub",
             "requiredScopes":["registry:generic:apply"],
             "requiredPurposes":["registry-application"],
-            "permissions":[{
+            "permissions":{"entities":[{
                 "entity":"record-change",
-                "operations":["get", "apply_request"],
+                "operations":["get", "apply-request"],
                 "readableFields":["code", "label"],
                 "rowBoundaries":"unrestricted",
             "applyTargets":[{"entity":"automatic-record", "rowBoundaries":"unrestricted"}],
-                "readableRequestFields":["review_state"]
-            }]
+                "readableRequestFields":["review-state"]
+            }]}
         }));
     fs::write(&project_file, serde_norway::to_string(&definition).unwrap()).unwrap();
 

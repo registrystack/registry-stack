@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use registry_breg::contract::{
-    AccessPermissionSource, AccessProfileSource, AccessRequirementsSource,
-    ActionTargetPermissionSource, ApplyTargetPermissionSource, RequestPresencePermissionSource,
+    AccessProfileSource, AccessRequirementsSource, ActionPermissionSource,
+    ActionTargetPermissionSource, ApplyTargetPermissionSource, EntityPermissionSource,
+    RequestPresencePermissionSource,
 };
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
@@ -39,7 +40,7 @@ fn carries_compiled_rows<T: DeserializeOwned>(mut value: Value) {
 
 #[test]
 fn every_row_bearing_grant_requires_an_explicit_declaration() {
-    requires_explicit_rows::<AccessPermissionSource>(json!({
+    requires_explicit_rows::<EntityPermissionSource>(json!({
         "entity":"record", "operations":["get"]
     }));
     requires_explicit_rows::<ActionTargetPermissionSource>(json!({"entity":"record"}));
@@ -49,13 +50,15 @@ fn every_row_bearing_grant_requires_an_explicit_declaration() {
 
 #[test]
 fn invocation_and_mandatory_requirements_do_not_invent_row_grants() {
-    let action: AccessPermissionSource = serde_json::from_value(json!({
+    let mut invocation = json!({
         "action":"register", "operations":["invoke"],
         "targets":[{"entity":"record", "rowBoundaries":"unrestricted"}]
-    }))
-    .expect("invocation declares rows only at its targets");
-    assert!(action.row_boundaries.is_empty());
+    });
+    let action: ActionPermissionSource = serde_json::from_value(invocation.clone())
+        .expect("invocation declares rows only at its targets");
     assert_eq!(action.targets.len(), 1);
+    invocation["rowBoundaries"] = json!("unrestricted");
+    assert!(serde_json::from_value::<ActionPermissionSource>(invocation).is_err());
     let floor: AccessRequirementsSource = serde_json::from_value(json!({
         "requiredScopes":["registry:read"]
     }))
@@ -73,9 +76,9 @@ fn membership_preserves_explicit_row_declarations_and_round_trips() {
     let mut grant = json!({
         "entity":"record", "operations":["get"], "membershipBoundaries": boundaries
     });
-    requires_explicit_rows::<AccessPermissionSource>(grant.clone());
+    requires_explicit_rows::<EntityPermissionSource>(grant.clone());
     grant["rowBoundaries"] = json!("unrestricted");
-    let parsed: AccessPermissionSource = serde_json::from_value(grant).unwrap();
+    let parsed: EntityPermissionSource = serde_json::from_value(grant).unwrap();
     assert_eq!(parsed.membership_boundaries.len(), 1);
     assert_eq!(
         serde_json::to_value(parsed).unwrap()["membershipBoundaries"],

@@ -84,8 +84,8 @@ pub(super) fn explain(project: &Path, policy: &CaseworkProject) -> Result<Value>
     Ok(json!({
         "ok": true,
         "command": "explain",
-        "projectId": policy.casework.id,
-        "policyVersion": policy.casework.version,
+        "projectId": policy.project.id,
+        "policyVersion": policy.project.version,
         "requests": requests,
         "accessProfiles": policy.access_profiles,
         "queues": policy.queues,
@@ -524,12 +524,12 @@ pub(crate) fn simulate(
         "ok": true,
         "command": "simulate",
         "fixture": value.id,
-        "projectId": policy.casework.id,
-        "policyVersion": policy.casework.version,
+        "projectId": policy.project.id,
+        "policyVersion": policy.project.version,
         "source": source.id,
         "subject": {
             "entity": value.subject.entity,
-            "id": value.subject.record_id,
+            "recordId": value.subject.record_id,
             "version": value.subject.version,
         },
         "routing": decision,
@@ -596,16 +596,14 @@ pub(crate) fn metadata_for_request(
     description: &Value,
     request: &SourceRequestPolicy,
 ) -> Result<RoutingSourceMetadata> {
-    let described = match description.get("requests").and_then(Value::as_array) {
-        Some(requests) => requests
-            .iter()
-            .find(|described| described["requestEntity"] == request.entity)
-            .context("source description does not describe a request entity in casework.yaml")?,
-        None => &description["request"],
-    };
-    if described["requestEntity"] != request.entity {
-        bail!("source description request entity does not match casework.yaml");
-    }
+    let described = description["requests"]
+        .as_array()
+        .and_then(|requests| {
+            requests
+                .iter()
+                .find(|described| described["requestEntity"] == request.entity)
+        })
+        .context("source description does not describe a request entity in casework.yaml")?;
     let stages = described
         .get("stages")
         .map(|stages| {
@@ -641,13 +639,9 @@ pub(crate) fn load_source_description(project: &Path, source: &SourcePolicy) -> 
     }
     let description: Value =
         serde_json::from_slice(&bytes).with_context(|| format!("parsing {}", path.display()))?;
-    let request_member = match description["apiVersion"].as_str() {
-        Some("registry.registrystack.org/casework-source-description/v1alpha1") => "request",
-        Some("registry.registrystack.org/casework-source-description/v1alpha2") => "requests",
-        _ => bail!("source description is not bound to the declared source"),
-    };
-    if description.get(request_member).is_none()
-        || description["kind"] != "BRegCaseworkSourceDescription"
+    if description["apiVersion"] != registry_casework_breg::DESCRIPTION_API_VERSION
+        || !description["requests"].is_array()
+        || description["kind"] != registry_casework_breg::DESCRIPTION_KIND
         || description["sourceId"] != source.id
         || description["authority"] != "none"
     {
@@ -671,7 +665,7 @@ mod tests {
         fs::create_dir_all(directory.path().join("sources")).unwrap();
         fs::write(
             directory.path().join("sources/farmers.json"),
-            r#"{"apiVersion":"registry.registrystack.org/casework-source-description/v1alpha2","kind":"BRegCaseworkSourceDescription","sourceId":"farmers","authority":"none","requests":[{"requestEntity":"correction","stages":[{"id":"technical"}],"fields":[]},{"requestEntity":"renewal","stages":[{"id":"renewal-review"}],"fields":[]}]}"#,
+            r#"{"apiVersion":"id.registrystack.org/formats/casework/breg-source-description/v1alpha1","kind":"CaseworkBregSourceDescription","sourceId":"farmers","authority":"none","requests":[{"requestEntity":"correction","stages":[{"id":"technical"}],"fields":[]},{"requestEntity":"renewal","stages":[{"id":"renewal-review"}],"fields":[]}]}"#,
         )
         .unwrap();
         let source: SourcePolicy = serde_norway::from_str(
@@ -708,9 +702,9 @@ mod tests {
         .unwrap()
     }
 
-    const REGIONAL_PROJECT: &str = r#"apiVersion: registry.registrystack.org/casework/v1alpha1
+    const REGIONAL_PROJECT: &str = r#"apiVersion: id.registrystack.org/formats/casework/project/v1alpha1
 kind: CaseworkProject
-casework: {id: regional-review, version: "1"}
+project: {id: regional-review, version: "1"}
 accessProfiles:
   - {id: staff, principalClaim: sub, requiredScopes: [staff], role: staff}
   - {id: supervisor, principalClaim: sub, requiredScopes: [supervisor], role: supervisor}
@@ -740,8 +734,8 @@ calendars:
     holidaySet: office-holidays
 clocks:
   - id: review-deadline
-    scope: activity
-    anchor: stageEnteredAt
+    type: activity
+    anchor: stage-entered-at
     calendar: office
     after: {workingDays: 5}
     dueTime: "17:00"
@@ -783,7 +777,7 @@ expect:
         fs::create_dir_all(directory.path().join("simulations/holiday-sets")).unwrap();
         fs::write(
             directory.path().join("sources/professional.json"),
-            r#"{"apiVersion":"registry.registrystack.org/casework-source-description/v1alpha1","kind":"BRegCaseworkSourceDescription","sourceId":"professional-register","authority":"none","request":{"requestEntity":"scope-correction","stages":[{"id":"technical"},{"id":"authorization"}],"fields":[{"field":"region","apiName":"region","schema":{"type":"string","enum":["north","south","islands"]}}]}}"#,
+            r#"{"apiVersion":"id.registrystack.org/formats/casework/breg-source-description/v1alpha1","kind":"CaseworkBregSourceDescription","sourceId":"professional-register","authority":"none","requests":[{"requestEntity":"scope-correction","stages":[{"id":"technical"},{"id":"authorization"}],"fields":[{"field":"region","apiName":"region","schema":{"type":"string","enum":["north","south","islands"]}}]}]}"#,
         )
         .unwrap();
         fs::write(
@@ -814,7 +808,8 @@ expect:
         assert_eq!(report["routing"]["ruleId"], "northern-requests");
         assert_eq!(report["clock"]["dueState"], "atRisk");
         assert_eq!(report["clock"]["holidayRevision"], 7);
-        assert_eq!(report["subject"]["id"], "request-0042");
+        assert_eq!(report["subject"]["recordId"], "request-0042");
+        assert!(report["subject"].get("id").is_none());
     }
 
     #[test]
@@ -922,7 +917,7 @@ expect:
         fs::create_dir_all(directory.path().join("simulations")).unwrap();
         fs::write(
             directory.path().join("sources/professional.json"),
-            r#"{"apiVersion":"registry.registrystack.org/casework-source-description/v1alpha1","kind":"BRegCaseworkSourceDescription","sourceId":"professional-register","authority":"none","request":{"requestEntity":"scope-correction","stages":[{"id":"review"}],"fields":[]}}"#,
+            r#"{"apiVersion":"id.registrystack.org/formats/casework/breg-source-description/v1alpha1","kind":"CaseworkBregSourceDescription","sourceId":"professional-register","authority":"none","requests":[{"requestEntity":"scope-correction","stages":[{"id":"review"}],"fields":[]}]}"#,
         )
         .unwrap();
         fs::write(
@@ -950,9 +945,9 @@ expect:
         .unwrap();
         let outcome = run(
             directory.path(),
-            br#"apiVersion: registry.registrystack.org/casework/v1alpha1
+            br#"apiVersion: id.registrystack.org/formats/casework/project/v1alpha1
 kind: CaseworkProject
-casework: {id: response-budget, version: "1"}
+project: {id: response-budget, version: "1"}
 accessProfiles:
   - {id: staff, principalClaim: sub, requiredScopes: [staff], role: staff}
   - {id: supervisor, principalClaim: sub, requiredScopes: [supervisor], role: supervisor}
@@ -966,11 +961,11 @@ sources:
       - {entity: scope-correction, queue: corrections, clock: response-budget}
 clocks:
   - id: response-budget
-    scope: subject
-    anchor: firstSubmittedAt
-    completeOn: reviewCompleted
+    type: subject
+    anchor: first-submitted-at
+    completeOn: review-completed
     after: {elapsed: PT48H}
-    pauseWhile: [awaitingApplicant]
+    pauseWhile: [awaiting-applicant]
 "#,
             "simulations/resubmitted-review.yaml",
         );

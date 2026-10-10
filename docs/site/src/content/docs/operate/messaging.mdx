@@ -232,9 +232,11 @@ refused on any non-loopback bind. `networkExposure` defaults to `private-address
 unicast address is refused under every combination. The metrics listener must be a concrete
 loopback or private address, and must not be the public listener's socket.
 
-`allowedClients` is never empty, and every client an access profile names must be listed. The
+`allowedClients` lists at least one distinct client, and every client an access profile names must
+be listed. Messaging refuses an omitted member, an empty list, a repeated client, and the
+`unrestricted` keyword its sibling runtimes accept on development loopback. The
 scope claim is `registry_scopes` unless `scopeClaim` names another. Signing keys come from issuer
-discovery by default; declare `jwksSource: {kind: static, documentRef: secret:file/<name>}` when the
+discovery by default; declare `jwksSource: {type: static, documentRef: secret:file/<name>}` when the
 runtime cannot reach the issuer's discovery document. With discovery, `serve` fails at startup
 with `the OIDC issuer could not be initialized` when the issuer is unreachable.
 
@@ -435,12 +437,13 @@ activation.
     crates/registry-messagingctl/tests/postgres_messages_cli.rs, plan_apply_and_status_are_one_operator_journey;
     crates/registry-messaging/tests/postgres_package.rs, reapplying_the_active_package_over_stale_grants_records_the_repair. */}
 
-:::caution[Drain senders and stop v0.39.0 before you upgrade]
-Upgrading from v0.39.0 discards every idempotency record, so every key spent before the upgrade can
-be used again, and a retry the new runtime receives under a discarded key sends its message a second
-time. Before you run `messagingctl apply` with this release, stop new submissions, let in-flight
-senders finish retrying the submissions whose answers they lost, then stop every v0.39.0 runtime.
-Start the new runtime only after `apply` succeeds.
+:::caution[Drain senders and stop v0.39.0 before you move to this release]
+v0.40.0 does not upgrade v0.39.0 state in place: you apply it to a new database, which holds no
+idempotency record. Every key spent against the v0.39.0 runtime can be used again, and a retry the
+new runtime receives under such a key sends its message a second time. Before you point senders at
+the new runtime, stop new submissions, let in-flight senders finish retrying the submissions whose
+answers they lost, then stop every v0.39.0 runtime. Start the new runtime only after `apply`
+succeeds.
 :::
 
 {/* Evidence: crates/registry-messaging/migrations/0003_idempotency_caller.sql;

@@ -89,7 +89,8 @@ package directory read-only. Discovery keeps no writable local state.
 Create `<discovery-project>/origins.yaml`. Each enabled origin is fetched only during packaging.
 
 ```yaml
-schemaVersion: registry-discovery/origins/v1alpha1
+apiVersion: id.registrystack.org/formats/discovery/origins/v1alpha1
+kind: DiscoveryOrigins
 origins:
   - originId: evidence-provider
     catalogUrl: https://<provider-host>/catalog.jsonld
@@ -111,7 +112,8 @@ evidence-type resolution. A mapping can offer alternatives, but every ID in one 
 required together.
 
 ```yaml
-schemaVersion: registry-discovery/evidence-mapping/v1alpha1
+apiVersion: id.registrystack.org/formats/discovery/evidence-mapping/v1alpha1
+kind: DiscoveryEvidenceMapping
 mappingId: urn:example:mapping:adult-status
 mappingAuthorityId: urn:example:authority
 requirementId: urn:example:requirement:adult-status
@@ -208,10 +210,11 @@ Place this `runtime.yaml` outside the package directory. Set `package.root` to i
 copy the reported package digest into `package.expectedDigest` when you want to pin the deployment.
 
 ```yaml
-apiVersion: registry.registrystack.org/discovery-runtime/v1alpha1
+apiVersion: id.registrystack.org/formats/discovery/runtime/v1alpha1
 kind: DiscoveryRuntimeConfig
 listener:
   bind: 127.0.0.1:8080
+  requestTimeoutMilliseconds: 10000
 package:
   root: /srv/registry-discovery/package
   expectedDigest: sha256:<digest-of-SHA256SUMS>
@@ -220,8 +223,7 @@ limits:
   maximumResponseBytes: 1048576
   maximumResultRecords: 100
   maximumResultAlternatives: 100
-  requestTimeoutSeconds: 10
-  shutdownTimeoutSeconds: 10
+  shutdownGraceMilliseconds: 10000
 logLevel: info
 ```
 

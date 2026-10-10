@@ -711,6 +711,12 @@ mod tests {
                 && constraint.arguments == ["--openapi <OPENAPI>", "[PROJECT]"]
         }));
 
+        let evidencectl_check = find_command(&catalog.binaries, "evidencectl check");
+        assert!(evidencectl_check.constraints.iter().any(|constraint| {
+            constraint.kind == ConstraintKind::RequiredExactlyOne
+                && constraint.arguments == ["[PROJECT]", "--file <FILE>"]
+        }));
+
         let mock_serve = find_command(&catalog.binaries, "evidencectl source mock serve");
         for option in [
             "--operation <OPERATION>",

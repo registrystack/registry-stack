@@ -66,7 +66,7 @@ pub struct ArgumentReference {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub enum ConstraintKind {
     RequiredExactlyOne,
     RequiredOneOrMore,
@@ -554,5 +554,23 @@ pub fn binary_catalog(
         schema_version: SCHEMA_VERSION,
         source_version,
         binaries: vec![command_reference(command, None, path_note)],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn constraint_kinds_serialize_in_kebab_case() {
+        let words = [
+            (ConstraintKind::RequiredExactlyOne, "required-exactly-one"),
+            (ConstraintKind::RequiredOneOrMore, "required-one-or-more"),
+            (ConstraintKind::RequiresAll, "requires-all"),
+            (ConstraintKind::MutuallyExclusive, "mutually-exclusive"),
+        ];
+        for (kind, word) in words {
+            assert_eq!(serde_json::to_value(kind).unwrap(), word);
+        }
     }
 }

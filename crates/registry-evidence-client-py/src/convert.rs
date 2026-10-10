@@ -1136,7 +1136,7 @@ mod tests {
                 { "role": "subject", "selector_profile": "national-id" }
             ],
             "expected_outputs": [
-                { "concept": "urn:example:concept:status-holds", "form": "boolean" }
+                { "concept": "urn:example:concept:status-holds", "form": {"type": "boolean"} }
             ],
             "maximum_assertion_lifetime_seconds": 300,
             "clock_skew_seconds": 30,
@@ -1371,7 +1371,8 @@ mod tests {
     #[test]
     fn spec_from_json_refuses_invalid_expected_outputs() {
         let mut spec = valid_spec_json();
-        spec["expected_outputs"] = serde_json::json!([{ "concept": "x", "form": "not-a-form" }]);
+        spec["expected_outputs"] =
+            serde_json::json!([{ "concept": "x", "form": {"type": "not-a-form"} }]);
         assert!(spec_from_json(&spec).is_err());
     }
 
@@ -1979,7 +1980,7 @@ mod tests {
             ),
             (
                 EvidenceClientError::NotAvailable { trace_id: None },
-                "not_available",
+                "not-available",
             ),
             (
                 EvidenceClientError::Protocol {
@@ -2006,13 +2007,13 @@ mod tests {
     fn map_client_error_carries_the_denied_fields() {
         let error = EvidenceClientError::Denied {
             status: 429,
-            code: "evidence.rate_limited".to_owned(),
+            code: "evidence.rate-limited".to_owned(),
             trace_id: Some("4bf92f3577b34da6a3ce929d0e0e4736".to_owned()),
             retry_after_seconds: Some(30),
         };
         let mapped = map_client_error(&error);
         assert_eq!(mapped.status, Some(429));
-        assert_eq!(mapped.code.as_deref(), Some("evidence.rate_limited"));
+        assert_eq!(mapped.code.as_deref(), Some("evidence.rate-limited"));
         assert_eq!(
             mapped.trace_id.as_deref(),
             Some("4bf92f3577b34da6a3ce929d0e0e4736")
@@ -2025,7 +2026,7 @@ mod tests {
         let mapped = map_client_error(&EvidenceClientError::Transport {
             kind: TransportKind::ResponseTooLarge,
         });
-        assert_eq!(mapped.transport_kind, Some("response_too_large"));
+        assert_eq!(mapped.transport_kind, Some("response-too-large"));
     }
 
     #[test]
@@ -2050,7 +2051,7 @@ mod tests {
             reason: "a bearer credential must be non-empty and within the accepted length",
         }));
         assert_eq!(invalid.kind, "token");
-        assert_eq!(invalid.token_kind, Some("invalid_credential"));
+        assert_eq!(invalid.token_kind, Some("invalid-credential"));
 
         let configuration =
             map_client_error(&EvidenceClientError::Token(TokenError::Configuration {

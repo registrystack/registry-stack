@@ -1,6 +1,6 @@
-apiVersion: registry.registrystack.org/v1alpha1
-kind: RegistryProject
-registry:
+apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
   id: publicschema-household-change-requests
   canonicalBaseIri: "https://publicschema-household.example.gov"
   version: 0.1.0
@@ -99,7 +99,7 @@ manifestProjection:
     - id: household-relationship
       schemeIri: https://publicschema.org/GroupRole
       version: "0.3.0"
-      externalRef: https://publicschema.org/GroupRole
+      externalReference: https://publicschema.org/GroupRole
       concepts:
         - {code: head, iri: https://publicschema.org/GroupRole/head, label: {en: Head, fr: Chef}}
         - {code: spouse, iri: https://publicschema.org/GroupRole/spouse, label: {en: Spouse, fr: Conjoint}}
@@ -112,11 +112,11 @@ manifestProjection:
       schemeIri: https://publicschema-household.example.gov/vocab/residency-status
     - id: preferred-language
       schemeIri: https://id.loc.gov/vocabulary/iso639-1
-      externalRef: https://id.loc.gov/vocabulary/iso639-1.html
+      externalReference: https://id.loc.gov/vocabulary/iso639-1.html
     - id: person-sex
       schemeIri: https://publicschema.org/Sex
       version: "0.3.0"
-      externalRef: https://publicschema.org/Sex
+      externalReference: https://publicschema.org/Sex
       concepts:
         - {code: female, iri: https://publicschema.org/Sex/female, label: {en: Female, fr: Féminin}}
         - {code: male, iri: https://publicschema.org/Sex/male, label: {en: Male, fr: Masculin}}
@@ -135,17 +135,17 @@ entities:
     classification: restricted
     fields:
       - {id: household, type: reference, target: household, required: true, classification: restricted}
-      - {id: person-code, type: string, required: true, maxLength: 64, classification: restricted}
-      - {id: legal-name, type: string, required: true, maxLength: 160, classification: restricted}
-      - {id: family-name, type: string, required: true, maxLength: 120, classification: restricted}
+      - {id: person-code, type: string, required: true, maximumLength: 64, classification: restricted}
+      - {id: legal-name, type: string, required: true, maximumLength: 160, classification: restricted}
+      - {id: family-name, type: string, required: true, maximumLength: 120, classification: restricted}
       - {id: person-sex, type: vocabulary-code, vocabulary: person-sex, required: true, classification: restricted}
       - {id: residency-status, type: vocabulary-code, vocabulary: residency-status, required: true, classification: restricted}
       - {id: relationship, type: vocabulary-code, vocabulary: household-relationship, required: true, classification: restricted}
       - {id: valid-from, type: date, required: true, classification: restricted}
-      - {id: reason, type: text, maxLength: 1000, required: true, classification: restricted}
+      - {id: reason, type: text, maximumLength: 1000, required: true, classification: restricted}
     changeRequest:
       retention:
-        mode: operator_erase
+        mode: operator-erase
       effects:
         - id: person
           target: {entity: person}
@@ -169,6 +169,7 @@ entities:
           set:
             contact-person: {fromEffect: person}
       review:
+        type: required
         authority: casework
         policyId: household-contact-registration
       onApproved:
@@ -176,7 +177,7 @@ entities:
 modules:
   - id: publicschema-household-core
     version: 0.1.0
-    digest: "sha256:51015e3216cb022b0eb882368599fc810ddc8a85aa5b19d16c0b5cc0a6ef5666"
+    digest: "sha256:bbb932496e3adeec235aae51ab2c38b5f82ccf9fe207c541179605e8725b41b0"
   - id: publicschema-household-demographics
     version: 0.1.0
     digest: "sha256:a6cee2013ce963009c7367aefcfdb7cb4dfa2709643adca445643dd92df5286e"
@@ -187,77 +188,82 @@ accessProfiles:
     requiredScopes: [registry:household:operate]
     requiredPurposes: [household-administration]
     permissions:
-      - {entity: person, operations: [get, list, patch], readableFields: [person-code, legal-name, family-name, date-of-birth, person-sex, residency-status, preferred-language], writableFields: [person-code, legal-name, family-name, date-of-birth, person-sex, residency-status, preferred-language], filterableFields: [person-code, person-sex, residency-status], sortableFields: [person-code], rowBoundaries: unrestricted}
-      - entity: household
-        rowBoundaries: unrestricted
-        operations: [create, get, lookup, list]
-        readableFields: [household-code, local-household-number, household-name, administrative-area, household-type, contact-person, head-count, child-count, child-under-5-count, elderly-count, single-headed, woman-headed]
-        writableFields: [household-code, local-household-number, household-name, administrative-area, household-type]
-        filterableFields: [household-code, local-household-number, administrative-area, household-type, head-count, child-count, child-under-5-count, elderly-count, single-headed, woman-headed]
-        sortableFields: [local-household-number, household-code, child-count]
-        allowCount: true
-        requestPresence:
-          - {requestType: register-household-contact-request, rowBoundaries: unrestricted}
-        lookups:
-          - {selector: by-local-reference, valueOrigin: request}
-          - {selector: by-household-code, valueOrigin: request}
-        readPaths:
-          - path: people
-            readableFields: [person-code, legal-name, family-name, date-of-birth, person-sex, residency-status]
-            filterableFields: [person-sex, residency-status]
-            sortableFields: [person-code]
-            allowCount: true
-      - {entity: group-membership, operations: [get, list, patch], readableFields: [person, household, relationship, valid-from, valid-to], writableFields: [person, household, relationship, valid-from, valid-to], filterableFields: [person, household, relationship, valid-from], rowBoundaries: unrestricted}
+      entities:
+        - {entity: person, operations: [get, list, patch], readableFields: [person-code, legal-name, family-name, date-of-birth, person-sex, residency-status, preferred-language], writableFields: [person-code, legal-name, family-name, date-of-birth, person-sex, residency-status, preferred-language], filterableFields: [person-code, person-sex, residency-status], sortableFields: [person-code], rowBoundaries: unrestricted}
+        - entity: household
+          rowBoundaries: unrestricted
+          operations: [create, get, lookup, list]
+          readableFields: [household-code, local-household-number, household-name, administrative-area, household-type, contact-person, head-count, child-count, child-under-5-count, elderly-count, single-headed, woman-headed]
+          writableFields: [household-code, local-household-number, household-name, administrative-area, household-type]
+          filterableFields: [household-code, local-household-number, administrative-area, household-type, head-count, child-count, child-under-5-count, elderly-count, single-headed, woman-headed]
+          sortableFields: [local-household-number, household-code, child-count]
+          allowCount: true
+          requestPresence:
+            - {requestType: register-household-contact-request, rowBoundaries: unrestricted}
+          lookups:
+            - {selector: by-local-reference, valueOrigin: request}
+            - {selector: by-household-code, valueOrigin: request}
+          readPaths:
+            - path: people
+              readableFields: [person-code, legal-name, family-name, date-of-birth, person-sex, residency-status]
+              filterableFields: [person-sex, residency-status]
+              sortableFields: [person-code]
+              allowCount: true
+        - {entity: group-membership, operations: [get, list, patch], readableFields: [person, household, relationship, valid-from, valid-to], writableFields: [person, household, relationship, valid-from, valid-to], filterableFields: [person, household, relationship, valid-from], rowBoundaries: unrestricted}
   - id: household-contact-submitter
     principalClaim: registry_principal
     requiredScopes: [registry:household-contact:submit]
     requiredPurposes: [household-contact-registration]
     permissions:
-      - entity: register-household-contact-request
-        rowBoundaries: unrestricted
-        operations: [create, get, patch, submit_request, revise_request, cancel_request]
-        readableFields: [household, person-code, legal-name, family-name, person-sex, residency-status, relationship, valid-from, reason]
-        readableRequestFields: [reason, review_state]
-        writableFields: [household, person-code, legal-name, family-name, person-sex, residency-status, relationship, valid-from, reason]
+      entities:
+        - entity: register-household-contact-request
+          rowBoundaries: unrestricted
+          operations: [create, get, patch, submit-request, revise-request, cancel-request]
+          readableFields: [household, person-code, legal-name, family-name, person-sex, residency-status, relationship, valid-from, reason]
+          readableRequestFields: [reason, review-state]
+          writableFields: [household, person-code, legal-name, family-name, person-sex, residency-status, relationship, valid-from, reason]
   - id: household-contact-reviewer
     default: true
     principalClaim: registry_principal
     requiredScopes: [registry:household-contact:review]
     requiredPurposes: [household-contact-review]
     permissions:
-      - entity: register-household-contact-request
-        rowBoundaries: unrestricted
-        operations: [get, list]
-        readableFields: [household, person-code, legal-name, family-name, person-sex, residency-status, relationship, valid-from, reason]
-        readableRequestFields: [reason, review_state]
+      entities:
+        - entity: register-household-contact-request
+          rowBoundaries: unrestricted
+          operations: [get, list]
+          readableFields: [household, person-code, legal-name, family-name, person-sex, residency-status, relationship, valid-from, reason]
+          readableRequestFields: [reason, review-state]
   - id: household-contact-applier
     principalClaim: registry_principal
     requiredScopes: [registry:household-contact:apply]
     requiredPurposes: [household-contact-apply]
     permissions:
-      - entity: register-household-contact-request
-        rowBoundaries: unrestricted
-        operations: [get, apply_request]
-        readableFields: [household, person-code, legal-name, family-name, person-sex, residency-status, relationship, valid-from, reason]
-        readableRequestFields: [reason, review_state]
-        applyTargets:
-          - {entity: person, rowBoundaries: unrestricted}
-          - {entity: group-membership, rowBoundaries: unrestricted}
-          - {entity: household, rowBoundaries: unrestricted}
+      entities:
+        - entity: register-household-contact-request
+          rowBoundaries: unrestricted
+          operations: [get, apply-request]
+          readableFields: [household, person-code, legal-name, family-name, person-sex, residency-status, relationship, valid-from, reason]
+          readableRequestFields: [reason, review-state]
+          applyTargets:
+            - {entity: person, rowBoundaries: unrestricted}
+            - {entity: group-membership, rowBoundaries: unrestricted}
+            - {entity: household, rowBoundaries: unrestricted}
   - id: household-viewer
     principalClaim: registry_principal
     requiredScopes: [registry:household:view]
     requiredPurposes: [household-view]
     permissions:
-      - entity: household
-        operations: [get, lookup]
-        readableFields: [household-code, local-household-number, household-name, administrative-area, household-type]
-        rowBoundaries:
-          - {field: id, claim: household_id, operator: equals}
-        lookups:
-          - selector: by-household-code
-            valueOrigin: verified_claim
-            claimMapping: {household-code: household_code}
+      entities:
+        - entity: household
+          operations: [get, lookup]
+          readableFields: [household-code, local-household-number, household-name, administrative-area, household-type]
+          rowBoundaries:
+            - {field: id, claim: household_id, operator: equals}
+          lookups:
+            - selector: by-household-code
+              valueOrigin: verified-claim
+              claimMapping: {household-code: household_code}
 vocabularies:
   - {id: household-relationship, values: [head, spouse, child, dependent, other]}
   - {id: household-type, values: [private, collective, institutional]}

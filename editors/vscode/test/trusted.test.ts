@@ -77,11 +77,11 @@ suite('Registry Stack extension', () => {
       '',
     ].join('\n');
     const productFixtures = [
-      ['breg', 'registry.yaml', 'kind: RegistryProject\nentities:\n  - id: host-person\n', 'host-person'],
+      ['breg', 'registry.yaml', 'kind: BRegProject\nentities:\n  - id: host-person\n', 'host-person'],
       ['casework', 'casework.yaml', 'kind: CaseworkProject\nqueues:\n  - id: host-queue\n', 'host-queue'],
       ['scheduling', 'scheduling.yaml', 'kind: SchedulingProject\nservices:\n  - id: host-service\n', 'host-service'],
       ['messaging', 'messaging.yaml', 'kind: MessagingProject\nproviders:\n  - id: host-provider\n', 'host-provider'],
-      ['discovery', 'origins.yaml', 'schemaVersion: registry-discovery/origins/v1alpha1\norigins:\n  - originId: host-origin\n', 'host-origin'],
+      ['discovery', 'origins.yaml', 'apiVersion: id.registrystack.org/formats/discovery/origins/v1alpha1\nkind: DiscoveryOrigins\norigins:\n  - originId: host-origin\n', 'host-origin'],
       ['render', 'manifest.yaml', 'kind: RenderBundle\ndocuments:\n  - id: host-document\n', 'host-document'],
       ['manifest', 'custom.yaml', 'schema_version: registry-manifest/v1\ncatalog:\n  id: host-catalog\n', 'host-catalog'],
       ['evidence-oid4vci', 'wallet-config.yml', oid4vciRuntime, 'credentialIssuer'],
@@ -114,7 +114,7 @@ suite('Registry Stack extension', () => {
     assert.ok(alphaFolder, 'alpha workspace folder is available');
     fs.writeFileSync(
       path.join(alphaFolder.uri.fsPath, 'registry.yaml'),
-      'apiVersion: registry.registrystack.org/v1alpha1\nkind: RegistryProject\nregistry: { id: alpha-reloaded }\n',
+      'apiVersion: id.registrystack.org/formats/breg/project/v1alpha1\nkind: BRegProject\nproject: { id: alpha-reloaded }\n',
     );
     await assertWorkspaceSymbol('alpha-reloaded');
 
@@ -122,7 +122,7 @@ suite('Registry Stack extension', () => {
     fs.mkdirSync(gammaPath);
     fs.writeFileSync(
       path.join(gammaPath, 'registry.yaml'),
-      'apiVersion: registry.registrystack.org/v1alpha1\nkind: RegistryProject\nregistry: { id: gamma-registry }\n',
+      'apiVersion: id.registrystack.org/formats/breg/project/v1alpha1\nkind: BRegProject\nproject: { id: gamma-registry }\n',
     );
     assert.strictEqual(
       vscode.workspace.updateWorkspaceFolders(3, 0, {

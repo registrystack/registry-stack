@@ -606,7 +606,7 @@ async fn string_minimum_lowering_replaces_or_drops_the_length_check_and_keeps_ex
             (
                 "00000000-0000-0000-0000-000000000203",
                 "seventeen chars x",
-                "the varchar bound still refuses a value above maxLength",
+                "the varchar bound still refuses a value above maximumLength",
             ),
             (
                 "00000000-0000-0000-0000-000000000204",
@@ -814,7 +814,7 @@ async fn vocabulary_code_addition_replaces_the_check_and_keeps_existing_rows() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn vocabulary_code_addition_beside_an_authored_vocabulary_constraint() {
     let constraints = serde_json::json!([
-        {"id": "status-open-or-closed", "kind": "vocabulary", "field": "status",
+        {"id": "status-open-or-closed", "type": "vocabulary", "field": "status",
          "values": ["open", "closed"]}
     ]);
     let previous = vocabulary_catalog_registry_with_constraints(
@@ -1637,15 +1637,15 @@ fn additive_catalog_registry(variant: AdditiveCatalogVariant) -> registry_breg::
         AdditiveCatalogVariant::ChangedNullability => vec![serde_json::json!({
             "id": "alpha",
             "type": "string",
-            "minLength": 1,
-            "maxLength": 32,
+            "minimumLength": 1,
+            "maximumLength": 32,
             "classification": "internal"
         })],
         _ => vec![serde_json::json!({
             "id": "alpha",
             "type": "string",
-            "minLength": 1,
-            "maxLength": 32,
+            "minimumLength": 1,
+            "maximumLength": 32,
             "required": true,
             "classification": "internal"
         })],
@@ -1653,8 +1653,8 @@ fn additive_catalog_registry(variant: AdditiveCatalogVariant) -> registry_breg::
     fields.push(serde_json::json!({
         "id": "omega",
         "type": "string",
-        "minLength": 1,
-        "maxLength": 32,
+        "minimumLength": 1,
+        "maximumLength": 32,
         "required": true,
         "classification": "internal"
     }));
@@ -1662,16 +1662,16 @@ fn additive_catalog_registry(variant: AdditiveCatalogVariant) -> registry_breg::
         fields.push(serde_json::json!({
             "id": "middle",
             "type": "string",
-            "minLength": 1,
-            "maxLength": 32,
+            "minimumLength": 1,
+            "maximumLength": 32,
             "classification": "internal"
         }));
     }
     let writable_fields = vec!["alpha", "omega"];
     let project = serde_json::json!({
-        "apiVersion": "registry.registrystack.org/v1alpha1",
-        "kind": "RegistryProject",
-        "registry": {
+        "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
+        "kind": "BRegProject",
+        "project": {
             "id": "additive-catalog",
             "version": "1",
             "defaultLanguage": "en", "canonicalBaseIri": "https://authoring.example.test"
@@ -1688,13 +1688,13 @@ fn additive_catalog_registry(variant: AdditiveCatalogVariant) -> registry_breg::
             "default": true,
             "principalClaim": "registry_principal",
             "requiredScopes": "unrestricted",
-            "permissions": [{
+            "permissions": {"entities": [{
                 "entity": "entry",
                 "operations": ["create", "get", "list", "patch"],
                 "readableFields": writable_fields,
                 "writableFields": writable_fields,
               "rowBoundaries": "unrestricted"
-            }]
+            }]}
         }]
     });
     let project_bytes = serde_json::to_vec(&project).expect("fixture serializes");
@@ -1708,9 +1708,9 @@ fn additive_catalog_registry(variant: AdditiveCatalogVariant) -> registry_breg::
 /// One required `text` field with a pattern, bounded by `max_length`.
 fn length_catalog_registry(max_length: u32) -> registry_breg::CompiledRegistry {
     let project = serde_json::json!({
-        "apiVersion": "registry.registrystack.org/v1alpha1",
-        "kind": "RegistryProject",
-        "registry": {
+        "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
+        "kind": "BRegProject",
+        "project": {
             "id": "length-catalog",
             "version": "1",
             "defaultLanguage": "en", "canonicalBaseIri": "https://authoring.example.test"
@@ -1721,7 +1721,7 @@ fn length_catalog_registry(max_length: u32) -> registry_breg::CompiledRegistry {
             "route": "entries",
             "mutationMode": "mutable",
             "fields": [
-                {"id": "note", "type": "text", "maxLength": max_length, "pattern": "^[a-z ]*$",
+                {"id": "note", "type": "text", "maximumLength": max_length, "pattern": "^[a-z ]*$",
                  "required": true, "classification": "internal"}
             ]
         }],
@@ -1730,13 +1730,13 @@ fn length_catalog_registry(max_length: u32) -> registry_breg::CompiledRegistry {
             "default": true,
             "principalClaim": "registry_principal",
             "requiredScopes": "unrestricted",
-            "permissions": [{
+            "permissions": {"entities": [{
                 "entity": "entry",
                 "operations": ["create", "get", "list", "patch"],
                 "readableFields": ["note"],
                 "writableFields": ["note"],
                 "rowBoundaries": "unrestricted"
-            }]
+            }]}
         }]
     });
     let project_bytes = serde_json::to_vec(&project).expect("fixture serializes");
@@ -1747,9 +1747,9 @@ fn length_catalog_registry(max_length: u32) -> registry_breg::CompiledRegistry {
 
 fn string_length_catalog_registry(min_length: u32) -> registry_breg::CompiledRegistry {
     let project = serde_json::json!({
-        "apiVersion": "registry.registrystack.org/v1alpha1",
-        "kind": "RegistryProject",
-        "registry": {
+        "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
+        "kind": "BRegProject",
+        "project": {
             "id": "length-catalog",
             "version": "1",
             "defaultLanguage": "en", "canonicalBaseIri": "https://authoring.example.test"
@@ -1760,7 +1760,7 @@ fn string_length_catalog_registry(min_length: u32) -> registry_breg::CompiledReg
             "route": "entries",
             "mutationMode": "mutable",
             "fields": [
-                {"id": "note", "type": "string", "minLength": min_length, "maxLength": 16,
+                {"id": "note", "type": "string", "minimumLength": min_length, "maximumLength": 16,
                  "pattern": "^[a-z ]*$", "required": true, "classification": "internal"}
             ]
         }],
@@ -1769,13 +1769,13 @@ fn string_length_catalog_registry(min_length: u32) -> registry_breg::CompiledReg
             "default": true,
             "principalClaim": "registry_principal",
             "requiredScopes": "unrestricted",
-            "permissions": [{
+            "permissions": {"entities": [{
                 "entity": "entry",
                 "operations": ["create", "get", "list", "patch"],
                 "readableFields": ["note"],
                 "writableFields": ["note"],
                 "rowBoundaries": "unrestricted"
-            }]
+            }]}
         }]
     });
     let project_bytes = serde_json::to_vec(&project).expect("fixture serializes");
@@ -1794,9 +1794,9 @@ fn vocabulary_catalog_registry_with_constraints(
     constraints: serde_json::Value,
 ) -> registry_breg::CompiledRegistry {
     let project = serde_json::json!({
-        "apiVersion": "registry.registrystack.org/v1alpha1",
-        "kind": "RegistryProject",
-        "registry": {
+        "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
+        "kind": "BRegProject",
+        "project": {
             "id": "vocabulary-catalog",
             "version": "1",
             "defaultLanguage": "en", "canonicalBaseIri": "https://authoring.example.test"
@@ -1823,13 +1823,13 @@ fn vocabulary_catalog_registry_with_constraints(
             "default": true,
             "principalClaim": "registry_principal",
             "requiredScopes": "unrestricted",
-            "permissions": [{
+            "permissions": {"entities": [{
                 "entity": "entry",
                 "operations": ["create", "get", "list", "patch"],
                 "readableFields": ["status", "kind"],
                 "writableFields": ["status", "kind"],
                 "rowBoundaries": "unrestricted"
-            }]
+            }]}
         }]
     });
     let project_bytes = serde_json::to_vec(&project).expect("fixture serializes");
@@ -1841,22 +1841,22 @@ fn vocabulary_catalog_registry_with_constraints(
 fn compiled_registry() -> registry_breg::CompiledRegistry {
     let project = parse_project_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"compiled-postgres","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"compiled-postgres","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[
             {
               "id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable",
               "fields":[
-                {"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"},
-                {"id":"region","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"},
-                {"id":"label","type":"string","minLength":1,"maxLength":128,"required":true,"classification":"internal"}
+                {"id":"tenant","type":"string","minimumLength":1,"maximumLength":64,"required":true,"classification":"internal"},
+                {"id":"region","type":"string","minimumLength":1,"maximumLength":64,"required":true,"classification":"internal"},
+                {"id":"label","type":"string","minimumLength":1,"maximumLength":128,"required":true,"classification":"internal"}
               ]
             },
             {
-              "id":"event","primaryDataset":"test-dataset","route":"events","mutationMode":"create_only",
+              "id":"event","primaryDataset":"test-dataset","route":"events","mutationMode":"create-only",
               "fields":[
-                {"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"}
+                {"id":"tenant","type":"string","minimumLength":1,"maximumLength":64,"required":true,"classification":"internal"}
               ]
             }
           ],
@@ -1864,34 +1864,36 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
             {
               "id":"writer","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
               "requiredPurposes":["operations"],
-              "permissions":[
-                {
-                  "entity":"entry","operations":["create","get","list","patch"],
-                  "readableFields":["tenant","region","label"],
-                  "writableFields":["tenant","region","label"],
-                  "rowBoundaries":[
-                    {"field":"tenant","claim":"tenant_claim","operator":"equals"},
-                    {"field":"region","claim":"region_claim","operator":"in"}
-                  ]
-                },
-                {
-                  "entity":"event","operations":["create","get","list"],
-                  "readableFields":["tenant"],"writableFields":["tenant"],
-                  "rowBoundaries": "unrestricted"
-                }
-              ]
+              "permissions":{
+                "entities":[
+                  {
+                    "entity":"entry","operations":["create","get","list","patch"],
+                    "readableFields":["tenant","region","label"],
+                    "writableFields":["tenant","region","label"],
+                    "rowBoundaries":[
+                      {"field":"tenant","claim":"tenant_claim","operator":"equals"},
+                      {"field":"region","claim":"region_claim","operator":"in"}
+                    ]
+                  },
+                  {
+                    "entity":"event","operations":["create","get","list"],
+                    "readableFields":["tenant"],"writableFields":["tenant"],
+                    "rowBoundaries": "unrestricted"
+                  }
+                ]
+              }
             },
             {
               "id":"reviewer","principalClaim":"registry_principal","requiredScopes":"unrestricted",
               "requiredPurposes":["review"],
-              "permissions":[{
+              "permissions":{"entities":[{
                 "entity":"entry","operations":["get","list"],
                 "readableFields":["tenant","region","label"],
                 "rowBoundaries":[
                   {"field":"tenant","claim":"tenant_claim","operator":"equals"},
                   {"field":"region","claim":"region_claim","operator":"in"}
                 ]
-              }]
+              }]}
             }
           ]
         }"#,
@@ -1904,13 +1906,13 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
 fn derived_registry() -> registry_breg::CompiledRegistry {
     let project = parse_project_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"derived-postgres","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"derived-postgres","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
             "id":"household","primaryDataset":"test-dataset","route":"households","mutationMode":"mutable",
             "fields":[
-              {"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"},
+              {"id":"tenant","type":"string","minimumLength":1,"maximumLength":64,"required":true,"classification":"internal"},
               {"id":"size","type":"int64","required":true,"classification":"internal"}
             ],
             "derived":[{
@@ -1922,14 +1924,14 @@ fn derived_registry() -> registry_breg::CompiledRegistry {
             }]
           }],
           "accessProfiles":[{
-            "id":"operator","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted","permissions":[{
+            "id":"operator","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted","permissions":{"entities":[{
               "entity":"household","operations":["create","get","list"],
               "readableFields":["tenant","size","child-count","observed-on"],
               "writableFields":["tenant","size"],
               "filterableFields":["child-count"],
               "sortableFields":["child-count"],
               "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]
-            }]
+            }]}
           }]
         }"#,
     )

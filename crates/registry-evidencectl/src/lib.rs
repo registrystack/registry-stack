@@ -7,7 +7,7 @@ use std::{ffi::OsString, path::PathBuf, process::ExitCode};
 
 use clap::{
     builder::{PossibleValuesParser, TypedValueParser as _},
-    ArgMatches, Args, CommandFactory, FromArgMatches as _, Parser, Subcommand, ValueEnum,
+    ArgGroup, ArgMatches, Args, CommandFactory, FromArgMatches as _, Parser, Subcommand, ValueEnum,
 };
 
 mod access;
@@ -50,11 +50,12 @@ pub mod schema;
     about = "Evidence adopter tooling: keys, source authoring, fixture runs"
 )]
 struct Cli {
-    /// Select human-readable or machine-readable output. `junit` is accepted
-    /// only by fixture runs (`test` and `fixtures run`).
+    /// Emit the selected command's report in this format. `junit` is accepted
+    /// only by `test` and `fixtures run`.
     #[arg(
         id = "output_format",
         long = "format",
+        value_name = "FORMAT",
         global = true,
         value_enum,
         default_value_t = CliFormat::Human
@@ -69,7 +70,7 @@ struct Cli {
 enum Command {
     /// Create a new editable Evidence project.
     Init(scaffold::NewArgs),
-    /// Validate authored policy and, when selected, deployment closure offline.
+    /// Check authored policy and, when selected, deployment closure, or one tooling file, offline.
     Check(CheckArgs),
     /// Explain the authored inventory and optional target-owned governance.
     Explain(ExplainArgs),
@@ -145,9 +146,14 @@ enum CliFormat {
 }
 
 #[derive(Debug, Args)]
+#[command(group(
+    ArgGroup::new("checked")
+        .required(true)
+        .multiple(false)
+        .args(["project", "file"])
+))]
 struct CheckArgs {
     /// Editable Evidence project directory. Required unless --file is given.
-    #[arg(required_unless_present = "file")]
     project: Option<PathBuf>,
     /// Check one tooling file on its own, offline: a client profile, reviewed
     /// contracts, development state, a source-import baseline or journal, a
@@ -157,15 +163,12 @@ struct CheckArgs {
     /// Explicit deployment target whose governance and runtime structure are checked.
     #[arg(long)]
     target: Option<PathBuf>,
-    /// Require a production or evidence-grade target and complete deployment closure.
+    /// Require a production or evidence-grade target and complete deployment closure. Requires --target.
     #[arg(long, requires = "target")]
     production: bool,
-    /// Refuse a project whose check reports any warning.
+    /// Exit 1 when a warning is reported.
     #[arg(long, conflicts_with = "file")]
     deny_warnings: bool,
-    /// The flag's former spelling, accepted only to name `--deny-warnings`.
-    #[arg(long, hide = true)]
-    deny_findings: bool,
 }
 
 #[derive(Debug, Args)]
@@ -196,7 +199,7 @@ struct TestArgs {
     /// Include the runtime's structured value-free evaluation trace.
     #[arg(long)]
     explain: bool,
-    /// Refuse a run whose fixture files carry any reader warning.
+    /// Exit 1 when a warning is reported.
     #[arg(long)]
     deny_warnings: bool,
     #[arg(long, hide = true)]
@@ -301,7 +304,7 @@ fn narrow_format(command: clap::Command, path: &[&str]) -> clap::Command {
         None => command.arg(
             clap::Arg::new("output_format")
                 .long("format")
-                .value_name("output_format")
+                .value_name("FORMAT")
                 .default_value("human")
                 .help("Select human-readable output; this command provides no JSON report")
                 .value_parser(PossibleValuesParser::new(["human"]).map(|_| CliFormat::Human)),
@@ -445,10 +448,6 @@ fn run_entry() -> ExitCode {
             print_report(&unsupported_json_format_failure(&command));
             return ExitCode::from(report::USAGE_EXIT);
         }
-    }
-    if matches!(&cli.command, Command::Check(args) if args.deny_findings) {
-        write_report_failure(&command_path, report::USAGE_EXIT, &renamed_flag(), format);
-        return ExitCode::from(report::USAGE_EXIT);
     }
     let result = match cli.command {
         Command::Init(args) => {
@@ -873,16 +872,6 @@ fn write_usage_failure(format: OutputFormat) {
     }
 }
 
-/// The usage refusal for `--deny-findings`, which names its new spelling.
-fn renamed_flag() -> registry_platform_yaml::Report {
-    registry_platform_yaml::Report::new(vec![registry_platform_yaml::Diagnostic::error(
-        "evidence.usage.flag-renamed",
-        "",
-        "--deny-findings was renamed to --deny-warnings",
-        "Rerun the command with --deny-warnings in place of --deny-findings.",
-    )])
-}
-
 /// Write a refusal that is a report of diagnostics: the diagnostics and the
 /// summary line on standard error, or the failure envelope carrying them.
 fn write_report_failure(
@@ -924,7 +913,7 @@ fn safe_command(
             return SafeCliFailure {
                 operational: false,
                 code: diagnostic.code.to_owned(),
-                artifact: "deployment_target".to_owned(),
+                artifact: "deployment-target".to_owned(),
                 path: diagnostic.path.clone(),
                 message: diagnostic.message.to_owned(),
                 suggested_action: suggested_action.to_owned(),
@@ -1734,7 +1723,7 @@ mod tests {
             .expect("safe failure");
         assert!(!failure.operational);
         assert_eq!(failure.code, "evidence.target.governance-version");
-        assert_eq!(failure.artifact, "deployment_target");
+        assert_eq!(failure.artifact, "deployment-target");
         assert_eq!(failure.path, "governance.yaml:/version");
         assert_eq!(failure.message, "deployment governance version must be 1");
     }

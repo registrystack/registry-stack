@@ -95,8 +95,8 @@ class RequestBatchTest(unittest.TestCase):
             },
             body=envelope(
                 [
-                    {"result": "evidence_not_available"},
-                    {"result": "evidence_not_available"},
+                    {"result": "evidence-not-available"},
+                    {"result": "evidence-not-available"},
                 ]
             ),
         )
@@ -188,7 +188,7 @@ class RequestBatchTest(unittest.TestCase):
             headers={"Content-Type": REQUEST_BATCH_MEDIA_TYPE},
             body=envelope(
                 [
-                    {"result": "evidence_not_available"},
+                    {"result": "evidence-not-available"},
                     {"result": "not-a-batch-result"},
                 ]
             ),

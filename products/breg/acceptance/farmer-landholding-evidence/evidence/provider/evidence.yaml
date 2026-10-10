@@ -1,11 +1,12 @@
-version: 1
+apiVersion: id.registrystack.org/formats/evidence/bundle/v1
+kind: EvidenceBundle
 assuranceProfile: local
 service:
   providerId: urn:example:farmer-registry
   publicOrigin: http://127.0.0.1:9
   trustDomain: urn:example:farmer:trial
 issuer:
-  id: urn:example:farmer-authority
+  uri: urn:example:farmer-authority
 authentication:
   oidc:
     issuer: http://127.0.0.1:9
@@ -15,11 +16,13 @@ authentication:
     algorithms:
     - ES256
     jwksSource:
-      kind: uri
+      type: uri
       uri: http://127.0.0.1:9/.well-known/jwks.json
     principalClaim: sub
     requesterTagsClaim: evidence_tags
     evidenceAudienceClaim: evidence_audience
+    allowedClients: unrestricted
+    requiredScopes: unrestricted
     maximumTokenLifetimeSeconds: 300
     revokedKeyIds: []
 audit:
@@ -53,11 +56,11 @@ selectorProfiles:
         maximumBytes: 77
 sources:
   source-status:
-    transport: http-json
+    type: http-json
     baseUrl: http://127.0.0.1:9
     posture: field-projected
     authentication:
-      kind: static-authorization
+      type: static-authorization
       tokenRef: secret:file/source-a-token
     request:
       method: POST
@@ -91,18 +94,18 @@ sources:
       - /reference
       - /active
       redirects: deny
-      timeoutMilliseconds: 3000
+      attemptTimeoutMilliseconds: 3000
       maximumResponseBytes: 65536
-      concurrencyLimit: 8
+      maximumConcurrency: 8
     responseSchema: schemas/status-response.schema.yaml
     extractScript: adapters/source-a.rhai
     factSchema: schemas/status-facts.schema.yaml
   source-category:
-    transport: http-json
+    type: http-json
     baseUrl: http://127.0.0.1:9
     posture: field-projected
     authentication:
-      kind: static-authorization
+      type: static-authorization
       tokenRef: secret:file/source-a-token
     request:
       method: POST
@@ -136,9 +139,9 @@ sources:
       - /reference
       - /category
       redirects: deny
-      timeoutMilliseconds: 3000
+      attemptTimeoutMilliseconds: 3000
       maximumResponseBytes: 65536
-      concurrencyLimit: 8
+      maximumConcurrency: 8
     responseSchema: schemas/category-response.schema.yaml
     extractScript: adapters/source-a.rhai
     factSchema: schemas/category-facts.schema.yaml
@@ -168,10 +171,10 @@ authorityProfiles:
         valueOrigin: request
 requirements:
 - handle: farmer-status
-  id: urn:example:farmer:status-v1
+  uri: urn:example:farmer:status-v1
   kind: information-requirement
   acquisition:
-    kind: single
+    type: single
     source: source-status
   purposes:
   - land-registration
@@ -190,8 +193,8 @@ requirements:
     parameters: {}
   concepts:
   - handle: active
-    id: urn:example:farmer:active
-    form: boolean
+    uri: urn:example:farmer:active
+    type: boolean
     required: true
     constraints: {}
   fixtures: fixtures/status.yaml
@@ -200,10 +203,10 @@ requirements:
     - urn:example:farmer:status
   existenceDisclosure: collapse-unresolved
 - handle: farmer-category
-  id: urn:example:farmer:category-v1
+  uri: urn:example:farmer:category-v1
   kind: information-requirement
   acquisition:
-    kind: single
+    type: single
     source: source-category
   purposes:
   - land-registration
@@ -222,8 +225,8 @@ requirements:
     parameters: {}
   concepts:
   - handle: category
-    id: urn:example:farmer:category
-    form: controlled-category
+    uri: urn:example:farmer:category
+    type: controlled-category
     required: true
     constraints:
       categoryScheme: urn:example:farmer:categories

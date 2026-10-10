@@ -96,6 +96,10 @@ const REMOVED_KEYS: &[RemovedKey] = &[
         path: "audit.retainDays",
         replacement: "declare audit.retentionDays instead",
     },
+    RemovedKey {
+        path: "resourceServer.jwksSource.kind",
+        replacement: "declare resourceServer.jwksSource.type with the same value instead",
+    },
 ];
 
 /// The operator runtime configuration document.
@@ -1004,7 +1008,7 @@ resourceServer:
   resource: https://gateway.example.test/mcp
   issuer: https://login.example.test
   jwksSource:
-    kind: uri
+    type: uri
     uri: https://login.example.test/jwks.json
   algorithms: [EdDSA, ES256]
   allowedClients: [chat-host]
@@ -1185,6 +1189,11 @@ rateLimits:
                 "  path: /var/lib/breg-mcp/audit/audit.jsonl\n  retainDays: 30\n",
                 "/audit/retainDays",
             ),
+            (
+                "    type: uri\n",
+                "    kind: uri\n",
+                "/resourceServer/jwksSource/kind",
+            ),
         ] {
             let text = document().replacen(from, to, 1);
             assert_ne!(text, document(), "{to}");
@@ -1263,8 +1272,8 @@ rateLimits:
             assert!(!error.to_string().contains(CANARY), "{error}");
         }
         let text = document().replace(
-            "    kind: uri\n    uri: https://login.example.test/jwks.json",
-            &format!("    kind: static\n    documentRef: '{{\"keys\":[\"{CANARY}\"]}}'"),
+            "    type: uri\n    uri: https://login.example.test/jwks.json",
+            &format!("    type: static\n    documentRef: '{{\"keys\":[\"{CANARY}\"]}}'"),
         );
         let error = load(&text).expect_err("an inline key set is refused");
         assert_eq!(
@@ -1312,7 +1321,7 @@ rateLimits:
     #[test]
     fn an_omitted_jwks_source_uses_discovery() {
         let text = document().replace(
-            "  jwksSource:\n    kind: uri\n    uri: https://login.example.test/jwks.json\n",
+            "  jwksSource:\n    type: uri\n    uri: https://login.example.test/jwks.json\n",
             "",
         );
         let config = load(&text).expect("discovery is the shared default");
@@ -1657,7 +1666,7 @@ rateLimits:
     /// it never answers with nothing about a document it did not decode.
     #[test]
     fn a_deferred_expression_that_stops_the_read_is_reported() {
-        let text = document().replace("kind: uri", "kind: ${BREG_MCP_TEST_UNSET_KIND}");
+        let text = document().replace("type: uri", "type: ${BREG_MCP_TEST_UNSET_KIND}");
         assert_ne!(text, document());
         let (_directory, path) = written(&text);
         let check = check_runtime(&path, false);
@@ -1676,7 +1685,7 @@ rateLimits:
             found,
             [(
                 registry_platform_config::INCOMPLETE_CODE,
-                "/resourceServer/jwksSource/kind",
+                "/resourceServer/jwksSource/type",
                 registry_platform_yaml::Severity::Warning
             )]
         );

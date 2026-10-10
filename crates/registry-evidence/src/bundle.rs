@@ -1092,7 +1092,7 @@ fn confirm_unchanged(
 }
 
 #[cfg(unix)]
-fn open_no_follow(path: &Path) -> Result<File, BundleError> {
+pub(crate) fn open_no_follow(path: &Path) -> Result<File, BundleError> {
     use rustix::fs::{Mode, OFlags};
     let descriptor = rustix::fs::open(
         path,
@@ -1104,7 +1104,7 @@ fn open_no_follow(path: &Path) -> Result<File, BundleError> {
 }
 
 #[cfg(not(unix))]
-fn open_no_follow(path: &Path) -> Result<File, BundleError> {
+pub(crate) fn open_no_follow(path: &Path) -> Result<File, BundleError> {
     let metadata = fs::symlink_metadata(path).map_err(|_| BundleError::Unavailable)?;
     if metadata.file_type().is_symlink() {
         return Err(BundleError::InvalidPath);
@@ -2446,9 +2446,9 @@ pub fn runtime_binding_findings(
     if !signer_matches_assurance {
         find(
             "evidence.runtime.signer-assurance-mismatch",
-            "/signer/kind".to_owned(),
+            "/signer/type".to_owned(),
             invalid_artifact("runtime signer kind does not match the bundle assurance profile"),
-            "Write kind: local-jwk for a local bundle, or kind: transit for a production or evidence-grade bundle.",
+            "Write type: local-jwk for a local bundle, or type: transit for a production or evidence-grade bundle.",
         );
     }
     // A governed reference resolves only through a provider the operator
@@ -3168,7 +3168,7 @@ mod tests {
         let source_id = requirement.acquisition.initial_source().to_owned();
         let mut document = serde_json::to_value(&config).unwrap();
         let project = |document: &JsonValue| {
-            let candidate = EvidenceConfig::parse_yaml(&serde_json::to_vec(document).unwrap())
+            let candidate = EvidenceConfig::parse_projection(document)
                 .expect("each compared candidate is valid");
             canonical_projection(&candidate, &requirement).unwrap()
         };
@@ -3178,7 +3178,7 @@ mod tests {
         let source = &document["sources"][&source_id];
         let connection = serde_json::json!({
             "baseUrl": source["baseUrl"], "authentication": source["authentication"],
-            "concurrencyLimit": source["request"]["concurrencyLimit"]
+            "maximumConcurrency": source["request"]["maximumConcurrency"]
         });
         document["sourceConnections"] = serde_json::json!({"unreached": connection.clone()});
         assert!(
@@ -3202,12 +3202,18 @@ mod tests {
     #[test]
     fn package_digest_binds_paths_and_exact_bytes_deterministically() {
         let first = BTreeMap::from([
-            ("evidence.yaml".to_owned(), b"version: 1\n".to_vec()),
+            (
+                "evidence.yaml".to_owned(),
+                b"kind: EvidenceBundle\n".to_vec(),
+            ),
             ("schemas/facts.yaml".to_owned(), b"type: object\n".to_vec()),
         ]);
         let same = BTreeMap::from([
             ("schemas/facts.yaml".to_owned(), b"type: object\n".to_vec()),
-            ("evidence.yaml".to_owned(), b"version: 1\n".to_vec()),
+            (
+                "evidence.yaml".to_owned(),
+                b"kind: EvidenceBundle\n".to_vec(),
+            ),
         ]);
         let digest = |files: &BTreeMap<String, Vec<u8>>| {
             registry_platform_config::plan_package(
@@ -3222,7 +3228,10 @@ mod tests {
         assert_eq!(digest(&first), digest(&same));
 
         let renamed = BTreeMap::from([
-            ("evidence.yaml".to_owned(), b"version: 1\n".to_vec()),
+            (
+                "evidence.yaml".to_owned(),
+                b"kind: EvidenceBundle\n".to_vec(),
+            ),
             ("schemas/other.yaml".to_owned(), b"type: object\n".to_vec()),
         ]);
         assert_ne!(digest(&first), digest(&renamed));
@@ -3455,8 +3464,8 @@ mod tests {
         let text = fs::read_to_string(&config_path).expect("configuration reads");
         let text = text
             .replacen(
-                "version: 1\n",
-                "version: 1\nacquisitionCapabilities: [source-batch]\n",
+                "kind: EvidenceBundle\n",
+                "kind: EvidenceBundle\nacquisitionCapabilities: [source-batch]\n",
                 1,
             )
             .replace(
@@ -4140,8 +4149,8 @@ mod tests {
         copy_acceptance_bundle("adult-status", directory.path());
         let config_path = directory.path().join("evidence.yaml");
         let config = fs::read_to_string(&config_path).expect("read configuration");
-        let original = "    concepts: [{handle: is_adult, id: urn:example:fixture:concept:adult-status, form: boolean, required: true, constraints: {}}]\n";
-        let replacement = "    concepts: [{handle: is_adult, id: urn:example:fixture:concept:adult-status, form: boolean, required: true, constraints: {}}, {handle: structured, id: urn:example:fixture:concept:structured, form: reviewed-structured-value, required: false, constraints: {schema: urn:example:fixture:schema:structured:v1, maximumSerializedBytes: 512}}]\n";
+        let original = "    concepts: [{handle: is_adult, uri: urn:example:fixture:concept:adult-status, type: boolean, required: true, constraints: {}}]\n";
+        let replacement = "    concepts: [{handle: is_adult, uri: urn:example:fixture:concept:adult-status, type: boolean, required: true, constraints: {}}, {handle: structured, uri: urn:example:fixture:concept:structured, type: reviewed-structured-value, required: false, constraints: {schema: urn:example:fixture:schema:structured:v1, maximumSerializedBytes: 512}}]\n";
         let config = config.replacen(original, replacement, 1);
         assert_ne!(
             config,
@@ -4255,15 +4264,15 @@ mod tests {
     /// One declared fetch member: the ordinary fixed request every Version 1
     /// source already is, bound to the reference the search resolved.
     const FIRST_MEMBER_SOURCE: &str = r#"  source-e:
-    transport: http-json
+    type: http-json
     baseUrl: https://source.invalid
     posture: field-projected
-    authentication: {kind: static-authorization, tokenRef: secret:file/source-e-token}
+    authentication: {type: static-authorization, tokenRef: secret:file/source-e-token}
     request:
       method: GET
-      pathTemplate: /v1/first/{record_id}
+      path: /v1/first/{record_id}
       pathBindings:
-        record_id: {from: prior-fact, field: record_id}
+        record_id: {type: prior-fact, field: record_id}
       fixedHeaders: [{name: Accept, value: application/json}]
       selectorInputs: []
       prepareScript: adapters/first-member-prepare.rhai
@@ -4272,24 +4281,24 @@ mod tests {
       preparationLimits: {query: allowed, jsonBody: forbidden, maximumNormalizedBytes: 4096}
       projection: [/total]
       redirects: deny
-      timeoutMilliseconds: 3000
+      attemptTimeoutMilliseconds: 3000
       maximumResponseBytes: 65536
-      concurrencyLimit: 8
+      maximumConcurrency: 8
     responseSchema: schemas/first-member-response.schema.yaml
     extractScript: adapters/first-member-source.rhai
     factSchema: schemas/first-member-facts.schema.yaml
 "#;
 
     const SECOND_MEMBER_SOURCE: &str = r#"  source-f:
-    transport: http-json
+    type: http-json
     baseUrl: https://source.invalid
     posture: field-projected
-    authentication: {kind: static-authorization, tokenRef: secret:file/source-f-token}
+    authentication: {type: static-authorization, tokenRef: secret:file/source-f-token}
     request:
       method: GET
-      pathTemplate: /v1/second/{record_id}
+      path: /v1/second/{record_id}
       pathBindings:
-        record_id: {from: prior-fact, field: record_id}
+        record_id: {type: prior-fact, field: record_id}
       fixedHeaders: [{name: Accept, value: application/json}]
       selectorInputs: []
       prepareScript: adapters/second-member-prepare.rhai
@@ -4298,16 +4307,16 @@ mod tests {
       preparationLimits: {query: allowed, jsonBody: forbidden, maximumNormalizedBytes: 4096}
       projection: [/total]
       redirects: deny
-      timeoutMilliseconds: 3000
+      attemptTimeoutMilliseconds: 3000
       maximumResponseBytes: 65536
-      concurrencyLimit: 8
+      maximumConcurrency: 8
     responseSchema: schemas/second-member-response.schema.yaml
     extractScript: adapters/second-member-source.rhai
     factSchema: schemas/second-member-facts.schema.yaml
 "#;
 
     const SEARCH_THEN_FETCH: &str =
-        "    acquisition:\n      kind: search-then-fetch\n      search: source-a\n      fetch: source-e\n";
+        "    acquisition:\n      type: search-then-fetch\n      search: source-a\n      fetch: source-e\n";
 
     /// The value-free cause one bundle refusal carries.
     fn refusal_cause(error: BundleError) -> &'static str {
@@ -4387,7 +4396,7 @@ mod tests {
         );
         assert_ne!(declared, yaml, "the capability declaration applies");
         let acquired = declared.replace(
-            "    acquisition:\n      kind: single\n      source: source-a\n",
+            "    acquisition:\n      type: single\n      source: source-a\n",
             acquisition,
         );
         assert_ne!(acquired, declared, "the acquisition rewrite applies");
@@ -4402,7 +4411,7 @@ mod tests {
     fn fetch_set_config(first_inputs: &str, second_inputs: &str) -> EvidenceConfig {
         multi_call_config(
             &format!(
-                "    acquisition:\n      kind: search-then-fetch-set\n      search: source-a\n      fetch:\n        - {{source: source-e, factInputs: [{first_inputs}]}}\n        - {{source: source-f, factInputs: [{second_inputs}]}}\n      maximumAcquisitionMilliseconds: 8000\n"
+                "    acquisition:\n      type: search-then-fetch-set\n      search: source-a\n      fetch:\n        - {{source: source-e, factInputs: [{first_inputs}]}}\n        - {{source: source-f, factInputs: [{second_inputs}]}}\n      maximumAcquisitionMilliseconds: 8000\n"
             ),
             &member_sources(&[FIRST_MEMBER_SOURCE, SECOND_MEMBER_SOURCE]),
         )
@@ -4589,8 +4598,8 @@ mod tests {
     #[test]
     fn search_then_fetch_bindings_are_proven_against_the_whole_search_fact_set() {
         let two_bindings = FIRST_MEMBER_SOURCE.replace(
-            "      pathTemplate: /v1/first/{record_id}\n      pathBindings:\n        record_id: {from: prior-fact, field: record_id}\n",
-            "      pathTemplate: /v1/first/{record_id}/{namespace}\n      pathBindings:\n        record_id: {from: prior-fact, field: record_id}\n        namespace: {from: prior-fact, field: record_namespace}\n",
+            "      path: /v1/first/{record_id}\n      pathBindings:\n        record_id: {type: prior-fact, field: record_id}\n",
+            "      path: /v1/first/{record_id}/{namespace}\n      pathBindings:\n        record_id: {type: prior-fact, field: record_id}\n        namespace: {type: prior-fact, field: record_namespace}\n",
         );
         assert_ne!(
             two_bindings, FIRST_MEMBER_SOURCE,
@@ -4799,7 +4808,7 @@ mod tests {
         fs::write(
             &runtime_path,
             format!(
-                "apiVersion: registry.registrystack.org/evidence-runtime/v1alpha1\nkind: EvidenceRuntimeConfig\npackage:\n  root: /etc/registry-evidence/bundle\nlistener:\n  bind: 127.0.0.1:8080\n  tlsTermination: operator-controlled-upstream\n  trustProxyIdentityHeaders: false\n  maximumRequestBytes: 65536\n  maximumConcurrentRequests: 64\n  requestTimeoutMilliseconds: 10000\n  shutdownGraceMilliseconds: 30000\nsecretProviders:\n  file: {{root: {}}}\nsigner:\n  kind: transit\n  unixSocketPath: /run/registry-evidence/transit-proxy.sock\n  mount: transit\n  keyName: evidence-signing\n  keyVersion: 7\n  timeoutMilliseconds: 2000\naudit:\n  path: /var/lib/registry-evidence/audit/evidence.jsonl\noutboundTls:\n  systemRoots: true\n  trustProfiles:\n    internal-pki: {{caBundleFile: {}}}\n",
+                "apiVersion: id.registrystack.org/formats/evidence/runtime/v1alpha1\nkind: EvidenceRuntimeConfig\npackage:\n  root: /etc/registry-evidence/bundle\nlistener:\n  bind: 127.0.0.1:8080\n  tlsTermination: operator-controlled-upstream\n  trustProxyIdentityHeaders: false\n  maximumRequestBytes: 65536\n  maximumConcurrentRequests: 64\n  requestTimeoutMilliseconds: 10000\n  shutdownGraceMilliseconds: 30000\nsecretProviders:\n  file: {{root: {}}}\nsigner:\n  type: transit\n  unixSocketPath: /run/registry-evidence/transit-proxy.sock\n  mount: transit\n  keyName: evidence-signing\n  keyVersion: 7\n  attemptTimeoutMilliseconds: 2000\naudit:\n  path: /var/lib/registry-evidence/audit/evidence.jsonl\noutboundTls:\n  systemRoots: true\n  trustProfiles:\n    internal-pki: {{caBundleFile: {}}}\n",
                 secret_root.display(),
                 ca_path.display()
             ),
@@ -4841,7 +4850,7 @@ mod tests {
     /// predates the acquisition gate is written: it says nothing about
     /// acquisition capabilities, because there was nothing to say.
     const OPERATOR_RUNTIME_DOCUMENT: &str =
-        "apiVersion: registry.registrystack.org/evidence-runtime/v1alpha1
+        "apiVersion: id.registrystack.org/formats/evidence/runtime/v1alpha1
 kind: EvidenceRuntimeConfig
 package:
   root: /etc/registry-evidence/bundle
@@ -4856,12 +4865,12 @@ listener:
 secretProviders:
   file: {root: /run/secrets/registry-evidence}
 signer:
-  kind: transit
+  type: transit
   unixSocketPath: /run/registry-evidence/transit-proxy.sock
   mount: transit
   keyName: evidence-signing
   keyVersion: 7
-  timeoutMilliseconds: 2000
+  attemptTimeoutMilliseconds: 2000
 audit:
   path: /var/lib/registry-evidence/audit/evidence.jsonl
 outboundTls:
@@ -4904,8 +4913,8 @@ outboundTls:
         ))
         .expect("fixture is UTF-8")
         .replacen(
-            "version: 1\n",
-            "version: 1\nacquisitionCapabilities: [source-batch]\n",
+            "kind: EvidenceBundle\n",
+            "kind: EvidenceBundle\nacquisitionCapabilities: [source-batch]\n",
             1,
         )
         .replace(
@@ -4954,8 +4963,8 @@ outboundTls:
         let naming = EvidenceConfig::parse_yaml(
             ACCEPTANCE
                 .replace(
-                    "sources:\n  source-a:\n    transport: http-json\n",
-                    "sources:\n  source-a:\n    transport: http-json\n    tlsTrustProfile: internal-pki\n",
+                    "sources:\n  source-a:\n    type: http-json\n",
+                    "sources:\n  source-a:\n    type: http-json\n    tlsTrustProfile: internal-pki\n",
                 )
                 .as_bytes(),
         )
@@ -5128,7 +5137,7 @@ outboundTls:
     /// It keeps the fixture's selector profile, schemas and extraction script,
     /// so the only thing the rewrite changes is how the source is reached.
     const STATEMENT_SOURCE: &str = r#"  source-a:
-    transport: sqlite-extract
+    type: sqlite-extract
     posture: field-projected
     extractProfile: residence-register
     request:
@@ -5139,14 +5148,14 @@ outboundTls:
           alternatives:
             - {profile: person-demographics-v1, fields: [given_name, family_name, birth_date]}
       parameterBindings:
-        record_reference: {kind: selector, role: subject, profile: person-demographics-v1, field: given_name}
+        record_reference: {type: selector, role: subject, profile: person-demographics-v1, field: given_name}
       maximumRows: 2
       maximumCellBytes: 4096
       maximumStatementSteps: 50000
       projection: [/rows/*/total, /rows/*/date_of_birth]
-      timeoutMilliseconds: 1000
+      attemptTimeoutMilliseconds: 1000
       maximumResponseBytes: 65536
-      concurrencyLimit: 8
+      maximumConcurrency: 8
     maximumExtractAgeSeconds: 86400
     responseSchema: schemas/response.schema.yaml
     extractScript: adapters/source-a.rhai

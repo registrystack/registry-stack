@@ -1,10 +1,10 @@
 # Focused executable OpenCRVS adapter fragment. For a deployable governed
 # bundle and runtime binding, use deployment-projects/opencrvs-family-evidence/.
-transport: http-json
+type: http-json
 baseUrl: https://events.opencrvs.example.invalid
 posture: record-transformed
 authentication:
-  kind: oauth2-client-credentials
+  type: oauth2-client-credentials
   tokenEndpoint: https://auth.opencrvs.example.invalid/token
   clientIdRef: secret:file/events-client-id
   clientSecretRef: secret:file/events-client-secret
@@ -57,9 +57,9 @@ request:
     - /results/*/declaration/mother.personReference
     - /results/*/declaration/father.personReference
   redirects: deny
-  timeoutMilliseconds: 3000
+  attemptTimeoutMilliseconds: 3000
   maximumResponseBytes: 262144
-  concurrencyLimit: 4
+  maximumConcurrency: 4
 responseSchema: response.schema.yaml
 extractScript: extract.rhai
 factSchema: facts.schema.yaml

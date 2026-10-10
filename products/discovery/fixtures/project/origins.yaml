@@ -1,4 +1,5 @@
-schemaVersion: registry-discovery/origins/v1alpha1
+apiVersion: id.registrystack.org/formats/discovery/origins/v1alpha1
+kind: DiscoveryOrigins
 origins:
   - originId: example-evidence
     catalogUrl: https://evidence.example.invalid/catalog.jsonld

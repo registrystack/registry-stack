@@ -20,7 +20,10 @@ use registry_evidence_verifier::{
 use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::NaiveDate;
-use serde::{de::Error as _, Deserialize, Deserializer, Serialize};
+use registry_platform_yaml::tagged_union;
+use serde::{
+    de::Error as _, ser::SerializeMap as _, Deserialize, Deserializer, Serialize, Serializer,
+};
 use url::Url;
 
 use crate::{
@@ -35,11 +38,11 @@ use crate::{
 
 pub const EVIDENCE_DEFINITIONS_SCHEMA_V1: &str = "registry.evidence-definitions/v1";
 
-const fn default_holder_bound_batch_max_size() -> u16 {
+const fn default_maximum_holder_bound_batch_size() -> u16 {
     1
 }
 
-fn deserialize_holder_bound_batch_max_size<'de, D>(deserializer: D) -> Result<u16, D::Error>
+fn deserialize_maximum_holder_bound_batch_size<'de, D>(deserializer: D) -> Result<u16, D::Error>
 where
     D: Deserializer<'de>,
 {
@@ -67,10 +70,10 @@ pub struct EvidenceDefinitionsDocument {
     /// never causes a caller or protocol adapter to advertise a wider batch
     /// than that deployment can honor.
     #[serde(
-        default = "default_holder_bound_batch_max_size",
-        deserialize_with = "deserialize_holder_bound_batch_max_size"
+        default = "default_maximum_holder_bound_batch_size",
+        deserialize_with = "deserialize_maximum_holder_bound_batch_size"
     )]
-    pub holder_bound_batch_max_size: u16,
+    pub maximum_holder_bound_batch_size: u16,
     pub definitions: Vec<EvidenceDefinition>,
 }
 
@@ -531,12 +534,93 @@ impl DefinitionConcept {
     }
 }
 
-/// The declared public form of one concept.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(untagged)]
+/// The declared public form of one concept. It is written as a mapping whose
+/// `type` member names the form, with a list's members beside `type`.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DefinitionConceptForm {
     Scalar(ConceptForm),
     List(DefinitionListForm),
+}
+
+impl Serialize for DefinitionConceptForm {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Scalar(form) => {
+                let mut map = serializer.serialize_map(Some(1))?;
+                map.serialize_entry("type", form)?;
+                map.end()
+            }
+            Self::List(form) => {
+                let mut map = serializer.serialize_map(Some(5))?;
+                map.serialize_entry("type", "list")?;
+                map.serialize_entry("items", &form.list.items)?;
+                map.serialize_entry("minimumItems", &form.list.minimum_items)?;
+                map.serialize_entry("maximumItems", &form.list.maximum_items)?;
+                map.serialize_entry("unique", &form.list.unique)?;
+                map.end()
+            }
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for DefinitionConceptForm {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        <TaggedConceptForm as Deserialize>::deserialize(deserializer).map(Self::from)
+    }
+}
+
+/// The form as it is written: one variant per `type` value, each refusing a
+/// member it does not declare.
+#[derive(Deserialize)]
+#[serde(
+    remote = "Self",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+enum TaggedConceptForm {
+    Boolean {},
+    Integer {},
+    String {},
+    DateBucket {},
+    TimeBucket {},
+    EntityReference {},
+    Structured {},
+    List {
+        items: DefinitionListItemForm,
+        minimum_items: usize,
+        maximum_items: usize,
+        unique: bool,
+    },
+}
+
+tagged_union!(TaggedConceptForm);
+
+impl From<TaggedConceptForm> for DefinitionConceptForm {
+    fn from(form: TaggedConceptForm) -> Self {
+        match form {
+            TaggedConceptForm::Boolean {} => Self::Scalar(ConceptForm::Boolean),
+            TaggedConceptForm::Integer {} => Self::Scalar(ConceptForm::Integer),
+            TaggedConceptForm::String {} => Self::Scalar(ConceptForm::String),
+            TaggedConceptForm::DateBucket {} => Self::Scalar(ConceptForm::DateBucket),
+            TaggedConceptForm::TimeBucket {} => Self::Scalar(ConceptForm::TimeBucket),
+            TaggedConceptForm::EntityReference {} => Self::Scalar(ConceptForm::EntityReference),
+            TaggedConceptForm::Structured {} => Self::Scalar(ConceptForm::Structured),
+            TaggedConceptForm::List {
+                items,
+                minimum_items,
+                maximum_items,
+                unique,
+            } => Self::List(DefinitionListForm {
+                list: DefinitionList {
+                    items,
+                    minimum_items,
+                    maximum_items,
+                    unique,
+                },
+            }),
+        }
+    }
 }
 
 impl DefinitionConceptForm {
@@ -561,14 +645,13 @@ impl DefinitionConceptForm {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
+/// The list form's members, held apart from the form that names them.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DefinitionListForm {
     pub list: DefinitionList,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DefinitionList {
     pub items: DefinitionListItemForm,
     pub minimum_items: usize,
@@ -625,7 +708,7 @@ mod tests {
       "audience": "urn:example:client:audience:relying-party",
       "issuedBy": "urn:example:client:issuer",
       "providedBy": "urn:example:client:provider",
-      "holderBoundBatchMaxSize": 4,
+      "maximumHolderBoundBatchSize": 4,
       "definitions": [
         {
           "handle": "status-holds",
@@ -653,7 +736,7 @@ mod tests {
               }
             }
           ],
-          "concepts": [{"handle": "status-holds", "concept": "urn:example:client:concept:status-holds", "required": true, "form": "boolean"}]
+          "concepts": [{"handle": "status-holds", "concept": "urn:example:client:concept:status-holds", "required": true, "form": {"type": "boolean"}}]
         }
       ]
     }"#;
@@ -667,7 +750,7 @@ mod tests {
         let document = document();
         assert_eq!(document.schema, EVIDENCE_DEFINITIONS_SCHEMA_V1);
         assert_eq!(document.assurance_profile, AssuranceProfile::Local);
-        assert_eq!(document.holder_bound_batch_max_size, 4);
+        assert_eq!(document.maximum_holder_bound_batch_size, 4);
         let definition = document
             .definition("urn:example:client:requirement:status:v1")
             .expect("the requirement is present");
@@ -792,18 +875,33 @@ mod tests {
 
     #[test]
     fn a_missing_holder_bound_batch_maximum_defaults_to_one() {
-        let earlier = DOCUMENT.replace(r#""holderBoundBatchMaxSize": 4,"#, "");
+        let earlier = DOCUMENT.replace(r#""maximumHolderBoundBatchSize": 4,"#, "");
         let document: EvidenceDefinitionsDocument =
             serde_json::from_str(&earlier).expect("the earlier v1 document parses");
-        assert_eq!(document.holder_bound_batch_max_size, 1);
+        assert_eq!(document.maximum_holder_bound_batch_size, 1);
+    }
+
+    #[test]
+    fn the_retired_holder_bound_batch_member_is_refused_as_an_unknown_member() {
+        assert!(DOCUMENT.contains(r#""maximumHolderBoundBatchSize": 4,"#));
+        let retired = DOCUMENT.replace(
+            r#""maximumHolderBoundBatchSize": 4,"#,
+            r#""holderBoundBatchMaxSize": 4,"#,
+        );
+        let error = serde_json::from_str::<EvidenceDefinitionsDocument>(&retired)
+            .expect_err("the retired member is not read");
+        assert!(
+            error.to_string().contains("unknown field"),
+            "the retired member is refused as any unknown member is: {error}"
+        );
     }
 
     #[test]
     fn a_discovered_holder_bound_batch_maximum_must_be_one_through_sixteen() {
         for value in [0, 17, u16::MAX] {
             let outside_contract = DOCUMENT.replace(
-                r#""holderBoundBatchMaxSize": 4"#,
-                &format!(r#""holderBoundBatchMaxSize": {value}"#),
+                r#""maximumHolderBoundBatchSize": 4"#,
+                &format!(r#""maximumHolderBoundBatchSize": {value}"#),
             );
             assert!(
                 serde_json::from_str::<EvidenceDefinitionsDocument>(&outside_contract).is_err(),
@@ -1153,8 +1251,110 @@ mod tests {
                 .expect("a collection form has a collection expectation");
             assert_eq!(
                 serde_json::to_value(&output.form).expect("the form serializes"),
-                serde_json::json!({"list": {"items": match items { DefinitionListItemForm::String => "string", DefinitionListItemForm::EntityReference => "entity-reference" }, "minimumItems": 1, "maximumItems": 4, "unique": true}})
+                serde_json::json!({"type": "list", "items": match items { DefinitionListItemForm::String => "string", DefinitionListItemForm::EntityReference => "entity-reference" }, "minimumItems": 1, "maximumItems": 4, "unique": true})
             );
+        }
+    }
+
+    fn list_form(items: DefinitionListItemForm) -> DefinitionConceptForm {
+        DefinitionConceptForm::List(DefinitionListForm {
+            list: DefinitionList {
+                items,
+                minimum_items: 1,
+                maximum_items: 4,
+                unique: true,
+            },
+        })
+    }
+
+    #[test]
+    fn a_concept_form_is_a_mapping_tagged_by_type() {
+        for (form, written) in [
+            (ConceptForm::Boolean, "boolean"),
+            (ConceptForm::Integer, "integer"),
+            (ConceptForm::String, "string"),
+            (ConceptForm::DateBucket, "date-bucket"),
+            (ConceptForm::TimeBucket, "time-bucket"),
+            (ConceptForm::EntityReference, "entity-reference"),
+            (ConceptForm::Structured, "structured"),
+        ] {
+            let form = DefinitionConceptForm::Scalar(form);
+            let wire = serde_json::to_value(&form).expect("the form serializes");
+            assert_eq!(wire, serde_json::json!({"type": written}));
+            assert_eq!(
+                serde_json::from_value::<DefinitionConceptForm>(wire).expect("the form reads back"),
+                form
+            );
+        }
+        for (items, written) in [
+            (DefinitionListItemForm::String, "string"),
+            (DefinitionListItemForm::EntityReference, "entity-reference"),
+        ] {
+            let form = list_form(items);
+            let wire = serde_json::to_value(&form).expect("the form serializes");
+            assert_eq!(
+                wire,
+                serde_json::json!({
+                    "type": "list",
+                    "items": written,
+                    "minimumItems": 1,
+                    "maximumItems": 4,
+                    "unique": true
+                })
+            );
+            assert_eq!(
+                serde_json::from_value::<DefinitionConceptForm>(wire).expect("the form reads back"),
+                form
+            );
+        }
+    }
+
+    #[test]
+    fn an_untagged_concept_form_is_refused() {
+        for written in [
+            serde_json::json!("boolean"),
+            serde_json::json!("entity-reference"),
+            serde_json::json!({"list": {"items": "string", "minimumItems": 1, "maximumItems": 4, "unique": true}}),
+            serde_json::json!({"items": "string", "minimumItems": 1, "maximumItems": 4, "unique": true}),
+            serde_json::json!({"boolean": {}}),
+            serde_json::json!({}),
+        ] {
+            assert!(
+                serde_json::from_value::<DefinitionConceptForm>(written.clone()).is_err(),
+                "{written} read as a concept form"
+            );
+        }
+    }
+
+    #[test]
+    fn a_concept_form_refuses_what_its_variant_does_not_declare() {
+        for written in [
+            serde_json::json!({"type": "boolean", "unique": true}),
+            serde_json::json!({"type": "structured", "items": "string"}),
+            serde_json::json!({"type": "list", "items": "string", "minimumItems": 1, "maximumItems": 4, "unique": true, "ordered": true}),
+            serde_json::json!({"type": "list", "items": "string", "minimumItems": 1, "maximumItems": 4}),
+            serde_json::json!({"type": "list", "items": "boolean", "minimumItems": 1, "maximumItems": 4, "unique": true}),
+        ] {
+            assert!(
+                serde_json::from_value::<DefinitionConceptForm>(written.clone()).is_err(),
+                "{written} read as a concept form"
+            );
+        }
+        let refusal =
+            serde_json::from_value::<DefinitionConceptForm>(serde_json::json!({"type": "decimal"}))
+                .expect_err("an unknown form is refused")
+                .to_string();
+        for form in [
+            "boolean",
+            "integer",
+            "string",
+            "date-bucket",
+            "time-bucket",
+            "entity-reference",
+            "structured",
+            "list",
+        ] {
+            assert!(refusal.contains(&format!("`{form}`")), "{form}: {refusal}");
         }
     }
 }

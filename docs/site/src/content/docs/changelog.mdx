@@ -69,7 +69,6 @@ relevant product pages on this site rather than duplicating release notes.
 
 {/* Evidence: products/breg/CHANGELOG.md;
     crates/registry-bregctl/src/test_lifecycle.rs, baseline_fingerprint_drift;
-    crates/registry-breg/src/package.rs, statistical_release_store_present;
     crates/registry-breg/src/artifacts.rs, restore_effective_model_planner_origins. */}
 
 - BReg adds governed statistical datasets. A root project declares count datasets under
@@ -1315,7 +1314,7 @@ relevant product pages on this site rather than duplicating release notes.
   `apply_request` there.
 
 {/* Evidence: crates/registry-breg/src/compiler.rs, expand_project_access;
-    crates/registry-breg/tests/http_auth.rs, task-grant apply_request compile refusal;
+    crates/registry-breg/tests/http_auth.rs, task-grant apply-request compile refusal;
     products/breg/TASK_GRANTS.md. */}
 
 - BReg no longer contacts the review authority for an apply made under a

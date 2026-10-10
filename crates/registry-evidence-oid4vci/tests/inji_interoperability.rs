@@ -87,7 +87,7 @@ const DEFINITIONS: &str = r#"{
   "audience": "https://wallet.example.org",
   "issuedBy": "https://registry.example.org",
   "providedBy": "https://provider.example.org",
-  "holderBoundBatchMaxSize": 4,
+  "maximumHolderBoundBatchSize": 4,
   "definitions": [{
     "handle": "holder-bound",
     "requirement": "urn:example:requirement:holder-bound",
@@ -112,7 +112,7 @@ const DEFINITIONS: &str = r#"{
         }]
       }
     }],
-    "concepts": [{"handle": "outcome", "concept": "urn:example:concept:outcome", "required": true, "form": "boolean"}]
+    "concepts": [{"handle": "outcome", "concept": "urn:example:concept:outcome", "required": true, "form": {"type": "boolean"}}]
   }]
 }"#;
 

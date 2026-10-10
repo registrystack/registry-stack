@@ -185,7 +185,7 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
         1,
         1,
         "attempt",
-        "attempt_started",
+        "attempt-started",
     )
     .await;
     let retry_delay = delivery_retry_delay(&database, &first).await;
@@ -219,7 +219,7 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
         1,
         1,
         "terminal",
-        "http_non_success",
+        "http-non-success",
     )
     .await;
     assert!(!outbox_payload_available(&database, &first).await);
@@ -266,7 +266,7 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
         1,
         0,
         "terminal",
-        "payload_expired",
+        "payload-expired",
     )
     .await;
     assert_eq!(
@@ -333,7 +333,7 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
     );
     assert_eq!(
         delivery_state(&database, &timeout_event).await,
-        (1, "dead_lettered".to_owned(), 2)
+        (1, "dead-lettered".to_owned(), 2)
     );
     assert_exact_audit_outcome(
         &database,
@@ -342,7 +342,7 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
         1,
         1,
         "terminal",
-        "destination_timeout",
+        "destination-timeout",
     )
     .await;
     assert_exact_audit_outcome(
@@ -352,7 +352,7 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
         1,
         2,
         "terminal",
-        "destination_timeout",
+        "destination-timeout",
     )
     .await;
 
@@ -384,7 +384,7 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
     }
     assert_eq!(
         answered,
-        ["replay_requested", "replay_committed"],
+        ["replay-requested", "replay-committed"],
         "a replay whose caller left is still answered"
     );
     assert_eq!(delivery_state(&database, &timeout_event).await.0, 2);
@@ -415,7 +415,7 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
     // reset commits, under one correlation.
     assert_eq!(
         audit_outcomes(&database, &audit_profile, &timeout_event, 2, 0, "replay").await,
-        ["replay_requested", "replay_committed"],
+        ["replay-requested", "replay-committed"],
         "an operator replay is answered once its reset commits"
     );
     assert_exact_audit_outcome(
@@ -524,7 +524,7 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
         1,
         1,
         "terminal",
-        "worker_interrupted",
+        "worker-interrupted",
     )
     .await;
     assert_exact_audit_outcome(
@@ -567,7 +567,7 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
         1,
         1,
         "terminal",
-        "destination_transport_unavailable",
+        "destination-transport-unavailable",
     )
     .await;
     assert_exact_audit_outcome(
@@ -577,7 +577,7 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
         1,
         2,
         "terminal",
-        "destination_transport_unavailable",
+        "destination-transport-unavailable",
     )
     .await;
 
@@ -594,7 +594,7 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
     assert_eq!(service.deliver_once().await, Ok(WebhookWorkOutcome::Idle));
     assert_eq!(
         delivery_state(&database, &transport_event).await,
-        (1, "dead_lettered".to_owned(), 2),
+        (1, "dead-lettered".to_owned(), 2),
         "retention erasure preserves the terminal failure state"
     );
     assert!(!outbox_payload_available(&database, &transport_event).await);
@@ -660,7 +660,7 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
         1,
         1,
         "terminal",
-        "destination_binding_refused",
+        "destination-binding-refused",
     )
     .await;
     wait_until_retry_is_due(&database, &binding_refused).await;
@@ -676,7 +676,7 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
         1,
         2,
         "terminal",
-        "destination_binding_refused",
+        "destination-binding-refused",
     )
     .await;
 
@@ -769,7 +769,7 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
         )
         .await
         .as_slice(),
-        ["discard_requested", "discard_committed"],
+        ["discard-requested", "discard-committed"],
     );
     let statuses = service
         .list(1)
@@ -796,7 +796,7 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
         audit_outcomes(&database, &audit_profile, &binding_refused, 2, 2, "discard",)
             .await
             .as_slice(),
-        ["discard_requested", "discard_committed"],
+        ["discard-requested", "discard-committed"],
     );
     let restarted_service = WebhookDeliveryService::new(
         pool.clone(),
@@ -866,7 +866,7 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
         1,
         1,
         "terminal",
-        "payload_refused",
+        "payload-refused",
     )
     .await;
     wait_until_retry_is_due(&database, &payload_refused).await;
@@ -882,7 +882,7 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
         1,
         2,
         "terminal",
-        "payload_refused",
+        "payload-refused",
     )
     .await;
 
@@ -981,7 +981,7 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
         1,
         1,
         "terminal",
-        "worker_interrupted",
+        "worker-interrupted",
     )
     .await;
     assert_eq!(
@@ -1027,7 +1027,7 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
         1,
         1,
         "attempt",
-        "attempt_started",
+        "attempt-started",
     )
     .await;
     assert_exact_audit_outcome(
@@ -1037,7 +1037,7 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
         1,
         1,
         "terminal",
-        "worker_interrupted",
+        "worker-interrupted",
     )
     .await;
     receiver.enqueue(ResponsePlan::Status(204)).await;
@@ -1189,7 +1189,7 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
     }
     assert_eq!(
         discard_answered,
-        ["discard_requested", "discard_committed"],
+        ["discard-requested", "discard-committed"],
         "a discard whose caller left still answers its accepted request"
     );
     assert_eq!(
@@ -1828,7 +1828,7 @@ async fn real_postgres_webhook_delivery_reap_refuses_an_out_of_bounds_captured_a
     );
     assert_eq!(
         delivery_state(&database, &policy_corrupted).await,
-        (1, "dead_lettered".to_owned(), 2),
+        (1, "dead-lettered".to_owned(), 2),
         "the exhausted attempt reaps normally once its captured policy is valid again"
     );
 
@@ -2178,7 +2178,7 @@ async fn real_postgres_url_hook_delivery_records_its_answer_and_refuses_one_over
         1,
         1,
         "terminal",
-        "handler_resource",
+        "handler-resource",
     )
     .await;
     assert_eq!(receiver.count().await, 3, "exactly one request per event");
@@ -2695,21 +2695,21 @@ fn independent_signature(fields: IndependentSignatureFields<'_>) -> String {
 fn compiled_registry() -> registry_breg::CompiledRegistry {
     let project = parse_project_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"webhook-delivery-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"webhook-delivery-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
-            "id":"case","primaryDataset":"test-dataset","route":"cases","mutationMode":"create_only","classification":"restricted",
+            "id":"case","primaryDataset":"test-dataset","route":"cases","mutationMode":"create-only","classification":"restricted",
             "fields":[
-              {"id":"jurisdiction","type":"string","maxLength":32,"required":true,"classification":"public"},
-              {"id":"label","type":"string","maxLength":64,"required":true,"classification":"internal"},
-              {"id":"restricted_note","type":"string","maxLength":64,"required":true,"classification":"restricted"}
+              {"id":"jurisdiction","type":"string","maximumLength":32,"required":true,"classification":"public"},
+              {"id":"label","type":"string","maximumLength":64,"required":true,"classification":"internal"},
+              {"id":"restricted_note","type":"string","maximumLength":64,"required":true,"classification":"restricted"}
             ],
             "hooks":[{
               "phase": "after",
               "id":"case-created","trigger":"created","projection":["label","restricted_note"],
               "handler":{
-                "kind": "url",
+                "type": "url",
                 "destinationId":"case-operations"
               }
             }]
@@ -2717,12 +2717,12 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
           "accessProfiles":[{
             "id":"operator","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "requiredPurposes":["case-management"],
-            "permissions":[{
+            "permissions":{"entities":[{
               "entity":"case","operations":["create","get","list"],
               "readableFields":["jurisdiction","label","restricted_note"],
               "writableFields":["jurisdiction","label","restricted_note"],
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
-            }]
+            }]}
           }]
         }"#,
     )
@@ -2736,21 +2736,21 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
 fn local_hook_compiled_registry() -> registry_breg::CompiledRegistry {
     let project = parse_project_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"webhook-delivery-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"webhook-delivery-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
-            "id":"case","primaryDataset":"test-dataset","route":"cases","mutationMode":"create_only","classification":"restricted",
+            "id":"case","primaryDataset":"test-dataset","route":"cases","mutationMode":"create-only","classification":"restricted",
             "fields":[
-              {"id":"jurisdiction","type":"string","maxLength":32,"required":true,"classification":"public"},
-              {"id":"label","type":"string","maxLength":64,"required":true,"classification":"internal"},
-              {"id":"restricted_note","type":"string","maxLength":64,"required":true,"classification":"restricted"}
+              {"id":"jurisdiction","type":"string","maximumLength":32,"required":true,"classification":"public"},
+              {"id":"label","type":"string","maximumLength":64,"required":true,"classification":"internal"},
+              {"id":"restricted_note","type":"string","maximumLength":64,"required":true,"classification":"restricted"}
             ],
             "hooks":[{
               "phase": "after",
               "id":"case-created","trigger":"created","projection":["label","restricted_note"],
               "handler":{
-                "kind": "rhai",
+                "type": "rhai",
                 "script": "hooks/case-created.rhai",
                 "abi": "registry.hook-handler/v1"
               }
@@ -2759,12 +2759,12 @@ fn local_hook_compiled_registry() -> registry_breg::CompiledRegistry {
           "accessProfiles":[{
             "id":"operator","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "requiredPurposes":["case-management"],
-            "permissions":[{
+            "permissions":{"entities":[{
               "entity":"case","operations":["create","get","list"],
               "readableFields":["jurisdiction","label","restricted_note"],
               "writableFields":["jurisdiction","label","restricted_note"],
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
-            }]
+            }]}
           }]
         }"#,
     )
@@ -2851,8 +2851,8 @@ impl DestinationFixture {
   {DESTINATION_ID}:
     origin: https://localhost:{}/
     path: {DELIVERY_PATH}
-    networkProfile: pinnedLoopbackHttpsTest
-    dnsFamily: ipv4Only
+    networkProfile: pinned-loopback-https-test
+    dnsFamily: ipv4-only
     allowedPrivateCidrs: []
     hmacSha256KeyRef: secret:file/{KEY_REF_CANARY}
     classificationCeiling: restricted
@@ -2893,7 +2893,7 @@ impl DestinationFixture {
             .display()
             .to_string();
         format!(
-            r#"apiVersion: registry.registrystack.org/breg-runtime/v1alpha1
+            r#"apiVersion: id.registrystack.org/formats/breg/runtime/v1alpha1
 kind: BRegRuntimeConfig
 listener:
   bind: 127.0.0.1:8080
@@ -2909,7 +2909,7 @@ database:
   runtimeUrlRef: secret:file/database-url
   migrationUrlRef: secret:file/migration-database-url
   pool:
-    maxSize: 12
+    maximumConnections: 12
     waitTimeoutMilliseconds: 1000
     createTimeoutMilliseconds: 1000
     recycleTimeoutMilliseconds: 1000
@@ -2928,14 +2928,14 @@ authentication:
     scopeSeparator: " "
     allowedClients: [registry-client]
     deniedKids: [denied-kid]
-    maxTokenLifetimeSeconds: 300
+    maximumTokenLifetimeSeconds: 300
     leewayMilliseconds: 60000
     jwksCache:
       cacheTtlSeconds: 600
       negativeCacheTtlSeconds: 60
       refreshCooldownSeconds: 30
-      maxDocumentBytes: 65536
-      requestTimeoutMilliseconds: 5000
+      maximumDocumentBytes: 65536
+      attemptTimeoutMilliseconds: 5000
       outageToleranceSeconds: 900
   authorityClaims:
     principal: registry_principal
@@ -2945,7 +2945,7 @@ audit:
   path: {audit_path}
 cursor:
   secretRef: secret:file/cursor-key
-  maxAgeSeconds: 300
+  maximumAgeSeconds: 300
 {event_destinations}operationalTimeouts:
   httpRequestMilliseconds: 10000
   shutdownGraceMilliseconds: 30000

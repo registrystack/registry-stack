@@ -255,8 +255,9 @@ holds no lock stronger than a row lock while the runtime works.
 - CASEWORK-SEC-25: `a_database_id_mismatch_is_refused_before_any_change`,
   `a_concurrent_apply_waits_for_the_migration_lock`,
   `an_apply_waiting_for_a_runtime_directory_lock_holds_no_migration_lock`,
-  `stranded_work_is_refused_until_the_exact_package_is_acknowledged`, and
-  `reapplying_the_active_package_is_refused_and_writes_nothing`.
+  `stranded_work_is_refused_until_the_exact_package_is_acknowledged`,
+  `activation_plan_refuses_a_package_that_drops_the_producer_of_an_in_flight_review`,
+  and `reapplying_the_active_package_is_refused_and_writes_nothing`.
 - CASEWORK-SEC-26:
   `startup_refuses_a_pinned_source_revision_the_source_no_longer_serves` and
   `startup_accepts_a_current_pin_an_unpinned_source_and_an_unreachable_source`

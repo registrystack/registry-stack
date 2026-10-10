@@ -1,6 +1,6 @@
-apiVersion: registry.registrystack.org/v1alpha1
-kind: RegistryProject
-registry:
+apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
   id: person-name-change-rhai
   canonicalBaseIri: "https://person-name-change-rhai.example.gov"
   version: 0.1.0
@@ -41,10 +41,10 @@ entities:
     changeControl:
       requiredFor: [patch]
     fields:
-      - {id: person-code, type: string, required: true, maxLength: 64, classification: internal}
-      - {id: display-name, type: string, required: true, maxLength: 160, classification: internal}
+      - {id: person-code, type: string, required: true, maximumLength: 64, classification: internal}
+      - {id: display-name, type: string, required: true, maximumLength: 160, classification: internal}
     constraints:
-      - {kind: unique, fields: [person-code]}
+      - {type: unique, fields: [person-code]}
   - id: person-name-change-request
     primaryDataset: person-name-change-rhai
     route: person-name-change-requests
@@ -52,8 +52,8 @@ entities:
     classification: internal
     fields:
       - {id: person, type: reference, target: person, required: true, classification: internal}
-      - {id: given-name, type: string, required: true, maxLength: 80, classification: internal}
-      - {id: family-name, type: string, required: true, maxLength: 80, classification: internal}
+      - {id: given-name, type: string, required: true, maximumLength: 80, classification: internal}
+      - {id: family-name, type: string, required: true, maximumLength: 80, classification: internal}
       - {id: handling, type: vocabulary-code, vocabulary: name-change-handling, required: true, classification: internal}
     changeRequest:
       planner:
@@ -66,11 +66,11 @@ entities:
             operation: patch
             fields: [display-name]
       review:
-        mode: none
+        type: none
       onApproved:
         mode: manual
       retention:
-        mode: operator_erase
+        mode: operator-erase
 accessProfiles:
   - id: person-operator
     default: true
@@ -78,30 +78,33 @@ accessProfiles:
     requiredScopes: unrestricted
     requiredPurposes: [person-maintenance]
     permissions:
-      - {entity: person, operations: [create, get, list], readableFields: [person-code, display-name], writableFields: [person-code, display-name], rowBoundaries: unrestricted}
+      entities:
+        - {entity: person, operations: [create, get, list], readableFields: [person-code, display-name], writableFields: [person-code, display-name], rowBoundaries: unrestricted}
   - id: name-change-submitter
     default: true
     principalClaim: registry_principal
     requiredScopes: ["registry:person-name:submit"]
     requiredPurposes: [person-name-change]
     permissions:
-      - entity: person-name-change-request
-        rowBoundaries: unrestricted
-        operations: [create, get, submit_request, apply_request]
-        readableFields: [person, given-name, family-name, handling]
-        writableFields: [person, given-name, family-name, handling]
-        applyTargets:
-          - {entity: person, rowBoundaries: unrestricted}
+      entities:
+        - entity: person-name-change-request
+          rowBoundaries: unrestricted
+          operations: [create, get, submit-request, apply-request]
+          readableFields: [person, given-name, family-name, handling]
+          writableFields: [person, given-name, family-name, handling]
+          applyTargets:
+            - {entity: person, rowBoundaries: unrestricted}
   - id: assisted-applier
     principalClaim: registry_principal
     requiredScopes: ["registry:person-name:apply-assisted"]
     requiredPurposes: [person-name-apply]
     permissions:
-      - entity: person-name-change-request
-        rowBoundaries: unrestricted
-        operations: [get, list, apply_request]
-        readableFields: [person, given-name, family-name, handling]
-        applyTargets:
-          - {entity: person, rowBoundaries: unrestricted}
+      entities:
+        - entity: person-name-change-request
+          rowBoundaries: unrestricted
+          operations: [get, list, apply-request]
+          readableFields: [person, given-name, family-name, handling]
+          applyTargets:
+            - {entity: person, rowBoundaries: unrestricted}
 vocabularies:
   - {id: name-change-handling, values: [routine, assisted]}

@@ -11,7 +11,7 @@ pub const MAXIMUM_SETTLEMENT_DECIDED_BY_BYTES: usize = 256;
 /// What an operator established about a source attempt whose outcome
 /// Casework could not observe.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub enum AttemptSettlementOutcome {
     /// The source applied the attempt.
     Applied,
@@ -74,4 +74,29 @@ pub struct AttemptUncertainMarkingReport {
     pub attempt_state: AttemptState,
     pub item_state: OccurrenceState,
     pub applied: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_settlement_outcome_is_kebab_case() {
+        for (outcome, word) in [
+            (AttemptSettlementOutcome::Applied, "applied"),
+            (AttemptSettlementOutcome::NotApplied, "not-applied"),
+        ] {
+            assert_eq!(serde_json::to_value(outcome).unwrap(), word);
+            assert_eq!(
+                serde_json::from_value::<AttemptSettlementOutcome>(serde_json::json!(word))
+                    .unwrap(),
+                outcome
+            );
+        }
+        assert!(
+            serde_json::from_value::<AttemptSettlementOutcome>(serde_json::json!("not_applied"))
+                .is_err(),
+            "not_applied is not read"
+        );
+    }
 }

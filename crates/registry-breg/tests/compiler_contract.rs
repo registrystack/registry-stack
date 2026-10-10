@@ -17,6 +17,7 @@ use registry_breg::contract::{
     parse_module_json, parse_module_yaml, parse_project_json, parse_project_yaml, Classification,
     ComparisonOperator, ConstraintSource, FieldTypeSource, ModuleAssetSource, Operation,
     PackageIdentitySource, ReferenceDelete, RegistryModule, UniqueWhenPredicate,
+    MODULE_API_VERSION, MODULE_KIND,
 };
 use registry_breg::diagnostics::CompileFailure;
 use registry_breg::generated_ddl::DdlStatementKind;
@@ -72,9 +73,9 @@ fn compile_json_with_assets(
 }
 
 const MULTI_DATASET_PROJECT: &[u8] = br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"multi-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://registry.example.test/multi"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"multi-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://registry.example.test/multi"},
           "manifestProjection":{
             "accessProfile":"reader",
             "classificationCeiling":"restricted",
@@ -88,16 +89,18 @@ const MULTI_DATASET_PROJECT: &[u8] = br#"{
             "distributions":[{"id":"people-json","dataset":"people","accessService":"registry-api","mediaType":"application/json"}]
           },
           "entities":[
-            {"id":"person","primaryDataset":"people","route":"people","mutationMode":"mutable","classification":"restricted","fields":[{"id":"name","type":"string","maxLength":100,"classification":"restricted"}]},
+            {"id":"person","primaryDataset":"people","route":"people","mutationMode":"mutable","classification":"restricted","fields":[{"id":"name","type":"string","maximumLength":100,"classification":"restricted"}]},
             {"id":"residence","primaryDataset":"residences","route":"residences","mutationMode":"mutable","classification":"internal","fields":[
-              {"id":"place","type":"string","maxLength":100,"classification":"internal"},
+              {"id":"place","type":"string","maximumLength":100,"classification":"internal"},
               {"id":"resident","type":"reference","target":"person","classification":"internal"}
             ]}
           ],
-          "accessProfiles":[{"id":"reader","default":true,"principalClaim":"sub","requiredScopes":["registry.read"],"permissions":[
-            {"entity":"person","operations":["get","list"],"readableFields":["name"], "rowBoundaries": "unrestricted"},
-            {"entity":"residence","operations":["get","list"],"readableFields":["place","resident"], "rowBoundaries": "unrestricted"}
-          ]}]
+          "accessProfiles":[{"id":"reader","default":true,"principalClaim":"sub","requiredScopes":["registry.read"],"permissions":{
+            "entities":[
+              {"entity":"person","operations":["get","list"],"readableFields":["name"], "rowBoundaries": "unrestricted"},
+              {"entity":"residence","operations":["get","list"],"readableFields":["place","resident"], "rowBoundaries": "unrestricted"}
+            ]
+          }}]
         }"#;
 
 fn multi_dataset_project() -> registry_breg::contract::RegistryProject {
@@ -232,9 +235,9 @@ fn plural_projection_compiles_resolved_membership_and_manifest_resources() {
 fn manifest_projection_excludes_every_protected_resource_from_public_bytes() {
     let mut project = parse_project_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"classified-catalog","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://catalog.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"classified-catalog","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://catalog.example.test"},
           "manifestProjection":{
             "accessProfile":"public-reader",
             "classificationCeiling":"public",
@@ -254,17 +257,17 @@ fn manifest_projection_excludes_every_protected_resource_from_public_bytes() {
             ]
           },
           "entities":[
-            {"id":"public-record","primaryDataset":"public-records","route":"public-records","mutationMode":"create_only","classification":"public","fields":[
-              {"id":"label","type":"string","maxLength":64,"classification":"public"},
+            {"id":"public-record","primaryDataset":"public-records","route":"public-records","mutationMode":"create-only","classification":"public","fields":[
+              {"id":"label","type":"string","maximumLength":64,"classification":"public"},
               {"id":"protected-link","type":"reference","target":"protected-record","classification":"public"}
             ]},
-            {"id":"protected-record","primaryDataset":"protected-records","route":"protected-records","mutationMode":"create_only","classification":"restricted","fields":[
-              {"id":"protected-title","type":"string","maxLength":64,"classification":"restricted"}
+            {"id":"protected-record","primaryDataset":"protected-records","route":"protected-records","mutationMode":"create-only","classification":"restricted","fields":[
+              {"id":"protected-title","type":"string","maximumLength":64,"classification":"restricted"}
             ]}
           ],
           "accessProfiles":[
-            {"id":"public-reader","principalClaim":"sub","requiredScopes":["public.read"],"permissions":[{"entity":"public-record","operations":["get"],"readableFields":["label","protected-link"], "rowBoundaries": "unrestricted"}]},
-            {"id":"protected-reader","principalClaim":"sub","requiredScopes":["protected.read"],"permissions":[{"entity":"protected-record","operations":["get"],"readableFields":["protected-title"], "rowBoundaries": "unrestricted"}]}
+            {"id":"public-reader","principalClaim":"sub","requiredScopes":["public.read"],"permissions":{"entities":[{"entity":"public-record","operations":["get"],"readableFields":["label","protected-link"], "rowBoundaries": "unrestricted"}]}},
+            {"id":"protected-reader","principalClaim":"sub","requiredScopes":["protected.read"],"permissions":{"entities":[{"entity":"protected-record","operations":["get"],"readableFields":["protected-title"], "rowBoundaries": "unrestricted"}]}}
           ]
         }"#,
     )
@@ -358,7 +361,7 @@ fn manifest_projection_excludes_every_protected_resource_from_public_bytes() {
 #[test]
 fn plural_projection_refuses_duplicate_and_dangling_membership() {
     let mut missing_canonical_iri = multi_dataset_project();
-    missing_canonical_iri.registry.canonical_base_iri.clear();
+    missing_canonical_iri.project.canonical_base_iri.clear();
     assert_compile_diagnostic(
         missing_canonical_iri,
         "breg.registry.canonical-base-iri-required",
@@ -480,10 +483,10 @@ fn plural_projection_refuses_duplicate_and_dangling_membership() {
 fn missing_resource_identity_members_have_actionable_authoring_diagnostics() {
     let project = parse_project_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"missing-identity","version":"1","defaultLanguage":"en"},
-          "entities":[{"id":"record","route":"records","mutationMode":"create_only"}]
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"missing-identity","version":"1","defaultLanguage":"en"},
+          "entities":[{"id":"record","route":"records","mutationMode":"create-only"}]
         }"#,
     )
     .expect("omissions reach the compiler diagnostic domain");
@@ -496,7 +499,7 @@ fn missing_resource_identity_members_have_actionable_authoring_diagnostics() {
         .collect::<BTreeSet<_>>();
     assert!(project_codes.contains(&(
         "breg.registry.canonical-base-iri-required",
-        "project.registry.canonicalBaseIri"
+        "project.project.canonicalBaseIri"
     )));
     assert!(project_codes.contains(&(
         "breg.manifest-projection.entity-primary-dataset-required",
@@ -504,14 +507,14 @@ fn missing_resource_identity_members_have_actionable_authoring_diagnostics() {
     )));
 
     let module = parse_module_json(
-        br#"{"id":"missing-membership","version":"1","entities":[{"id":"record","route":"records","mutationMode":"create_only"}]}"#,
+        br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"missing-membership","version":"1","entities":[{"id":"record","route":"records","mutationMode":"create-only"}]}"#,
     )
     .expect("module omission reaches the compiler diagnostic domain");
     let project = parse_project_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"module-host","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://module-host.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"module-host","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://module-host.example.test"},
           "modules":[{"id":"missing-membership","version":"1"}]
         }"#,
     )
@@ -575,25 +578,25 @@ fn change_request_correction_project(
     };
     format!(
         r#"{{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{{"id":"{registry_id}","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}}{package_entry},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{{"id":"{registry_id}","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}}{package_entry},
           "entities":[{{
-            "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"create_only",
-            "fields":[{{"id":"label","type":"string","maxLength":64,"required":true,"classification":"internal"}}]
+            "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"create-only",
+            "fields":[{{"id":"label","type":"string","maximumLength":64,"required":true,"classification":"internal"}}]
           }},{{
             "id":"placement","primaryDataset":"test-dataset","route":"placements","mutationMode":"mutable",
             "changeControl":{{"requiredFor":["patch"]}},
             "fields":[
               {{"id":"site","type":"reference","target":"site","required":true,"classification":"internal"}},
-              {{"id":"label","type":"string","maxLength":64,"classification":"{target_label_classification}"}}
+              {{"id":"label","type":"string","maximumLength":64,"classification":"{target_label_classification}"}}
             ]
           }},{{
             "id":"placement-correction-request","primaryDataset":"test-dataset","route":"placement-correction-requests","mutationMode":"mutable",
             "fields":[
               {{"id":"placement","type":"reference","target":"placement","required":true,"classification":"internal"}},
               {{"id":"proposed-site","type":"reference","target":"site","required":true,"classification":"internal"}},
-              {{"id":"reason","type":"text","maxLength":1000,"required":true,"classification":"{request_reason_classification}"}}
+              {{"id":"reason","type":"text","maximumLength":1000,"required":true,"classification":"{request_reason_classification}"}}
             ],
             "changeRequest":{{
               "effects":[{{
@@ -602,24 +605,24 @@ fn change_request_correction_project(
                 "set":{{"site":{{"fromField":"proposed-site"}}}},
                 "clear":["label"]
               }}],
-              "review":{{"authority":"casework-main","policyId":"placement-correction"}},
+              "review":{{"type":"required","authority":"casework-main","policyId":"placement-correction"}},
               "onApproved":{{"mode":"manual"}}
             }}
           }}{extra_entity}],
           "accessProfiles":[{{
-            "id":"placement-reader","principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{{
+            "id":"placement-reader","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{{"entities":[{{
               "rowBoundaries": "unrestricted", "entity":"placement","operations":["get","list"],"readableFields":["site","label"],
               "requestPresence":[{{"rowBoundaries": "unrestricted", "requestType":"placement-correction-request"}}]
-            }}]
+            }}]}}
           }},{{
-            "id":"request-reviewer","default":true,"principalClaim":"principal","requiredScopes":{reviewer_scopes},"permissions":[{{
-              "rowBoundaries": "unrestricted", "entity":"placement-correction-request","operations":["get","list","submit_request"],"readableFields":["placement","proposed-site","reason"]
-            }}]
+            "id":"request-reviewer","default":true,"principalClaim":"principal","requiredScopes":{reviewer_scopes},"permissions":{{"entities":[{{
+              "rowBoundaries": "unrestricted", "entity":"placement-correction-request","operations":["get","list","submit-request"],"readableFields":["placement","proposed-site","reason"]
+            }}]}}
           }},{{
-            "id":"request-applier","principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{{
-              "rowBoundaries": "unrestricted", "entity":"placement-correction-request","operations":["get","apply_request"],"readableFields":["placement"],
+            "id":"request-applier","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{{"entities":[{{
+              "rowBoundaries": "unrestricted", "entity":"placement-correction-request","operations":["get","apply-request"],"readableFields":["placement"],
               "applyTargets":[{{"entity":"placement","rowBoundaries":{apply_boundaries}}}]
-            }}]
+            }}]}}
           }}]
         }}"#
     )
@@ -630,25 +633,25 @@ fn change_request_correction_project(
 fn change_request_correction_compiles_to_immutable_plan_and_scoped_grants() {
     let compiled = compile_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"change-request-correction","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"change-request-correction","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
-            "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"create_only",
-            "fields":[{"id":"label","type":"string","maxLength":64,"required":true,"classification":"internal"}]
+            "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"create-only",
+            "fields":[{"id":"label","type":"string","maximumLength":64,"required":true,"classification":"internal"}]
           },{
             "id":"placement","primaryDataset":"test-dataset","route":"placements","mutationMode":"mutable",
             "changeControl":{"requiredFor":["patch"]},
             "fields":[
               {"id":"site","type":"reference","target":"site","required":true,"classification":"internal"},
-              {"id":"label","type":"string","maxLength":64,"classification":"internal"}
+              {"id":"label","type":"string","maximumLength":64,"classification":"internal"}
             ]
           },{
             "id":"placement-correction-request","primaryDataset":"test-dataset","route":"placement-correction-requests","mutationMode":"mutable",
             "fields":[
               {"id":"placement","type":"reference","target":"placement","required":true,"classification":"internal"},
               {"id":"proposed-site","type":"reference","target":"site","required":true,"classification":"internal"},
-              {"id":"reason","type":"text","maxLength":1000,"required":true,"classification":"internal"}
+              {"id":"reason","type":"text","maximumLength":1000,"required":true,"classification":"internal"}
             ],
             "changeRequest":{
               "effects":[{
@@ -657,27 +660,27 @@ fn change_request_correction_compiles_to_immutable_plan_and_scoped_grants() {
                 "set":{"site":{"fromField":"proposed-site"}},
                 "clear":["label"]
               }],
-              "review":{"authority":"casework-main","policyId":"placement-correction"},
+              "review":{"type":"required","authority":"casework-main","policyId":"placement-correction"},
               "onApproved":{"mode":"manual"}
             }
           }],
           "accessProfiles":[{
-            "id":"placement-reader","principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
+            "id":"placement-reader","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
               "entity":"placement","operations":["get","list"],"readableFields":["site","label"],
               "requestPresence":[{"requestType":"placement-correction-request", "rowBoundaries": "unrestricted"}],
               "rowBoundaries": "unrestricted"
-            }]
+            }]}
           },{
-            "id":"request-reviewer","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
-              "entity":"placement-correction-request","operations":["get","list","submit_request"],"readableFields":["placement","proposed-site","reason"],
+            "id":"request-reviewer","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
+              "entity":"placement-correction-request","operations":["get","list","submit-request"],"readableFields":["placement","proposed-site","reason"],
               "rowBoundaries": "unrestricted"
-            }]
+            }]}
           },{
-            "id":"request-applier","principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
-              "entity":"placement-correction-request","operations":["get","apply_request"],"readableFields":["placement"],
+            "id":"request-applier","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
+              "entity":"placement-correction-request","operations":["get","apply-request"],"readableFields":["placement"],
               "applyTargets":[{"entity":"placement","rowBoundaries":"unrestricted"}],
               "rowBoundaries": "unrestricted"
-            }]
+            }]}
           }]
         }"#,
     )
@@ -783,25 +786,25 @@ fn change_request_routes_compile_to_finite_action_inventory() {
 fn change_request_openapi_exposes_finite_action_contract_and_request_metadata() {
     let compiled = compile_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"change-request-openapi","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"change-request-openapi","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
-            "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"create_only",
-            "fields":[{"id":"label","type":"string","maxLength":64,"required":true,"classification":"internal"}]
+            "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"create-only",
+            "fields":[{"id":"label","type":"string","maximumLength":64,"required":true,"classification":"internal"}]
           },{
             "id":"placement","primaryDataset":"test-dataset","route":"placements","mutationMode":"mutable",
             "changeControl":{"requiredFor":["patch"]},
             "fields":[
               {"id":"site","type":"reference","target":"site","required":true,"classification":"internal"},
-              {"id":"label","type":"string","maxLength":64,"classification":"internal"}
+              {"id":"label","type":"string","maximumLength":64,"classification":"internal"}
             ]
           },{
             "id":"placement-correction-request","primaryDataset":"test-dataset","route":"placement-correction-requests","mutationMode":"mutable",
             "fields":[
               {"id":"placement","type":"reference","target":"placement","required":true,"classification":"internal"},
               {"id":"proposed-site","type":"reference","target":"site","required":true,"classification":"internal"},
-              {"id":"reason","type":"text","maxLength":1000,"required":true,"classification":"internal"}
+              {"id":"reason","type":"text","maximumLength":1000,"required":true,"classification":"internal"}
             ],
             "changeRequest":{
               "effects":[{
@@ -810,37 +813,37 @@ fn change_request_openapi_exposes_finite_action_contract_and_request_metadata() 
                 "set":{"site":{"fromField":"proposed-site"}},
                 "clear":["label"]
               }],
-              "review":{"authority":"casework-main","policyId":"placement-correction"},
+              "review":{"type":"required","authority":"casework-main","policyId":"placement-correction"},
               "onApproved":{"mode":"manual"}
             }
           }],
           "accessProfiles":[{
-            "id":"placement-reader","principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
+            "id":"placement-reader","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
               "entity":"placement","operations":["get","list"],"readableFields":["site","label"],
               "requestPresence":[{"requestType":"placement-correction-request", "rowBoundaries": "unrestricted"}],
               "rowBoundaries": "unrestricted"
-            }]
+            }]}
           },{
-            "id":"submitter","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
-              "entity":"placement-correction-request","operations":["create","patch","submit_request","revise_request","cancel_request"],"readableFields":["placement","proposed-site","reason"],"writableFields":["placement","proposed-site","reason"],
+            "id":"submitter","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
+              "entity":"placement-correction-request","operations":["create","patch","submit-request","revise-request","cancel-request"],"readableFields":["placement","proposed-site","reason"],"writableFields":["placement","proposed-site","reason"],
               "rowBoundaries": "unrestricted"
-            }]
+            }]}
           },{
-            "id":"reviewer","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
+            "id":"reviewer","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
               "entity":"placement-correction-request","operations":["get","list"],"readableFields":["placement","proposed-site","reason"],
               "rowBoundaries": "unrestricted"
-            }]
+            }]}
           },{
-            "id":"supervisor","principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
+            "id":"supervisor","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
               "entity":"placement-correction-request","operations":["get"],"readableFields":["placement","proposed-site","reason"],
               "rowBoundaries": "unrestricted"
-            }]
+            }]}
           },{
-            "id":"applier","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
-              "entity":"placement-correction-request","operations":["apply_request"],"readableFields":["placement"],
+            "id":"applier","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
+              "entity":"placement-correction-request","operations":["apply-request"],"readableFields":["placement"],
               "applyTargets":[{"entity":"placement","rowBoundaries":"unrestricted"}],
               "rowBoundaries": "unrestricted"
-            }]
+            }]}
           }]
         }"#,
     )
@@ -866,12 +869,12 @@ fn change_request_openapi_exposes_finite_action_contract_and_request_metadata() 
     assert_eq!(
         submit_request["x-registry-requestAction"],
         json!({
-            "operation": "submit_request",
+            "operation": "submit-request",
             "method": "post",
             "path": "/v1/records/placement-correction-requests/{record_id}/actions/submit",
             "requestEntity": "placement-correction-request",
             "requiredPreconditions": ["Idempotency-Key", "If-Match"],
-            "inputSchema": "placement-correction-request-submit_request-input",
+            "inputSchema": "placement-correction-request-submit-request-input",
             "responseSchema": "ChangeRequestActionResponse",
             "proposalBinding": {
                 "versionField": "proposalVersion",
@@ -884,7 +887,7 @@ fn change_request_openapi_exposes_finite_action_contract_and_request_metadata() 
     );
     assert_eq!(
         submit_request["requestBody"]["content"]["application/json"]["schema"],
-        json!({"$ref": "#/components/schemas/placement-correction-request-submit_request-input"})
+        json!({"$ref": "#/components/schemas/placement-correction-request-submit-request-input"})
     );
     assert_eq!(
         submit_request["responses"]["200"]["content"]["application/json"]["schema"],
@@ -911,7 +914,7 @@ fn change_request_openapi_exposes_finite_action_contract_and_request_metadata() 
         ])
     );
     let apply_input =
-        &value["components"]["schemas"]["placement-correction-request-apply_request-input"];
+        &value["components"]["schemas"]["placement-correction-request-apply-request-input"];
     assert_eq!(apply_input["additionalProperties"], false);
     assert_eq!(
         apply_input["required"],
@@ -926,7 +929,7 @@ fn change_request_openapi_exposes_finite_action_contract_and_request_metadata() 
         "^sha256:[0-9a-f]{64}$"
     );
     let revise_input =
-        &value["components"]["schemas"]["placement-correction-request-revise_request-input"];
+        &value["components"]["schemas"]["placement-correction-request-revise-request-input"];
     assert_eq!(revise_input["required"], json!(["rebase"]));
     assert_eq!(revise_input["properties"]["rebase"]["type"], "boolean");
     assert_eq!(
@@ -947,7 +950,7 @@ fn change_request_openapi_exposes_finite_action_contract_and_request_metadata() 
     assert_eq!(
         value["components"]["schemas"]["placement-correction-request"]["x-registry-changeRequest"]
             ["review"],
-        json!({"authority":"casework-main","policyId":"placement-correction"})
+        json!({"type":"required","authority":"casework-main","policyId":"placement-correction"})
     );
     assert_eq!(
         value["components"]["schemas"]["placement-correction-request"]["x-registry-changeRequest"]
@@ -984,7 +987,7 @@ fn change_request_fingerprint_tracks_relevant_contract_closure_only() {
     let unrelated = compiled_request(change_request_correction_project(
         "change-request-fingerprint",
         ",\"package\":{\"sourceRevision\":\"unrelated\"}",
-        r#"{"id":"audit-note","primaryDataset":"test-dataset","route":"audit-notes","mutationMode":"create_only","fields":[{"id":"label","type":"string","maxLength":16,"classification":"internal"}]}"#,
+        r#"{"id":"audit-note","primaryDataset":"test-dataset","route":"audit-notes","mutationMode":"create-only","fields":[{"id":"label","type":"string","maximumLength":16,"classification":"internal"}]}"#,
         "internal",
         "internal",
         "\"unrestricted\"",
@@ -1005,7 +1008,7 @@ fn change_request_fingerprint_tracks_relevant_contract_closure_only() {
             "\"unrestricted\"",
             "\"unrestricted\"",
         ),
-        "operator_erase",
+        "operator-erase",
     ));
     assert_eq!(
         operator_erase.retention_mode,
@@ -1093,7 +1096,7 @@ fn change_request_retention_mode_is_a_strict_enum() {
 }
 
 #[test]
-fn change_request_review_members_select_its_form() {
+fn change_request_review_type_selects_its_form() {
     let review = "project.entities[2].changeRequest.review";
     let project = |written: &str| {
         let source = String::from_utf8(change_request_correction_project(
@@ -1108,38 +1111,48 @@ fn change_request_review_members_select_its_form() {
         ))
         .expect("fixture is UTF-8")
         .replacen(
-            r#""review":{"authority":"casework-main","policyId":"placement-correction"}"#,
+            r#""review":{"type":"required","authority":"casework-main","policyId":"placement-correction"}"#,
             &format!(r#""review":{written}"#),
             1,
         );
         parse_project_yaml(source.as_bytes())
     };
     for accepted in [
-        r#"{"mode":"none"}"#,
-        r#"{"authority":"casework-main","policyId":"placement-correction"}"#,
+        r#"{"type":"none"}"#,
+        r#"{"type":"required","authority":"casework-main","policyId":"placement-correction"}"#,
     ] {
         project(accepted).expect("each review form is read");
     }
     for (written, code, path) in [
         (
-            r#"{"mode":"none","policyId":"placement-correction"}"#,
-            "config.invalid-value",
-            review.to_owned(),
+            r#"{"type":"none","policyId":"placement-correction"}"#,
+            "config.unknown-key",
+            format!("{review}.policyId"),
         ),
         (
-            r#"{"authority":"casework-main"}"#,
+            r#"{"type":"required","authority":"casework-main"}"#,
             "config.missing-key",
             review.to_owned(),
         ),
         (
-            r#"{"mode":"none","reviewer":"casework-main"}"#,
+            r#"{"type":"none","reviewer":"casework-main"}"#,
             "config.unknown-key",
             format!("{review}.reviewer"),
         ),
         (
-            r#"{"mode":"skip"}"#,
+            r#"{"type":"skip"}"#,
             "config.unknown-variant",
-            format!("{review}.mode"),
+            format!("{review}.type"),
+        ),
+        (
+            r#"{"mode":"none"}"#,
+            "config.missing-key",
+            review.to_owned(),
+        ),
+        (
+            r#"{"authority":"casework-main","policyId":"placement-correction"}"#,
+            "config.missing-key",
+            review.to_owned(),
         ),
     ] {
         let failure = project(written).expect_err("a malformed review is refused");
@@ -1157,24 +1170,24 @@ fn constraint_unions_refuse_at_the_member_inside_the_form() {
     let constraint = "project.entities[0].constraints[0]";
     for (written, code, path) in [
         (
-            r#"{"kind":"compare","left":"left","operator":"less_than","right":"right","field":"left"}"#,
+            r#"{"type":"compare","left":"left","operator":"less-than","right":"right","field":"left"}"#,
             "config.unknown-key",
             format!("{constraint}.field"),
         ),
         (
-            r#"{"kind":"compare","left":"left","right":"right"}"#,
+            r#"{"type":"compare","left":"left","right":"right"}"#,
             "config.missing-key",
             constraint.to_owned(),
         ),
         (
-            r#"{"kind":"unique","fields":["left"],"when":[{"kind":"active_lifecycle","field":"left"}]}"#,
+            r#"{"type":"unique","fields":["left"],"when":[{"type":"active-lifecycle","field":"left"}]}"#,
             "config.unknown-key",
             format!("{constraint}.when[0].field"),
         ),
         (
-            r#"{"kind":"unique","fields":["left"],"when":[{"kind":"field_is_empty","field":"left"}]}"#,
+            r#"{"type":"unique","fields":["left"],"when":[{"type":"field_is_empty","field":"left"}]}"#,
             "config.unknown-variant",
-            format!("{constraint}.when[0].kind"),
+            format!("{constraint}.when[0].type"),
         ),
         (
             r#"{"fields":["left"]}"#,
@@ -1184,11 +1197,11 @@ fn constraint_unions_refuse_at_the_member_inside_the_form() {
     ] {
         let source = format!(
             r#"{{
-              "apiVersion":"registry.registrystack.org/v1alpha1",
-              "kind":"RegistryProject",
-              "registry":{{"id":"constraint-unions","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
+              "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+              "kind":"BRegProject",
+              "project":{{"id":"constraint-unions","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
               "entities":[{{
-                "id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"create_only",
+                "id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"create-only",
                 "fields":[
                   {{"id":"left","type":"int64","classification":"internal"}},
                   {{"id":"right","type":"int64","classification":"internal"}}
@@ -1230,9 +1243,9 @@ fn correction_with_target_access_requirements() -> serde_json::Value {
         profile["requiredScopes"] = serde_json::json!(["target:manage"]);
         profile["requiredPurposes"] = serde_json::json!(["target-management"]);
     }
-    source["accessProfiles"][0]["permissions"][0]["rowBoundaries"] =
+    source["accessProfiles"][0]["permissions"]["entities"][0]["rowBoundaries"] =
         serde_json::json!([boundary.clone()]);
-    source["accessProfiles"][2]["permissions"][0]["applyTargets"][0]["rowBoundaries"] =
+    source["accessProfiles"][2]["permissions"]["entities"][0]["applyTargets"][0]["rowBoundaries"] =
         serde_json::json!([boundary]);
     source
 }
@@ -1244,7 +1257,7 @@ fn change_request_review_and_apply_cannot_omit_target_access_requirements() {
         .expect("explicit requirements are satisfied");
     for (profile_index, target_path, surface) in [(
         2,
-        "/permissions/0/applyTargets/0/rowBoundaries",
+        "/permissions/entities/0/applyTargets/0/rowBoundaries",
         "applyTargets",
     )] {
         for (path, replacement, code) in [
@@ -1358,11 +1371,12 @@ fn change_request_presence_cannot_omit_request_access_requirements() {
     {
         profile["requiredScopes"] = serde_json::json!(["target:manage", "request:read"]);
         if index > 0 {
-            profile["permissions"][0]["rowBoundaries"] = serde_json::json!([boundary.clone()]);
+            profile["permissions"]["entities"][0]["rowBoundaries"] =
+                serde_json::json!([boundary.clone()]);
         }
     }
-    source["accessProfiles"][0]["permissions"][0]["requestPresence"][0]["rowBoundaries"] =
-        serde_json::json!([boundary]);
+    source["accessProfiles"][0]["permissions"]["entities"][0]["requestPresence"][0]
+        ["rowBoundaries"] = serde_json::json!([boundary]);
     compile_json(&serde_json::to_vec(&source).unwrap())
         .expect("presence explicitly satisfies request requirements");
     for (path, replacement, code) in [
@@ -1377,12 +1391,12 @@ fn change_request_presence_cannot_omit_request_access_requirements() {
             "breg.access.requirements-purpose-widened",
         ),
         (
-            "/permissions/0/requestPresence/0/rowBoundaries",
+            "/permissions/entities/0/requestPresence/0/rowBoundaries",
             serde_json::json!("unrestricted"),
             "breg.access.requirements-row-boundary-missing",
         ),
         (
-            "/permissions/0/requestPresence/0/rowBoundaries",
+            "/permissions/entities/0/requestPresence/0/rowBoundaries",
             serde_json::json!([{"field":"placement","claim":"different_placements","operator":"in"}]),
             "breg.access.requirements-row-boundary-missing",
         ),
@@ -1405,12 +1419,12 @@ fn change_request_presence_cannot_omit_request_access_requirements() {
 fn change_request_multi_record_create_and_patch_orders_reserved_references() {
     let compiled = compile_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"change-request-registration","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"change-request-registration","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
             "id":"person","primaryDataset":"test-dataset","route":"people","mutationMode":"mutable","changeControl":{"requiredFor":["create"]},
-            "fields":[{"id":"display-name","type":"string","maxLength":200,"required":true,"classification":"internal"}]
+            "fields":[{"id":"display-name","type":"string","maximumLength":200,"required":true,"classification":"internal"}]
           },{
             "id":"membership","primaryDataset":"test-dataset","route":"memberships","mutationMode":"mutable","changeControl":{"requiredFor":["create"]},
             "fields":[
@@ -1424,7 +1438,7 @@ fn change_request_multi_record_create_and_patch_orders_reserved_references() {
             "id":"registration-request","primaryDataset":"test-dataset","route":"registration-requests","mutationMode":"mutable",
             "fields":[
               {"id":"household","type":"reference","target":"household","required":true,"classification":"internal"},
-              {"id":"name","type":"string","maxLength":200,"required":true,"classification":"internal"}
+              {"id":"name","type":"string","maximumLength":200,"required":true,"classification":"internal"}
             ],
             "changeRequest":{
               "effects":[
@@ -1432,16 +1446,16 @@ fn change_request_multi_record_create_and_patch_orders_reserved_references() {
                 {"id":"membership","target":{"entity":"membership"},"operation":"create","set":{"person":{"fromEffect":"person"},"household":{"fromField":"household"}}},
                 {"target":{"fromField":"household"},"operation":"patch","set":{"contact-person":{"fromEffect":"person"}}}
               ],
-              "review":{"authority":"casework-main","policyId":"registration"},
+              "review":{"type":"required","authority":"casework-main","policyId":"registration"},
               "onApproved":{"mode":"manual"}
             }
           }],
           "accessProfiles":[{
-            "id":"reviewer","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
-              "entity":"registration-request","operations":["get","list","submit_request","apply_request"],"readableFields":["household","name"],
+            "id":"reviewer","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
+              "entity":"registration-request","operations":["get","list","submit-request","apply-request"],"readableFields":["household","name"],
               "applyTargets":[{"entity":"person", "rowBoundaries": "unrestricted"},{"entity":"membership", "rowBoundaries": "unrestricted"},{"entity":"household", "rowBoundaries": "unrestricted"}],
               "rowBoundaries": "unrestricted"
-            }]
+            }]}
           }]
         }"#,
     )
@@ -1488,12 +1502,12 @@ fn change_request_compile_refuses_direct_write_bypass_and_incomplete_grants() {
     let source = |grant_ops: &str, apply_targets: &str| {
         format!(
             r#"{{
-              "apiVersion":"registry.registrystack.org/v1alpha1",
-              "kind":"RegistryProject",
-              "registry":{{"id":"change-request-refusals","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
+              "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+              "kind":"BRegProject",
+              "project":{{"id":"change-request-refusals","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
               "entities":[{{
-                "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"create_only",
-                "fields":[{{"id":"label","type":"string","maxLength":64,"required":true,"classification":"internal"}}]
+                "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"create-only",
+                "fields":[{{"id":"label","type":"string","maximumLength":64,"required":true,"classification":"internal"}}]
               }},{{
                 "id":"placement","primaryDataset":"test-dataset","route":"placements","mutationMode":"mutable","changeControl":{{"requiredFor":["patch"]}},
                 "fields":[{{"id":"site","type":"reference","target":"site","required":true,"classification":"internal"}}]
@@ -1504,14 +1518,14 @@ fn change_request_compile_refuses_direct_write_bypass_and_incomplete_grants() {
                   {{"id":"site","type":"reference","target":"site","required":true,"classification":"internal"}}
                 ],
                 "changeRequest":{{"effects":[{{"target":{{"fromField":"placement"}},"operation":"patch","set":{{"site":{{"fromField":"site"}}}}}}],
-                  "review":{{"authority":"casework-main","policyId":"correction-review"}},"onApproved":{{"mode":"manual"}}}}
+                  "review":{{"type":"required","authority":"casework-main","policyId":"correction-review"}},"onApproved":{{"mode":"manual"}}}}
               }}],
               "accessProfiles":[{{
-                "id":"target-writer","principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{{"rowBoundaries": "unrestricted", "entity":"placement","operations":{grant_ops},"readableFields":["site"],"writableFields":["site"]}}]
+                "id":"target-writer","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{{"entities":[{{"rowBoundaries": "unrestricted", "entity":"placement","operations":{grant_ops},"readableFields":["site"],"writableFields":["site"]}}]}}
               }},{{
-                "id":"reviewer","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{{"rowBoundaries": "unrestricted", "entity":"correction-request","operations":["get","submit_request","apply_request"],"readableFields":["placement","site"],
+                "id":"reviewer","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{{"entities":[{{"rowBoundaries": "unrestricted", "entity":"correction-request","operations":["get","submit-request","apply-request"],"readableFields":["placement","site"],
                   "applyTargets":{apply_targets}
-                }}]
+                }}]}}
               }}]
             }}"#
         )
@@ -1543,33 +1557,33 @@ fn change_request_compile_refuses_ambiguous_references_cycles_overlaps_and_null_
     let base = |effect: &str, request_fields: &str, target_fields: &str| {
         format!(
             r#"{{
-              "apiVersion":"registry.registrystack.org/v1alpha1",
-              "kind":"RegistryProject",
-              "registry":{{"id":"change-request-negative","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
+              "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+              "kind":"BRegProject",
+              "project":{{"id":"change-request-negative","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
               "entities":[{{
                 "id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"mutable","changeControl":{{"requiredFor":["patch","create"]}},
                 "fields":[{target_fields}]
               }},{{
                 "id":"request","primaryDataset":"test-dataset","route":"requests","mutationMode":"mutable",
                 "fields":[{request_fields}],
-                "changeRequest":{{"effects":[{effect}],"review":{{"authority":"casework-main","policyId":"request-review"}},"onApproved":{{"mode":"manual"}}}}
+                "changeRequest":{{"effects":[{effect}],"review":{{"type":"required","authority":"casework-main","policyId":"request-review"}},"onApproved":{{"mode":"manual"}}}}
               }}],
               "accessProfiles":[{{
-                "id":"operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{{
-                  "rowBoundaries": "unrestricted", "entity":"request","operations":["get","submit_request","apply_request"],"readableFields":["target","value","optional-value"],
+                "id":"operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{{"entities":[{{
+                  "rowBoundaries": "unrestricted", "entity":"request","operations":["get","submit-request","apply-request"],"readableFields":["target","value","optional-value"],
                   "applyTargets":[{{"rowBoundaries": "unrestricted", "entity":"record"}}]
-                }}]
+                }}]}}
               }}]
             }}"#
         )
     };
     let request_fields = r#"
       {"id":"target","type":"reference","target":"record","required":true,"classification":"internal"},
-      {"id":"value","type":"string","maxLength":32,"required":true,"classification":"internal"},
-      {"id":"optional-value","type":"string","maxLength":32,"classification":"internal"}
+      {"id":"value","type":"string","maximumLength":32,"required":true,"classification":"internal"},
+      {"id":"optional-value","type":"string","maximumLength":32,"classification":"internal"}
     "#;
     let target_fields = r#"
-      {"id":"label","type":"string","maxLength":32,"required":true,"classification":"internal"},
+      {"id":"label","type":"string","maximumLength":32,"required":true,"classification":"internal"},
       {"id":"parent","type":"reference","target":"record","classification":"internal"}
     "#;
 
@@ -1695,27 +1709,27 @@ fn change_request_compile_refuses_ambiguous_references_cycles_overlaps_and_null_
 fn change_request_compile_refuses_uncontrolled_targets_tombstone_requests_and_plan_bounds() {
     let uncontrolled = compile_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"uncontrolled-request","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"uncontrolled-request","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
             "id":"target","primaryDataset":"test-dataset","route":"targets","mutationMode":"mutable",
-            "fields":[{"id":"label","type":"string","maxLength":32,"required":true,"classification":"internal"}]
+            "fields":[{"id":"label","type":"string","maximumLength":32,"required":true,"classification":"internal"}]
           },{
             "id":"request","primaryDataset":"test-dataset","route":"requests","mutationMode":"mutable",
             "fields":[
               {"id":"target","type":"reference","target":"target","required":true,"classification":"internal"},
-              {"id":"label","type":"string","maxLength":32,"required":true,"classification":"internal"}
+              {"id":"label","type":"string","maximumLength":32,"required":true,"classification":"internal"}
             ],
             "changeRequest":{"effects":[{"target":{"fromField":"target"},"operation":"patch","set":{"label":{"fromField":"label"}}}],
-              "review":{"authority":"casework-main","policyId":"request-review"},"onApproved":{"mode":"manual"}}
+              "review":{"type":"required","authority":"casework-main","policyId":"request-review"},"onApproved":{"mode":"manual"}}
           }],
           "accessProfiles":[{
-            "id":"operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
-              "entity":"request","operations":["get","submit_request","apply_request"],"readableFields":["target","label"],
+            "id":"operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
+              "entity":"request","operations":["get","submit-request","apply-request"],"readableFields":["target","label"],
               "applyTargets":[{"entity":"target", "rowBoundaries": "unrestricted"}],
               "rowBoundaries": "unrestricted"
-            }]
+            }]}
           }]
         }"#,
     )
@@ -1727,27 +1741,27 @@ fn change_request_compile_refuses_uncontrolled_targets_tombstone_requests_and_pl
 
     let tombstone_request = compile_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"request-tombstone","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"request-tombstone","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
             "id":"target","primaryDataset":"test-dataset","route":"targets","mutationMode":"mutable","changeControl":{"requiredFor":["patch"]},
-            "fields":[{"id":"label","type":"string","maxLength":32,"required":true,"classification":"internal"}]
+            "fields":[{"id":"label","type":"string","maximumLength":32,"required":true,"classification":"internal"}]
           },{
             "id":"request","primaryDataset":"test-dataset","route":"requests","mutationMode":"mutable","tombstone":true,
             "fields":[
               {"id":"target","type":"reference","target":"target","required":true,"classification":"internal"},
-              {"id":"label","type":"string","maxLength":32,"required":true,"classification":"internal"}
+              {"id":"label","type":"string","maximumLength":32,"required":true,"classification":"internal"}
             ],
             "changeRequest":{"effects":[{"target":{"fromField":"target"},"operation":"patch","set":{"label":{"fromField":"label"}}}],
-              "review":{"authority":"casework-main","policyId":"request-review"},"onApproved":{"mode":"manual"}}
+              "review":{"type":"required","authority":"casework-main","policyId":"request-review"},"onApproved":{"mode":"manual"}}
           }],
           "accessProfiles":[{
-            "id":"operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
-              "entity":"request","operations":["get","tombstone","submit_request","apply_request"],"readableFields":["target","label"],
+            "id":"operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
+              "entity":"request","operations":["get","tombstone","submit-request","apply-request"],"readableFields":["target","label"],
               "applyTargets":[{"entity":"target", "rowBoundaries": "unrestricted"}],
               "rowBoundaries": "unrestricted"
-            }]
+            }]}
           }]
         }"#,
     )
@@ -1763,10 +1777,10 @@ fn change_request_compile_refuses_uncontrolled_targets_tombstone_requests_and_pl
     for index in 0..129 {
         let id = format!("field-{index}");
         target_fields.push(format!(
-            r#"{{"id":"{id}","type":"string","maxLength":8,"classification":"internal"}}"#
+            r#"{{"id":"{id}","type":"string","maximumLength":8,"classification":"internal"}}"#
         ));
         request_fields.push(format!(
-            r#"{{"id":"{id}","type":"string","maxLength":8,"required":true,"classification":"internal"}}"#
+            r#"{{"id":"{id}","type":"string","maximumLength":8,"required":true,"classification":"internal"}}"#
         ));
     }
     request_fields.push(
@@ -1782,16 +1796,16 @@ fn change_request_compile_refuses_uncontrolled_targets_tombstone_requests_and_pl
     ));
     let bounded = format!(
         r#"{{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{{"id":"request-bounds","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{{"id":"request-bounds","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
           "entities":[{{"id":"target","primaryDataset":"test-dataset","route":"targets","mutationMode":"mutable","changeControl":{{"requiredFor":["patch"]}},
             "fields":[{}]}},{{"id":"request","primaryDataset":"test-dataset","route":"requests","mutationMode":"mutable",
             "fields":[{}],
-            "changeRequest":{{"effects":[{}],"review":{{"authority":"casework-main","policyId":"request-review"}},"onApproved":{{"mode":"manual"}}}}
+            "changeRequest":{{"effects":[{}],"review":{{"type":"required","authority":"casework-main","policyId":"request-review"}},"onApproved":{{"mode":"manual"}}}}
           }}],
-          "accessProfiles":[{{"id":"operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{{"rowBoundaries": "unrestricted", "entity":"request","operations":["get","submit_request","apply_request"],"readableFields":["target"],
-            "applyTargets":[{{"rowBoundaries": "unrestricted", "entity":"target"}}]}}]}}]
+          "accessProfiles":[{{"id":"operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{{"entities":[{{"rowBoundaries": "unrestricted", "entity":"request","operations":["get","submit-request","apply-request"],"readableFields":["target"],
+            "applyTargets":[{{"rowBoundaries": "unrestricted", "entity":"target"}}]}}]}}}}]
         }}"#,
         target_fields.join(","),
         request_fields.join(","),
@@ -1809,12 +1823,12 @@ fn change_request_compile_refuses_uncontrolled_targets_tombstone_requests_and_pl
 fn change_request_compile_refuses_invalid_lifecycle_surface_bounds_and_controls() {
     let misplaced_lifecycle = compile_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"misplaced-lifecycle","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "entities":[{"id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"create_only",
-            "fields":[{"id":"label","type":"string","maxLength":32,"classification":"internal"}]}],
-          "accessProfiles":[{"id":"operator","principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{"entity":"record","operations":["get","submit_request"],"readableFields":["label"], "rowBoundaries": "unrestricted"}]}]
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"misplaced-lifecycle","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "entities":[{"id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"create-only",
+            "fields":[{"id":"label","type":"string","maximumLength":32,"classification":"internal"}]}],
+          "accessProfiles":[{"id":"operator","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{"entity":"record","operations":["get","submit-request"],"readableFields":["label"], "rowBoundaries": "unrestricted"}]}}]
         }"#,
     )
     .expect_err("request lifecycle operations are available only on request entities");
@@ -1825,12 +1839,12 @@ fn change_request_compile_refuses_invalid_lifecycle_surface_bounds_and_controls(
 
     let unsupported_control = compile_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"unsupported-control","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"unsupported-control","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{"id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"mutable","changeControl":{"requiredFor":["tombstone"]},
-            "fields":[{"id":"label","type":"string","maxLength":32,"classification":"internal"}]}],
-          "accessProfiles":[{"id":"reader","principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{"entity":"record","operations":["get"],"readableFields":["label"], "rowBoundaries": "unrestricted"}]}]
+            "fields":[{"id":"label","type":"string","maximumLength":32,"classification":"internal"}]}],
+          "accessProfiles":[{"id":"reader","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{"entity":"record","operations":["get"],"readableFields":["label"], "rowBoundaries": "unrestricted"}]}}]
         }"#,
     )
     .expect_err("change control is bounded to create and patch operations");
@@ -1841,23 +1855,23 @@ fn change_request_compile_refuses_invalid_lifecycle_surface_bounds_and_controls(
 
     let self_controlled_request = compile_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"self-controlled-request","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"self-controlled-request","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
             "id":"target","primaryDataset":"test-dataset","route":"targets","mutationMode":"mutable","changeControl":{"requiredFor":["patch"]},
-            "fields":[{"id":"label","type":"string","maxLength":32,"required":true,"classification":"internal"}]
+            "fields":[{"id":"label","type":"string","maximumLength":32,"required":true,"classification":"internal"}]
           },{
             "id":"request","primaryDataset":"test-dataset","route":"requests","mutationMode":"mutable","changeControl":{"requiredFor":["patch"]},
             "fields":[
               {"id":"target","type":"reference","target":"target","required":true,"classification":"internal"},
-              {"id":"label","type":"string","maxLength":32,"required":true,"classification":"internal"}
+              {"id":"label","type":"string","maximumLength":32,"required":true,"classification":"internal"}
             ],
             "changeRequest":{"effects":[{"target":{"fromField":"target"},"operation":"patch","set":{"label":{"fromField":"label"}}}],
-              "review":{"authority":"casework-main","policyId":"request-review"},"onApproved":{"mode":"manual"}}
+              "review":{"type":"required","authority":"casework-main","policyId":"request-review"},"onApproved":{"mode":"manual"}}
           }],
-          "accessProfiles":[{"id":"operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{"entity":"request","operations":["get","submit_request","apply_request"],"readableFields":["target","label"],
-            "applyTargets":[{"entity":"target", "rowBoundaries": "unrestricted"}], "rowBoundaries": "unrestricted"}]}]
+          "accessProfiles":[{"id":"operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{"entity":"request","operations":["get","submit-request","apply-request"],"readableFields":["target","label"],
+            "applyTargets":[{"entity":"target", "rowBoundaries": "unrestricted"}], "rowBoundaries": "unrestricted"}]}}]
         }"#,
     )
     .expect_err("request entities cannot also be target-controlled entities");
@@ -1868,38 +1882,38 @@ fn change_request_compile_refuses_invalid_lifecycle_surface_bounds_and_controls(
 
     let nested_request_target = compile_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"nested-request-target","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"nested-request-target","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
             "id":"target","primaryDataset":"test-dataset","route":"targets","mutationMode":"mutable","changeControl":{"requiredFor":["patch"]},
-            "fields":[{"id":"label","type":"string","maxLength":32,"required":true,"classification":"internal"}]
+            "fields":[{"id":"label","type":"string","maximumLength":32,"required":true,"classification":"internal"}]
           },{
             "id":"inner-request","primaryDataset":"test-dataset","route":"inner-requests","mutationMode":"mutable",
             "fields":[
               {"id":"target","type":"reference","target":"target","required":true,"classification":"internal"},
-              {"id":"label","type":"string","maxLength":32,"required":true,"classification":"internal"}
+              {"id":"label","type":"string","maximumLength":32,"required":true,"classification":"internal"}
             ],
             "changeRequest":{"effects":[{"target":{"fromField":"target"},"operation":"patch","set":{"label":{"fromField":"label"}}}],
-              "review":{"authority":"casework-main","policyId":"inner-review"},"onApproved":{"mode":"manual"}}
+              "review":{"type":"required","authority":"casework-main","policyId":"inner-review"},"onApproved":{"mode":"manual"}}
           },{
             "id":"outer-request","primaryDataset":"test-dataset","route":"outer-requests","mutationMode":"mutable",
             "fields":[
               {"id":"inner","type":"reference","target":"inner-request","required":true,"classification":"internal"},
-              {"id":"label","type":"string","maxLength":32,"required":true,"classification":"internal"}
+              {"id":"label","type":"string","maximumLength":32,"required":true,"classification":"internal"}
             ],
             "changeRequest":{"effects":[{"target":{"fromField":"inner"},"operation":"patch","set":{"label":{"fromField":"label"}}}],
-              "review":{"authority":"casework-main","policyId":"outer-review"},"onApproved":{"mode":"manual"}}
+              "review":{"type":"required","authority":"casework-main","policyId":"outer-review"},"onApproved":{"mode":"manual"}}
           }],
-          "accessProfiles":[{"id":"operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
-            "entity":"inner-request","operations":["get","submit_request","apply_request"],"readableFields":["target","label"],
+          "accessProfiles":[{"id":"operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
+            "entity":"inner-request","operations":["get","submit-request","apply-request"],"readableFields":["target","label"],
             "applyTargets":[{"entity":"target", "rowBoundaries": "unrestricted"}],
             "rowBoundaries": "unrestricted"
           },{
-            "entity":"outer-request","operations":["get","submit_request","apply_request"],"readableFields":["inner","label"],
+            "entity":"outer-request","operations":["get","submit-request","apply-request"],"readableFields":["inner","label"],
             "applyTargets":[{"entity":"inner-request", "rowBoundaries": "unrestricted"}],
             "rowBoundaries": "unrestricted"
-          }]}]
+          }]}}]
         }"#,
     )
     .expect_err("request effects cannot target nested request entities");
@@ -1912,15 +1926,15 @@ fn change_request_compile_refuses_invalid_lifecycle_surface_bounds_and_controls(
 #[test]
 fn derived_fields_selectors_and_read_paths_compile_to_route_specific_inventories() {
     let project = br#"{
-      "apiVersion":"registry.registrystack.org/v1alpha1",
-      "kind":"RegistryProject",
-      "registry":{"id":"household-demo","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+      "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+      "kind":"BRegProject",
+      "project":{"id":"household-demo","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
       "entities":[{
         "id":"household","primaryDataset":"test-dataset","route":"households","mutationMode":"mutable",
         "fields":[
-          {"id":"household-code","type":"string","maxLength":32,"required":true,"classification":"internal"},
-          {"id":"administrative-area","type":"string","maxLength":32,"required":true,"classification":"internal"},
-          {"id":"local-household-number","type":"string","maxLength":32,"required":true,"classification":"internal"}
+          {"id":"household-code","type":"string","maximumLength":32,"required":true,"classification":"internal"},
+          {"id":"administrative-area","type":"string","maximumLength":32,"required":true,"classification":"internal"},
+          {"id":"local-household-number","type":"string","maximumLength":32,"required":true,"classification":"internal"}
         ],
         "derived":[{
           "id":"demographics","sql":"sql/household-demographics.sql","key":"id","execution":"live",
@@ -1937,7 +1951,7 @@ fn derived_fields_selectors_and_read_paths_compile_to_route_specific_inventories
       },{
         "id":"person","primaryDataset":"test-dataset","route":"people","mutationMode":"mutable",
         "fields":[
-          {"id":"legal-name","type":"string","maxLength":80,"classification":"internal"},
+          {"id":"legal-name","type":"string","maximumLength":80,"classification":"internal"},
           {"id":"date-of-birth","type":"date","classification":"internal"}
         ]
       },{
@@ -1948,7 +1962,7 @@ fn derived_fields_selectors_and_read_paths_compile_to_route_specific_inventories
         ]
       }],
       "accessProfiles":[{
-        "id":"operator","default":true,"principalClaim":"sub","requiredScopes":"unrestricted","permissions":[{
+        "id":"operator","default":true,"principalClaim":"sub","requiredScopes":"unrestricted","permissions":{"entities":[{
           "entity":"household","operations":["get","lookup","list"],
           "readableFields":["household-code","child-count","single-headed"],
           "filterableFields":["child-count","single-headed"],
@@ -1963,7 +1977,7 @@ fn derived_fields_selectors_and_read_paths_compile_to_route_specific_inventories
             "allowCount":true
           }],
           "rowBoundaries": "unrestricted"
-        }]
+        }]}
       }]
     }"#;
     let sql = "SELECT h.id AS id, count(p.id)::bigint AS child_count, false AS single_headed, 1::bigint AS registry_derived_key_cardinality FROM registry_source.household h LEFT JOIN registry_source.group_membership gm ON gm.household = h.id LEFT JOIN registry_source.person p ON p.id = gm.person GROUP BY h.id";
@@ -2075,21 +2089,21 @@ fn derived_fields_selectors_and_read_paths_compile_to_route_specific_inventories
 fn canonical_id_row_boundary_targets_the_physical_record_id_column() {
     let compiled = compile_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"canonical-id-boundary","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"canonical-id-boundary","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
             "id":"household","primaryDataset":"test-dataset","route":"households","mutationMode":"mutable",
             "fields":[
-              {"id":"household-code","type":"string","maxLength":32,"classification":"internal"}
+              {"id":"household-code","type":"string","maximumLength":32,"classification":"internal"}
             ]
           }],
           "accessProfiles":[{
-            "id":"viewer","principalClaim":"sub","requiredScopes":"unrestricted","permissions":[{
+            "id":"viewer","principalClaim":"sub","requiredScopes":"unrestricted","permissions":{"entities":[{
               "entity":"household","operations":["get"],
               "readableFields":["household-code"],
               "rowBoundaries":[{"field":"id","claim":"household_id","operator":"equals"}]
-            }]
+            }]}
           }]
         }"#,
     )
@@ -2121,12 +2135,12 @@ fn canonical_id_row_boundary_targets_the_physical_record_id_column() {
 #[test]
 fn derived_sql_is_asset_backed_value_free_and_validates_output_aliases() {
     let project = br#"{
-      "apiVersion":"registry.registrystack.org/v1alpha1",
-      "kind":"RegistryProject",
-      "registry":{"id":"derived-demo","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+      "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+      "kind":"BRegProject",
+      "project":{"id":"derived-demo","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
       "entities":[{
         "id":"household","primaryDataset":"test-dataset","route":"households","mutationMode":"mutable",
-        "fields":[{"id":"code","type":"string","maxLength":32,"classification":"internal"}],
+        "fields":[{"id":"code","type":"string","maximumLength":32,"classification":"internal"}],
         "derived":[{
           "id":"demographics","sql":"sql/demographics.sql","key":"id",
           "fields":[{"id":"child-count","type":"int64","classification":"internal"}]
@@ -2185,7 +2199,7 @@ fn derived_sql_is_asset_backed_value_free_and_validates_output_aliases() {
 #[test]
 fn module_digest_can_bind_explicit_sql_assets() {
     let module = parse_module_json(
-        br#"{"id":"core","version":"1","entities":[{"id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"mutable","fields":[{"id":"code","type":"string","maxLength":8,"classification":"internal"}]}]}"#,
+        br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","entities":[{"id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"mutable","fields":[{"id":"code","type":"string","maximumLength":8,"classification":"internal"}]}]}"#,
     )
     .expect("module parses");
     let yaml_only = module_digest(&module);
@@ -2218,18 +2232,18 @@ fn batch_route_requires_explicit_bounds_and_compiles_bounded_openapi() {
     let source = |batch: &str, operations: &str| {
         format!(
             r#"{{
-              "apiVersion":"registry.registrystack.org/v1alpha1",
-              "kind":"RegistryProject",
-              "registry":{{"id":"batch-contract","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
+              "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+              "kind":"BRegProject",
+              "project":{{"id":"batch-contract","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
               "entities":[{{
                 "id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"mutable"{batch},
-                "fields":[{{"id":"label","type":"string","maxLength":32,"required":true,"classification":"internal"}}]
+                "fields":[{{"id":"label","type":"string","maximumLength":32,"required":true,"classification":"internal"}}]
               }}],
               "accessProfiles":[{{
-                "id":"writer","principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{{
+                "id":"writer","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{{"entities":[{{
                   "rowBoundaries": "unrestricted", "entity":"record","operations":{operations},
                   "readableFields":["label"],"writableFields":["label"]
-                }}]
+                }}]}}
               }}]
             }}"#
         )
@@ -2390,7 +2404,7 @@ fn batch_route_requires_explicit_bounds_and_compiles_bounded_openapi() {
     )
     .replace(
         r#""mutationMode":"mutable""#,
-        r#""mutationMode":"create_only""#,
+        r#""mutationMode":"create-only""#,
     );
     let create_only = compile_json(create_only.as_bytes())
         .expect("create-only entities may expose bounded batch create");
@@ -2406,7 +2420,7 @@ fn batch_route_requires_explicit_bounds_and_compiles_bounded_openapi() {
     )
     .replace(
         r#""mutationMode":"mutable""#,
-        r#""mutationMode":"create_only""#,
+        r#""mutationMode":"create-only""#,
     );
     let unavailable = compile_json(create_only_patch.as_bytes())
         .expect_err("create-only Batch profiles can never grant patch");
@@ -2548,9 +2562,9 @@ fn deployment_identity_keys_in_the_project_are_refused_as_unknown_fields() {
         ("sequence", json!(424242)),
     ] {
         let mut project = json!({
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"neutral","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"neutral","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "package":{"sourceRevision":"source"},
           "entities":[]
         });
@@ -2603,9 +2617,9 @@ fn singular_manifest_projection_keys_are_refused_as_unknown_fields() {
         ),
     ] {
         let mut project = json!({
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"neutral","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"neutral","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "package":{"sourceRevision":"source"},
           "manifestProjection":{
             "accessProfile":"reader",
@@ -2655,24 +2669,24 @@ fn production_allows_missing_manifest_projection_and_emits_no_manifest_artifacts
     let compiled = compile_project(
         &parse_project_json(
             br#"{
-              "apiVersion":"registry.registrystack.org/v1alpha1",
-              "kind":"RegistryProject",
-              "registry":{"id":"neutral","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+              "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+              "kind":"BRegProject",
+              "project":{"id":"neutral","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
               "package":{"sourceRevision":"source"},
               "entities":[{
-                "id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"create_only",
-                "fields":[{"id":"code","type":"string","maxLength":32,"classification":"internal"}]
+                "id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"create-only",
+                "fields":[{"id":"code","type":"string","maximumLength":32,"classification":"internal"}]
               }],
               "accessProfiles":[{
                 "id":"reader",
                 "principalClaim":"principal",
                 "requiredScopes":"unrestricted",
-                "permissions":[{
+                "permissions":{"entities":[{
                   "entity":"record",
                   "operations":["get"],
                   "readableFields":["code"],
                   "rowBoundaries": "unrestricted"
-                }]
+                }]}
               }]
             }"#,
         )
@@ -2702,14 +2716,14 @@ fn production_allows_missing_manifest_projection_and_emits_no_manifest_artifacts
 fn project_access_profiles_use_the_entity_access_vocabulary() {
     let project = parse_project_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"profile-vocabulary","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"profile-vocabulary","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
             "id":"case-file","primaryDataset":"test-dataset","route":"case-files","mutationMode":"mutable",
             "fields":[
-              {"id":"case-code","type":"string","maxLength":32,"classification":"internal"},
-              {"id":"status","type":"string","maxLength":32,"classification":"internal"}
+              {"id":"case-code","type":"string","maximumLength":32,"classification":"internal"},
+              {"id":"status","type":"string","maximumLength":32,"classification":"internal"}
             ]
           }],
           "accessProfiles":[{
@@ -2718,14 +2732,14 @@ fn project_access_profiles_use_the_entity_access_vocabulary() {
             "principalClaim":"sub",
             "requiredScopes":["records.read"],
             "requiredPurposes":["case-management"],
-            "permissions":[{
+            "permissions":{"entities":[{
               "entity":"case-file",
               "operations":["get","list"],
               "readableFields":["case-code","status"],
               "filterableFields":["status"],
               "allowCount":true,
               "rowBoundaries": "unrestricted"
-            }]
+            }]}
           }]
         }"#,
     )
@@ -2739,7 +2753,7 @@ fn project_access_profiles_use_the_entity_access_vocabulary() {
         .and_then(|entity| entity.access_profiles.get("operator"))
         .expect("top-level profile is expanded onto its granted entity");
 
-    assert_eq!(profile.principal_claim.as_deref(), Some("sub"));
+    assert_eq!(profile.principal_claim, "sub");
     assert_eq!(
         profile.required_scopes,
         ["records.read".to_owned()].into_iter().collect()
@@ -2765,12 +2779,12 @@ fn project_access_profiles_use_the_entity_access_vocabulary() {
 fn root_project_entity_access_profiles_are_compile_time_errors() {
     let project = parse_project_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"profile-vocabulary","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"profile-vocabulary","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
             "id":"case-file","primaryDataset":"test-dataset","route":"case-files","mutationMode":"mutable",
-            "fields":[{"id":"case-code","type":"string","maxLength":32,"classification":"internal"}],
+            "fields":[{"id":"case-code","type":"string","maximumLength":32,"classification":"internal"}],
             "accessProfiles":[{
               "id":"entity-local-reader",
               "principalClaim":"sub",
@@ -2798,24 +2812,23 @@ fn root_project_entity_access_profiles_are_compile_time_errors() {
 fn module_entity_access_profiles_remain_supported_for_module_composition() {
     let project = parse_project_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"module-profile","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"module-profile","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
             "id":"case-file","primaryDataset":"test-dataset","route":"case-files","mutationMode":"mutable",
-            "fields":[{"id":"case-code","type":"string","maxLength":32,"classification":"internal"}]
+            "fields":[{"id":"case-code","type":"string","maximumLength":32,"classification":"internal"}]
           }],
           "modules":[{"id":"core","version":"1"}]
         }"#,
     )
     .expect("project parses");
     let module = parse_module_json(
-        br#"{
-          "id":"core",
+        br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core",
           "version":"1",
           "entities":[{
             "id":"module-record","primaryDataset":"test-dataset","route":"module-records","mutationMode":"mutable",
-            "fields":[{"id":"case-code","type":"string","maxLength":32,"classification":"internal"}],
+            "fields":[{"id":"case-code","type":"string","maximumLength":32,"classification":"internal"}],
             "accessProfiles":[{
               "id":"module-reader",
               "principalClaim":"sub",
@@ -2854,19 +2867,19 @@ fn module_entity_access_profiles_remain_supported_for_module_composition() {
 fn project_access_profiles_reject_the_legacy_purpose_vocabulary() {
     let failure = parse_project_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"profile-vocabulary","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"profile-vocabulary","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
             "id":"case-file","primaryDataset":"test-dataset","route":"case-files","mutationMode":"mutable",
-            "fields":[{"id":"case-code","type":"string","maxLength":32,"classification":"internal"}]
+            "fields":[{"id":"case-code","type":"string","maximumLength":32,"classification":"internal"}]
           }],
           "accessProfiles":[{
             "id":"operator",
             "principalClaim":"sub",
             "requiredScopes":"unrestricted",
             "purposes":["case-management"],
-            "permissions":[{"entity":"case-file","operations":["get"],"readableFields":["case-code"], "rowBoundaries": "unrestricted"}]
+            "permissions":{"entities":[{"entity":"case-file","operations":["get"],"readableFields":["case-code"], "rowBoundaries": "unrestricted"}]}
           }]
         }"#,
     )
@@ -2877,116 +2890,111 @@ fn project_access_profiles_reject_the_legacy_purpose_vocabulary() {
     assert_eq!(diagnostic.path, "project.accessProfiles[0].purposes");
 }
 
-#[test]
-fn project_access_grants_reject_the_legacy_action_vocabulary() {
-    let failure = parse_project_json(
-        br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"profile-vocabulary","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "entities":[{
+/// The read-time refusals of one project whose only access profile holds the
+/// written permissions.
+fn permission_refusals(permissions: &str) -> Vec<(String, String)> {
+    let source = format!(
+        r#"{{
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{{"id":"profile-vocabulary","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
+          "entities":[{{
             "id":"case-file","primaryDataset":"test-dataset","route":"case-files","mutationMode":"mutable",
-            "fields":[{"id":"case-code","type":"string","maxLength":32,"classification":"internal"}]
-          }],
-          "accessProfiles":[{
+            "fields":[{{"id":"case-code","type":"string","maximumLength":32,"classification":"internal"}}]
+          }}],
+          "actions":[{{
+            "id":"create-case-file",
+            "inputs":[{{"id":"case-code","type":"string","maximumLength":32,"classification":"internal"}}],
+            "effects":[{{"id":"case","target":{{"entity":"case-file"}},"operation":"create","set":{{"case-code":{{"fromField":"case-code"}}}}}}]
+          }}],
+          "accessProfiles":[{{
             "id":"operator",
             "principalClaim":"sub",
             "requiredScopes":"unrestricted",
-            "requiredPurposes":["case-management"],
-            "permissions":[{"entity":"case-file","actions":["get"],"readableFields":["case-code"], "rowBoundaries": "unrestricted"}]
-          }]
-        }"#,
-    )
-    .expect_err("legacy actions key is no longer part of the authoring contract");
+            "permissions":{permissions}
+          }}]
+        }}"#
+    );
+    parse_project_yaml(source.as_bytes())
+        .expect_err("the permissions are refused when the project is read")
+        .diagnostics()
+        .iter()
+        .map(|diagnostic| (diagnostic.code.clone(), diagnostic.path.clone()))
+        .collect()
+}
 
-    let diagnostic = &failure.diagnostics()[0];
-    assert_eq!(diagnostic.code, "breg.source.shape-invalid");
-    assert_eq!(
-        diagnostic.path,
-        "project.accessProfiles[0].permissions[0].actions"
+fn unknown_keys(group: &str, members: &[&str]) -> Vec<(String, String)> {
+    members
+        .iter()
+        .map(|member| {
+            (
+                "config.unknown-key".to_owned(),
+                format!("project.accessProfiles[0].permissions.{group}[0].{member}"),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn project_access_grants_reject_the_legacy_action_vocabulary() {
+    let refused = permission_refusals(
+        r#"{"entities":[{"entity":"case-file","actions":["get"],"readableFields":["case-code"], "rowBoundaries": "unrestricted"}]}"#,
+    );
+    assert!(
+        refused.contains(&(
+            "config.unknown-key".to_owned(),
+            "project.accessProfiles[0].permissions.entities[0].actions".to_owned()
+        )),
+        "{refused:?}"
     );
 }
 
 #[test]
 fn entity_access_grants_reject_action_target_and_result_fields() {
-    for extra in [
-        r#","targets":[{"entity":"case-file","rowBoundaries":"unrestricted"}]"#,
-        r#","results":["created"]"#,
+    for (extra, member) in [
+        (
+            r#","targets":[{"entity":"case-file","rowBoundaries":"unrestricted"}]"#,
+            "targets",
+        ),
+        (r#","results":["created"]"#, "results"),
     ] {
-        let source = format!(
-            r#"{{
-              "apiVersion":"registry.registrystack.org/v1alpha1",
-              "kind":"RegistryProject",
-              "registry":{{"id":"profile-vocabulary","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
-              "entities":[{{
-                "id":"case-file","primaryDataset":"test-dataset","route":"case-files","mutationMode":"mutable",
-                "fields":[{{"id":"case-code","type":"string","maxLength":32,"classification":"internal"}}]
-              }}],
-              "accessProfiles":[{{
-                "id":"operator",
-                "principalClaim":"sub",
-                "requiredScopes":"unrestricted",
-                "permissions":[{{
-                  "rowBoundaries": "unrestricted", "entity":"case-file",
-                  "operations":["get"],
-                  "readableFields":["case-code"]{extra}
-                }}]
-              }}]
-            }}"#
-        );
-        let failure = compile_json(source.as_bytes())
-            .expect_err("entity grants cannot carry action-only fields");
-        assert!(failure.diagnostics().iter().any(|diagnostic| {
-            diagnostic.code == "breg.access-profile.permission-action-fields-forbidden"
-                && diagnostic.path == "project.accessProfiles[].permissions[]"
-        }));
+        let refused = permission_refusals(&format!(
+            r#"{{"entities":[{{
+              "rowBoundaries": "unrestricted", "entity":"case-file",
+              "operations":["get"],
+              "readableFields":["case-code"]{extra}
+            }}]}}"#
+        ));
+        assert_eq!(refused, unknown_keys("entities", &[member]));
     }
 }
 
 #[test]
 fn project_access_grants_reject_mixed_entity_and_action_targets() {
-    let failure = compile_json(
-        br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"profile-vocabulary","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "entities":[{
-            "id":"case-file","primaryDataset":"test-dataset","route":"case-files","mutationMode":"mutable",
-            "fields":[{"id":"case-code","type":"string","maxLength":32,"classification":"internal"}]
-          }],
-          "actions":[{
-            "id":"create-case-file",
-            "inputs":[{"id":"case-code","type":"string","maxLength":32,"classification":"internal"}],
-            "effects":[{"id":"case","target":{"entity":"case-file"},"operation":"create","set":{"case-code":{"fromField":"case-code"}}}]
-          }],
-          "accessProfiles":[{
-            "id":"operator",
-            "principalClaim":"sub",
-            "requiredScopes":"unrestricted",
-            "permissions":[{
-              "entity":"case-file",
-              "action":"create-case-file",
-              "operations":["invoke"],
-              "targets":[{"entity":"case-file","rowBoundaries":"unrestricted"}],
-              "rowBoundaries": "unrestricted"
-            }]
-          }]
-        }"#,
-    )
-    .expect_err("grants cannot name both an entity and an action");
-    assert!(failure.diagnostics().iter().any(|diagnostic| {
-        diagnostic.code == "breg.access-profile.permission-target-exclusive"
-            && diagnostic.path == "project.accessProfiles[].permissions[]"
-    }));
+    let mixed = r#"{
+      "entity":"case-file",
+      "action":"create-case-file",
+      "operations":["invoke"],
+      "targets":[{"entity":"case-file","rowBoundaries":"unrestricted"}],
+      "rowBoundaries": "unrestricted"
+    }"#;
+    assert_eq!(
+        permission_refusals(&format!(r#"{{"entities":[{mixed}]}}"#)),
+        unknown_keys("entities", &["action", "targets"])
+    );
+    assert_eq!(
+        permission_refusals(&format!(r#"{{"actions":[{mixed}]}}"#)),
+        unknown_keys("actions", &["entity", "rowBoundaries"])
+    );
 }
 
 #[test]
 fn manifest_projection_unknown_nested_keys_are_rejected_without_values() {
     let failure = parse_project_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"neutral","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://registry.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"neutral","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://registry.example.test"},
           "manifestProjection":{
             "accessProfile":"reader",
             "classificationCeiling":"internal",
@@ -3069,8 +3077,14 @@ fn a_read_project_or_module_serializes_to_source_the_reader_reads_again() {
             let Ok(module) = parse_module_yaml(&bytes) else {
                 continue;
             };
-            let reread = parse_module_yaml(&source_bytes::source_bytes(&module))
-                .unwrap_or_else(|failure| panic!("{display}: {:?}", failure.diagnostics()));
+            // The read module does not keep the header its file opens with.
+            let mut source: Value = serde_json::from_slice(&source_bytes::source_bytes(&module))
+                .expect("the module source is JSON");
+            source["apiVersion"] = json!(MODULE_API_VERSION);
+            source["kind"] = json!(MODULE_KIND);
+            let reread =
+                parse_module_yaml(&serde_json::to_vec(&source).expect("the module source encodes"))
+                    .unwrap_or_else(|failure| panic!("{display}: {:?}", failure.diagnostics()));
             assert_eq!(reread, module, "{display}");
         } else {
             let Ok(project) = parse_project_yaml(&bytes) else {
@@ -3216,9 +3230,9 @@ fn all_acceptance_fixtures_compile_manifest_projection_under_production() {
 fn manifest_projection_filters_by_selected_profile_and_classification_ceiling() {
     let project = parse_project_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"public-slice","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://public-slice.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"public-slice","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://public-slice.example.test"},
           "manifestProjection":{
             "accessProfile":"operator",
             "classificationCeiling":"public",
@@ -3228,24 +3242,26 @@ fn manifest_projection_filters_by_selected_profile_and_classification_ceiling() 
             "dataServices":[{"id":"public-slice-api","title":"Public Slice API","endpointUrl":"https://public-slice.example.test/v1","servesDatasets":["public-slice"]}]
           },
           "entities":[
-            {"id":"visible-target","primaryDataset":"public-slice","route":"visible-targets","mutationMode":"create_only","classification":"public",
-             "fields":[{"id":"label","type":"string","maxLength":64,"classification":"public"}]},
-            {"id":"hidden-target","primaryDataset":"public-slice","route":"hidden-targets","mutationMode":"create_only","classification":"restricted",
-             "fields":[{"id":"label","type":"string","maxLength":64,"classification":"restricted"}]},
-            {"id":"link","primaryDataset":"public-slice","route":"links","mutationMode":"create_only","classification":"public",
+            {"id":"visible-target","primaryDataset":"public-slice","route":"visible-targets","mutationMode":"create-only","classification":"public",
+             "fields":[{"id":"label","type":"string","maximumLength":64,"classification":"public"}]},
+            {"id":"hidden-target","primaryDataset":"public-slice","route":"hidden-targets","mutationMode":"create-only","classification":"restricted",
+             "fields":[{"id":"label","type":"string","maximumLength":64,"classification":"restricted"}]},
+            {"id":"link","primaryDataset":"public-slice","route":"links","mutationMode":"create-only","classification":"public",
              "fields":[
-               {"id":"name","type":"string","maxLength":64,"classification":"public"},
-               {"id":"operator-note","type":"string","maxLength":64,"classification":"internal"},
+               {"id":"name","type":"string","maximumLength":64,"classification":"public"},
+               {"id":"operator-note","type":"string","maximumLength":64,"classification":"internal"},
                {"id":"visible-ref","type":"reference","target":"visible-target","classification":"public"},
                {"id":"hidden-ref","type":"reference","target":"hidden-target","classification":"public"}
              ]}
           ],
           "accessProfiles":[{
-            "id":"operator","principalClaim":"principal","requiredScopes":"unrestricted","permissions":[
-              {"entity":"visible-target","operations":["get"],"readableFields":["label"], "rowBoundaries": "unrestricted"},
-              {"entity":"hidden-target","operations":["get"],"readableFields":["label"], "rowBoundaries": "unrestricted"},
-              {"entity":"link","operations":["get"],"readableFields":["name","operator-note","visible-ref","hidden-ref"], "rowBoundaries": "unrestricted"}
-            ]
+            "id":"operator","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{
+              "entities":[
+                {"entity":"visible-target","operations":["get"],"readableFields":["label"], "rowBoundaries": "unrestricted"},
+                {"entity":"hidden-target","operations":["get"],"readableFields":["label"], "rowBoundaries": "unrestricted"},
+                {"entity":"link","operations":["get"],"readableFields":["name","operator-note","visible-ref","hidden-ref"], "rowBoundaries": "unrestricted"}
+              ]
+            }
           }]
         }"#,
     )
@@ -3286,9 +3302,9 @@ fn manifest_projection_filters_by_selected_profile_and_classification_ceiling() 
 fn manifest_projection_metadata_cannot_describe_hidden_entities_or_fields() {
     let project = parse_project_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"public-slice","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://public-slice.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"public-slice","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://public-slice.example.test"},
           "manifestProjection":{
             "accessProfile":"reader",
             "classificationCeiling":"restricted",
@@ -3305,18 +3321,18 @@ fn manifest_projection_metadata_cannot_describe_hidden_entities_or_fields() {
             ]
           },
           "entities":[
-            {"id":"record","primaryDataset":"public-slice","route":"records","mutationMode":"create_only","classification":"public",
+            {"id":"record","primaryDataset":"public-slice","route":"records","mutationMode":"create-only","classification":"public",
              "fields":[
-               {"id":"name","type":"string","maxLength":64,"classification":"public"},
-               {"id":"secret-note","type":"string","maxLength":64,"classification":"restricted"},
-               {"id":"profile","type":"structured","maxBytes":1024,"schema":{"type":"object","additionalProperties":false},"classification":"public"}
+               {"id":"name","type":"string","maximumLength":64,"classification":"public"},
+               {"id":"secret-note","type":"string","maximumLength":64,"classification":"restricted"},
+               {"id":"profile","type":"structured","maximumBytes":1024,"schema":{"type":"object","additionalProperties":false},"classification":"public"}
              ]},
-            {"id":"secret-record","primaryDataset":"public-slice","route":"secret-records","mutationMode":"create_only","classification":"restricted",
-             "fields":[{"id":"name","type":"string","maxLength":64,"classification":"restricted"}]}
+            {"id":"secret-record","primaryDataset":"public-slice","route":"secret-records","mutationMode":"create-only","classification":"restricted",
+             "fields":[{"id":"name","type":"string","maximumLength":64,"classification":"restricted"}]}
           ],
           "accessProfiles":[
-            {"id":"reader","principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{"entity":"record","operations":["get"],"readableFields":["name","profile"], "rowBoundaries": "unrestricted"}]},
-            {"id":"other-reader","principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{"entity":"secret-record","operations":["get"],"readableFields":["name"], "rowBoundaries": "unrestricted"}]}
+            {"id":"reader","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{"entity":"record","operations":["get"],"readableFields":["name","profile"], "rowBoundaries": "unrestricted"}]}},
+            {"id":"other-reader","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{"entity":"secret-record","operations":["get"],"readableFields":["name"], "rowBoundaries": "unrestricted"}]}}
           ]
         }"#,
     )
@@ -3341,9 +3357,9 @@ fn manifest_projection_metadata_cannot_describe_hidden_entities_or_fields() {
 /// projection's classification ceiling.
 fn narrowed_vocabulary_project(concepts: Value) -> registry_breg::contract::RegistryProject {
     let project = json!({
-      "apiVersion":"registry.registrystack.org/v1alpha1",
-      "kind":"RegistryProject",
-      "registry":{"id":"narrowed-codes","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://narrowed-codes.example.test"},
+      "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+      "kind":"BRegProject",
+      "project":{"id":"narrowed-codes","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://narrowed-codes.example.test"},
       "manifestProjection":{
         "accessProfile":"reader",
         "classificationCeiling":"public",
@@ -3355,19 +3371,21 @@ fn narrowed_vocabulary_project(concepts: Value) -> registry_breg::contract::Regi
       },
       "vocabularies":[{"id":"authorization-status","values":["pending","active","suspended","cancelled","revoked"]}],
       "entities":[
-        {"id":"authorization","primaryDataset":"narrowed-codes","route":"authorizations","mutationMode":"create_only","classification":"public",
+        {"id":"authorization","primaryDataset":"narrowed-codes","route":"authorizations","mutationMode":"create-only","classification":"public",
          "fields":[
            {"id":"status","type":"vocabulary-code","vocabulary":"authorization-status","values":["pending","active","suspended","cancelled"],"classification":"public"},
            {"id":"archived-status","type":"vocabulary-code","vocabulary":"authorization-status","classification":"restricted"}
          ]},
-        {"id":"authorization-request","primaryDataset":"narrowed-codes","route":"authorization-requests","mutationMode":"create_only","classification":"public",
+        {"id":"authorization-request","primaryDataset":"narrowed-codes","route":"authorization-requests","mutationMode":"create-only","classification":"public",
          "fields":[{"id":"status","type":"vocabulary-code","vocabulary":"authorization-status","values":["pending"],"classification":"public"}]}
       ],
       "accessProfiles":[{
-        "id":"reader","principalClaim":"principal","requiredScopes":"unrestricted","permissions":[
-          {"entity":"authorization","operations":["get"],"readableFields":["status","archived-status"],"rowBoundaries":"unrestricted"},
-          {"entity":"authorization-request","operations":["get"],"readableFields":["status"],"rowBoundaries":"unrestricted"}
-        ]
+        "id":"reader","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{
+          "entities":[
+            {"entity":"authorization","operations":["get"],"readableFields":["status","archived-status"],"rowBoundaries":"unrestricted"},
+            {"entity":"authorization-request","operations":["get"],"readableFields":["status"],"rowBoundaries":"unrestricted"}
+          ]
+        }
       }]
     });
     parse_project_json(&serde_json::to_vec(&project).expect("project serializes"))
@@ -3451,9 +3469,9 @@ fn manifest_projection_refuses_a_label_for_a_declared_code_no_visible_field_uses
 #[test]
 fn manifest_projection_codelists_carry_only_codes_the_publication_admits() {
     let project = json!({
-      "apiVersion":"registry.registrystack.org/v1alpha1",
-      "kind":"RegistryProject",
-      "registry":{"id":"shared-codes","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://shared-codes.example.test"},
+      "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+      "kind":"BRegProject",
+      "project":{"id":"shared-codes","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://shared-codes.example.test"},
       "manifestProjection":{
         "accessProfile":"public-reader",
         "classificationCeiling":"public",
@@ -3474,14 +3492,14 @@ fn manifest_projection_codelists_carry_only_codes_the_publication_admits() {
       },
       "vocabularies":[{"id":"case-status","values":["open","sealed-by-court"]}],
       "entities":[
-        {"id":"public-case","primaryDataset":"public-cases","route":"public-cases","mutationMode":"create_only","classification":"public",
+        {"id":"public-case","primaryDataset":"public-cases","route":"public-cases","mutationMode":"create-only","classification":"public",
          "fields":[{"id":"status","type":"vocabulary-code","vocabulary":"case-status","values":["open"],"classification":"public"}]},
-        {"id":"protected-case","primaryDataset":"protected-cases","route":"protected-cases","mutationMode":"create_only","classification":"restricted",
+        {"id":"protected-case","primaryDataset":"protected-cases","route":"protected-cases","mutationMode":"create-only","classification":"restricted",
          "fields":[{"id":"status","type":"vocabulary-code","vocabulary":"case-status","classification":"restricted"}]}
       ],
       "accessProfiles":[
-        {"id":"public-reader","principalClaim":"sub","requiredScopes":["public.read"],"permissions":[{"entity":"public-case","operations":["get"],"readableFields":["status"],"rowBoundaries":"unrestricted"}]},
-        {"id":"protected-reader","principalClaim":"sub","requiredScopes":["protected.read"],"permissions":[{"entity":"protected-case","operations":["get"],"readableFields":["status"],"rowBoundaries":"unrestricted"}]}
+        {"id":"public-reader","principalClaim":"sub","requiredScopes":["public.read"],"permissions":{"entities":[{"entity":"public-case","operations":["get"],"readableFields":["status"],"rowBoundaries":"unrestricted"}]}},
+        {"id":"protected-reader","principalClaim":"sub","requiredScopes":["protected.read"],"permissions":{"entities":[{"entity":"protected-case","operations":["get"],"readableFields":["status"],"rowBoundaries":"unrestricted"}]}}
       ]
     });
     let project = parse_project_json(&serde_json::to_vec(&project).expect("project serializes"))
@@ -3555,9 +3573,9 @@ fn manifest_projection_omits_physical_runtime_and_security_terms() {
 fn independent_additive_modules_are_order_independent() {
     let project = parse_project_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"neutral-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"neutral-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "modules":[
             {"id":"core","version":"1"},
             {"id":"alpha","version":"1"},
@@ -3565,21 +3583,20 @@ fn independent_additive_modules_are_order_independent() {
           ],
           "entities":[{
             "id":"object","primaryDataset":"test-dataset","route":"objects","mutationMode":"mutable",
-            "fields":[{"id":"code","type":"string","maxLength":32,"required":true,"classification":"internal"}]
+            "fields":[{"id":"code","type":"string","maximumLength":32,"required":true,"classification":"internal"}]
           }],
           "accessProfiles":[{
-            "id":"operator","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted","permissions":[{
+            "id":"operator","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted","permissions":{"entities":[{
               "entity":"object","operations":["create","get","list","patch"],
               "readableFields":["code"],"writableFields":["code"],
               "rowBoundaries": "unrestricted"
-            }]
+            }]}
           }]
         }"#,
     )
     .expect("project parses");
     let alpha = parse_module_json(
-        br#"{
-          "id":"alpha","version":"1","dependencies":["core"],
+        br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"alpha","version":"1","dependencies":["core"],
           "extendEntities":[{"entity":"object","fields":[
             {"id":"alpha-field","type":"boolean","classification":"internal"}
           ]}]
@@ -3587,8 +3604,7 @@ fn independent_additive_modules_are_order_independent() {
     )
     .expect("alpha module parses");
     let beta = parse_module_json(
-        br#"{
-          "id":"beta","version":"1","dependencies":["core"],
+        br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"beta","version":"1","dependencies":["core"],
           "extendEntities":[{"entity":"object","fields":[
             {"id":"beta-field","type":"int64","classification":"internal"}
           ]}]
@@ -3612,20 +3628,20 @@ fn independent_additive_modules_are_order_independent() {
 fn project_access_profile_required_scopes_compile_into_each_grant() {
     let project = parse_project_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"scope-bound-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"scope-bound-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
             "id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"mutable",
-            "fields":[{"id":"code","type":"string","maxLength":32,"required":true,"classification":"internal"}]
+            "fields":[{"id":"code","type":"string","maximumLength":32,"required":true,"classification":"internal"}]
           }],
           "accessProfiles":[{
             "id":"operator","principalClaim":"registry_principal",
             "requiredScopes":["registry:record:operate"],
-            "permissions":[{
+            "permissions":{"entities":[{
               "entity":"record","operations":["get"],"readableFields":["code"],
               "rowBoundaries": "unrestricted"
-            }]
+            }]}
           }]
         }"#,
     )
@@ -3647,26 +3663,24 @@ fn project_access_profile_required_scopes_compile_into_each_grant() {
 fn strict_parse_refuses_unknown_and_duplicate_members_without_echoing_values() {
     let unknown = parse_project_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"neutral","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test","secretField":"do-not-echo"}
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"neutral","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test","secretField":"do-not-echo"}
         }"#,
     )
     .expect_err("unknown member is refused");
     assert_eq!(unknown.diagnostics()[0].code, "breg.source.shape-invalid");
-    assert!(unknown.diagnostics()[0]
-        .path
-        .starts_with("project.registry"));
+    assert!(unknown.diagnostics()[0].path.starts_with("project.project"));
     let rendered = serde_json::to_string(&unknown).expect("diagnostic serializes");
     assert!(!rendered.contains("do-not-echo"));
     assert!(unknown.diagnostics()[0].path.ends_with("secretField"));
 
     let duplicate = parse_project_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
           "kind":"Other",
-          "registry":{"id":"neutral","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}
+          "project":{"id":"neutral","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}
         }"#,
     )
     .expect_err("duplicate member is refused");
@@ -3705,11 +3719,11 @@ fn deferred_query_features_are_strictly_unknown_key_rejected() {
     ] {
         let source = format!(
             r#"{{
-              "apiVersion":"registry.registrystack.org/v1alpha1",
-              "kind":"RegistryProject",
-              "registry":{{"id":"closed-query-grammar","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
+              "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+              "kind":"BRegProject",
+              "project":{{"id":"closed-query-grammar","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
               "entities":[{{
-                "id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"create_only",
+                "id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"create-only",
                 {member}
               }}]
             }}"#
@@ -3730,10 +3744,10 @@ fn deferred_query_features_are_strictly_unknown_key_rejected() {
 fn strict_yaml_parse_refuses_duplicate_members() {
     let failure = parse_project_yaml(
         br#"
-apiVersion: registry.registrystack.org/v1alpha1
-kind: RegistryProject
+apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
 kind: AnotherKind
-registry:
+project:
   id: neutral
   version: "1"
   defaultLanguage: en
@@ -3750,9 +3764,9 @@ registry:
 fn an_authored_project_carrying_an_environment_expression_is_refused() {
     let failure = parse_project_yaml(
         br#"
-apiVersion: registry.registrystack.org/v1alpha1
-kind: RegistryProject
-registry:
+apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
   id: neutral
   version: "1"
   defaultLanguage: en
@@ -3768,17 +3782,17 @@ entities:
     let diagnostic = failure
         .diagnostics()
         .iter()
-        .find(|diagnostic| diagnostic.path == "project.registry.canonicalBaseIri")
+        .find(|diagnostic| diagnostic.path == "project.project.canonicalBaseIri")
         .expect("the expression in the registry block is refused");
     assert_eq!(diagnostic.code, "config.substitution-not-allowed");
-    assert_eq!(diagnostic.path, "project.registry.canonicalBaseIri");
+    assert_eq!(diagnostic.path, "project.project.canonicalBaseIri");
     assert!(diagnostic.message.contains("runtime.yaml"));
     assert!(!diagnostic.message.contains("AUTHORED_BASE_IRI"));
 
     let module = parse_module_yaml(
         br#"
-apiVersion: registry.registrystack.org/v1alpha1
-kind: RegistryModule
+apiVersion: id.registrystack.org/formats/breg/module/v1alpha1
+kind: BRegModule
 entities:
   - id: case
     fields:
@@ -3903,27 +3917,27 @@ fn integer_members_are_read_within_their_stated_bounds() {
     let cases: Vec<(&str, ProjectEdit, &str, &str)> = vec![
         (
             "asset-site-placement",
-            Box::new(field(json!({"type": "string", "maxLength": 0}))),
+            Box::new(field(json!({"type": "string", "maximumLength": 0}))),
             "config.out-of-range",
-            "project.entities[0].fields[0].maxLength",
+            "project.entities[0].fields[0].maximumLength",
         ),
         (
             "asset-site-placement",
-            Box::new(field(json!({"type": "text", "maxLength": 10_000_001}))),
+            Box::new(field(json!({"type": "text", "maximumLength": 10_000_001}))),
             "config.out-of-range",
-            "project.entities[0].fields[0].maxLength",
+            "project.entities[0].fields[0].maximumLength",
         ),
         (
             "asset-site-placement",
             Box::new(field(
-                json!({"type": "string", "minLength": 1_000_001, "maxLength": 64}),
+                json!({"type": "string", "minimumLength": 1_000_001, "maximumLength": 64}),
             )),
             "config.out-of-range",
-            "project.entities[0].fields[0].minLength",
+            "project.entities[0].fields[0].minimumLength",
         ),
         (
             "asset-site-placement",
-            Box::new(field(json!({"type": "string", "maxLength": 1_000_001}))),
+            Box::new(field(json!({"type": "string", "maximumLength": 1_000_001}))),
             "config.invalid-value",
             "project.entities[0].fields[0]",
         ),
@@ -3960,10 +3974,10 @@ fn integer_members_are_read_within_their_stated_bounds() {
         (
             "asset-site-placement",
             Box::new(field(
-                json!({"type": "structured", "maxBytes": 1_048_577, "schema": {"type": "object"}}),
+                json!({"type": "structured", "maximumBytes": 1_048_577, "schema": {"type": "object"}}),
             )),
             "config.out-of-range",
-            "project.entities[0].fields[0].maxBytes",
+            "project.entities[0].fields[0].maximumBytes",
         ),
         (
             "asset-site-placement",
@@ -4049,13 +4063,13 @@ fn a_set_written_as_a_list_refuses_a_repeated_item_when_the_project_is_read() {
     let cases = [
         (
             "asset-site-placement",
-            "/accessProfiles/0/permissions/0/operations",
-            "project.accessProfiles[0].permissions[0].operations[5]",
+            "/accessProfiles/0/permissions/entities/0/operations",
+            "project.accessProfiles[0].permissions.entities[0].operations[5]",
         ),
         (
             "asset-site-placement",
-            "/accessProfiles/0/permissions/0/readableFields",
-            "project.accessProfiles[0].permissions[0].readableFields[3]",
+            "/accessProfiles/0/permissions/entities/0/readableFields",
+            "project.accessProfiles[0].permissions.entities[0].readableFields[3]",
         ),
         (
             "asset-site-placement",
@@ -4101,13 +4115,184 @@ fn a_set_written_as_a_list_refuses_a_repeated_item_when_the_project_is_read() {
     }
 }
 
+/// A module holding one entity whose access profile carries `member`.
+fn module_with_profile_member(member: &str, value: Value) -> Vec<u8> {
+    let mut profile = json!({
+        "id": "historian", "principalClaim": "registry_principal",
+        "operations": ["get", "list", "revisions"], "revisionAccess": true,
+        "readableFields": ["label"],
+        "requiredScopes": "unrestricted", "rowBoundaries": "unrestricted"
+    });
+    profile[member] = value;
+    serde_json::to_vec(&json!({
+        "apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule",
+        "id": "memo-core", "version": "1",
+        "entities": [{
+            "id": "memo", "primaryDataset": "test-dataset", "route": "memos",
+            "mutationMode": "mutable", "classification": "internal",
+            "fields": [{"id": "label", "type": "string", "maximumLength": 32, "required": true, "classification": "internal"}],
+            "accessProfiles": [profile]
+        }]
+    }))
+    .expect("the module serializes")
+}
+
+fn refusals(failure: &CompileFailure) -> Vec<(&str, &str)> {
+    failure
+        .diagnostics()
+        .iter()
+        .map(|diagnostic| (diagnostic.code.as_str(), diagnostic.path.as_str()))
+        .collect()
+}
+
+#[test]
+fn provenance_fields_are_read_as_a_set_in_a_project_and_a_module() {
+    parse_module_yaml(&module_with_profile_member(
+        "provenanceFields",
+        json!(["sourceReferences", "kind"]),
+    ))
+    .expect("distinct provenance fields are read in the order written");
+    let failure = parse_module_yaml(&module_with_profile_member(
+        "provenanceFields",
+        json!(["kind", "reasonCode", "kind"]),
+    ))
+    .expect_err("a repeated provenance field is refused rather than collapsed");
+    assert_eq!(
+        refusals(&failure),
+        vec![(
+            "config.duplicate-item",
+            "module.entities[0].accessProfiles[0].provenanceFields[2]"
+        )],
+        "{failure:?}"
+    );
+
+    let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../products/breg/acceptance/asset-site-placement/registry.yaml");
+    let mut source: Value =
+        serde_norway::from_slice(&fs::read(fixture).expect("the fixture is readable"))
+            .expect("the fixture is YAML");
+    source["accessProfiles"][0]["permissions"]["entities"][0]["provenanceFields"] =
+        json!(["reasonText", "reasonText"]);
+    let failure = parse_project_yaml(
+        serde_norway::to_string(&source)
+            .expect("the project serializes")
+            .as_bytes(),
+    )
+    .expect_err("a repeated provenance field is refused rather than collapsed");
+    assert_eq!(
+        refusals(&failure),
+        vec![(
+            "config.duplicate-item",
+            "project.accessProfiles[0].permissions.entities[0].provenanceFields[1]"
+        )],
+        "{failure:?}"
+    );
+}
+
+#[test]
+fn a_module_profile_task_grant_issuer_is_read_as_a_url() {
+    let failure = parse_module_yaml(&module_with_profile_member(
+        "taskGrant",
+        json!({"sourceIssuer": "urn:casework:issuer", "permissions": []}),
+    ))
+    .expect_err("an issuer that is not a URL is refused when the module is read");
+    assert_eq!(
+        refusals(&failure),
+        vec![(
+            "config.invalid-value",
+            "module.entities[0].accessProfiles[0].taskGrant.sourceIssuer"
+        )],
+        "{failure:?}"
+    );
+    assert!(
+        !failure.diagnostics()[0].message.contains("casework:issuer"),
+        "{failure:?}"
+    );
+}
+
+#[test]
+fn a_repeated_entity_id_is_refused_at_the_second_id_when_the_file_is_read() {
+    let acceptance =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../products/breg/acceptance");
+    let repeated = |file: &str| {
+        let mut source: Value = serde_norway::from_slice(
+            &fs::read(acceptance.join(file)).expect("the fixture is readable"),
+        )
+        .expect("the fixture is YAML");
+        let entities = source
+            .pointer_mut("/entities")
+            .and_then(Value::as_array_mut)
+            .expect("the fixture lists entities");
+        let first = entities[0].clone();
+        entities.push(first);
+        let last = entities.len() - 1;
+        (
+            serde_norway::to_string(&source).expect("the source serializes"),
+            last,
+        )
+    };
+    let refused = |failure: &CompileFailure| {
+        failure
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| (diagnostic.code.clone(), diagnostic.path.clone()))
+            .collect::<Vec<_>>()
+    };
+
+    let (project, last) = repeated("person-registration-rhai/registry.yaml");
+    let failure = parse_project_yaml(project.as_bytes())
+        .expect_err("a project that names one entity twice is refused when read");
+    assert_eq!(
+        refused(&failure),
+        vec![(
+            "config.duplicate-id".to_owned(),
+            format!("project.entities[{last}].id")
+        )],
+        "{failure:?}"
+    );
+
+    let (module, last) = repeated("inspection/modules/inspection-core/module.yaml");
+    let failure = parse_module_yaml(module.as_bytes())
+        .expect_err("a module that names one entity twice is refused when read");
+    assert_eq!(
+        refused(&failure),
+        vec![(
+            "config.duplicate-id".to_owned(),
+            format!("module.entities[{last}].id")
+        )],
+        "{failure:?}"
+    );
+}
+
+#[test]
+fn an_entity_two_files_contribute_is_refused_by_the_compiler() {
+    let mut project = acceptance_project("inspection");
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../products/breg/acceptance/inspection/modules")
+        .join("inspection-core/module.yaml");
+    let module = parse_module_yaml(&fs::read(path).expect("the module is readable"))
+        .expect("the module follows the authoring contract");
+    project.entities.push(module.entities[0].clone());
+
+    let failure = compile_project(&project, &[module], CompileProfile::Authoring)
+        .expect_err("one entity contributed by the project and by a module is refused");
+    assert!(
+        failure
+            .diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.code == "breg.entity.id-duplicate"),
+        "{:?}",
+        failure.diagnostics()
+    );
+}
+
 #[test]
 fn source_parse_diagnostics_name_the_member_the_alternatives_and_the_location() {
     let unknown_yaml_member = parse_project_yaml(
         br#"
-apiVersion: registry.registrystack.org/v1alpha1
-kind: RegistryProject
-registry:
+apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
   id: neutral
   version: "1"
   defaultLanguage: en
@@ -4118,7 +4303,7 @@ registry:
     .expect_err("an unknown YAML member is refused");
     let diagnostic = &unknown_yaml_member.diagnostics()[0];
     assert_eq!(diagnostic.code, "config.unknown-key");
-    assert_eq!(diagnostic.path, "project.registry.secretField");
+    assert_eq!(diagnostic.path, "project.project.secretField");
     assert!(diagnostic
         .message
         .contains("`secretField` is not a member of this mapping"));
@@ -4129,9 +4314,9 @@ registry:
 
     let missing_yaml_member = parse_project_yaml(
         br#"
-apiVersion: registry.registrystack.org/v1alpha1
-kind: RegistryProject
-registry:
+apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
   id: neutral
   defaultLanguage: en
   canonicalBaseIri: https://authoring.example.test
@@ -4148,9 +4333,9 @@ registry:
 
     let wrong_yaml_type = parse_project_yaml(
         br#"
-apiVersion: registry.registrystack.org/v1alpha1
-kind: RegistryProject
-registry:
+apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
   id: neutral
   version: "1"
   defaultLanguage: en
@@ -4167,9 +4352,9 @@ entities: do-not-echo
 
     let unknown_enum_value = parse_project_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"neutral","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"neutral","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{"id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"append_only"}]
         }"#,
     )
@@ -4178,7 +4363,7 @@ entities: do-not-echo
     assert_eq!(diagnostic.code, "breg.source.shape-invalid");
     assert_eq!(diagnostic.path, "project.entities[0].mutationMode");
     assert!(diagnostic.message.contains("unknown variant `append_only`"));
-    assert!(diagnostic.message.contains("create_only"));
+    assert!(diagnostic.message.contains("create-only"));
 
     let malformed_json =
         parse_project_json(b"{\"apiVersion\":}").expect_err("malformed JSON is refused");
@@ -4192,15 +4377,15 @@ entities: do-not-echo
 fn generic_decimal_crs84_point_and_structured_fields_compile_to_deterministic_ddl_and_schema() {
     let project = parse_project_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"generic-scalars","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"generic-scalars","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
             "id":"reading","primaryDataset":"test-dataset","route":"readings","mutationMode":"mutable",
             "fields":[
               {"id":"amount","type":"decimal","precision":6,"scale":2,"minimum":"-10.00","maximum":"9999.99","classification":"internal"},
               {"id":"location","type":"crs84-point","precision":4,"bbox":{"west":"100.0000","south":"10.0000","east":"110.0000","north":"20.0000"},"classification":"internal"},
-              {"id":"payload","type":"structured","maxBytes":256,"classification":"internal","schema":{
+              {"id":"payload","type":"structured","maximumBytes":256,"classification":"internal","schema":{
                 "$schema":"https://json-schema.org/draft/2020-12/schema",
                 "type":"object",
                 "additionalProperties":false,
@@ -4210,12 +4395,12 @@ fn generic_decimal_crs84_point_and_structured_fields_compile_to_deterministic_dd
             ]
           }],
           "accessProfiles":[{
-            "id":"operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
+            "id":"operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
               "entity":"reading","operations":["create","get","list","patch"],
               "readableFields":["amount","location","payload"],
               "writableFields":["amount","location","payload"],
               "rowBoundaries": "unrestricted"
-            }]
+            }]}
           }]
         }"#,
     )
@@ -4270,9 +4455,9 @@ fn generic_decimal_crs84_point_and_structured_fields_compile_to_deterministic_dd
 fn scalar_field_sources_reject_incompatible_type_options_during_strict_parse() {
     let failure = parse_project_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"generic-scalars","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"generic-scalars","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
             "id":"reading","primaryDataset":"test-dataset","route":"readings","mutationMode":"mutable",
             "fields":[{"id":"flag","type":"boolean","precision":2,"classification":"internal"}]
@@ -4287,17 +4472,17 @@ fn scalar_field_sources_reject_incompatible_type_options_during_strict_parse() {
 fn scalar_grammar_is_exactly_the_typed_allowlist_and_rejects_json_or_reference_lists() {
     let project = parse_project_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"scalar-allowlist","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"scalar-allowlist","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[
-            {"id":"target","primaryDataset":"test-dataset","route":"targets","mutationMode":"create_only"},
+            {"id":"target","primaryDataset":"test-dataset","route":"targets","mutationMode":"create-only"},
             {
-              "id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"create_only",
+              "id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"create-only",
               "fields":[
                 {"id":"flag","type":"boolean","classification":"internal"},
-                {"id":"code","type":"string","maxLength":32,"classification":"internal"},
-                {"id":"notes","type":"text","maxLength":1024,"classification":"internal"},
+                {"id":"code","type":"string","maximumLength":32,"classification":"internal"},
+                {"id":"notes","type":"text","maximumLength":1024,"classification":"internal"},
                 {"id":"count","type":"int64","classification":"internal"},
                 {"id":"amount","type":"decimal","precision":6,"scale":2,"classification":"internal"},
                 {"id":"day","type":"date","classification":"internal"},
@@ -4306,7 +4491,7 @@ fn scalar_grammar_is_exactly_the_typed_allowlist_and_rejects_json_or_reference_l
                 {"id":"status","type":"vocabulary-code","vocabulary":"status","classification":"internal"},
                 {"id":"target","type":"reference","target":"target","classification":"internal"},
                 {"id":"location","type":"crs84-point","precision":4,"classification":"internal"},
-                {"id":"payload","type":"structured","maxBytes":256,"classification":"internal","schema":{"type":"object","additionalProperties":false}}
+                {"id":"payload","type":"structured","maximumBytes":256,"classification":"internal","schema":{"type":"object","additionalProperties":false}}
               ]
             }
           ],
@@ -4370,11 +4555,11 @@ fn scalar_grammar_is_exactly_the_typed_allowlist_and_rejects_json_or_reference_l
     for (field, canary) in refused {
         let source = format!(
             r#"{{
-              "apiVersion":"registry.registrystack.org/v1alpha1",
-              "kind":"RegistryProject",
-              "registry":{{"id":"scalar-allowlist","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
+              "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+              "kind":"BRegProject",
+              "project":{{"id":"scalar-allowlist","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
               "entities":[{{
-                "id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"create_only",
+                "id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"create-only",
                 "fields":[{field}]
               }}]
             }}"#
@@ -4410,19 +4595,19 @@ fn generic_scalar_option_and_schema_negatives_fail_before_ddl_generation() {
             "breg.field.crs84-point-bounds-invalid",
         ),
         (
-            r#"{"id":"payload","type":"structured","maxBytes":0,"classification":"internal","schema":{"type":"object","additionalProperties":false}}"#,
+            r#"{"id":"payload","type":"structured","maximumBytes":0,"classification":"internal","schema":{"type":"object","additionalProperties":false}}"#,
             "config.out-of-range",
         ),
         (
-            r#"{"id":"payload","type":"structured","maxBytes":256,"classification":"internal","schema":{"type":"object","properties":{"code":{"type":"string"}}}}"#,
+            r#"{"id":"payload","type":"structured","maximumBytes":256,"classification":"internal","schema":{"type":"object","properties":{"code":{"type":"string"}}}}"#,
             "breg.field.structured-schema-invalid",
         ),
         (
-            r#"{"id":"payload","type":"structured","maxBytes":256,"classification":"internal","schema":{}}"#,
+            r#"{"id":"payload","type":"structured","maximumBytes":256,"classification":"internal","schema":{}}"#,
             "breg.field.structured-schema-invalid",
         ),
         (
-            r#"{"id":"payload","type":"structured","maxBytes":256,"classification":"internal","schema":{"$ref":"https://schema.example.invalid/payload"}}"#,
+            r#"{"id":"payload","type":"structured","maximumBytes":256,"classification":"internal","schema":{"$ref":"https://schema.example.invalid/payload"}}"#,
             "breg.field.structured-schema-invalid",
         ),
     ];
@@ -4430,14 +4615,14 @@ fn generic_scalar_option_and_schema_negatives_fail_before_ddl_generation() {
     for (field, code) in cases {
         let source = format!(
             r#"{{
-              "apiVersion":"registry.registrystack.org/v1alpha1",
-              "kind":"RegistryProject",
-              "registry":{{"id":"generic-scalars","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
+              "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+              "kind":"BRegProject",
+              "project":{{"id":"generic-scalars","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
               "entities":[{{
                 "id":"reading","primaryDataset":"test-dataset","route":"readings","mutationMode":"mutable",
                 "fields":[{field}]
               }}],
-              "accessProfiles":[{{"id":"operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{{"rowBoundaries": "unrestricted", "entity":"reading","operations":["get"],"readableFields":["{}"]}}]}}]
+              "accessProfiles":[{{"id":"operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{{"entities":[{{"rowBoundaries": "unrestricted", "entity":"reading","operations":["get"],"readableFields":["{}"]}}]}}}}]
             }}"#,
             if field.contains("\"amount\"") {
                 "amount"
@@ -4469,7 +4654,7 @@ fn generic_scalar_option_and_schema_negatives_fail_before_ddl_generation() {
 fn crs84_point_and_structured_fields_cannot_be_row_boundaries_until_equality_is_defined() {
     for field in [
         r#"{"id":"location","type":"crs84-point","precision":4,"classification":"internal"}"#,
-        r#"{"id":"payload","type":"structured","maxBytes":256,"classification":"internal","schema":{"type":"object","additionalProperties":false}}"#,
+        r#"{"id":"payload","type":"structured","maximumBytes":256,"classification":"internal","schema":{"type":"object","additionalProperties":false}}"#,
     ] {
         let field_id = if field.contains("\"location\"") {
             "location"
@@ -4478,19 +4663,19 @@ fn crs84_point_and_structured_fields_cannot_be_row_boundaries_until_equality_is_
         };
         let source = format!(
             r#"{{
-              "apiVersion":"registry.registrystack.org/v1alpha1",
-              "kind":"RegistryProject",
-              "registry":{{"id":"generic-scalars","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
+              "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+              "kind":"BRegProject",
+              "project":{{"id":"generic-scalars","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
               "entities":[{{
                 "id":"reading","primaryDataset":"test-dataset","route":"readings","mutationMode":"mutable",
                 "fields":[{field}]
               }}],
               "accessProfiles":[{{
-                "id":"operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{{
+                "id":"operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{{"entities":[{{
                   "entity":"reading","operations":["get"],
                   "readableFields":["{field_id}"],
                   "rowBoundaries":[{{"field":"{field_id}","claim":"claim","operator":"equals"}}]
-                }}]
+                }}]}}
               }}]
             }}"#
         );
@@ -4507,34 +4692,34 @@ fn crs84_point_and_structured_fields_cannot_be_row_boundaries_until_equality_is_
 fn geojson_and_bbox_compile_only_for_direct_current_lists() {
     let project = parse_project_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"spatial-authoring","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"spatial-authoring","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
             "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"mutable","classification":"internal",
             "fields":[
-              {"id":"code","type":"string","maxLength":32,"required":true,"classification":"internal"},
+              {"id":"code","type":"string","maximumLength":32,"required":true,"classification":"internal"},
               {"id":"location","type":"crs84-point","precision":6,"required":true,"classification":"internal"},
-              {"id":"valid-from","type":"timestamp","validTimeRole":"valid_from","required":true,"classification":"internal"},
-              {"id":"valid-to","type":"timestamp","validTimeRole":"valid_to","classification":"internal"},
-              {"id":"scope","type":"string","maxLength":32,"required":true,"classification":"internal"}
+              {"id":"valid-from","type":"timestamp","validTimeRole":"valid-from","required":true,"classification":"internal"},
+              {"id":"valid-to","type":"timestamp","validTimeRole":"valid-to","classification":"internal"},
+              {"id":"scope","type":"string","maximumLength":32,"required":true,"classification":"internal"}
             ],
             "geojson":{"geometryField":"location"},
             "temporal":{"startField":"valid-from","endField":"valid-to","scopeFields":["scope"]},
             "constraints":[{
               "id":"scope-time",
-              "kind":"temporal-non-overlap",
+              "type":"temporal-non-overlap",
               "scopeFields":["scope"],
               "startField":"valid-from",
               "endField":"valid-to"
             }]
           }],
           "accessProfiles":[{
-            "id":"map-reader","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
+            "id":"map-reader","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
               "entity":"site","operations":["get","list"],"readableFields":["code","location","valid-from","valid-to","scope"],
               "spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":0.25,"maximumLatitudeSpanDegrees":1.5}},
               "rowBoundaries": "unrestricted"
-            }]
+            }]}
           }]
         }"#,
     )
@@ -4584,18 +4769,18 @@ fn geojson_and_bbox_compile_only_for_direct_current_lists() {
 
     let ordinary = compile_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"ordinary","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"ordinary","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
             "id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable",
-            "fields":[{"id":"code","type":"string","maxLength":32,"classification":"internal"}]
+            "fields":[{"id":"code","type":"string","maximumLength":32,"classification":"internal"}]
           }],
           "accessProfiles":[{
-            "id":"reader","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
+            "id":"reader","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
               "entity":"entry","operations":["list"],"readableFields":["code"],
               "rowBoundaries": "unrestricted"
-            }]
+            }]}
           }]
         }"#,
     )
@@ -4672,21 +4857,21 @@ fn bbox_authoring_requires_declared_readable_primary_point_and_bounded_spans() {
     for (geojson, grant, code, path) in cases {
         let source = format!(
             r#"{{
-              "apiVersion":"registry.registrystack.org/v1alpha1",
-              "kind":"RegistryProject",
-              "registry":{{"id":"spatial-negative","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
+              "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+              "kind":"BRegProject",
+              "project":{{"id":"spatial-negative","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
               "entities":[{{
                 "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"mutable","classification":"internal",
                 "fields":[
-                  {{"id":"code","type":"string","maxLength":32,"classification":"internal"}},
+                  {{"id":"code","type":"string","maximumLength":32,"classification":"internal"}},
                   {{"id":"location","type":"crs84-point","precision":6,"classification":"internal"}}
                 ],
                 {geojson}
               }}],
               "accessProfiles":[{{
-                "id":"map-reader","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{{
+                "id":"map-reader","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{{"entities":[{{
                   "rowBoundaries": "unrestricted", "entity":"site",{grant}
-                }}]
+                }}]}}
               }}]
             }}"#
         );
@@ -4706,20 +4891,20 @@ fn bbox_authoring_requires_declared_readable_primary_point_and_bounded_spans() {
 fn bbox_authoring_is_strict_and_does_not_make_points_scalar_query_fields() {
     let strict_failure = parse_project_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"spatial-strict","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"spatial-strict","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
             "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"mutable",
             "fields":[{"id":"location","type":"crs84-point","precision":6,"classification":"internal"}],
             "geojson":{"geometryField":"location"}
           }],
           "accessProfiles":[{
-            "id":"map-reader","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
+            "id":"map-reader","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
               "entity":"site","operations":["list"],"readableFields":["location"],
               "spatialQueries":{"bbox":{"geometryField":"location","maximumLongitudeSpanDegrees":2,"maximumLatitudeSpanDegrees":2}},
               "rowBoundaries": "unrestricted"
-            }]
+            }]}
           }]
         }"#,
     )
@@ -4743,17 +4928,17 @@ fn bbox_authoring_is_strict_and_does_not_make_points_scalar_query_fields() {
     ] {
         let source = format!(
             r#"{{
-              "apiVersion":"registry.registrystack.org/v1alpha1",
-              "kind":"RegistryProject",
-              "registry":{{"id":"point-scalar-negative","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
+              "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+              "kind":"BRegProject",
+              "project":{{"id":"point-scalar-negative","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
               "entities":[{{
                 "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"mutable",
                 "fields":[{{"id":"location","type":"crs84-point","precision":6,"classification":"internal"}}]
               }}],
               "accessProfiles":[{{
-                "id":"reader","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{{
+                "id":"reader","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{{"entities":[{{
                   "rowBoundaries": "unrestricted", "entity":"site","operations":["list"],"readableFields":["location"],{member}
-                }}]
+                }}]}}
               }}]
             }}"#
         );
@@ -4773,31 +4958,30 @@ fn bbox_authoring_is_strict_and_does_not_make_points_scalar_query_fields() {
 fn modules_can_add_geojson_once_but_conflicting_geometry_is_refused() {
     let project = parse_project_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"module-spatial","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"module-spatial","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "modules":[{"id":"maps","version":"1"}],
           "entities":[{
             "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"mutable",
             "fields":[
-              {"id":"code","type":"string","maxLength":32,"classification":"internal"},
+              {"id":"code","type":"string","maximumLength":32,"classification":"internal"},
               {"id":"location","type":"crs84-point","precision":6,"classification":"internal"},
               {"id":"alternate","type":"crs84-point","precision":6,"classification":"internal"}
             ]
           }],
           "accessProfiles":[{
-            "id":"map-reader","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
+            "id":"map-reader","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
               "entity":"site","operations":["list"],"readableFields":["code","location"],
               "spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":2,"maximumLatitudeSpanDegrees":2}},
               "rowBoundaries": "unrestricted"
-            }]
+            }]}
           }]
         }"#,
     )
     .expect("project parses");
     let module = parse_module_json(
-        br#"{
-          "id":"maps","version":"1",
+        br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"maps","version":"1",
           "extendEntities":[{"entity":"site","geojson":{"geometryField":"location"}}]
         }"#,
     )
@@ -4818,8 +5002,7 @@ fn modules_can_add_geojson_once_but_conflicting_geometry_is_refused() {
         geometry_field: "location".to_owned(),
     });
     let conflicting = parse_module_json(
-        br#"{
-          "id":"maps","version":"1",
+        br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"maps","version":"1",
           "extendEntities":[{"entity":"site","geojson":{"geometryField":"alternate"}}]
         }"#,
     )
@@ -4842,16 +5025,16 @@ fn modules_can_add_geojson_once_but_conflicting_geometry_is_refused() {
 fn closed_constraint_grammar_compiles_typed_checks_and_refuses_expression_escape_hatches() {
     let project = parse_project_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"constraint-matrix","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"constraint-matrix","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[
-            {"id":"parent","primaryDataset":"test-dataset","route":"parents","mutationMode":"create_only"},
+            {"id":"parent","primaryDataset":"test-dataset","route":"parents","mutationMode":"create-only"},
             {
-              "id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"create_only",
+              "id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"create-only",
               "fields":[
-                {"id":"jurisdiction","type":"string","maxLength":32,"required":true,"classification":"internal"},
-                {"id":"code","type":"string","maxLength":32,"required":true,"classification":"internal"},
+                {"id":"jurisdiction","type":"string","maximumLength":32,"required":true,"classification":"internal"},
+                {"id":"code","type":"string","maximumLength":32,"required":true,"classification":"internal"},
                 {"id":"revoked-at","type":"timestamp","classification":"internal"},
                 {"id":"status","type":"vocabulary-code","vocabulary":"status","required":true,"classification":"internal"},
                 {"id":"count","type":"int64","required":true,"classification":"internal"},
@@ -4866,25 +5049,25 @@ fn closed_constraint_grammar_compiles_typed_checks_and_refuses_expression_escape
                 {"id":"amount","type":"decimal","precision":8,"scale":2,"minimum":"-100.00","maximum":"100.00","classification":"internal"},
                 {"id":"parent","type":"reference","target":"parent","onDelete":"restrict","required":true,"classification":"internal"},
                 {"id":"alternate-parent","type":"reference","target":"parent","onDelete":"restrict","classification":"internal"},
-                {"id":"scope","type":"string","maxLength":32,"required":true,"classification":"internal"},
-                {"id":"valid-from","type":"timestamp","validTimeRole":"valid_from","required":true,"classification":"internal"},
-                {"id":"valid-to","type":"timestamp","validTimeRole":"valid_to","classification":"internal"}
+                {"id":"scope","type":"string","maximumLength":32,"required":true,"classification":"internal"},
+                {"id":"valid-from","type":"timestamp","validTimeRole":"valid-from","required":true,"classification":"internal"},
+                {"id":"valid-to","type":"timestamp","validTimeRole":"valid-to","classification":"internal"}
               ],
               "temporal":{"startField":"valid-from","endField":"valid-to","scopeFields":["scope"]},
               "constraints":[
-                {"id":"composite-key","kind":"unique","fields":["jurisdiction","code"]},
-                {"id":"active-code","kind":"unique","fields":["code"],"when":[
-                  {"kind":"field_equals","field":"status","value":"active"},
-                  {"kind":"field_is_null","field":"revoked-at"},
-                  {"kind":"active_lifecycle"}
+                {"id":"composite-key","type":"unique","fields":["jurisdiction","code"]},
+                {"id":"active-code","type":"unique","fields":["code"],"when":[
+                  {"type":"field-equals","field":"status","value":"active"},
+                  {"type":"field-is-null","field":"revoked-at"},
+                  {"type":"active-lifecycle"}
                 ]},
-                {"id":"int-less","kind":"compare","left":"count","operator":"less_than","right":"capacity"},
-                {"id":"date-less-or-equal","kind":"compare","left":"starts-on","operator":"less_than_or_equal","right":"ends-on"},
-                {"id":"timestamp-greater","kind":"compare","left":"expires-at","operator":"greater_than","right":"observed-at"},
-                {"id":"int-greater-or-equal","kind":"compare","left":"ceiling","operator":"greater_than_or_equal","right":"floor"},
-                {"id":"quantity-range","kind":"int_range","field":"quantity","minimum":0,"maximum":100},
-                {"id":"status-membership","kind":"vocabulary","field":"status","values":["active","paused"]},
-                {"id":"scope-time","kind":"temporal-non-overlap","scopeFields":["scope"],"startField":"valid-from","endField":"valid-to"}
+                {"id":"int-less","type":"compare","left":"count","operator":"less-than","right":"capacity"},
+                {"id":"date-less-or-equal","type":"compare","left":"starts-on","operator":"less-than-or-equal","right":"ends-on"},
+                {"id":"timestamp-greater","type":"compare","left":"expires-at","operator":"greater-than","right":"observed-at"},
+                {"id":"int-greater-or-equal","type":"compare","left":"ceiling","operator":"greater-than-or-equal","right":"floor"},
+                {"id":"quantity-range","type":"int-range","field":"quantity","minimum":0,"maximum":100},
+                {"id":"status-membership","type":"vocabulary","field":"status","values":["active","paused"]},
+                {"id":"scope-time","type":"temporal-non-overlap","scopeFields":["scope"],"startField":"valid-from","endField":"valid-to"}
               ]
             }
           ],
@@ -4937,10 +5120,10 @@ fn closed_constraint_grammar_compiles_typed_checks_and_refuses_expression_escape
         .values()
         .filter_map(|constraint| match constraint {
             ConstraintSource::Compare { operator, .. } => Some(match operator {
-                ComparisonOperator::LessThan => "less_than",
-                ComparisonOperator::LessThanOrEqual => "less_than_or_equal",
-                ComparisonOperator::GreaterThan => "greater_than",
-                ComparisonOperator::GreaterThanOrEqual => "greater_than_or_equal",
+                ComparisonOperator::LessThan => "less-than",
+                ComparisonOperator::LessThanOrEqual => "less-than-or-equal",
+                ComparisonOperator::GreaterThan => "greater-than",
+                ComparisonOperator::GreaterThanOrEqual => "greater-than-or-equal",
             }),
             _ => None,
         })
@@ -4948,10 +5131,10 @@ fn closed_constraint_grammar_compiles_typed_checks_and_refuses_expression_escape
     assert_eq!(
         comparison_operators,
         [
-            "greater_than",
-            "greater_than_or_equal",
-            "less_than",
-            "less_than_or_equal",
+            "greater-than",
+            "greater-than-or-equal",
+            "less-than",
+            "less-than-or-equal",
         ]
         .into_iter()
         .collect()
@@ -5036,21 +5219,21 @@ fn closed_constraint_grammar_compiles_typed_checks_and_refuses_expression_escape
             "sql-expression-canary",
         ),
         (
-            r#"{"kind":"compare","left":"left","operator":"less_than","right":"right","sql":"sql-fragment-canary"}"#,
+            r#"{"type":"compare","left":"left","operator":"less-than","right":"right","sql":"sql-fragment-canary"}"#,
             "sql-fragment-canary",
         ),
         (
-            r#"{"kind":"int_range","field":"left","minimum":0,"expression":"general-expression-canary"}"#,
+            r#"{"type":"int-range","field":"left","minimum":0,"expression":"general-expression-canary"}"#,
             "general-expression-canary",
         ),
     ] {
         let source = format!(
             r#"{{
-              "apiVersion":"registry.registrystack.org/v1alpha1",
-              "kind":"RegistryProject",
-              "registry":{{"id":"constraint-matrix","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
+              "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+              "kind":"BRegProject",
+              "project":{{"id":"constraint-matrix","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
               "entities":[{{
-                "id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"create_only",
+                "id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"create-only",
                 "fields":[
                   {{"id":"left","type":"int64","classification":"internal"}},
                   {{"id":"right","type":"int64","classification":"internal"}}
@@ -5071,11 +5254,11 @@ fn closed_constraint_grammar_compiles_typed_checks_and_refuses_expression_escape
 
     let cascade = parse_project_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"constraint-matrix","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"constraint-matrix","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
-            "id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"create_only",
+            "id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"create-only",
             "fields":[{"id":"cascade-reference-canary","type":"reference","target":"record","onDelete":"cascade","classification":"internal"}]
           }]
         }"#,
@@ -5093,18 +5276,18 @@ fn closed_constraint_grammar_compiles_typed_checks_and_refuses_expression_escape
 fn partial_unique_when_predicates_are_strictly_tagged_and_closed() {
     let unknown_member = parse_project_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"partial-unique","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"partial-unique","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
             "id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable",
             "fields":[
-              {"id":"code","type":"string","maxLength":32,"required":true,"classification":"internal"},
+              {"id":"code","type":"string","maximumLength":32,"required":true,"classification":"internal"},
               {"id":"status","type":"vocabulary-code","vocabulary":"status","required":true,"classification":"internal"}
             ],
             "constraints":[{
-              "kind":"unique","fields":["code"],
-              "when":[{"kind":"field_equals","field":"status","value":"active","sql":"record_lifecycle = 'active'"}]
+              "type":"unique","fields":["code"],
+              "when":[{"type":"field-equals","field":"status","value":"active","sql":"record_lifecycle = 'active'"}]
             }]
           }],
           "vocabularies":[{"id":"status","values":["active","closed"]}]
@@ -5121,15 +5304,15 @@ fn partial_unique_when_predicates_are_strictly_tagged_and_closed() {
 
     let arbitrary_lifecycle = parse_project_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"partial-unique","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"partial-unique","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
             "id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable",
-            "fields":[{"id":"code","type":"string","maxLength":32,"required":true,"classification":"internal"}],
+            "fields":[{"id":"code","type":"string","maximumLength":32,"required":true,"classification":"internal"}],
             "constraints":[{
-              "kind":"unique","fields":["code"],
-              "when":[{"kind":"active_lifecycle","value":"tombstoned"}]
+              "type":"unique","fields":["code"],
+              "when":[{"type":"active-lifecycle","value":"tombstoned"}]
             }]
           }]
         }"#,
@@ -5144,13 +5327,13 @@ fn partial_unique_when_predicates_are_strictly_tagged_and_closed() {
 #[test]
 fn partial_unique_typed_literals_are_canonical_for_each_supported_field_type() {
     let source = br#"{
-      "apiVersion":"registry.registrystack.org/v1alpha1",
-      "kind":"RegistryProject",
-      "registry":{"id":"partial-unique","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+      "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+      "kind":"BRegProject",
+      "project":{"id":"partial-unique","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
       "entities":[{
         "id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable",
         "fields":[
-          {"id":"code","type":"string","maxLength":32,"required":true,"classification":"internal"},
+          {"id":"code","type":"string","maximumLength":32,"required":true,"classification":"internal"},
           {"id":"flag","type":"boolean","classification":"internal"},
           {"id":"count","type":"int64","classification":"internal"},
           {"id":"amount","type":"decimal","precision":6,"scale":2,"minimum":"0.00","maximum":"9999.99","classification":"internal"},
@@ -5160,15 +5343,15 @@ fn partial_unique_typed_literals_are_canonical_for_each_supported_field_type() {
           {"id":"status","type":"vocabulary-code","vocabulary":"status","classification":"internal"}
         ],
         "constraints":[{
-          "kind":"unique","fields":["code"],
+          "type":"unique","fields":["code"],
           "when":[
-            {"kind":"field_equals","field":"flag","value":true},
-            {"kind":"field_equals","field":"count","value":42},
-            {"kind":"field_equals","field":"amount","value":"12.30"},
-            {"kind":"field_equals","field":"day","value":"2026-08-29"},
-            {"kind":"field_equals","field":"seen-at","value":"2026-08-29T10:20:30Z"},
-            {"kind":"field_equals","field":"owner","value":"123e4567-e89b-12d3-a456-426614174000"},
-            {"kind":"field_equals","field":"status","value":"active"}
+            {"type":"field-equals","field":"flag","value":true},
+            {"type":"field-equals","field":"count","value":42},
+            {"type":"field-equals","field":"amount","value":"12.30"},
+            {"type":"field-equals","field":"day","value":"2026-08-29"},
+            {"type":"field-equals","field":"seen-at","value":"2026-08-29T10:20:30Z"},
+            {"type":"field-equals","field":"owner","value":"123e4567-e89b-12d3-a456-426614174000"},
+            {"type":"field-equals","field":"status","value":"active"}
           ]
         }]
       }],
@@ -5189,27 +5372,27 @@ fn partial_unique_rejects_invalid_literals_and_json_predicate_fields() {
     let cases = [
         (
             r#"{"id":"amount","type":"decimal","precision":6,"scale":2,"classification":"internal"}"#,
-            r#"{"kind":"field_equals","field":"amount","value":"1.2"}"#,
+            r#"{"type":"field-equals","field":"amount","value":"1.2"}"#,
             "breg.constraint.unique-when-literal-invalid",
         ),
         (
             r#"{"id":"seen-at","type":"timestamp","classification":"internal"}"#,
-            r#"{"kind":"field_equals","field":"seen-at","value":"2026-08-29T10:20:30+00:00"}"#,
+            r#"{"type":"field-equals","field":"seen-at","value":"2026-08-29T10:20:30+00:00"}"#,
             "breg.constraint.unique-when-literal-invalid",
         ),
         (
             r#"{"id":"owner","type":"uuid","classification":"internal"}"#,
-            r#"{"kind":"field_equals","field":"owner","value":"123E4567-E89B-12D3-A456-426614174000"}"#,
+            r#"{"type":"field-equals","field":"owner","value":"123E4567-E89B-12D3-A456-426614174000"}"#,
             "breg.constraint.unique-when-literal-invalid",
         ),
         (
             r#"{"id":"shape","type":"crs84-point","precision":4,"classification":"internal"}"#,
-            r#"{"kind":"field_is_not_null","field":"shape"}"#,
+            r#"{"type":"field-is-not-null","field":"shape"}"#,
             "breg.constraint.unique-when-field-unsupported",
         ),
         (
-            r#"{"id":"payload","type":"structured","maxBytes":256,"classification":"internal","schema":{"type":"object","additionalProperties":false}}"#,
-            r#"{"kind":"field_equals","field":"payload","value":{}}"#,
+            r#"{"id":"payload","type":"structured","maximumBytes":256,"classification":"internal","schema":{"type":"object","additionalProperties":false}}"#,
+            r#"{"type":"field-equals","field":"payload","value":{}}"#,
             "breg.constraint.unique-when-field-unsupported",
         ),
     ];
@@ -5217,16 +5400,16 @@ fn partial_unique_rejects_invalid_literals_and_json_predicate_fields() {
     for (field, predicate, code) in cases {
         let source = format!(
             r#"{{
-              "apiVersion":"registry.registrystack.org/v1alpha1",
-              "kind":"RegistryProject",
-              "registry":{{"id":"partial-unique","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
+              "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+              "kind":"BRegProject",
+              "project":{{"id":"partial-unique","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
               "entities":[{{
                 "id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable",
                 "fields":[
-                  {{"id":"code","type":"string","maxLength":32,"required":true,"classification":"internal"}},
+                  {{"id":"code","type":"string","maximumLength":32,"required":true,"classification":"internal"}},
                   {field}
                 ],
-                "constraints":[{{"kind":"unique","fields":["code"],"when":[{predicate}]}}]
+                "constraints":[{{"type":"unique","fields":["code"],"when":[{predicate}]}}]
               }}]
             }}"#
         );
@@ -5243,23 +5426,23 @@ fn partial_unique_rejects_empty_unknown_duplicate_and_contradictory_when_predica
     let cases = [
         ("[]", "breg.constraint.unique-when-empty"),
         (
-            r#"[{"kind":"active_lifecycle"},{"kind":"active_lifecycle"}]"#,
+            r#"[{"type":"active-lifecycle"},{"type":"active-lifecycle"}]"#,
             "breg.constraint.unique-when-duplicate",
         ),
         (
-            r#"[{"kind":"field_is_null","field":"optional"},{"kind":"field_is_not_null","field":"optional"}]"#,
+            r#"[{"type":"field-is-null","field":"optional"},{"type":"field-is-not-null","field":"optional"}]"#,
             "breg.constraint.unique-when-contradiction",
         ),
         (
-            r#"[{"kind":"field_equals","field":"optional","value":"one"},{"kind":"field_equals","field":"optional","value":"two"}]"#,
+            r#"[{"type":"field-equals","field":"optional","value":"one"},{"type":"field-equals","field":"optional","value":"two"}]"#,
             "breg.constraint.unique-when-contradiction",
         ),
         (
-            r#"[{"kind":"field_is_not_null","field":"required"}]"#,
+            r#"[{"type":"field-is-not-null","field":"required"}]"#,
             "breg.constraint.unique-when-null-invalid",
         ),
         (
-            r#"[{"kind":"field_equals","field":"missing","value":"one"}]"#,
+            r#"[{"type":"field-equals","field":"missing","value":"one"}]"#,
             "breg.constraint.unique-when-field-unknown",
         ),
     ];
@@ -5267,17 +5450,17 @@ fn partial_unique_rejects_empty_unknown_duplicate_and_contradictory_when_predica
     for (when, code) in cases {
         let source = format!(
             r#"{{
-              "apiVersion":"registry.registrystack.org/v1alpha1",
-              "kind":"RegistryProject",
-              "registry":{{"id":"partial-unique","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
+              "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+              "kind":"BRegProject",
+              "project":{{"id":"partial-unique","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
               "entities":[{{
                 "id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable",
                 "fields":[
-                  {{"id":"code","type":"string","maxLength":32,"required":true,"classification":"internal"}},
-                  {{"id":"required","type":"string","maxLength":32,"required":true,"classification":"internal"}},
-                  {{"id":"optional","type":"string","maxLength":32,"classification":"internal"}}
+                  {{"id":"code","type":"string","maximumLength":32,"required":true,"classification":"internal"}},
+                  {{"id":"required","type":"string","maximumLength":32,"required":true,"classification":"internal"}},
+                  {{"id":"optional","type":"string","maximumLength":32,"classification":"internal"}}
                 ],
-                "constraints":[{{"kind":"unique","fields":["code"],"when":{when}}}]
+                "constraints":[{{"type":"unique","fields":["code"],"when":{when}}}]
               }}]
             }}"#
         );
@@ -5292,43 +5475,43 @@ fn partial_unique_rejects_empty_unknown_duplicate_and_contradictory_when_predica
 #[test]
 fn partial_unique_ddl_is_quoted_and_deterministic_across_predicate_order() {
     let left = br#"{
-      "apiVersion":"registry.registrystack.org/v1alpha1",
-      "kind":"RegistryProject",
-      "registry":{"id":"partial-unique","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+      "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+      "kind":"BRegProject",
+      "project":{"id":"partial-unique","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
       "entities":[{
         "id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable",
         "fields":[
-          {"id":"code","type":"string","maxLength":32,"required":true,"classification":"internal"},
+          {"id":"code","type":"string","maximumLength":32,"required":true,"classification":"internal"},
           {"id":"ended-on","type":"date","classification":"internal"},
-          {"id":"marker","type":"string","maxLength":96,"classification":"internal"}
+          {"id":"marker","type":"string","maximumLength":96,"classification":"internal"}
         ],
         "constraints":[{
-          "kind":"unique","fields":["code"],
+          "type":"unique","fields":["code"],
           "when":[
-            {"kind":"active_lifecycle"},
-            {"kind":"field_equals","field":"marker","value":"O'Hare'); DROP TABLE registry_data.x; --"},
-            {"kind":"field_is_null","field":"ended-on"}
+            {"type":"active-lifecycle"},
+            {"type":"field-equals","field":"marker","value":"O'Hare'); DROP TABLE registry_data.x; --"},
+            {"type":"field-is-null","field":"ended-on"}
           ]
         }]
       }]
     }"#;
     let right = br#"{
-      "apiVersion":"registry.registrystack.org/v1alpha1",
-      "kind":"RegistryProject",
-      "registry":{"id":"partial-unique","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+      "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+      "kind":"BRegProject",
+      "project":{"id":"partial-unique","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
       "entities":[{
         "id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable",
         "fields":[
-          {"id":"code","type":"string","maxLength":32,"required":true,"classification":"internal"},
+          {"id":"code","type":"string","maximumLength":32,"required":true,"classification":"internal"},
           {"id":"ended-on","type":"date","classification":"internal"},
-          {"id":"marker","type":"string","maxLength":96,"classification":"internal"}
+          {"id":"marker","type":"string","maximumLength":96,"classification":"internal"}
         ],
         "constraints":[{
-          "kind":"unique","fields":["code"],
+          "type":"unique","fields":["code"],
           "when":[
-            {"kind":"field_is_null","field":"ended-on"},
-            {"kind":"field_equals","field":"marker","value":"O'Hare'); DROP TABLE registry_data.x; --"},
-            {"kind":"active_lifecycle"}
+            {"type":"field-is-null","field":"ended-on"},
+            {"type":"field-equals","field":"marker","value":"O'Hare'); DROP TABLE registry_data.x; --"},
+            {"type":"active-lifecycle"}
           ]
         }]
       }]
@@ -5356,25 +5539,25 @@ fn partial_unique_ddl_is_quoted_and_deterministic_across_predicate_order() {
 fn equivalent_partial_unique_extension_constraints_merge_deterministically() {
     let project = parse_project_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject",
-          "registry":{"id":"partial-unique","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
+          "project":{"id":"partial-unique","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "modules":[{"id":"a","version":"1"},{"id":"b","version":"1"}],
           "entities":[{"id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable","fields":[
-            {"id":"code","type":"string","maxLength":32,"required":true,"classification":"internal"},
+            {"id":"code","type":"string","maximumLength":32,"required":true,"classification":"internal"},
             {"id":"ended-on","type":"date","classification":"internal"}
           ]}]
         }"#,
     )
     .expect("project parses");
     let a = parse_module_json(
-        br#"{"id":"a","version":"1","extendEntities":[{"entity":"entry","constraints":[{
-          "kind":"unique","fields":["code"],"when":[{"kind":"active_lifecycle"},{"kind":"field_is_null","field":"ended-on"}]
+        br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"a","version":"1","extendEntities":[{"entity":"entry","constraints":[{
+          "type":"unique","fields":["code"],"when":[{"type":"active-lifecycle"},{"type":"field-is-null","field":"ended-on"}]
         }]}]}"#,
     )
     .expect("module parses");
     let b = parse_module_json(
-        br#"{"id":"b","version":"1","extendEntities":[{"entity":"entry","constraints":[{
-          "kind":"unique","fields":["code"],"when":[{"kind":"field_is_null","field":"ended-on"},{"kind":"active_lifecycle"}]
+        br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"b","version":"1","extendEntities":[{"entity":"entry","constraints":[{
+          "type":"unique","fields":["code"],"when":[{"type":"field-is-null","field":"ended-on"},{"type":"active-lifecycle"}]
         }]}]}"#,
     )
     .expect("module parses");
@@ -5392,39 +5575,39 @@ fn equivalent_partial_unique_extension_constraints_merge_deterministically() {
 #[test]
 fn authenticated_profiles_may_process_governed_non_public_constraint_fields() {
     let source = br#"{
-      "apiVersion":"registry.registrystack.org/v1alpha1",
-      "kind":"RegistryProject",
-      "registry":{"id":"constraint-processing","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+      "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+      "kind":"BRegProject",
+      "project":{"id":"constraint-processing","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
       "entities":[{
         "id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"mutable","classification":"public",
         "fields":[
-          {"id":"label","type":"string","maxLength":32,"required":true,"classification":"public"},
-          {"id":"unique-field","type":"string","maxLength":32,"required":true,"classification":"public"},
-          {"id":"partial-field","type":"string","maxLength":32,"required":true,"classification":"public"},
-          {"id":"predicate-field","type":"string","maxLength":32,"classification":"public"},
+          {"id":"label","type":"string","maximumLength":32,"required":true,"classification":"public"},
+          {"id":"unique-field","type":"string","maximumLength":32,"required":true,"classification":"public"},
+          {"id":"partial-field","type":"string","maximumLength":32,"required":true,"classification":"public"},
+          {"id":"predicate-field","type":"string","maximumLength":32,"classification":"public"},
           {"id":"compare-left","type":"int64","required":true,"classification":"public"},
           {"id":"compare-right","type":"int64","required":true,"classification":"public"},
           {"id":"range-field","type":"int64","classification":"public"},
           {"id":"vocabulary-field","type":"vocabulary-code","vocabulary":"status","classification":"public"},
           {"id":"temporal-start","type":"date","required":true,"classification":"public"},
           {"id":"temporal-end","type":"date","classification":"public"},
-          {"id":"temporal-scope","type":"string","maxLength":32,"required":true,"classification":"public"}
+          {"id":"temporal-scope","type":"string","maximumLength":32,"required":true,"classification":"public"}
         ],
         "temporal":{"startField":"temporal-start","endField":"temporal-end","scopeFields":["temporal-scope"]},
         "constraints":[
-          {"kind":"unique","fields":["unique-field"]},
-          {"kind":"unique","fields":["partial-field"],"when":[{"kind":"field_is_not_null","field":"predicate-field"}]},
-          {"kind":"compare","left":"compare-left","operator":"less_than","right":"compare-right"},
-          {"kind":"int_range","field":"range-field","minimum":0,"maximum":10},
-          {"kind":"vocabulary","field":"vocabulary-field","values":["active"]},
-          {"kind":"temporal-non-overlap","scopeFields":["temporal-scope"],"startField":"temporal-start","endField":"temporal-end"}
+          {"type":"unique","fields":["unique-field"]},
+          {"type":"unique","fields":["partial-field"],"when":[{"type":"field-is-not-null","field":"predicate-field"}]},
+          {"type":"compare","left":"compare-left","operator":"less-than","right":"compare-right"},
+          {"type":"int-range","field":"range-field","minimum":0,"maximum":10},
+          {"type":"vocabulary","field":"vocabulary-field","values":["active"]},
+          {"type":"temporal-non-overlap","scopeFields":["temporal-scope"],"startField":"temporal-start","endField":"temporal-end"}
         ]
       }],
       "accessProfiles":[{
-        "id":"reader","principalClaim":"principal","requiredScopes":["records.read"],"default":true,"permissions":[{
+        "id":"reader","principalClaim":"principal","requiredScopes":["records.read"],"default":true,"permissions":{"entities":[{
           "entity":"record","operations":["get"],"readableFields":["label"],
           "rowBoundaries": "unrestricted"
-        }]
+        }]}
       }],
       "vocabularies":[{"id":"status","values":["active","inactive"]}]
     }"#;
@@ -5456,25 +5639,25 @@ fn authenticated_profiles_may_process_governed_non_public_constraint_fields() {
 #[test]
 fn compiled_partial_unique_constraint_keeps_closed_predicates_in_the_model() {
     let source = br#"{
-      "apiVersion":"registry.registrystack.org/v1alpha1",
-      "kind":"RegistryProject",
-      "registry":{"id":"partial-unique","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+      "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+      "kind":"BRegProject",
+      "project":{"id":"partial-unique","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
       "entities":[{
         "id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable","classification":"public",
         "fields":[
-          {"id":"code","type":"string","maxLength":32,"required":true,"classification":"public"},
+          {"id":"code","type":"string","maximumLength":32,"required":true,"classification":"public"},
           {"id":"status","type":"vocabulary-code","vocabulary":"status","classification":"public"}
         ],
         "constraints":[{
-          "kind":"unique","fields":["code"],
-          "when":[{"kind":"active_lifecycle"},{"kind":"field_equals","field":"status","value":"active"}]
+          "type":"unique","fields":["code"],
+          "when":[{"type":"active-lifecycle"},{"type":"field-equals","field":"status","value":"active"}]
         }]
       }],
       "accessProfiles":[{
-        "id":"reader","principalClaim":"principal","requiredScopes":["entries.read"],"default":true,"permissions":[{
+        "id":"reader","principalClaim":"principal","requiredScopes":["entries.read"],"default":true,"permissions":{"entities":[{
           "entity":"entry","operations":["get"],"readableFields":["code","status"],"filterableFields":["status"],
           "rowBoundaries": "unrestricted"
-        }]
+        }]}
       }],
       "vocabularies":[{"id":"status","values":["active","closed"]}]
     }"#;
@@ -5512,6 +5695,7 @@ fn create_only_operation_conflict_fails_before_artifact_generation() {
         .expect("fixture has an access profile");
     let grant = profile
         .permissions
+        .entities
         .iter_mut()
         .find(|grant| grant.entity == "inspection-event")
         .expect("fixture grants the create-only entity");
@@ -5735,15 +5919,15 @@ fn generated_openapi_routes_and_physical_names_share_one_compiled_inventory() {
 fn generated_openapi_separates_security_and_mutation_input_from_read_schema() {
     let compiled = compile_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"business-contract","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"business-contract","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
             "id":"business-record","primaryDataset":"test-dataset","route":"business-records","mutationMode":"mutable","classification":"public",
             "fields":[
-              {"id":"code","type":"string","required":true,"maxLength":32,"classification":"public"},
-              {"id":"business-note","apiName":"businessNote","type":"string","maxLength":80,"classification":"public"},
-              {"id":"draft-note","apiName":"draftNote","type":"string","maxLength":80,"classification":"internal"}
+              {"id":"code","type":"string","required":true,"maximumLength":32,"classification":"public"},
+              {"id":"business-note","apiName":"businessNote","type":"string","maximumLength":80,"classification":"public"},
+              {"id":"draft-note","apiName":"draftNote","type":"string","maximumLength":80,"classification":"internal"}
             ]
           }],
           "accessProfiles":[{
@@ -5751,24 +5935,24 @@ fn generated_openapi_separates_security_and_mutation_input_from_read_schema() {
             "default":true,
             "principalClaim":"registry_principal",
             "requiredScopes":["records.read"],
-            "permissions":[{
+            "permissions":{"entities":[{
               "entity":"business-record",
               "operations":["get","list"],
               "readableFields":["code","business-note"],
               "rowBoundaries": "unrestricted"
-            }]
+            }]}
           },{
             "id":"business",
             "principalClaim":"registry_principal",
             "requiredScopes":"unrestricted",
             "requiredPurposes":["business"],
-            "permissions":[{
+            "permissions":{"entities":[{
               "entity":"business-record",
               "operations":["create","get"],
               "readableFields":["code","business-note"],
               "writableFields":["code","draft-note"],
               "rowBoundaries": "unrestricted"
-            }]
+            }]}
           }]
         }"#,
     )
@@ -5833,15 +6017,15 @@ fn generated_openapi_separates_security_and_mutation_input_from_read_schema() {
 fn entity_schema_uses_compiled_api_names_and_preserves_field_contracts() {
     let compiled = compile_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"logical-schema","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"logical-schema","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
             "id":"household","primaryDataset":"test-dataset","route":"households","mutationMode":"mutable",
             "fields":[
-              {"id":"household-code","type":"string","required":true,"maxLength":64,"classification":"restricted"},
+              {"id":"household-code","type":"string","required":true,"maximumLength":64,"classification":"restricted"},
               {"id":"household-kind-code","apiName":"householdKind","type":"vocabulary-code","vocabulary":"household-kind","required":true,"classification":"restricted"},
-              {"id":"case-note","apiName":"caseNoteText","type":"text","maxLength":200,"classification":"restricted"}
+              {"id":"case-note","apiName":"caseNoteText","type":"text","maximumLength":200,"classification":"restricted"}
             ]
           }],
           "vocabularies":[{"id":"household-kind","values":["single","extended"]}]
@@ -5974,18 +6158,18 @@ fn compiled_metadata_inventory_is_bijective_canonical_schema_bound_and_determini
 fn compiler_produces_both_revision_routes_when_explicitly_configured() {
     let compiled = compile_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"revision-surface","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"revision-surface","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
-            "id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"create_only","classification":"internal",
-            "fields":[{"id":"code","type":"string","maxLength":32,"classification":"internal"}]
+            "id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"create-only","classification":"internal",
+            "fields":[{"id":"code","type":"string","maximumLength":32,"classification":"internal"}]
           }],
           "accessProfiles":[{
-            "id":"auditor","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
+            "id":"auditor","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
               "entity":"entry","operations":["revisions"],"revisionAccess":true,"readableFields":["code"],
               "rowBoundaries": "unrestricted"
-            }]
+            }]}
           }]
         }"#,
     )
@@ -6066,17 +6250,17 @@ fn compiler_omits_revision_routes_when_not_configured_or_revision_access_is_fals
     for (operations, revision_access) in [(r#"["get"]"#, "true"), (r#"["revisions"]"#, "false")] {
         let source = format!(
             r#"{{
-              "apiVersion":"registry.registrystack.org/v1alpha1",
-              "kind":"RegistryProject",
-              "registry":{{"id":"revision-surface","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
+              "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+              "kind":"BRegProject",
+              "project":{{"id":"revision-surface","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
               "entities":[{{
-                "id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"create_only","classification":"public",
-                "fields":[{{"id":"code","type":"string","maxLength":32,"classification":"public"}}]
+                "id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"create-only","classification":"public",
+                "fields":[{{"id":"code","type":"string","maximumLength":32,"classification":"public"}}]
               }}],
               "accessProfiles":[{{
-                "id":"reader","default":true,"principalClaim":"principal","requiredScopes":["entries.read"],"permissions":[{{
+                "id":"reader","default":true,"principalClaim":"principal","requiredScopes":["entries.read"],"permissions":{{"entities":[{{
                   "rowBoundaries": "unrestricted", "entity":"entry","operations":{operations},"revisionAccess":{revision_access},"readableFields":["code"]
-                }}]
+                }}]}}
               }}]
             }}"#
         );
@@ -6130,22 +6314,22 @@ fn unresolved_reference_is_value_free_and_fails_before_ddl() {
 fn additive_module_conflicts_fail_instead_of_using_input_precedence() {
     let project = parse_project_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject",
-          "registry":{"id":"neutral","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
+          "project":{"id":"neutral","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "modules":[{"id":"core","version":"1"},{"id":"a","version":"1"},{"id":"b","version":"1"}],
           "entities":[{"id":"object","primaryDataset":"test-dataset","route":"objects","mutationMode":"mutable","fields":[
-            {"id":"code","type":"string","maxLength":8,"classification":"internal"}
+            {"id":"code","type":"string","maximumLength":8,"classification":"internal"}
           ]}],
-          "accessProfiles":[{"id":"operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{"entity":"object","operations":["get"],"readableFields":["code"], "rowBoundaries": "unrestricted"}]}]
+          "accessProfiles":[{"id":"operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{"entity":"object","operations":["get"],"readableFields":["code"], "rowBoundaries": "unrestricted"}]}}]
         }"#,
     )
     .expect("project parses");
     let a = parse_module_json(
-        br#"{"id":"a","version":"1","dependencies":["core"],"extendEntities":[{"entity":"object","fields":[{"id":"collision","type":"boolean","classification":"internal"}]}]}"#,
+        br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"a","version":"1","dependencies":["core"],"extendEntities":[{"entity":"object","fields":[{"id":"collision","type":"boolean","classification":"internal"}]}]}"#,
     )
     .expect("module parses");
     let b = parse_module_json(
-        br#"{"id":"b","version":"1","dependencies":["core"],"extendEntities":[{"entity":"object","fields":[{"id":"collision","type":"int64","classification":"internal"}]}]}"#,
+        br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"b","version":"1","dependencies":["core"],"extendEntities":[{"entity":"object","fields":[{"id":"collision","type":"int64","classification":"internal"}]}]}"#,
     )
     .expect("module parses");
     for modules in [vec![a.clone(), b.clone()], vec![b.clone(), a.clone()]] {
@@ -6162,20 +6346,22 @@ fn additive_module_conflicts_fail_instead_of_using_input_precedence() {
 fn operation_ids_preserve_distinct_valid_entity_ids_without_collisions() {
     let project = parse_project_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject",
-          "registry":{"id":"neutral","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
+          "project":{"id":"neutral","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[
-            {"id":"case-file","primaryDataset":"test-dataset","route":"case-files","mutationMode":"create_only","fields":[
-              {"id":"code","type":"string","maxLength":8,"classification":"internal"}
+            {"id":"case-file","primaryDataset":"test-dataset","route":"case-files","mutationMode":"create-only","fields":[
+              {"id":"code","type":"string","maximumLength":8,"classification":"internal"}
             ]},
-            {"id":"case_file_record","primaryDataset":"test-dataset","route":"case_file_records","mutationMode":"create_only","fields":[
-              {"id":"code","type":"string","maxLength":8,"classification":"internal"}
+            {"id":"case_file_record","primaryDataset":"test-dataset","route":"case_file_records","mutationMode":"create-only","fields":[
+              {"id":"code","type":"string","maximumLength":8,"classification":"internal"}
             ]}
           ],
-          "accessProfiles":[{"id":"reader","principalClaim":"principal","requiredScopes":"unrestricted","permissions":[
-            {"entity":"case-file","operations":["get"],"readableFields":["code"], "rowBoundaries": "unrestricted"},
-            {"entity":"case_file_record","operations":["get"],"readableFields":["code"], "rowBoundaries": "unrestricted"}
-          ]}]
+          "accessProfiles":[{"id":"reader","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{
+            "entities":[
+              {"entity":"case-file","operations":["get"],"readableFields":["code"], "rowBoundaries": "unrestricted"},
+              {"entity":"case_file_record","operations":["get"],"readableFields":["code"], "rowBoundaries": "unrestricted"}
+            ]
+          }}]
         }"#,
     )
     .expect("project parses");
@@ -6198,20 +6384,22 @@ fn operation_ids_preserve_distinct_valid_entity_ids_without_collisions() {
 fn entity_ids_that_share_one_sql_name_are_refused() {
     let project = parse_project_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject",
-          "registry":{"id":"neutral","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
+          "project":{"id":"neutral","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[
-            {"id":"case-file","primaryDataset":"test-dataset","route":"case-files","mutationMode":"create_only","fields":[
-              {"id":"code","type":"string","maxLength":8,"classification":"internal"}
+            {"id":"case-file","primaryDataset":"test-dataset","route":"case-files","mutationMode":"create-only","fields":[
+              {"id":"code","type":"string","maximumLength":8,"classification":"internal"}
             ]},
-            {"id":"case_file","primaryDataset":"test-dataset","route":"case_files","mutationMode":"create_only","fields":[
-              {"id":"code","type":"string","maxLength":8,"classification":"internal"}
+            {"id":"case_file","primaryDataset":"test-dataset","route":"case_files","mutationMode":"create-only","fields":[
+              {"id":"code","type":"string","maximumLength":8,"classification":"internal"}
             ]}
           ],
-          "accessProfiles":[{"id":"reader","principalClaim":"principal","requiredScopes":"unrestricted","permissions":[
-            {"entity":"case-file","operations":["get"],"readableFields":["code"], "rowBoundaries": "unrestricted"},
-            {"entity":"case_file","operations":["get"],"readableFields":["code"], "rowBoundaries": "unrestricted"}
-          ]}]
+          "accessProfiles":[{"id":"reader","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{
+            "entities":[
+              {"entity":"case-file","operations":["get"],"readableFields":["code"], "rowBoundaries": "unrestricted"},
+              {"entity":"case_file","operations":["get"],"readableFields":["code"], "rowBoundaries": "unrestricted"}
+            ]
+          }}]
         }"#,
     )
     .expect("project parses");
@@ -6356,6 +6544,7 @@ fn compiled_query_inventory_is_profile_scoped_bounded_and_temporal() {
         .first_mut()
         .expect("fixture has an access profile")
         .permissions
+        .entities
         .iter_mut()
         .find(|grant| grant.entity == "asset-placement")
         .expect("fixture grants placement access");
@@ -6505,7 +6694,7 @@ fn compiled_query_inventory_is_profile_scoped_bounded_and_temporal() {
     );
     assert_eq!(
         openapi["paths"]["/v1/records/placements:as-of"]["get"]["x-registry-queryKind"],
-        "as_of"
+        "as-of"
     );
     assert!(
         openapi["paths"]["/v1/records/placements:as-of"]["get"]["x-registry-queryProfiles"]
@@ -6586,25 +6775,25 @@ fn compiled_query_inventory_is_profile_scoped_bounded_and_temporal() {
 fn temporal_validity_compiles_without_non_overlap_constraint() {
     let compiled = compile_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"temporal-open","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"temporal-open","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
             "id":"membership","primaryDataset":"test-dataset","route":"memberships","mutationMode":"mutable","classification":"internal",
             "fields":[
-              {"id":"person","type":"string","maxLength":32,"required":true,"classification":"internal"},
-              {"id":"role","type":"string","maxLength":32,"required":true,"classification":"internal"},
+              {"id":"person","type":"string","maximumLength":32,"required":true,"classification":"internal"},
+              {"id":"role","type":"string","maximumLength":32,"required":true,"classification":"internal"},
               {"id":"valid-from","type":"date","required":true,"classification":"internal"},
               {"id":"valid-to","type":"date","classification":"internal"}
             ],
             "temporal":{"startField":"valid-from","endField":"valid-to"}
           }],
           "accessProfiles":[{
-            "id":"operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
+            "id":"operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
               "entity":"membership","operations":["list"],
               "readableFields":["person","role","valid-from","valid-to"],
               "rowBoundaries": "unrestricted"
-            }]
+            }]}
           }]
         }"#,
     )
@@ -6628,28 +6817,28 @@ fn temporal_validity_compiles_without_non_overlap_constraint() {
 fn deprecated_temporal_scope_fields_must_match_explicit_non_overlap() {
     let failure = compile_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"temporal-bridge","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"temporal-bridge","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
             "id":"membership","primaryDataset":"test-dataset","route":"memberships","mutationMode":"mutable","classification":"internal",
             "fields":[
-              {"id":"person","type":"string","maxLength":32,"required":true,"classification":"internal"},
-              {"id":"household","type":"string","maxLength":32,"required":true,"classification":"internal"},
+              {"id":"person","type":"string","maximumLength":32,"required":true,"classification":"internal"},
+              {"id":"household","type":"string","maximumLength":32,"required":true,"classification":"internal"},
               {"id":"valid-from","type":"date","required":true,"classification":"internal"},
               {"id":"valid-to","type":"date","classification":"internal"}
             ],
             "temporal":{"startField":"valid-from","endField":"valid-to","scopeFields":["person"]},
             "constraints":[
-              {"kind":"temporal-non-overlap","scopeFields":["household"],"startField":"valid-from","endField":"valid-to"}
+              {"type":"temporal-non-overlap","scopeFields":["household"],"startField":"valid-from","endField":"valid-to"}
             ]
           }],
           "accessProfiles":[{
-            "id":"operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
+            "id":"operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
               "entity":"membership","operations":["list"],
               "readableFields":["person","household","valid-from","valid-to"],
               "rowBoundaries": "unrestricted"
-            }]
+            }]}
           }]
         }"#,
     )
@@ -6663,14 +6852,14 @@ fn deprecated_temporal_scope_fields_must_match_explicit_non_overlap() {
 #[test]
 fn snapshot_operation_is_authenticated_stored_field_history_contract() {
     let project = br#"{
-      "apiVersion":"registry.registrystack.org/v1alpha1",
-      "kind":"RegistryProject",
-      "registry":{"id":"snapshot-demo","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+      "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+      "kind":"BRegProject",
+      "project":{"id":"snapshot-demo","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
       "entities":[{
         "id":"household","primaryDataset":"test-dataset","route":"households","mutationMode":"mutable","classification":"internal",
         "fields":[
-          {"id":"household-code","type":"string","maxLength":32,"required":true,"classification":"internal"},
-          {"id":"administrative-area","type":"string","maxLength":32,"required":true,"classification":"internal"},
+          {"id":"household-code","type":"string","maximumLength":32,"required":true,"classification":"internal"},
+          {"id":"administrative-area","type":"string","maximumLength":32,"required":true,"classification":"internal"},
           {"id":"valid-from","type":"date","required":true,"classification":"internal"},
           {"id":"valid-to","type":"date","classification":"internal"}
         ],
@@ -6681,7 +6870,7 @@ fn snapshot_operation_is_authenticated_stored_field_history_contract() {
         }]
       }],
       "accessProfiles":[{
-        "id":"historian","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
+        "id":"historian","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
           "entity":"household","operations":["list","snapshot","revisions"],"revisionAccess":true,
           "readableFields":["household-code","administrative-area","valid-from","valid-to","member-count"],
           "filterableFields":["administrative-area","member-count"],
@@ -6689,7 +6878,7 @@ fn snapshot_operation_is_authenticated_stored_field_history_contract() {
           "allowCount":true,
           "provenanceFields":["kind","reasonCode","sourceReferences"],
           "rowBoundaries": "unrestricted"
-        }]
+        }]}
       }]
     }"#;
     let sql = "SELECT h.id AS id, 1::bigint AS member_count FROM registry_source.household h";
@@ -6889,19 +7078,19 @@ fn snapshot_operation_is_authenticated_stored_field_history_contract() {
 fn snapshot_operation_rejects_unauthorized_provenance() {
     let provenance = compile_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"snapshot-provenance","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"snapshot-provenance","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
             "id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"mutable","classification":"internal",
-            "fields":[{"id":"code","type":"string","maxLength":32,"classification":"internal"}]
+            "fields":[{"id":"code","type":"string","maximumLength":32,"classification":"internal"}]
           }],
           "accessProfiles":[{
-            "id":"reader","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
+            "id":"reader","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
               "entity":"record","operations":["snapshot"],"readableFields":["code"],
               "provenanceFields":["kind"],
               "rowBoundaries": "unrestricted"
-            }]
+            }]}
           }]
         }"#,
     )
@@ -6916,24 +7105,24 @@ fn snapshot_operation_rejects_unauthorized_provenance() {
 fn snapshot_valid_at_openapi_schema_matches_temporal_value_type() {
     let compiled = compile_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"snapshot-timestamp","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"snapshot-timestamp","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
             "id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"mutable","classification":"internal",
             "fields":[
-              {"id":"code","type":"string","maxLength":32,"classification":"internal"},
+              {"id":"code","type":"string","maximumLength":32,"classification":"internal"},
               {"id":"valid-from","type":"timestamp","required":true,"classification":"internal"},
               {"id":"valid-to","type":"timestamp","classification":"internal"}
             ],
             "temporal":{"startField":"valid-from","endField":"valid-to"}
           }],
           "accessProfiles":[{
-            "id":"historian","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
+            "id":"historian","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
               "entity":"record","operations":["snapshot"],"allowCount":true,
               "readableFields":["code","valid-from","valid-to"],
               "rowBoundaries": "unrestricted"
-            }]
+            }]}
           }]
         }"#,
     )
@@ -6972,9 +7161,9 @@ fn snapshot_valid_at_openapi_schema_matches_temporal_value_type() {
 #[test]
 fn change_request_entity_fields_cannot_shadow_server_owned_query_state_api_names() {
     for reserved_field in [
-        r#"{"id":"breg-state","type":"string","maxLength":32,"required":true,"classification":"internal"}"#,
+        r#"{"id":"breg-state","type":"string","maximumLength":32,"required":true,"classification":"internal"}"#,
         r#"{"id":"proposal-version","type":"int64","required":true,"classification":"internal"}"#,
-        r#"{"id":"digest","apiName":"effectDigest","type":"string","maxLength":71,"classification":"internal"}"#,
+        r#"{"id":"digest","apiName":"effectDigest","type":"string","maximumLength":71,"classification":"internal"}"#,
     ] {
         let project = change_request_correction_project(
             "change-request-reserved-query-name",
@@ -6988,9 +7177,9 @@ fn change_request_entity_fields_cannot_shadow_server_owned_query_state_api_names
         );
         let mut source = String::from_utf8(project).expect("fixture is UTF-8");
         source = source.replace(
-            r#"{"id":"reason","type":"text","maxLength":1000,"required":true,"classification":"internal"}"#,
+            r#"{"id":"reason","type":"text","maximumLength":1000,"required":true,"classification":"internal"}"#,
             &format!(
-                r#"{{"id":"reason","type":"text","maxLength":1000,"required":true,"classification":"internal"}},{}"#,
+                r#"{{"id":"reason","type":"text","maximumLength":1000,"required":true,"classification":"internal"}},{}"#,
                 reserved_field
             ),
         );
@@ -7116,19 +7305,19 @@ fn query_inventory_rejects_unsupported_filter_and_sort_field_types() {
     ] {
         let source = format!(
             r#"{{
-              "apiVersion":"registry.registrystack.org/v1alpha1",
-              "kind":"RegistryProject",
-              "registry":{{"id":"query-shape","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
+              "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+              "kind":"BRegProject",
+              "project":{{"id":"query-shape","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
               "entities":[{{
                 "id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable",
                 "fields":[
-                  {{"id":"payload","type":"structured","maxBytes":256,"classification":"internal","schema":{{"type":"object","additionalProperties":false}}}}
+                  {{"id":"payload","type":"structured","maximumBytes":256,"classification":"internal","schema":{{"type":"object","additionalProperties":false}}}}
                 ]
               }}],
               "accessProfiles":[{{
-                "id":"operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{{
+                "id":"operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{{"entities":[{{
                   "rowBoundaries": "unrestricted", "entity":"entry","operations":["list"],"readableFields":["payload"],{member}
-                }}]
+                }}]}}
               }}]
             }}"#
         );
@@ -7150,6 +7339,7 @@ fn temporal_queries_require_profile_readable_boundary_fields() {
         .first_mut()
         .expect("fixture has an access profile")
         .permissions
+        .entities
         .iter_mut()
         .find(|grant| grant.entity == "asset-placement")
         .expect("fixture grants placement access");
@@ -7167,42 +7357,42 @@ fn temporal_queries_require_profile_readable_boundary_fields() {
 fn reordered_stored_field_authoring_changes_revision_but_not_query_inventory() {
     let left = parse_project_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject",
-          "registry":{"id":"query-shape","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
+          "project":{"id":"query-shape","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
             "id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable",
             "fields":[
-              {"id":"code","type":"string","maxLength":32,"classification":"internal"},
+              {"id":"code","type":"string","maximumLength":32,"classification":"internal"},
               {"id":"count","type":"int64","classification":"internal"}
             ]
           }],
           "accessProfiles":[{
-            "id":"operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
+            "id":"operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
               "entity":"entry","operations":["list"],
               "readableFields":["code","count"],"filterableFields":["count","code"],"sortableFields":["count","code"],
               "rowBoundaries": "unrestricted"
-            }]
+            }]}
           }]
         }"#,
     )
     .expect("left source parses");
     let right = parse_project_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject",
-          "registry":{"id":"query-shape","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
+          "project":{"id":"query-shape","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
             "id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable",
             "fields":[
               {"id":"count","type":"int64","classification":"internal"},
-              {"id":"code","type":"string","maxLength":32,"classification":"internal"}
+              {"id":"code","type":"string","maximumLength":32,"classification":"internal"}
             ]
           }],
           "accessProfiles":[{
-            "id":"operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
+            "id":"operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
               "entity":"entry","operations":["list"],
               "readableFields":["count","code"],"filterableFields":["code","count"],"sortableFields":["code","count"],
               "rowBoundaries": "unrestricted"
-            }]
+            }]}
           }]
         }"#,
     )
@@ -7224,20 +7414,22 @@ fn reordered_stored_field_authoring_changes_revision_but_not_query_inventory() {
 fn duplicate_routes_fail_before_artifact_generation() {
     let project = parse_project_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject",
-          "registry":{"id":"neutral","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
+          "project":{"id":"neutral","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[
-            {"id":"first-record","primaryDataset":"test-dataset","route":"hidden-route-value","mutationMode":"create_only","fields":[
-              {"id":"code","type":"string","maxLength":8,"classification":"internal"}
+            {"id":"first-record","primaryDataset":"test-dataset","route":"hidden-route-value","mutationMode":"create-only","fields":[
+              {"id":"code","type":"string","maximumLength":8,"classification":"internal"}
             ]},
-            {"id":"second-record","primaryDataset":"test-dataset","route":"hidden-route-value","mutationMode":"create_only","fields":[
-              {"id":"code","type":"string","maxLength":8,"classification":"internal"}
+            {"id":"second-record","primaryDataset":"test-dataset","route":"hidden-route-value","mutationMode":"create-only","fields":[
+              {"id":"code","type":"string","maximumLength":8,"classification":"internal"}
             ]}
           ],
-          "accessProfiles":[{"id":"reader","principalClaim":"principal","requiredScopes":"unrestricted","permissions":[
-            {"entity":"first-record","operations":["get"],"readableFields":["code"], "rowBoundaries": "unrestricted"},
-            {"entity":"second-record","operations":["get"],"readableFields":["code"], "rowBoundaries": "unrestricted"}
-          ]}]
+          "accessProfiles":[{"id":"reader","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{
+            "entities":[
+              {"entity":"first-record","operations":["get"],"readableFields":["code"], "rowBoundaries": "unrestricted"},
+              {"entity":"second-record","operations":["get"],"readableFields":["code"], "rowBoundaries": "unrestricted"}
+            ]
+          }}]
         }"#,
     )
     .expect("project parses");
@@ -7260,14 +7452,14 @@ fn duplicate_routes_fail_before_artifact_generation() {
 fn production_refuses_a_digest_present_lock_without_module_source() {
     let project = parse_project_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject",
-          "registry":{"id":"neutral","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
+          "project":{"id":"neutral","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "package":{"sourceRevision":"revision-1"},
           "modules":[{"id":"missing-module","version":"1","digest":"sha256:0000000000000000000000000000000000000000000000000000000000000000"}],
-          "entities":[{"id":"object","primaryDataset":"test-dataset","route":"objects","mutationMode":"create_only","fields":[
-            {"id":"code","type":"string","maxLength":8,"classification":"internal"}
+          "entities":[{"id":"object","primaryDataset":"test-dataset","route":"objects","mutationMode":"create-only","fields":[
+            {"id":"code","type":"string","maximumLength":8,"classification":"internal"}
           ]}],
-          "accessProfiles":[{"id":"reader","principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{"entity":"object","operations":["get"],"readableFields":["code"], "rowBoundaries": "unrestricted"}]}]
+          "accessProfiles":[{"id":"reader","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{"entity":"object","operations":["get"],"readableFields":["code"], "rowBoundaries": "unrestricted"}]}}]
         }"#,
     )
     .expect("project parses");
@@ -7289,19 +7481,18 @@ fn production_refuses_a_digest_present_lock_without_module_source() {
 #[test]
 fn verified_module_digest_changes_compiled_closure_artifact_and_revision() {
     let project_source = br#"{
-      "apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject",
-      "registry":{"id":"neutral","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://neutral.example.test"},
+      "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
+      "project":{"id":"neutral","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://neutral.example.test"},
       "package":{"sourceRevision":"revision-1"},
       "manifestProjection":{"accessProfile":"reader","classificationCeiling":"internal","catalog":{"baseUrl":"https://neutral.example.test","title":"Neutral Catalog","publisher":{"id":"neutral-authority","name":"Neutral Publisher"}},"publicService":{"id":"neutral-service","title":"Neutral service"},"datasets":[{"id":"neutral","title":"Neutral Dataset"}],"dataServices":[{"id":"neutral-api","title":"Neutral API","endpointUrl":"https://neutral.example.test","servesDatasets":["neutral"]}]},
       "modules":[{"id":"core","version":"1","digest":"sha256:0000000000000000000000000000000000000000000000000000000000000000"}]
     }"#;
-    let module_source = br#"{
-      "id":"core","version":"1","entities":[
-        {"id":"alpha-record","primaryDataset":"neutral","route":"alpha-records","mutationMode":"create_only","fields":[
-          {"id":"code","type":"string","maxLength":8,"classification":"internal"}
+    let module_source = br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","entities":[
+        {"id":"alpha-record","primaryDataset":"neutral","route":"alpha-records","mutationMode":"create-only","fields":[
+          {"id":"code","type":"string","maximumLength":8,"classification":"internal"}
         ],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get"],"readableFields":["code"], "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}]},
-        {"id":"beta-record","primaryDataset":"neutral","route":"beta-records","mutationMode":"create_only","fields":[
-          {"id":"code","type":"string","maxLength":8,"classification":"internal"}
+        {"id":"beta-record","primaryDataset":"neutral","route":"beta-records","mutationMode":"create-only","fields":[
+          {"id":"code","type":"string","maximumLength":8,"classification":"internal"}
         ],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get"],"readableFields":["code"], "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}]}
       ]
     }"#;
@@ -7345,22 +7536,22 @@ fn verified_module_digest_changes_compiled_closure_artifact_and_revision() {
 fn selector_project(fields: &str) -> Vec<u8> {
     format!(
         r#"{{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{{"id":"selector-grammar","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{{"id":"selector-grammar","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
           "entities":[{{
             "id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"mutable",
             "fields":[
-              {{"id":"code","type":"string","maxLength":32,"classification":"internal"}},
-              {{"id":"area","type":"string","maxLength":32,"classification":"internal"}},
+              {{"id":"code","type":"string","maximumLength":32,"classification":"internal"}},
+              {{"id":"area","type":"string","maximumLength":32,"classification":"internal"}},
               {{"id":"location","type":"crs84-point","precision":6,"classification":"internal"}}
             ],
             "selectorProfiles":[{{"id":"by-code","fields":{fields}}}]
           }}],
           "accessProfiles":[{{
-            "id":"operator","default":true,"principalClaim":"sub","requiredScopes":"unrestricted","permissions":[{{
+            "id":"operator","default":true,"principalClaim":"sub","requiredScopes":"unrestricted","permissions":{{"entities":[{{
               "rowBoundaries": "unrestricted", "entity":"record","operations":["get"],"readableFields":["code","area"]
-            }}]
+            }}]}}
           }}]
         }}"#
     )
@@ -7421,18 +7612,18 @@ fn selector_profile_field_refusals_separate_unknown_names_from_cardinality() {
 fn entity_classification_defaults_while_field_classification_stays_explicit() {
     let compiled = compile_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"classification-defaults","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"classification-defaults","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
             "id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"mutable",
-            "fields":[{"id":"code","type":"string","maxLength":32,"classification":"internal"}]
+            "fields":[{"id":"code","type":"string","maximumLength":32,"classification":"internal"}]
           }],
           "accessProfiles":[{
-            "id":"operator","default":true,"principalClaim":"sub","requiredScopes":"unrestricted","permissions":[{
+            "id":"operator","default":true,"principalClaim":"sub","requiredScopes":"unrestricted","permissions":{"entities":[{
               "entity":"record","operations":["get"],"readableFields":["code"],
               "rowBoundaries": "unrestricted"
-            }]
+            }]}
           }]
         }"#,
     )
@@ -7448,12 +7639,12 @@ fn entity_classification_defaults_while_field_classification_stays_explicit() {
 
     let failure = parse_project_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"classification-defaults","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"classification-defaults","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
             "id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"mutable",
-            "fields":[{"id":"code","type":"string","maxLength":32}]
+            "fields":[{"id":"code","type":"string","maximumLength":32}]
           }]
         }"#,
     )
@@ -7492,10 +7683,10 @@ fn structured_root_arrays_preserve_schema_and_closed_nested_object_validation() 
         (json!({"type":"array","items":true}), false),
     ] {
         let source = json!({
-            "apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject",
-            "registry":{"id":"array-schema","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://example.test"},
-            "entities":[{"id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"create_only",
-                "fields":[{"id":"codes","type":"structured","required":true,"classification":"internal","maxBytes":512,"schema":schema}]}]
+            "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
+            "project":{"id":"array-schema","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://example.test"},
+            "entities":[{"id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"create-only",
+                "fields":[{"id":"codes","type":"structured","required":true,"classification":"internal","maximumBytes":512,"schema":schema}]}]
         });
         let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
         let result = compile_project(&project, &[], CompileProfile::Authoring);
@@ -7510,4 +7701,1243 @@ fn structured_root_arrays_preserve_schema_and_closed_nested_object_validation() 
             );
         }
     }
+}
+
+fn headed_project(api_version: &str, kind: &str, identity_block: &str) -> Vec<u8> {
+    let mut project = json!({"apiVersion": api_version, "kind": kind});
+    project[identity_block] = json!({
+        "id":"header-check","version":"1","defaultLanguage":"en",
+        "canonicalBaseIri":"https://registry.example.test/header-check"
+    });
+    serde_json::to_vec(&project).expect("the project serializes")
+}
+
+fn read_refusals(bytes: &[u8]) -> Vec<(String, String, String)> {
+    parse_project_yaml(bytes)
+        .expect_err("the project is refused when it is read")
+        .diagnostics()
+        .iter()
+        .map(|diagnostic| {
+            (
+                diagnostic.code.clone(),
+                diagnostic.path.clone(),
+                diagnostic.message.clone(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn a_project_opens_with_the_breg_project_header_and_a_project_block() {
+    let project = parse_project_yaml(&headed_project(
+        "id.registrystack.org/formats/breg/project/v1alpha1",
+        "BRegProject",
+        "project",
+    ))
+    .expect("the stable project header is read");
+    assert_eq!(project.project.id, "header-check");
+    assert_eq!(project.project.version, "1");
+    compile_project(&project, &[], CompileProfile::Authoring)
+        .expect("a project under the stable header compiles");
+}
+
+#[test]
+fn the_retired_project_api_version_is_refused_with_its_replacement_named() {
+    let refused = read_refusals(&headed_project(
+        "registry.registrystack.org/v1alpha1",
+        "BRegProject",
+        "project",
+    ));
+    let [(code, path, message)] = refused.as_slice() else {
+        panic!("one diagnostic refuses the retired apiVersion: {refused:?}");
+    };
+    assert_eq!(code, "config.retired-api-version");
+    assert_eq!(path, "project.apiVersion");
+    assert!(
+        message.contains("id.registrystack.org/formats/breg/project/v1alpha1"),
+        "the refusal names the replacement: {message}"
+    );
+}
+
+#[test]
+fn the_retired_project_kind_is_refused_with_the_stable_kind_named() {
+    let refused = read_refusals(&headed_project(
+        "registry.registrystack.org/v1alpha1",
+        "RegistryProject",
+        "project",
+    ));
+    // The retired apiVersion is reported beside the kind, each at its own member.
+    let [(retired, _, _), (code, path, message)] = refused.as_slice() else {
+        panic!("the retired apiVersion and the retired kind are each refused: {refused:?}");
+    };
+    assert_eq!(retired, "config.retired-api-version");
+    assert_eq!(code, "config.wrong-kind");
+    assert_eq!(path, "project.kind");
+    assert!(
+        message.contains("BRegProject"),
+        "the refusal names the stable kind: {message}"
+    );
+}
+
+fn module_read_refusals(bytes: &[u8]) -> Vec<(String, String, String)> {
+    parse_module_yaml(bytes)
+        .expect_err("the module is refused when it is read")
+        .diagnostics()
+        .iter()
+        .map(|diagnostic| {
+            (
+                diagnostic.code.clone(),
+                diagnostic.path.clone(),
+                diagnostic.message.clone(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn a_module_opens_with_the_breg_module_header() {
+    let module = parse_module_yaml(
+        b"apiVersion: id.registrystack.org/formats/breg/module/v1alpha1\n\
+          kind: BRegModule\nid: header-check\nversion: 0.1.0\n",
+    )
+    .expect("the module header is read");
+    assert_eq!(module.id, "header-check");
+    assert_eq!(module.version, "0.1.0");
+}
+
+#[test]
+fn a_module_without_its_header_is_refused() {
+    let refused = module_read_refusals(b"id: header-check\nversion: 0.1.0\n");
+    let [(code, path, _)] = refused.as_slice() else {
+        panic!("one diagnostic refuses the module without a header: {refused:?}");
+    };
+    assert_eq!(code, "config.missing-envelope");
+    assert_eq!(path, "module");
+}
+
+#[test]
+fn a_module_under_another_kind_or_api_version_is_refused_with_the_expected_one_named() {
+    let refused = module_read_refusals(
+        b"apiVersion: id.registrystack.org/formats/breg/module/v1alpha1\n\
+          kind: BRegProject\nid: header-check\nversion: 0.1.0\n",
+    );
+    let [(code, path, message)] = refused.as_slice() else {
+        panic!("one diagnostic refuses the other kind: {refused:?}");
+    };
+    assert_eq!(code, "config.wrong-kind");
+    assert_eq!(path, "module.kind");
+    assert!(
+        message.contains("BRegModule"),
+        "the refusal names the module kind: {message}"
+    );
+
+    let refused = module_read_refusals(
+        b"apiVersion: id.registrystack.org/formats/breg/project/v1alpha1\n\
+          kind: BRegModule\nid: header-check\nversion: 0.1.0\n",
+    );
+    let [(code, path, message)] = refused.as_slice() else {
+        panic!("one diagnostic refuses the other apiVersion: {refused:?}");
+    };
+    assert_eq!(code, "config.unsupported-api-version");
+    assert_eq!(path, "module.apiVersion");
+    assert!(
+        message.contains("id.registrystack.org/formats/breg/module/v1alpha1"),
+        "the refusal names the module apiVersion: {message}"
+    );
+}
+
+#[test]
+fn a_module_read_as_json_opens_with_the_same_header() {
+    let headed = |api_version: Option<&str>, kind: Option<&str>| {
+        let mut module = json!({"id": "header-check", "version": "0.1.0"});
+        if let Some(api_version) = api_version {
+            module["apiVersion"] = json!(api_version);
+        }
+        if let Some(kind) = kind {
+            module["kind"] = json!(kind);
+        }
+        parse_module_json(&serde_json::to_vec(&module).expect("the module encodes"))
+    };
+    let refusals = |failure: CompileFailure| -> Vec<(String, String)> {
+        failure
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| (diagnostic.code.clone(), diagnostic.path.clone()))
+            .collect()
+    };
+
+    let module = headed(Some(MODULE_API_VERSION), Some(MODULE_KIND)).expect("the header is read");
+    assert_eq!(module.id, "header-check");
+
+    assert_eq!(
+        refusals(headed(None, None).expect_err("a module without a header is refused")),
+        [
+            (
+                "breg.source.shape-invalid".to_owned(),
+                "module.apiVersion".to_owned()
+            ),
+            (
+                "breg.source.shape-invalid".to_owned(),
+                "module.kind".to_owned()
+            ),
+        ]
+    );
+    assert_eq!(
+        refusals(
+            headed(
+                Some("id.registrystack.org/formats/breg/project/v1alpha1"),
+                Some(MODULE_KIND)
+            )
+            .expect_err("another apiVersion is refused")
+        ),
+        [(
+            "breg.module.api-version-unsupported".to_owned(),
+            "module.apiVersion".to_owned()
+        )]
+    );
+    assert_eq!(
+        refusals(
+            headed(Some(MODULE_API_VERSION), Some("BRegProject"))
+                .expect_err("another kind is refused")
+        ),
+        [(
+            "breg.module.kind-unsupported".to_owned(),
+            "module.kind".to_owned()
+        )]
+    );
+}
+
+#[test]
+fn the_registry_block_is_refused_with_the_project_block_named() {
+    let refused = read_refusals(&headed_project(
+        "id.registrystack.org/formats/breg/project/v1alpha1",
+        "BRegProject",
+        "registry",
+    ));
+    let removed = refused
+        .iter()
+        .find(|(code, _, _)| code == "config.removed-key")
+        .unwrap_or_else(|| panic!("the registry block is refused as removed: {refused:?}"));
+    assert_eq!(removed.1, "project.registry");
+    assert!(
+        removed.2.contains("project"),
+        "the refusal names the project block: {}",
+        removed.2
+    );
+}
+
+/// Entity fields, derived fields, and action inputs that each declare a
+/// length or size bound under the given member names. The structured field's
+/// `schema` is a JSON Schema, whose own `maxLength` keyword is not a member
+/// of this format.
+fn bounded_fields(
+    minimum_length: &str,
+    maximum_length: &str,
+    maximum_bytes: &str,
+) -> (Value, Value, Value) {
+    let mut code =
+        json!({"id":"case-code","type":"string","required":true,"classification":"internal"});
+    code[minimum_length] = json!(2);
+    code[maximum_length] = json!(32);
+    let mut note = json!({"id":"note","type":"text","classification":"internal"});
+    note[maximum_length] = json!(4096);
+    let mut detail = json!({
+        "id":"detail","type":"structured","classification":"internal",
+        "schema":{"type":"object","additionalProperties":false,
+            "properties":{"label":{"type":"string","maxLength":16}}}
+    });
+    detail[maximum_bytes] = json!(512);
+    let mut summary = json!({"id":"summary","type":"string","classification":"internal"});
+    summary[maximum_length] = json!(64);
+    let mut input = json!({"id":"case-code","type":"string","classification":"internal"});
+    input[minimum_length] = json!(2);
+    input[maximum_length] = json!(32);
+    (
+        json!([code, note, detail]),
+        json!([{"id":"overview","sql":"sql/overview.sql","key":"id","fields":[summary]}]),
+        json!([input]),
+    )
+}
+
+fn bounded_field_project(
+    minimum_length: &str,
+    maximum_length: &str,
+    maximum_bytes: &str,
+) -> Vec<u8> {
+    let (fields, derived, inputs) = bounded_fields(minimum_length, maximum_length, maximum_bytes);
+    serde_json::to_vec(&json!({
+        "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+        "kind":"BRegProject",
+        "project":{"id":"field-bounds","version":"1","defaultLanguage":"en",
+            "canonicalBaseIri":"https://registry.example.test/field-bounds"},
+        "entities":[{
+            "id":"case-file","primaryDataset":"test-dataset","route":"case-files",
+            "mutationMode":"mutable","fields":fields,"derived":derived
+        }],
+        "actions":[{
+            "id":"create-case-file","inputs":inputs,
+            "effects":[{"id":"case","target":{"entity":"case-file"},"operation":"create",
+                "set":{"case-code":{"fromField":"case-code"}}}]
+        }]
+    }))
+    .expect("the project serializes")
+}
+
+fn bounded_field_module(
+    minimum_length: &str,
+    maximum_length: &str,
+    maximum_bytes: &str,
+) -> Vec<u8> {
+    let (fields, derived, inputs) = bounded_fields(minimum_length, maximum_length, maximum_bytes);
+    serde_json::to_vec(&json!({
+        "apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1",
+        "kind":"BRegModule",
+        "id":"field-bounds","version":"1",
+        "entities":[{
+            "id":"case-file","primaryDataset":"test-dataset","route":"case-files",
+            "mutationMode":"mutable","fields":fields,"derived":derived
+        }],
+        "extendEntities":[{"entity":"ledger","fields":fields,"derived":derived}],
+        "actions":[{
+            "id":"create-case-file","inputs":inputs,
+            "effects":[{"id":"case","target":{"entity":"case-file"},"operation":"create",
+                "set":{"case-code":{"fromField":"case-code"}}}]
+        }]
+    }))
+    .expect("the module serializes")
+}
+
+/// The `config.removed-key` refusals of a failed read, as path and message.
+fn removed_key_refusals(failure: &CompileFailure) -> Vec<(String, String)> {
+    let mut removed: Vec<(String, String)> = failure
+        .diagnostics()
+        .iter()
+        .filter(|diagnostic| diagnostic.code == "config.removed-key")
+        .map(|diagnostic| (diagnostic.path.clone(), diagnostic.message.clone()))
+        .collect();
+    removed.sort();
+    removed
+}
+
+/// The bounds one list of field declarations carries under the retired
+/// names, as the refused path and the member that replaces it.
+fn retired_bounds(fields: &str, bounds: &[(usize, &str)]) -> Vec<(String, &'static str)> {
+    bounds
+        .iter()
+        .map(|(index, key)| {
+            let replacement = match *key {
+                "minLength" => "minimumLength",
+                "maxLength" => "maximumLength",
+                "maxBytes" => "maximumBytes",
+                other => panic!("no retired bound is named {other}"),
+            };
+            (format!("{fields}[{index}].{key}"), replacement)
+        })
+        .collect()
+}
+
+fn assert_retired_bounds_refused(
+    removed: &[(String, String)],
+    mut expected: Vec<(String, &'static str)>,
+) {
+    expected.sort();
+    assert_eq!(
+        removed.iter().map(|(path, _)| path).collect::<Vec<_>>(),
+        expected.iter().map(|(path, _)| path).collect::<Vec<_>>(),
+        "every retired bound is refused where it is written, and no JSON Schema keyword is"
+    );
+    for ((path, message), (_, replacement)) in removed.iter().zip(&expected) {
+        assert!(
+            message.contains(&format!("`{replacement}`")),
+            "the refusal at {path} names {replacement}: {message}"
+        );
+    }
+}
+
+const STORED_FIELD_BOUNDS: &[(usize, &str)] = &[
+    (0, "minLength"),
+    (0, "maxLength"),
+    (1, "maxLength"),
+    (2, "maxBytes"),
+];
+
+#[test]
+fn field_bounds_are_written_as_minimum_length_maximum_length_and_maximum_bytes() {
+    let project = parse_project_yaml(&bounded_field_project(
+        "minimumLength",
+        "maximumLength",
+        "maximumBytes",
+    ))
+    .expect("a project that spells its field bounds in full is read");
+    let entity = &project.entities[0];
+    assert_eq!(
+        entity.fields[0].field_type,
+        FieldTypeSource::String {
+            min_length: 2,
+            max_length: 32
+        }
+    );
+    assert_eq!(
+        entity.fields[1].field_type,
+        FieldTypeSource::Text { max_length: 4096 }
+    );
+    assert!(matches!(
+        entity.fields[2].field_type,
+        FieldTypeSource::Structured { max_bytes: 512, .. }
+    ));
+    assert_eq!(
+        entity.derived[0].fields[0].field_type,
+        FieldTypeSource::String {
+            min_length: 0,
+            max_length: 64
+        }
+    );
+    assert_eq!(
+        project.actions[0].inputs[0].field_type,
+        FieldTypeSource::String {
+            min_length: 2,
+            max_length: 32
+        }
+    );
+
+    // The project is written back with the same members it was read from.
+    let written = serde_json::to_value(&project).expect("the project serializes");
+    assert_eq!(
+        written["entities"][0]["fields"][0]["minimumLength"],
+        json!(2)
+    );
+    assert_eq!(
+        written["entities"][0]["fields"][0]["maximumLength"],
+        json!(32)
+    );
+    assert_eq!(
+        written["entities"][0]["fields"][2]["maximumBytes"],
+        json!(512)
+    );
+    assert_eq!(
+        written["entities"][0]["fields"][2]["schema"]["properties"]["label"]["maxLength"],
+        json!(16),
+        "a structured field's schema keeps its JSON Schema keywords"
+    );
+    assert_eq!(
+        written["actions"][0]["inputs"][0]["maximumLength"],
+        json!(32)
+    );
+
+    let module = parse_module_yaml(&bounded_field_module(
+        "minimumLength",
+        "maximumLength",
+        "maximumBytes",
+    ))
+    .expect("a module that spells its field bounds in full is read");
+    assert_eq!(
+        module.extend_entities[0].fields[1].field_type,
+        FieldTypeSource::Text { max_length: 4096 }
+    );
+}
+
+#[test]
+fn the_short_field_bound_names_are_refused_in_a_project_with_their_replacement_named() {
+    let failure = parse_project_yaml(&bounded_field_project("minLength", "maxLength", "maxBytes"))
+        .expect_err("a project that abbreviates its field bounds is refused");
+    let mut expected = retired_bounds("project.entities[0].fields", STORED_FIELD_BOUNDS);
+    expected.extend(retired_bounds(
+        "project.entities[0].derived[0].fields",
+        &[(0, "maxLength")],
+    ));
+    expected.extend(retired_bounds(
+        "project.actions[0].inputs",
+        &[(0, "minLength"), (0, "maxLength")],
+    ));
+    assert_retired_bounds_refused(&removed_key_refusals(&failure), expected);
+}
+
+#[test]
+fn the_short_field_bound_names_are_refused_in_a_module_with_their_replacement_named() {
+    let failure = parse_module_yaml(&bounded_field_module("minLength", "maxLength", "maxBytes"))
+        .expect_err("a module that abbreviates its field bounds is refused");
+    let mut expected = retired_bounds("module.entities[0].fields", STORED_FIELD_BOUNDS);
+    expected.extend(retired_bounds(
+        "module.entities[0].derived[0].fields",
+        &[(0, "maxLength")],
+    ));
+    expected.extend(retired_bounds(
+        "module.extendEntities[0].fields",
+        STORED_FIELD_BOUNDS,
+    ));
+    expected.extend(retired_bounds(
+        "module.extendEntities[0].derived[0].fields",
+        &[(0, "maxLength")],
+    ));
+    expected.extend(retired_bounds(
+        "module.actions[0].inputs",
+        &[(0, "minLength"), (0, "maxLength")],
+    ));
+    assert_retired_bounds_refused(&removed_key_refusals(&failure), expected);
+}
+
+/// One entity hook and one action handler, each tagged by `tag`.
+fn tagged_handlers(tag: &str) -> (Value, Value) {
+    let mut hook_handler = json!({"destinationId":"case-intake"});
+    hook_handler[tag] = json!("url");
+    let mut action_handler = json!({
+        "script":"handlers/create-case-file.rhai","abi":"registry.action-handler/v1",
+        "writes":[{"id":"case","target":{"entity":"case-file"},"operation":"create",
+            "fields":["case-code"]}]
+    });
+    action_handler[tag] = json!("rhai");
+    (
+        json!([{"id":"notify-intake","phase":"after","trigger":"created",
+            "projection":["case-code"],"handler":hook_handler}]),
+        action_handler,
+    )
+}
+
+fn tagged_handler_project(tag: &str) -> Vec<u8> {
+    let (hooks, handler) = tagged_handlers(tag);
+    serde_json::to_vec(&json!({
+        "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+        "kind":"BRegProject",
+        "project":{"id":"handler-tags","version":"1","defaultLanguage":"en",
+            "canonicalBaseIri":"https://registry.example.test/handler-tags"},
+        "entities":[{
+            "id":"case-file","primaryDataset":"test-dataset","route":"case-files",
+            "mutationMode":"mutable",
+            "fields":[{"id":"case-code","type":"string","maximumLength":32,
+                "classification":"internal"}],
+            "hooks":hooks
+        }],
+        "actions":[{"id":"create-case-file","inputs":[],"handler":handler}]
+    }))
+    .expect("the project serializes")
+}
+
+fn tagged_handler_module(tag: &str) -> Vec<u8> {
+    let (hooks, handler) = tagged_handlers(tag);
+    serde_json::to_vec(&json!({
+        "apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1",
+        "kind":"BRegModule",
+        "id":"handler-tags","version":"1",
+        "entities":[{
+            "id":"case-file","primaryDataset":"test-dataset","route":"case-files",
+            "mutationMode":"mutable",
+            "fields":[{"id":"case-code","type":"string","maximumLength":32,
+                "classification":"internal"}],
+            "hooks":hooks
+        }],
+        "extendEntities":[{"entity":"ledger","hooks":hooks}],
+        "actions":[{"id":"create-case-file","inputs":[],"handler":handler}]
+    }))
+    .expect("the module serializes")
+}
+
+fn assert_handler_kind_refused(failure: &CompileFailure, expected: &[&str]) {
+    let removed = removed_key_refusals(failure);
+    assert_eq!(
+        removed
+            .iter()
+            .map(|(path, _)| path.as_str())
+            .collect::<Vec<_>>(),
+        expected,
+        "every handler tagged by `kind` is refused where it is written"
+    );
+    for (path, message) in &removed {
+        assert!(
+            message.contains("`type`"),
+            "the refusal at {path} names `type`: {message}"
+        );
+    }
+}
+
+#[test]
+fn a_handler_is_tagged_by_type_in_a_project_and_a_module() {
+    let project = parse_project_yaml(&tagged_handler_project("type"))
+        .expect("a project that tags its handlers by `type` is read");
+    let written = serde_json::to_value(&project).expect("the project serializes");
+    assert_eq!(
+        written["entities"][0]["hooks"][0]["handler"],
+        json!({"type":"url","destinationId":"case-intake"})
+    );
+    assert_eq!(written["actions"][0]["handler"]["type"], json!("rhai"));
+    assert!(written["actions"][0]["handler"].get("kind").is_none());
+
+    parse_module_yaml(&tagged_handler_module("type"))
+        .expect("a module that tags its handlers by `type` is read");
+}
+
+#[test]
+fn a_handler_tagged_by_kind_is_refused_in_a_project_with_its_replacement_named() {
+    let failure = parse_project_yaml(&tagged_handler_project("kind"))
+        .expect_err("a project that tags a handler by `kind` is refused");
+    assert_handler_kind_refused(
+        &failure,
+        &[
+            "project.actions[0].handler.kind",
+            "project.entities[0].hooks[0].handler.kind",
+        ],
+    );
+}
+
+#[test]
+fn a_handler_tagged_by_kind_is_refused_in_a_module_with_its_replacement_named() {
+    let failure = parse_module_yaml(&tagged_handler_module("kind"))
+        .expect_err("a module that tags a handler by `kind` is refused");
+    assert_handler_kind_refused(
+        &failure,
+        &[
+            "module.actions[0].handler.kind",
+            "module.entities[0].hooks[0].handler.kind",
+            "module.extendEntities[0].hooks[0].handler.kind",
+        ],
+    );
+}
+
+/// One consent-record entity whose validity states its longest duration
+/// under `member`.
+fn consent_record_entity(member: &str, value: Value) -> Value {
+    let mut validity = json!({"from":"effective-at","until":"expires-at"});
+    validity[member] = value;
+    json!({
+        "id":"consent-decision","primaryDataset":"test-dataset","route":"consent-decisions",
+        "mutationMode":"mutable",
+        "fields":[
+            {"id":"effective-at","type":"timestamp","required":true,"classification":"internal"},
+            {"id":"expires-at","type":"timestamp","classification":"internal"}
+        ],
+        "consentRecord":{
+            "subject":"subject","recipient":"recipient","purpose":"purpose","scope":"scope",
+            "decision":{"field":"decision","gives":["given"],"revokes":["withdrawn"]},
+            "validity":validity
+        }
+    })
+}
+
+fn consent_record_project(member: &str, value: Value) -> Vec<u8> {
+    serde_json::to_vec(&json!({
+        "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+        "kind":"BRegProject",
+        "project":{"id":"consent-duration","version":"1","defaultLanguage":"en",
+            "canonicalBaseIri":"https://registry.example.test/consent-duration"},
+        "entities":[consent_record_entity(member, value)]
+    }))
+    .expect("the project serializes")
+}
+
+fn consent_record_module(member: &str, value: Value) -> Vec<u8> {
+    serde_json::to_vec(&json!({
+        "apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1",
+        "kind":"BRegModule",
+        "id":"consent-duration","version":"1",
+        "entities":[consent_record_entity(member, value)]
+    }))
+    .expect("the module serializes")
+}
+
+#[test]
+fn a_consent_record_states_its_longest_duration_in_whole_days() {
+    let project = parse_project_yaml(&consent_record_project("maximumDurationDays", json!(365)))
+        .expect("a project that states the duration in days is read");
+    let record = project.entities[0]
+        .consent_record
+        .as_ref()
+        .expect("the consent record");
+    assert_eq!(record.validity.maximum_duration_days, 365);
+
+    // The project is written back with the member it was read from.
+    let written = serde_json::to_value(&project).expect("the project serializes");
+    assert_eq!(
+        written["entities"][0]["consentRecord"]["validity"],
+        json!({"from":"effective-at","until":"expires-at","maximumDurationDays":365})
+    );
+
+    let module = parse_module_yaml(&consent_record_module("maximumDurationDays", json!(365)))
+        .expect("a module that states the duration in days is read");
+    let record = module.entities[0]
+        .consent_record
+        .as_ref()
+        .expect("the consent record");
+    assert_eq!(record.validity.maximum_duration_days, 365);
+}
+
+#[test]
+fn a_consent_duration_is_an_integer_and_never_an_iso_8601_text() {
+    for text in ["P365D", "365", "P1Y"] {
+        parse_project_yaml(&consent_record_project("maximumDurationDays", json!(text)))
+            .expect_err("a duration written as text is refused");
+    }
+    for number in [json!(-1), json!(1.5)] {
+        parse_project_yaml(&consent_record_project("maximumDurationDays", number))
+            .expect_err("a duration that is not a whole number of days is refused");
+    }
+}
+
+#[test]
+fn the_iso_8601_consent_duration_is_refused_in_a_project_with_its_replacement_named() {
+    // The replacement text carries its own fixed example, so the value read
+    // here is one that example does not use.
+    let failure = parse_project_yaml(&consent_record_project("maxDuration", json!("P1Y6M")))
+        .expect_err("a project that writes the duration as ISO 8601 text is refused");
+    let removed = removed_key_refusals(&failure);
+    assert_eq!(
+        removed
+            .iter()
+            .map(|(path, _)| path.as_str())
+            .collect::<Vec<_>>(),
+        ["project.entities[0].consentRecord.validity.maxDuration"]
+    );
+    assert!(
+        removed[0].1.contains("`maximumDurationDays`"),
+        "the refusal names the replacement: {}",
+        removed[0].1
+    );
+    assert!(
+        !removed[0].1.contains("P1Y6M"),
+        "the refusal never repeats the value it read: {}",
+        removed[0].1
+    );
+}
+
+#[test]
+fn the_iso_8601_consent_duration_is_refused_in_a_module_with_its_replacement_named() {
+    let failure = parse_module_yaml(&consent_record_module("maxDuration", json!("P365D")))
+        .expect_err("a module that writes the duration as ISO 8601 text is refused");
+    let removed = removed_key_refusals(&failure);
+    assert_eq!(
+        removed
+            .iter()
+            .map(|(path, _)| path.as_str())
+            .collect::<Vec<_>>(),
+        ["module.entities[0].consentRecord.validity.maxDuration"]
+    );
+    assert!(
+        removed[0].1.contains("`maximumDurationDays`"),
+        "the refusal names the replacement: {}",
+        removed[0].1
+    );
+}
+
+/// A project whose manifest projection describes one vocabulary and points at
+/// where that vocabulary is published, under `member`.
+fn external_reference_project(member: &str) -> Vec<u8> {
+    let mut project: Value = serde_json::from_slice(&source_bytes::source_bytes(
+        &narrowed_vocabulary_project(json!([
+            {"code":"pending","label":{"en":"Pending"}},
+            {"code":"active","label":{"en":"Active"}},
+            {"code":"suspended","label":{"en":"Suspended"}},
+            {"code":"cancelled","label":{"en":"Cancelled"}}
+        ])),
+    ))
+    .expect("the project source is JSON");
+    project["manifestProjection"]["vocabularies"][0][member] =
+        json!("https://codes.example.test/authorization-status.html");
+    serde_json::to_vec(&project).expect("the project is JSON")
+}
+
+#[test]
+fn a_projected_vocabulary_names_where_it_is_published_as_external_reference() {
+    let project = parse_project_yaml(&external_reference_project("externalReference"))
+        .expect("a project that writes externalReference is read");
+    let projection = project
+        .manifest_projection
+        .as_ref()
+        .expect("the project projects a manifest");
+    assert_eq!(
+        projection.vocabularies[0].external_reference.as_deref(),
+        Some("https://codes.example.test/authorization-status.html")
+    );
+
+    // The project is written back with the member it was read from.
+    let written = serde_json::to_value(&project).expect("the project serializes");
+    assert_eq!(
+        written["manifestProjection"]["vocabularies"][0]["externalReference"],
+        json!("https://codes.example.test/authorization-status.html")
+    );
+
+    // The Registry Manifest the projection renders keeps the member its own
+    // format defines.
+    let compiled =
+        compile_project(&project, &[], CompileProfile::Authoring).expect("the project compiles");
+    let manifest: Value = serde_json::from_slice(
+        &compiled
+            .artifacts()
+            .get("generated/manifest/registry-manifest.json")
+            .expect("the projection renders a manifest")
+            .bytes,
+    )
+    .expect("the manifest is JSON");
+    assert_eq!(
+        manifest["codelists"][0]["external_ref"],
+        json!("https://codes.example.test/authorization-status.html")
+    );
+}
+
+#[test]
+fn the_abbreviated_external_reference_is_refused_with_its_replacement_named() {
+    let failure = parse_project_yaml(&external_reference_project("externalRef"))
+        .expect_err("a project that abbreviates the member is refused");
+    let removed = removed_key_refusals(&failure);
+    assert_eq!(
+        removed
+            .iter()
+            .map(|(path, _)| path.as_str())
+            .collect::<Vec<_>>(),
+        ["project.manifestProjection.vocabularies[0].externalRef"]
+    );
+    assert!(
+        removed[0].1.contains("`externalReference`"),
+        "the refusal names the replacement: {}",
+        removed[0].1
+    );
+    assert!(
+        !removed[0].1.contains("codes.example.test"),
+        "the refusal never repeats the value it read: {}",
+        removed[0].1
+    );
+}
+
+/// Reads `new` as `T`, writes it back unchanged, and refuses `old` with a
+/// diagnostic that lists `new` among the values the reader accepts.
+fn assert_word_is_read_and_its_earlier_spelling_refused<T>(new: &str, old: &str)
+where
+    T: serde::de::DeserializeOwned + serde::Serialize,
+{
+    let name = std::any::type_name::<T>();
+    let read: T = serde_json::from_value(json!(new))
+        .unwrap_or_else(|error| panic!("{name} reads `{new}`: {error}"));
+    assert_eq!(
+        serde_json::to_value(&read).expect("the word serializes"),
+        json!(new),
+        "{name} writes the word it read"
+    );
+    let Err(error) = serde_json::from_value::<T>(json!(old)) else {
+        panic!("{name} refuses `{old}`");
+    };
+    assert!(
+        error.to_string().contains(&format!("`{new}`")),
+        "{name} names `{new}` when it refuses `{old}`: {error}"
+    );
+}
+
+#[test]
+fn an_enumerated_word_is_read_in_kebab_case_and_refused_in_snake_case() {
+    use registry_breg::contract::{
+        ChangeRequestCurrentDatePredicateSource, ChangeRequestRetentionModeSource, EventTrigger,
+        LookupValueOrigin, ManifestProjectionDatasetStatus, MutationMode,
+        RequestMetadataFieldSource, ValidTimeRole, WebhookAuthenticationProfile,
+    };
+    use registry_breg::model::{
+        ActionRouteKind, CompiledChangeRequestRetentionMode, CompiledCurrentDateRelation,
+        CompiledQueryTemporalSemantics, CompiledWebhookDeliveryMode, CompiledWebhookRetryProfile,
+    };
+
+    macro_rules! words {
+        ($($type:ty: $($new:literal),+;)+) => {
+            $($(
+                assert_word_is_read_and_its_earlier_spelling_refused::<$type>(
+                    $new,
+                    &$new.replace('-', "_"),
+                );
+            )+)+
+        };
+    }
+    words! {
+        Operation: "submit-request", "revise-request", "cancel-request", "apply-request";
+        ChangeRequestOperation: "submit-request", "revise-request", "cancel-request", "apply-request";
+        ComparisonOperator: "less-than", "less-than-or-equal", "greater-than", "greater-than-or-equal";
+        ChangeRequestCurrentDatePredicateSource: "on-or-after", "on-or-before";
+        CompiledCurrentDateRelation: "on-or-after", "on-or-before";
+        ChangeRequestRetentionModeSource: "operator-erase";
+        CompiledChangeRequestRetentionMode: "operator-erase";
+        EventTrigger: "request-lifecycle";
+        MutationMode: "create-only";
+        ValidTimeRole: "valid-from", "valid-to";
+        LookupValueOrigin: "verified-claim";
+        ManifestProjectionDatasetStatus: "under-development";
+        RequestMetadataFieldSource: "actor-reference", "review-state";
+        WebhookAuthenticationProfile: "hmac-sha256-v1";
+        ActionRouteKind: "target-conditions";
+        CompiledQueryFilterOperator: "is-null", "is-not-null";
+        CompiledQueryKind: "as-of";
+        CompiledQueryTemporalSemantics: "start-inclusive-end-exclusive";
+        CompiledWebhookDeliveryMode: "after-commit";
+        CompiledWebhookRetryProfile: "registry-v1";
+    }
+}
+
+#[test]
+fn a_union_variant_is_named_in_kebab_case_and_refused_in_snake_case() {
+    use registry_breg::contract::{ChangeRequestSelectorSource, EventConditionSource};
+    use registry_breg::model::{
+        CompiledActionValue, CompiledChangeRequestEvidenceExpected,
+        CompiledChangeRequestPredicateExpected, CompiledChangeRequestSelector,
+    };
+
+    fn check<T: serde::de::DeserializeOwned>(tag: &str, new: &str, rest: Value) {
+        let name = std::any::type_name::<T>();
+        let document = |word: &str| {
+            let mut document = rest.clone();
+            document[tag] = json!(word);
+            document
+        };
+        if let Err(error) = serde_json::from_value::<T>(document(new)) {
+            panic!("{name} reads `{new}`: {error}");
+        }
+        let old = new.replace('-', "_");
+        let old_camel = {
+            let mut parts = new.split('-');
+            let first = parts.next().unwrap_or_default().to_owned();
+            parts.fold(first, |mut word, part| {
+                let mut letters = part.chars();
+                if let Some(initial) = letters.next() {
+                    word.extend(initial.to_uppercase());
+                    word.push_str(letters.as_str());
+                }
+                word
+            })
+        };
+        for earlier in [old, old_camel] {
+            let Err(error) = serde_json::from_value::<T>(document(&earlier)) else {
+                panic!("{name} refuses `{earlier}`");
+            };
+            assert!(
+                error.to_string().contains(&format!("`{new}`")),
+                "{name} names `{new}` when it refuses `{earlier}`: {error}"
+            );
+        }
+    }
+
+    check::<ConstraintSource>("type", "int-range", json!({"field": "count", "minimum": 0}));
+    check::<UniqueWhenPredicate>(
+        "type",
+        "field-equals",
+        json!({"field": "state", "value": "a"}),
+    );
+    check::<UniqueWhenPredicate>("type", "field-is-null", json!({"field": "state"}));
+    check::<UniqueWhenPredicate>("type", "field-is-not-null", json!({"field": "state"}));
+    check::<UniqueWhenPredicate>("type", "active-lifecycle", json!({}));
+    check::<EventConditionSource>(
+        "type",
+        "request-lifecycle",
+        json!({"toStates": ["submitted"]}),
+    );
+    check::<ChangeRequestSelectorSource>("type", "request-field", json!({"field": "a"}));
+    check::<ChangeRequestSelectorSource>(
+        "type",
+        "target-field",
+        json!({"target": "a", "field": "b"}),
+    );
+    check::<CompiledChangeRequestSelector>("type", "request-field", json!({"field": "a"}));
+    check::<CompiledChangeRequestSelector>(
+        "type",
+        "target-field",
+        json!({"target": "a", "field": "b"}),
+    );
+    check::<CompiledChangeRequestPredicateExpected>("kind", "request-field", json!({"field": "a"}));
+    check::<CompiledChangeRequestPredicateExpected>(
+        "kind",
+        "current-date",
+        json!({"relation": "on-or-after"}),
+    );
+    check::<CompiledChangeRequestPredicateExpected>("kind", "at-least", json!({"value": 1}));
+    check::<CompiledChangeRequestPredicateExpected>("kind", "at-most", json!({"value": 1}));
+    check::<CompiledChangeRequestEvidenceExpected>("kind", "request-field", json!({"field": "a"}));
+    check::<CompiledChangeRequestTargetBinding>("kind", "reserved-create", json!({"effect": "a"}));
+    check::<CompiledChangeRequestValue>("kind", "from-field", json!({"field": "a"}));
+    check::<CompiledChangeRequestValue>(
+        "kind",
+        "from-effect",
+        json!({"effect": "a", "target_entity_id": "b"}),
+    );
+    check::<CompiledActionValue>("kind", "from-input", json!({"input": "a"}));
+    check::<CompiledActionValue>(
+        "kind",
+        "from-effect",
+        json!({"effect": "a", "target_entity_id": "b"}),
+    );
+}
+
+// CFG-EMPTY-1: an unset record value is stated with `isNull`, `beforeIsNull`,
+// or `afterIsNull`, and `null` is never a comparison literal.
+#[test]
+fn an_unset_value_is_stated_explicitly_and_a_null_literal_is_refused() {
+    use registry_breg::contract::{
+        ActionRequirementSource, ChangeRequestPredicateSource, EventConditionSource,
+    };
+
+    fn reads<T: serde::de::DeserializeOwned + serde::Serialize>(document: Value) {
+        let name = std::any::type_name::<T>();
+        let read = serde_json::from_value::<T>(document.clone())
+            .unwrap_or_else(|error| panic!("{name} reads {document}: {error}"));
+        let written = serde_json::to_value(&read).expect("a source type serializes");
+        for (member, value) in document.as_object().expect("a mapping") {
+            assert_eq!(&written[member], value, "{name} writes `{member}` as read");
+        }
+    }
+    fn refuses<T: serde::de::DeserializeOwned>(document: Value) {
+        let name = std::any::type_name::<T>();
+        assert!(
+            serde_json::from_value::<T>(document.clone()).is_err(),
+            "{name} refuses {document}"
+        );
+    }
+
+    reads::<ChangeRequestPredicateSource>(json!({"field": "note", "isNull": true}));
+    reads::<ChangeRequestPredicateSource>(json!({"field": "note", "equals": "open"}));
+    reads::<ActionRequirementSource>(json!({"input": "subject", "field": "note", "isNull": true}));
+    reads::<ActionRequirementSource>(json!({"input": "subject", "field": "note", "equals": 3}));
+    reads::<EventConditionSource>(json!({
+        "type": "fields",
+        "beforeIsNull": ["note"],
+        "afterIsNull": ["closed-on"],
+        "afterEquals": {"state": true}
+    }));
+
+    refuses::<ChangeRequestPredicateSource>(json!({"field": "note", "equals": null}));
+    refuses::<ChangeRequestPredicateSource>(json!({"field": "note", "isNull": false}));
+    refuses::<ChangeRequestPredicateSource>(json!({"field": "note", "isNull": null}));
+    refuses::<ChangeRequestPredicateSource>(json!({"field": "note", "equals": ["open"]}));
+    refuses::<ActionRequirementSource>(
+        json!({"input": "subject", "field": "note", "equals": null}),
+    );
+    refuses::<ActionRequirementSource>(
+        json!({"input": "subject", "field": "note", "isNull": false}),
+    );
+    refuses::<EventConditionSource>(json!({"type": "fields", "beforeEquals": {"note": null}}));
+    refuses::<EventConditionSource>(json!({"type": "fields", "afterEquals": {"note": null}}));
+    refuses::<EventConditionSource>(json!({"type": "fields", "afterEquals": {"note": {"a": 1}}}));
+    refuses::<EventConditionSource>(json!({"type": "fields", "afterIsNull": ["note", "note"]}));
+
+    // A condition that names no unset field is written as it was, so the
+    // digest of a module that never compared with null does not move.
+    let written = serde_json::to_value(
+        serde_json::from_value::<EventConditionSource>(
+            json!({"type": "fields", "afterEquals": {"state": "open"}}),
+        )
+        .expect("a fields condition is read"),
+    )
+    .expect("a condition serializes");
+    assert_eq!(
+        written,
+        json!({"type": "fields", "changed": [], "beforeEquals": {}, "afterEquals": {"state": "open"}})
+    );
+    let predicate = serde_json::to_value(
+        serde_json::from_value::<ChangeRequestPredicateSource>(
+            json!({"field": "note", "equals": "open"}),
+        )
+        .expect("a predicate is read"),
+    )
+    .expect("a predicate serializes");
+    assert_eq!(predicate, json!({"field": "note", "equals": "open"}));
+}
+
+#[test]
+fn a_union_is_tagged_by_type_and_refused_under_its_earlier_tag() {
+    use registry_breg::contract::{
+        ChangeRequestReviewSource, ChangeRequestSelectorSource, EventConditionSource,
+    };
+    use registry_breg::model::{CompiledChangeRequestReview, CompiledChangeRequestSelector};
+
+    fn check<T: serde::de::DeserializeOwned>(earlier: &str, word: &str, rest: Value) {
+        let name = std::any::type_name::<T>();
+        let document = |tag: &str| {
+            let mut document = rest.clone();
+            document[tag] = json!(word);
+            document
+        };
+        if let Err(error) = serde_json::from_value::<T>(document("type")) {
+            panic!("{name} reads `type: {word}`: {error}");
+        }
+        let Err(error) = serde_json::from_value::<T>(document(earlier)) else {
+            panic!("{name} refuses `{earlier}: {word}`");
+        };
+        assert!(
+            error.to_string().contains("`type`"),
+            "{name} names `type` when it refuses `{earlier}`: {error}"
+        );
+    }
+
+    check::<ConstraintSource>("kind", "unique", json!({"fields": ["code"]}));
+    check::<ConstraintSource>(
+        "kind",
+        "compare",
+        json!({"left": "a", "operator": "less-than", "right": "b"}),
+    );
+    check::<ConstraintSource>("kind", "int-range", json!({"field": "count", "minimum": 0}));
+    check::<ConstraintSource>(
+        "kind",
+        "vocabulary",
+        json!({"field": "state", "values": ["a"]}),
+    );
+    check::<ConstraintSource>(
+        "kind",
+        "temporal-non-overlap",
+        json!({"scopeFields": ["code"], "startField": "valid_from", "endField": "valid_to"}),
+    );
+    check::<UniqueWhenPredicate>(
+        "kind",
+        "field-equals",
+        json!({"field": "state", "value": "a"}),
+    );
+    check::<UniqueWhenPredicate>("kind", "field-is-null", json!({"field": "state"}));
+    check::<UniqueWhenPredicate>("kind", "field-is-not-null", json!({"field": "state"}));
+    check::<UniqueWhenPredicate>("kind", "active-lifecycle", json!({}));
+    check::<EventConditionSource>("kind", "fields", json!({"changed": ["state"]}));
+    check::<EventConditionSource>(
+        "kind",
+        "request-lifecycle",
+        json!({"toStates": ["submitted"]}),
+    );
+    check::<ChangeRequestSelectorSource>("source", "request-field", json!({"field": "a"}));
+    check::<ChangeRequestSelectorSource>(
+        "source",
+        "target-field",
+        json!({"target": "a", "field": "b"}),
+    );
+    check::<CompiledChangeRequestSelector>("source", "request-field", json!({"field": "a"}));
+    check::<CompiledChangeRequestSelector>(
+        "source",
+        "target-field",
+        json!({"target": "a", "field": "b"}),
+    );
+    // A review named its form by the members present: `mode`, or `authority`
+    // with `policyId`.
+    check::<ChangeRequestReviewSource>("mode", "none", json!({}));
+    check::<CompiledChangeRequestReview>("mode", "none", json!({}));
+    let required = json!({"authority": "casework-main", "policyId": "correction-review"});
+    for (name, read) in [
+        (
+            "ChangeRequestReviewSource",
+            (|value| serde_json::from_value::<ChangeRequestReviewSource>(value).map(|_| ()))
+                as fn(Value) -> serde_json::Result<()>,
+        ),
+        ("CompiledChangeRequestReview", |value| {
+            serde_json::from_value::<CompiledChangeRequestReview>(value).map(|_| ())
+        }),
+    ] {
+        let mut tagged = required.clone();
+        tagged["type"] = json!("required");
+        if let Err(error) = read(tagged) {
+            panic!("{name} reads `type: required`: {error}");
+        }
+        let Err(error) = read(required.clone()) else {
+            panic!("{name} refuses a review with no `type`");
+        };
+        assert!(
+            error.to_string().contains("`type`"),
+            "{name} names `type` when it refuses a review without one: {error}"
+        );
+    }
+    assert_eq!(
+        serde_json::to_value(
+            serde_json::from_value::<CompiledChangeRequestReview>(json!({"type": "none"}))
+                .expect("the compiled review reads `type: none`")
+        )
+        .expect("the compiled review serializes"),
+        json!({"type": "none"})
+    );
+}
+
+#[test]
+fn an_identifier_is_read_in_the_local_grammar_and_refused_outside_it() {
+    use registry_breg::action_evidence_contracts::{ActionEvidenceSource, EvidenceProviderSource};
+    use registry_breg::contract::{
+        AccessLogSource, ActionEffectSource, ActionHandlerWriteSource, ActionInputSource,
+        ActionSource, AttachmentSlotSource, ChangeRequestEffectSource, ChangeRequestEvidenceSource,
+        ChangeRequestGuardTargetSource, DerivedFieldSource, DerivedSource, EntitySource,
+        EventConditionSource, FieldSource, HookSource, IndexSource, LookupPermissionSource,
+        ManifestProjectionApplicationProfileSource, ManifestProjectionDataServiceSource,
+        ManifestProjectionDatasetSource, ManifestProjectionDistributionSource,
+        ManifestProjectionEntitySource, ManifestProjectionFieldSource,
+        ManifestProjectionPublicServiceSource, ManifestProjectionPublisherSource,
+        ManifestProjectionVocabularySource, ModuleLockSource, ProjectAccessProfileSource,
+        ReadPathSource, RecipientGroupSource, RecipientOrganizationSource, RegistryIdentitySource,
+        SelectorProfileSource, VocabularySource,
+    };
+
+    const EXPECTED: &str = "a local identifier matching";
+
+    /// Reads the document `write` builds around a well-formed identifier
+    /// without refusing the identifier, and refuses it around each
+    /// identifier outside the grammar without repeating what was written.
+    fn check<T: serde::de::DeserializeOwned>(write: impl Fn(&str) -> Value) {
+        let name = std::any::type_name::<T>();
+        if let Err(error) = serde_json::from_value::<T>(write("a-b_1")) {
+            assert!(
+                !error.to_string().contains(EXPECTED),
+                "{name} reads a local identifier: {error}"
+            );
+        }
+        for refused in ["Upper-case", "1-leading-digit", "dotted.name", ""] {
+            let Err(error) = serde_json::from_value::<T>(write(refused)) else {
+                panic!("{name} refuses an identifier outside the grammar");
+            };
+            let error = error.to_string();
+            assert!(
+                error.contains(EXPECTED),
+                "{name} names the grammar: {error}"
+            );
+            assert!(
+                refused.is_empty() || !error.contains(refused),
+                "{name} never repeats what it read: {error}"
+            );
+        }
+    }
+
+    macro_rules! identified {
+        ($($type:ty),+ $(,)?) => {
+            $( check::<$type>(|id| json!({"id": id})); )+
+        };
+    }
+    identified!(
+        ActionEffectSource,
+        ActionEvidenceSource,
+        ActionHandlerWriteSource,
+        ActionInputSource,
+        ActionSource,
+        AttachmentSlotSource,
+        ChangeRequestEffectSource,
+        ChangeRequestEvidenceSource,
+        ChangeRequestGuardTargetSource,
+        DerivedFieldSource,
+        DerivedSource,
+        EntitySource,
+        EvidenceProviderSource,
+        HookSource,
+        IndexSource,
+        ManifestProjectionApplicationProfileSource,
+        ManifestProjectionDataServiceSource,
+        ManifestProjectionDatasetSource,
+        ManifestProjectionDistributionSource,
+        ManifestProjectionEntitySource,
+        ManifestProjectionFieldSource,
+        ManifestProjectionPublicServiceSource,
+        ManifestProjectionPublisherSource,
+        ManifestProjectionVocabularySource,
+        ModuleLockSource,
+        ProjectAccessProfileSource,
+        ReadPathSource,
+        RecipientGroupSource,
+        RecipientOrganizationSource,
+        RegistryIdentitySource,
+        RegistryModule,
+        SelectorProfileSource,
+        VocabularySource,
+    );
+    check::<FieldSource>(|id| json!({"id": id, "type": "boolean"}));
+    for kind in [
+        "unique",
+        "compare",
+        "int-range",
+        "vocabulary",
+        "temporal-non-overlap",
+    ] {
+        check::<ConstraintSource>(|id| json!({"type": kind, "id": id}));
+    }
+
+    check::<AccessLogSource>(|id| json!({"exemptions": {id: {}}}));
+    check::<ActionEffectSource>(|id| json!({"set": {id: {}}}));
+    check::<ChangeRequestEffectSource>(|id| json!({"set": {id: {}}}));
+    check::<EventConditionSource>(|id| json!({"type": "fields", "beforeEquals": {id: true}}));
+    check::<EventConditionSource>(|id| json!({"type": "fields", "afterEquals": {id: true}}));
+    check::<LookupPermissionSource>(|id| json!({"claimMapping": {id: "claim"}}));
 }

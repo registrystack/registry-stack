@@ -13,8 +13,8 @@
   status: current-source
   surface: CPSV-AP JSON-LD service catalogue, CCCEV requirements, grouped evidence type lists, local form-definition links, DCAT data services, and form JSON Schemas.
   source_of_truth:
-    label: Registry Manifest CPSV-AP fixture
-    url: https://github.com/registrystack/registry-stack/tree/v0.23.0/products/manifest/fixtures/cpsv-ap
+    label: Registry Manifest data model specification
+    url: /spec/rs-dm-manifest/
   consumer_note: Each CCCEV evidence type list is one grouped option; multiple lists on a requirement are alternatives.
 - id: registry-manifest.static-publication
   name: Static Discovery Bundle

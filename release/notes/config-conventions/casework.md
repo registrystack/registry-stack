@@ -3,8 +3,11 @@
 Every Registry Casework change the configuration conventions make, with the
 step that migrates a file or a script. The Casework `CHANGELOG.md` points here.
 
+The items of this fragment were written as each change was made, and where
+two of them disagree about a spelling or a diagnostic code, the one further
+down states what v0.40.0 reads and reports.
+
 ## BREAKING: `casework.yaml` is read by the shared configuration reader
-<!-- upgrade: casework-project-reader-refusals -->
 
 `caseworkctl` (every command that reads a project: `check`, `explain`,
 `test`, `simulate`, `package`, `source add`, and `dev`) and the `casework`
@@ -55,7 +58,6 @@ shares.
   schemas takes the regenerated ones.
 
 ## BREAKING: `casework.yaml` has a schema, and the reader holds its bounds
-<!-- upgrade: casework-project-bounds -->
 
 `casework.yaml` has a published JSON Schema,
 `https://id.registrystack.org/schemas/casework/project/project.v1alpha1.schema.json`,
@@ -100,7 +102,6 @@ The project check keeps the old codes for a project built in code, which the
 reader never sees; the table below gives the code a file now receives.
 
 ## BREAKING: `runtime.yaml` members are typed by the shared reader
-<!-- upgrade: casework-runtime-reader-refusals -->
 
 The `casework` runtime and every `caseworkctl` command that reads
 `runtime.yaml` (`plan`, `apply`, `status`, `doctor`, and `dev`) read its
@@ -141,7 +142,6 @@ diagnostic never repeats the value.
   Migration: none.
 
 ## BREAKING: a refused `runtime.yaml` is reported in full, and `caseworkctl check` reads it offline
-<!-- upgrade: no-file -->
 
 The `casework` runtime and every `caseworkctl` command that reads
 `runtime.yaml` report every problem a pass finds in the file, each at its line and
@@ -191,7 +191,6 @@ Runtime file codes: `casework.runtime.allowed-clients-required`, `casework.runti
 Package codes: `casework.package.digest-mismatch`, `casework.package.file-changed`, `casework.package.invalid`, `casework.package.invalid-project`, `casework.package.retired-manifest`, `casework.package.source-description-mismatch`, `casework.package.unexpected-contents`, `casework.package.unreadable-project`.
 
 ## BREAKING: `caseworkctl check` and `test` report diagnostics, and `--deny-warnings` replaces `--deny-findings`
-<!-- upgrade: no-file -->
 
 `caseworkctl check` and `caseworkctl test` report what they find in the one
 diagnostic shape every Registry Stack check command shares, and exit as every
@@ -240,7 +239,6 @@ reported.
 | `artifact: casework_project` | `artifact: CaseworkProject` |
 
 ## BREAKING: every project refusal against its source descriptions is placed in `casework.yaml`
-<!-- upgrade: no-file -->
 
 `caseworkctl check`, `explain`, `simulate`, and `package` check a project
 against the source descriptions it imported. Each problem they find is its
@@ -291,7 +289,6 @@ project changes.
 | `--against-breg-package` with a missing or stale description | unchanged code, `casework.yaml:/sources/N/description` | unchanged code, `/sources/N/description` |
 
 ## BREAKING: fixtures, simulations, and holiday sets are read by the shared reader
-<!-- upgrade: casework-fixture-file-extension, casework-fixture-spelling, casework-fixture-target, casework-simulation-file-extension, casework-simulation-spelling, casework-holiday-set-envelope, casework-holiday-set-file-name -->
 
 `caseworkctl check`, `test`, and `simulate` read the files under
 `fixtures/`, `simulations/`, and `simulations/holiday-sets/` through the
@@ -359,7 +356,7 @@ The reader names the replacement for each old spelling at its position
   project with neither (`casework.test.no-fixtures`). Each expectation that
   does not hold is its own diagnostic at the `expect` member that states it,
   where the first failure was reported alone as `caseworkctl.refused`.
-- `caseworkctl simulate --fixture FILE` reports the same diagnostics for the
+- `caseworkctl simulate --simulation FILE` reports the same diagnostics for the
   one simulation it reads.
 
 Migration: rewrite each file as the tables above show; `caseworkctl check`
@@ -379,8 +376,22 @@ matches its `code`.
 
 Offline file codes: `casework.fixture.display-mismatch`, `casework.fixture.display-too-large`, `casework.fixture.expectation-not-met`, `casework.fixture.no-subject`, `casework.fixture.request-expectation`, `casework.fixture.review-expectation`, `casework.fixture.two-subjects`, `casework.fixture.unknown-reference`, `casework.holiday-set.misnamed`, `casework.holiday-set.too-many-dates`, `casework.project.misplaced-file`, `casework.project.not-a-directory`, `casework.project.not-a-regular-file`, `casework.project.too-many-files`, `casework.project.unread-directory`, `casework.project.unreadable-file`, `casework.simulation.clock-expectation`, `casework.simulation.clock-failed`, `casework.simulation.clock-input`, `casework.simulation.expectation-not-met`, `casework.simulation.field-mismatch`, `casework.simulation.missing-holiday-set`, `casework.simulation.stage-mismatch`, `casework.simulation.unknown-field`, `casework.simulation.unknown-reference`, `casework.simulation.unprojected-field`, `casework.test.no-fixtures`.
 
+## BREAKING: `caseworkctl simulate` names its file with `--simulation`
+
+`caseworkctl simulate` reads one simulation, a `CaseworkSimulation` file, and
+takes it as `--simulation FILE`, where the flag was `--fixture`. A fixture is
+a different file kind, the one `caseworkctl test` runs beside the simulations.
+There is no alias: `--fixture` is a usage error (exit 2). The file, the
+report, and every other argument are unchanged.
+
+| Old | New |
+|---|---|
+| `caseworkctl simulate PROJECT --fixture FILE` | `caseworkctl simulate PROJECT --simulation FILE` |
+
+Migration: replace `--fixture` with `--simulation` in every script that runs
+`caseworkctl simulate`.
+
 ## BREAKING: a project check reads a bounded number of files
-<!-- upgrade: casework-project-file-bounds -->
 
 - A project declares at most 64 sources. More is refused at `/sources` with
   `casework.source.too-many`. Migration: split the sources across Casework
@@ -401,7 +412,6 @@ Offline file codes: `casework.fixture.display-mismatch`, `casework.fixture.displ
   request declares no target. The report itself is unchanged.
 
 ## BREAKING: `source add` reports positioned warnings in `diagnostics`
-<!-- upgrade: no-file -->
 
 `caseworkctl source add --format json` reports the warnings it used to
 report as findings in the same `diagnostics` shape every other report uses.
@@ -426,7 +436,6 @@ Neither warning blocks the pairing, and their codes are unchanged:
   removed from every report schema.
 
 ## BREAKING: `dev-clients.yaml` is read by the shared reader
-<!-- upgrade: casework-dev-clients-envelope -->
 
 `dev-clients.yaml`, the local callers `caseworkctl dev` registers, carries
 the format envelope, is read through the shared configuration reader, and is
@@ -493,7 +502,6 @@ checked by `caseworkctl check`.
 Development clients codes: `casework.dev-clients.clients-out-of-range`, `casework.dev-clients.duplicate-access-profile`, `casework.dev-clients.duplicate-id`, `casework.dev-clients.duplicate-member`, `casework.dev-clients.duplicate-queue`, `casework.dev-clients.duplicate-scope`, `casework.dev-clients.duplicate-team`, `casework.dev-clients.invalid-access-profile`, `casework.dev-clients.invalid-claim-name`, `casework.dev-clients.invalid-claim-value`, `casework.dev-clients.invalid-id`, `casework.dev-clients.invalid-queue`, `casework.dev-clients.invalid-resource`, `casework.dev-clients.invalid-scope`, `casework.dev-clients.invalid-secret-file`, `casework.dev-clients.invalid-status-client`, `casework.dev-clients.invalid-task-authority-issuer`, `casework.dev-clients.invalid-task-exchange`, `casework.dev-clients.invalid-team`, `casework.dev-clients.member-role-mismatch`, `casework.dev-clients.missing-administrator`, `casework.dev-clients.missing-human-claim`, `casework.dev-clients.missing-integrations`, `casework.dev-clients.missing-principal-claim`, `casework.dev-clients.missing-required-scope`, `casework.dev-clients.missing-task-authority`, `casework.dev-clients.missing-task-exchange-client`, `casework.dev-clients.repeated-principal`, `casework.dev-clients.requester-human-claim`, `casework.dev-clients.requester-member`, `casework.dev-clients.reserved-claim`, `casework.dev-clients.reserved-id`, `casework.dev-clients.scopes-out-of-range`, `casework.dev-clients.service-client-human-claim`, `casework.dev-clients.source-bindings-mismatch`, `casework.dev-clients.staff-out-of-range`, `casework.dev-clients.too-many-claims`, `casework.dev-clients.too-many-integrations`, `casework.dev-clients.too-many-supervisors`, `casework.dev-clients.too-many-teams`, `casework.dev-clients.unknown-access-profile`, `casework.dev-clients.unknown-client`, `casework.dev-clients.unknown-queue`, `casework.dev-clients.unserved-queue`.
 
 ## BREAKING: the development session state is read by the shared reader
-<!-- upgrade: casework-dev-session-reset -->
 
 `.casework/dev/state.json`, the session state `caseworkctl dev` writes and
 reads back, carries the format envelope, is read through the shared
@@ -526,7 +534,6 @@ configuration reader, and is checked by `caseworkctl check`.
 Development state codes: `casework.dev-state.invalid-ownership`.
 
 ## BREAKING: `caseworkctl` report schema identifiers
-<!-- upgrade: no-file -->
 
 The 21 schemas in `products/casework/contracts/cli/`, one per
 `caseworkctl --format json` report `kind`, are published in the identifier
@@ -586,7 +593,6 @@ The members still left open are listed in
 `products/casework/contracts/cli/README.md`.
 
 ## BREAKING: `authentication.oidc.assertionIssuers: {}` is refused
-<!-- upgrade: casework-runtime-empty-assertion-issuers -->
 
 | Before | Now | Migration |
 |---|---|---|
@@ -618,7 +624,7 @@ Project codes:
 - `casework.calendar.*`: `casework.calendar.duplicate-id`, `casework.calendar.duplicate-working-weekday`, `casework.calendar.invalid-holiday-set`, `casework.calendar.invalid-id`, `casework.calendar.no-working-weekdays`, `casework.calendar.too-many`, `casework.calendar.unknown-timezone`.
 - `casework.clock.*`: `casework.clock.duplicate-id`, `casework.clock.duplicate-reminder-id`, `casework.clock.duplicate-step-id`, `casework.clock.invalid-because`, `casework.clock.invalid-due-time`, `casework.clock.invalid-elapsed`, `casework.clock.invalid-id`, `casework.clock.invalid-reminder-id`, `casework.clock.invalid-step-id`, `casework.clock.too-many-reminders`, `casework.clock.too-many-steps`, `casework.clock.too-many`, `casework.clock.unknown-calendar`, `casework.clock.unknown-queue`, `casework.clock.unsupported-pause`, `casework.clock.working-days-out-of-range`.
 - `casework.inbox.*`: `casework.inbox.inconsistent-bounds`, `casework.inbox.out-of-range`.
-- `casework.project.*`: `casework.project.empty-id`, `casework.project.empty-version`, `casework.project.no-work`, `casework.project.wrong-api-version`, `casework.project.wrong-kind`.
+- `casework.project.*`: `casework.project.empty-version`, `casework.project.no-work`, `casework.project.wrong-api-version`, `casework.project.wrong-kind`.
 - `casework.queue.*`: `casework.queue.duplicate-id`, `casework.queue.invalid-id`, `casework.queue.invalid-label`, `casework.queue.none`.
 - `casework.request.*`: `casework.request.duplicate-context-field`, `casework.request.duplicate-entity`, `casework.request.empty-entity`, `casework.request.empty-target-id`, `casework.request.invalid-context-field`, `casework.request.invalid-display-reference`, `casework.request.invalid-target-elapsed`, `casework.request.too-many-context-fields`, `casework.request.unknown-clock`.
 - `casework.review-kind.*`: `casework.review-kind.accountability-before-terminal`, `casework.review-kind.answer-stage-approvals`, `casework.review-kind.answer-stage-count`, `casework.review-kind.answer-without-outcomes`, `casework.review-kind.answered-outcome-in-approval`, `casework.review-kind.display-hides-disclosure`, `casework.review-kind.duplicate-clock`, `casework.review-kind.duplicate-deciding-profile`, `casework.review-kind.duplicate-id`, `casework.review-kind.duplicate-outcome-id`, `casework.review-kind.duplicate-stage-id`, `casework.review-kind.ineligible-deciding-profile`, `casework.review-kind.invalid-clock`, `casework.review-kind.invalid-deciding-profile`, `casework.review-kind.invalid-display-schema`, `casework.review-kind.invalid-id`, `casework.review-kind.invalid-outcome-id`, `casework.review-kind.invalid-outcome-label`, `casework.review-kind.invalid-result-schema`, `casework.review-kind.invalid-stage-id`, `casework.review-kind.invalid-stage-queue`, `casework.review-kind.invalid-version`, `casework.review-kind.no-deciding-profiles`, `casework.review-kind.no-stages`, `casework.review-kind.required-approvals-out-of-range`, `casework.review-kind.result-required-without-result-schema`, `casework.review-kind.retention-out-of-range`, `casework.review-kind.too-many-clocks`, `casework.review-kind.too-many-deciding-profiles`, `casework.review-kind.too-many-outcomes`, `casework.review-kind.too-many-stages`, `casework.review-kind.too-many`, `casework.review-kind.unanswered-outcome-in-answer`, `casework.review-kind.unknown-clock`, `casework.review-kind.unknown-queue`.
@@ -628,3 +634,1046 @@ Project codes:
 - `casework.source-description.*`: `casework.source-description.contract-mismatch`, `casework.source-description.missing`, `casework.source-description.review-kind-not-approval`, `casework.source-description.review-kind-not-source-context`, `casework.source-description.review-not-admitted`, `casework.source-description.unknown-review-kind`.
 - `casework.source-revision.*`: `casework.source-revision.stale`.
 - `casework.task-template.*`: `casework.task-template.duplicate-entry`, `casework.task-template.duplicate-id`, `casework.task-template.duplicate-permission`, `casework.task-template.empty-list`, `casework.task-template.ineligible-profile`, `casework.task-template.invalid-audience`, `casework.task-template.invalid-bounds`, `casework.task-template.invalid-entry`, `casework.task-template.invalid-id`, `casework.task-template.invalid-operation`, `casework.task-template.invalid-purpose`, `casework.task-template.invalid-requester-tag`, `casework.task-template.invalid-scope`, `casework.task-template.invalid-subject-claim`, `casework.task-template.invalid-subject-field`, `casework.task-template.invalid-team`, `casework.task-template.invalid-text`, `casework.task-template.lifetime-out-of-range`, `casework.task-template.missing-evidence-context`, `casework.task-template.mixed-eligibility`, `casework.task-template.no-eligibility`, `casework.task-template.permissions-out-of-range`, `casework.task-template.subjects-out-of-range`, `casework.task-template.too-many-entries`, `casework.task-template.too-many`, `casework.task-template.unexpected-evidence-context`, `casework.task-template.unknown-item-kind`, `casework.task-template.unknown-review-kind`, `casework.task-template.unknown-source`, `casework.task-template.unsupported-item-state`.
+
+## Stable move
+
+The changes below move promised spellings to the form the configuration
+conventions give them. Each old spelling is refused with a diagnostic that
+names its replacement; no release reads both.
+
+### BREAKING: `authentication.oidc.jwksSource` is tagged by `type`
+
+The shared OIDC key source block is a union tagged by `type` (CFG-ID-7),
+where it was tagged by `kind`. The `casework` runtime and every command
+that reads a runtime file refuse `kind` under `jwksSource` as
+`config.removed-key` at `/authentication/oidc/jwksSource/kind`, and the
+message names `type`. The values and their members are unchanged.
+
+| Old spelling | New spelling | Migration |
+|---|---|---|
+| `authentication.oidc.jwksSource.kind` | `authentication.oidc.jwksSource.type` | Rename the key; keep the value (`discovery`, `uri`, or `static`). |
+
+`jwksSource: {kind: static, documentRef: secret:file/jwks}` becomes
+`jwksSource: {type: static, documentRef: secret:file/jwks}`. A file that
+omits `jwksSource` needs no change: the default is still `type: discovery`.
+`caseworkctl check PROJECT --runtime-config FILE` reports the old key at
+its line and column.
+
+### BREAKING: `runtime.yaml` carries the format identifier as its `apiVersion`
+
+The Casework runtime configuration names its format the way every other
+Registry Stack file does (CFG-ENV-2). The `casework` runtime and every
+command that reads a runtime file refuse the old value as
+`config.retired-api-version` at `/apiVersion`, and the message names the new
+one. `kind: CaseworkRuntimeConfig` and every other member are unchanged.
+
+| Old spelling | New spelling | Migration |
+|---|---|---|
+| `apiVersion: registry.registrystack.org/casework-runtime/v1alpha1` | `apiVersion: id.registrystack.org/formats/casework/runtime/v1alpha1` | Replace the line. |
+
+`caseworkctl dev` writes the new value into the runtime file it generates.
+
+### BREAKING: four `runtime.yaml` keys are renamed
+
+A retention period ends in `RetentionDays`, the time one attempt may take
+is `attemptTimeoutMilliseconds`, and the wait between attempts is a retry
+delay (CFG-NAME-5). The `casework` runtime and every command that reads a
+runtime file refuse each old key as `config.removed-key` at its own pointer,
+and the message names the replacement. Values, units, defaults, and bounds
+are unchanged.
+
+| Old spelling | New spelling | Migration |
+|---|---|---|
+| `audit.retainDays` | `audit.retentionDays` | Rename the key; keep the value. |
+| `sources.<id>.requestTimeoutMilliseconds` | `sources.<id>.attemptTimeoutMilliseconds` | Rename the key; keep the value. |
+| `reviewCompletionDestinations.<id>.timeoutMilliseconds` | `reviewCompletionDestinations.<id>.attemptTimeoutMilliseconds` | Rename the key; keep the value. |
+| `reviewCompletionDestinations.<id>.retrySeconds` | `reviewCompletionDestinations.<id>.retryDelaySeconds` | Rename the key; keep the value. |
+
+`sources.<id>.connectTimeoutMilliseconds` keeps its name. A refusal of an
+audit member now names `audit.retentionDays` in its message and path.
+
+### BREAKING: the keys of three id-keyed `runtime.yaml` maps are typed
+
+The runtime schema states the grammar of each id-keyed map's keys (CFG-ID-1,
+CFG-ID-2), and the reader refuses a key outside it as `config.invalid-value`
+at the key's own pointer, before any cross-check against `casework.yaml`.
+
+| Map | Key grammar | Migration |
+|---|---|---|
+| `sources` | local identifier, `^[a-z][a-z0-9_-]{0,63}$` | None for a file the runtime started with: a source id in `casework.yaml` already had a narrower grammar. |
+| `reviewCompletionDestinations` | kept as written: 1 to 512 characters, no control characters | Rewrite an empty, over-long, or control-character key. |
+| `taskAuthority.statusClients` | kept as written: 1 to 512 characters, no control characters | Rewrite an empty, over-long, or control-character key. |
+
+A completion destination id is stored with each review request, so its
+grammar is not narrowed: `casework.yaml` still holds `destinationId` to 1 to
+128 ASCII letters, digits, `-`, `_`, `.`, or `:`.
+
+### BREAKING: each `caseworkctl` report names its own format
+
+A `caseworkctl --format json` report is a format of its own, as every other
+Registry Stack document is (CFG-ENV-2, CFG-ENV-3). Its `apiVersion` is
+`id.registrystack.org/formats/casework/<report>/v1alpha3`, where it was
+`registry.registrystack.org/caseworkctl/v1alpha3` for every report, and its
+`kind` carries the product's name. The 21 reports keep one version and move
+together. Every other member, the schema file names in
+`products/casework/contracts/cli/`, and the schema `$id` values are
+unchanged.
+
+| Old `kind` | New `kind` | New `apiVersion` |
+|---|---|---|
+| `ApplyReport` | `CaseworkApplyReport` | `id.registrystack.org/formats/casework/apply-report/v1alpha3` |
+| `AttemptSettlementReport` | `CaseworkAttemptSettlementReport` | `id.registrystack.org/formats/casework/attempt-settlement-report/v1alpha3` |
+| `AttemptUncertainMarkingReport` | `CaseworkAttemptUncertainMarkingReport` | `id.registrystack.org/formats/casework/attempt-uncertain-marking-report/v1alpha3` |
+| `CheckReport` | `CaseworkCheckReport` | `id.registrystack.org/formats/casework/check-report/v1alpha3` |
+| `DevEventsReport` | `CaseworkDevEventsReport` | `id.registrystack.org/formats/casework/dev-events-report/v1alpha3` |
+| `DevGrantReport` | `CaseworkDevGrantReport` | `id.registrystack.org/formats/casework/dev-grant-report/v1alpha3` |
+| `DevIdentityReport` | `CaseworkDevIdentityReport` | `id.registrystack.org/formats/casework/dev-identity-report/v1alpha3` |
+| `DevReport` | `CaseworkDevReport` | `id.registrystack.org/formats/casework/dev-report/v1alpha3` |
+| `DevTokenReport` | `CaseworkDevTokenReport` | `id.registrystack.org/formats/casework/dev-token-report/v1alpha3` |
+| `DoctorReport` | `CaseworkDoctorReport` | `id.registrystack.org/formats/casework/doctor-report/v1alpha3` |
+| `ExplainReport` | `CaseworkExplainReport` | `id.registrystack.org/formats/casework/explain-report/v1alpha3` |
+| `InitReport` | `CaseworkInitReport` | `id.registrystack.org/formats/casework/init-report/v1alpha3` |
+| `LifecycleReport` | `CaseworkLifecycleReport` | `id.registrystack.org/formats/casework/lifecycle-report/v1alpha3` |
+| `PackageReport` | `CaseworkPackageReport` | `id.registrystack.org/formats/casework/package-report/v1alpha3` |
+| `PlanReport` | `CaseworkPlanReport` | `id.registrystack.org/formats/casework/plan-report/v1alpha3` |
+| `RetentionEraseReport` | `CaseworkRetentionEraseReport` | `id.registrystack.org/formats/casework/retention-erase-report/v1alpha3` |
+| `SimulationReport` | `CaseworkSimulationReport` | `id.registrystack.org/formats/casework/simulation-report/v1alpha3` |
+| `SourceAddReport` | `CaseworkSourceAddReport` | `id.registrystack.org/formats/casework/source-add-report/v1alpha3` |
+| `StatusReport` | `CaseworkStatusReport` | `id.registrystack.org/formats/casework/status-report/v1alpha3` |
+| `TestReport` | `CaseworkTestReport` | `id.registrystack.org/formats/casework/test-report/v1alpha3` |
+| `UsageReport` | `CaseworkUsageReport` | `id.registrystack.org/formats/casework/usage-report/v1alpha3` |
+
+Migration: no file changes. A script that selects a report by `kind`, or
+checks `apiVersion`, matches the new values; nothing reads a report back, so
+no old value is refused anywhere.
+
+### BREAKING: `casework.yaml` carries the format identifier as its `apiVersion`
+
+A Casework project names its format the way every other Registry Stack file
+does (CFG-ENV-2): `apiVersion` is
+`id.registrystack.org/formats/casework/project/v1alpha1`, where it was
+`registry.registrystack.org/casework/v1alpha1`. `kind: CaseworkProject` and
+every other member are unchanged. Every command that reads a project and the
+`casework` runtime refuse the old value as `config.retired-api-version` at
+`/apiVersion`, and the diagnostic names the new one.
+
+Migration: write
+`apiVersion: id.registrystack.org/formats/casework/project/v1alpha1` in
+`casework.yaml`, then run `caseworkctl package`, `caseworkctl plan`, and
+`caseworkctl apply`: the header is part of the packaged policy, so the
+package digest changes while no stored review, clock, or task record does.
+
+### BREAKING: the identifiers `casework.yaml` declares are local identifiers
+
+Thirteen members of `casework.yaml` are typed by the shared identifier types
+(CFG-ID-1, CFG-ID-2), so the schema, the reader, and the semantic checks hold
+one grammar: `^[a-z][a-z0-9_-]{0,63}$`.
+
+| Member | Before | Now |
+|---|---|---|
+| `calendars[].id`, `clocks[].id`, `clocks[].reminders[].id`, `clocks[].steps[].id`, `reviewKinds[].id`, `reviewKinds[].stages[].id`, `reviewKinds[].outcomes[].id`, the `id` of a rule under `routing`, a key under a routing rule's `when.fields` | `^[a-z][a-z0-9-]{0,63}$` | local identifier: `_` is also accepted |
+| `sources[].id`, `sources[].requests[].target.id` | any non-empty string | local identifier |
+| a key under `taskTemplates[].subjects` | untyped in the schema | external identifier in the schema; the check still holds it to letters, digits, `-`, `_`, and `.` up to 128 bytes |
+
+A malformed identifier in a file is refused by the reader as
+`config.invalid-value` at the identifier's own pointer, before the semantic
+checks run. The identifier pattern the OpenAPI document publishes for these
+ids, and for the holiday-set path parameter, accepts `_` as well: a client
+that validates responses against a copied pattern must take the new one.
+
+Migration: a source id or a target id that is not a local identifier must be
+rewritten, in `casework.yaml` and as the matching key under `sources` in
+`runtime.yaml`; then run `caseworkctl package`, `caseworkctl plan`, and
+`caseworkctl apply`. Work already stored under the old source id keeps that
+id, so settle or drain it before the rename. No other file changes.
+
+### A repeated id in `casework.yaml` is refused by the reader
+
+The eight named lists of `casework.yaml` (`accessProfiles`, `queues`,
+`sources`, `reviewKinds`, `reviewProducers`, `calendars`, `clocks`, and
+`taskTemplates`) are read through the shared unique-by-id list type
+(CFG-ID-5). A file that repeats an id was refused before and is refused now;
+the code and the order change:
+
+| List | Code before | Code now |
+|---|---|---|
+| `accessProfiles` | `casework.access-profile.duplicate-id` | `config.duplicate-id` |
+| `queues` | `casework.queue.duplicate-id` | `config.duplicate-id` |
+| `sources` | `casework.source.duplicate-id` | `config.duplicate-id` |
+| `reviewKinds` | `casework.review-kind.duplicate-id` | `config.duplicate-id` |
+| `reviewProducers` | `casework.review-producer.duplicate-id` | `config.duplicate-id` |
+| `calendars` | `casework.calendar.duplicate-id` | `config.duplicate-id` |
+| `clocks` | `casework.clock.duplicate-id` | `config.duplicate-id` |
+| `taskTemplates` | `casework.task-template.duplicate-id` | `config.duplicate-id` |
+
+The diagnostic sits at the `id` of the second item, as before. The reader
+refuses first, so a repeated id is reported before the semantic checks run.
+The product codes stay in the catalogue: they still report a repeated id in a
+project that was not read from a file.
+
+Migration: no file changes. A script that matches the product code of a
+repeated id must match `config.duplicate-id`.
+
+### BREAKING: the required scopes of an access profile are a set
+
+`accessProfiles[].requiredScopes` in `casework.yaml` is read as a set
+(CFG-ID-6). A scope listed twice in one profile, which was accepted and
+counted once, is refused by the reader as `config.duplicate-item` at the
+second occurrence, and the schema declares `uniqueItems`.
+
+Migration: delete the repeated scope. A profile that lists each scope once
+needs no change.
+
+### BREAKING: a client listed under `assertionIssuers` names at least one issuer
+
+`authentication.oidc.assertionIssuers` in the runtime file refuses a client
+written with an empty issuer list (CFG-EMPTY-2). The runtime, `caseworkctl
+check`, and every command that reads a runtime file report
+`config.invalid-value` at `/authentication/oidc/assertionIssuers/<client>`,
+and the runtime schema declares `minItems: 1` on the list. A client that is
+not listed may exchange from no authority, which is what the empty list
+meant.
+
+Migration: remove a client that lists no issuer from `assertionIssuers`, or
+list its issuers. Do not delete the whole member to get there unless no
+assertion-issuer rule is wanted: with the member omitted, a token exchanged
+from any authority the issuer federates is accepted.
+
+### BREAKING: five `caseworkctl` reports respell values and type their identifiers
+
+Nothing an operator writes changes; a script that reads these reports does.
+
+| Report | Member | Old | New |
+|---|---|---|---|
+| `plan` | `databaseIdCheck` | `notRecorded` | `not-recorded` |
+| `lifecycle` | `lifecycles[].id` | `review_request` | `review-request` |
+| `simulate` | `subject.id` | `id` | `recordId` |
+| `source add` | `activation` | `not_performed` | `not-performed` |
+| `test` | `proofBoundary` | `offline_synthetic` | `offline-synthetic` |
+
+- `subject.recordId` in the simulation report is the source record
+  identifier the simulation file writes under the same name. It is the
+  source's own identifier, not a local identifier, so the report no longer
+  calls it `id` (CFG-ID-1, CFG-ID-2).
+- `LifecycleReport.schema.json` types a lifecycle's `id`, a state's `id`, and
+  an enforcement layer's `id` as local identifiers. The state and layer
+  identifiers are written as the runtime stores them. The two waiting item
+  states are respelled with the runtime (see "the two waiting item states are
+  kebab-case" below), and the review state `changes_requested` with the
+  report words (see "the words `caseworkctl` prints in its reports are
+  kebab-case" under "Protocol words").
+- `PlanReport.schema.json` has two variants, told apart by `ok`, where it had
+  three (CFG-ID-7). A refusal carries the plan it refused when its `status`
+  is `refused` and carries none of the plan's members otherwise; the schema
+  states that with `if`, `then`, and `else` inside the one refusal variant.
+  The report itself is unchanged apart from `databaseIdCheck`.
+
+Migration: a script that compares one of the old values compares the new
+one, and a script that reads `.subject.id` from `caseworkctl simulate` reads
+`.subject.recordId`. A consumer that validates reports takes the regenerated
+schemas.
+
+### BREAKING: `casework.yaml` names the project in a `project` block
+
+A Casework project names itself the way every other Registry Stack project
+does (CFG-ENV-6): the top-level `project` block holds the shared
+`ProjectIdentity` members, `id` and `version`, where the block was called
+`casework`. Every command that reads a project and the `casework` runtime
+refuse `casework` as `config.removed-key` at `/casework`, and the diagnostic
+names `project`. An empty project version is still
+`casework.project.empty-version`, now at `/project/version`.
+
+Nothing stored changes: the runtime keeps no project id, and it reports the
+one the packaged project declares as `projectId` in its description
+response, whose member names are unchanged. `caseworkctl` reports keep `projectId` and
+`policyVersion`.
+
+Migration: rename the top-level `casework` key to `project` in
+`casework.yaml`, then run `caseworkctl package`, `caseworkctl plan`, and
+`caseworkctl apply`.
+
+### BREAKING: the project id in `casework.yaml` is a local identifier
+
+`project.id` is a local identifier (CFG-ID-1): a lowercase letter, then at
+most 63 lowercase letters, digits, underscores, or hyphens. It was any
+non-empty text. A value outside that grammar is refused as
+`config.invalid-value` at `/project/id`.
+
+| Failure | Old code | New code |
+|---|---|---|
+| an empty project id | `casework.project.empty-id` | `config.invalid-value` |
+
+Migration: rewrite `project.id` when it is not a local identifier, then
+package, plan, and apply. A caller that compares `projectId` from the
+runtime's description response or from a `caseworkctl` report compares the
+new value.
+
+### BREAKING: the runtime file states which OAuth clients it admits
+
+`authentication.oidc.allowedClients` in `runtime.yaml` is required
+(CFG-EMPTY-2). It takes the keyword `unrestricted`, to admit a token from
+every client the issuer verifies, or a list of at least one client, none
+repeated (CFG-ID-6). The `casework` runtime and
+`caseworkctl check PROJECT --runtime-config FILE` refuse the other forms
+when the file is read.
+
+| Written | Before | Now |
+|---|---|---|
+| member omitted, development loopback | every client admitted | refused, `config.missing-key` at `/authentication/oidc` |
+| `allowedClients: []`, development loopback | every client admitted | refused, `config.invalid-value` at `/authentication/oidc/allowedClients` |
+| member omitted or `[]`, `operator-controlled-upstream` | refused, `casework.runtime.allowed-clients-required` | refused with the reader codes above |
+| `allowedClients: unrestricted`, development loopback | refused | every client admitted |
+| `allowedClients: unrestricted`, `operator-controlled-upstream` | refused | refused, `casework.runtime.allowed-clients-required` at `/authentication/oidc/allowedClients` |
+| `allowedClients: [a, b]` | only `a` and `b` admitted | unchanged |
+| `allowedClients: [a, b, a]` | only `a` and `b` admitted | refused, `config.duplicate-item` at `/authentication/oidc/allowedClients/2` |
+
+The diagnostic names the fix and never repeats what was written. Token
+verification does not change: a runtime file rewritten as below admits
+exactly the tokens it admitted before. A configured `taskAuthority` still
+requires a list in either listener mode. `caseworkctl init` and the
+maintained examples, which listen on development loopback, write
+`allowedClients: unrestricted`; `caseworkctl dev` writes the session's
+clients as it did.
+
+Migration:
+
+1. If `allowedClients` is missing or written `[]`, list the OAuth clients
+   that call this deployment. Listing them is the stronger choice: a token
+   issued to any other client of the same issuer is then refused.
+2. To keep admitting every client on development loopback, write
+   `allowedClients: unrestricted`.
+3. Write a client the list repeats once.
+4. Run `caseworkctl check PROJECT --runtime-config runtime.yaml`.
+
+### BREAKING: a clock is tagged by `type`, and its four values are kebab-case
+
+A clock in `casework.yaml` says which kind it is with `type` (CFG-ID-7),
+where the member was called `scope`, and the four values a clock names are
+lowercase kebab-case (CFG-NAME-2). One spelling is used everywhere a clock
+appears: the authored file, the record a running occurrence stores, the
+digest computed over a clock, and the `clocks` member of `GET /v1/casework`.
+
+| Member | Before | Now |
+|---|---|---|
+| the tag | `scope: subject`, `scope: activity` | `type: subject`, `type: activity` |
+| `anchor` of a subject clock | `firstSubmittedAt` | `first-submitted-at` |
+| `completeOn` | `reviewCompleted` | `review-completed` |
+| `pauseWhile` items | `awaitingApplicant` | `awaiting-applicant` |
+| `anchor` of an activity clock | `stageEnteredAt` | `stage-entered-at` |
+
+`scope` on a clock is refused as `config.removed-key` at `/clocks/N/scope`,
+and the diagnostic names `type: subject` and `type: activity`. Each old value
+is refused as `config.unknown-variant` at its own position, and the
+diagnostic lists the values the member accepts. The members of a simulation
+file that carry the same words as keys, `subject.stageEnteredAt` and
+`subject.reviewTiming.firstSubmittedAt`, are member names and do not change.
+
+HTTP: `GET /v1/casework` returns each clock with `type` in place of `scope`
+and with the four values above respelled. The `scope` member of a review
+clock's `correlation` in `GET /v1/review-requests/{request}/clocks` is a
+different member and does not change. The Rust client, the Node.js and
+Python bindings, and `@registrystack/client` carry the new spellings in their
+types.
+
+Stored state: a running clock occurrence keeps the clock it started under,
+with the digest computed when it started, and the runtime reads that record
+for as long as the occurrence runs. A stored clock in the previous spelling
+is not read: v0.40.0 does not upgrade v0.39.0 state in place; apply to a new
+database. An authored file in that spelling is refused.
+
+Migration: in `casework.yaml`, rename `scope` to `type` on every clock and
+respell the four values as the table gives them, then run `caseworkctl
+package`, `caseworkctl plan`, and `caseworkctl apply`. Update a caller that
+reads the `clocks` member of `GET /v1/casework`.
+
+### BREAKING: the two waiting item states are kebab-case
+
+The two waiting states of a work item are lowercase kebab-case (CFG-NAME-2),
+as the other closed values Casework reads and writes. One spelling is used
+everywhere the state appears: `itemStates` of a task template in
+`casework.yaml`, the `state` column of a stored work item, the template a
+task grant was approved under, and every HTTP response that carries a work
+item.
+
+| Before | Now |
+|---|---|
+| `waiting_applicant` | `waiting-applicant` |
+| `waiting_application` | `waiting-application` |
+
+An old value under `taskTemplates[].itemStates` is refused as
+`config.unknown-variant` at its own position, and the diagnostic lists the
+values the member accepts. The other six states (`open`, `claimed`,
+`synchronizing`, `completed`, `superseded`, `cancelled`) are unchanged. The
+lifecycle event identifiers `caseworkctl lifecycle` prints
+(`observe_waiting_applicant`, `observe_waiting_application`) are another
+vocabulary, respelled with the report words (see "the words `caseworkctl`
+prints in its reports are kebab-case" under "Protocol words").
+
+HTTP: the `state` member of a work item carries the new spelling in every
+response that returns one: `GET /v1/work-items`, `GET /v1/work-items/next`,
+`GET /v1/work-items/{item_id}`, `POST /v1/directory/caseload/preview`, and
+the `item` of the response to `POST /v1/work-items/{item_id}/claim`,
+`release`, `assign`, `delegate`, `decisions`, `attempts/recover`, and
+`attempts/{attempt_id}/recover`. No HTTP response carries a task template's
+`itemStates`. `caseworkctl attempt settle` and `caseworkctl attempt
+mark-uncertain` print `itemState` in the same spelling, and `caseworkctl
+lifecycle` prints the two state identifiers in it. The Rust client, the
+Node.js and Python bindings, and `@registrystack/client` carry the new
+spellings in their types.
+
+Stored state: schema migration 22 respells what the previous release stored.
+It rewrites `itemStates` in each stored task template document and in the
+template each task grant record embeds, then the `state` of every work item,
+and replaces the constraint on that column, in that order, so a live task
+grant stays valid across the upgrade. `caseworkctl apply` runs the migration.
+A stored template document carries no digest and is compared with the
+packaged template as JSON, so it is rewritten in place. An authored file in
+the old spelling is refused. A retained replay response of a claim or a
+release never holds a waiting state, so none is rewritten.
+
+Migration: in `casework.yaml`, respell the two values under
+`taskTemplates[].itemStates`, keeping each template's `version`, then run
+`caseworkctl package`, `caseworkctl plan`, and `caseworkctl apply`. Stop the
+previous release's runtime before the apply: it cannot read the new
+spelling. Update a caller that compares a work item's `state` with either
+value.
+
+### BREAKING: the settlement that asks for changes is `changes-requested`
+
+The settlement of a review outcome is a closed value and is lowercase
+kebab-case (CFG-NAME-2). One of the three had an underscore:
+
+| Before | Now |
+|---|---|
+| `changes_requested` | `changes-requested` |
+
+`rejected` and `answered` are unchanged. The old value under
+`reviewKinds[].outcomes[].settlement` is refused as `config.unknown-variant`
+at its own position, and the diagnostic lists the values the member accepts.
+One spelling is used everywhere the settlement of an outcome appears: the
+authored review kind, the digest input of the kind's policy, the snapshot a
+review pins, and the HTTP responses that carry a snapshot.
+
+Three other words carried the same value in another vocabulary: the
+`lifecycle` of a review request, the `status` of a review result (the review
+protocol a producer such as BReg reads), and the `type` of a reviewer's
+decision. They are respelled too, with a schema migration of their own: see
+"the review protocol words are kebab-case" under "Protocol words".
+
+HTTP: `outcomes[].settlement` carries the new spelling in the review kind
+snapshots returned by `GET /v1/review-kinds` and `GET
+/v1/review-kinds/{kind_id}`, and in the `policySnapshot` of `GET
+/v1/review-tasks/{task_id}/context`. The policy `digest` of a review kind
+that declares a changes-requested outcome is a new value, wherever that
+kind's policy identity is returned.
+The Rust client, the Node.js binding, and `@registrystack/client` carry the
+new spelling in their types.
+
+Stored state: a review pins its kind's policy snapshot and the snapshot's
+digest when it is admitted, and keeps both until it is erased. A stored
+snapshot in the previous spelling is not read, and a snapshot verifies only
+under the digest this release computes for it: v0.40.0 does not upgrade
+v0.39.0 state in place; apply to a new database. An authored file in the old
+spelling is refused. No schema migration is involved for the settlement of
+an outcome.
+
+Migration: in `casework.yaml`, respell `settlement: changes_requested` to
+`settlement: changes-requested` under each review kind, keeping the kind's
+`version`, then run `caseworkctl package`, `caseworkctl plan`, and
+`caseworkctl apply`. Update a caller that compares an outcome's `settlement`
+with the old value.
+
+### BREAKING: four more ids `casework.yaml` declares are local identifiers
+
+The id of an access profile, a queue, a review producer, and a task template
+is typed by the shared identifier type (CFG-ID-1), so the schema, the reader,
+and the semantic checks hold one grammar: `^[a-z][a-z0-9_-]{0,63}$`.
+
+| Member | Before | Now |
+|---|---|---|
+| `accessProfiles[].id`, `reviewProducers[].id` | letters, digits, `-`, `_`, `.`, and `:`, up to 128 bytes | local identifier |
+| `queues[].id`, `taskTemplates[].id` | letters, digits, `-`, `_`, and `.`, up to 128 bytes | local identifier |
+
+An id outside the grammar is refused by the reader as `config.invalid-value`
+at the id's own pointer, before the semantic checks run. A reference to one of
+these ids (`reviewProducers[].profile`, a stage's `queue` and
+`decidingProfiles`, a source request's `queue`, a template's
+`eligibleProfiles`, a routing rule's queue, `accessProfile` and a team's
+`queue` in `dev-clients.yaml`) is still checked by resolving it, so a
+reference to an id that no longer exists is refused as it was.
+
+HTTP: no response member is renamed. The `Registry-Casework-Profile` header
+and a queue id in a directory request keep their 128-byte bound; a name
+outside the grammar selects no profile and no queue. The ids themselves are
+returned where they were: a renamed id is returned under its new name.
+
+Stored state: an id cannot be respelled mechanically, so no schema migration
+runs and stored rows keep the id they were written under.
+
+- A queue id is stored with every open work item, every review task, and the
+  directory's team assignments. `caseworkctl plan` refuses a package that no
+  longer declares a queue holding in-flight reviews or open work items, as
+  `casework.activation.stranded-work`, naming the queue and the two counts.
+- An access profile id is pinned in the policy snapshot of every in-flight
+  review whose remaining stages it decides. `caseworkctl plan` refuses a
+  package that no longer declares it, under the same code, naming the profile
+  and the count. History rows keep the profile name they were written with.
+- A review producer id is stored with every review request the producer
+  submitted, and the producer reads its requests, its results, and its result
+  feed by that id. `caseworkctl plan` refuses a package that no longer
+  declares the producer of an in-flight review, under the same code, naming
+  the producer and the count; the plan, apply, and doctor reports carry the
+  conflict with the reason `producer-removed`. A review that has reached a
+  result is not counted, and its producer still reads the result and the
+  result feed only by the old id: step 1 below is the only guard for a result
+  not read yet.
+- A task template id is stored with each template version and each task
+  grant. `caseworkctl plan` lists a version the package no longer declares as
+  `deactivated`; apply invalidates its live grants, which last at most 15
+  minutes.
+
+Migration: an id already inside the grammar needs no change. To rename one:
+
+1. Let the work stored under the old id finish: decide or cancel the
+   in-flight reviews and close the open work items of a queue or an access
+   profile, let a producer's in-flight requests reach a result and read the
+   result feed to its end, and let a template's live grants expire.
+2. Rename the id and every reference to it in `casework.yaml`, and
+   `accessProfile` or a team's `queue` in `dev-clients.yaml`.
+3. Run `caseworkctl package`, `caseworkctl plan`, and `caseworkctl apply`.
+4. For a renamed queue, assign its teams to the new id through the
+   Administrator directory routes; for a renamed access profile, have each
+   caller send the new name in `Registry-Casework-Profile`.
+
+### BREAKING: a registry operation in a task template is a local identifier
+
+A registry operation a task template lists under
+`taskTemplates[].bounds.permissions[].operations` follows the identifier
+grammar every other id in the file follows (CFG-ID-1):
+`^[a-z][a-z0-9_-]{0,63}$`, where it was any run of lowercase letters and
+underscores. A hyphen and a digit are admitted, so a template may name a
+kebab-case registry operation such as `apply-request`; a snake_case name
+that starts with a letter is accepted as before.
+
+| Value | Before | Now |
+|---|---|---|
+| `apply-request`, `read-live`, `revision2` | refused | accepted |
+| `apply_request`, `get` | accepted | accepted |
+| a name that starts with `_`, or is longer than 64 characters | accepted | refused |
+| an uppercase letter, a space, `.`, `:`, `/`, `*`, a leading digit or hyphen | refused | refused |
+
+The project check refuses a value outside the grammar as
+`casework.task-template.invalid-operation` at the operation's own pointer.
+Casework copies the listed operations into the task assertion unchanged and
+infers nothing from their spelling: the registry that verifies the
+assertion still decides what each operation permits.
+
+Migration: a template whose operations start with a letter and fit in 64
+characters needs no change. Otherwise write the operation name the registry
+declares, give the template a new `version`, and run `caseworkctl package`,
+`caseworkctl plan`, and `caseworkctl apply`.
+
+### BREAKING: a source description carries its format identifier and one request list
+
+The description `caseworkctl source add` writes under `sources/` is a
+generated project file. It carries the format identifier as its `apiVersion`
+(CFG-ENV-2) and one kind, named for the product that reads it (CFG-ENV-3).
+
+| Member | Before | Now |
+|---|---|---|
+| `apiVersion` | `registry.registrystack.org/casework-source-description/v1alpha1` for one request entity, `registry.registrystack.org/casework-source-description/v1alpha2` for several | `id.registrystack.org/formats/casework/breg-source-description/v1alpha1` |
+| `kind` | `BRegCaseworkSourceDescription` | `CaseworkBregSourceDescription` |
+| request entities | `request` (one object) under `v1alpha1`, `requests` (a list) under `v1alpha2` | `requests`, a list in declaration order, one entry for a source with one entity |
+
+Two versions were live against one format: which one a description carried
+depended on how many request entities the source declared. One version and
+one shape are read now. A description under either earlier `apiVersion` is
+refused and imported again; no reader accepts the earlier shape.
+
+- `caseworkctl check` and `caseworkctl package` refuse it as
+  `config.retired-api-version` at `/sources/N/description`, naming the current
+  `apiVersion` and the `caseworkctl source add` command for that source.
+- `caseworkctl source add --apply` does not replace it: the run names the file
+  as carrying a retired `apiVersion` and prints the command that moves it
+  aside and retries.
+- The runtime refuses a package that carries one as
+  `casework.package.source-description-mismatch`, whose `next` names
+  `caseworkctl source add` and `caseworkctl package`.
+
+HTTP: no response member changes. A diagnostic's related pointer into a
+one-entity description reads `/requests/0/...` where it read `/request/...`.
+
+Stored state: no schema migration runs. The description's digest is part of
+the source binding generation, so the imported description gives the source a
+new generation. `caseworkctl plan` reports that source's generation as
+changed, and `caseworkctl apply` rebinds the state stored under the previous
+generation. Plan refuses while a source attempt is pending or uncertain under
+the previous generation. A draft saved, or an item displayed, under the
+previous generation is answered as moved and is prepared again.
+
+Migration, for each source in `casework.yaml`:
+
+1. Settle every source attempt that is pending or uncertain, with
+   `caseworkctl attempt settle`.
+2. Move the description aside:
+   `test ! -e sources/SOURCE_ID.json.previous && mv sources/SOURCE_ID.json sources/SOURCE_ID.json.previous`.
+3. Import it again:
+   `caseworkctl source add BREG_PROJECT --project DIR --source-id SOURCE_ID --apply`.
+4. Run `caseworkctl package`, `caseworkctl plan`, and `caseworkctl apply`.
+
+### BREAKING: `caseworkctl check` and `caseworkctl init` summarize in the human format
+
+In the human format both commands printed every member of their report as a
+`key: value` line, the effective configuration among them as one line of
+JSON. They now print what a person reads and leave the report to
+`--format json`, which is unchanged.
+
+| Command | Human format now | Lines no longer printed |
+|---|---|---|
+| `caseworkctl check` | the outcome line, `project:`, `runtime config:` when a runtime file was given, `profile:`, each warning, then `N errors, M warnings in K files` | `status:`, `effective:`, `networkAccess:`, `databaseAccess:` |
+| `caseworkctl init` | `created:` with the project directory, one indented line for each entry written, then `next:` with the step that follows | `init succeeded.`, `template:`, `project:`, the one-line `created:` and `next:` lists |
+
+No file changes. A script that read one of the removed lines reads the same
+member from `caseworkctl --format json check` or `caseworkctl --format json
+init`. The other commands print as before.
+
+### BREAKING: `caseworkctl lifecycle` spells its enforcement layer ids in kebab-case
+
+Each lifecycle `caseworkctl lifecycle` reports lists the enforcement layers a
+request meets, and each layer carries an `id`. The ids were snake_case and are
+lowercase kebab-case now (CFG-NAME-2), the spelling `bregctl explain
+lifecycle` gives its own: every underscore became a hyphen.
+
+| Lifecycle | Before | Now |
+|---|---|---|
+| `occurrence` | `caller_authentication` | `caller-authentication` |
+| `occurrence` | `caller_revision_precondition` | `caller-revision-precondition` |
+| `occurrence` | `erased_item_idempotency_preflight` | `erased-item-idempotency-preflight` |
+| `occurrence` | `source_authorization` | `source-authorization` |
+| `occurrence` | `queue_and_holder_authority` | `queue-and-holder-authority` |
+| `occurrence` | `idempotency_admission` | `idempotency-admission` |
+| `occurrence` | `source_binding_currency` | `source-binding-currency` |
+| `occurrence` | `reservation_key_admission` | `reservation-key-admission` |
+| `occurrence` | `attempt_fence` | `attempt-fence` |
+| `occurrence` | `lifecycle_transition` | `lifecycle-transition` |
+| `occurrence` | `persist_serialization` | `persist-serialization` |
+| `review-request` | `caller_authentication` | `caller-authentication` |
+| `review-request` | `producer_or_reviewer_admission` | `producer-or-reviewer-admission` |
+| `review-request` | `review_source_preflight` | `review-source-preflight` |
+| `review-request` | `producer_submission_idempotency` | `producer-submission-idempotency` |
+| `review-request` | `request_lock_and_lifecycle` | `request-lock-and-lifecycle` |
+| `review-request` | `reviewer_queue_authority` | `reviewer-queue-authority` |
+| `review-request` | `request_idempotency_admission` | `request-idempotency-admission` |
+| `review-request` | `task_revision_and_holder` | `task-revision-and-holder` |
+| `review-request` | `decision_eligibility` | `decision-eligibility` |
+| `review-request` | `stage_quorum_progression` | `stage-quorum-progression` |
+| `review-request` | `settlement_persist_filter` | `settlement-persist-filter` |
+
+The words are printed by `caseworkctl lifecycle` alone, in both formats, as
+`lifecycles[].enforcement[].id`. No file an adopter writes carries one, no
+HTTP response carries one, and nothing stored holds one, so no file changes
+and no migration runs. A script that selects a layer by its id reads the new
+spelling. The event ids a layer lists under `events` and the review state id
+are respelled with the report words (see "the words `caseworkctl` prints in
+its reports are kebab-case" under "Protocol words").
+
+### BREAKING: the lifecycle hook `source add` writes is tagged by `type`
+
+`caseworkctl source add` writes one lifecycle hook for each paired request
+entity into the Base Registry Engine project. Its handler is written
+`handler: {type: url, destinationId: casework}`, where it was
+`handler: {kind: url, destinationId: casework}`, because the Base Registry
+Engine of this release tags a hook handler by `type` and refuses `kind` by
+name.
+
+Who is affected: a deployment whose Base Registry Engine project was paired
+by an earlier `caseworkctl source add`. Its `registry.yaml` carries the hook
+with `kind`, which `bregctl check` of this release refuses with
+`config.removed-key`.
+
+To migrate, rename `kind` to `type` in the `handler` of each
+`casework-lifecycle-v1-<entity>` hook in `registry.yaml`, keeping `url`, or
+repeat `caseworkctl source add --apply` with this release, then build the
+Base Registry Engine package again.
+
+## Protocol words
+
+A protocol word is a value Casework itself defines and writes where a caller
+reads it or where it is stored: a lifecycle, a status, a decision type, an
+outcome, a reason, an event kind. Each one is lowercase kebab-case
+(CFG-NAME-2), the spelling the configuration files already use. Nothing an
+operator writes in `casework.yaml` or `runtime.yaml` changes in this section.
+There is no alias: the old spelling is not read from a request, and the new
+spelling is the only one written.
+
+### BREAKING: the review protocol words are kebab-case
+
+| Where | Member | Before | Now |
+|---|---|---|---|
+| review request | `lifecycle` | `changes_requested` | `changes-requested` |
+| review result | `status` | `changes_requested` | `changes-requested` |
+| reviewer decision (request body) | `decision.type` | `changes_requested` | `changes-requested` |
+| cancel response | `outcome` | `already_terminal` | `already-terminal` |
+| review task context | `bindingStatus` | `binding_changed` | `binding-changed` |
+| review history entry `review-decided` | `detail.decision` | `changes_requested` | `changes-requested` |
+| review history entry `review-decided` | `detail.transition` | `changes_requested` | `changes-requested` |
+| review history entry `review-decided` | `detail.transition` | `stage_advanced` | `stage-advanced` |
+| review history entry `review-settled` | `detail.status` | `changes_requested` | `changes-requested` |
+
+HTTP: the values are returned by `GET /v1/review-requests/{request_id}`,
+`GET /v1/review-requests/{request_id}/result`, `POST
+/v1/review-requests/{request_id}/cancel`, `GET
+/v1/review-tasks/{task_id}/context`, and `GET
+/v1/review-requests/{request_id}/history`, and the decision type is read from the body of `POST
+/v1/review-tasks/{task_id}/decisions`. A decision sent in the old spelling
+is refused with the `request.unprocessable` problem and records nothing. The
+committed OpenAPI document, the Rust clients (`registry-casework-client`,
+`registry-review-client`), the Node.js declarations, the Python stubs, and
+`@registrystack/client` carry the new values. A producer that reads a
+review result, as the Base Registry Engine does, reads `changes-requested`.
+
+Stored state: migration `0023_review_outcome_spelling.sql` runs with
+`caseworkctl apply`. It rewrites `changes_requested` to `changes-requested`
+in the `lifecycle` of a stored review request, the `decision` of a stored
+decision and of its accountability record, and the `status` of a stored
+result; it rewrites the `detail` of stored review history entries as the
+table above shows; and it rewrites the retained replay responses of the
+decide and cancel operations, so a retried request under the same
+idempotency key is answered in the new spelling. The five `CHECK`
+constraints that named the old value are replaced in the same migration, so
+the database refuses the old spelling afterwards. No row is removed, and no
+idempotency request hash changes. A review's pinned policy snapshot is not
+touched (see "the settlement that asks for changes is `changes-requested`").
+
+One retry is not matched across the upgrade: a `changes-requested` decision
+retried after it under the idempotency key of a decision sent before it is
+refused with the `idempotency.key-reused` problem (HTTP 409) and commits no
+second decision, because the stored request hash covers the decision type
+in the spelling it was sent with; the first decision stands, so read the
+review request instead of retrying.
+
+Audit: a `casework.review-decided` record written after the upgrade carries
+`decision` and `transition` in the new spelling. Records already written are
+not rewritten and keep the spelling they were written with, so a reader of
+the audit stream meets both spellings across the upgrade.
+
+Migration: stop the previous release's runtime, then run `caseworkctl plan`
+and `caseworkctl apply`: the previous runtime cannot read the new spelling.
+Update a caller that compares one of the values above, and a caller that
+sends a `changes_requested` decision.
+
+### BREAKING: the words `caseworkctl` prints in its reports are kebab-case
+
+Every value `caseworkctl` writes in a `--format json` report is lowercase
+kebab-case (CFG-NAME-2). These are the words that were still snake_case:
+
+| Report | Member | Before | Now |
+|---|---|---|---|
+| `lifecycle` | `transitions[].event`, `enforcement[].events[]` | `attempt_reserved` | `attempt-reserved` |
+| `lifecycle` | `transitions[].event`, `enforcement[].events[]` | `attempt_uncertain` | `attempt-uncertain` |
+| `lifecycle` | `transitions[].event`, `enforcement[].events[]` | `attempt_completed` | `attempt-completed` |
+| `lifecycle` | `transitions[].event`, `enforcement[].events[]` | `attempt_refused` | `attempt-refused` |
+| `lifecycle` | `transitions[].event`, `enforcement[].events[]` | `observe_open` | `observe-open` |
+| `lifecycle` | `transitions[].event`, `enforcement[].events[]` | `observe_waiting_applicant` | `observe-waiting-applicant` |
+| `lifecycle` | `transitions[].event`, `enforcement[].events[]` | `observe_waiting_application` | `observe-waiting-application` |
+| `lifecycle` | `transitions[].event`, `enforcement[].events[]` | `record_decision` | `record-decision` |
+| `lifecycle` | `transitions[].event`, `enforcement[].events[]` | `advance_stage` | `advance-stage` |
+| `lifecycle` | `states[].id`, `transitions[].to` | `changes_requested` | `changes-requested` |
+| `check` | `effective.sources[].requests[].queueMode` | `first_match` | `first-match` |
+| `check` | `effective.sourceDescription` | `pending_source_add` | `pending-source-add` |
+| `source add` | `bregAuthoringChanges[].operation` | `ensure_exact` | `ensure-exact` |
+| every report | `diagnostics[].artifact` | `runtime_dependency` | `runtime-dependency` |
+| every report | `diagnostics[].artifact` | `runtime_configuration` | `runtime-configuration` |
+| every report | `diagnostics[].artifact` | `authoring_input` | `authoring-input` |
+| every report | `diagnostics[].artifact` | `operator_action` | `operator-action` |
+| every report | `diagnostics[].artifact` | `command_arguments` | `command-arguments` |
+| every report | `diagnostics[].artifact` | `dev_session` | `dev-session` |
+
+The description of a review enforcement layer names the same events and
+states in the new spelling. A diagnostic about a document still names it by
+its `kind` (`CaseworkProject`, `CaseworkRuntimeConfig`); only the six words
+for something that is not a document changed.
+
+No file an adopter writes carries one of these words, no HTTP response
+carries one, and nothing stored holds one, so no file changes and no
+migration runs. The committed report examples under
+`products/casework/examples/formats/reports` carry the new values.
+
+Migration: update a script that compares one of the values above in a
+`caseworkctl` report.
+
+### BREAKING: the validation reason of a refused review submission is kebab-case
+
+Casework refuses a review request or a reviewer's decision that fails
+validation with the `request.invalid` problem and two response headers:
+`Registry-Casework-Validation-Path` and
+`Registry-Casework-Validation-Reason`. The reason is one word from a closed
+set, and every word in the set is now lowercase kebab-case (CFG-NAME-2):
+
+| Before | Now |
+|---|---|
+| `kind_not_allowed` | `kind-not-allowed` |
+| `reference_invalid` | `reference-invalid` |
+| `object_required` | `object-required` |
+| `maximum_bytes_exceeded` | `maximum-bytes-exceeded` |
+| `maximum_depth_exceeded` | `maximum-depth-exceeded` |
+| `schema_mismatch` | `schema-mismatch` |
+| `outcome_not_declared` | `outcome-not-declared` |
+| `reason_required` | `reason-required` |
+| `text_invalid` | `text-invalid` |
+| `result_not_declared` | `result-not-declared` |
+| `result_required` | `result-required` |
+| `field_not_declared` | `field-not-declared` |
+| `constraint_invalid` | `constraint-invalid` |
+| `constraint_violated` | `constraint-violated` |
+
+The same words are the `validation.reason` member the Rust client
+(`registry-casework-client`), its Node.js and Python bindings, and the unified
+`@registrystack/client` and `registry-stack-client` packages expose, and the
+reason `registry-review-client` reads for a source that submits review
+requests. The header names, the problem code, and the validation path are
+unchanged.
+
+There is no alias. A client of the previous release does not know the new
+words, so it reports a refused submission as a protocol failure where it
+reported the validation problem; a client of this release reads only the new
+words and treats the previous spelling the same way. Nothing stored holds a
+validation reason, so no file changes and no migration runs. The process log
+field `validation_reason` of a refused display document carries the same word
+in the new spelling.
+
+Migration: upgrade the Casework clients with the runtime, and update code
+that compares `validation.reason` with one of the words above.
+
+### BREAKING: the history, event, and audit words are kebab-case
+
+Every `kind` Casework writes in a history entry, every durable event kind,
+and every audit event name is lowercase kebab-case (CFG-NAME-2). A word of
+one segment (`observed`, `opened`, `claimed`, `assigned`, `delegated`,
+`released`, `superseded`, `completed`, `note`) is unchanged. These are the words
+that were still snake_case.
+
+Work item history, the `kind` of an entry of
+`GET /v1/work-items/{item_id}/history`, and the audit event `casework.<kind>`:
+
+| Before | Now |
+|---|---|
+| `caseload_moved` | `caseload-moved` |
+| `draft_saved` | `draft-saved` |
+| `task_approved` | `task-approved` |
+| `task_revoked` | `task-revoked` |
+| `task_invalidated` | `task-invalidated` |
+| `attempt_reserved` | `attempt-reserved` |
+| `attempt_uncertain` | `attempt-uncertain` |
+| `action_completed` | `action-completed` |
+| `attempt_settled` | `attempt-settled` |
+| `clock_reminder` | `clock-reminder` |
+| `clock_step_applied` | `clock-step-applied` |
+| `clock_recomputed` | `clock-recomputed` |
+
+Review history, the `kind` of an entry of
+`GET /v1/review-requests/{request_id}/history`, and the audit event
+`casework.<kind>` where one is written:
+
+| Before | Now |
+|---|---|
+| `request_created` | `request-created` |
+| `review_created` | `review-created` |
+| `review_decided` | `review-decided` |
+| `review_settled` | `review-settled` |
+| `review_cancelled` | `review-cancelled` |
+| `review_superseded` | `review-superseded` |
+| `stage_advanced` | `stage-advanced` |
+| `task_assigned` | `task-assigned` |
+| `task_claimed` | `task-claimed` |
+| `task_delegated` | `task-delegated` |
+| `task_released` | `task-released` |
+| `task_draft_saved` | `task-draft-saved` |
+| `task_absence_reconciled` | `task-absence-reconciled` |
+| `task_grant_approved` | `task-grant-approved` |
+| `task_grant_revoked` | `task-grant-revoked` |
+| `task_grant_invalidated` | `task-grant-invalidated` |
+| `clock_reminder` | `clock-reminder` |
+| `clock_step_applied` | `clock-step-applied` |
+
+Directory events, stored and written to audit as `casework.<kind>`:
+
+| Before | Now |
+|---|---|
+| `directory_bootstrapped` | `directory-bootstrapped` |
+| `team_updated` | `team-updated` |
+| `absence_created` | `absence-created` |
+| `absence_updated` | `absence-updated` |
+| `absence_deleted` | `absence-deleted` |
+
+Audit events with no history entry:
+
+| Before | Now |
+|---|---|
+| `casework.holiday_revision_created` | `casework.holiday-revision-created` |
+| `casework.review_accountability_read` | `casework.review-accountability-read` |
+| `casework.review_note_added` | `casework.review-note-added` |
+| `casework.source_retention_erased` | `casework.source-retention-erased` |
+| `casework.package_activated` | `casework.package-activated` |
+
+Values inside a history entry and a command report:
+
+| Where | Member | Before | Now |
+|---|---|---|---|
+| `attempt-settled` history entry, `caseworkctl attempt settle` report | `outcome` | `not_applied` | `not-applied` |
+| `released` history entry written by source reconciliation | `detail.reason` | `source_observation` | `source-observation` |
+| `released` history entry written by directory reconciliation | `detail.reason` | `directory_membership_changed` | `directory-membership-changed` |
+
+HTTP: the committed OpenAPI document, the Rust client
+(`registry-casework-client`), the Node.js declarations, the Python stubs, and
+`@registrystack/client` carry the new `kind` values. The
+`caseworkctl attempt settle --outcome` option already read `not-applied`; its
+JSON report now prints the same word.
+
+Stored state: migration `0024_history_event_spelling.sql` runs with
+`caseworkctl apply`. It rewrites the `kind` of stored work item history
+entries and of the durable events that mirror them, the `kind` of stored
+review history entries, and the kind of stored directory events, as the
+tables above show. It rewrites `outcome` in the detail of a stored
+settlement entry, and the `reason` of a release Casework itself recorded
+during source or directory reconciliation; a reason a caller wrote is text
+and is never touched, whatever it spells. It renames the retained
+idempotency operation of a caseload move (`item.caseload_moved` to
+`item.caseload-moved`), so a retried move under the same key is still
+answered from its record. It replaces the database function that records a
+task invalidation and the partial index that serves it, so both name
+`task-invalidated`. No row is removed, and no idempotency request hash
+changes.
+
+Audit: a record written after the upgrade names its event in the new
+spelling, for example `casework.review-decided` and
+`casework.task-invalidated`. Records already written are not rewritten and
+keep the spelling they were written with, so a reader of the audit stream
+meets both spellings across the upgrade: match both when a query spans it.
+
+Migration: stop the previous release's runtime, then run `caseworkctl plan`
+and `caseworkctl apply`: the previous runtime cannot read a history kind in
+the new spelling. Update a caller that compares a history `kind`, an audit
+consumer that selects by event name, and a script that reads the `outcome`
+of a settlement report.
+
+### BREAKING: the clock, staffing, inbox, paging, and caseload words are kebab-case
+
+The remaining closed values Casework writes in a response or reads in a
+query are lowercase kebab-case (CFG-NAME-2). A word of one segment
+(`running`, `paused`, `completed`, `cancelled`, `complete`, `moved`,
+`conflict`, `mine`, `overdue`, `assignment`, `claim`, `nomination`,
+`delegation`) is unchanged.
+
+| Where | Member | Before | Now |
+|---|---|---|---|
+| `GET /v1/work-items/{item_id}/clocks` | `state` of a clock occurrence | `verification_pending` | `verification-pending` |
+| `GET /v1/work-items/{item_id}/clocks`, `GET /v1/review-requests/{request_id}/clocks` | `state` of a clock occurrence | `source_facts_missing` | `source-facts-missing` |
+| a work item | `assignment.staffingDiagnostic` | `no_cover_available` | `no-cover-available` |
+| `GET /v1/review-requests/{request_id}/history` | `detail.assignmentKind` of an assignment entry | `absence_cover` | `absence-cover` |
+| every paged read | `status` | `budget_exhausted` | `budget-exhausted` |
+| every paged read | `status` | `source_unavailable` | `source-unavailable` |
+| `POST /v1/directory/caseload/apply` | `result` of an item | `not_visible` | `not-visible` |
+| `POST /v1/directory/caseload/apply` | `result` of an item | `not_eligible` | `not-eligible` |
+| `POST /v1/directory/caseload/apply` | `result` of an item | `attempt_in_progress` | `attempt-in-progress` |
+| `GET /v1/work-items` | `view` query value | `my_teams` | `my-teams` |
+| `GET /v1/work-items` | `view` query value | `team_holdings` | `team-holdings` |
+| `GET /v1/work-items` | `view` query value | `completed_by_me` | `completed-by-me` |
+| `GET /v1/directory/targets` | `purpose` query value | `absence_person` | `absence-person` |
+| `GET /v1/directory/targets` | `purpose` query value | `absence_cover` | `absence-cover` |
+
+The query parameter names (`view`, `purpose`) do not change. A request that
+names a view or a purpose in the old spelling is refused as any other
+unknown value is.
+
+HTTP: the committed OpenAPI document, the Rust client
+(`registry-casework-client`), the Node.js declarations, the Python stubs, and
+`@registrystack/client` carry the new values.
+
+Stored state: migration `0025_clock_staffing_inbox_spelling.sql` runs with
+`caseworkctl apply`. It rewrites the state of stored work item and review
+clock occurrences, the staffing diagnostic of stored work items and review
+tasks, and the assignment kind of stored review tasks, and replaces the
+`CHECK` constraint of each of those columns and the two partial indexes
+that select on a clock state, so the database admits the new spelling
+only. It rewrites `assignmentKind` in the detail of a stored review
+assignment entry; the reason a caller wrote beside it is text and is never
+touched. It rewrites the staffing diagnostic inside a retained work item
+idempotency response, so a retried claim, release, assignment, delegation,
+or caseload move under the same key is still answered from its record; no
+idempotency request hash changes. It rewrites the view inside a stored
+inbox cursor, so a listing that was being paged across the upgrade
+continues. No row is removed.
+
+A directory target cursor is the one record that does not carry over: it is
+bound to a digest of the listing it continues, and the digest covers the
+purpose. A cursor issued before the upgrade for `absence_person` or
+`absence_cover` is refused with the `cursor.invalid` problem (HTTP 400)
+after it; start that listing again without a cursor. Cursors live 15
+minutes.
+
+Migration: stop the previous release's runtime, then run `caseworkctl plan`
+and `caseworkctl apply`: the previous runtime cannot read a clock state in
+the new spelling. Update a caller that sends `view` or `purpose`, that
+compares the `status` of a page, the `state` of a clock occurrence, the
+`result` of a moved item, or `staffingDiagnostic`.
+
+### BREAKING: the correction action is named `request-correction`
+
+A source action name belongs to the source adapter that offers it, with one
+exception: Casework itself gives a meaning to the action that sends a
+subject back for correction. When an action of that name completes,
+Casework retains the reason and the flagged fields the officer gave as the
+correction context of the work item, the context `routingCopy` is read
+from. That one name is lowercase kebab-case (CFG-NAME-2).
+
+| Where | Member | Before | Now |
+|---|---|---|---|
+| a work item | `actions[].operation` | `request_correction` | `request-correction` |
+| `POST /v1/work-items/{item_id}/decisions` | `operation` of the request | `request_correction` | `request-correction` |
+| `POST /v1/work-items/{item_id}/decisions`, the two attempt recovery routes | `operation` of the attempt | `request_correction` | `request-correction` |
+| `GET /v1/work-items/{item_id}/history` | `detail.operation` of an attempt entry | `request_correction` | `request-correction` |
+
+Who is affected: a deployment whose source adapter offers the correction
+action, and the callers that send it. The Base Registry Engine adapter
+offers `submit`, `revise`, `cancel`, and `apply` only, so a deployment that
+uses no other adapter stores no such attempt and changes nothing. An
+adapter built on `registry-casework-core` names the action with
+`OperationName::REQUEST_CORRECTION`. The old spelling is still a valid
+action name under the local identifier grammar, and it is an ordinary one:
+an adapter that keeps offering `request_correction` has its action
+executed, and no correction context is retained for it.
+
+HTTP: the name is not an enumerated value of the OpenAPI document, so the
+document and the generated clients do not change.
+
+Stored state: no schema migration rewrites a stored action name. v0.40.0
+does not upgrade v0.39.0 state in place; apply to a new database.
+
+Audit: an audit record keeps the spelling it was written with. Audit
+records are never rewritten.
+
+Migration: update the source adapter that offers the action and every
+caller that sends it or compares `actions[].operation`.
+
+### BREAKING: five client error words are written in kebab-case
+
+The Node.js and Python Casework clients name a failure with fixed words a
+caller branches on. Five of them carried an underscore (CFG-NAME-2): four
+are the client's own, and the transport word comes from the shared HTTP
+primitives, which respell it in this release.
+
+| Member of `CaseworkClientError` (Node.js, Python) | Old word | New word |
+|---|---|---|
+| `kind` | `invalid_request` | `invalid-request` |
+| `protocolFailure`, `protocol_failure` | `header_bounds` | `header-bounds` |
+| `protocolFailure`, `protocol_failure` | `trace_context` | `trace-context` |
+| `protocolFailure`, `protocol_failure` | `media_type` | `media-type` |
+| `transportKind`, `transport_kind` | `response_too_large` | `response-too-large` |
+
+The other words of the three members are unchanged, and so is the Rust
+client, whose errors are enum variants with no word of their own.
+`@registrystack/client` and `registry-stack-client` carry the same words.
+
+No file an adopter writes changes. To migrate, change what a consumer of a
+client error compares each of these members with.

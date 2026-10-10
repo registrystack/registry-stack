@@ -1724,18 +1724,18 @@ mod tests {
 
     fn compiled_with(operations: &[&str]) -> registry_breg::CompiledRegistry {
         let source = json!({
-            "apiVersion": "registry.registrystack.org/v1alpha1",
-            "kind": "RegistryProject",
-            "registry": {"id": "ctl-data", "version": "1", "defaultLanguage": "en",
+            "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
+            "kind": "BRegProject",
+            "project": {"id": "ctl-data", "version": "1", "defaultLanguage": "en",
                          "canonicalBaseIri": "https://ctl-data.example.test"},
             "entities": [{
                 "id": ENTITY,
                 "primaryDataset": "test-dataset",
                 "route": "records",
-                "mutationMode": "create_only",
+                "mutationMode": "create-only",
                 "batch": {"maximumItems": 2, "maximumBytes": 400},
                 "fields": [
-                    {"id": "code", "type": "string", "minLength": 2, "maxLength": 16,
+                    {"id": "code", "type": "string", "minimumLength": 2, "maximumLength": 16,
                      "required": true, "classification": "internal"}
                 ]
             }],
@@ -1743,14 +1743,14 @@ mod tests {
                 "id": PROFILE,
                 "principalClaim": "principal",
                 "requiredScopes": "unrestricted",
-                "permissions": [{
+                "permissions": {"entities": [{
                     "entity": ENTITY,
                     "operations": operations,
                     "readableFields": ["code"],
                     "writableFields": ["code"],
                     "allowDataExport": true,
                   "rowBoundaries": "unrestricted"
-                }]
+                }]}
             }]
         });
         let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
@@ -2211,21 +2211,21 @@ mod tests {
     /// canonical batch body exactly at the batch byte ceiling.
     fn ceiling_compiled() -> registry_breg::CompiledRegistry {
         let source = json!({
-            "apiVersion": "registry.registrystack.org/v1alpha1",
-            "kind": "RegistryProject",
-            "registry": {"id": "ctl-data", "version": "1", "defaultLanguage": "en",
+            "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
+            "kind": "BRegProject",
+            "project": {"id": "ctl-data", "version": "1", "defaultLanguage": "en",
                          "canonicalBaseIri": "https://ctl-data.example.test"},
             "entities": [{
                 "id": ENTITY,
                 "primaryDataset": "test-dataset",
                 "route": "records",
-                "mutationMode": "create_only",
+                "mutationMode": "create-only",
                 "batch": {
                     "maximumItems": 2,
                     "maximumBytes": registry_breg::compiler::MAX_BATCH_BYTES
                 },
                 "fields": [
-                    {"id": "payload", "type": "text", "maxLength": 3_000_000,
+                    {"id": "payload", "type": "text", "maximumLength": 3_000_000,
                      "required": true, "classification": "internal"}
                 ]
             }],
@@ -2233,14 +2233,14 @@ mod tests {
                 "id": PROFILE,
                 "principalClaim": "principal",
                 "requiredScopes": "unrestricted",
-                "permissions": [{
+                "permissions": {"entities": [{
                     "entity": ENTITY,
                     "operations": ["create", "batch", "list"],
                     "readableFields": ["payload"],
                     "writableFields": ["payload"],
                     "allowDataExport": true,
                     "rowBoundaries": "unrestricted"
-                }]
+                }]}
             }]
         });
         let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();

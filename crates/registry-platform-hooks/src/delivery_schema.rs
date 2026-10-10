@@ -74,8 +74,8 @@ const DELIVERY_STATEMENTS: &[&str] = &[
                  classification_ceiling text NOT NULL
                      CHECK (classification_ceiling IN ('public', 'internal', 'restricted')),
                  authentication_profile text NOT NULL
-                     CHECK (authentication_profile = 'hmac_sha256_v1'),
-                 delivery_mode text NOT NULL CHECK (delivery_mode = 'after_commit'),
+                     CHECK (authentication_profile = 'hmac-sha256-v1'),
+                 delivery_mode text NOT NULL CHECK (delivery_mode = 'after-commit'),
                  attempt_timeout_ms bigint NOT NULL
                      CHECK (attempt_timeout_ms BETWEEN 100 AND 10000),
                  initial_backoff_ms bigint NOT NULL
@@ -121,7 +121,7 @@ const DELIVERY_STATEMENTS: &[&str] = &[
                  generation bigint NOT NULL CHECK (generation > 0),
                  state text NOT NULL
                      CONSTRAINT registry_webhook_delivery_state_values CHECK (
-                         state IN ('pending', 'leased', 'delivered', 'dead_lettered', 'expired')
+                         state IN ('pending', 'leased', 'delivered', 'dead-lettered', 'expired')
                      ),
                  attempt smallint NOT NULL CHECK (attempt BETWEEN 0 AND 20),
                  next_attempt_at timestamptz,
@@ -134,23 +134,23 @@ const DELIVERY_STATEMENTS: &[&str] = &[
                  dead_letter_reason text
                      CONSTRAINT registry_webhook_delivery_state_dead_letter_reason_values CHECK (
                          dead_letter_reason IS NULL OR dead_letter_reason IN (
-                             'http_non_success', 'destination_timeout',
-                             'invalid_remaining_timeout', 'invalid_frozen_policy',
-                             'invalid_frozen_request', 'resolution_failed',
-                             'resolution_capacity_unavailable', 'too_many_resolver_answers',
-                             'no_resolver_answers', 'resolver_port_mismatch',
-                             'resolver_address_family_mismatch', 'literal_origin_mismatch',
-                             'cloud_metadata_denied', 'always_denied_address',
-                             'private_address_not_allowed', 'non_global_address_denied',
-                             'development_address_denied', 'tls_material_unavailable',
-                             'client_build_failed', 'transport_failed',
-                             'transport_failed_after_connect', 'deadline_exceeded',
-                             'deadline_exceeded_after_connect', 'too_many_response_headers',
-                             'response_header_bytes_exceeded', 'destination_policy_refused',
-                             'destination_binding_refused', 'handler_binding_refused',
-                             'handler_deadline', 'handler_resource', 'handler_execution',
-                             'handler_source', 'handler_unavailable', 'payload_refused',
-                             'worker_interrupted', 'proposal_dead_lettered'
+                             'http-non-success', 'destination-timeout',
+                             'invalid-remaining-timeout', 'invalid-frozen-policy',
+                             'invalid-frozen-request', 'resolution-failed',
+                             'resolution-capacity-unavailable', 'too-many-resolver-answers',
+                             'no-resolver-answers', 'resolver-port-mismatch',
+                             'resolver-address-family-mismatch', 'literal-origin-mismatch',
+                             'cloud-metadata-denied', 'always-denied-address',
+                             'private-address-not-allowed', 'non-global-address-denied',
+                             'development-address-denied', 'tls-material-unavailable',
+                             'client-build-failed', 'transport-failed',
+                             'transport-failed-after-connect', 'deadline-exceeded',
+                             'deadline-exceeded-after-connect', 'too-many-response-headers',
+                             'response-header-bytes-exceeded', 'destination-policy-refused',
+                             'destination-binding-refused', 'handler-binding-refused',
+                             'handler-deadline', 'handler-resource', 'handler-execution',
+                             'handler-source', 'handler-unavailable', 'payload-refused',
+                             'worker-interrupted', 'proposal-dead-lettered'
                          )
                      ),
                  handler_message bytea,
@@ -158,7 +158,7 @@ const DELIVERY_STATEMENTS: &[&str] = &[
                  proposal_disposition text
                      CONSTRAINT registry_webhook_delivery_state_proposal_values CHECK (
                          proposal_disposition IS NULL
-                         OR proposal_disposition IN ('none', 'applied', 'refused', 'dead_lettered')
+                         OR proposal_disposition IN ('none', 'applied', 'refused', 'dead-lettered')
                      ),
                  proposal_resulting_revision bigint
                      CHECK (proposal_resulting_revision IS NULL OR proposal_resulting_revision > 0),
@@ -205,7 +205,7 @@ const DELIVERY_STATEMENTS: &[&str] = &[
                          AND delivered_at IS NOT NULL
                          AND dead_lettered_at IS NULL
                          AND expired_at IS NULL)
-                     OR (state = 'dead_lettered'
+                     OR (state = 'dead-lettered'
                          AND attempt > 0
                          AND next_attempt_at IS NULL
                          AND attempt_started_at IS NULL
@@ -242,7 +242,7 @@ const DELIVERY_STATEMENTS: &[&str] = &[
                          AND proposal_resulting_revision IS NOT NULL
                          AND proposal_code IS NULL
                          AND proposal_summary IS NULL)
-                     OR (proposal_disposition IN ('refused', 'dead_lettered')
+                     OR (proposal_disposition IN ('refused', 'dead-lettered')
                          AND proposal_resulting_revision IS NULL
                          AND proposal_code IS NOT NULL
                          AND proposal_summary IS NOT NULL)
@@ -265,23 +265,23 @@ const DELIVERY_STATEMENTS: &[&str] = &[
                          ADD CONSTRAINT registry_webhook_delivery_state_dead_letter_reason_values
                          CHECK (
                              dead_letter_reason IS NULL OR dead_letter_reason IN (
-                                 'http_non_success', 'destination_timeout',
-                                 'invalid_remaining_timeout', 'invalid_frozen_policy',
-                                 'invalid_frozen_request', 'resolution_failed',
-                                 'resolution_capacity_unavailable', 'too_many_resolver_answers',
-                                 'no_resolver_answers', 'resolver_port_mismatch',
-                                 'resolver_address_family_mismatch', 'literal_origin_mismatch',
-                                 'cloud_metadata_denied', 'always_denied_address',
-                                 'private_address_not_allowed', 'non_global_address_denied',
-                                 'development_address_denied', 'tls_material_unavailable',
-                                 'client_build_failed', 'transport_failed',
-                                 'transport_failed_after_connect', 'deadline_exceeded',
-                                 'deadline_exceeded_after_connect', 'too_many_response_headers',
-                                 'response_header_bytes_exceeded', 'destination_policy_refused',
-                                 'destination_binding_refused', 'handler_binding_refused',
-                                 'handler_deadline', 'handler_resource', 'handler_execution',
-                                 'handler_source', 'handler_unavailable', 'payload_refused',
-                                 'worker_interrupted', 'proposal_dead_lettered'
+                                 'http-non-success', 'destination-timeout',
+                                 'invalid-remaining-timeout', 'invalid-frozen-policy',
+                                 'invalid-frozen-request', 'resolution-failed',
+                                 'resolution-capacity-unavailable', 'too-many-resolver-answers',
+                                 'no-resolver-answers', 'resolver-port-mismatch',
+                                 'resolver-address-family-mismatch', 'literal-origin-mismatch',
+                                 'cloud-metadata-denied', 'always-denied-address',
+                                 'private-address-not-allowed', 'non-global-address-denied',
+                                 'development-address-denied', 'tls-material-unavailable',
+                                 'client-build-failed', 'transport-failed',
+                                 'transport-failed-after-connect', 'deadline-exceeded',
+                                 'deadline-exceeded-after-connect', 'too-many-response-headers',
+                                 'response-header-bytes-exceeded', 'destination-policy-refused',
+                                 'destination-binding-refused', 'handler-binding-refused',
+                                 'handler-deadline', 'handler-resource', 'handler-execution',
+                                 'handler-source', 'handler-unavailable', 'payload-refused',
+                                 'worker-interrupted', 'proposal-dead-lettered'
                              )
                          );
                  END IF;
@@ -454,7 +454,7 @@ mod tests {
     fn the_shared_outbox_bounds_but_does_not_own_product_triggers() {
         let statements = rendered(KERNEL_SCHEMA).join("\n");
         assert!(statements.contains("trigger <> '' AND octet_length(trigger) <= 128"));
-        for product_trigger in ["created", "patched", "tombstoned", "request_lifecycle"] {
+        for product_trigger in ["created", "patched", "tombstoned", "request-lifecycle"] {
             assert!(
                 !statements.contains(&format!("trigger IN ('{product_trigger}'")),
                 "the shared schema must not freeze {product_trigger} as platform vocabulary"
@@ -509,7 +509,7 @@ mod tests {
             .filter(|statement| {
                 statement.contains("registry_webhook_delivery_state_proposal_values CHECK (")
                     && statement.contains(
-                        "proposal_disposition IN ('none', 'applied', 'refused', 'dead_lettered')",
+                        "proposal_disposition IN ('none', 'applied', 'refused', 'dead-lettered')",
                     )
             })
             .count();
@@ -531,7 +531,7 @@ mod tests {
         for combination in [
             "proposal_disposition = 'none'",
             "proposal_disposition = 'applied'",
-            "proposal_disposition IN ('refused', 'dead_lettered')",
+            "proposal_disposition IN ('refused', 'dead-lettered')",
         ] {
             assert!(
                 joined.contains(combination),
@@ -548,6 +548,70 @@ mod tests {
         );
         assert!(joined
             .contains("proposal_resulting_revision IS NULL OR proposal_resulting_revision > 0"));
+    }
+
+    // The words of every `dead_letter_reason IN (...)` list in the statements,
+    // one list per occurrence, in statement order.
+    fn dead_letter_reason_lists(statements: &[String]) -> Vec<Vec<String>> {
+        let joined = statements.join("\n");
+        joined
+            .split("dead_letter_reason IN (")
+            .skip(1)
+            .map(|rest| {
+                let (list, _) = rest.split_once(')').expect("the list is closed");
+                list.split(',')
+                    .map(|word| word.trim().trim_matches('\'').to_owned())
+                    .collect()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn every_dead_letter_reason_list_holds_the_reasons_the_service_spells() {
+        let spelled: Vec<String> = crate::delivery::DeliveryFailureReason::ALL
+            .iter()
+            .map(|reason| reason.as_str().to_owned())
+            .collect();
+        let lists = dead_letter_reason_lists(&rendered(KERNEL_SCHEMA));
+        assert_eq!(
+            lists.len(),
+            2,
+            "the table and the reason upgrade each list the reasons"
+        );
+        for list in lists {
+            assert_eq!(list, spelled);
+        }
+    }
+
+    #[test]
+    fn the_tables_are_created_with_every_protocol_word_in_kebab_case() {
+        let statements = rendered(KERNEL_SCHEMA);
+        let created: Vec<&String> = statements
+            .iter()
+            .filter(|statement| statement.trim_start().starts_with("CREATE TABLE"))
+            .collect();
+        assert_eq!(created.len(), 3);
+        let created = created
+            .into_iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .join("\n");
+        for expected in [
+            "CHECK (authentication_profile = 'hmac-sha256-v1')",
+            "CHECK (delivery_mode = 'after-commit')",
+            "state IN ('pending', 'leased', 'delivered', 'dead-lettered', 'expired')",
+            "OR (state = 'dead-lettered'",
+            "proposal_disposition IN ('none', 'applied', 'refused', 'dead-lettered')",
+            "proposal_disposition IN ('refused', 'dead-lettered')",
+        ] {
+            assert!(created.contains(expected), "{expected} is installed");
+        }
+        for word in created.split('\'').skip(1).step_by(2) {
+            assert!(
+                word.starts_with('^') || !word.contains('_'),
+                "{word} is a stored word spelled with an underscore"
+            );
+        }
     }
 
     #[test]

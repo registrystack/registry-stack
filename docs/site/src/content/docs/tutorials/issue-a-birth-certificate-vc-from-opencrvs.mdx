@@ -106,11 +106,11 @@ Replace `sources/opencrvs-birth-certificate.yaml` with:
 ```yaml
 apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1
 kind: EvidenceSource
-transport: http-json
+type: http-json
 baseUrl: https://events.farajaland-integration.opencrvs.dev
 posture: record-transformed
 authentication:
-  kind: oauth2-client-credentials
+  type: oauth2-client-credentials
   tokenEndpoint: https://auth.farajaland-integration.opencrvs.dev/token
   clientIdRef: secret:file/opencrvs-client-id
   clientSecretRef: secret:file/opencrvs-client-secret
@@ -158,9 +158,9 @@ request:
     - /results/*/declaration/child.name/surname
     - /results/*/declaration/child.birthLocationId
   redirects: deny
-  timeoutMilliseconds: 10000
+  attemptTimeoutMilliseconds: 10000
   maximumResponseBytes: 262144
-  concurrencyLimit: 8
+  maximumConcurrency: 8
 responseSchema: schemas/opencrvs-birth-certificate-response.schema.yaml
 extractScript: adapters/opencrvs-birth-certificate-extract.rhai
 factSchema: schemas/opencrvs-birth-certificate-facts.schema.yaml
@@ -551,7 +551,7 @@ you no longer need the project.
 | Evidence Gateway reports an ambiguous source result | More than one registered birth now carries that national ID in the demo data. | Keep `resultLimit: 2` and the `ambiguous` outcome. An ambiguous civil-registration match is a fact about the record set. |
 | The OpenCRVS token request fails with 401 | The Record Search client was deleted, its secret was rotated, or the demo reset its integrations. | Create a new Record Search client and rewrite `secrets/opencrvs-client-id` and `secrets/opencrvs-client-secret`. Keep both values out of shell history and tracked files. |
 | Requests start failing after several runs | OpenCRVS audits its searches and applies a daily request limit on the integration demo. | Wait for the limit to reset before running the tutorial again. Do not add retries around the source. |
-| Evidence Gateway reports a source dependency failure | The demo host was unreachable or slow, or the response exceeded `timeoutMilliseconds` or `maximumResponseBytes`. | Retry later. Treat the bounds as reviewed source policy, and raise one only after deciding it is right for the deployment. |
+| Evidence Gateway reports a source dependency failure | The demo host was unreachable or slow, or the response exceeded `attemptTimeoutMilliseconds` or `maximumResponseBytes`. | Retry later. Treat the bounds as reviewed source policy, and raise one only after deciding it is right for the deployment. |
 | The token request or the search fails with a certificate error | An intercepting proxy or an out-of-date trust store on your machine. | Repair the trust store, or exempt the demo hosts from interception. Do not reach for `--insecure`: the source denies redirects and reaches OpenCRVS over HTTPS only. |
 
 ## Next

@@ -1640,7 +1640,7 @@ mod tests {
         assert_eq!(status_condition(None), "true");
         assert_eq!(
             status_condition(Some(MessageStatus::Failed)),
-            "(job.state = 'dead_lettered' OR (job.state = 'delivered' AND message.report = \
+            "(job.state = 'dead-lettered' OR (job.state = 'delivered' AND message.report = \
              'undelivered'))"
         );
         assert_eq!(

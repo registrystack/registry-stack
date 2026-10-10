@@ -149,29 +149,33 @@ because its database URL is absent is not database verification, and the
 escape never turns a deployed runtime into a plaintext client.
 
 `authentication.oidc` requires `issuer` and `audience`. `jwksSource` defaults
-to `kind: discovery`. `kind: uri` with `uri` fetches the key set from a fixed
+to `type: discovery`. `type: uri` with `uri` fetches the key set from a fixed
 HTTPS address instead of the one discovery names; plain `http` is accepted only
-for a loopback host under development loopback. `kind: static` with
+for a loopback host under development loopback. `type: static` with
 `documentRef` reads a pinned key set, which does no rotation of its own:
 rolling a key means replacing the referenced document and restarting
 Scheduling. The removed `jwksUri` key is refused with a diagnostic naming
-`jwksSource` `kind: uri` as its replacement. `scopeClaim` defaults to `registry_scopes` for compatibility with
+`jwksSource` `type: uri` as its replacement. `scopeClaim` defaults to `registry_scopes` for compatibility with
 existing deployments; stock ThunderID emits `scope`, so the maintained example
 and `schedulingctl init` set that explicit override. `readsScope` defaults to
 `scheduling-read` and `explainScope` to `scheduling-explain`; the two must
 differ, because the explain path can name member-level causes the public
 availability read never discloses. `allowedClients` lists the exact client ids
-the runtime admits. It is required in every file, development loopback
-included: an omitted member and `[]` are startup refusals
-(`scheduling.runtime.allowed-clients-required`), because a forgotten field
-would otherwise admit every client the issuer verifies, including an
-application in the same realm that has nothing to do with booking, and a
-development file is copied toward production.
+the runtime admits, and every file writes it, development loopback included:
+a list of at least one distinct client. An omitted member, an empty list, and
+a repeated client are refused when the file is read (`config.missing-key`,
+`config.invalid-value`, `config.duplicate-item`). `unrestricted`, which would
+admit every client the issuer verifies, including an application in the same
+realm that has nothing to do with booking, is a startup refusal in every mode
+(`scheduling.runtime.allowed-clients-required`), because a development file
+is copied toward production.
 
 `assertionIssuers` maps a client id to the assertion authorities that client may
 exchange a subject token from. A deployment that performs no token exchange
 leaves it empty, and an exchanged token whose authority no entry declares is
-refused. Once a client is listed, a token it exchanged is accepted only for one
+refused. A listed client names at least one authority: an empty list is
+refused, and a client that is not listed may exchange from no authority. Once
+a client is listed, a token it exchanged is accepted only for one
 of that client's declared authorities, so an assertion minted by an unrelated
 authority the issuer happens to federate cannot become a booking credential
 here.

@@ -2,6 +2,297 @@
 
 ## Unreleased
 
+### Protocol words
+
+- BREAKING: four transport and token words the Node.js and Python clients
+  pass through from the shared HTTP primitives are kebab-case (CFG-NAME-2):
+  the transport kind `response-too-large` (was `response_too_large`), the
+  token kinds `invalid-credential` and `scope-narrowed` (were
+  `invalid_credential` and `scope_narrowed`), and the refused-token code
+  `unregistered-error-code` (was `unregistered_error_code`). The codes
+  RFC 6749 section 5.2 registers keep the specification's spelling.
+  Migration: change what a consumer of a client error compares. No file an
+  adopter writes changes.
+- BREAKING: five Evidence problem codes and the `type` URI derived from each
+  are spelled in kebab-case: `evidence.invalid_request` is
+  `evidence.invalid-request`, `request.selector_invalid` is
+  `request.selector-invalid`, `auth.invalid_credential` is
+  `auth.invalid-credential`, `evidence.rate_limited` is
+  `evidence.rate-limited`, and `resource.not_found` is `resource.not-found`.
+  The `error` label of `evidence_http_requests_total` carries the
+  same words. The Version 1 problem contract and the generated schema and
+  OpenAPI document state the new codes. The clients register the new codes
+  only and report a body in the old spelling as a protocol failure.
+  Migration: upgrade the gateway and every client in one step, and respell
+  any match on `code`, `type`, or the `error` label. See "Protocol words" in
+  `release/notes/config-conventions/evidence.md`.
+- BREAKING: an unavailable item of the request-batch response states
+  `result: evidence-not-available` in place of `evidence_not_available`. The
+  Version 1 request-batch response contract and the generated schema and
+  OpenAPI document state the new word, and the verifier, the client, and
+  both bindings refuse a response that carries the old one. Migration:
+  upgrade the gateway and every client in one step; code of your own that
+  reads the envelope matches the new word.
+- BREAKING: five error kinds are spelled in kebab-case. The verifier's
+  `malformed_jws`, `protected_header`, and `key_binding` are `malformed-jws`,
+  `protected-header`, and `key-binding`; the client's `not_available` and the
+  nonce error's `not_canonical` are `not-available` and `not-canonical`. The
+  Node.js and Python bindings carry the same words in `kind` and, for a
+  verification failure, in `code`. Migration: a caller that catches by error
+  class changes nothing; a comparison with one of the five words is
+  respelled.
+- BREAKING: `evidencectl audit view` prints each `reason=` word as the
+  audit record spells its decision: `not_authorized`, `no_match`,
+  `fact_missing`, `dependency_failure`, `evaluation_failure`, and
+  `signing_failure` are `not-authorized`, `no-match`, `fact-missing`,
+  `dependency-failure`, `evaluation-failure`, and `signing-failure`. The
+  `artifact` of a deployment-target refusal in an `evidencectl` diagnostic is
+  `deployment-target` in place of `deployment_target`. Migration: a script
+  that matches the view's output or a diagnostic's `artifact` matches the
+  new spelling. No audit record changes.
+- BREAKING: the five fixed problems of the local source mock that
+  `evidencectl` serves state their `code` in kebab-case:
+  `source-mock.not-found`, `source-mock.method-not-allowed`,
+  `source-mock.unsupported-route`, `source-mock.generation-failed`, and
+  `source-mock.busy`. Migration: a local script that matches a mock
+  problem `code` matches the new word.
+- BREAKING: the metric label values Evidence defines are spelled in
+  kebab-case. The `status` label of `evidence_http_requests_total`,
+  `evidence_http_request_duration_seconds`, and the two
+  `evidence_oid4vci_http_*` series is `client-error` or `server-error` in
+  place of `client_error` or `server_error`, and so is the `status` field
+  of a structured request log. The `outcome` label of
+  `evidence_oid4vci_outcomes_total` carries its eighteen words with hyphens
+  (`nonce-tampered`, `credential-issued`, `evidence-not-available`, ...).
+  Metric names, label names, and the OAuth and OID4VCI error codes the
+  delivery front end passes through its `error` label are unchanged.
+  Migration: respell the label values in every dashboard query, recording
+  rule, alert rule, and log filter. See "Protocol words" in
+  `release/notes/config-conventions/evidence.md`.
+- BREAKING: `evidencectl dev` reads the `mapping` of an exchange issuer in
+  the borrowed Base Registry Engine owner's `.breg/dev/clients.json` in the
+  spelling the owner writes: `institutional-grant` and `first-party`. It
+  matched `institutional_grant` and `first_party`, which the owner no
+  longer accepts, so every borrowed exchange registration was refused.
+  Migration: none for a `clients.json` already upgraded for the Base
+  Registry Engine; an owner file in the old spelling is refused by
+  `bregctl` first.
+
+### Stable move
+
+- BREAKING: `evidence.yaml` opens with `apiVersion:
+  id.registrystack.org/formats/evidence/bundle/v1` and `kind: EvidenceBundle`
+  in place of `version: 1`, which is refused as `config.removed-key` with the
+  two lines named. Migration: replace the first line of a hand-written bundle
+  with the two members, regenerate `SHA256SUMS`, and re-pin
+  `configurationRevision`; rebuild a compiled bundle with `evidencectl build`.
+  See "Stable move" in `release/notes/config-conventions/evidence.md`.
+- BREAKING: the runtime file declares `apiVersion:
+  id.registrystack.org/formats/evidence/runtime/v1alpha1`. The earlier
+  `registry.registrystack.org/evidence-runtime/v1alpha1` is refused as
+  `config.retired-api-version` with the new value named. Migration: replace
+  the `apiVersion` line of `runtime.yaml` and of the `runtime` member of each
+  target settings file.
+- BREAKING: a code list opens with `apiVersion:
+  id.registrystack.org/formats/evidence/codelist/v1alpha1` and `kind:
+  EvidenceCodelist`, names its identifier `uri`, states its form with `type:
+  code-list` or `type: mapping`, and spells a mapping's outputs
+  `allowedOutputs`. `id` and `allowed_outputs` are refused as
+  `config.removed-key` with the replacement named, and
+  `evidence.codelist.invalid-form` is no longer reported. Migration: add the
+  two envelope lines and the `type` member, rename the two keys, regenerate
+  `SHA256SUMS`, and re-pin `configurationRevision`.
+- BREAKING: a code list `uri` holds no whitespace and no control character,
+  and its limit of 512 is counted in characters, as the code list schema
+  states it. An identifier with a space, tab, or line break at either end or
+  inside is refused with `config.invalid-value` at `/uri`; it was accepted and
+  kept as written while the URI parser read it without the character. An
+  identifier of at most 512 characters that takes more than 512 bytes is now
+  read; a `bucketScheme` that cites one is still held to 512 bytes.
+  Migration: remove the character from the identifier, regenerate
+  `SHA256SUMS`, and re-pin `configurationRevision`.
+- BREAKING: the policy files `evidence verify --policy` and `evidence
+  verify-presentation --policy` read open with `apiVersion` and `kind`
+  (`id.registrystack.org/formats/evidence/verification-policy/v1` with
+  `EvidenceVerificationPolicy`, and
+  `id.registrystack.org/formats/evidence/holder-bound-verification-policy/v1`
+  with `EvidenceHolderBoundVerificationPolicy`). A file without them is
+  refused as `config.missing-envelope`. Migration: add the two lines at the
+  top of every retained policy file. The policy object the clients take is
+  unchanged.
+- BREAKING: in the bundle, a request's `timeoutMilliseconds` is
+  `attemptTimeoutMilliseconds`, and `concurrencyLimit` on a request and on a
+  source connection is `maximumConcurrency`. The old keys are refused as
+  `config.removed-key` with the replacement named. Migration: rename the keys
+  in `evidence.yaml`, in authored `sources/*.yaml`, and under
+  `sourceConnections` in target settings; keep the values, regenerate
+  `SHA256SUMS`, and re-pin `configurationRevision`.
+- BREAKING: in the runtime file, `audit.retainDays` is `audit.retentionDays`
+  and the Transit signer's `timeoutMilliseconds` is
+  `attemptTimeoutMilliseconds`. The old keys are refused as
+  `config.removed-key` with the replacement named. Migration: rename the two
+  keys in `runtime.yaml` and under the `runtime` member of each target
+  settings file; keep the values.
+- The bundle and runtime schemas type every `...Ref` secret member as
+  `$defs/SecretReference`, the shared definition name, in place of
+  `$defs/secret-ref`. The grammar and every file are unchanged.
+- BREAKING: the bundle union tags are spelled `type`: a source's `transport`,
+  an authentication's `kind`, a path binding's `from`, a statement parameter
+  binding's `kind`, and an acquisition's `kind` are refused as
+  `config.removed-key` with `type` named. Migration: rename the five tags and
+  keep the values, in `evidence.yaml`, in every authored `sources/*.yaml`, and
+  under `sourceConnections` in every target `settings.yaml`; regenerate
+  `SHA256SUMS` and re-pin `configurationRevision`.
+- BREAKING: the access-token key source is tagged by `type`:
+  `authentication.oidc.jwksSource.kind` is refused as `config.removed-key`
+  with `type` named. Evidence still reads keys from `type: uri` only.
+  Migration: rename the key and keep the value, in `evidence.yaml`, in every
+  target `governance.yaml`, and in the governance part of every authored
+  target `settings.yaml`; regenerate `SHA256SUMS` and re-pin
+  `package.expectedDigest` and `configurationRevision`.
+- BREAKING: every bundle states `authentication.oidc.allowedClients` and
+  `authentication.oidc.requiredScopes`, each as the keyword `unrestricted` or
+  a list of at least one value. An omitted member is refused as
+  `config.missing-key` and an empty list as `config.invalid-value`; neither
+  means "no gate" any longer. Migration: add the absent member under
+  `authentication.oidc` with `unrestricted` to keep today's behavior, or list
+  the admitted values, then regenerate `SHA256SUMS` and re-pin
+  `package.expectedDigest` and `configurationRevision`. See "Stable move" in
+  `release/notes/config-conventions/evidence.md`.
+- BREAKING: the runtime file tags its signer with `signer.type`; `signer.kind`
+  is refused as `config.removed-key` with the replacement named. Migration:
+  rename the key in `runtime.yaml` and under the `runtime` member of every
+  target `settings.yaml`; keep the value.
+- BREAKING: a client profile opens with `apiVersion:
+  id.registrystack.org/formats/evidence/client-profile/v1` and `kind:
+  EvidenceClientProfile`, and a reviewed contracts file with `apiVersion:
+  id.registrystack.org/formats/evidence/client-contracts/v1` and `kind:
+  EvidenceClientContracts`, in place of the `schema` header, which is refused
+  as `config.removed-key` with the two members named. A profile tags its
+  private key reference with `privateKey.type`; `privateKey.source` is
+  refused the same way. The SDK types carry `api_version` and `kind` in place
+  of `schema`. Migration: replace the `schema` line of each file with the two
+  members and rename `privateKey.source` to `privateKey.type`, keeping the
+  value; a Base Registry Engine project does the same in
+  `evidence/contracts.json` and rebuilds its package. See "Stable move" in
+  `release/notes/config-conventions/evidence.md`.
+- BREAKING: the key of every id-keyed map in `evidence.yaml` and
+  `runtime.yaml` is a local identifier as every Registry Stack format writes
+  one: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or
+  `-`. That covers `selectorProfiles`, `sourceConnections`, `sources`,
+  `authorityProfiles`, a selector profile's `fields`, `pathBindings` and path
+  placeholders, `valueClaims`, `derivation.parameters`, and the runtime
+  `outboundTls.trustProfiles` and `sourceExtracts`. A key with a dot or over
+  64 characters is refused at the key. Adapter and statement parameter names
+  and `assertionIssuers` client identifiers keep their spelling. Migration:
+  rename each such key and every reference to it, coordinate a renamed
+  selector profile or field with the callers that send it, regenerate
+  `SHA256SUMS`, and re-pin `configurationRevision`.
+- BREAKING: the bundle names the issuer URI `issuer.uri` and each concept URI
+  `requirements[].concepts[].uri`. The old `id` keys are refused as
+  `config.removed-key` with `uri` named.
+  Migration: rename the two keys and keep the values, in `evidence.yaml`, in
+  each target `governance.yaml`, and in the governance part of each authored
+  target `settings.yaml`; then regenerate `SHA256SUMS`, update
+  `package.expectedDigest`, and re-pin `configurationRevision`.
+- BREAKING: a bundle requirement names its URI `requirements[].uri`. The old
+  `id` key is refused as `config.removed-key` with `uri` named. A request,
+  the definitions document, and an assertion are unchanged. Migration: rename
+  the key and keep the value in every requirement of `evidence.yaml`; then
+  regenerate `SHA256SUMS`, update `package.expectedDigest`, and re-pin
+  `configurationRevision`.
+- BREAKING: the holder-bound batch ceiling is `maximumHolderBoundBatchSize`
+  in every place Evidence writes or reads it: the bundle (`evidence.yaml`,
+  top level and `sources.*.evidence.contract`), the
+  `registry.evidence-definitions/v1` document served at
+  `GET /v1/evidence/definitions`, the OpenAPI document, and the
+  `maximum_holder_bound_batch_size` field of the Rust client's
+  `EvidenceDefinitionsDocument`. It was `holderBoundBatchMaxSize`
+  (`holder_bound_batch_max_size`). The value, its range of 1 through 16, and
+  the meaning of omission in a bundle are unchanged. There is no alias: a
+  bundle that writes the old key is refused as `config.removed-key` with the
+  new name, and the client, `evidence-oid4vci`, and `evidencectl doctor`
+  refuse a definitions document carrying the old member as they refuse any
+  unknown member. Migration for an operator: rename the key in
+  `evidence.yaml`, then regenerate `SHA256SUMS`, update
+  `package.expectedDigest`, and re-pin `configurationRevision`. Migration
+  for a relying party or an SDK caller: upgrade Evidence Gateway and every
+  client, binding, and protocol adapter that reads its definitions response
+  in one step, and rename the member wherever your own code reads the
+  document.
+- BREAKING: a bundle concept states its value form as
+  `requirements[].concepts[].type`. The old `form` key is refused as
+  `config.removed-key` with `type` named; the values and the constraints
+  each one fixes are unchanged, and the definitions document, a verification
+  policy, and a source's fact contract keep `form`. Migration: rename the
+  key and keep the value in `evidence.yaml`, then regenerate `SHA256SUMS`,
+  update `package.expectedDigest`, and re-pin `configurationRevision`.
+- BREAKING: a concept's `form` is a mapping named by `type` in every place
+  Evidence writes or reads it: the fact contract a bundle pins under
+  `sources.*.evidence.contract`, a verification policy and a holder-bound
+  verification policy file, a reviewed contracts file, the
+  `registry.evidence-definitions/v1` document served at
+  `GET /v1/evidence/definitions`, the OpenAPI document, and the policy object
+  handed to a client library. `form: boolean` becomes `form: {type: boolean}`,
+  the same for `integer`, `string`, `date-bucket`, `time-bucket`,
+  `entity-reference`, and `structured`, and
+  `form: {list: {items: string, minimumItems: 1, maximumItems: 8, unique: true}}`
+  becomes
+  `form: {type: list, items: string, minimumItems: 1, maximumItems: 8, unique: true}`.
+  The form names, the list's members, and their bounds are unchanged, and so
+  are the Rust variants `DefinitionConceptForm` and `ExpectedFormDocument`
+  expose. There is no alias: a file in the old shape is refused, a bare name
+  as `config.invalid-type` and a `list` member as `config.removed-key` with
+  the shape to write, and a client refuses a definitions document or a policy
+  object in the old shape. A signed assertion, an SD-JWT VC, and an audit
+  record never carried this union and are unchanged. Migration for an
+  operator: rewrite each form under `sources.*.evidence.contract` in
+  `evidence.yaml`, then regenerate `SHA256SUMS`, update
+  `package.expectedDigest`, and re-pin `configurationRevision`. Migration for
+  a relying party or an SDK caller: upgrade Evidence Gateway and every
+  client, binding, and protocol adapter that reads its definitions response
+  in one step; rewrite the `form` of each `expectedOutputs` entry in every
+  retained policy file and in code that builds the policy object; and fetch
+  each reviewed contracts file again. See "Stable move" in
+  `release/notes/config-conventions/evidence.md`.
+- BREAKING: a source that authenticates to its token endpoint with a signed
+  client assertion declares `authentication.type: oauth2-private-key-jwt`.
+  `oauth2-client-credentials` is the shared-secret form alone and requires
+  `clientSecretRef` and `credentialPlacement`; `clientAssertionKeyRef` or
+  `clientAssertionAudience` under it is refused as `config.unknown-key` at
+  the key, with the new type named. The token request is unchanged.
+  Migration: change `type` to `oauth2-private-key-jwt` wherever an
+  `authentication` mapping carries `clientAssertionKeyRef`, in
+  `evidence.yaml`, an authored `sources/*.yaml`, and an authored target
+  `settings.yaml`, then regenerate `SHA256SUMS`, update
+  `package.expectedDigest`, and re-pin `configurationRevision`.
+- BREAKING: a source request states one `path`, a literal or a template.
+  A path that names a placeholder requires `pathBindings`, and a path
+  without one takes none. `pathTemplate` is refused as `config.removed-key`
+  with `path` named, and `path` is 2 to 2048 bytes in both forms. The
+  request the runtime sends is unchanged. Migration: rename
+  `request.pathTemplate` to `request.path` and keep the value, in
+  `evidence.yaml` and in an authored `sources/*.yaml`, then regenerate
+  `SHA256SUMS`, update `package.expectedDigest`, and re-pin
+  `configurationRevision`.
+- A bundle requirement that repeats the `uri` of an earlier requirement is
+  refused as `config.duplicate-id` at the copy's `uri`, with the first
+  requirement as a related position, in place of
+  `evidence.bundle.invalid-requirement`. A script that matches on the code
+  matches on the new one.
+- `evidence check` reports a bundle, a code list, or a fixture file over the
+  1 MiB document cap as `yaml.too-large` at that file, in place of
+  `evidence.package.too-large` at the package directory. A package file
+  that is no configuration document keeps the package code.
+- `evidence check` reports a package entry that is no regular file, such as
+  a symbolic link, at each bundle member that names it, with the line and
+  column of the value. The code stays `evidence.package.unsafe-entry`, and
+  an entry no bundle member names stays at the package directory.
+- A bundle whose derivation parameter is an integer outside the safe
+  integers, or whose list concept declares `minimumItems` or `maximumItems`
+  outside 1 to 64, is refused as `config.out-of-range` at the value, in
+  place of `evidence.bundle.invalid-requirement` at the requirement.
+
 ### Evidence clients and OID4VCI
 
 - BREAKING: the `evidence-oid4vci` runtime file has an envelope
@@ -114,6 +405,20 @@
   move such a file out of `fixtures/`, or give it the fixture envelope.
   `evidencectl test --deny-warnings` and `evidencectl fixtures run
   --deny-warnings` are new and make a reader warning exit 1.
+
+- BREAKING: a question refuses, at the member that carries it, each name its
+  compiled bundle would refuse: an `id` over 47 bytes when the question reads
+  an `operation` and has one subject, an `id` and a `role` over 46 bytes
+  together or a `role` with a dot when it has several, and a dot in a
+  `selector`, a `profile`, an entry of `profiles`, or a `source.ref`. The codes
+  are `evidence.question.compiled-name-length` and
+  `evidence.question.compiled-name-dot`. Such a project already failed, later,
+  at the bundle check. Migration: shorten or rename the member in the
+  question file.
+- An access policy compiles to an authority profile named by the first 42
+  characters of its requester tag, which fits the bundle's 64-character local
+  identifier; the profile's `requesterTags` carries the tag whole, and callers
+  are matched as before.
 
 ### Evidence runtime
 

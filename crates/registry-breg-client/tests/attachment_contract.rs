@@ -625,9 +625,9 @@ fn list_operation(descriptor: &Value, api_name: &str) -> Value {
         "sortableFields": [],
         "allowCount": false,
         "defaultPageSize": 100,
-        "maxPageSize": 100,
-        "maxFilterClauses": 32,
-        "maxInValues": 100,
+        "maximumPageSize": 100,
+        "maximumFilterClauses": 32,
+        "maximumInValues": 100,
         "pagination": {
             "parameter": "$skiptoken",
             "responsePath": "pageInfo.nextCursor",

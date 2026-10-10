@@ -21,6 +21,9 @@ import registry_evidence_client as revc  # noqa: E402
 
 ROOT = pathlib.Path(__file__).resolve().parents[4]
 CONTRACTS = json.loads((ROOT / "products/breg/acceptance/farmer-landholding-evidence/evidence/farmer-contracts.json").read_text())
+# The contracts file carries an envelope the published definitions document does not.
+for _member in ("apiVersion", "kind"):
+    del CONTRACTS[_member]
 JWKS = json.loads((ROOT / "crates/registry-evidence-client-py/tests/fixtures/jwks.json").read_text())
 KEY = {
     "kty": "EC", "crv": "P-256", "alg": "ES256",
@@ -65,7 +68,7 @@ class ProfileExchangeTest(unittest.TestCase):
                     payload = {"access_token": "staff-token", "token_type": "Bearer", "expires_in": 300,
                                "scope": "evidence:invoke", "issued_token_type": "urn:ietf:params:oauth:token-type:access_token"}
                 elif self.path == "/v1/evidence-definitions":
-                    payload = {**CONTRACTS, "schema": "registry.evidence-definitions/v1", "holderBoundBatchMaxSize": 1,
+                    payload = {**CONTRACTS, "schema": "registry.evidence-definitions/v1", "maximumHolderBoundBatchSize": 1,
                                "definitions": [dict(CONTRACTS["definitions"][0], configurationRevision=revision[0]),
                                                *CONTRACTS["definitions"][1:]]}
                 elif self.path == "/v1/evidence":
@@ -98,9 +101,10 @@ class ProfileExchangeTest(unittest.TestCase):
             with tempfile.TemporaryDirectory(prefix="evidence-profile-exchange-") as directory:
                 profile_path = pathlib.Path(directory) / "client.json"
                 profile_path.write_text(json.dumps({
-                    "schema": "registry.evidence-client-profile/v1", "baseUrl": origin,
+                    "apiVersion": "id.registrystack.org/formats/evidence/client-profile/v1",
+                    "kind": "EvidenceClientProfile", "baseUrl": origin,
                     "clientId": "profile-staff",
-                    "privateKey": {"source": "environment", "variable": "UNUSED_PROFILE_EXCHANGE_KEY"},
+                    "privateKey": {"type": "environment", "variable": "UNUSED_PROFILE_EXCHANGE_KEY"},
                     "trust": {"type": "local-loopback-discovery"}, "contracts": {"type": "published"},
                     "oauth": {"resource": "urn:registry:evidence", "scopes": ["evidence:invoke"]},
                     "expected": {"definitions": {"farmer-status": {

@@ -549,13 +549,13 @@ impl BaseRegistryClientError {
     pub fn kind(&self) -> &'static str {
         match self {
             Self::Configuration { .. } => "configuration",
-            Self::InvalidRequest { .. } => "invalid_request",
+            Self::InvalidRequest { .. } => "invalid-request",
             Self::Token(_) => "token",
             Self::Transport { .. } => "transport",
             Self::Problem {
                 code: BRegProblemCode::ResourceNotFound,
                 ..
-            } => "not_found",
+            } => "not-found",
             Self::Problem { .. } => "problem",
             Self::Protocol { .. } => "protocol",
         }
@@ -791,7 +791,7 @@ mod tests {
     // problem code naming that exact case, so it alone is promoted to its own
     // kind. `LookupUnresolved` is deliberately excluded: it also carries status
     // 404, but it means a lookup matched zero or more than one record, not that
-    // a known resource is absent, and folding it into `not_found` would mislead
+    // a known resource is absent, and folding it into `not-found` would mislead
     // a caller who could instead disambiguate.
     #[test]
     fn only_a_missing_resource_reports_kind_not_found() {
@@ -806,7 +806,7 @@ mod tests {
                 refusal_code: None,
             };
             let expected = if code == BRegProblemCode::ResourceNotFound {
-                "not_found"
+                "not-found"
             } else {
                 "problem"
             };

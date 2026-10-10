@@ -1,5 +1,9 @@
 # Configuration conventions: Base Registry Engine
 
+The items of this fragment were written as each change was made, and where
+two of them disagree about a spelling or a diagnostic code, the one further
+down states what v0.40.0 reads and reports.
+
 ## BReg authored formats
 
 This section covers the formats an adopter and an operator write for the
@@ -7,7 +11,6 @@ Base Registry Engine: `registry.yaml`, `module.yaml`, `runtime.yaml`, and the
 package a `bregctl package` run seals around them.
 
 ### BREAKING: the shared reader reads `registry.yaml` and `module.yaml`
-<!-- upgrade: breg-project-reader-refusals -->
 
 `bregctl`, the package builder, and `breg` read a project and its modules
 through the shared Registry Stack reader. A file that was already outside the
@@ -54,19 +57,8 @@ the literal, and the published schemas type the literal as `DataLiteral`.
 A package rederives its project from the `source/registry.yaml` and module
 files it seals, at `bregctl package` and every time `breg` or `bregctl` loads
 it. A package whose sealed sources carry one of the shapes above no longer
-loads. Correct the source project, rebuild the package with `bregctl package
---baseline-package <deployed package>`, and apply it before starting the
-upgraded runtime.
-
-The deployed package is also read as the upgrade baseline, and that read
-refuses a sealed source with an anchor, an alias, a tag, a merge key, a
-duplicate key, or an unquoted number such as `0123`, `.5`, or `0x1F`; it
-tolerates a `null` member and the access spellings the earlier release wrote.
-When the deployed package's sealed sources carry a refused shape, `bregctl
-test` reports `migration.rehearsal.baseline_unavailable` and `package` cannot
-run. Correct the project and build and apply a successor package with the
-`bregctl` release that built the deployed package, so the active package's
-sealed sources no longer carry the shape. Then upgrade with this release.
+loads. Correct the source project, rebuild the package with this release,
+and apply it to a new database with `bregctl apply --initial`.
 
 ### The published schemas describe what the reader accepts
 
@@ -92,7 +84,6 @@ types the reader decodes, and now say what it refuses:
   schema by its `$id` should name the new one.
 
 ### BREAKING: project URLs and module digests are typed by the shared reader
-<!-- upgrade: breg-project-reader-refusals -->
 
 The reader types the URL members of `registry.yaml` as `Url` (an absolute
 `http` or `https` URL with a host, no user information, and at most 2048
@@ -116,7 +107,6 @@ these values no longer loads; correct the source project and rebuild the
 package as described above.
 
 ### BREAKING: integer bounds in `registry.yaml` and `module.yaml` are refused when read
-<!-- upgrade: already-wrong -->
 
 Every integer member of the project and module formats now states its
 minimum and maximum in the published schemas, and the reader refuses a value
@@ -148,7 +138,6 @@ constraint's `minimum` and `maximum`, state the signed 64-bit range in the
 schema, the range the reader already enforced.
 
 ### BREAKING: a list that is a set refuses a repeated item
-<!-- upgrade: breg-delete-repeated-items -->
 
 A list member of `registry.yaml` and `module.yaml` whose order carries no
 meaning is a set. The reader used to collapse a repeated item silently; it now
@@ -161,8 +150,8 @@ what it meant before. The members are:
   `requiredPurposes`, at project level and on an entity;
 - a permission's or an entity access profile's `operations`,
   `readableFields`, `readableRequestFields`, `writableFields`,
-  `filterableFields`, `sortableFields`, and `submitterTargets`, and a
-  permission's `results`;
+  `filterableFields`, `sortableFields`, `submitterTargets`, and
+  `provenanceFields`, and a permission's `results`;
 - a read path's `readableFields`, `filterableFields`, and `sortableFields`;
 - a task grant permission's `operations`;
 - an entity's `accessRequirements.requiredScopes` and
@@ -173,8 +162,24 @@ what it meant before. The members are:
 - a hook's `projection`, and its `when` condition's `changed`,
   `transitions`, and `toStates`.
 
+`provenanceFields` used to pass the reader and be refused by the compiler as
+`breg.access-profile.provenance-fields-invalid`; a repeat is now refused
+where the file is read, like every other set, and the items keep the order
+written. Its words (`kind`, `reasonCode`, `reasonText`, `sourceReferences`)
+are unchanged: each names a member of a revision's `changeContext` and is
+spelled as that member is (CFG-NAME-2), which the published schemas now state
+with `x-registry-member-names`. The project schema also lists
+`provenanceFields` on an entity permission, which the reader already
+accepted.
+
+A task grant written on an entity access profile in a module file reads its
+`sourceIssuer` as a URL, as a project profile's task grant does: a value that
+is not an absolute `http` or `https` URL is refused with
+`config.invalid-value` at `taskGrant.sourceIssuer`. A module profile still
+cannot declare a task grant, so no module that compiled before is affected;
+only the refusal a wrong value meets first changes.
+
 ### BREAKING: `runtime.yaml` is decoded by the shared reader
-<!-- upgrade: breg-runtime-refused-forms -->
 
 `breg` and every `bregctl` command that takes `--runtime-config` decode
 `runtime.yaml` through the shared runtime loader rather than a second
@@ -203,7 +208,7 @@ appended to the message.
 | `runtime_config.bounds` | `platform.runtime-config.size` | Keeping the file at most 1 MiB. |
 | `runtime_config.unsafe_file` | `platform.runtime-config.unsafe-file` or `platform.runtime-config.path` | Giving the absolute path of a regular file with no symbolic link in it. |
 | `runtime_config.unavailable` | `platform.runtime-config.unavailable` | Making the file exist and readable by the runtime user. |
-| `runtime_config.invalid_api_version`, `runtime_config.invalid_kind` | `config.unsupported-api-version`, `config.wrong-kind`, or `config.missing-envelope` when the member is absent | Writing `apiVersion: registry.registrystack.org/breg-runtime/v1alpha1` and `kind: BRegRuntimeConfig`. |
+| `runtime_config.invalid_api_version`, `runtime_config.invalid_kind` | `config.unsupported-api-version`, `config.wrong-kind`, or `config.missing-envelope` when the member is absent | Writing `apiVersion: id.registrystack.org/formats/breg/runtime/v1alpha1` and `kind: BRegRuntimeConfig`. |
 | `runtime_config.invalid_listener`, `runtime_config.invalid_metrics_listener` for a `bind` that is not a numeric socket address | `config.invalid-value` at `/listener/bind` or `/metricsListener/bind` | Writing a numeric `address:port`, such as `127.0.0.1:8080`. A numeric address that is public, unspecified, or on port 0 is still refused as before. |
 | `runtime_config.invalid_audit` for an `audit.hashKeyRef` that is not a secret reference | `config.invalid-value` at `/audit/hashKeyRef` | Writing `secret:file/NAME` or `secret:env/NAME`. |
 | `runtime_config.invalid_database` for `database.url`, `database.password`, or `database.plaintext` | `config.removed-key`, naming `database.runtimeUrlRef` and `database.migrationUrlRef` | Deleting the member; the connection URL, password included, is named by secret reference in `database.runtimeUrlRef` and `database.migrationUrlRef`. |
@@ -249,7 +254,6 @@ reported `config.invalid-value` at the member. The fix is the same: write the
 member as `secret:file/<name>` or `secret:env/<NAME>`.
 
 ### BREAKING: integer bounds in `runtime.yaml` are refused when read
-<!-- upgrade: already-wrong -->
 
 Every integer member of `runtime.yaml` is read with the minimum and maximum
 the published runtime schema already stated, so a value outside them is
@@ -278,7 +282,6 @@ the accepted spellings are unchanged, and every problem the decoding pass finds 
 is now reported at its own member, line, and column rather than at the block.
 
 ### BREAKING: `bregctl check` reports in the shared diagnostic shape
-<!-- upgrade: no-file -->
 
 `bregctl check` reads `registry.yaml` and every `module.yaml` through the
 shared reader and reports what it finds in the diagnostic shape every
@@ -291,12 +294,12 @@ followed by its message and a `next:` line, and closes with
 | Was | Is | Migrate by |
 |---|---|---|
 | a JSON report with advisories under `findings[]`, each without `severity` | every error and warning under `diagnostics[]`, each with `severity` | Reading `diagnostics[]` and selecting `severity: warning` where a script read `findings[]`. `ok`, `command`, `profile`, `revision`, `registryRevision`, and, for `--package`, `packageDigest` are unchanged. |
-| a diagnostic `path` such as `entities[id=record].accessProfiles[id=operator].rowBoundaries` | a JSON Pointer into the file that holds the member, such as `/accessProfiles/0/permissions/1/rowBoundaries`, with `source` naming the file, line, and column | Matching on `code` and `source.file` rather than on the path text. |
+| a diagnostic `path` such as `entities[id=record].accessProfiles[id=operator].rowBoundaries` | a JSON Pointer into the file that holds the member, such as `/accessProfiles/0/permissions/entities/1/rowBoundaries`, with `source` naming the file, line, and column | Matching on `code` and `source.file` rather than on the path text. |
 | a `suggestedAction` such as `run_schema_test` | a sentence naming the fix | Showing the sentence to the reader; a script that branched on the identifier branches on `code` instead. |
 | a finding, reported as `finding` | a `warning` | Matching `warning` where a script matched `finding`. |
-| `bregctl check --deny-findings` | `bregctl check --deny-warnings`, refusing with exit 1 when the check reports any warning | Renaming the flag in every pipeline. |
+| `bregctl check --deny-findings`, which could not be combined with `--package` | `bregctl check --deny-warnings`, refusing with exit 1 when the check reports any warning, and accepted with `--package` as well | Renaming the flag in every pipeline. |
 | exit 1 when the project directory, a package file, or the runtime file could not be read | exit 3, with `breg.source.project-invalid`, `breg.package.refused`, or `platform.runtime-config.unavailable` | Treating exit 3 as "the check could not run" and exit 1 as "the check refused the project". |
-| a module diagnostic naming `RegistryProject` as its `artifact` | `BRegModule` | Matching `BRegModule` for a diagnostic inside a `module.yaml`. |
+| a diagnostic naming `registry_project` as its `artifact` | the kind of the file that holds the member: `BRegProject` for `registry.yaml`, `BRegModule` for a `module.yaml` | Matching `BRegProject`, or `BRegModule` for a diagnostic inside a `module.yaml`. |
 | a refused package reported as `the package was refused` at the path `package` | a message naming the cause, such as `the shared package envelope is invalid`, with `source` naming the package directory | Reading the message and the code; the code still names the class of refusal. |
 
 `bregctl check --runtime-config FILE` also reads a `runtime.yaml` the way
@@ -317,7 +320,6 @@ under `--deny-warnings`; run the check again with `--environment` to have
 every rule decided.
 
 ### BREAKING: the package format is named `id.registrystack.org/formats/breg/package/v2`
-<!-- upgrade: breg-rebuild-package -->
 
 The `package.json` a `bregctl package` run writes declares the package format
 by its registered identifier and a kind (CFG-ENV-1, CFG-ENV-2). The rest of
@@ -328,53 +330,35 @@ unchanged.
 |---|---|
 | `"apiVersion": "registry.registrystack.org/package/v2"` with no `kind` | `"apiVersion": "id.registrystack.org/formats/breg/package/v2"` and `"kind": "BRegPackage"` |
 
-A package carrying the retired header is read only as the predecessor of an
-upgrade: the deployed package named by `--baseline-package`, and the active
-package a runtime file names to `bregctl plan`, `apply`, `reconcile`, and the
-field-encryption commands. Everywhere else it is refused:
+A package carrying the retired header is refused wherever a package is read,
+as a current package and as the predecessor `--baseline-package` or a runtime
+file names. Each refusal names the current apiVersion:
 
 - `breg` refuses to start with "the Registry package carries the retired
-  apiVersion registry.registrystack.org/package/v2" and the rebuild steps
+  apiVersion registry.registrystack.org/package/v2" and the rebuild step
   below.
 - `bregctl check --package` reports `config.retired-api-version`.
 - `bregctl verify` and `bregctl migration explain` report
   `verify.package.retired_api_version` and
-  `migration.explain.package.retired_api_version`, and
-  `bregctl diff --package` reports `diff.baseline.retired_api_version`;
-  `bregctl diff PROJECT --runtime-config RUNTIME` still compares a project
-  with the deployed package the runtime file names.
+  `migration.explain.package.retired_api_version`, and `bregctl diff` reports
+  `diff.baseline.retired_api_version` for a baseline named by `--package` or
+  by `--runtime-config`.
+- `bregctl test` and `bregctl package` refuse it as `--baseline-package`,
+  and `bregctl plan`, `apply`, `reconcile`, and the field-encryption commands
+  refuse it as the active package a runtime file names.
 - `bregctl data validate`, `import`, and `export` report
   `data.<command>.package.refused` with the `correct_package_build` action.
 
-Upgrade each deployed registry with this release's `bregctl`, then start
-this release's `breg`:
-
-1. Run `bregctl test PROJECT --baseline-package DEPLOYED ...` and
-   `bregctl package PROJECT --test-receipt RECEIPT --output BUILD
-   --baseline-package DEPLOYED` on the unchanged project, where `DEPLOYED` is
-   the active package directory. The rebuild carries the current header.
-2. Run `bregctl plan --runtime-config RUNTIME --package BUILD/package`, then
-   `bregctl apply` with the same arguments. The runtime file still names the
-   active package. The rebuild changes no schema; `apply` activates it and
-   records it in the migration ledger as a `metadata_only` activation whose
-   predecessor is the deployed package digest.
-3. Point `package.root` and `package.expectedDigest` in `runtime.yaml` at the
-   rebuild and start `breg`.
-
-The same upgrade may carry a project change: the rebuild then follows the
-ordinary successor path, with `--reviewed-migrations` where the change needs
-review. `test` rebuilds the deployed registry from its packaged sources with
-this release's compiler; when the stricter reader refuses those sources, it
-reports `migration.rehearsal.baseline_unavailable`. If the refused sources are
-an anchor, an alias, a tag, a merge key, or a duplicate key in the deployed
-package, write them out in full with the release that built that package, and
-build and apply that successor before upgrading.
+This release does not upgrade `v0.39.0` state in place, so no package under
+the retired header is carried across. Migrate the project files by hand per
+this fragment, run `bregctl project lock`, rebuild the package with this
+release's `bregctl test` and `bregctl package`, and apply it to a new
+database with `bregctl apply --initial`.
 
 ### BREAKING: a statistical dataset's period is tagged by `type`
-<!-- upgrade: breg-statistical-period -->
 
-Statistical datasets are experimental, so their members follow the
-conventions now (CFG-ID-7, CFG-ID-1) rather than at the stable move.
+Statistical datasets are experimental, and their members follow the
+conventions (CFG-ID-7, CFG-ID-1).
 
 | Was | Is |
 |---|---|
@@ -395,14 +379,10 @@ perl -pi -e 's/^(\s+)kind: (flow|stock)$/$1type: $2/' registry.yaml
 ```
 
 then review the diff: the expression also renames any other `kind: flow` or
-`kind: stock` line in the file. Rebuild and promote the project as usual.
-`bregctl test` rebuilds a deployed registry from its packaged sources, and
-reads the period of a deployed package with the tag the earlier release
-wrote, so a deployed package whose project still writes `kind` is rehearsed
-as the baseline it is.
+`kind: stock` line in the file. Rebuild the package with this release and
+apply it to a new database.
 
 ### BREAKING: configuration diagnostic codes are named `breg.<area>.<condition>`
-<!-- upgrade: no-file -->
 
 Every code the Base Registry Engine reports for a problem in
 `registry.yaml`, a `module.yaml`, `runtime.yaml`, or a package is named
@@ -451,10 +431,8 @@ become `breg.package.*`, and `check.package.package_refused` becomes
 
 | Was | Is |
 |---|---|
-| `access.action.no_required_scope` | `breg.access.action-no-required-scope` |
 | `access.consent.ungated_client` | `breg.access.consent-ungated-client` |
 | `access.membership.active_type` | `breg.access.membership-active-type` |
-| `access.membership.authentication` | `breg.access.membership-authentication` |
 | `access.membership.duplicate` | `breg.access.membership-duplicate` |
 | `access.membership.entity_unknown` | `breg.access.membership-entity-unknown` |
 | `access.membership.key_type` | `breg.access.membership-key-type` |
@@ -470,7 +448,6 @@ become `breg.package.*`, and `check.package.package_refused` becomes
 | `access.profile.create_required_field_not_writable` | `breg.access.profile-create-required-field-not-writable` |
 | `access.profile.data_export` | `breg.access.profile-data-export` |
 | `access.profile.higher_classification` | `breg.access.profile-higher-classification` |
-| `access.profile.no_required_scope` | `breg.access.profile-no-required-scope` |
 | `access.profile.no_writable_fields` | `breg.access.profile-no-writable-fields` |
 | `access.profile.related_disclosure` | `breg.access.profile-related-disclosure` |
 | `access.profile.revision_history` | `breg.access.profile-revision-history` |
@@ -510,11 +487,8 @@ become `breg.package.*`, and `check.package.package_refused` becomes
 | `access_profile.lookup.selector_unknown` | `breg.access-profile.lookup-selector-unknown` |
 | `access_profile.operation.unavailable` | `breg.access-profile.operation-unavailable` |
 | `access_profile.operations.empty` | `breg.access-profile.operations-empty` |
-| `access_profile.permission.action_fields_forbidden` | `breg.access-profile.permission-action-fields-forbidden` |
 | `access_profile.permission.duplicate` | `breg.access-profile.permission-duplicate` |
 | `access_profile.permission.entity_unknown` | `breg.access-profile.permission-entity-unknown` |
-| `access_profile.permission.target_exclusive` | `breg.access-profile.permission-target-exclusive` |
-| `access_profile.permission.target_missing` | `breg.access-profile.permission-target-missing` |
 | `access_profile.principal_claim.required` | `breg.access-profile.principal-claim-required` |
 | `access_profile.processing.encrypted` | `breg.access-profile.processing-encrypted` |
 | `access_profile.processing.wider_than_read` | `breg.access-profile.processing-wider-than-read` |
@@ -635,8 +609,6 @@ become `breg.package.*`, and `check.package.package_refused` becomes
 | `action.inputs.empty` | `breg.action.inputs-empty` |
 | `action.permission.action_unknown` | `breg.action.permission-action-unknown` |
 | `action.permission.duplicate` | `breg.action.permission-duplicate` |
-| `action.permission.entity_fields_forbidden` | `breg.action.permission-entity-fields-forbidden` |
-| `action.permission.exclusive` | `breg.action.permission-exclusive` |
 | `action.permission.missing` | `breg.action.permission-missing` |
 | `action.permission.operation.invalid` | `breg.action.permission-operation-invalid` |
 | `action.permission.result_unknown` | `breg.action.permission-result-unknown` |
@@ -903,7 +875,6 @@ become `breg.package.*`, and `check.package.package_refused` becomes
 | `identifier.invalid` | `breg.identifier.invalid` |
 | `import.batch.redundant` | `breg.import.batch-redundant` |
 | `import.batch_bounds.required` | `breg.import.batch-bounds-required` |
-| `import.principal.required` | `breg.import.principal-required` |
 | `index.fields.encrypted` | `breg.index.fields-encrypted` |
 | `index.fields.invalid` | `breg.index.fields-invalid` |
 | `index.id.duplicate` | `breg.index.id-duplicate` |
@@ -1089,7 +1060,6 @@ file now carries a Registry Stack header, is read by the shared reader, and
 is refused with the reader's codes and positions.
 
 ### BREAKING: fixture journeys version 1 (`tests/journeys.yaml`)
-<!-- upgrade: breg-journeys -->
 
 `bregctl test`, `bregctl package`, `bregctl dev`, and every fixture runner
 read the journeys file through the shared reader. Migrate a file with these
@@ -1102,7 +1072,7 @@ edits:
 | `recordRef`, `etagRef`, `proposalVersionRef`, `effectDigestRef` in a request | `recordCapture`, `etagCapture`, `proposalVersionCapture`, `effectDigestCapture` |
 | `conditionRef` in a request precondition | `conditionCapture` |
 | `{recordRef: <capture>}` inside request data | `{recordCapture: <capture>}` |
-| a YAML anchor (`&claims`) and its aliases (`*claims`) | the shared mapping written out in full at every step that used the alias; the `breg-journeys` step does this |
+| a YAML anchor (`&claims`) and its aliases (`*claims`) | the shared mapping written out in full at every step that used the alias |
 
 A file with the old header and no `kind` is refused with
 `config.missing-envelope`, whose fix names the new header. Once the header
@@ -1126,7 +1096,6 @@ matched `test.journeys.refused` or a `path` of `tests/journeys.yaml` in that
 output must match the reader codes and read `source.file` instead.
 
 ### BREAKING: the record marker in example inputs is `recordCapture`
-<!-- upgrade: breg-example-inputs -->
 
 The `bregctl dev` example runner and the fixture runner share one logical
 record marker. An example input (`examples/inputs/*.json`) that names a
@@ -1136,7 +1105,6 @@ a message naming the new one. Migrate each input file by renaming the key;
 the capture name is unchanged.
 
 ### BREAKING: schema-test receipt version 2 header
-<!-- upgrade: breg-schema-test-receipt -->
 
 `bregctl test` writes `schema-test-receipt.json` with `"apiVersion":
 "id.registrystack.org/formats/breg/schema-test-receipt/v2"` and `"kind":
@@ -1157,7 +1125,6 @@ test` writes) and `breg.receipt.too-large` (the receipt is over 64 KiB). An
 unknown member is refused with `config.unknown-key` at its position.
 
 ### BREAKING: schema-test credentials version 1 header
-<!-- upgrade: breg-schema-test-credentials -->
 
 `bregctl test --credentials` reads the credentials file through the shared
 reader. Migrate a file by replacing its first two lines:
@@ -1190,7 +1157,6 @@ The diagnostics name the credentials file and the journey and step ids;
 they never repeat a token, a secret reference, or a secret name.
 
 ### BREAKING: data checkpoint and import state headers
-<!-- upgrade: breg-data-checkpoints -->
 
 `bregctl data import` and `bregctl data export` read their checkpoints, and
 `bregctl data import` its `.state` sidecar, through the shared reader. Each
@@ -1227,7 +1193,6 @@ wrote `"nextCursor": null`, which the shared reader refuses
 (`config.null-value`).
 
 ### BREAKING: model selection header
-<!-- upgrade: breg-model-selection -->
 
 `bregctl init --from publicschema` reads a selection (`--selection`, a
 shipped `--starter`, and the echo it writes to `model/selection.yaml`)
@@ -1257,7 +1222,6 @@ written. Every unknown key is reported, not only the first.
 `init.selection.unreadable` for one that cannot be read.
 
 ### BREAKING: development clients header and secret references (`dev-clients.yaml`)
-<!-- upgrade: breg-dev-clients -->
 
 `bregctl dev start` reads `dev-clients.yaml`, or the `--clients-file` it
 names, through the shared reader. Every member that named a secret file now
@@ -1316,7 +1280,6 @@ are invalid`), naming this fix. Before upgrading, run `bregctl dev stop
 export a client again where another tool holds its pair.
 
 ### BREAKING: example scenarios header (`examples/scenarios.json`)
-<!-- upgrade: breg-example-scenarios -->
 
 `bregctl examples list` and `bregctl examples run` read the catalogue
 through the shared reader. Migrate a catalogue by replacing its version
@@ -1358,7 +1321,6 @@ not resumed; start a new one with `--new-attempt`.
 catalogue.
 
 ### BREAKING: development session state header (`.breg/dev/state.json`)
-<!-- upgrade: breg-dev-session-reset -->
 
 `bregctl dev` writes its session state with
 `apiVersion: id.registrystack.org/formats/breg/dev-state/v1alpha1` and
@@ -1375,7 +1337,6 @@ migration takes. A script that reads `state.json` finds `containerId`,
 have a value.
 
 ### BREAKING: source preparation record and journal headers (`.breg/dev/source-prepared-<client>.json`, `.breg/dev/source-transition.json`)
-<!-- upgrade: breg-dev-session-reset -->
 
 `bregctl dev prepare-source` writes the record that repeats an identical
 request with `apiVersion:
@@ -1397,7 +1358,6 @@ upgrading; otherwise run `bregctl dev stop --remove <project>`, remove
 `<project>/.breg/dev`, and start again.
 
 ### BREAKING: reviewed migration documents and the backup binding (`descriptor.json`, `rehearsal.json`, the `--backup` binding)
-<!-- upgrade: breg-reviewed-migrations -->
 
 `bregctl test`, `bregctl package`, `bregctl plan`, `bregctl apply`, and the
 runtime's package load read a reviewed migration's descriptor and rehearsal
@@ -1427,7 +1387,9 @@ Migrate the descriptor (`modules/<module>/migrations/<id>/descriptor.json`):
 
 `id`, `changeClass`, `covers` (with each change's `code` and `target` as
 `diff --format json` reports them), `recovery`, `history`, the assertion
-lists, and the two paths keep their spelling.
+lists, and the two paths keep their member names. The words `changeClass`,
+`covers[].code`, `covers[].target.kind`, and `recovery` hold are respelled in
+the next section.
 
 Migrate the rehearsal receipt (`rehearsal.json`) and recompute its
 `planDigest` over the migrated descriptor, since the header and the renamed
@@ -1476,16 +1438,100 @@ fails a semantic check, such as a cover the candidate does not make, a
 receipt that does not bind this candidate, or a backup that is too old.
 
 A package carrying a reviewed migration that an earlier `bregctl` built
-holds its documents in the old spelling, and the runtime refuses to load it
-after the upgrade; the previous release still loaded a package whose receipt
-carried `proofs`, and this one does not. Migrate the reviewed directory as
-above, then run `bregctl test` and `bregctl package` with
-`--reviewed-migrations` again to rebuild the package before upgrading the
-runtime. The activation ledger keeps
-its own record of each backup it accepted and is unchanged.
+holds its documents in the old spelling and is refused, like every package
+an earlier release built; the previous release still loaded a package whose
+receipt carried `proofs`, and this one does not. Migrate a reviewed
+directory you still author as above before you pass it to `bregctl test`
+and `bregctl package` with `--reviewed-migrations`.
+
+### BREAKING: migration change words are written in kebab-case (`descriptor.json`, `bregctl diff`, `plan`, `apply`, `migration explain`)
+
+The words that name a change between two compiled registries, and the words
+`bregctl plan` and `bregctl apply` report about an activation, are written in
+kebab-case (CFG-NAME-2) everywhere they appear: in a reviewed migration
+descriptor, in the `migrationPlan.changes` of a compiled package, in the JSON
+and human output of `bregctl diff`, `bregctl plan`, `bregctl apply`, and
+`bregctl migration explain`, and in the refusals that name them. Every member
+keeps its name; only the words change.
+
+Words an adopter writes in a reviewed migration descriptor
+(`modules/<module>/migrations/<id>/descriptor.json`):
+
+| Where | Was | Is |
+|---|---|---|
+| `changeClass` | `data_backfill_required`, `access_or_disclosure_change`, `destructive_or_irreversible` | `data-backfill-required`, `access-or-disclosure-change`, `destructive-or-irreversible` |
+| `covers[].code` | a change code in snake_case, as the third table lists them | the same code in kebab-case |
+| `covers[].target.kind` | `change_request`, `derived_relation`, `access_profile`, `query_inventory`, `statistical_dataset` | `change-request`, `derived-relation`, `access-profile`, `query-inventory`, `statistical-dataset` |
+| `recovery` | `exact_target_resume` | `exact-target-resume` |
+
+Words `bregctl` and the compiled package write:
+
+| Where | Was | Is |
+|---|---|---|
+| change class: `changes[].change.class` of `diff --format json`, `migrationPlan.changes[].class` of a compiled package, `migration.reviewedMigrations[].changeClass` of `plan --format json`, and `plan.reviewedMigrations[].changeClass` of `migration explain --format json` | `compatible_additive`, `data_backfill_required`, `access_or_disclosure_change`, `destructive_or_irreversible` | `compatible-additive`, `data-backfill-required`, `access-or-disclosure-change`, `destructive-or-irreversible` |
+| change target kind: `changes[].change.target.kind` of `diff --format json` and `migrationPlan.changes[].target.kind` of a compiled package | `change_request`, `derived_relation`, `access_profile`, `query_inventory`, `statistical_dataset` | `change-request`, `derived-relation`, `access-profile`, `query-inventory`, `statistical-dataset` |
+| recovery: `migration.reviewedMigrations[].recovery` of `plan --format json` and `plan.reviewedMigrations[].recovery` of `migration explain --format json` | `exact_target_resume` | `exact-target-resume` |
+| `changes[].classification` of `diff --format json` | `compatible_additive`, `data_backfill_required`, `lock_or_rewrite_risk`, `access_change`, `disclosure_widening`, `disclosure_narrowing`, `destructive_or_irreversible` | `compatible-additive`, `data-backfill-required`, `lock-or-rewrite-risk`, `access-change`, `disclosure-widening`, `disclosure-narrowing`, `destructive-or-irreversible` |
+| `changes[].accessDetails[].direction` of `diff --format json` | `review_required` | `review-required` |
+| plan kind: `migration.planKind` of `plan --format json` and `plan.planKind` of `migration explain --format json` | `compatible_additive` | `compatible-additive` |
+| `activation` of `plan --format json` and `apply --format json` | `role_change` | `role-change` |
+| `checks` of `plan --format json` | `migrationRole`, `runtimeWriteAuthority`, `uninitializedDatabase`, `successorBinding`, `requestProposals`, `historyCoverage`, `webhookBindings`, `activeState`, `activeBinding`, `activeRoles` | `migration-role`, `runtime-write-authority`, `uninitialized-database`, `successor-binding`, `request-proposals`, `history-coverage`, `webhook-bindings`, `active-state`, `active-binding`, `active-roles` |
+
+Change codes, in `covers[].code` of a descriptor, `changes[].change.code` of
+`diff --format json`, and `migrationPlan.changes[].code` of a compiled
+package. All 63 are respelled:
+
+| Where | Was | Is |
+|---|---|---|
+| change code, registry (2) | `registry_identity_changed`, `registry_version_changed` | `registry-identity-changed`, `registry-version-changed` |
+| change code, entity (10) | `entity_added`, `entity_removed`, `entity_physical_name_changed`, `entity_route_changed`, `entity_mutation_mode_changed`, `entity_classification_changed`, `entity_access_requirements_changed`, `entity_access_log_changed`, `entity_geo_json_changed`, `entity_temporal_changed` | `entity-added`, `entity-removed`, `entity-physical-name-changed`, `entity-route-changed`, `entity-mutation-mode-changed`, `entity-classification-changed`, `entity-access-requirements-changed`, `entity-access-log-changed`, `entity-geo-json-changed`, `entity-temporal-changed` |
+| change code, change request (1) | `change_request_contract_changed` | `change-request-contract-changed` |
+| change code, field (15) | `field_added_optional`, `field_added_required`, `field_removed`, `field_type_changed`, `field_vocabulary_codes_added`, `field_length_widened`, `field_physical_name_changed`, `field_requiredness_changed`, `field_pattern_added`, `field_pattern_changed`, `field_pattern_removed`, `field_encryption_changed`, `field_lookup_changed`, `field_classification_changed`, `field_temporal_role_changed` | `field-added-optional`, `field-added-required`, `field-removed`, `field-type-changed`, `field-vocabulary-codes-added`, `field-length-widened`, `field-physical-name-changed`, `field-requiredness-changed`, `field-pattern-added`, `field-pattern-changed`, `field-pattern-removed`, `field-encryption-changed`, `field-lookup-changed`, `field-classification-changed`, `field-temporal-role-changed` |
+| change code, derived relation and reference (4) | `derived_relation_added`, `derived_relation_removed`, `derived_relation_changed`, `reference_target_changed` | `derived-relation-added`, `derived-relation-removed`, `derived-relation-changed`, `reference-target-changed` |
+| change code, constraint (3) | `constraint_added`, `constraint_removed`, `constraint_changed` | `constraint-added`, `constraint-removed`, `constraint-changed` |
+| change code, index (3) | `index_added`, `index_removed`, `index_changed` | `index-added`, `index-removed`, `index-changed` |
+| change code, access profile (3) | `access_profile_added`, `access_profile_removed`, `access_profile_changed` | `access-profile-added`, `access-profile-removed`, `access-profile-changed` |
+| change code, route (3) | `route_added`, `route_removed`, `route_changed` | `route-added`, `route-removed`, `route-changed` |
+| change code, query inventory (1) | `query_inventory_changed` | `query-inventory-changed` |
+| change code, event (3) | `event_added`, `event_removed`, `event_changed` | `event-added`, `event-removed`, `event-changed` |
+| change code, action (5) | `action_added`, `action_removed`, `action_changed`, `action_vocabulary_codes_added`, `action_target_fields_widened` | `action-added`, `action-removed`, `action-changed`, `action-vocabulary-codes-added`, `action-target-fields-widened` |
+| change code, consent (1) | `consent_record_changed` | `consent-record-changed` |
+| change code, recipient (6) | `recipient_organization_added`, `recipient_organization_removed`, `recipient_organization_changed`, `recipient_group_added`, `recipient_group_removed`, `recipient_group_changed` | `recipient-organization-added`, `recipient-organization-removed`, `recipient-organization-changed`, `recipient-group-added`, `recipient-group-removed`, `recipient-group-changed` |
+| change code, statistical dataset (3) | `statistical_dataset_added`, `statistical_dataset_removed`, `statistical_dataset_changed` | `statistical-dataset-added`, `statistical-dataset-removed`, `statistical-dataset-changed` |
+
+Words that were already one lowercase word are unchanged: the change class
+`unsupported`, the target kinds `registry`, `entity`, `field`, `constraint`,
+`index`, `route`, `event`, `action`, and `recipient`, the plan kinds `initial`
+and `reviewed`, the activations `initial`, `successor`, and `none`, the
+directions `widening` and `narrowing`, and the check `prerequisites`. The
+words the activation ledger stores and `bregctl status` reports are
+unchanged.
+
+A descriptor carrying a word in snake_case is refused where it is read, by
+`bregctl test`, `bregctl package`, `bregctl plan`, `bregctl apply`, and the
+runtime's package load, with `config.unknown-variant` at the word's position,
+for example `/changeClass`, `/covers/0/code`, `/covers/0/target/kind`, or
+`/recovery`. The fix names the kebab-case word (``Use `exact-target-resume`,
+the closest accepted value.``) and the refusal never repeats the word it was
+given. A descriptor whose `changeClass` reads but is `compatible-additive` or
+`unsupported` is refused with `breg.migration.change-class`, which names the
+three classes a reviewed migration covers in kebab-case.
+
+To migrate a reviewed directory you still author, write `changeClass`, each
+`covers[].code`, each `covers[].target.kind`, and `recovery` in kebab-case in
+each `descriptor.json`. The words are part of the descriptor's canonical
+JSON, so recompute the `planDigest` of the sibling `rehearsal.json` over the
+migrated descriptor (`jq -jcS . descriptor.json | shasum -a 256` computes it
+for a descriptor of ASCII text and integers), then pass the directory to
+`bregctl test` and `bregctl package` with `--reviewed-migrations`. A package
+built by an earlier release holds the earlier words in its `migrationPlan`
+and is refused, like every package an earlier release built; build it again.
+A script or pipeline that reads `bregctl diff`, `bregctl plan`, `bregctl
+apply`, or `bregctl migration explain` output, in JSON or as text, compares
+against the kebab-case words. No database step is needed: none of these words
+is stored.
 
 ### BREAKING: Evidence source export manifest header (`source-export.json`)
-<!-- upgrade: breg-evidence-source-export -->
 
 `bregctl generate evidence-source` writes `source-export.json` with an
 `apiVersion` and `kind` header first and a `digest` for each artifact, and
@@ -1512,13 +1558,22 @@ unchanged and the command exits 1. The checks that follow decoding, such as
 the artifact digests, bounds, and the single `sources/<sourceId>.yaml`, keep
 their messages.
 
+The `sources/<sourceId>.yaml` a manifest lists is written in the spelling
+Evidence reads in this release: where an earlier `bregctl` wrote
+`"transport": "http-json"` and, under `request`,
+`"timeoutMilliseconds": 5000`, the export writes `"type": "http-json"` and
+`"attemptTimeoutMilliseconds": 5000`, so a regenerated export is also what
+replaces a source file Evidence refuses, and a producer that writes its own
+export renames the two members in the file it lists.
+
 The source-import baseline (`.evidence/source-imports/state.json`) records
-each accepted manifest in its own unchanged shape, so a project that already
-imported an export keeps its baseline; only the next import, diff, or update
-needs a regenerated export.
+each accepted manifest in its own shape, `sourceId`, `provenance`, and
+`artifacts[]` with `path` and `sha256`. The baseline file itself opens with a
+header in this release, and one an earlier `evidencectl` wrote is refused: a
+project that already imported an export deletes `.evidence/source-imports`
+and runs `evidencectl source import` again with a regenerated export.
 
 ### BREAKING: a substitution expression is refused in a file `bregctl` reads as written
-<!-- upgrade: breg-tool-file-substitution -->
 
 Substitution (`${NAME}`, `${NAME:-fallback}`, `${NAME:?message}`) applies to
 the runtime configuration only. The fixture journeys, the schema-test
@@ -1547,7 +1602,6 @@ passes, 1 when it is refused or, with `--deny-warnings`, when it carries a
 warning, 2 for a usage error, and 3 when the file cannot be read.
 
 ### BREAKING: `bregctl check PROJECT` reads the journeys and the development clients
-<!-- upgrade: breg-project-check-tool-files -->
 
 `bregctl check PROJECT` reads the tool files a project holds beside its
 sources: `dev-clients.yaml` when the project has one, and every `.yaml` and
@@ -1583,18 +1637,24 @@ YAML elsewhere in the project directory, such as a runtime file kept beside
 ### Published JSON Schemas for the tool files
 
 The fixture journeys, schema-test credentials, model selection, development
-clients, example scenarios, and backup binding each publish a JSON Schema
-generated from the types `bregctl` decodes, under
+clients, example scenarios, backup binding, and reviewed migration descriptor
+each publish a JSON Schema generated from the types `bregctl` decodes, under
 `products/breg/generated/tools/`. Each identifier names the format and its
 version, for example
 `https://id.registrystack.org/schemas/breg/journeys/journeys.v1.schema.json`.
 `editors/configure.py` maps the YAML formats (`tests/journeys.yaml`,
 `credentials.yaml`, `model/selection.yaml`, `dev-clients.yaml`) and the JSON
-formats (`*-binding.json`, `examples/scenarios.json`) for editors; a JSON
-format goes through `json.schemas` in VS Code and the `json-language-server`
-settings in Zed. The schema is an editing aid: `bregctl check --file` remains
-the check, and it also refuses what a schema cannot express, such as a
-journey that names a route its project does not declare.
+formats (`*-binding.json`, `examples/scenarios.json`, and a reviewed
+migration's `modules/*/migrations/*/descriptor.json` anywhere below the
+project directory) for editors; a JSON format goes through `json.schemas` in
+VS Code and the `json-language-server` settings in Zed. The schema is an
+editing aid: `bregctl check --file` remains the check, and it also refuses
+what a schema cannot express, such as a journey that names a route its
+project does not declare. The descriptor schema lists every change class,
+change code, target kind, and step type the reader decodes; refusing the two
+classes a reviewed migration cannot carry (`compatible-additive` and
+`unsupported`) and holding a descriptor against the change it covers remain
+with `bregctl test` and `bregctl package`.
 
 ### `bregctl check --format json` carries `status`; `dev grant` carries `diagnostics`
 
@@ -1608,7 +1668,6 @@ Both changes add a member; no existing member moves or changes meaning.
   list on success, like every other report.
 
 ### BREAKING: development clients identifiers, URLs, and exchange mapping (`dev-clients.yaml`)
-<!-- upgrade: breg-dev-clients-types -->
 
 The development clients schema states the reader's types, so the reader now
 decodes these members through the shared types and refuses a value they
@@ -1632,7 +1691,6 @@ refuse, with the reader's code, path, and fix:
   spellings are refused.
 
 ### BREAKING: `explain` output schema identifiers
-<!-- upgrade: no-file -->
 
 The nine `bregctl explain` output schemas under
 `products/breg/contracts/explain/` take their identifiers from the Registry
@@ -1669,7 +1727,6 @@ is security-sensitive: it removes the configuration and the runtime paths
 that admitted a caller without a verified token.
 
 ### BREAKING: anonymous access profiles are removed
-<!-- upgrade: breg-remove-anonymous, breg-module-relock -->
 
 `anonymous` is refused wherever an access profile was written, with
 `true` or `false`, as `config.removed-key` when the file is read. The
@@ -1697,9 +1754,9 @@ concealed `404`. The OpenAPI document drops the unauthenticated security
 alternative: each operation lists `bearerAuth` only.
 
 Such a refusal names no principal, so it is counted in the
-`breg_http_requests_total` `client_error` series and never journaled. The
+`breg_http_requests_total` `client-error` series and never journaled. The
 `breg_anonymous_refusals_total` counter is removed with its nine `reason`
-values; move an alert on it to the `client_error` rate of the record routes.
+values; move an alert on it to the `client-error` rate of the record routes.
 
 A `tests/journeys.yaml` step that writes `claims: {}` now has to carry the
 claims its profile requires, and the schema-test credentials file refuses
@@ -1712,54 +1769,14 @@ member, and `claimContractError` in `AccessExplanation` no longer takes
 `anonymous_profile_carries_authority`. A consumer that pins `v1alpha3`
 moves to the `v1alpha4` schemas and stops reading the member.
 
-The compiled model changes, so a project's compiled revision changes while
-its tables, its action fingerprints, and its change-request contract
-fingerprints do not: a proposal submitted under the earlier release does not
-ask for a rebase when the successor's request type did not change. A package
-an earlier release built reads as a predecessor when every profile in it was
-authenticated. A predecessor that granted unauthenticated access is refused
-when `bregctl test` or `bregctl package` reads it through
-`--baseline-package`, because a successor planned over it would keep row
-policies that admit a caller without a principal.
-
-A predecessor package is also read with the access spellings the earlier
-release wrote. When `bregctl test` or `bregctl package` compiles its packaged
-sources for a rehearsal, `rowBoundaries: []` reads as `unrestricted`, an
-omitted or empty `requiredScopes` reads as `unrestricted`, an empty
-`requiredPurposes`, `requesterClients`, or access-requirement list reads as
-omitted, an action permission's empty `rowBoundaries` is dropped, `anonymous:
-false` is dropped, and a `null` optional member reads as absent. A `null` that
-is a value stays one: an `equals` comparison literal, a literal under a hook
-condition's `beforeEquals` or `afterEquals`, and a `null` inside a structured
-field's `schema`. Each keeps the meaning the earlier release gave it. This
-applies to the predecessor only: a project or module you check, build, package
-as the successor, or start still refuses the empty list.
-A predecessor's module lock is not compared with its module either: the
-earlier release computed that digest over the spellings it wrote, and the
-sealed package already binds every module byte to the package digest the
-rehearsal names. A predecessor that locks a module therefore compiles for a
-rehearsal; a module whose version differs from its lock is still refused.
-A predecessor's statistical datasets are read with the forms the earlier
-release wrote too. A period tagged by `kind` reads as the same period, and
-the profiles a dataset named under `live` and `releases` read as the profile
-permissions the migration steps of "statistical dataset access is granted in
-profile permissions" write: `read-live` for a live profile, `publish` for the
-publisher, and `read-releases` for every profile a dataset with `releases`
-named. The predecessor compiles to the registry its project compiles to once
-those steps are applied, with the live profiles and the publisher it had. Its
-reader list leaves out the publisher or a live profile it listed under
-`releases.readers`, which the release routes served either way. A dataset
-that names a profile the project does not declare is refused, as the earlier
-release refused it.
-The predecessor's sealed sources are read through the shared reader's
-structural pass, so a sealed source outside the YAML subset (an anchor, an
-alias, a tag, a merge key, or a duplicate key) is no longer a readable upgrade
-baseline and the read refuses it. An operator whose deployed package carries
-one writes it out in full with the `bregctl` release that built that package,
-builds and applies that successor, and then upgrades with this release.
+The compiled model changes, so a project's compiled revision changes. A
+package whose governed model states an `anonymous` member, whatever its
+value, is refused, as a current package and as the predecessor
+`--baseline-package` names.
 
 These configuration diagnostics are no longer reported, because nothing can
-reach them. The second column is the name the code table above gave them:
+reach them. The second column is the name the renaming rule of the code table
+above gives them:
 
 | Was | Renamed to, now removed |
 |---|---|
@@ -1784,18 +1801,17 @@ To migrate a registry that served anonymous callers:
 1. Decide who the callers are, and have the identity provider issue them
    tokens. A public directory becomes a profile whose `requiredScopes`
    names a scope every directory client carries.
-2. On the earlier release, delete `anonymous` from every access profile, in
-   `registry.yaml` and under `entities` and `extendEntities` in every
-   `module.yaml`, and give each profile a `principalClaim` and the scopes
-   above. Run `bregctl project lock` in each project that locks a module you
-   changed, then `bregctl test`, `package`, and `apply` that package.
-3. Upgrade the binaries, rebuild the package from the same sources, and apply
-   it. Clients send a bearer token on every request, discovery included.
+2. Delete `anonymous` from every access profile, in `registry.yaml` and
+   under `entities` and `extendEntities` in every `module.yaml`, and give
+   each profile a `principalClaim` and the scopes above. Run `bregctl
+   project lock` in each project that locks a module you changed.
+3. Rebuild the package with this release and apply it to a new database
+   with `bregctl apply --initial`. Clients send a bearer token on every
+   request, discovery included.
 4. Replace alerts on `breg_anonymous_refusals_total`, and update scripts that
    expected `404` from a request without a token to expect `401`.
 
 ### BREAKING: an access member says `unrestricted` or names what it restricts
-<!-- upgrade: breg-access-unrestricted, breg-module-access-unrestricted, breg-access-requirements, breg-module-relock -->
 
 An empty list no longer means "no restriction" in an access profile. A
 member that grants reach takes the keyword `unrestricted` or a list of at
@@ -1808,10 +1824,10 @@ member when the file is read. The diagnostic names the fix.
 | `registry.yaml` | `/accessProfiles/*/requiredScopes` | `unrestricted`, or a list of at least one scope | omitted (`config.missing-key`), `[]` |
 | `registry.yaml` | `/accessProfiles/*/requiredPurposes` | omitted, or a list of at least one purpose | `[]`, `unrestricted` |
 | `registry.yaml` | `/accessProfiles/*/requesterClients` | omitted, or a list of at least one OAuth client | `[]`, `unrestricted` |
-| `registry.yaml` | `/accessProfiles/*/permissions/*/rowBoundaries` on an entity permission | `unrestricted`, or a list of at least one row boundary | omitted, `[]` |
-| `registry.yaml` | `/accessProfiles/*/permissions/*/applyTargets/*/rowBoundaries` | `unrestricted`, or a list of at least one row boundary | omitted, `[]` |
-| `registry.yaml` | `/accessProfiles/*/permissions/*/requestPresence/*/rowBoundaries` | `unrestricted`, or a list of at least one row boundary | omitted, `[]` |
-| `registry.yaml` | `/accessProfiles/*/permissions/*/targets/*/rowBoundaries` on an action permission | `unrestricted`, or a list of at least one row boundary | omitted, `[]` |
+| `registry.yaml` | `/accessProfiles/*/permissions/entities/*/rowBoundaries` | `unrestricted`, or a list of at least one row boundary | omitted (`config.invalid-value` at the permission), `[]` |
+| `registry.yaml` | `/accessProfiles/*/permissions/entities/*/applyTargets/*/rowBoundaries` | `unrestricted`, or a list of at least one row boundary | omitted (`config.missing-key`), `[]` |
+| `registry.yaml` | `/accessProfiles/*/permissions/entities/*/requestPresence/*/rowBoundaries` | `unrestricted`, or a list of at least one row boundary | omitted (`config.missing-key`), `[]` |
+| `registry.yaml` | `/accessProfiles/*/permissions/actions/*/targets/*/rowBoundaries` | `unrestricted`, or a list of at least one row boundary | omitted (`config.missing-key`), `[]` |
 | `registry.yaml`, `module.yaml` | `/entities/*/accessRequirements/requiredScopes`, `allowedPurposes`, `rowBoundaries` | omitted, or a list of at least one item | `[]`, `unrestricted` |
 | `module.yaml` | `/extendEntities/*/accessRequirements/requiredScopes`, `allowedPurposes`, `rowBoundaries` | omitted, or a list of at least one item | `[]`, `unrestricted` |
 | `module.yaml` | `/entities/*/accessProfiles/*/requiredScopes` and `/extendEntities/*/accessProfiles/*/requiredScopes` | `unrestricted`, or a list of at least one scope | omitted (`config.missing-key`), `[]` |
@@ -1824,18 +1840,15 @@ and do not take the keyword: omitting one applies no restriction on that
 dimension, as it did. An access requirement never grants, so it has nothing
 to write `unrestricted` for.
 
-The authorization a registry enforces does not change. `unrestricted`
-compiles to what `[]` compiled to, so a project rewritten this way keeps its
-compiled revision, its tables, its row policies, and its action
-fingerprints, and a package an earlier release built still reads as a
-predecessor.
+The authorization a registry enforces does not change: `unrestricted`
+compiles to the tables and the row policies `[]` compiled to.
 
 Two findings are removed and two are added:
 
 | Finding | Change |
 |---|---|
-| `breg.access.profile-no-required-scope` | Removed. The profile now writes `requiredScopes: unrestricted`, so the file states the decision the finding asked about. |
-| `breg.access.action-no-required-scope` | Removed for the same reason. |
+| `access.profile.no_required_scope` (`breg.access.profile-no-required-scope` by the renaming rule of the code table above) | Removed. The profile now writes `requiredScopes: unrestricted`, so the file states the decision the finding asked about. |
+| `access.action.no_required_scope` (`breg.access.action-no-required-scope` by the same rule) | Removed for the same reason. |
 | `breg.access.profile-subsumes-narrower` | Added, a warning at `project.accessProfiles[id=...].requiredScopes`. A profile written `unrestricted` admits every token that another profile admits, so a caller admitted there also reaches what the unrestricted profile grants by selecting it. Two unrestricted profiles behind the same gates are each reported. |
 | `breg.access.wildcard-spelled-item` | Added, a warning at the member. An item spelled `*` or `unrestricted` in a profile's `requiredScopes`, `requiredPurposes`, or `requesterClients`, or in an access requirement's `requiredScopes` or `allowedPurposes`, names one entry and matches nothing else. |
 
@@ -1888,7 +1901,6 @@ To migrate a registry project:
    are reachable by every caller of the narrower profile.
 
 ### BREAKING: the runtime file states which OAuth clients it accepts
-<!-- upgrade: breg-runtime-allowed-clients -->
 
 `authentication.oidc.allowedClients` in `runtime.yaml` is required. It takes
 the keyword `unrestricted`, to accept a token from every client of the
@@ -1945,7 +1957,6 @@ To migrate a runtime file:
 3. Run `bregctl check <project> --runtime-config runtime.yaml`.
 
 ### BREAKING: statistical dataset access is granted in profile permissions
-<!-- upgrade: breg-statistical-dataset-grants -->
 
 A statistical dataset no longer names the profiles that use it. Each access
 profile grants the dataset in its own `permissions`, beside its record
@@ -1955,33 +1966,36 @@ grants, so reviewing one profile shows everything the profile reaches.
 |---|---|---|
 | `registry.yaml` | `/statisticalDatasets/*/live` | Removed, refused as `config.removed-key` naming the new home |
 | `registry.yaml` | `/statisticalDatasets/*/releases` | Removed, refused as `config.removed-key` naming the new home |
-| `registry.yaml` | `/accessProfiles/*/permissions/*` | Accepts a third form, `{dataset, operations}` |
+| `registry.yaml` | `/accessProfiles/*/permissions/datasets/*` | Added: a dataset permission, `{dataset, operations}` |
 
 A dataset permission holds `dataset` and `operations` only. Its operations
 are `read-live` (exact live counts), `publish` (publish and withdraw
 releases), and `read-releases` (read released documents).
 
-The three words are new, so they are kebab-case from their first release
-(CFG-NAME-2, CFG-CHANGE-5). The fifteen entity and action operations keep
-their spelling (`submit_request` and the rest) until the stable move, and
-the operation names the API returns for a dataset in `/v1/registry` and in
-the OpenAPI document (`read_live`, `list_releases`, `publish_release`, and
-the rest) are unchanged.
+The three words are new and are written in kebab-case (CFG-NAME-2), as the
+fifteen entity and action operations are: "every enumerated word is written
+in kebab-case" below gives `submit-request` and the three other words that
+changed. The operation names the API returns for a dataset in `/v1/registry`
+and in the OpenAPI document (`read_live`, `list_releases`, `publish_release`,
+and the rest) are unchanged.
 
 ```yaml
 accessProfiles:
   - id: facility-operator
     permissions:
-      - dataset: monthly-discharge-reports
-        operations: [read-live, read-releases]
+      datasets:
+        - dataset: monthly-discharge-reports
+          operations: [read-live, read-releases]
   - id: statistics-publisher
     permissions:
-      - dataset: monthly-discharge-reports
-        operations: [publish, read-releases]
+      datasets:
+        - dataset: monthly-discharge-reports
+          operations: [publish, read-releases]
   - id: statistics-reader
     permissions:
-      - dataset: monthly-discharge-reports
-        operations: [read-releases]
+      datasets:
+        - dataset: monthly-discharge-reports
+          operations: [read-releases]
 ```
 
 The release routes serve the publisher and every live reader as well as the
@@ -1989,22 +2003,25 @@ listed readers, and they still do. The file now says so: when a dataset has
 a publisher, the publisher and every `read-live` profile must also write
 `read-releases`. That audience was implied before and is written now.
 
-Refused when the file is read, as `config.invalid-value` at the permission:
+Refused when the file is read:
 
-| Written | Fix the diagnostic names |
-|---|---|
-| a dataset permission with an entity or action operation, or with none | write at least one of `read-live`, `publish`, or `read-releases` |
-| a dataset permission with any other member (`entity`, `action`, `rowBoundaries`, `readableFields`, and the rest) | keep `dataset` and `operations` only |
-| an entity or action permission with `read-live`, `publish`, or `read-releases` | move them to a permission that names a dataset |
+| Written | Refusal | Fix the diagnostic names |
+|---|---|---|
+| an entry of `datasets` with an operation other than the three, an entity or action operation included | `config.unknown-variant` at the operation | use one of `read-live`, `publish`, `read-releases` |
+| an entry of `datasets` with `operations: []` | `config.invalid-value` at `operations` | list `read-live`, `publish`, or `read-releases`, or remove the dataset permission |
+| an entry of `datasets` without `operations` | `config.missing-key` at the entry | add `operations` |
+| an entry of `datasets` with any other member (`entity`, `action`, `rowBoundaries`, `readableFields`, and the rest) | `config.unknown-key` at the member | remove it; the accepted keys are `dataset` and `operations` |
+| an entry of `entities` or `actions` with `read-live`, `publish`, or `read-releases` | `config.unknown-variant` at the operation | use one of the fifteen entity and action operations |
 
-An operation outside the eighteen words a permission accepts is refused as
-`config.unknown-variant`.
+Each group accepts its own operations only: the three words above under
+`datasets`, and the fifteen entity and action operations under `entities` and
+`actions`.
 
 Refused at compile:
 
 | Code | Path | Condition |
 |---|---|---|
-| `breg.access-profile.permission-dataset-unknown` | `project.accessProfiles[].permissions[].dataset` | The permission names a dataset the project does not declare. Added. |
+| `breg.access-profile.permission-dataset-unknown` | the permission's `dataset`, such as `/accessProfiles/0/permissions/datasets/0/dataset` | The permission names a dataset the project does not declare. Added. |
 | `breg.statistical-dataset.publisher-multiple` | the dataset | More than one profile holds `publish`. Added. |
 | `breg.statistical-dataset.publisher-missing` | the dataset | A profile holds `read-releases` and no profile holds `publish`. Added. |
 | `breg.statistical-dataset.read-releases-required` | the dataset | The publisher or a `read-live` profile of a published dataset does not hold `read-releases`. One diagnostic per profile. Added. |
@@ -2022,16 +2039,16 @@ refused:
 A dataset that only its publisher reads is therefore accepted: the publisher
 holds `publish` and `read-releases`, and no other profile is needed.
 
-The message of `breg.access-profile.permission-target-missing` now reads "an
-access permission must name one entity, one action, or one statistical
-dataset".
-
 The authorization a registry enforces does not change. A project rewritten
-as below compiles to the same live profiles, publisher, and readers, so it
-keeps its compiled revision and its dataset definition digests. One case
-moves the revision without changing who is served: a project that listed the
-publisher or a live profile under `releases.readers` compiles to a reader
-list without that profile, which the release routes already served.
+as below compiles to the same live profiles, publisher, and readers, so this
+rewrite alone moves neither the compiled revision nor a dataset definition
+digest. One case of it moves the revision without changing who is served: a
+project that listed the publisher or a live profile under `releases.readers`
+compiles to a reader list without that profile, which the release routes
+already served. Other changes in this release move the package revision of
+every project and the definition digest of a dataset over a field that
+states a bound: see "field bounds are written `minimumLength`,
+`maximumLength`, and `maximumBytes`".
 
 `bregctl explain access` gains `statisticalDatasets`: one entry per dataset,
 in dataset id order, with the profiles holding `readLive`, `publish`, and
@@ -2042,28 +2059,31 @@ where it is required; no member is removed or renamed.
 To migrate a registry project, for each entry under `statisticalDatasets`:
 
 1. For each profile under `live`, add `{dataset: <id>, operations:
-   [read-live]}` to that profile's `permissions`. If the dataset has
+   [read-live]}` to that profile's `permissions.datasets`. If the dataset has
    `releases`, write `operations: [read-live, read-releases]`.
 2. For `releases.publisher`, add `{dataset: <id>, operations: [publish,
-   read-releases]}` to that profile's `permissions`. A profile that is both
-   live and the publisher writes one permission with all three operations.
+   read-releases]}` to that profile's `permissions.datasets`. A profile that
+   is both live and the publisher writes one permission with all three
+   operations.
 3. For each profile under `releases.readers`, add `{dataset: <id>,
-   operations: [read-releases]}` to that profile's `permissions`, or add
-   `read-releases` to the permission steps 1 and 2 already wrote for it.
+   operations: [read-releases]}` to that profile's `permissions.datasets`, or
+   add `read-releases` to the permission steps 1 and 2 already wrote for it.
 4. Delete `live` and `releases` from the dataset.
 5. Run `bregctl check`, then `bregctl explain access` and compare
    `statisticalDatasets` with the grants you removed.
 
 ### BREAKING: an action permission takes no `rowBoundaries`
-<!-- upgrade: breg-action-row-boundaries -->
 
 An access-profile permission that names an `action` is refused when it also
-writes `rowBoundaries`, with `config.invalid-value` at the permission and the
-fix named. The project schema never listed the member for an action, and the
-compiled project is now written without it.
+writes `rowBoundaries`, with `config.unknown-key` at the member, such as
+`/accessProfiles/0/permissions/actions/0/rowBoundaries`. The fix names the
+accepted keys: `action`, `operations`, `targets`, and `results`. The project
+schema never listed the member for an action, and the compiled project is now
+written without it.
 
-Migrate by deleting `rowBoundaries` from every permission that has `action:`;
-the row reach of an action is written on each of its `targets`.
+Migrate by deleting `rowBoundaries` from every entry of
+`permissions.actions`; the row reach of an action is written on each of its
+`targets`.
 
 ## BReg citizen services
 
@@ -2073,7 +2093,6 @@ its paired review page. Both formats are experimental, so every
 normalization lands in this release.
 
 ### BREAKING: both runtime files take a new `apiVersion` and renamed keys
-<!-- upgrade: breg-service-runtime-keys -->
 
 `breg-mcp` and `breg-review` read `runtime.yaml` through the shared Registry
 Stack reader. The old `apiVersion` is refused as
@@ -2105,7 +2124,6 @@ alone; once that is replaced, it reports each old key at its line and column
 with its replacement, and the file is clean when the command exits 0.
 
 ### BREAKING: the shared reader refuses values outside the documented grammar
-<!-- upgrade: breg-runtime-reader-refusals -->
 
 A file that was already outside the documented grammar is now refused when it
 is read, and every refusal carries a code, a JSON Pointer path, a line, a
@@ -2122,7 +2140,6 @@ column, and the edit that fixes it. No refusal repeats a configured value.
 | a file over the reader's size bound | `yaml.too-large` (was `platform.runtime-config.size`) | Shrinking the file below the bound the message names. |
 
 ### BREAKING: members are typed by the shared reader
-<!-- upgrade: breg-service-runtime-members -->
 
 Each member is read as the shared type its schema names, so a value outside
 that type is refused at the member, as `config.invalid-value`,
@@ -2176,7 +2193,6 @@ rather than after the whole file was decoded.
   Migration: lower a value above its maximum.
 
 ### BREAKING: `check` reads its file offline and reports in the shared shape
-<!-- upgrade: no-file -->
 
 `breg-mcp --runtime-config FILE check` and `breg-review --runtime-config
 FILE check` are the offline checks for their runtime files.
@@ -2296,3 +2312,1503 @@ A minimal example of each is under `products/breg/examples/mcp-runtime/` and
 `python3 editors/configure.py breg-mcp DIRECTORY` and
 `python3 editors/configure.py breg-review DIRECTORY` map the directory's
 `runtime.yaml` to its schema and add an editor task that runs `check`.
+
+## Stable move
+
+The respellings of the promised Base Registry Engine formats (`registry.yaml`,
+`module.yaml`, `runtime.yaml`, and the `bregctl` report and `explain`
+outputs). Each one is a clean break: the earlier spelling is refused by name
+and no alias reads it.
+
+### BREAKING: `registry.yaml` opens as a `BRegProject` with a `project` block
+
+The project file follows the header shape every Registry Stack format uses
+(CFG-ENV-2, CFG-ENV-3) and names itself in the top-level `project` block every
+product's project file opens with (CFG-ENV-6).
+
+| Was | Is |
+|---|---|
+| `apiVersion: registry.registrystack.org/v1alpha1` | `apiVersion: id.registrystack.org/formats/breg/project/v1alpha1` |
+| `kind: RegistryProject` | `kind: BRegProject` |
+| the top-level `registry` block (`id`, `version`, `defaultLanguage`, `canonicalBaseIri`) | the top-level `project` block, with the same members |
+
+A file that still writes `kind: RegistryProject` is refused with
+`config.wrong-kind` at `kind`, which names `BRegProject`. Under the new kind,
+the earlier `apiVersion` is refused with `config.retired-api-version`, whose
+fix names the replacement, and a top-level `registry` block is refused with
+`config.removed-key`, whose fix names `project`. Compiler diagnostics that
+pointed at `project.registry.<member>` now point at
+`project.project.<member>`.
+
+To migrate, edit the three places in `registry.yaml`:
+
+```sh
+perl -pi -e 's|^apiVersion: registry\.registrystack\.org/v1alpha1$|apiVersion: id.registrystack.org/formats/breg/project/v1alpha1|; s|^kind: RegistryProject$|kind: BRegProject|; s|^registry:|project:|' registry.yaml
+```
+
+The registry's identity and version are unchanged. The header and the block
+are part of the packaged project source: a package the previous release
+built is refused, as a current package and as a predecessor, so rebuild the
+package after editing `registry.yaml` and apply it to a new database.
+
+### BREAKING: `module.yaml` opens with an `apiVersion` and a `kind`
+
+A module file carries the header every Registry Stack authored file opens with
+(CFG-ENV-1). It had none.
+
+| Was | Is |
+|---|---|
+| no header: the file starts at `id` | `apiVersion: id.registrystack.org/formats/breg/module/v1alpha1` and `kind: BRegModule` above `id` |
+
+A module without the header is refused with `config.missing-envelope`, whose
+fix names both lines. Another `kind` is refused with `config.wrong-kind` at
+`kind`, and another `apiVersion` with `config.unsupported-api-version` at
+`apiVersion`; each names the value a module carries.
+
+To migrate, add the two lines to every `modules/<id>/module.yaml`:
+
+```sh
+for module in modules/*/module.yaml; do
+  printf 'apiVersion: id.registrystack.org/formats/breg/module/v1alpha1\nkind: BRegModule\n' | cat - "$module" > "$module.headed" && mv "$module.headed" "$module"
+done
+```
+
+The header is not part of the module the project's lock pins: every module
+digest in `registry.yaml` is unchanged, so `bregctl project lock --check`
+reports no change after the edit. The header is part of the packaged module
+source: a package the previous release built from a project with modules is
+refused, as a current package and as a predecessor, so rebuild the package
+after editing the modules and apply it to a new database.
+
+### BREAKING: `runtime.yaml` writes its `apiVersion` in the shared identifier form
+
+The runtime file names its format the way every Registry Stack file does
+(CFG-ENV-2). Its `kind` is unchanged.
+
+| Was | Is |
+|---|---|
+| `apiVersion: registry.registrystack.org/breg-runtime/v1alpha1` | `apiVersion: id.registrystack.org/formats/breg/runtime/v1alpha1` |
+
+A runtime file that still writes the earlier value is refused with
+`config.retired-api-version` at `apiVersion`, whose fix names the value to
+write. `breg` refuses to start on it, and `bregctl doctor` and every other
+`bregctl` command that reads the runtime file report the same refusal.
+
+To migrate, edit the first line of every runtime file an instance reads:
+
+```sh
+perl -pi -e 's|^apiVersion: registry\.registrystack\.org/breg-runtime/v1alpha1$|apiVersion: id.registrystack.org/formats/breg/runtime/v1alpha1|' runtime.yaml
+```
+
+The runtime file is not part of a package and is not stored in the database:
+no package is rebuilt and no migration runs for this change.
+
+### BREAKING: each `bregctl explain` format carries its own `apiVersion` and a `BReg` kind
+
+The nine `bregctl explain` payloads shared one `apiVersion` and wrote kinds
+that did not name the product. Each is now a format of its own (CFG-ENV-2,
+CFG-ENV-3): the `apiVersion` is
+`id.registrystack.org/formats/breg/<format>/v1alpha4` and the `kind` opens
+with `BReg`.
+
+| Subject | Was `kind` | Is `apiVersion` | Is `kind` |
+|---|---|---|---|
+| `model` | `ModelExplanation` | `id.registrystack.org/formats/breg/model-explanation/v1alpha4` | `BRegModelExplanation` |
+| `access` | `AccessExplanation` | `id.registrystack.org/formats/breg/access-explanation/v1alpha4` | `BRegAccessExplanation` |
+| `access --scenario` | `AccessPreview` | `id.registrystack.org/formats/breg/access-preview/v1alpha4` | `BRegAccessPreview` |
+| `routes` | `RoutesExplanation` | `id.registrystack.org/formats/breg/routes-explanation/v1alpha4` | `BRegRoutesExplanation` |
+| `queries` | `QueriesExplanation` | `id.registrystack.org/formats/breg/queries-explanation/v1alpha4` | `BRegQueriesExplanation` |
+| `actions` | `ActionsExplanation` | `id.registrystack.org/formats/breg/actions-explanation/v1alpha4` | `BRegActionsExplanation` |
+| `change-requests` | `ChangeRequestsExplanation` | `id.registrystack.org/formats/breg/change-requests-explanation/v1alpha4` | `BRegChangeRequestsExplanation` |
+| `events` | `EventsExplanation` | `id.registrystack.org/formats/breg/events-explanation/v1alpha4` | `BRegEventsExplanation` |
+| `lifecycle` | `LifecycleExplanation` | `id.registrystack.org/formats/breg/lifecycle-explanation/v1alpha4` | `BRegLifecycleExplanation` |
+
+Every one of them was `apiVersion:
+registry.registrystack.org/breg-explain/v1alpha4`. The payloads are otherwise
+the same, and the schema files keep their names and their `$id` values. Each
+schema now states its own two header values as constants, so a document with
+the earlier `apiVersion` or the earlier `kind` no longer validates.
+
+No file an adopter writes changes. To migrate, change what a consumer of
+`bregctl --format json explain` compares: read `explanation.kind` against the
+`BReg` name in the table, and `explanation.apiVersion` against the value
+beside it.
+
+### Every `bregctl --format json` report names its format
+
+A `bregctl --format json` report had no header, so a consumer could not tell
+which format it was reading (CFG-ENV-1). Every report now opens with two
+members, ahead of `ok` and `command`:
+
+```json
+{
+  "apiVersion": "id.registrystack.org/formats/breg/ctl-report/v1alpha1",
+  "kind": "BRegCtlReport",
+  "ok": true,
+  "command": "check"
+}
+```
+
+Every command writes them: a success, a refusal, a command line that was not
+understood, `check --file`, `explain`, `dev`, and `examples`. The members a
+command already wrote are unchanged, in the same order. The change is additive:
+a consumer that reads members by name needs no edit, and one that refuses
+members it does not know must accept `apiVersion` and `kind`.
+
+### BREAKING: `runtime.yaml` spells its bounds, attempt timeouts, and retention the shared way
+
+Eleven runtime members take the spelling every Registry Stack file uses for
+the same thing: a bound opens with `maximum` (CFG-NAME-3), the time allowed
+for one outbound call is `attemptTimeoutMilliseconds`, and how long records
+are kept is `retentionDays` (CFG-NAME-5). Every value, default, and accepted
+range is unchanged.
+
+| Was | Is |
+|---|---|
+| `database.pool.maxSize` | `database.pool.maximumConnections` |
+| `authentication.oidc.maxTokenLifetimeSeconds` | `authentication.oidc.maximumTokenLifetimeSeconds` |
+| `authentication.oidc.jwksCache.maxDocumentBytes` | `authentication.oidc.jwksCache.maximumDocumentBytes` |
+| `authentication.oidc.jwksCache.requestTimeoutMilliseconds` | `authentication.oidc.jwksCache.attemptTimeoutMilliseconds` |
+| `audit.retainDays` | `audit.retentionDays` |
+| `cursor.maxAgeSeconds` | `cursor.maximumAgeSeconds` |
+| `wasmExecution.maxModuleBytes` | `wasmExecution.maximumModuleBytes` |
+| `wasmExecution.maxGuestMemoryBytes` | `wasmExecution.maximumGuestMemoryBytes` |
+| `fieldEncryption.provider.timeoutMilliseconds` | `fieldEncryption.provider.attemptTimeoutMilliseconds` |
+| `attachmentStorage.timeoutMilliseconds` | `attachmentStorage.attemptTimeoutMilliseconds` |
+| `attachmentVerification.timeoutMilliseconds` | `attachmentVerification.attemptTimeoutMilliseconds` |
+
+A runtime file that still writes one of the earlier keys is refused with
+`config.removed-key` at that key, whose fix names the key to write. `breg`
+refuses to start on it, and `bregctl doctor` and every other `bregctl` command
+that reads the runtime file report the same refusal.
+
+To migrate, rename each key the runtime file writes and leave its value as it
+is. Eight of the eleven are unique in the file:
+
+```sh
+perl -pi \
+  -e 's/^(\s+)maxSize:/$1maximumConnections:/;' \
+  -e 's/^(\s+)maxTokenLifetimeSeconds:/$1maximumTokenLifetimeSeconds:/;' \
+  -e 's/^(\s+)maxDocumentBytes:/$1maximumDocumentBytes:/;' \
+  -e 's/^(\s+)requestTimeoutMilliseconds:/$1attemptTimeoutMilliseconds:/;' \
+  -e 's/^(\s+)retainDays:/$1retentionDays:/;' \
+  -e 's/^(\s+)maxAgeSeconds:/$1maximumAgeSeconds:/;' \
+  -e 's/^(\s+)maxModuleBytes:/$1maximumModuleBytes:/;' \
+  -e 's/^(\s+)maxGuestMemoryBytes:/$1maximumGuestMemoryBytes:/;' \
+  runtime.yaml
+```
+
+The three provider timeouts share one earlier name, so rename each by hand
+where the file declares the block: `timeoutMilliseconds` becomes
+`attemptTimeoutMilliseconds` under `fieldEncryption.provider`,
+`attachmentStorage`, and `attachmentVerification`. A member the file does not
+write needs no edit.
+
+The runtime file is not part of a package and is not stored in the database:
+no package is rebuilt and no migration runs for this change.
+
+### BREAKING: event destination profile words are written in kebab-case
+
+The two closed words an event destination binding writes in `runtime.yaml`
+take the spelling every Registry Stack enumeration value uses (CFG-NAME-2).
+What each word means is unchanged.
+
+| Member | Was | Is |
+|---|---|---|
+| `eventDestinations.<id>.networkProfile` | `productionHttps` | `production-https` |
+| `eventDestinations.<id>.networkProfile` | `loopbackDevelopmentHttp` | `loopback-development-http` |
+| `eventDestinations.<id>.dnsFamily` | `dualStackStrict` | `dual-stack-strict` |
+| `eventDestinations.<id>.dnsFamily` | `ipv4Only` | `ipv4-only` |
+
+A runtime file that still writes an earlier word is refused with
+`config.unknown-variant` at that member, and the refusal lists the words the
+member accepts. `breg` refuses to start on it, and every `bregctl` command
+that reads the runtime file reports the same refusal.
+
+To migrate, respell the words where the file writes them:
+
+```sh
+perl -pi \
+  -e 's/^(\s+networkProfile:\s*)productionHttps\b/$1production-https/;' \
+  -e 's/^(\s+networkProfile:\s*)loopbackDevelopmentHttp\b/$1loopback-development-http/;' \
+  -e 's/^(\s+dnsFamily:\s*)dualStackStrict\b/$1dual-stack-strict/;' \
+  -e 's/^(\s+dnsFamily:\s*)ipv4Only\b/$1ipv4-only/;' \
+  runtime.yaml
+```
+
+Nothing stored changes. The digest that identifies a destination binding,
+which the registry stores with every delivery the binding queued, is computed
+over the same words as before. No package is rebuilt and no migration runs
+for this change.
+
+### BREAKING: field bounds are written `minimumLength`, `maximumLength`, and `maximumBytes`
+
+The three bounds a field type declares take the spelling every Registry Stack
+file uses for a bound (CFG-NAME-3). The Base Registry Engine writes the same
+word everywhere it writes a field type of its own, so the rename reaches the
+authored files, the compiled package, and what the runtime and `bregctl`
+report. Every value, default, and accepted range is unchanged.
+
+| Field type | Was | Is |
+|---|---|---|
+| `string` | `minLength` | `minimumLength` |
+| `string`, `text` | `maxLength` | `maximumLength` |
+| `structured` | `maxBytes` | `maximumBytes` |
+
+In `registry.yaml` the bounds are members of `entities.<id>.fields[]`,
+`entities.<id>.derived.<id>.fields[]`, and `actions.<id>.inputs[]`. A
+`module.yaml` writes them in the same three places and in
+`extendEntities.<id>.fields[]` and `extendEntities.<id>.derived.<id>.fields[]`.
+
+A project or module that still writes an earlier name is refused with
+`config.removed-key` at that key, whose fix names the key to write. Every
+`bregctl` command that reads the project reports the same refusal.
+
+Two spellings do not move, because neither is a member the engine names:
+
+- A JSON Schema keyword. The `schema` of a `structured` field is a JSON
+  Schema, and `maxLength` and `minLength` inside it are the standard's own
+  keywords. The same holds for the generated OpenAPI document and for every
+  generated JSON Schema. A rename inside a `schema` would not be refused: the
+  keyword would stop constraining the value. Leave every `schema` block as it
+  is.
+- `x-registry-maxBytes`, the annotation the generated OpenAPI document writes
+  on a structured value, which is a foreign-document extension (CFG-EMBED-2).
+
+To migrate:
+
+1. In `registry.yaml` and in every `modules/*/module.yaml`, rename the three
+   keys where they are a direct member of a field or of an action input. List
+   the candidates and skip the ones inside a `schema` block:
+
+   ```sh
+   rg -n '\b(minLength|maxLength|maxBytes):' registry.yaml modules/*/module.yaml
+   ```
+
+2. Run `bregctl project lock <project>`. A module is pinned by the digest of
+   its file, so an edited module no longer matches its entry in `modules` and
+   the project is refused with `breg.module.lock-digest-mismatch` until it is
+   locked again.
+3. Build the package again with `bregctl test` and `bregctl package`, apply
+   it to a new database with `bregctl apply`, and point `package.root` and
+   `package.expectedDigest` in `runtime.yaml` at the rebuild. A package the
+   previous release built cannot be named by `--baseline-package`: it states
+   the earlier names and is refused as a predecessor.
+
+What the engine writes moves with the type. A consumer that reads one of these
+by member name reads the new names:
+
+| Output | Member |
+|---|---|
+| `effective-model.json` in a package | `fieldType` of every stored and derived field |
+| `inventories/actions.json` in a package, and `compiled/actions.json` from `bregctl generate actions` | `fieldType` of an action input, `fieldTypes` of a handler or planner write |
+| `package.json` | field types under `migrationPlan.priorBaseline` |
+| the registry metadata document (`metadata/registry.json`, and the metadata route) | `fieldType` of an action input |
+| `openapi/openapi.json` | the action metadata the document embeds; its JSON Schema keywords are unchanged |
+| `bregctl explain` model, queries, and access explanations | the bounds of a field type |
+| the authority inventory | the field type of a direct claim expectation |
+| the history descriptor stored with a schema version | `fieldType` of every stored field |
+
+The Rust, Node.js, and Python clients of this release read the new names in
+the metadata document, so a client and the runtime it calls upgrade together.
+
+Stored state and identities:
+
+- **Package.** A package is addressed by its digest and is never rewritten.
+  A package the previous release sealed states the three earlier names and is
+  refused: as a current package, as the baseline of a plan, and as the
+  predecessor of a rebuild. The runtime serves only a package this release
+  built.
+- **History descriptors.** The descriptor retained with each schema version
+  in PostgreSQL states the bounds under the current names. A row the previous
+  release retained states the earlier names and is refused when it is read,
+  which is why the rebuilt package is applied to a new database. No SQL
+  migration runs for this change.
+- **Identities that change.** The package `revision` and digest, the digest of
+  each edited module, and the `registryRevision` an Evidence source export
+  records as provenance. A cursor issued by the previous package is refused,
+  as it is after any package change.
+- **Identities computed over field types.** The contract fingerprint of an
+  action and of a change request, the definition digest of a statistical
+  dataset, and the `behaviorRevision` of an Evidence source export hash each
+  bound under the name a project writes. The fingerprint of every action and
+  of every change request changes: it also no longer hashes the `anonymous`
+  member, always `false`, that an action permission and a request authority
+  once carried. The row policies in the generated DDL state those
+  fingerprints, so the DDL of a project with an action or a change request
+  changes with them. A definition digest and a `behaviorRevision` change
+  when a field they cover states a bound. The rebuilt package is applied to
+  a new database, so no stored proposal and no published statistical release
+  is read under an earlier identity. A consumer that holds an Evidence
+  source export generates it again with `bregctl generate evidence-source`
+  and replaces the `behaviorRevision` it pinned.
+
+### BREAKING: a consent record states its longest duration as `maximumDurationDays`
+
+`consentRecord.validity.maxDuration` was an ISO 8601 duration text such as
+`P365D`. A duration is an integer with its unit in the key (CFG-QTY-1), and a
+bound is spelled in full (CFG-NAME-3), so the member is now
+`maximumDurationDays`: a whole number of days, from 1 to 3652 (ten years, the
+bound the text already had).
+
+| File | Was | Is |
+|---|---|---|
+| `registry.yaml`, `modules/*/module.yaml` | `entities[].consentRecord.validity.maxDuration: P365D` | `entities[].consentRecord.validity.maximumDurationDays: 365` |
+
+A project or module that still writes `maxDuration` is refused with
+`config.removed-key` at that key, whose fix names the key to write. A
+`maximumDurationDays` that is text, negative, or fractional is refused when
+the file is read, and one outside 1 to 3652 with
+`breg.consent.record-max-duration`.
+
+Values that can no longer be written:
+
+- A duration counted in years, months, or weeks. Write the days it stands
+  for. `P1Y` added one calendar year to the start of a give, 365 or 366 days
+  by the year; `maximumDurationDays: 365` adds 365 days, so a give that
+  spanned a leap day now ends one day earlier. `P1M` added one calendar
+  month; choose the number of days the notice given to the subject allows.
+- A duration with hours, minutes, or seconds. The smallest duration is one
+  day.
+
+`bregctl module add consent` writes `maximumDurationDays: 365`, the same
+length as before.
+
+To migrate:
+
+1. In `registry.yaml` and in every `modules/*/module.yaml`, replace
+   `maxDuration` under a consent record's `validity` with
+   `maximumDurationDays`:
+
+   ```sh
+   rg -n 'maxDuration:' registry.yaml modules/*/module.yaml
+   ```
+
+2. Run `bregctl project lock <project>`, as an edited module no longer
+   matches its entry in `modules`.
+3. Build the package again with `bregctl test` and `bregctl package`, apply
+   it to a new database with `bregctl apply`, and point `package.root` and
+   `package.expectedDigest` in `runtime.yaml` at the rebuild. A package the
+   previous release built cannot be named by `--baseline-package`: it states
+   `maxDuration` and is refused as a predecessor.
+
+Stored state. No SQL migration runs and no stored row is rewritten: a give
+stores its own `from` and `until`, and the duration is added at read time by
+the probe function the package installs. A package is addressed by its
+digest, so a package the previous release built is not rewritten either: it
+states `maxDuration` in its compiled model and is refused, as a current
+package and as the predecessor of a rebuild.
+
+What the engine writes moves with the type:
+
+| Output | Was | Is |
+|---|---|---|
+| `effective-model.json` in a package, and `migrationPlan.priorBaseline` in `package.json` | `consentRecord.maxDuration`, an object of `iso` and seven components | `consentRecord.maximumDurationDays`, an integer |
+| `bregctl explain access --format json` | `consent.records[].maxDuration` and `consent.permissions[].maxDuration`, the ISO 8601 text | `maximumDurationDays`, an integer, in both places |
+| `bregctl explain access` | `max duration P365D` | `maximum duration 365 days` |
+| the `condition` sentence of a consent-gated permission in `explain access` | `... or P365D after it was given` | `... or 365 days after it was given` |
+| `bregctl plan` consent record details | `maxDuration` | `maximumDurationDays` |
+
+The refusal code `breg.consent.record-max-duration` keeps its name, and now
+reports at `validity.maximumDurationDays`.
+
+### BREAKING: a projected vocabulary names where it is published as `externalReference`
+
+A vocabulary under `manifestProjection.vocabularies` in `registry.yaml` may
+name the page that publishes it. That member is now `externalReference` (was
+`externalRef`). A member whose name ends in `Ref` is reserved for a reference
+to a secret (CFG-SEC-1), and this one holds a public URL. Its value and its
+meaning are unchanged.
+
+| File | Was | Is |
+|---|---|---|
+| `registry.yaml` | `manifestProjection.vocabularies[].externalRef` | `manifestProjection.vocabularies[].externalReference` |
+| compiled package, `effective-model.json` | `manifestProjection.vocabularies[].externalRef` | `manifestProjection.vocabularies[].externalReference` |
+
+A project that still writes `externalRef` is refused with `config.removed-key`
+at that member, and the refusal names `externalReference`. The refusal never
+repeats the value.
+
+The Registry Manifest the projection renders
+(`generated/manifest/registry-manifest.json`) is another format and keeps its
+own member, `external_ref` on a codelist. A reader of the published manifest
+or of the DCAT document sees no change.
+
+To migrate, rename the member where the project writes it:
+
+```sh
+perl -pi -e 's/^(\s+)externalRef:/$1externalReference:/' registry.yaml
+```
+
+Then rebuild the package: the package binds the bytes of `registry.yaml`, and
+its compiled model writes the member under the new name, so the package digest
+and the registry revision change for a project that writes the member. No
+stored row is rewritten, and the generated SQL, OpenAPI document, and
+manifest are byte for byte what they were.
+
+### BREAKING: a deployed package written in the retired spellings is not rehearsed
+
+`bregctl test --baseline-package`, `bregctl package --baseline-package`, and
+`bregctl diff` read a deployed package as the baseline of the next one. A
+package is addressed by its digest, so a package the previous release sealed
+keeps that release's package `apiVersion` and its spellings, and it is not
+such a baseline: it is refused before its sources are read, with
+`package.baseline.retired_api_version` by `test` and `package` and with
+`diff.baseline.retired_api_version` by `diff`. Migrate the project as the
+sections above describe, build the package with this release, and apply it
+to a new database.
+
+### BREAKING: `deniedKids` names at least one key or is left out
+
+`authentication.oidc.deniedKids` in `runtime.yaml` lists the signing key
+identifiers the registry refuses a token from. The member was already
+optional. A list that names no key is now refused: a file says "deny no key"
+by leaving the member out (CFG-EMPTY-2).
+
+| Written | Before | Now |
+|---|---|---|
+| member omitted | no key denied | unchanged |
+| `deniedKids: []` | no key denied | refused, `config.invalid-value` at `/authentication/oidc/deniedKids` |
+| `deniedKids: [a, b]` | tokens signed by `a` or `b` refused | unchanged |
+
+The refusal says to list a key or delete the member and never repeats what
+was written. `breg` refuses to start on such a file, and every `bregctl`
+command that reads the runtime file reports the same refusal. A list keeps
+its bounds: at most 128 distinct identifiers of 1 to 512 characters each. The
+published runtime schema states `minItems: 1`.
+
+Token verification does not change: a registry whose runtime file drops the
+empty list accepts exactly the tokens it accepted before. `bregctl init` and
+`bregctl dev` no longer write the empty list.
+
+To migrate, delete the member where it is written empty, and only there. A
+list that names a key keeps denying that key and must stay:
+
+```sh
+perl -ni -e 'print unless /^\s+deniedKids:\s*\[\s*\]\s*$/' runtime.yaml
+bregctl check <project> --runtime-config runtime.yaml
+```
+
+Nothing stored changes. No package is rebuilt and no migration runs for this
+change. A development session keeps the runtime files `bregctl dev` wrote
+for it. A session started by an earlier `bregctl` is reset as "development
+session state header" above describes; the files a new session writes leave
+the member out.
+
+### BREAKING: a client listed under `assertionIssuers` names at least one issuer
+
+`authentication.oidc.assertionIssuers` in `runtime.yaml` names, per client,
+the assertion authorities that client may exchange a subject token from. A
+client written with an empty list is now refused: a file says "this client
+may exchange from no authority" by leaving the client out (CFG-EMPTY-2).
+
+| Written | Before | Now |
+|---|---|---|
+| member omitted | no assertion-issuer rule | unchanged |
+| client not listed | the client may exchange from no authority | unchanged |
+| `assertionIssuers: {portal: [https://a.example], kiosk: []}` | `kiosk` may exchange from no authority | refused, `config.invalid-value` at `/authentication/oidc/assertionIssuers/kiosk` |
+| `assertionIssuers: {portal: [https://a.example]}` | `portal` may exchange from `https://a.example` only | unchanged |
+
+The refusal says to list an issuer for the client or remove the client and
+never repeats what was written. `breg` refuses to start on such a file, and
+every `bregctl` command that reads the runtime file reports the same refusal.
+A list keeps its bounds: at most 128 distinct issuers of 1 to 512 characters
+each. The published runtime schema states `minItems: 1` on the list.
+
+Token verification does not change: a registry whose runtime file drops the
+client that listed no issuer accepts exactly the tokens it accepted before.
+`bregctl dev` never wrote a client with an empty list.
+
+To migrate, remove each client that lists no issuer, or list its issuers. Do
+not delete the whole member to get there unless no assertion-issuer rule is
+wanted: with the member gone, no assertion-issuer rule applies to any
+client. If the removed client was the only one listed, the member would be
+left as `{}`, which is refused too; decide then whether another client
+belongs in the list or no rule is wanted.
+
+```sh
+bregctl check <project> --runtime-config runtime.yaml
+```
+
+Nothing stored changes. No package is rebuilt and no migration runs for this
+change.
+
+### BREAKING: an access profile without a `principalClaim` is refused when read
+
+Every access profile serves authenticated callers, so every profile names the
+token claim that identifies the caller. The compiler already refused a
+profile that named none. The reader now refuses it first, as a missing
+required member, and the published project schema lists `principalClaim` as
+required, so an editor reports it while the file is written.
+
+| Written | Before | Now |
+|---|---|---|
+| profile with no `principalClaim` | `breg.access-profile.principal-claim-required` from the compiler | `config.missing-key` at the profile, from the reader |
+| `principalClaim: ""` | `breg.access-profile.principal-claim-required` | unchanged |
+| `principalClaim: sub` or another claim name | read | unchanged |
+
+The refusal applies wherever a profile is written: `accessProfiles` in
+`registry.yaml`, and `entities[].accessProfiles` and
+`extendEntities[].accessProfiles` in `module.yaml`.
+
+No project the previous release accepted needs an edit for this change: an
+authenticated profile always had to name its claim. A profile that was
+`anonymous` gains one under "anonymous access profiles are removed" above.
+
+These configuration diagnostics are no longer reported, because a profile
+that reaches the compiler always names a principal claim. The second column
+is the name the renaming rule of the code table above gives them:
+
+| Was | Renamed to, now removed |
+|---|---|
+| `access.membership.authentication` | `breg.access.membership-authentication` |
+| `import.principal.required` | `breg.import.principal-required` |
+
+A script that matched either code matches `config.missing-key` at the
+profile in their place.
+
+Nothing stored changes. A compiled package writes the same bytes for every
+profile, so no package is rebuilt and no migration runs for this change. A
+package whose compiled profile carries no principal claim is refused when it
+is read; no release compiled one for an authenticated profile.
+
+### BREAKING: the unions of `runtime.yaml` name their variant in `type`
+
+Three blocks of `runtime.yaml` choose one of several shapes: where request
+attachments are stored, how they are verified, and which custodian holds the
+field encryption key. Each named its shape in a `kind` member. They now name
+it in `type`, the member every Registry Stack union uses (CFG-ID-7), and the
+one variant word written in camelCase is kebab-case (CFG-NAME-2). What each
+variant means, and every other member of it, is unchanged.
+
+| Was | Is |
+|---|---|
+| `attachmentStorage.kind` | `attachmentStorage.type` |
+| `attachmentVerification.kind` | `attachmentVerification.type` |
+| `fieldEncryption.provider.kind` | `fieldEncryption.provider.type` |
+| `fieldEncryption.provider.kind: localFile` | `fieldEncryption.provider.type: local-file` |
+
+The words `database`, `s3`, `disabled`, `http`, and `transit` stay as they
+are. `authentication.oidc.jwksSource` is the shared issuer block; its own
+change is the next section.
+
+A runtime file that still writes one of the three `kind` members is refused
+with `config.removed-key` at that member, and the refusal names the member to
+write. `type: localFile` is refused with `config.unknown-variant`, and the
+refusal lists the words the member accepts. `breg` refuses to start on either,
+and every `bregctl` command that reads the runtime file reports the same
+refusal.
+
+To migrate, rename the member where the file writes it:
+
+```sh
+perl -0pi \
+  -e 's/^(attachmentStorage:\s*\n\s+)kind:/$1type:/m;' \
+  -e 's/^(attachmentVerification:\s*\n\s+)kind:/$1type:/m;' \
+  -e 's/^(fieldEncryption:\s*\n\s+provider:\s*\n\s+)kind:(\s*)localFile\b/$1type:$2local-file/m;' \
+  -e 's/^(fieldEncryption:\s*\n\s+provider:\s*\n\s+)kind:/$1type:/m;' \
+  runtime.yaml
+```
+
+The commands expect `kind` on the first line of its block, which is where
+`bregctl` and the documentation write it. Where a file writes it lower, or
+writes a block on one line (`attachmentStorage: {kind: database}`), rename it
+by hand.
+
+Nothing stored changes. The provider label the registry stores with each field
+encryption key version (`transit_datakey`, `local_datakey_file`) is its own
+word and is written as before. No package is rebuilt and no migration runs
+for this change.
+
+### BREAKING: the issuer key source names its variant in `type`
+
+`jwksSource` is the block every Registry Stack runtime reads for the signing
+keys of its OIDC issuer. It named its variant in a `kind` member and now
+names it in `type` (CFG-ID-7). The engine reads it at
+`authentication.oidc.jwksSource` in `runtime.yaml`, and the `breg-mcp`
+gateway at `resourceServer.jwksSource` in its own runtime file. The words
+`discovery`, `uri`, and `static` and the members of each are unchanged, and a
+file that leaves the block out still gets `type: discovery`.
+
+| File | Was | Is |
+|---|---|---|
+| the engine's `runtime.yaml` | `authentication.oidc.jwksSource.kind` | `authentication.oidc.jwksSource.type` |
+| the `breg-mcp` runtime file | `resourceServer.jwksSource.kind` | `resourceServer.jwksSource.type` |
+
+A file that still writes `kind` is refused with `config.removed-key` at that
+member, and the refusal names `type`. `breg` and `breg-mcp` refuse to start
+on it, and every `bregctl` command that reads the runtime file and
+`breg-mcp check` report the same refusal.
+
+To migrate, rename the member where the file writes it:
+
+```sh
+perl -0pi \
+  -e 's/^(\s+jwksSource:\s*\n\s+)kind:/$1type:/m;' \
+  runtime.yaml
+```
+
+The command expects `kind` on the first line of the block. Where a file
+writes the block on one line (`jwksSource: {kind: discovery}`), rename it by
+hand.
+
+Nothing stored changes. No package is rebuilt and no migration runs for this
+change.
+
+### BREAKING: three maps of `runtime.yaml` read their keys as typed identifiers
+
+Three maps of the runtime file name their entries with a key the reader
+checked late, or did not check at all. The shared reader now reads each key
+as the identifier type its member names, and refuses a key that is not one at
+the key itself.
+
+| Map | Key type | What a key is |
+|---|---|---|
+| `eventDestinations` | `LocalId` | a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-` |
+| `authentication.oidc.assertionIssuers` | `ExternalId` | 1 to 512 characters, none of them a control character, kept exactly as written |
+| `authentication.authorityClaims.trustedActors` | `ExternalId` | the same |
+
+What changes for a file that was read before:
+
+- `eventDestinations`: nothing is newly refused. The keys already held this
+  grammar. A key outside it is now refused with `config.invalid-value` at the
+  key, where it was `breg.runtime.invalid-event-destination` for the whole
+  file.
+- `assertionIssuers`: a client key that is empty, longer than 512 characters,
+  or carries a control character is refused with `config.invalid-value` at the
+  key, where it was `breg.runtime.invalid-oidc` for the whole file. A key that
+  carries a control character in the range U+0080 to U+009F is newly refused.
+  The rule that a client key carries no whitespace is unchanged and is still
+  reported as `breg.runtime.invalid-oidc`.
+- `trustedActors`: a client key that carries a control character is newly
+  refused with `config.invalid-value` at the key. A key that is empty, longer
+  than 512 bytes, or carries whitespace was refused before and still is.
+
+No file that names client identifiers an authorization server issued needs an
+edit: an OAuth client identifier is printable ASCII (RFC 6749, appendix A.1).
+A file that is refused names the key by its position, and the fix is to write
+the client identifier as its issuer gives it.
+
+The published runtime schema types the three `propertyNames` with
+`#/$defs/LocalId` and `#/$defs/ExternalId`. Nothing stored changes, no package
+is rebuilt, and no migration runs.
+
+`evidenceProviders`, `reviewAuthorities`, and `reviewExecutors` keep their
+keys as they are: each key must equal an identifier the registry project
+writes, so their key type follows the project's identifier grammar.
+
+### A repeated entity `id` in one file is refused when the file is read
+
+A `registry.yaml` or a `module.yaml` whose `entities` list writes one `id`
+twice is refused by the reader with `config.duplicate-id`, located at the
+`id` of the second item, such as `project.entities[3].id`. The same file was
+refused before by the compiler with `breg.entity.id-duplicate` at the
+`entities` list, so no file that was read before is refused now; a tool that
+matched the earlier code for this case matches `config.duplicate-id`.
+
+`breg.entity.id-duplicate` stays for an entity that more than one file
+contributes, such as the project and one of its modules: that repetition is
+only visible once the files are compiled together. Nothing stored changes, no
+package is rebuilt, and no file needs editing.
+
+### `bregctl init` writes the schema modeline
+
+The three configuration files `bregctl init` writes open with the comment an
+editor reads to find the schema of the file:
+
+| File | First line |
+|---|---|
+| `registry.yaml` | `# yaml-language-server: $schema=https://id.registrystack.org/schemas/breg/project/project.v1alpha1.schema.json` |
+| `modules/record-notes/module.yaml` | `# yaml-language-server: $schema=https://id.registrystack.org/schemas/breg/module/module.v1alpha1.schema.json` |
+| `runtime.example.yaml` | `# yaml-language-server: $schema=https://id.registrystack.org/schemas/breg/runtime/runtime.v1alpha1.schema.json` |
+
+`bregctl init --from publicschema` writes the same line in the `registry.yaml`
+and `runtime.example.yaml` it derives. The line is a comment, so the reader,
+a module digest, and a package digest do not see it. Nothing needs editing in
+an existing project; add the line by hand to get the same editor checking.
+
+### BREAKING: `bregctl explain lifecycle` spells every enforcement layer `id` in kebab-case
+
+The `id` of an enforcement layer in `bregctl --format json explain lifecycle`
+is a name a consumer matches, so it is lowercase kebab-case (CFG-NAME-2). All
+twenty-one were snake_case.
+
+| Was | Is |
+|---|---|
+| `caller_authentication` | `caller-authentication` |
+| `route_admission` | `route-admission` |
+| `review_evidence_load` | `review-evidence-load` |
+| `apply_evidence_acquisition` | `apply-evidence-acquisition` |
+| `apply_preflight` | `apply-preflight` |
+| `request_header_lookup` | `request-header-lookup` |
+| `submit_preparation` | `submit-preparation` |
+| `idempotency_replay` | `idempotency-replay` |
+| `row_visibility` | `row-visibility` |
+| `submitter_targets` | `submitter-targets` |
+| `applied_recovery` | `applied-recovery` |
+| `action_etag` | `action-etag` |
+| `request_ownership` | `request-ownership` |
+| `task_grant` | `task-grant` |
+| `review_outcome` | `review-outcome` |
+| `submit_commit_preconditions` | `submit-commit-preconditions` |
+| `apply_target_authorization` | `apply-target-authorization` |
+| `apply_preconditions` | `apply-preconditions` |
+| `apply_target_persistence` | `apply-target-persistence` |
+| `workflow_transition` | `workflow-transition` |
+| `persist_policy` | `persist-policy` |
+
+The states, the transitions, the events, and every description are unchanged.
+`LifecycleExplanation.schema.json` pins each layer by its `id`, so a document
+that carries an earlier spelling no longer validates.
+
+No file an adopter writes changes. To migrate, change what a consumer of
+`bregctl --format json explain lifecycle` compares: read
+`explanation.lifecycles[].enforcement[].id` against the value in the right
+column.
+
+### The `bregctl explain` contracts type their identifiers
+
+An `id` member in a `bregctl explain` contract was typed as any string. Each
+one that carries an identifier of the registry project, or of the request
+lifecycle, now refers to `$defs/LocalId`: a lowercase letter, then up to 63
+lowercase letters, digits, `_`, or `-` (CFG-ID-1).
+
+| Contract | Members |
+|---|---|
+| `ModelExplanation.schema.json` | `moduleClosure[].id` |
+| `ActionsExplanation.schema.json` | `actions[].id`, `actions[].effects[].id` |
+| `ChangeRequestsExplanation.schema.json` | `requests[].effects[].id`, `requests[].planner.declaringOrigin.id` |
+| `AccessExplanation.schema.json` | `consent.organizations[].id`, `consent.groups[].id` |
+| `LifecycleExplanation.schema.json` | `lifecycles[].id`, `lifecycles[].states[].id`, `lifecycles[].enforcement[].id` |
+
+The registry project already holds every one of these to the same grammar, so
+`bregctl` writes what it wrote and no consumer needs an edit. The route and
+query operation identifiers, which are dotted paths the compiler derives, keep
+their earlier type.
+
+### BREAKING: `bregctl explain actions` and `explain routes` tag their unions with `type`
+
+`bregctl --format json explain actions` and `bregctl --format json explain
+routes` told the variants of a union apart with a member named `kind`. They
+now write `type`, the member every other union in the stack is tagged by
+(CFG-ID-7), and the two tag values that were written in snake_case are
+written in kebab-case (CFG-NAME-2).
+
+| Output | Union | Was | Is |
+|---|---|---|---|
+| `explain actions` | `actions[].targets[].source`, `actions[].permissions[].targets[].source` | `kind: effect`, `kind: input` | `type: effect`, `type: input` |
+| `explain actions` | `actions[].effects[].target.binding` | `kind: create`, `kind: existing` | `type: create`, `type: existing` |
+| `explain actions` | `actions[].effects[].fields[]` | `kind: set`, `kind: clear` | `type: set`, `type: clear` |
+| `explain actions` | `actions[].effects[].fields[].value` | `kind: computed`, `kind: from_input`, `kind: from_effect` | `type: computed`, `type: from-input`, `type: from-effect` |
+| `explain routes` | `routes[]` | `kind: entity`, `kind: action` | `type: entity`, `type: action` |
+
+Three members named `kind` are unchanged, because they tag no union of these
+outputs: `actions[].handler.kind` and `actions[].routes[].kind` in `explain
+actions`, and the `kind` that opens each explanation. `explain
+change-requests` moves the same way, in the item "`bregctl explain
+change-requests` tags its unions with `type`" below.
+
+No file an adopter writes changes. To migrate, change what a consumer of the
+two outputs reads: read `type` where it read `kind` at each path in the table,
+and compare an effect field value against `from-input` and `from-effect`.
+
+### BREAKING: `bregctl explain actions` spells its handler statements in kebab-case
+
+`bregctl --format json explain actions` states how a handler runs, how its
+evidence is gathered, and when a requirement is evaluated, as constants. It
+wrote them in snake_case; it now writes each in lowercase kebab-case
+(CFG-NAME-2). Every underscore became a hyphen and nothing else moved.
+
+| Member | Was | Is |
+|---|---|---|
+| `actions[].handler.inputKeys` | `authored_ids` | `authored-ids` |
+| `actions[].handler.reads` | `supplied_inputs_only` | `supplied-inputs-only` |
+| `actions[].handler.replay` | `recover_committed_result_without_handler_evaluation` | `recover-committed-result-without-handler-evaluation` |
+| `actions[].requires[].evaluated` | `before_effects_under_target_lock` | `before-effects-under-target-lock` |
+| `actions[].handler.omittedSlots` | `no_write_or_result; all_declared_existing_targets_still_require_admission_and_conditions` | `no-write-or-result; all-declared-existing-targets-still-require-admission-and-conditions` |
+| `actions[].handler.evaluation` | `after_locked_receipt_recovery_before_target_locks` | `after-locked-receipt-recovery-before-target-locks` |
+| `actions[].handler.evaluation` | `outside_postgres_after_admission_and_receipt_preflight` | `outside-postgres-after-admission-and-receipt-preflight` |
+| `actions[].evidence.deadline` | `bounded_by_operator_http_request_timeout_and_action_timeout` | `bounded-by-operator-http-request-timeout-and-action-timeout` |
+| `actions[].evidence.invocation` | `optional_explicit_helper_calls; omission_makes_no_remote_request` | `optional-explicit-helper-calls; omission-makes-no-remote-request` |
+| `actions[].evidence.disclosure` | `remote_requirement_disclosure_is_not_reduced_by_output_selection` | `remote-requirement-disclosure-is-not-reduced-by-output-selection` |
+| `actions[].evidence.lifecycle` | `outside_postgres; frozen_transcript_reused_for_sql_retries; receipt_replay_has_zero_calls` | `outside-postgres; frozen-transcript-reused-for-sql-retries; receipt-replay-has-zero-calls` |
+
+`ActionsExplanation.schema.json` pins the first four, so a document that
+carries an earlier spelling of one of them no longer validates. The other
+seven stay typed as strings and are respelled with them, so one object does
+not carry two spellings.
+
+No file an adopter writes changes. To migrate, change what a consumer of
+`bregctl --format json explain actions` compares: read each member in the
+table against the value in the right column.
+
+### BREAKING: `bregctl explain queries` spells its bounds with `maximum`
+
+`bregctl --format json explain queries` reports the bounds of each query
+operation under `operations[].bounds`. It abbreviated the eight member names
+to `max<Thing>`; a bound is named `maximum<Thing>` everywhere else (CFG-NAME-3,
+and CFG-NAME-5 for the byte bound), so it now writes the word in full. The
+values are unchanged.
+
+| Was | Is |
+|---|---|
+| `maxPageSize` | `maximumPageSize` |
+| `maxTop` | `maximumTop` |
+| `maxSelectedFields` | `maximumSelectedFields` |
+| `maxFilterPayloadBytes` | `maximumFilterPayloadBytes` |
+| `maxFilterDepth` | `maximumFilterDepth` |
+| `maxFilterNodes` | `maximumFilterNodes` |
+| `maxFilterPredicates` | `maximumFilterPredicates` |
+| `maxInValues` | `maximumInValues` |
+
+`QueriesExplanation.schema.json` pins the eight names, so a document that
+carries an earlier one no longer validates. The bounds the registry serves
+over HTTP in its metadata document are a different contract; the section on
+enumerated words below renames its three.
+
+No file an adopter writes changes. To migrate, change what a consumer of
+`bregctl --format json explain queries` reads: read each member of
+`explanation.operations[].bounds` by the name in the right column.
+
+### BREAKING: `bregctl explain actions` reports the evidence retention in days
+
+For an action whose handler may resolve Evidence, `bregctl --format json
+explain actions` reports how long the registry retains an accepted assertion.
+It wrote the member in seconds; a retention is written in days in every other
+format (CFG-QTY-2), so the member is renamed and its value converted. The
+retention itself is unchanged: 24 hours after acceptance.
+
+| Was | Is |
+|---|---|
+| `actions[].evidence.retentionSeconds: 86400` | `actions[].evidence.retentionDays: 1` |
+
+`ActionsExplanation.schema.json` requires the new member and refuses the
+earlier one.
+
+No file an adopter writes changes. To migrate, change what a consumer of
+`bregctl --format json explain actions` reads: read
+`explanation.actions[].evidence.retentionDays`, and multiply by 86400 where
+the consumer needs seconds.
+
+### BREAKING: `bregctl explain access` spells its constants in kebab-case
+
+`bregctl --format json explain access` reports why the compiled claim
+contract could not be built as one of seven constants, and with `--scenario`
+it states the mode of the preview and that record access was not evaluated.
+It wrote the nine constants in snake_case; it now writes each in lowercase
+kebab-case (CFG-NAME-2). Every underscore became a hyphen and nothing else
+moved.
+
+| Output | Member | Was | Is |
+|---|---|---|---|
+| `explain access` | `claimContractError` | `principal_claim_missing` | `principal-claim-missing` |
+| `explain access` | `claimContractError` | `target_entity_not_compiled` | `target-entity-not-compiled` |
+| `explain access` | `claimContractError` | `boundary_field_not_compiled` | `boundary-field-not-compiled` |
+| `explain access` | `claimContractError` | `lookup_selector_not_compiled` | `lookup-selector-not-compiled` |
+| `explain access` | `claimContractError` | `lookup_claim_mapping_incomplete` | `lookup-claim-mapping-incomplete` |
+| `explain access` | `claimContractError` | `lookup_field_not_compiled` | `lookup-field-not-compiled` |
+| `explain access` | `claimContractError` | `conflicting_claim_expectation` | `conflicting-claim-expectation` |
+| `explain access --scenario` | `mode` | `offline_synthetic` | `offline-synthetic` |
+| `explain access --scenario` | `recordAccess` | `not_evaluated` | `not-evaluated` |
+
+`AccessExplanation.schema.json` and `AccessPreview.schema.json` pin the nine
+values, so a document that carries an earlier spelling no longer validates.
+The `reason` of a preview is typed as a string and is unchanged. Only these
+two outputs write the constants: the startup refusal the same failures
+produce, and every HTTP response, is unchanged.
+
+No file an adopter writes changes. To migrate, change what a consumer of
+`bregctl --format json explain access` compares: read each member in the
+table against the value in the right column.
+
+### BREAKING: `bregctl explain change-requests` tags its unions with `type`
+
+`bregctl --format json explain change-requests` told the variants of six
+unions apart with a member named `kind`. It now writes `type`, the member
+every other union in the stack is tagged by (CFG-ID-7), and the three tag
+values that were written in snake_case are written in kebab-case
+(CFG-NAME-2).
+
+| Output | Union | Was | Is |
+|---|---|---|---|
+| `explain change-requests` | `requests[].planner` | `kind: declarative`, `kind: rhai` | `type: declarative`, `type: rhai` |
+| `explain change-requests` | `requests[].planner.declaringOrigin` | `kind: project`, `kind: module` | `type: project`, `type: module` |
+| `explain change-requests` | `requests[].planner.possibleWrites[].target` | `kind: existing`, `kind: reserved_create` | `type: existing`, `type: reserved-create` |
+| `explain change-requests` | `requests[].effects[].target.binding` | `kind: existing`, `kind: reserved_create` | `type: existing`, `type: reserved-create` |
+| `explain change-requests` | `requests[].effects[].fields[]` | `kind: set`, `kind: clear` | `type: set`, `type: clear` |
+| `explain change-requests` | `requests[].effects[].fields[].value` | `kind: from_field`, `kind: from_effect` | `type: from-field`, `type: from-effect` |
+
+`ChangeRequestsExplanation.schema.json` pins each tag, so a document that
+carries `kind` at one of these paths no longer validates. The `kind` that
+opens the explanation is unchanged. `requests[].review` moves with the review
+of the registry project, under "BREAKING: a union of the project and the
+module is tagged by `type`" below. The `bregctl project planner-test` report
+keeps its spelling.
+
+No file an adopter writes changes. To migrate, change what a consumer of
+`bregctl --format json explain change-requests` reads: read `type` where it
+read `kind` at each path in the table, and compare against `reserved-create`,
+`from-field`, and `from-effect`. A Casework source that was imported from
+this output is imported again with the same release's `caseworkctl source
+add`.
+
+### BREAKING: hook delivery, review result, and verification words are written in kebab-case
+
+The Base Registry Engine follows the shared hook delivery and review protocol
+words, which are written in kebab-case (CFG-NAME-2), in what it stores, what
+it writes to the audit journal, and what `bregctl` reports.
+
+| Where | Was | Is |
+|---|---|---|
+| `bregctl webhook list`, `state` | `dead_lettered` | `dead-lettered` |
+| `bregctl webhook list`, `deadLetterReason` | `always_denied_address` and the other snake_case reasons | `always-denied-address` and the same reasons in kebab-case |
+| audit journal, webhook attempt outcome | `http_non_success`, `destination_timeout`, `destination_policy_refused`, `destination_binding_refused`, `handler_binding_refused`, `handler_deadline`, `handler_resource`, `handler_execution`, `handler_source`, `handler_unavailable`, `payload_refused`, `worker_interrupted` | `http-non-success`, `destination-timeout`, `destination-policy-refused`, `destination-binding-refused`, `handler-binding-refused`, `handler-deadline`, `handler-resource`, `handler-execution`, `handler-source`, `handler-unavailable`, `payload-refused`, `worker-interrupted` |
+| audit journal, webhook attempt disposition | `retry_pending`, `dead_lettered`, `replay_pending` | `retry-pending`, `dead-lettered`, `replay-pending` |
+| audit journal, attachment verification disposition | `retry_pending` | `retry-pending` |
+| stored hook delivery row, authentication profile | `hmac_sha256_v1` | `hmac-sha256-v1` |
+| stored hook delivery row, delivery mode | `after_commit` | `after-commit` |
+| stored hook delivery row, state | `dead_lettered` | `dead-lettered` |
+| stored review result row, status | `changes_requested` | `changes-requested` |
+
+The HTTP review projection still answers `changesRequested`, and the
+operational code `attachment_verification.retry_pending` is unchanged.
+
+No file an adopter writes changes. The stored words are not migrated in
+place: a database written by an earlier release holds the earlier words in
+its hook delivery rows and its review result rows, and its review result
+table keeps a check constraint that refuses `changes-requested`. To migrate,
+start the registry on a new database built with `bregctl apply` from this
+release. A consumer of the audit journal or of `bregctl webhook list` reads
+each member against the right column of the table.
+
+### BREAKING: every enumerated word is written in kebab-case
+
+Every word the Base Registry Engine reads from a closed list, and every such
+word it writes into a compiled package, an inventory, the HTTP metadata
+document, an OpenAPI extension, or `bregctl` output, is written in kebab-case
+(CFG-NAME-2). A word in snake_case or camelCase is refused where the file is
+read, and the refusal lists the words that are accepted. The three bounds of
+the HTTP metadata document follow the bound spelling (CFG-NAME-3).
+
+Words an adopter writes in `registry.yaml` and in a module file:
+
+| Where | Was | Is |
+|---|---|---|
+| current date predicate | `on_or_after`, `on_or_before` | `on-or-after`, `on-or-before` |
+| retention mode | `operator_erase` | `operator-erase` |
+| selector source | `request_field`, `target_field` | `request-field`, `target-field` |
+| comparison operator | `less_than`, `less_than_or_equal`, `greater_than`, `greater_than_or_equal` | `less-than`, `less-than-or-equal`, `greater-than`, `greater-than-or-equal` |
+| constraint kind | `int_range` | `int-range` |
+| event trigger and condition | `request_lifecycle` | `request-lifecycle` |
+| lookup value origin | `verified_claim` | `verified-claim` |
+| manifest projection dataset status | `under_development` | `under-development` |
+| mutation mode | `create_only` | `create-only` |
+| operation, and operation of a permission | `submit_request`, `revise_request`, `cancel_request`, `apply_request` | `submit-request`, `revise-request`, `cancel-request`, `apply-request` |
+| request metadata field | `actor_reference`, `review_state` | `actor-reference`, `review-state` |
+| unique-when predicate | `field_equals`, `field_is_null`, `field_is_not_null`, `active_lifecycle` | `field-equals`, `field-is-null`, `field-is-not-null`, `active-lifecycle` |
+| valid time role | `valid_from`, `valid_to` | `valid-from`, `valid-to` |
+| webhook authentication profile | `hmac_sha256_v1` | `hmac-sha256-v1` |
+
+Words the engine writes (compiled model, inventories, `bregctl explain`, the
+HTTP metadata document, OpenAPI extensions):
+
+| Where | Was | Is |
+|---|---|---|
+| action route kind, and the operation id `actions.{id}.target-conditions` | `target_conditions` | `target-conditions` |
+| operation words, `x-registry-operation`, and the component schema names built from them, such as `<request>-submit-request-input` | `submit_request`, `revise_request`, `cancel_request`, `apply_request` | `submit-request`, `revise-request`, `cancel-request`, `apply-request` |
+| value source of an effect or a target | `fromInput`, `fromEffect`, `fromField`, `reservedCreate` | `from-input`, `from-effect`, `from-field`, `reserved-create` |
+| guard and selector words | `request_field`, `target_field`, `current_date`, `at_least`, `at_most` | `request-field`, `target-field`, `current-date`, `at-least`, `at-most` |
+| retention mode | `operator_erase` | `operator-erase` |
+| current date predicate | `on_or_after`, `on_or_before` | `on-or-after`, `on-or-before` |
+| filter operator | `is_null`, `is_not_null` | `is-null`, `is-not-null` |
+| query kind, `x-registry-queryKind`, and metadata `mode` | `as_of` | `as-of` |
+| valid time semantics | `start_inclusive_end_exclusive` | `start-inclusive-end-exclusive` |
+| hook delivery mode | `after_commit` | `after-commit` |
+| webhook retry profile | `registry_v1` | `registry-v1` |
+| `x-registry-mutationMode` | `create_only` | `create-only` |
+| unique-when identity preimage | `field:<id>:is_null` | `field:<id>:is-null` |
+| HTTP metadata query bounds, and `x-registry-queryProfile` | `maxPageSize`, `maxFilterClauses`, `maxInValues` | `maximumPageSize`, `maximumFilterClauses`, `maximumInValues` |
+| `bregctl access preview`, refusal reason | `required_scope_missing`, `principal_missing_or_mismatched`, `purpose_missing_or_not_allowed`, `actor_kind_missing`, `actor_kind_mismatched`, `requester_client_missing_or_mismatched`, `row_claim_missing_or_wrong_cardinality`, `entity_or_profile_not_found`, `operation_not_granted` | `required-scope-missing`, `principal-missing-or-mismatched`, `purpose-missing-or-not-allowed`, `actor-kind-missing`, `actor-kind-mismatched`, `requester-client-missing-or-mismatched`, `row-claim-missing-or-wrong-cardinality`, `entity-or-profile-not-found`, `operation-not-granted` |
+
+The Rust client names the three bounds `maximum_page_size`,
+`maximum_filter_clauses`, and `maximum_in_values` on `BRegQueryDescriptor`,
+and the Node.js and Python clients read the renamed members.
+
+Member names are unchanged: an effect still writes `fromField` and
+`fromEffect` as the names of its members. The names of the stored columns
+`valid_from`, `valid_to`, and `actor_reference` are unchanged, and so is the
+value of `$orderby`.
+
+One set of words the engine writes is an exception and keeps its spelling in
+this release: the seven statistical dataset operation names (`read_live`,
+`list_releases`, `read_released_series`, `read_latest_release`,
+`read_release_version`, `publish_release`, and `withdraw_release`), which the
+API returns in `x-registry-statisticalOperation` and as the last segment of a
+statistics `operationId` in the OpenAPI document, and under
+`statisticalDatasets` in the registry metadata document
+(`metadata/registry.json`, and `/v1/registry`).
+
+The reports `bregctl` builds itself are a second exception in this release:
+in the `--format json` output of every command other than `bregctl check`,
+and in the usage-error report of any command, `bregctl check` included, each
+entry of `diagnostics[]` and of `findings[]` names its `artifact` and its
+`suggestedAction` with a snake_case identifier (`registry_project` with
+`correct_authoring_source`, `baseline_package` with `verify_package_path`),
+also where the entry is about the registry project, and the operation and
+usage codes that the diagnostic code item above leaves unchanged, such as
+`verify.package.retired_api_version`, `diff.baseline.retired_api_version`,
+and `data.<command>.package.refused`, keep their snake_case segments. The
+exception stops where one of those commands carries the shared reader's
+diagnostics for a tool file unchanged, as `bregctl init` does for a refused
+model selection: those entries have the shared shape, with the kind of the
+file as `artifact` and a sentence as `suggestedAction`.
+
+To migrate, write each word of the first table in kebab-case in
+`registry.yaml` and in each module file, run `bregctl project lock` because a
+module digest covers the words, and build the package again. A package built
+by an earlier release holds the earlier words and is refused, as a current
+package and as a predecessor: `bregctl plan`, `bregctl apply`, and the start
+of `breg` refuse it. The schema fingerprint and the stored operation words of
+a database written by an earlier release no longer match, so the rebuilt
+package is applied to a new database with `bregctl apply`. A client reads the
+metadata document only from a registry of the same release, and a task grant
+or a Casework source that names an operation of the registry names it in
+kebab-case.
+
+### BREAKING: an identifier outside the grammar is refused where the file is read
+
+Every `id` member of `registry.yaml` and of a module file, and every mapping
+keyed by an identifier, is typed in the reader and in the published schemas
+(CFG-ID-1). The grammar of an `id` is unchanged, `^[a-z][a-z0-9_-]{0,63}$`,
+so a project that `bregctl check` accepted is still accepted. What changes is
+where and how an identifier outside the grammar is refused.
+
+| Where | Was | Is |
+|---|---|---|
+| an `id` outside the grammar, in a project or a module | refused by the compiler as `breg.identifier.invalid`, with a document path | refused when the file is read, as `config.invalid-value` at the line and column of the identifier |
+| a key outside the grammar in `accessLog.exemptions`, an effect's `set`, an event condition's `beforeEquals` or `afterEquals`, a lookup's `claimMapping` | read as written, and refused by the compiler when it named no declared field or profile | refused when the file is read, as `config.invalid-value` at the key |
+| an empty key, or a key holding a control character, in an Evidence `subjects` or `selectors` mapping or in a localized text mapping | read as written | refused when the file is read, as `config.invalid-value` at the key |
+| a key outside the grammar in `evidenceProviders`, `reviewAuthorities`, or `reviewExecutors` of `runtime.yaml` | read as written; it could match no identifier of the project | refused when the file is read, as `config.invalid-value` at the key |
+| `registry-project.schema.json`, `registry-module.schema.json`, `runtime.schema.json` | `id` typed `string`; mapping keys unconstrained or pinned by an inline pattern | `id` typed `$ref: #/$defs/LocalId`; mapping keys named by `propertyNames` with `LocalId` or `ExternalId` |
+
+`breg.identifier.invalid` is still what the compiler reports for a route
+segment or a reference outside the grammar. The diagnostic never repeats the
+identifier it refused.
+
+In the Rust crate, `ManifestProjectionTextSource::Localized` holds a mapping
+keyed by `ExternalId`.
+
+No file an adopter writes changes. To migrate, change a script that looked
+for `breg.identifier.invalid` on an `id` to look for `config.invalid-value`.
+
+### BREAKING: a union of the project and the module is tagged by `type`
+
+Five unions of `registry.yaml` and of a module file told their variants apart
+with a member named `kind`, with a member named `source`, or with no member at
+all. Each is now tagged by `type`, the member every other union in the stack
+is tagged by (CFG-ID-7). The values keep their kebab-case spelling.
+
+| Where | Was | Is |
+|---|---|---|
+| an entity constraint, `entities[].constraints[]` | `kind: unique`, `kind: compare`, `kind: int-range`, `kind: vocabulary`, `kind: temporal-non-overlap` | `type: unique`, `type: compare`, `type: int-range`, `type: vocabulary`, `type: temporal-non-overlap` |
+| a predicate of a unique constraint, `constraints[].when[]` | `kind: field-equals`, `kind: field-is-null`, `kind: field-is-not-null`, `kind: active-lifecycle` | `type: field-equals`, `type: field-is-null`, `type: field-is-not-null`, `type: active-lifecycle` |
+| the condition of an event, `events[].when` | `kind: fields`, `kind: request-lifecycle` | `type: fields`, `type: request-lifecycle` |
+| a selector of a change request Evidence subject, `subject.selectors.<name>` | `source: request-field`, `source: target-field` | `type: request-field`, `type: target-field` |
+| the review of a change request, `changeRequest.review` | `{authority: ..., policyId: ...}` | `{type: required, authority: ..., policyId: ...}` |
+| the review of a change request, `changeRequest.review` | `{mode: none}` | `{type: none}` |
+
+A union written the earlier way is refused when the file is read, with
+`config.missing-key` naming `type` at the union. A review that carries
+`type: none` beside another member is refused with `config.unknown-key` at
+that member (was `config.invalid-value` at the review), and `type: required`
+without `authority` or `policyId` is refused with `config.missing-key`, as it
+was. `registry-project.schema.json`
+and `registry-module.schema.json` pin each tag, and the type of a field is
+pinned in place in each variant of a field, so an editor tells the variants
+apart by `type` everywhere.
+
+The review is written the same way wherever the registry states it:
+
+| Output | Was | Is |
+|---|---|---|
+| `effective-model.json` of a package, `changeRequest.review` | `{authority, policyId}` or `{mode: none}` | `{type: required, authority, policyId}` or `{type: none}` |
+| `effective-model.json` of a package, an Evidence subject selector | `source: request-field`, `source: target-field` | `type: request-field`, `type: target-field` |
+| the `x-registry-changeRequest` extension of the generated OpenAPI and entity schemas, `review` | `{authority, policyId}` or `{mode: none}` | `{type: required, authority, policyId}` or `{type: none}` |
+| the metadata document, the `review` of a change request capability | `{authority, policyId}` or `{mode: none}` | `{type: required, authority, policyId}` or `{type: none}` |
+| a change request record, `request.proposal.review` | `{authority, policyId}` or `{mode: none}` | `{type: required, authority, policyId}` or `{type: none}` |
+| `bregctl --format json explain change-requests`, `requests[].review` | `{authority, policyId}` or `{mode: none}` | `{type: required, authority, policyId}` or `{type: none}` |
+| the Node.js client type `BRegRequestReviewRequirement` | `{ mode: 'none' }` or `{ authority, policyId }` | `{ type: 'none' }` or `{ type: 'required', authority, policyId }` |
+| the Python client, the `review` of a proposal and of a change request capability | `{"mode": "none"}` or `{"authority", "policy_id"}` | `{"type": "none"}` or `{"type": "required", "authority", "policy_id"}` |
+
+The frozen review requirement is part of what a proposal digest covers, so the
+digest of a proposal changes with it.
+
+To migrate, write `type` in `registry.yaml` and in each module file at each
+place of the first table, run `bregctl project lock` because a module digest
+covers the words, and build the package again. A package built by an earlier
+release holds the earlier members and is refused, as a current package and as
+a predecessor: `bregctl plan`, `bregctl apply`, and the start of `breg` refuse
+it. A database that holds a submitted change request written by an earlier
+release holds a frozen proposal in the earlier form, in the `snapshot` column
+of `registry_internal.registry_request_proposals`, which the registry no
+longer reads or verifies: apply the rebuilt
+package to a new database with `bregctl apply`. A client reads the metadata
+document and a change request record only from a registry of the same
+release, and a Casework source that was imported from `bregctl explain
+change-requests` is imported again with the same release's `caseworkctl
+source add`.
+
+### BREAKING: an access profile groups its permissions by what each names
+
+`permissions` of an access profile in `registry.yaml` was one list whose
+entries were told apart by the member each carried, `entity` or `action`. No
+member tagged the shapes, so a reader and an editor had to guess the shape
+from the members present (CFG-ID-7, CFG-SCHEMA-8). `permissions` is now a
+mapping of three lists, and each list holds one shape. The third list holds
+the dataset permissions that "statistical dataset access is granted in
+profile permissions" above adds. The members of a permission are unchanged.
+
+| Where | Was | Is |
+|---|---|---|
+| a permission that names an entity | an entry of `accessProfiles[].permissions` | an entry of `accessProfiles[].permissions.entities` |
+| a permission that names an action | an entry of `accessProfiles[].permissions` | an entry of `accessProfiles[].permissions.actions` |
+| a permission that names a statistical dataset | not written: the dataset named its profiles under `live` and `releases` | an entry of `accessProfiles[].permissions.datasets` |
+
+Written before:
+
+```yaml
+accessProfiles:
+  - id: registrar
+    permissions:
+      - entity: record
+        operations: [get, list]
+        rowBoundaries: unrestricted
+      - action: approve
+        operations: [invoke]
+```
+
+Written now:
+
+```yaml
+accessProfiles:
+  - id: registrar
+    permissions:
+      entities:
+        - entity: record
+          operations: [get, list]
+          rowBoundaries: unrestricted
+      actions:
+        - action: approve
+          operations: [invoke]
+      datasets:
+        - dataset: births
+          operations: [read-live]
+```
+
+The `datasets` entry has no earlier spelling in `permissions`: it states what
+the dataset `births` stated by listing the profile under `live`.
+
+A group the profile does not use is left out, and a group written `[]` means
+the same. The three groups may be written in any order, and the order of the
+entries in a group is kept. A profile that grants nothing omits `permissions`
+or writes `permissions: {}`.
+
+A list at `permissions` is refused when the file is read, with
+`config.invalid-value` at `/accessProfiles/N/permissions`: "expected a mapping
+with entities, actions, and datasets". Its fix reads "Group the permissions by
+what each names: write every permission that names an entity under
+permissions.entities, every one that names an action under
+permissions.actions, and every one that names a statistical dataset under
+permissions.datasets. A profile that grants nothing omits permissions."
+`permissions: []`, which the earlier reader took for a profile that grants
+nothing, is refused the same way.
+
+Each group reads its own shape strictly, so a member that belongs to another
+kind of permission is an ordinary unknown key where it is written:
+
+| Written | Refusal |
+|---|---|
+| an entry of `actions` with `rowBoundaries` | `config.unknown-key` at `rowBoundaries` |
+| an entry of `actions` with another member of an entity permission (`readableFields`, `writableFields`, `requireConsent`, `lookups`, `applyTargets`, and the rest) | `config.unknown-key` at the member |
+| an entry of `entities` with `targets` or `results` | `config.unknown-key` at the member |
+| an entry of `datasets` with any member but `dataset` and `operations` | `config.unknown-key` at the member |
+| an entry that does not name what its group lists (`entity`, `action`, or `dataset`) | `config.missing-key` at the entry |
+| `read-live`, `publish`, or `read-releases` in an entry of `entities` or `actions` | `config.unknown-variant` at the operation |
+| an entity or action operation in an entry of `datasets` | `config.unknown-variant` at the operation |
+| an entry of `datasets` with `operations: []` | `config.invalid-value` at `operations` |
+| an entry of `entities` without `rowBoundaries` | `config.invalid-value` at the entry, naming the fix |
+| a member of `permissions` other than the three groups | `config.unknown-key` at the member, naming the closest group |
+
+The items "statistical dataset access is granted in profile permissions",
+"an action permission takes no `rowBoundaries`", and "an access member says
+`unrestricted` or names what it restricts" above state their refusals and
+JSON Pointers in this grouped form.
+
+Five compiler diagnostics are no longer reported, because nothing can write
+the shape they refused. The second column is the name the renaming rule of
+the code table above gives them:
+
+| Was | Renamed to, now removed |
+|---|---|
+| `access_profile.permission.target_missing` | `breg.access-profile.permission-target-missing` |
+| `access_profile.permission.target_exclusive` | `breg.access-profile.permission-target-exclusive` |
+| `access_profile.permission.action_fields_forbidden` | `breg.access-profile.permission-action-fields-forbidden` |
+| `action.permission.exclusive` | `breg.action.permission-exclusive` |
+| `action.permission.entity_fields_forbidden` | `breg.action.permission-entity-fields-forbidden` |
+
+A script that matched one of them matches `config.unknown-key` or
+`config.missing-key` at the entry in their place.
+`breg.consent.require-read-only` is still reported for a consent-checked
+profile that writes or that invokes an action targeting its gated entity; the
+half of it that refused `requireConsent` on an action permission is the
+unknown key above, and its message for an action no longer mentions the
+member.
+
+Every diagnostic that points into a permission names the group. The `path` of
+a `bregctl check` diagnostic, and the pointer of its text form, is a JSON
+Pointer such as `/accessProfiles/0/permissions/entities/1/rowBoundaries`. A
+compiler path changes the same way:
+
+| Output | Was | Is |
+|---|---|---|
+| the path of a compiler diagnostic on an entity permission | `project.accessProfiles[].permissions[].entity` | `project.accessProfiles[].permissions.entities[].entity` |
+| the path of a compiler diagnostic on an action permission | `project.accessProfiles[].permissions[].targets` | `project.accessProfiles[].permissions.actions[].targets` |
+| the path of `breg.action.permission-missing` | `project.accessProfiles[].permissions` | `project.accessProfiles[].permissions.actions` |
+
+The index of an entry counts within its group, and the line and column follow
+the file as it is now written. Codes, messages, and severities are otherwise
+unchanged.
+
+The authorization a registry enforces does not change. A project regrouped as
+above compiles to the same model: its registry revision, every `bregctl
+explain` report, and every generated output (OpenAPI, entity schemas, action
+schemas, manifest, metadata, and SQL) are the ones the list compiled to.
+`bregctl explain access` has its own model and keeps it.
+`registry-project.schema.json` drops the untagged union: `permissions` is one
+object schema, and `entities`, `actions`, and `datasets` each list one item
+schema. A module file is not affected: a module access profile belongs to one
+entity and has no `permissions`.
+
+To migrate, in each access profile of `registry.yaml` move every entry of
+`permissions` under the group that matches the member it names, keeping the
+entries of a group in the order they had, and change nothing inside an entry.
+Run `bregctl check`. A package holds the project as it is written, in
+`source/registry.yaml`, so build the package again: its digest changes and its
+registry revision does not. `bregctl init`, `bregctl module add consent`, and
+`caseworkctl source add` of the same release write the grouped form;
+`caseworkctl source add` adds its reader permission under
+`permissions.entities`. Nothing stored in a database changes.
+
+### BREAKING: a hook handler and an action handler are tagged by `type`
+
+The handler of an entity hook and the handler of a governed action are one
+shared declaration, and it told `rhai`, `wasm`, and `url` apart with a member
+named `kind`. It is now tagged by `type` (CFG-ID-7), in `registry.yaml` and in
+a module file. The values, the source reference each names, `abi`, `writes`,
+and `refusals` are unchanged.
+
+| Where | Was | Is |
+|---|---|---|
+| an entity hook, `entities[].hooks[].handler` and `extendEntities[].hooks[].handler` | `{kind: url, destinationId: <id>}` | `{type: url, destinationId: <id>}` |
+| an entity hook that runs a reviewed program | `kind: rhai`, `kind: wasm` | `type: rhai`, `type: wasm` |
+| a governed action, `actions[].handler` | `kind: rhai`, `kind: wasm` | `type: rhai`, `type: wasm` |
+
+A handler written with `kind` is refused when the file is read, with
+`config.removed-key` at the member and a message that names `type`. The
+compiler refusals that pointed at the member point at `handler.type`:
+`breg.hook.handler-kind-unsupported`, `breg.hook.handler-wasm-build-unsupported`,
+`breg.action.handler-kind-unsupported`,
+`breg.action.handler-wasm-abi-unsupported`, and
+`breg.action.handler-wasm-build-unsupported` keep their codes.
+`registry-project.schema.json` and `registry-module.schema.json` describe the
+handler with `type`, and the comment `bregctl init` writes above the event
+example says `{type: url, destinationId: registry-events}`.
+
+Three members named `kind` are unchanged: the planner of a change request,
+`changeRequest.planner.kind`; the compiled handler in `effective-model.json`
+and in `bregctl explain actions`, `handler.kind`; and the stored
+`handler_kind` of a hook delivery.
+
+To migrate, rename `kind` to `type` in each `handler` block of
+`registry.yaml` and of each module file, keeping the value, run `bregctl
+project lock` for a module you changed because its digest covers the words,
+and build the package again: the package holds the authored project, so its
+digest changes. A package built by an earlier release holds the earlier
+member and is refused, as a current package and as a predecessor. A project
+paired with Registry Casework carries the lifecycle hook `caseworkctl source
+add` wrote: rename its `kind` too, or repeat `caseworkctl source add --apply`
+with the same release.
+
+### BREAKING: an unset value is stated with `isNull`, and `null` is not a comparison value
+
+Four places of `registry.yaml` and of a module file compared a stored value
+with a literal and accepted `null` there to mean that the field holds no
+value. `null` is now refused in every member (CFG-EMPTY-1), and each place has
+a member of its own that states an unset value.
+
+| Where | Was | Is |
+|---|---|---|
+| a predicate of a change request precondition, `preconditions.request[]` and `preconditions.targets[].requires[]` | `{field: note, equals: null}` | `{field: note, isNull: true}` |
+| a requirement of an action, `actions[].requires[]` | `{input: subject, field: note, equals: null}` | `{input: subject, field: note, isNull: true}` |
+| the condition of an event, `when.beforeEquals` | `beforeEquals: {note: null}` | `beforeIsNull: [note]` |
+| the condition of an event, `when.afterEquals` | `afterEquals: {note: null}` | `afterIsNull: [note]` |
+
+`equals`, and a value of `beforeEquals` or `afterEquals`, holds a boolean, a
+number, or text. `null` there is refused when the file is read, with
+`config.null-value` at the member. `isNull` reads only `true`: `isNull: false`
+is refused with `config.invalid-value`, and a predicate that states nothing
+about a field leaves the key out. A predicate or a requirement still states
+exactly one comparison, so `isNull` beside `equals` is refused by the compiler
+with the code it already reported for two comparisons
+(`breg.change-request.preconditions-predicate-operator-invalid`, or
+`breg.action.requires-value-invalid`). `beforeIsNull` is valid with the
+`patched` and `tombstoned` triggers and `afterIsNull` with `created` and
+`patched`, as `beforeEquals` and `afterEquals` are, and a field either one
+names must be a declared field that is not encrypted
+(`breg.event.when-field-unknown`, `breg.event.when-encrypted`).
+`registry-project.schema.json` and `registry-module.schema.json` publish the
+comparison value as `ScalarLiteral` (was `DataLiteral`, which admitted null)
+and no longer admit `null` anywhere.
+
+What the registry decides does not change: `isNull: true` compiles to
+the predicate that `equals: null` compiled to, so `effective-model.json` holds
+the same comparison, and an event
+condition matches when the named field is null in the snapshot it names. A
+module that never compared with `null` is written as it was, so its digest and
+its lock do not move.
+
+To migrate, replace each `null` comparison as the table shows, run `bregctl
+project lock` for a module you changed, and build the package again. A project
+that never wrote a `null` comparison changes nothing.
+
+### BREAKING: the registry spells its metric label values in kebab-case
+
+A metric name and a label name follow the Prometheus naming rule and are
+unchanged. A label value is a word the registry defines and an operator's
+query matches, so it follows the same rule as every other such word
+(CFG-NAME-2).
+
+| Series | Label | Old value | New value |
+|---|---|---|---|
+| `breg_http_requests_total`, `breg_http_request_duration_seconds` | `status` | `client_error` | `client-error` |
+| `breg_http_requests_total`, `breg_http_request_duration_seconds` | `status` | `server_error` | `server-error` |
+| `breg_pool_connections` | `state` | `max_size` | `maximum-size` |
+| `breg_worker_last_success_age_seconds` | `worker` | `attachment_verification` | `attachment-verification` |
+| `breg_worker_last_success_age_seconds` | `worker` | `subject_access_log_retention` | `subject-access-log-retention` |
+| `breg_queue_oldest_pending_age_seconds` | `queue` | `webhook_delivery` | `webhook-delivery` |
+| `breg_queue_oldest_pending_age_seconds` | `queue` | `review_submission` | `review-submission` |
+| `breg_queue_oldest_pending_age_seconds` | `queue` | `review_application` | `review-application` |
+
+The `status` value `success`, the pool states `size`, `available`, and
+`waiting`, and the workers `webhook` and `review` are single words and are
+unchanged. The `status` field of the structured request log carries the same
+word as the `status` label, so it reads `client-error` or `server-error` too.
+The label name `package_digest` of `breg_active_package_info` is a label
+name and is unchanged.
+
+To migrate, respell the label values in every dashboard query, recording
+rule, alert rule, and log filter. A series under an old value stops receiving
+samples when the process restarts on this release, and the series under the
+new value starts at zero.
+
+### BREAKING: the remaining webhook audit words are written in kebab-case
+
+The webhook delivery records of the audit journal already wrote most of
+their `outcome` and `disposition` words in kebab-case. The thirteen words
+that still carried an underscore now follow them (CFG-NAME-2):
+
+| Member | Was | Is |
+|---|---|---|
+| `outcome` | `attempt_started` | `attempt-started` |
+| `outcome` | `destination_resolution_refused` | `destination-resolution-refused` |
+| `outcome` | `destination_transport_unavailable` | `destination-transport-unavailable` |
+| `outcome` | `payload_expired` | `payload-expired` |
+| `outcome` | `replay_requested` | `replay-requested` |
+| `outcome` | `replay_committed` | `replay-committed` |
+| `outcome` | `replay_refused` | `replay-refused` |
+| `outcome` | `replay_unfinished` | `replay-unfinished` |
+| `outcome` | `discard_requested` | `discard-requested` |
+| `outcome` | `discard_committed` | `discard-committed` |
+| `outcome` | `discard_refused` | `discard-refused` |
+| `outcome` | `discard_unfinished` | `discard-unfinished` |
+| `disposition` | `discard_pending` | `discard-pending` |
+
+No file an adopter writes changes, nothing stored changes, and the registry
+never reads these words back. Records already written keep the spelling they
+were written with. To migrate, a query, alert, or report that matches one of
+these words in the audit journal matches the new spelling for records written
+from this release on.
+
+### BREAKING: eight client error words are written in kebab-case
+
+The Base Registry Engine clients name a failure with fixed words a caller
+branches on: `BaseRegistryClientError::kind()` in Rust, and the members of a
+`BRegClientError` in Node.js and Python. Eight of those words carried an
+underscore (CFG-NAME-2). Four are the client's own and four come from the
+shared HTTP primitives, which respell them in this release.
+
+| Member (Node.js, Python) | Old word | New word |
+|---|---|---|
+| `kind` | `invalid_request` | `invalid-request` |
+| `code` of a `protocol` error | `header_bounds` | `header-bounds` |
+| `code` of a `protocol` error | `trace_context` | `trace-context` |
+| `code` of a `protocol` error | `media_type` | `media-type` |
+| `transportKind`, `transport_kind` | `response_too_large` | `response-too-large` |
+| `tokenKind`, `token_kind` | `invalid_credential` | `invalid-credential` |
+| `tokenKind`, `token_kind` | `scope_narrowed` | `scope-narrowed` |
+| `code` of a refused token request | `unregistered_error_code` | `unregistered-error-code` |
+
+`BaseRegistryClientError::kind()` returns `invalid-request` for an input
+refused before any exchange. `@registrystack/client` and
+`registry-stack-client` carry the same words.
+
+Not changed: the `code` of a refused token request when the authorization
+server answered one of the six codes RFC 6749 section 5.2 registers, which
+keeps the specification's spelling (`invalid_request` among them).
+
+### BREAKING: the clients write their own remaining words in kebab-case
+
+The words only the Base Registry Engine clients carry follow the same rule
+(CFG-NAME-2), so a consumer of a client error changes what it compares once.
+Eighteen words carried an underscore.
+
+| Member (Node.js, Python) | Old word | New word |
+|---|---|---|
+| `kind` | `not_found` | `not-found` |
+| `kind` | `metadata_selection` | `metadata-selection` |
+| `kind` | `lifecycle_promotion` | `lifecycle-promotion` |
+| `kind` (Node.js webhook verification) | `webhook_verification` | `webhook-verification` |
+| `code` of a `protocol` error | `entity_tag` | `entity-tag` |
+| `code` of a `protocol` error | `profile_link` | `profile-link` |
+| `code` of a `protocol` error | `cache_policy` | `cache-policy` |
+| `code` of a `protocol` error | `representation_digest` | `representation-digest` |
+| `code` of a `metadata-selection` error | `not_found` | `not-found` |
+| `code` of a `metadata-selection` error | `unbound_source` | `unbound-source` |
+| `code` of a `metadata-selection` error | `profile_mismatch` | `profile-mismatch` |
+| `code` of a `metadata-selection` error | `unsupported_operation` | `unsupported-operation` |
+| `code` of a `metadata-selection` error | `required_capability` | `required-capability` |
+| `code` of a `metadata-selection` error | `contract_mismatch` | `contract-mismatch` |
+| `code` of a `webhook-verification` error | `missing_header` | `missing-header` |
+| `code` of a `webhook-verification` error | `malformed_signature` | `malformed-signature` |
+| `code` of a `webhook-verification` error | `signature_mismatch` | `signature-mismatch` |
+| `code` of a `webhook-verification` error | `unsupported_version` | `unsupported-version` |
+| `kind` of an attachment slot value | `not_selected` | `not-selected` |
+
+`not-found` is both a kind and a `metadata-selection` code, which is why the
+table has nineteen rows. In Rust, `BaseRegistryClientError::kind()` returns
+`not-found` for a missing resource and
+`BRegWebhookVerificationError::code()` returns the four webhook words.
+`@registrystack/client` and `registry-stack-client` carry the same words.
+
+Not changed: the Problem `code` the registry answers (`resource.not_found`
+among them), which is the registry's word and not the client's; the
+`lifecycle-promotion` codes `authority` and `binding`; and the words the
+registry stores for a webhook destination, which are inputs to a stored
+digest.
+
+No file an adopter writes changes and nothing stored changes. To migrate,
+change what a consumer of a client error, a webhook verification refusal, or
+an attachment slot value compares.
+
+No file an adopter writes changes. To migrate, change what a consumer of a
+client error compares each of these members with.

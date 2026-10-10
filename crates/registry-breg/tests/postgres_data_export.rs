@@ -359,34 +359,34 @@ async fn real_postgres_export_is_authenticated_projected_audited_and_resumable()
 
 fn compiled_registry() -> registry_breg::CompiledRegistry {
     let source = json!({
-        "apiVersion":"registry.registrystack.org/v1alpha1",
-        "kind":"RegistryProject",
-        "registry":{"id":"data-export-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+        "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+        "kind":"BRegProject",
+        "project":{"id":"data-export-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
         "entities":[{
-            "id":"entry", "primaryDataset":"test-dataset", "route":"entries", "mutationMode":"create_only",
+            "id":"entry", "primaryDataset":"test-dataset", "route":"entries", "mutationMode":"create-only",
             "batch":{"maximumItems":60,"maximumBytes":131072},
             "fields":[
-                {"id":"code","type":"string","required":true,"maxLength":16,
+                {"id":"code","type":"string","required":true,"maximumLength":16,
                  "classification":"internal"},
-                {"id":"jurisdiction","type":"string","required":true,"maxLength":16,
+                {"id":"jurisdiction","type":"string","required":true,"maximumLength":16,
                  "classification":"internal"},
-                {"id":"secret","type":"text","required":true,"maxLength":160,
+                {"id":"secret","type":"text","required":true,"maximumLength":160,
                  "classification":"restricted"}
             ],
-            "constraints":[{"kind":"unique","fields":["code"]}],
+            "constraints":[{"type":"unique","fields":["code"]}],
             "hooks":[{"phase":"after","id":"entry-created","trigger":"created","projection":["code"]}]
         }],
         "accessProfiles":[{
             "id":PROFILE, "principalClaim":"registry_principal","requiredScopes":"unrestricted",
                 "requiredPurposes":["data-export"],
-            "permissions":[{
+            "permissions":{"entities":[{
                 "entity":"entry",
                 "operations":["create","batch","list"],
                 "readableFields":["code"],
                 "writableFields":["code","jurisdiction","secret"],
                 "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdictions","operator":"in"}],
                 "allowDataExport":true
-            }]
+            }]}
         }]
     });
     let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();

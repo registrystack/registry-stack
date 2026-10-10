@@ -75,7 +75,7 @@ the ambiguity signal, so neither is an operator dial.
 One record is resolved by exact reference and one controlled code is signed.
 The register's own region code never leaves the service: `codelists/`
 maps several register codes onto each disclosed region, and only the codes in
-`allowed_outputs` can pass the output gate. A register code with no reviewed
+`allowedOutputs` can pass the output gate. A register code with no reviewed
 mapping leaves the requirement unresolved rather than passing the precise code
 through, and a record carrying no region at all is refused by the fact schema
 before derivation runs, so an absent region can never be read as a region.

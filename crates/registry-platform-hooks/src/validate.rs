@@ -205,7 +205,7 @@ mod tests {
             declaration(
                 "case-intake",
                 HookPhase::After,
-                "request_lifecycle",
+                "request-lifecycle",
                 HookHandlerSource::Url {
                     destination_id: "case-intake".to_owned(),
                 },

@@ -31,9 +31,9 @@ use zeroize::Zeroizing;
 mod strict_query;
 
 const PROJECT: &str = r#"
-apiVersion: registry.registrystack.org/v1alpha1
-kind: RegistryProject
-registry:
+apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
   id: read-surface
   version: 0.1.0
   defaultLanguage: en
@@ -47,53 +47,55 @@ entities:
     batch: {maximumItems: 10, maximumBytes: 65536}
     classification: public
     fields:
-      - {id: label, type: string, required: true, maxLength: 100, classification: public}
-      - {id: secret, type: string, required: true, maxLength: 100, classification: restricted}
-      - {id: jurisdiction, type: string, required: true, maxLength: 32, classification: internal}
+      - {id: label, type: string, required: true, maximumLength: 100, classification: public}
+      - {id: secret, type: string, required: true, maximumLength: 100, classification: restricted}
+      - {id: jurisdiction, type: string, required: true, maximumLength: 32, classification: internal}
   - id: protected-note
     primaryDataset: test-dataset
     route: notes
-    mutationMode: create_only
+    mutationMode: create-only
     classification: restricted
     fields:
-      - {id: text, type: text, required: true, maxLength: 200, classification: restricted}
+      - {id: text, type: text, required: true, maximumLength: 200, classification: restricted}
 accessProfiles:
   - id: public
     default: true
     principalClaim: registry_principal
     requiredScopes: unrestricted
     permissions:
-      - entity: case
-        rowBoundaries: unrestricted
-        operations: [get, list]
-        readableFields: [label]
-        filterableFields: [label]
-        sortableFields: [label]
+      entities:
+        - entity: case
+          rowBoundaries: unrestricted
+          operations: [get, list]
+          readableFields: [label]
+          filterableFields: [label]
+          sortableFields: [label]
   - id: caseworker
     principalClaim: registry_principal
     requiredScopes: [registry.read]
     requiredPurposes: [case-management]
     permissions:
-      - entity: case
-        operations: [create, get, list, patch, tombstone, batch, revisions]
-        allowCount: true
-        readableFields: [label, secret, jurisdiction]
-        writableFields: [label, secret, jurisdiction]
-        filterableFields: [label, jurisdiction]
-        sortableFields: [label]
-        rowBoundaries:
-          - {field: jurisdiction, claim: jurisdictions, operator: in}
-      - entity: protected-note
-        rowBoundaries: unrestricted
-        operations: [create, get, list]
-        readableFields: [text]
-        writableFields: [text]
+      entities:
+        - entity: case
+          operations: [create, get, list, patch, tombstone, batch, revisions]
+          allowCount: true
+          readableFields: [label, secret, jurisdiction]
+          writableFields: [label, secret, jurisdiction]
+          filterableFields: [label, jurisdiction]
+          sortableFields: [label]
+          rowBoundaries:
+            - {field: jurisdiction, claim: jurisdictions, operator: in}
+        - entity: protected-note
+          rowBoundaries: unrestricted
+          operations: [create, get, list]
+          readableFields: [text]
+          writableFields: [text]
 "#;
 
 const LOOKUP_PATH_PROJECT: &str = r#"
-apiVersion: registry.registrystack.org/v1alpha1
-kind: RegistryProject
-registry:
+apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
   id: lookup-path-surface
   version: 0.1.0
   defaultLanguage: en
@@ -106,10 +108,10 @@ entities:
     tombstone: true
     classification: restricted
     fields:
-      - {id: household-code, type: string, required: true, maxLength: 64, classification: restricted}
-      - {id: administrative-area, type: string, required: true, maxLength: 64, classification: restricted}
+      - {id: household-code, type: string, required: true, maximumLength: 64, classification: restricted}
+      - {id: administrative-area, type: string, required: true, maximumLength: 64, classification: restricted}
       - {id: local-household-number, type: int64, required: true, classification: restricted}
-      - {id: private-note, type: string, required: false, maxLength: 64, classification: restricted}
+      - {id: private-note, type: string, required: false, maximumLength: 64, classification: restricted}
     selectorProfiles:
       - {id: by-household-code, fields: [household-code]}
       - {id: by-local-reference, fields: [administrative-area, local-household-number]}
@@ -130,8 +132,8 @@ entities:
     mutationMode: mutable
     classification: restricted
     fields:
-      - {id: person-code, type: string, required: true, maxLength: 64, classification: restricted}
-      - {id: sensitive-note, type: string, required: false, maxLength: 64, classification: restricted}
+      - {id: person-code, type: string, required: true, maximumLength: 64, classification: restricted}
+      - {id: sensitive-note, type: string, required: false, maximumLength: 64, classification: restricted}
 accessProfiles:
   - id: operator
     default: true
@@ -139,47 +141,49 @@ accessProfiles:
     requiredScopes: [registry.read]
     requiredPurposes: [case-management]
     permissions:
-      - entity: household
-        rowBoundaries: unrestricted
-        operations: [get, lookup, list]
-        readableFields: [household-code, administrative-area, local-household-number]
-        filterableFields: [household-code, administrative-area, local-household-number]
-        sortableFields: [household-code]
-        lookups:
-          - {selector: by-household-code, valueOrigin: request}
-          - {selector: by-local-reference, valueOrigin: request}
-        readPaths:
-          - path: people
-            readableFields: [person-code]
-            filterableFields: [person-code]
-            sortableFields: [person-code]
-            allowCount: true
-      - entity: person
-        rowBoundaries: unrestricted
-        operations: [get, list]
-        readableFields: [sensitive-note]
-        filterableFields: [sensitive-note]
-        sortableFields: [sensitive-note]
+      entities:
+        - entity: household
+          rowBoundaries: unrestricted
+          operations: [get, lookup, list]
+          readableFields: [household-code, administrative-area, local-household-number]
+          filterableFields: [household-code, administrative-area, local-household-number]
+          sortableFields: [household-code]
+          lookups:
+            - {selector: by-household-code, valueOrigin: request}
+            - {selector: by-local-reference, valueOrigin: request}
+          readPaths:
+            - path: people
+              readableFields: [person-code]
+              filterableFields: [person-code]
+              sortableFields: [person-code]
+              allowCount: true
+        - entity: person
+          rowBoundaries: unrestricted
+          operations: [get, list]
+          readableFields: [sensitive-note]
+          filterableFields: [sensitive-note]
+          sortableFields: [sensitive-note]
   - id: viewer
     principalClaim: registry_principal
     requiredScopes: [registry.read]
     requiredPurposes: [case-management]
     permissions:
-      - entity: household
-        operations: [get, lookup]
-        readableFields: [household-code]
-        rowBoundaries:
-          - {field: id, claim: household_id, operator: equals}
-        lookups:
-          - selector: by-household-code
-            valueOrigin: verified_claim
-            claimMapping: {household-code: household_code}
+      entities:
+        - entity: household
+          operations: [get, lookup]
+          readableFields: [household-code]
+          rowBoundaries:
+            - {field: id, claim: household_id, operator: equals}
+          lookups:
+            - selector: by-household-code
+              valueOrigin: verified-claim
+              claimMapping: {household-code: household_code}
 "#;
 
 const DERIVED_DISCOVERY_PROJECT: &str = r#"
-apiVersion: registry.registrystack.org/v1alpha1
-kind: RegistryProject
-registry:
+apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
   id: derived-discovery
   version: 0.1.0
   defaultLanguage: en
@@ -191,7 +195,7 @@ entities:
     mutationMode: mutable
     classification: restricted
     fields:
-      - {id: label, type: string, required: true, maxLength: 100, classification: restricted}
+      - {id: label, type: string, required: true, maximumLength: 100, classification: restricted}
     derived:
       - id: eligibility
         sql: sql/eligibility.sql
@@ -206,16 +210,17 @@ accessProfiles:
     requiredScopes: [registry.read]
     requiredPurposes: [case-management]
     permissions:
-      - entity: benefit-record
-        rowBoundaries: unrestricted
-        operations: [get, list]
-        readableFields: [label, eligibility-score]
+      entities:
+        - entity: benefit-record
+          rowBoundaries: unrestricted
+          operations: [get, list]
+          readableFields: [label, eligibility-score]
 "#;
 
 const DISCOVERY_MATRIX_PROJECT: &str = r#"
-apiVersion: registry.registrystack.org/v1alpha1
-kind: RegistryProject
-registry:
+apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
   id: discovery-matrix
   version: "1"
   defaultLanguage: en
@@ -227,8 +232,8 @@ entities:
     mutationMode: mutable
     classification: public
     fields:
-      - {id: label, type: string, required: true, maxLength: 100, classification: public}
-      - {id: restricted-canary-field, type: string, maxLength: 100, classification: restricted}
+      - {id: label, type: string, required: true, maximumLength: 100, classification: public}
+      - {id: restricted-canary-field, type: string, maximumLength: 100, classification: restricted}
   - id: protected-ledger
     primaryDataset: test-dataset
     route: classified-records
@@ -243,14 +248,14 @@ entities:
       endField: valid-to
       scopeFields: [classified-status]
     constraints:
-      - {kind: temporal-non-overlap, scopeFields: [classified-status], startField: valid-from, endField: valid-to}
+      - {type: temporal-non-overlap, scopeFields: [classified-status], startField: valid-from, endField: valid-to}
     hooks:
       - id: classified-created-event
         phase: after
         trigger: created
         projection: [classified-status, valid-from]
         handler:
-          kind: url
+          type: url
           destinationId: classified-operations-destination
 accessProfiles:
   - id: public
@@ -258,38 +263,40 @@ accessProfiles:
     principalClaim: registry_principal
     requiredScopes: unrestricted
     permissions:
-      - entity: public-record
-        rowBoundaries: unrestricted
-        operations: [get, list]
-        readableFields: [label]
-        filterableFields: [label]
-        sortableFields: [label]
+      entities:
+        - entity: public-record
+          rowBoundaries: unrestricted
+          operations: [get, list]
+          readableFields: [label]
+          filterableFields: [label]
+          sortableFields: [label]
   - id: caseworker
     principalClaim: registry_principal
     requiredScopes: [registry.read]
     requiredPurposes: [case-management]
     permissions:
-      - entity: public-record
-        rowBoundaries: unrestricted
-        operations: [get, list]
-        readableFields: [label, restricted-canary-field]
-        filterableFields: [label]
-        sortableFields: [label]
-      - entity: protected-ledger
-        rowBoundaries: unrestricted
-        operations: [get, list]
-        readableFields: [classified-status, valid-from, valid-to]
-        filterableFields: [classified-status]
-        sortableFields: [valid-from]
+      entities:
+        - entity: public-record
+          rowBoundaries: unrestricted
+          operations: [get, list]
+          readableFields: [label, restricted-canary-field]
+          filterableFields: [label]
+          sortableFields: [label]
+        - entity: protected-ledger
+          rowBoundaries: unrestricted
+          operations: [get, list]
+          readableFields: [classified-status, valid-from, valid-to]
+          filterableFields: [classified-status]
+          sortableFields: [valid-from]
 vocabularies:
   - id: classified-status-vocabulary
     values: [sealed-canary-value, retired-canary-value]
 "#;
 
 const LOGICAL_SCHEMA_PROJECT: &str = r#"
-apiVersion: registry.registrystack.org/v1alpha1
-kind: RegistryProject
-registry:
+apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
   id: logical-schema-surface
   version: "1"
   defaultLanguage: en
@@ -301,28 +308,29 @@ entities:
     mutationMode: mutable
     classification: public
     fields:
-      - {id: household-code, type: string, required: true, maxLength: 64, classification: public}
+      - {id: household-code, type: string, required: true, maximumLength: 64, classification: public}
       - {id: household-kind-code, apiName: householdKind, type: vocabulary-code, vocabulary: household-kind, required: true, classification: public}
-      - {id: private-canary-field, apiName: privateCanary, type: string, required: true, maxLength: 64, classification: restricted}
+      - {id: private-canary-field, apiName: privateCanary, type: string, required: true, maximumLength: 64, classification: restricted}
 accessProfiles:
   - id: public
     default: true
     principalClaim: registry_principal
     requiredScopes: unrestricted
     permissions:
-      - entity: logical-record
-        rowBoundaries: unrestricted
-        operations: [get, list]
-        readableFields: [household-code, household-kind-code]
+      entities:
+        - entity: logical-record
+          rowBoundaries: unrestricted
+          operations: [get, list]
+          readableFields: [household-code, household-kind-code]
 vocabularies:
   - id: household-kind
     values: [single, extended]
 "#;
 
 const METADATA_LABEL_PROJECT: &str = r#"
-apiVersion: registry.registrystack.org/v1alpha1
-kind: RegistryProject
-registry:
+apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
   id: metadata-labels
   version: "1"
   defaultLanguage: en
@@ -354,11 +362,11 @@ entities:
     mutationMode: mutable
     classification: public
     fields:
-      - {id: import-source, type: string, required: true, maxLength: 64, classification: public}
-      - {id: source-record-id, type: string, required: true, maxLength: 64, classification: public}
-      - {id: permit-number, type: string, required: true, maxLength: 64, classification: public}
-      - {id: display-token, type: string, required: true, maxLength: 64, classification: public}
-      - {id: hidden-permit-key, type: string, required: true, maxLength: 64, classification: public}
+      - {id: import-source, type: string, required: true, maximumLength: 64, classification: public}
+      - {id: source-record-id, type: string, required: true, maximumLength: 64, classification: public}
+      - {id: permit-number, type: string, required: true, maximumLength: 64, classification: public}
+      - {id: display-token, type: string, required: true, maximumLength: 64, classification: public}
+      - {id: hidden-permit-key, type: string, required: true, maximumLength: 64, classification: public}
       - {id: valid-from, type: date, required: true, classification: public}
       - {id: valid-to, type: date, classification: public}
     temporal:
@@ -366,31 +374,31 @@ entities:
       endField: valid-to
       scopeFields: [permit-number]
     constraints:
-      - {kind: unique, fields: [hidden-permit-key]}
-      - {kind: unique, fields: [permit-number, valid-from]}
-      - {kind: unique, fields: [import-source, source-record-id]}
-      - {kind: temporal-non-overlap, scopeFields: [permit-number], startField: valid-from, endField: valid-to}
+      - {type: unique, fields: [hidden-permit-key]}
+      - {type: unique, fields: [permit-number, valid-from]}
+      - {type: unique, fields: [import-source, source-record-id]}
+      - {type: temporal-non-overlap, scopeFields: [permit-number], startField: valid-from, endField: valid-to}
   - id: inspection
     primaryDataset: test-dataset
     route: inspections
     mutationMode: mutable
     classification: public
     fields:
-      - {id: import-source, type: string, required: true, maxLength: 64, classification: public}
-      - {id: source-record-id, type: string, required: true, maxLength: 64, classification: public}
-      - {id: inspection-code, type: text, required: true, maxLength: 64, classification: public}
-      - {id: hidden-inspection-key, type: string, required: true, maxLength: 64, classification: public}
-      - {id: valid-from, type: date, required: true, classification: public, validTimeRole: valid_from}
-      - {id: valid-to, type: date, classification: public, validTimeRole: valid_to}
+      - {id: import-source, type: string, required: true, maximumLength: 64, classification: public}
+      - {id: source-record-id, type: string, required: true, maximumLength: 64, classification: public}
+      - {id: inspection-code, type: text, required: true, maximumLength: 64, classification: public}
+      - {id: hidden-inspection-key, type: string, required: true, maximumLength: 64, classification: public}
+      - {id: valid-from, type: date, required: true, classification: public, validTimeRole: valid-from}
+      - {id: valid-to, type: date, classification: public, validTimeRole: valid-to}
     temporal:
       startField: valid-from
       endField: valid-to
       scopeFields: [inspection-code]
     constraints:
-      - {kind: unique, fields: [hidden-inspection-key, valid-from]}
-      - {kind: unique, fields: [inspection-code, valid-from]}
-      - {kind: unique, fields: [import-source, source-record-id]}
-      - {kind: temporal-non-overlap, scopeFields: [inspection-code], startField: valid-from, endField: valid-to}
+      - {type: unique, fields: [hidden-inspection-key, valid-from]}
+      - {type: unique, fields: [inspection-code, valid-from]}
+      - {type: unique, fields: [import-source, source-record-id]}
+      - {type: temporal-non-overlap, scopeFields: [inspection-code], startField: valid-from, endField: valid-to}
   - id: finding
     primaryDataset: test-dataset
     route: findings
@@ -404,54 +412,56 @@ entities:
     mutationMode: mutable
     classification: public
     fields:
-      - {id: import-source, type: string, required: true, maxLength: 64, classification: public}
-      - {id: certificate-code, type: text, required: true, maxLength: 64, classification: public}
-      - {id: hidden-certificate-key, type: string, required: true, maxLength: 64, classification: public}
+      - {id: import-source, type: string, required: true, maximumLength: 64, classification: public}
+      - {id: certificate-code, type: text, required: true, maximumLength: 64, classification: public}
+      - {id: hidden-certificate-key, type: string, required: true, maximumLength: 64, classification: public}
     constraints:
-      - {kind: unique, fields: [hidden-certificate-key]}
-      - {kind: unique, fields: [certificate-code]}
+      - {type: unique, fields: [hidden-certificate-key]}
+      - {type: unique, fields: [certificate-code]}
 accessProfiles:
   - id: operator
     default: true
     principalClaim: registry_principal
     requiredScopes: unrestricted
     permissions:
-      - entity: permit
-        rowBoundaries: unrestricted
-        operations: [get, list]
-        readableFields: [import-source, source-record-id, permit-number, display-token, valid-from, valid-to]
-      - entity: inspection
-        rowBoundaries: unrestricted
-        operations: [get, list]
-        readableFields: [import-source, source-record-id, inspection-code, valid-from, valid-to]
-        filterableFields: [inspection-code]
-        sortableFields: [inspection-code]
-      - entity: finding
-        rowBoundaries: unrestricted
-        operations: [get]
-        readableFields: [inspection]
-      - entity: certificate
-        rowBoundaries: unrestricted
-        operations: [get, list]
-        readableFields: [import-source, certificate-code]
+      entities:
+        - entity: permit
+          rowBoundaries: unrestricted
+          operations: [get, list]
+          readableFields: [import-source, source-record-id, permit-number, display-token, valid-from, valid-to]
+        - entity: inspection
+          rowBoundaries: unrestricted
+          operations: [get, list]
+          readableFields: [import-source, source-record-id, inspection-code, valid-from, valid-to]
+          filterableFields: [inspection-code]
+          sortableFields: [inspection-code]
+        - entity: finding
+          rowBoundaries: unrestricted
+          operations: [get]
+          readableFields: [inspection]
+        - entity: certificate
+          rowBoundaries: unrestricted
+          operations: [get, list]
+          readableFields: [import-source, certificate-code]
   - id: redacted-reader
     principalClaim: registry_principal
     requiredScopes: unrestricted
     permissions:
-      - entity: inspection
-        rowBoundaries: unrestricted
-        operations: [get]
-        readableFields: [import-source, valid-from]
-      - entity: finding
-        rowBoundaries: unrestricted
-        operations: [get]
-        readableFields: [inspection]
+      entities:
+        - entity: inspection
+          rowBoundaries: unrestricted
+          operations: [get]
+          readableFields: [import-source, valid-from]
+        - entity: finding
+          rowBoundaries: unrestricted
+          operations: [get]
+          readableFields: [inspection]
 "#;
 
 const SPATIAL_PROJECT: &str = r#"
-apiVersion: registry.registrystack.org/v1alpha1
-kind: RegistryProject
-registry:
+apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
   id: spatial-read-surface
   version: 0.1.0
   defaultLanguage: en
@@ -463,7 +473,7 @@ entities:
     mutationMode: mutable
     classification: public
     fields:
-      - {id: code, type: string, required: true, maxLength: 64, classification: public}
+      - {id: code, type: string, required: true, maximumLength: 64, classification: public}
       - {id: location, type: crs84-point, precision: 6, required: false, classification: public}
     geojson:
       geometryField: location
@@ -473,23 +483,25 @@ accessProfiles:
     principalClaim: registry_principal
     requiredScopes: unrestricted
     permissions:
-      - entity: site
-        rowBoundaries: unrestricted
-        operations: [get, list]
-        readableFields: [code, location]
-        filterableFields: [code]
-        spatialQueries:
-          bbox:
-            maximumLongitudeSpanDegrees: 2
-            maximumLatitudeSpanDegrees: 2
+      entities:
+        - entity: site
+          rowBoundaries: unrestricted
+          operations: [get, list]
+          readableFields: [code, location]
+          filterableFields: [code]
+          spatialQueries:
+            bbox:
+              maximumLongitudeSpanDegrees: 2
+              maximumLatitudeSpanDegrees: 2
   - id: tabular
     principalClaim: registry_principal
     requiredScopes: unrestricted
     permissions:
-      - entity: site
-        rowBoundaries: unrestricted
-        operations: [get, list]
-        readableFields: [code]
+      entities:
+        - entity: site
+          rowBoundaries: unrestricted
+          operations: [get, list]
+          readableFields: [code]
 "#;
 
 #[derive(Default)]
@@ -541,9 +553,9 @@ impl SnapshotReadService for RecordingSnapshotReadService {
 }
 
 const SNAPSHOT_PROJECT: &str = r#"
-apiVersion: registry.registrystack.org/v1alpha1
-kind: RegistryProject
-registry: {id: snapshot-surface, version: "1", defaultLanguage: en, canonicalBaseIri: https://authoring.example.test}
+apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project: {id: snapshot-surface, version: "1", defaultLanguage: en, canonicalBaseIri: https://authoring.example.test}
 entities:
   - id: assignment
     primaryDataset: test-dataset
@@ -553,8 +565,8 @@ entities:
     classification: restricted
     temporal: {startField: starts, endField: ends}
     fields:
-      - {id: label, type: string, required: true, maxLength: 100, classification: restricted}
-      - {id: jurisdiction, type: string, required: true, maxLength: 32, classification: restricted}
+      - {id: label, type: string, required: true, maximumLength: 100, classification: restricted}
+      - {id: jurisdiction, type: string, required: true, maximumLength: 32, classification: restricted}
       - {id: starts, type: date, required: true, classification: restricted}
       - {id: ends, type: date, classification: restricted}
 accessProfiles:
@@ -564,37 +576,40 @@ accessProfiles:
     requiredScopes: [registry.read]
     requiredPurposes: [case-management]
     permissions:
-      - entity: assignment
-        operations: [snapshot]
-        readableFields: [label, starts, ends]
-        filterableFields: [label]
-        sortableFields: [label]
-        allowCount: true
-        rowBoundaries:
-          - {field: jurisdiction, claim: jurisdictions, operator: in}
+      entities:
+        - entity: assignment
+          operations: [snapshot]
+          readableFields: [label, starts, ends]
+          filterableFields: [label]
+          sortableFields: [label]
+          allowCount: true
+          rowBoundaries:
+            - {field: jurisdiction, claim: jurisdictions, operator: in}
   - id: live-only
     principalClaim: registry_principal
     requiredScopes: [registry.read]
     permissions:
-      - entity: assignment
-        rowBoundaries: unrestricted
-        operations: [get, list]
-        readableFields: [label, starts, ends]
+      entities:
+        - entity: assignment
+          rowBoundaries: unrestricted
+          operations: [get, list]
+          readableFields: [label, starts, ends]
   - id: revision-only
     principalClaim: registry_principal
     requiredScopes: [registry.read]
     permissions:
-      - entity: assignment
-        rowBoundaries: unrestricted
-        operations: [revisions]
-        revisionAccess: true
-        readableFields: [label]
+      entities:
+        - entity: assignment
+          rowBoundaries: unrestricted
+          operations: [revisions]
+          revisionAccess: true
+          readableFields: [label]
 "#;
 
 const REQUEST_METADATA_GRANT_PROJECT: &str = r#"
-apiVersion: registry.registrystack.org/v1alpha1
-kind: RegistryProject
-registry: {id: request-metadata-grants, version: 0.1.0, defaultLanguage: en, canonicalBaseIri: https://authoring.example.test}
+apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project: {id: request-metadata-grants, version: 0.1.0, defaultLanguage: en, canonicalBaseIri: https://authoring.example.test}
 entities:
   - id: placement
     primaryDataset: test-dataset
@@ -604,8 +619,8 @@ entities:
     changeControl:
       requiredFor: [patch]
     fields:
-      - {id: site, type: string, required: true, maxLength: 64, classification: public}
-      - {id: holder-note, type: string, maxLength: 64, classification: public}
+      - {id: site, type: string, required: true, maximumLength: 64, classification: public}
+      - {id: holder-note, type: string, maximumLength: 64, classification: public}
   - id: placement-correction
     primaryDataset: test-dataset
     route: placement-corrections
@@ -613,7 +628,7 @@ entities:
     classification: public
     fields:
       - {id: target, type: reference, target: placement, required: true, classification: public}
-      - {id: proposed-site, type: string, required: true, maxLength: 64, classification: public}
+      - {id: proposed-site, type: string, required: true, maximumLength: 64, classification: public}
     changeRequest:
       effects:
         - target: {fromField: target}
@@ -622,6 +637,7 @@ entities:
             site: {fromField: proposed-site}
           clear: [holder-note]
       review:
+        type: required
         authority: casework-main
         policyId: placement-correction
       onApproved: {mode: manual}
@@ -631,46 +647,50 @@ accessProfiles:
     principalClaim: registry_principal
     requiredScopes: unrestricted
     permissions:
-      - {entity: placement-correction, rowBoundaries: unrestricted, operations: [get, list], readableFields: [target, proposed-site]}
+      entities:
+        - {entity: placement-correction, rowBoundaries: unrestricted, operations: [get, list], readableFields: [target, proposed-site]}
   - id: correction-officer
     principalClaim: registry_principal
     requiredScopes: [registry.read]
     requiredPurposes: [case-management]
     permissions:
-      - entity: placement
-        rowBoundaries: unrestricted
-        operations: [get]
-        readableFields: [site]
-      - entity: placement-correction
-        rowBoundaries: unrestricted
-        operations: [create, get, list, patch, submit_request, apply_request]
-        readableFields: [target, proposed-site]
-        writableFields: [target, proposed-site]
-        applyTargets:
-          - {entity: placement, rowBoundaries: unrestricted}
+      entities:
+        - entity: placement
+          rowBoundaries: unrestricted
+          operations: [get]
+          readableFields: [site]
+        - entity: placement-correction
+          rowBoundaries: unrestricted
+          operations: [create, get, list, patch, submit-request, apply-request]
+          readableFields: [target, proposed-site]
+          writableFields: [target, proposed-site]
+          applyTargets:
+            - {entity: placement, rowBoundaries: unrestricted}
   - id: checkpoint-reader
     principalClaim: registry_principal
     requiredScopes: [registry.read]
     requiredPurposes: [case-management]
     permissions:
-      - entity: placement
-        rowBoundaries: unrestricted
-        operations: [get]
-        readableFields: [site]
-      - entity: placement-correction
-        rowBoundaries: unrestricted
-        operations: [get, list]
-        readableFields: [target, proposed-site]
-        readableRequestFields: [reason, review_state]
+      entities:
+        - entity: placement
+          rowBoundaries: unrestricted
+          operations: [get]
+          readableFields: [site]
+        - entity: placement-correction
+          rowBoundaries: unrestricted
+          operations: [get, list]
+          readableFields: [target, proposed-site]
+          readableRequestFields: [reason, review-state]
   - id: narrow-reader
     principalClaim: registry_principal
     requiredScopes: [registry.read]
     requiredPurposes: [case-management]
     permissions:
-      - entity: placement-correction
-        rowBoundaries: unrestricted
-        operations: [get, list]
-        readableFields: [target, proposed-site]
+      entities:
+        - entity: placement-correction
+          rowBoundaries: unrestricted
+          operations: [get, list]
+          readableFields: [target, proposed-site]
 "#;
 
 fn snapshot_harness(
@@ -1656,10 +1676,11 @@ async fn lookup_route_conceals_a_substituted_access_profile_selection() {
     requiredScopes: [registry.read]
     requiredPurposes: [case-management]
     permissions:
-      - entity: household
-        rowBoundaries: unrestricted
-        operations: [get]
-        readableFields: [household-code]
+      entities:
+        - entity: household
+          rowBoundaries: unrestricted
+          operations: [get]
+          readableFields: [household-code]
 "
     );
     let harness = Harness::from_project(&project, true);
@@ -1810,12 +1831,12 @@ async fn relationship_route_uses_path_grant_not_direct_target_rights() {
 async fn relationship_route_conceals_geojson_before_record_service_access() {
     let project = LOOKUP_PATH_PROJECT
         .replace(
-            "      - {id: sensitive-note, type: string, required: false, maxLength: 64, classification: restricted}",
-            "      - {id: sensitive-note, type: string, required: false, maxLength: 64, classification: restricted}\n      - {id: location, type: crs84-point, precision: 6, required: false, classification: restricted}\n    geojson:\n      geometryField: location",
+            "      - {id: sensitive-note, type: string, required: false, maximumLength: 64, classification: restricted}",
+            "      - {id: sensitive-note, type: string, required: false, maximumLength: 64, classification: restricted}\n      - {id: location, type: crs84-point, precision: 6, required: false, classification: restricted}\n    geojson:\n      geometryField: location",
         )
         .replace(
-            "            readableFields: [person-code]",
-            "            readableFields: [person-code, location]",
+            "              readableFields: [person-code]",
+            "              readableFields: [person-code, location]",
         );
     let harness = Harness::from_project(&project, true);
     let root = "00000000-0000-4000-8000-000000000001";
@@ -2508,7 +2529,7 @@ impl Harness {
 fn revision_harness() -> (axum::Router, Arc<RecordingRevisionReadService>) {
     let project = PROJECT.replace(
         "operations: [create, get, list, patch, tombstone, batch, revisions]",
-        "operations: [create, get, list, patch, tombstone, batch, revisions]\n        revisionAccess: true",
+        "operations: [create, get, list, patch, tombstone, batch, revisions]\n          revisionAccess: true",
     );
     let project = parse_project_yaml(project.as_bytes()).expect("revision project parses");
     let registry = Arc::new(
@@ -3211,7 +3232,7 @@ async fn caller_filtered_discovery_conceals_counts_vocabularies_events_queries_a
     assert_eq!(
         protected_openapi["paths"]["/v1/records/classified-records:as-of"]["get"]
             ["x-registry-queryKind"],
-        "as_of"
+        "as-of"
     );
     assert_eq!(
         protected_openapi["components"]["schemas"]["protected-ledger"]["properties"]
@@ -3559,10 +3580,10 @@ fn operation_name(operation: Operation) -> &'static str {
         Operation::Tombstone => "tombstone",
         Operation::Batch => "batch",
         Operation::Revisions => "revisions",
-        Operation::SubmitRequest => "submit_request",
-        Operation::ReviseRequest => "revise_request",
-        Operation::CancelRequest => "cancel_request",
-        Operation::ApplyRequest => "apply_request",
+        Operation::SubmitRequest => "submit-request",
+        Operation::ReviseRequest => "revise-request",
+        Operation::CancelRequest => "cancel-request",
+        Operation::ApplyRequest => "apply-request",
         Operation::Invoke => "invoke",
         Operation::Snapshot => "snapshot",
         Operation::Import => "import",
@@ -3880,11 +3901,11 @@ async fn workspace_metadata_projects_request_field_disclosure_per_caller_profile
     .await;
     assert_eq!(
         metadata_operation(&granted, "records.placement-correction.get")["readableRequestFields"],
-        json!(["reason", "review_state"])
+        json!(["reason", "review-state"])
     );
     assert_eq!(
         metadata_operation(&granted, "records.placement-correction.list")["readableRequestFields"],
-        json!(["reason", "review_state"])
+        json!(["reason", "review-state"])
     );
     // An entity without a change request never carries request metadata, so the
     // projection stays empty whatever the profile's default grant holds.
@@ -4098,7 +4119,7 @@ async fn workspace_metadata_keeps_route_fields_selectors_and_query_capabilities_
         ])
     );
     assert_eq!(
-        path["query"]["maxPageSize"],
+        path["query"]["maximumPageSize"],
         path["query"]["defaultPageSize"]
     );
     let direct = metadata_operation(&document, "records.person.get");
@@ -4188,7 +4209,7 @@ async fn workspace_metadata_lookup_claim_origin_exposes_no_private_claim_mapping
     .await;
     let lookup = metadata_operation(&document, "records.household.lookup");
     assert_eq!(lookup["selectors"].as_array().unwrap().len(), 1);
-    assert_eq!(lookup["selectors"][0]["valueOrigin"], "verified_claim");
+    assert_eq!(lookup["selectors"][0]["valueOrigin"], "verified-claim");
     assert_eq!(lookup["request"]["queryParameters"], json!(["$select"]));
     assert_eq!(lookup["selectors"][0]["requestFields"], json!([]));
     assert_eq!(
@@ -4212,7 +4233,7 @@ async fn workspace_metadata_lookup_claim_origin_exposes_no_private_claim_mapping
 
 #[tokio::test]
 async fn workspace_references_require_independent_same_profile_target_operations() {
-    let source = LOOKUP_PATH_PROJECT.replace("      - entity: person\n        rowBoundaries: unrestricted\n        operations: [get, list]", "      - entity: membership\n        rowBoundaries: unrestricted\n        operations: [get]\n        readableFields: [person]\n      - entity: person\n        rowBoundaries: unrestricted\n        operations: [get, list]");
+    let source = LOOKUP_PATH_PROJECT.replace("        - entity: person\n          rowBoundaries: unrestricted\n          operations: [get, list]", "        - entity: membership\n          rowBoundaries: unrestricted\n          operations: [get]\n          readableFields: [person]\n        - entity: person\n          rowBoundaries: unrestricted\n          operations: [get, list]");
     let harness = Harness::from_project(&source, true);
     let document = body_json(
         harness
@@ -4235,7 +4256,7 @@ async fn workspace_references_require_independent_same_profile_target_operations
         assert_eq!(operation["labelFields"], json!(["sensitive-note"]));
         assert_ne!(operation["operationId"], "records.household.path.people");
     }
-    let path_only = source.replace("      - entity: person\n        rowBoundaries: unrestricted\n        operations: [get, list]\n        readableFields: [sensitive-note]\n        filterableFields: [sensitive-note]\n        sortableFields: [sensitive-note]\n", "");
+    let path_only = source.replace("        - entity: person\n          rowBoundaries: unrestricted\n          operations: [get, list]\n          readableFields: [sensitive-note]\n          filterableFields: [sensitive-note]\n          sortableFields: [sensitive-note]\n", "");
     let harness = Harness::from_project(&path_only, true);
     let document = body_json(
         harness
@@ -4257,7 +4278,7 @@ async fn workspace_references_require_independent_same_profile_target_operations
         .any(|operation| operation["readPath"]["id"] == "people"));
     // The no-profile request can have different compiled defaults per route.
     // Even a visible direct operation in another profile cannot label this reference.
-    let other_profile = format!("{path_only}      - entity: person\n        rowBoundaries: unrestricted\n        operations: [get, list]\n        readableFields: [sensitive-note]\n");
+    let other_profile = format!("{path_only}        - entity: person\n          rowBoundaries: unrestricted\n          operations: [get, list]\n          readableFields: [sensitive-note]\n");
     let harness = Harness::from_project(&other_profile, true);
     let document = body_json(
         harness
@@ -4296,7 +4317,7 @@ async fn workspace_temporal_capabilities_and_no_store_cover_success_and_refusal(
         .as_array()
         .unwrap()
         .iter()
-        .find(|operation| operation["query"]["kind"] == "as_of")
+        .find(|operation| operation["query"]["kind"] == "as-of")
         .unwrap();
     assert_eq!(as_of["query"]["temporal"]["parameter"], "asOf");
     assert_eq!(as_of["query"]["temporal"]["required"], true);
@@ -4423,9 +4444,9 @@ async fn attachment_query_metadata_matches_readable_slots_without_scalar_sql_pro
         .unwrap()
         .clone();
     narrow["id"] = json!("metadata-narrow");
-    narrow["permissions"][0]["operations"] = json!(["get", "list"]);
-    narrow["permissions"][0]["readableFields"] = json!(["record", "label"]);
-    narrow["permissions"][0]["writableFields"] = json!([]);
+    narrow["permissions"]["entities"][0]["operations"] = json!(["get", "list"]);
+    narrow["permissions"]["entities"][0]["readableFields"] = json!(["record", "label"]);
+    narrow["permissions"]["entities"][0]["writableFields"] = json!([]);
     source["accessProfiles"]
         .as_array_mut()
         .unwrap()
@@ -4498,9 +4519,9 @@ async fn attachment_query_metadata_matches_readable_slots_without_scalar_sql_pro
 }
 
 const FIELD_ENCRYPTION_PROJECT: &str = r#"
-apiVersion: registry.registrystack.org/v1alpha1
-kind: RegistryProject
-registry:
+apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
   id: field-encryption-surface
   version: 0.1.0
   defaultLanguage: en
@@ -4513,34 +4534,35 @@ entities:
     tombstone: true
     classification: restricted
     fields:
-      - {id: label, type: string, required: true, maxLength: 100, classification: internal}
-      - {id: secret, type: string, required: true, maxLength: 256, classification: restricted, encrypted: true,
+      - {id: label, type: string, required: true, maximumLength: 100, classification: internal}
+      - {id: secret, type: string, required: true, maximumLength: 256, classification: restricted, encrypted: true,
          lookup: {normalization: [trim, uppercase], unique: true}}
   - id: note
     primaryDataset: test-dataset
     route: notes
-    mutationMode: create_only
+    mutationMode: create-only
     classification: restricted
     fields:
-      - {id: text, type: string, required: true, maxLength: 200, classification: restricted}
+      - {id: text, type: string, required: true, maximumLength: 200, classification: restricted}
 accessProfiles:
   - id: caseworker
     default: true
     principalClaim: registry_principal
     requiredScopes: unrestricted
     permissions:
-      - entity: holder
-        rowBoundaries: unrestricted
-        operations: [get, list]
-        readableFields: [label, secret]
-        filterableFields: [label]
-        sortableFields: [label]
-      - entity: note
-        rowBoundaries: unrestricted
-        operations: [get, list]
-        readableFields: [text]
-        filterableFields: [text]
-        sortableFields: [text]
+      entities:
+        - entity: holder
+          rowBoundaries: unrestricted
+          operations: [get, list]
+          readableFields: [label, secret]
+          filterableFields: [label]
+          sortableFields: [label]
+        - entity: note
+          rowBoundaries: unrestricted
+          operations: [get, list]
+          readableFields: [text]
+          filterableFields: [text]
+          sortableFields: [text]
 "#;
 
 #[tokio::test]

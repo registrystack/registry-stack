@@ -98,10 +98,10 @@ test('invalid request graphs fail before I/O with a stable kind', async () => {
   const client = new BaseRegistryClient({ baseUrl });
   const cyclic = {}; cyclic.self = cyclic;
   assert.throws(() => client.continueList(cyclic), (error) => (
-    error instanceof BaseRegistryClientError && error.kind === 'invalid_request'
+    error instanceof BaseRegistryClientError && error.kind === 'invalid-request'
   ));
   await assert.rejects(client.listRecords('people', { top: 0 }), (error) => (
-    error instanceof BaseRegistryClientError && error.kind === 'invalid_request'
+    error instanceof BaseRegistryClientError && error.kind === 'invalid-request'
   ));
 });
 
@@ -176,12 +176,12 @@ test('nullable private-key JWT durations use provider defaults', () => {
   }), (error) => error instanceof BaseRegistryClientError && error.kind === 'configuration');
 });
 
-test('a missing record fails with its own not_found kind', async () => {
+test('a missing record fails with its own not-found kind', async () => {
   const client = new BaseRegistryClient({ baseUrl });
   await assert.rejects(
     client.getRecord('companies', MISSING_RECORD_ID),
     (error) => error instanceof BaseRegistryClientError
-      && error.kind === 'not_found'
+      && error.kind === 'not-found'
       && error.status === 404,
   );
 });
@@ -192,13 +192,13 @@ test('metadata selection failures use the public error envelope', async () => {
   assert.throws(
     () => metadata.selectCreate('records.missing.create', 'writer'),
     (error) => error instanceof BaseRegistryClientError
-      && error.kind === 'metadata_selection'
-      && error.code === 'not_found',
+      && error.kind === 'metadata-selection'
+      && error.code === 'not-found',
   );
   assert.throws(
     () => metadata.selectCreate(null, 'writer'),
     (error) => error instanceof BaseRegistryClientError
-      && error.kind === 'invalid_request',
+      && error.kind === 'invalid-request',
   );
 });
 

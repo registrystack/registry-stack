@@ -53,7 +53,7 @@ async fn settle_as(harness: &Harness, message_id: Uuid, state: &str, age_days: i
         }
         "unknown" => "attempt = 1, next_attempt_at = NULL",
         "delivered" => "attempt = 1, next_attempt_at = NULL, delivered_at = now()",
-        "dead_lettered" => "attempt = 1, next_attempt_at = NULL, dead_lettered_at = now()",
+        "dead-lettered" => "attempt = 1, next_attempt_at = NULL, dead_lettered_at = now()",
         "expired" => "next_attempt_at = NULL, expired_at = now()",
         "cancelled" => "next_attempt_at = NULL",
         other => panic!("no shape for {other}"),
@@ -150,7 +150,7 @@ async fn a_payload_is_erased_payload_days_after_a_terminal_state_and_never_while
 ) {
     let harness = Harness::start().await;
     let mut due = Vec::new();
-    for state in ["delivered", "dead_lettered", "expired", "cancelled"] {
+    for state in ["delivered", "dead-lettered", "expired", "cancelled"] {
         let id = harness.accepted(&email_submission()).await;
         settle_as(&harness, id, state, 8).await;
         due.push(id);
@@ -215,7 +215,7 @@ async fn a_payload_is_erased_payload_days_after_a_terminal_state_and_never_while
 async fn a_requeue_committed_while_retention_waits_keeps_the_payload() {
     let harness = Harness::start().await;
     let id = harness.accepted(&email_submission()).await;
-    settle_as(&harness, id, "dead_lettered", 8).await;
+    settle_as(&harness, id, "dead-lettered", 8).await;
     // An operator requeue holds the job's row when retention reaches it.
     harness
         .isolated

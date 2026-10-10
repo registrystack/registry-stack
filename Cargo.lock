@@ -5322,6 +5322,7 @@ version = "0.40.0"
 dependencies = [
  "clap",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -5926,6 +5927,7 @@ version = "0.40.0"
 dependencies = [
  "chrono",
  "serde",
+ "serde_json",
  "thiserror 2.0.21",
  "tokio",
  "tokio-postgres",
@@ -6219,6 +6221,7 @@ dependencies = [
 name = "registry-platform-yaml"
 version = "0.40.0"
 dependencies = [
+ "regex",
  "saphyr-parser",
  "schemars",
  "serde",

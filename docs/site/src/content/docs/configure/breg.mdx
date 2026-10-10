@@ -116,8 +116,8 @@ This page describes the Base Registry Engine (BReg)
 
 | Member | What it holds |
 |---|---|
-| `apiVersion`, `kind` | `registry.registrystack.org/v1alpha1` and `RegistryProject`. |
-| `registry` | `id`, `version`, `defaultLanguage`, and `canonicalBaseIri`, the base of every record IRI. |
+| `apiVersion`, `kind` | `id.registrystack.org/formats/breg/project/v1alpha1` and `BRegProject`. |
+| `project` | `id`, `version`, `defaultLanguage`, and `canonicalBaseIri`, the base of every record IRI. |
 | `package` | Production identity: `sourceRevision`. Required for a production package. The retired `environment`, `instanceId`, and `sequence` keys are refused; the environment and instance belong in the runtime file's `identity`. |
 | `manifestProjection` | The Registry Manifest catalog a deployment publishes: the `accessProfile` it describes, a `classificationCeiling`, `catalog` metadata, and the `datasets[]` and `dataServices[]` it lists. Omitting it raises the finding `breg.manifest-projection.missing`, which is reported only in authoring mode: it does not fail `bregctl check --production`, and `package` builds a package without one. A project that still carries the retired singular `dataset` or `dataService` is refused; declare `datasets[]` and `dataServices[]` instead. |
 | `modules` | Included modules by `id`, `version`, and `digest`. A production compilation requires a digest on every lock, and a lock and a loaded source for every module. |
@@ -144,7 +144,7 @@ they use directly.<DocsetProduct product="registry-breg-services"> The
     crates/registry-breg/src/compiler.rs. */}
 
 Identifiers follow a closed grammar: a lowercase ASCII letter first, then lowercase letters, digits, hyphens, or underscores, at most 64 bytes.
-`check` refuses anything else with `breg.identifier.invalid`, so an event id such as `record.status.changed` fails where `record-status-changed-v1` passes.
+`check` refuses anything else where it reads the file, as `config.invalid-value` at the line of the `id`, so an event id such as `record.status.changed` fails where `record-status-changed-v1` passes.
 The project convention is kebab-case for entity ids, field ids, profile ids, and vocabulary ids.
 The API exposes field ids in camelCase, so `asset-code` becomes `assetCode`, unless a field sets `apiName`.
 
@@ -165,12 +165,12 @@ entities:
       - id: asset-code
         type: string
         required: true
-        maxLength: 64
+        maximumLength: 64
         classification: internal
       - id: label
         type: string
         required: true
-        maxLength: 200
+        maximumLength: 200
         classification: internal
       - id: asset-class
         type: vocabulary-code
@@ -178,7 +178,7 @@ entities:
         required: true
         classification: internal
     constraints:
-      - kind: unique
+      - type: unique
         id: asset-code-unique
         fields: [asset-code]
 vocabularies:
@@ -187,7 +187,7 @@ vocabularies:
 ```
 
 An entity needs an `id`, a `primaryDataset` that names the dataset its records belong to, a `route` that becomes the path segment under `/v1/records/`, and a `mutationMode`.
-`mutable` allows patches; `create_only` refuses them, which suits event-like records such as inspections.
+`mutable` allows patches; `create-only` refuses them, which suits event-like records such as inspections.
 `tombstone: true` enables the tombstone operation.
 `batch` sets the item and byte limits of one batch request for the entity.
 
@@ -197,22 +197,22 @@ Classification never grants access on its own: the manifest projection uses it a
 | Type | Field members | Notes |
 |---|---|---|
 | `boolean`, `int64`, `uuid` | None | `int64` holds whole numbers. |
-| `string` | `maxLength`, `minLength` | Single-line, bounded text. |
-| `text` | `maxLength` | Longer text; not filterable. |
+| `string` | `maximumLength`, `minimumLength` | Single-line, bounded text. |
+| `text` | `maximumLength` | Longer text; not filterable. |
 | `decimal` | `precision`, `scale`, `minimum`, `maximum` | Exact decimals, exposed as strings. |
 | `date`, `timestamp` | None | ISO 8601; timestamps are UTC. |
 | `vocabulary-code` | `vocabulary` or `values` | A code from a declared vocabulary or an inline list. |
 | `reference` | `target`, `onDelete` | The identifier of a record in another entity. `onDelete` defaults to `restrict`. |
 | `crs84-point` | `precision`, `bbox` | A GeoJSON Point in CRS84 longitude and latitude. |
-| `structured` | `schema`, `maxBytes` | A JSON value validated by an inline JSON Schema. |
+| `structured` | `schema`, `maximumBytes` | A JSON value validated by an inline JSON Schema. |
 
 Constraints are evaluated on every write:
 
-| `kind` | Members | Checks |
+| `type` | Members | Checks |
 |---|---|---|
 | `unique` | Optional `id`, `fields`, optional `when` | No two live records share the values. `when` narrows the rule to rows where a field equals a value, is null, is not null, or the record is in an active lifecycle. |
-| `compare` | Optional `id`, `left`, `operator`, `right` | Two fields of one record compare as `less_than`, `less_than_or_equal`, `greater_than`, or `greater_than_or_equal`. |
-| `int_range` | Optional `id`, `field`, `minimum`, `maximum` | An `int64` field stays within bounds. |
+| `compare` | Optional `id`, `left`, `operator`, `right` | Two fields of one record compare as `less-than`, `less-than-or-equal`, `greater-than`, or `greater-than-or-equal`. |
+| `int-range` | Optional `id`, `field`, `minimum`, `maximum` | An `int64` field stays within bounds. |
 | `vocabulary` | Optional `id`, `field`, `values` | A field takes one of the listed values. |
 | `temporal-non-overlap` | Optional `id`, `startField`, `endField`, `scopeFields` | No two records with equal scope fields have overlapping validity. |
 
@@ -250,7 +250,7 @@ fields:
   - id: national-identifier
     type: string
     required: true
-    maxLength: 32
+    maximumLength: 32
     classification: restricted
     encrypted: true
     lookup:
@@ -297,12 +297,12 @@ For a many-to-many relationship, declare a relationship entity with two referenc
       - id: household-code
         type: string
         required: true
-        maxLength: 64
+        maximumLength: 64
         classification: internal
       - id: administrative-area
         type: string
         required: true
-        maxLength: 64
+        maximumLength: 64
         classification: internal
       - id: local-household-number
         type: int64
@@ -374,7 +374,7 @@ A temporal entity declares which fields bound a record's validity:
       startField: valid-from
       endField: valid-to
     constraints:
-      - kind: temporal-non-overlap
+      - type: temporal-non-overlap
         id: subject-validity-non-overlap
         scopeFields: [subject]
         startField: valid-from
@@ -396,6 +396,8 @@ A module is a reusable file under `modules/<id>/module.yaml` that contributes en
 The module `init` wrote adds one optional field to the project's `record` entity:
 
 ```yaml
+apiVersion: id.registrystack.org/formats/breg/module/v1alpha1
+kind: BRegModule
 id: record-notes
 version: 0.1.0
 extendEntities:
@@ -403,10 +405,11 @@ extendEntities:
     fields:
       - id: internal-note
         type: string
-        maxLength: 500
+        maximumLength: 500
         classification: internal
 ```
 
+A module opens with its own `apiVersion` and `kind`, which are not part of the content the digest pins.
 `registry.yaml` includes it under `modules` with its `id`, `version`, and content `digest`.
 An `extendEntities` entry may add `fields`, `constraints`, `events`, `selectorProfiles`, `readPaths`, `accessRequirements`, and change control to an entity the module does not own.
 Adding a field to the model grants nobody access to it; a profile still has to list it before a caller can read or set it.
@@ -437,7 +440,7 @@ Hooks are declared on entities, in the registry file or in a module, and the pro
       - id: code
         type: string
         required: true
-        maxLength: 64
+        maximumLength: 64
         classification: internal
       - id: status
         type: vocabulary-code
@@ -449,10 +452,10 @@ Hooks are declared on entities, in the registry file or in a module, and the pro
         trigger: patched
         projection: [code, status]
         when:
-          kind: fields
+          type: fields
           changed: [status]
         handler:
-          kind: url
+          type: url
           destinationId: record-receiver
 ```
 
@@ -460,14 +463,15 @@ Hooks are declared on entities, in the registry file or in a module, and the pro
 |---|---|
 | `id` | The event contract identifier, sent to receivers as the CloudEvents `ce-type`. Use a new id for a payload change receivers must notice. |
 | `phase` | `after`. An entity hook runs after the triggering transaction commits; the engine refuses any other phase. |
-| `trigger` | `created`, `patched`, `tombstoned`, or `request_lifecycle` for change-request state changes. |
-| `when` | Optional. `kind: fields` with `changed`, `beforeEquals`, and `afterEquals`; or `kind: request_lifecycle` with `transitions`, `toStates`, and `stages`. Every listed test must hold. |
+| `trigger` | `created`, `patched`, `tombstoned`, or `request-lifecycle` for change-request state changes. |
+| `when` | Optional. `type: fields` with `changed`, `beforeEquals`, `afterEquals`, `beforeIsNull`, and `afterIsNull`; or `type: request-lifecycle` with `transitions`, `toStates`, and `stages`. Every listed test must hold. |
 | `projection` | The field ids copied into the event payload's `values`. Restricted fields cannot be projected. |
-| `handler.kind` | `url`, `rhai`, or `wasm`. A `url` hook delivers to a bound destination; a `rhai` or `wasm` hook runs a reviewed local program in the post-commit worker. |
+| `handler.type` | `url`, `rhai`, or `wasm`. A `url` hook delivers to a bound destination; a `rhai` or `wasm` hook runs a reviewed local program in the post-commit worker. |
 | `handler.destinationId` | The key the runtime configuration binds to a receiver URL and signing key. Required for a `url` hook; a local handler names its reviewed `script` or `module` path instead. |
 
 Field ids in `when` and `projection` are the authored ids, and the payload keeps them.
-`changed` is valid only with the `patched` trigger, `beforeEquals` with `patched` and `tombstoned`, and `afterEquals` with `created` and `patched`.
+`changed` is valid only with the `patched` trigger, `beforeEquals` and `beforeIsNull` with `patched` and `tombstoned`, and `afterEquals` and `afterIsNull` with `created` and `patched`.
+A comparison value is a boolean, a number, or text. To require that a field holds no value, list it in `beforeIsNull` or `afterIsNull`; `null` is not a comparison value.
 
 Render the exact HTTP request a receiver will get, with synthetic values, so you can build the receiver before the registry exists:
 
@@ -512,7 +516,7 @@ Follow [publish a statistical series](../breg-statistics/) to declare a dataset 
 |---|---|
 | `init` fails with `output.destination.invalid`. | The destination exists or contains a parent-directory component. Give a new path, or remove the directory if it holds nothing you want. |
 | An error or finding names a path such as `entities[id=record].fields[id=label]`. | The path is a document path into `registry.yaml` or the module file the message names. Fix the member it points at. |
-| `check` reports `breg.identifier.invalid`. | An id breaks the closed grammar: start with a lowercase letter and use only lowercase letters, digits, hyphens, and underscores, at most 64 bytes. |
+| `check` reports `config.invalid-value` on an `id`, or `breg.identifier.invalid` on a route or a reference. | An identifier breaks the closed grammar: start with a lowercase letter and use only lowercase letters, digits, hyphens, and underscores, at most 64 bytes. |
 | A module digest does not match. | Run `project lock` after editing a module, then review the digest change together with the module diff. |
 | `check` refuses a filter, sort, comparison, change request, or projection that uses an encrypted field. | An encrypted field answers equality lookups only. Declare a `lookup` block for exact-value lookups, or move the comparison to a field that is not sealed; [Encrypt restricted fields](#encrypt-restricted-fields) lists what is refused. |
 | `check` refuses the manifest projection's singular `dataset` or `dataService`. | The projection takes only the plural keys. Declare `datasets[]` and `dataServices[]`, each with an `id`, and point every entity's `primaryDataset` at one of them. |

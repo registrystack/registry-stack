@@ -1366,8 +1366,8 @@ fn cfg_diag_6_a_refused_value_with_an_unspaced_hash_says_where_comments_start() 
             "config.invalid-value",
             "/url",
             6,
-            "expected an absolute http or https URL with a host, no user information, and at most 2048 characters",
-            "Write an absolute URL starting with `https://` or `http://`, without user information.",
+            "expected an absolute http or https URL with a host, no user information, no whitespace or control character, and at most 2048 characters",
+            "Write an absolute URL starting with `https://` or `http://`, without user information, spaces, tabs, or line breaks.",
         ),
     ] {
         let report = refusal::<Everything>(body);
@@ -2487,10 +2487,54 @@ fn cfg_val_7_a_url_is_absolute_with_a_host_and_no_user_information() {
             "config.invalid-value",
             "/url",
             (3, 6),
-            "expected an absolute http or https URL with a host, no user information, and at most 2048 characters",
-            "Write an absolute URL starting with `https://` or `http://`, without user information.",
+            "expected an absolute http or https URL with a host, no user information, no whitespace or control character, and at most 2048 characters",
+            "Write an absolute URL starting with `https://` or `http://`, without user information, spaces, tabs, or line breaks.",
         );
     }
+}
+
+#[test]
+fn cfg_val_7_a_url_holds_no_whitespace_and_no_control_character() {
+    // CFG-VAL-1 lets a text value hold a tab, a line feed, a carriage
+    // return, or a space, so the reader hands each of these to the URL type.
+    for (case, body) in [
+        ("tab escape", "url: \"https://a.example/x\\ty\"\n"),
+        ("line feed escape", "url: \"https://a.example/x\\ny\"\n"),
+        (
+            "carriage return escape",
+            "url: \"https://a.example/x\\ry\"\n",
+        ),
+        (
+            "trailing line feed escape",
+            "url: \"https://a.example\\n\"\n",
+        ),
+        ("literal tab", "url: \"https://a.example/x\ty\"\n"),
+        ("trailing space", "url: \"https://a.example \"\n"),
+        ("leading space", "url: \" https://a.example\"\n"),
+        ("inner space", "url: https://a.example/x y\n"),
+        (
+            "no-break space escape",
+            "url: \"https://a.example/x\\_y\"\n",
+        ),
+        ("block scalar", "url: |\n  https://a.example\n"),
+    ] {
+        let report = refusal::<Everything>(body);
+        let diagnostic = only(&report);
+        assert_eq!(diagnostic.code, "config.invalid-value", "{case}");
+        assert_eq!(diagnostic.path, "/url", "{case}");
+        assert_eq!(
+            diagnostic.message,
+            "expected an absolute http or https URL with a host, no user information, no whitespace or control character, and at most 2048 characters",
+            "{case}"
+        );
+        assert_eq!(
+            diagnostic.suggested_action,
+            "Write an absolute URL starting with `https://` or `http://`, without user information, spaces, tabs, or line breaks.",
+            "{case}"
+        );
+    }
+    let read = decode::<Everything>("url: |-\n  https://a.example\n").unwrap();
+    assert_eq!(read.url.unwrap().as_str(), "https://a.example");
 }
 
 // ----- JSON input -----

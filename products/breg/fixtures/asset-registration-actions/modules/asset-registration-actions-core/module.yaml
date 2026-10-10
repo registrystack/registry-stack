@@ -1,3 +1,5 @@
+apiVersion: id.registrystack.org/formats/breg/module/v1alpha1
+kind: BRegModule
 id: asset-registration-actions-core
 version: 0.1.0
 entities:
@@ -6,28 +8,28 @@ entities:
     route: assets
     mutationMode: mutable
     fields:
-      - {id: asset-code, apiName: assetCode, type: string, required: true, maxLength: 64, classification: internal}
-      - {id: label, type: string, required: true, maxLength: 200, classification: internal}
+      - {id: asset-code, apiName: assetCode, type: string, required: true, maximumLength: 64, classification: internal}
+      - {id: label, type: string, required: true, maximumLength: 200, classification: internal}
       - {id: asset-type, apiName: assetType, type: vocabulary-code, vocabulary: asset-type, required: true, classification: internal}
-      - {id: jurisdiction, type: string, required: true, maxLength: 80, classification: internal}
+      - {id: jurisdiction, type: string, required: true, maximumLength: 80, classification: internal}
     constraints:
-      - {kind: unique, fields: [asset-code]}
+      - {type: unique, fields: [asset-code]}
   - id: asset-inspection
     primaryDataset: asset-registration-actions
     route: inspections
-    mutationMode: create_only
+    mutationMode: create-only
     fields:
       - {id: asset, type: reference, target: asset, required: true, classification: internal}
       - {id: observed-at, apiName: observedAt, type: timestamp, required: true, classification: internal}
       - {id: result, type: vocabulary-code, vocabulary: inspection-result, required: true, classification: internal}
-      - {id: jurisdiction, type: string, required: true, maxLength: 80, classification: internal}
+      - {id: jurisdiction, type: string, required: true, maximumLength: 80, classification: internal}
 actions:
   - id: register-asset-with-inspection
     inputs:
-      - {id: asset-code, apiName: assetCode, type: string, required: true, maxLength: 64, classification: internal}
-      - {id: label, type: string, required: true, maxLength: 200, classification: internal}
+      - {id: asset-code, apiName: assetCode, type: string, required: true, maximumLength: 64, classification: internal}
+      - {id: label, type: string, required: true, maximumLength: 200, classification: internal}
       - {id: asset-type, apiName: assetType, type: vocabulary-code, vocabulary: asset-type, required: true, classification: internal}
-      - {id: jurisdiction, type: string, required: true, maxLength: 80, classification: internal}
+      - {id: jurisdiction, type: string, required: true, maximumLength: 80, classification: internal}
       - {id: observed-at, apiName: observedAt, type: timestamp, required: true, classification: internal}
       - {id: inspection-result, apiName: initialResult, type: vocabulary-code, vocabulary: inspection-result, required: true, classification: internal}
     effects:

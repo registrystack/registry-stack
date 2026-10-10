@@ -62,15 +62,15 @@
     },
     "EventDestinationDnsFamily": {
       "enum": [
-        "dualStackStrict",
-        "ipv4Only"
+        "dual-stack-strict",
+        "ipv4-only"
       ],
       "type": "string"
     },
     "EventDestinationNetworkProfile": {
       "enum": [
-        "productionHttps",
-        "loopbackDevelopmentHttp"
+        "production-https",
+        "loopback-development-http"
       ],
       "type": "string"
     },
@@ -159,6 +159,13 @@
       ],
       "type": "object"
     },
+    "ExternalId": {
+      "description": "An identifier another system issues, written exactly as its issuer gives it.",
+      "maxLength": 512,
+      "minLength": 1,
+      "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
+      "type": "string"
+    },
     "FileSecretProviderConfig": {
       "additionalProperties": false,
       "description": "The file secret provider.",
@@ -181,13 +188,13 @@
           "additionalProperties": false,
           "description": "Read `jwks_uri` from the issuer's OpenID Connect discovery document.",
           "properties": {
-            "kind": {
+            "type": {
               "const": "discovery",
               "type": "string"
             }
           },
           "required": [
-            "kind"
+            "type"
           ],
           "type": "object"
         },
@@ -195,7 +202,7 @@
           "additionalProperties": false,
           "description": "Fetch the key set from this absolute `https` URI, skipping discovery.",
           "properties": {
-            "kind": {
+            "type": {
               "const": "uri",
               "type": "string"
             },
@@ -204,7 +211,7 @@
             }
           },
           "required": [
-            "kind",
+            "type",
             "uri"
           ],
           "type": "object"
@@ -216,13 +223,13 @@
             "documentRef": {
               "$ref": "#/$defs/SecretReference"
             },
-            "kind": {
+            "type": {
               "const": "static",
               "type": "string"
             }
           },
           "required": [
-            "kind",
+            "type",
             "documentRef"
           ],
           "type": "object"
@@ -233,6 +240,11 @@
       "description": "Socket address the runtime listens on, written host:port with an IP address host ([addr]:port for IPv6).",
       "maxLength": 128,
       "minLength": 1,
+      "type": "string"
+    },
+    "LocalId": {
+      "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
       "type": "string"
     },
     "OidcAlgorithm": {
@@ -250,13 +262,13 @@
         {
           "additionalProperties": false,
           "properties": {
-            "kind": {
+            "type": {
               "const": "database",
               "type": "string"
             }
           },
           "required": [
-            "kind"
+            "type"
           ],
           "type": "object"
         },
@@ -265,6 +277,13 @@
           "properties": {
             "accessKeyIdRef": {
               "$ref": "#/$defs/SecretReference"
+            },
+            "attemptTimeoutMilliseconds": {
+              "default": 10000,
+              "format": "uint64",
+              "maximum": 60000,
+              "minimum": 100,
+              "type": "integer"
             },
             "bucket": {
               "maxLength": 63,
@@ -277,10 +296,6 @@
             "endpoint": {
               "maxLength": 2048,
               "minLength": 1,
-              "type": "string"
-            },
-            "kind": {
-              "const": "s3",
               "type": "string"
             },
             "pathStyle": {
@@ -298,16 +313,13 @@
             "sessionTokenRef": {
               "$ref": "#/$defs/SecretReference"
             },
-            "timeoutMilliseconds": {
-              "default": 10000,
-              "format": "uint64",
-              "maximum": 60000,
-              "minimum": 100,
-              "type": "integer"
+            "type": {
+              "const": "s3",
+              "type": "string"
             }
           },
           "required": [
-            "kind",
+            "type",
             "endpoint",
             "bucket",
             "region",
@@ -323,29 +335,32 @@
         {
           "additionalProperties": false,
           "properties": {
-            "kind": {
+            "type": {
               "const": "disabled",
               "type": "string"
             }
           },
           "required": [
-            "kind"
+            "type"
           ],
           "type": "object"
         },
         {
           "additionalProperties": false,
           "properties": {
+            "attemptTimeoutMilliseconds": {
+              "default": 10000,
+              "format": "uint64",
+              "maximum": 60000,
+              "minimum": 100,
+              "type": "integer"
+            },
             "authorizationRef": {
               "$ref": "#/$defs/SecretReference"
             },
             "endpoint": {
               "maxLength": 2048,
               "minLength": 1,
-              "type": "string"
-            },
-            "kind": {
-              "const": "http",
               "type": "string"
             },
             "policyId": {
@@ -355,16 +370,13 @@
               "pattern": "^[\\x21-\\x7E]+$",
               "type": "string"
             },
-            "timeoutMilliseconds": {
-              "default": 10000,
-              "format": "uint64",
-              "maximum": 60000,
-              "minimum": 100,
-              "type": "integer"
+            "type": {
+              "const": "http",
+              "type": "string"
             }
           },
           "required": [
-            "kind",
+            "type",
             "endpoint",
             "authorizationRef",
             "policyId"
@@ -411,7 +423,7 @@
           "description": "Absolute path of the active audit file. Required for, and accepted\nonly with, the `file` destination; omitted with `stdout`.",
           "type": "string"
         },
-        "retainDays": {
+        "retentionDays": {
           "description": "Days a rotated file is retained, accepted only with the `file`\ndestination. Omitted, a rotated file is retained for 90 days.",
           "format": "uint32",
           "maximum": 36500,
@@ -444,7 +456,7 @@
             },
             {
               "required": [
-                "retainDays"
+                "retentionDays"
               ]
             }
           ]
@@ -530,6 +542,9 @@
             "type": "string"
           },
           "default": {},
+          "propertyNames": {
+            "$ref": "#/$defs/ExternalId"
+          },
           "type": "object"
         }
       },
@@ -585,7 +600,7 @@
     "RawCursorConfig": {
       "additionalProperties": false,
       "properties": {
-        "maxAgeSeconds": {
+        "maximumAgeSeconds": {
           "default": 300,
           "description": "Defaults to the bounded cursor validity lifetime.",
           "format": "uint64",
@@ -775,18 +790,21 @@
       "type": "object"
     },
     "RawFieldEncryptionProvider": {
-      "description": "Raw provider binding; the `kind` member selects the custodian.",
+      "description": "Raw provider binding; the `type` member selects the custodian.",
       "oneOf": [
         {
           "additionalProperties": false,
           "properties": {
+            "attemptTimeoutMilliseconds": {
+              "default": 5000,
+              "format": "uint64",
+              "maximum": 30000,
+              "minimum": 1,
+              "type": "integer"
+            },
             "keyName": {
               "maxLength": 128,
               "minLength": 1,
-              "type": "string"
-            },
-            "kind": {
-              "const": "transit",
               "type": "string"
             },
             "mount": {
@@ -794,12 +812,9 @@
               "minLength": 1,
               "type": "string"
             },
-            "timeoutMilliseconds": {
-              "default": 5000,
-              "format": "uint64",
-              "maximum": 30000,
-              "minimum": 1,
-              "type": "integer"
+            "type": {
+              "const": "transit",
+              "type": "string"
             },
             "unixSocketPath": {
               "maxLength": 4096,
@@ -808,7 +823,7 @@
             }
           },
           "required": [
-            "kind",
+            "type",
             "unixSocketPath",
             "mount",
             "keyName"
@@ -822,13 +837,13 @@
               "$ref": "#/$defs/SecretReference",
               "description": "The data encryption key, named by a `secret:file/NAME` reference;\nan environment reference is refused."
             },
-            "kind": {
-              "const": "localFile",
+            "type": {
+              "const": "local-file",
               "type": "string"
             }
           },
           "required": [
-            "kind",
+            "type",
             "dekRef"
           ],
           "type": "object"
@@ -852,6 +867,14 @@
     "RawJwksCacheConfig": {
       "additionalProperties": false,
       "properties": {
+        "attemptTimeoutMilliseconds": {
+          "default": 5000,
+          "description": "Defaults to the bounded JWKS fetch timeout.",
+          "format": "uint64",
+          "maximum": 30000,
+          "minimum": 1,
+          "type": "integer"
+        },
         "cacheTtlSeconds": {
           "default": 600,
           "description": "Defaults to the bounded JWKS cache time-to-live.",
@@ -860,7 +883,7 @@
           "minimum": 1,
           "type": "integer"
         },
-        "maxDocumentBytes": {
+        "maximumDocumentBytes": {
           "default": 65536,
           "description": "Defaults to the bounded maximum JWKS document size.",
           "format": "uint64",
@@ -889,14 +912,6 @@
           "description": "Defaults to the bounded JWKS refresh cooldown.",
           "format": "uint64",
           "maximum": 3600,
-          "minimum": 1,
-          "type": "integer"
-        },
-        "requestTimeoutMilliseconds": {
-          "default": 5000,
-          "description": "Defaults to the bounded JWKS fetch timeout.",
-          "format": "uint64",
-          "maximum": 30000,
           "minimum": 1,
           "type": "integer"
         }
@@ -943,17 +958,18 @@
               "type": "string"
             },
             "maxItems": 128,
+            "minItems": 1,
             "type": "array",
             "uniqueItems": true
           },
-          "description": "The assertion authorities each client may exchange a subject token\nfrom, keyed by client identifier. Omitted, no assertion-issuer rule\napplies; written, it lists at least one client, and a client not\nlisted, or listed with `[]`, may exchange from no authority.",
+          "description": "The assertion authorities each client may exchange a subject token\nfrom, keyed by client identifier. Omitted, no assertion-issuer rule\napplies; written, it lists at least one client, each with at least one\nauthority, and a client not listed may exchange from no authority.",
           "maxProperties": 128,
           "minProperties": 1,
           "propertyNames": {
+            "$ref": "#/$defs/ExternalId",
             "maxLength": 512,
             "minLength": 1,
-            "pattern": "^[^\\x00-\\x20\\x7F]+$",
-            "type": "string"
+            "pattern": "^[^\\x00-\\x20\\x7F]+$"
           },
           "type": "object"
         },
@@ -965,6 +981,7 @@
           "type": "string"
         },
         "deniedKids": {
+          "description": "The signing key identifiers this registry refuses a token from.\nOmitted, no key is denied; written, it names at least one key.",
           "items": {
             "maxLength": 512,
             "minLength": 1,
@@ -972,6 +989,7 @@
             "type": "string"
           },
           "maxItems": 128,
+          "minItems": 1,
           "type": "array",
           "uniqueItems": true
         },
@@ -984,12 +1002,12 @@
         "jwksCache": {
           "$ref": "#/$defs/RawJwksCacheConfig",
           "default": {
+            "attemptTimeoutMilliseconds": 5000,
             "cacheTtlSeconds": 600,
-            "maxDocumentBytes": 65536,
+            "maximumDocumentBytes": 65536,
             "negativeCacheTtlSeconds": 60,
             "outageToleranceSeconds": 900,
-            "refreshCooldownSeconds": 30,
-            "requestTimeoutMilliseconds": 5000
+            "refreshCooldownSeconds": 30
           },
           "description": "Optional JWKS fetch and cache tuning. Defaults to bounded cache behavior."
         },
@@ -1003,7 +1021,7 @@
           "minimum": 0,
           "type": "integer"
         },
-        "maxTokenLifetimeSeconds": {
+        "maximumTokenLifetimeSeconds": {
           "format": "uint64",
           "maximum": 7200,
           "minimum": 1,
@@ -1030,7 +1048,7 @@
         "scopeClaim",
         "scopeSeparator",
         "allowedClients",
-        "maxTokenLifetimeSeconds",
+        "maximumTokenLifetimeSeconds",
         "leewayMilliseconds"
       ],
       "type": "object"
@@ -1113,7 +1131,7 @@
           "minimum": 1,
           "type": "integer"
         },
-        "maxSize": {
+        "maximumConnections": {
           "format": "uint32",
           "maximum": 128,
           "minimum": 1,
@@ -1137,7 +1155,7 @@
         }
       },
       "required": [
-        "maxSize"
+        "maximumConnections"
       ],
       "type": "object"
     },
@@ -1334,7 +1352,7 @@
           "description": "The backend handler modules are compiled and executed for: `pulley`\n(default, the portable interpreter target) or `native`. Any other\nvalue is refused as an invalid `wasmExecution` section.",
           "type": "string"
         },
-        "maxGuestMemoryBytes": {
+        "maximumGuestMemoryBytes": {
           "default": 33554432,
           "description": "Defaults to the platform guest-memory ceiling (32 MiB).",
           "format": "uint64",
@@ -1342,7 +1360,7 @@
           "minimum": 1048576,
           "type": "integer"
         },
-        "maxModuleBytes": {
+        "maximumModuleBytes": {
           "default": 2097152,
           "description": "Defaults to the default execution-time module ceiling (2 MiB); the\nstructural admission ceiling (5 MiB) is operator-reachable here.",
           "format": "uint64",
@@ -1438,10 +1456,10 @@
       "type": "object"
     },
     "Url": {
-      "description": "An absolute http or https URL with a host and no user information.",
+      "description": "An absolute http or https URL with a host, no user information, and no whitespace or control character.",
       "format": "uri",
       "maxLength": 2048,
-      "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://[^/?#@]+([/?#].*)?$",
+      "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://[^/?#@\\u0000-\\u0020\\u007F-\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]+([/?#][^\\u0000-\\u0020\\u007F-\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*)?$",
       "type": "string"
     }
   },
@@ -1450,20 +1468,20 @@
   "additionalProperties": false,
   "properties": {
     "apiVersion": {
-      "const": "registry.registrystack.org/breg-runtime/v1alpha1",
+      "const": "id.registrystack.org/formats/breg/runtime/v1alpha1",
       "type": "string"
     },
     "attachmentStorage": {
       "$ref": "#/$defs/RawAttachmentStorageConfig",
       "default": {
-        "kind": "database"
+        "type": "database"
       },
       "description": "Defaults to PostgreSQL; S3 requires a bucket with versioning never enabled."
     },
     "attachmentVerification": {
       "$ref": "#/$defs/RawAttachmentVerificationConfig",
       "default": {
-        "kind": "disabled"
+        "type": "disabled"
       },
       "description": "Optional external verdict hook. Disabled by default."
     },
@@ -1492,8 +1510,7 @@
       },
       "maxProperties": 128,
       "propertyNames": {
-        "pattern": "^[a-z][a-z0-9_-]{0,63}$",
-        "type": "string"
+        "$ref": "#/$defs/LocalId"
       },
       "type": "object"
     },
@@ -1502,6 +1519,9 @@
         "$ref": "#/$defs/EvidenceProviderConfig"
       },
       "default": {},
+      "propertyNames": {
+        "$ref": "#/$defs/LocalId"
+      },
       "type": "object"
     },
     "fieldEncryption": {
@@ -1549,6 +1569,9 @@
         "$ref": "#/$defs/RawReviewAuthorityConfig"
       },
       "default": {},
+      "propertyNames": {
+        "$ref": "#/$defs/LocalId"
+      },
       "type": "object"
     },
     "reviewExecutors": {
@@ -1556,6 +1579,9 @@
         "$ref": "#/$defs/RawReviewExecutorConfig"
       },
       "default": {},
+      "propertyNames": {
+        "$ref": "#/$defs/LocalId"
+      },
       "type": "object"
     },
     "secretProviders": {
@@ -1572,8 +1598,8 @@
       "$ref": "#/$defs/RawWasmExecutionConfig",
       "default": {
         "backend": "pulley",
-        "maxGuestMemoryBytes": 33554432,
-        "maxModuleBytes": 2097152
+        "maximumGuestMemoryBytes": 33554432,
+        "maximumModuleBytes": 2097152
       },
       "description": "Optional WASM handler execution budgets. Parsed in every build;\nexecuted only in builds with the `wasm` cargo feature, on by default."
     }

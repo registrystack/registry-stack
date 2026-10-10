@@ -1698,7 +1698,7 @@ mod tests {
         );
         assert_eq!(
             replay_disposition(JobState::DeadLettered, ReplayOutcome::Refused),
-            "dead_lettered"
+            "dead-lettered"
         );
     }
 }

@@ -485,13 +485,96 @@ impl<'de> Deserialize<'de> for ExpectedOutputDocument {
 
 /// The closed expected value-form vocabulary as written in a policy document.
 ///
-/// The two alternatives are untagged because the policy schema writes a scalar
-/// form as a plain string and the list form as a mapping under `list`.
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(untagged)]
+/// A form is a mapping whose `type` member names it. The list form writes its
+/// item form and cardinality beside `type`; every other form writes `type`
+/// alone, and each refuses a member it does not declare.
+#[derive(Debug, Clone)]
 pub enum ExpectedFormDocument {
     Scalar(ExpectedScalarFormDocument),
     List(ExpectedListFormDocument),
+}
+
+impl Serialize for ExpectedFormDocument {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        TaggedExpectedForm::from(self.clone()).serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for ExpectedFormDocument {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        TaggedExpectedForm::deserialize(deserializer).map(Self::from)
+    }
+}
+
+/// [`ExpectedFormDocument`] as it is written: one variant per `type` value.
+#[derive(Deserialize, Serialize)]
+#[serde(
+    tag = "type",
+    rename_all = "kebab-case",
+    deny_unknown_fields,
+    expecting = "a mapping whose `type` member names the form"
+)]
+enum TaggedExpectedForm {
+    Boolean {},
+    Integer {},
+    String {},
+    DateBucket {},
+    TimeBucket {},
+    EntityReference {},
+    Structured {},
+    List(ExpectedListDocument),
+}
+
+impl From<ExpectedFormDocument> for TaggedExpectedForm {
+    fn from(form: ExpectedFormDocument) -> Self {
+        match form {
+            ExpectedFormDocument::Scalar(ExpectedScalarFormDocument::Boolean) => Self::Boolean {},
+            ExpectedFormDocument::Scalar(ExpectedScalarFormDocument::Integer) => Self::Integer {},
+            ExpectedFormDocument::Scalar(ExpectedScalarFormDocument::String) => Self::String {},
+            ExpectedFormDocument::Scalar(ExpectedScalarFormDocument::DateBucket) => {
+                Self::DateBucket {}
+            }
+            ExpectedFormDocument::Scalar(ExpectedScalarFormDocument::TimeBucket) => {
+                Self::TimeBucket {}
+            }
+            ExpectedFormDocument::Scalar(ExpectedScalarFormDocument::EntityReference) => {
+                Self::EntityReference {}
+            }
+            ExpectedFormDocument::Scalar(ExpectedScalarFormDocument::Structured) => {
+                Self::Structured {}
+            }
+            ExpectedFormDocument::List(form) => Self::List(form.list),
+        }
+    }
+}
+
+impl From<TaggedExpectedForm> for ExpectedFormDocument {
+    fn from(form: TaggedExpectedForm) -> Self {
+        match form {
+            TaggedExpectedForm::Boolean {} => Self::Scalar(ExpectedScalarFormDocument::Boolean),
+            TaggedExpectedForm::Integer {} => Self::Scalar(ExpectedScalarFormDocument::Integer),
+            TaggedExpectedForm::String {} => Self::Scalar(ExpectedScalarFormDocument::String),
+            TaggedExpectedForm::DateBucket {} => {
+                Self::Scalar(ExpectedScalarFormDocument::DateBucket)
+            }
+            TaggedExpectedForm::TimeBucket {} => {
+                Self::Scalar(ExpectedScalarFormDocument::TimeBucket)
+            }
+            TaggedExpectedForm::EntityReference {} => {
+                Self::Scalar(ExpectedScalarFormDocument::EntityReference)
+            }
+            TaggedExpectedForm::Structured {} => {
+                Self::Scalar(ExpectedScalarFormDocument::Structured)
+            }
+            TaggedExpectedForm::List(list) => Self::List(ExpectedListFormDocument { list }),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -506,8 +589,8 @@ pub enum ExpectedScalarFormDocument {
     Structured,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
+/// The list form's members, held apart from the form that names them.
+#[derive(Debug, Clone)]
 pub struct ExpectedListFormDocument {
     pub list: ExpectedListDocument,
 }
@@ -950,15 +1033,15 @@ impl VerificationError {
     #[must_use]
     pub fn kind(&self) -> &'static str {
         match self {
-            Self::MalformedJws => "malformed_jws",
-            Self::ProtectedHeader => "protected_header",
+            Self::MalformedJws => "malformed-jws",
+            Self::ProtectedHeader => "protected-header",
             Self::Key => "key",
             Self::Signature => "signature",
             Self::Payload => "payload",
             Self::Policy => "policy",
             Self::Time => "time",
             Self::Disclosure => "disclosure",
-            Self::KeyBinding => "key_binding",
+            Self::KeyBinding => "key-binding",
         }
     }
 }
@@ -3041,8 +3124,7 @@ mod tests {
             MAXIMUM_CLOCK_SKEW_SECONDS
         );
 
-        let list =
-            &contract["$defs"]["expected-form"]["oneOf"][1]["properties"]["list"]["properties"];
+        let list = &contract["$defs"]["expected-form"]["oneOf"][7]["properties"];
         let list_bound = |field: &str, bound: &str| -> usize {
             serde_norway::from_value(list[field][bound].clone())
                 .unwrap_or_else(|error| panic!("the contract states {field} {bound}: {error}"))
@@ -3125,7 +3207,7 @@ mod tests {
     fn a_legacy_list_policy_keeps_its_original_item_and_uniqueness_semantics() {
         let mut value = serde_json::to_value(policy_document_with_list_bounds(1, 4))
             .expect("policy document serializes");
-        let list = value["expectedOutputs"][0]["form"]["list"]
+        let list = value["expectedOutputs"][0]["form"]
             .as_object_mut()
             .expect("list policy object");
         list.remove("items");
@@ -3160,7 +3242,7 @@ mod tests {
         .expect("legacy-compatible list");
         assert!(value_matches_form(&mixed, form));
 
-        value["expectedOutputs"][0]["form"]["list"]["unique"] = serde_json::json!(true);
+        value["expectedOutputs"][0]["form"]["unique"] = serde_json::json!(true);
         assert!(serde_json::from_value::<EvidenceVerificationPolicyDocument>(value).is_err());
     }
 
@@ -3558,12 +3640,13 @@ mod tests {
                 "handle": "status-codes",
                 "concept": "urn:example:status-codes",
                 "required": false,
-                "form": {"list": {
+                "form": {
+                    "type": "list",
                     "items": "string",
                     "minimumItems": 1,
                     "maximumItems": 3,
                     "unique": true
-                }}
+                }
             })
         );
 
@@ -3574,6 +3657,116 @@ mod tests {
             .insert("selector".to_string(), json!("must-not-be-published"));
         serde_json::from_value::<ExpectedOutputDocument>(widened)
             .expect_err("the output policy document accepted an unknown field");
+    }
+
+    /// Every expected form is a mapping whose `type` member names it, and it
+    /// is written back the way it was read.
+    #[test]
+    fn an_expected_form_is_a_mapping_tagged_by_type() {
+        for form in [
+            json!({"type": "boolean"}),
+            json!({"type": "integer"}),
+            json!({"type": "string"}),
+            json!({"type": "date-bucket"}),
+            json!({"type": "time-bucket"}),
+            json!({"type": "entity-reference"}),
+            json!({"type": "structured"}),
+            json!({
+                "type": "list", "items": "string",
+                "minimumItems": 1, "maximumItems": 8, "unique": true
+            }),
+            json!({
+                "type": "list", "items": "entity-reference",
+                "minimumItems": 2, "maximumItems": 2, "unique": true
+            }),
+        ] {
+            let document: ExpectedFormDocument = serde_json::from_value(form.clone())
+                .unwrap_or_else(|error| panic!("{form} is read: {error}"));
+            assert_eq!(
+                serde_json::to_value(&document).expect("the form serializes"),
+                form
+            );
+        }
+        assert!(matches!(
+            serde_json::from_value(json!({"type": "date-bucket"})),
+            Ok(ExpectedFormDocument::Scalar(
+                ExpectedScalarFormDocument::DateBucket
+            ))
+        ));
+        assert!(matches!(
+            serde_json::from_value(json!({
+                "type": "list", "items": "string",
+                "minimumItems": 1, "maximumItems": 8, "unique": true
+            })),
+            Ok(ExpectedFormDocument::List(ExpectedListFormDocument {
+                list: ExpectedListDocument {
+                    items: ExpectedListItemFormDocument::String,
+                    minimum_items: 1,
+                    maximum_items: 8,
+                    unique: true,
+                }
+            }))
+        ));
+    }
+
+    /// The shapes a form was written in before it was tagged are refused:
+    /// a plain string, and the list's members under a `list` key.
+    #[test]
+    fn an_untagged_expected_form_is_refused() {
+        for form in [
+            json!("boolean"),
+            json!("entity-reference"),
+            json!({"list": {
+                "items": "string", "minimumItems": 1, "maximumItems": 8, "unique": true
+            }}),
+            json!({"boolean": {}}),
+        ] {
+            serde_json::from_value::<ExpectedFormDocument>(form.clone())
+                .expect_err(&format!("{form} is not a tagged form"));
+        }
+    }
+
+    #[test]
+    fn an_expected_form_refuses_what_its_variant_does_not_declare() {
+        for (label, form) in [
+            (
+                "a member beside a form that has none",
+                json!({"type": "boolean", "items": "string"}),
+            ),
+            (
+                "an unknown member in a list form",
+                json!({
+                    "type": "list", "items": "string", "minimumItems": 1,
+                    "maximumItems": 8, "unique": true, "selector": "undeclared"
+                }),
+            ),
+            ("a form without its type", json!({})),
+            (
+                "a list form without its type",
+                json!({"items": "string", "minimumItems": 1, "maximumItems": 8, "unique": true}),
+            ),
+        ] {
+            serde_json::from_value::<ExpectedFormDocument>(form).expect_err(label);
+        }
+
+        let message = serde_json::from_value::<ExpectedFormDocument>(json!({"type": "decimal"}))
+            .expect_err("an unknown form is refused")
+            .to_string();
+        for variant in [
+            "boolean",
+            "integer",
+            "string",
+            "date-bucket",
+            "time-bucket",
+            "entity-reference",
+            "structured",
+            "list",
+        ] {
+            assert!(
+                message.contains(&format!("`{variant}`")),
+                "the refusal names {variant}: {message}"
+            );
+        }
     }
 
     #[tokio::test]
@@ -4444,15 +4637,15 @@ mod tests {
     #[test]
     fn every_verification_failure_reports_its_own_stable_kind() {
         let cases = [
-            (VerificationError::MalformedJws, "malformed_jws"),
-            (VerificationError::ProtectedHeader, "protected_header"),
+            (VerificationError::MalformedJws, "malformed-jws"),
+            (VerificationError::ProtectedHeader, "protected-header"),
             (VerificationError::Key, "key"),
             (VerificationError::Signature, "signature"),
             (VerificationError::Payload, "payload"),
             (VerificationError::Policy, "policy"),
             (VerificationError::Time, "time"),
             (VerificationError::Disclosure, "disclosure"),
-            (VerificationError::KeyBinding, "key_binding"),
+            (VerificationError::KeyBinding, "key-binding"),
         ];
         for (error, kind) in &cases {
             assert_eq!(error.kind(), *kind, "{error}");
@@ -4665,8 +4858,7 @@ mod tests {
             MAXIMUM_KEY_BINDING_AGE_SECONDS
         );
 
-        let list =
-            &contract["$defs"]["expected-form"]["oneOf"][1]["properties"]["list"]["properties"];
+        let list = &contract["$defs"]["expected-form"]["oneOf"][7]["properties"];
         let list_bound = |field: &str, bound: &str| -> usize {
             serde_norway::from_value(list[field][bound].clone())
                 .unwrap_or_else(|error| panic!("the contract states {field} {bound}: {error}"))
@@ -4974,7 +5166,7 @@ mod tests {
                 verify_sd_jwt_vc_presentation_report(presentation.as_bytes(), &jwks, &policy)
                     .err()
                     .map(|error| error.kind()),
-                Some("key_binding"),
+                Some("key-binding"),
                 "{label} must report the key-binding class"
             );
         }

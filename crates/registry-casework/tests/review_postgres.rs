@@ -19,21 +19,20 @@ use registry_casework::{
 };
 use registry_casework_core::{
     AccessProfile, ActiveSubjectsPage, ActivityClockAnchor, ActorContext, AssignmentRequest,
-    AuthoritativeObservation, CalendarPolicy, CallerSubjectView, CaseworkIdentity, CaseworkProject,
-    CaseworkRole, ClockPolicy, ClockReassignment, ClockReminder, ClockStep, ClockStepAction,
-    ClockStepInstant, ContentDigest, DelegateRequest, DiscoveryCursor, ElapsedDuration,
-    EphemeralCredential, EventRequest, ExecutePreparedRequest, HolidaySetDocument, HumanIdentity,
-    InboxPolicy, IssuerPrincipal, OccurrenceKind, OccurrenceState, PrepareActionRequest,
-    PreparedSourceAttempt, QueuePolicy, ReviewCancelRequest, ReviewCancelResponse,
-    ReviewClockState, ReviewCompletionDestinationPolicy, ReviewContext, ReviewContextStrategy,
-    ReviewCreateRequest, ReviewHistoryAudience, ReviewKindPolicy, ReviewKindPurpose,
-    ReviewNoteRequest, ReviewOutcomePolicy, ReviewOutcomeSettlement, ReviewProducerPolicy,
-    ReviewRequestLifecycle, ReviewResultStatus, ReviewRetentionPolicy, ReviewStagePolicy,
-    ReviewTaskDraftInput, ReviewTransition, ReviewValidationReason, ReviewerDecisionKind,
-    ReviewerTaskState, SourceAdapter, SourceAdapterError, SourceBinding, SourceContextBinding,
-    SourceReceipt, SubjectBinding, SubjectClockAnchor, SubjectClockCompletion, SubjectClockPause,
-    SubjectRef, TransitionHint, WorkingDaysAfter, WorkingWeekday,
-    MAXIMUM_REVIEW_POLICY_SNAPSHOT_BYTES,
+    AuthoritativeObservation, CalendarPolicy, CallerSubjectView, CaseworkProject, CaseworkRole,
+    ClockPolicy, ClockReassignment, ClockReminder, ClockStep, ClockStepAction, ClockStepInstant,
+    ContentDigest, DelegateRequest, DiscoveryCursor, ElapsedDuration, EphemeralCredential,
+    EventRequest, ExecutePreparedRequest, HolidaySetDocument, HumanIdentity, InboxPolicy,
+    IssuerPrincipal, OccurrenceKind, OccurrenceState, PrepareActionRequest, PreparedSourceAttempt,
+    ProjectIdentity, QueuePolicy, ReviewCancelRequest, ReviewCancelResponse, ReviewClockState,
+    ReviewCompletionDestinationPolicy, ReviewContext, ReviewContextStrategy, ReviewCreateRequest,
+    ReviewHistoryAudience, ReviewKindPolicy, ReviewKindPurpose, ReviewNoteRequest,
+    ReviewOutcomePolicy, ReviewOutcomeSettlement, ReviewProducerPolicy, ReviewRequestLifecycle,
+    ReviewResultStatus, ReviewRetentionPolicy, ReviewStagePolicy, ReviewTaskDraftInput,
+    ReviewTransition, ReviewValidationReason, ReviewerDecisionKind, ReviewerTaskState,
+    SourceAdapter, SourceAdapterError, SourceBinding, SourceContextBinding, SourceReceipt,
+    SubjectBinding, SubjectClockAnchor, SubjectClockCompletion, SubjectClockPause, SubjectRef,
+    TransitionHint, WorkingDaysAfter, WorkingWeekday, MAXIMUM_REVIEW_POLICY_SNAPSHOT_BYTES,
 };
 use registry_platform_config::{SecretProvider, SecretResolver};
 use serde_json::json;
@@ -276,8 +275,8 @@ fn project(version: &str) -> CaseworkProject {
     CaseworkProject {
         api_version: registry_casework_core::CASEWORK_API_VERSION.to_owned(),
         kind: registry_casework_core::CASEWORK_KIND.to_owned(),
-        casework: CaseworkIdentity {
-            id: "review-test".to_owned(),
+        project: ProjectIdentity {
+            id: "review-test".parse().unwrap(),
             version: version.to_owned(),
         },
         access_profiles: vec![
@@ -1351,7 +1350,7 @@ async fn recovery_pins_policy_and_terminal_settlement_emits_atomically() {
         .database
         .execute(
             "UPDATE casework_review_results
-                SET status='changes_requested',outcome='needs-correction',
+                SET status='changes-requested',outcome='needs-correction',
                     result=jsonb_build_object('numericExpansionProbe',$2::jsonb)
               WHERE request_id=$1",
             &[&first.accepted.request_id, &json!(exponent_values)],
@@ -1628,6 +1627,172 @@ async fn activation_preflight_counts_in_flight_reviews_a_package_would_strand() 
             reviews: 3,
         }]
     );
+}
+
+/// A review request stores the id of the producer that submitted it, and a
+/// producer reads its requests only under that id. The previous release
+/// admitted `Registry_Service` as a producer id; a package that renames it
+/// is refused while a review that producer submitted is still in flight,
+/// and plans clean once the review settles.
+#[tokio::test]
+async fn activation_plan_refuses_a_package_that_drops_the_producer_of_an_in_flight_review() {
+    let fixture = fixture().await;
+    let in_flight = fixture
+        .service_v1
+        .create_review_request(
+            &fixture.producer,
+            request("record-producer-open", "producer-ref-producer-open"),
+            "create-producer-open",
+        )
+        .await
+        .expect("create the in-flight review")
+        .accepted
+        .request_id;
+    let cancelled = request(
+        "record-producer-cancelled",
+        "producer-ref-producer-cancelled",
+    );
+    let cancelled_id = fixture
+        .service_v1
+        .create_review_request(
+            &fixture.producer,
+            cancelled.clone(),
+            "create-producer-cancelled",
+        )
+        .await
+        .expect("create the review to cancel")
+        .accepted
+        .request_id;
+    fixture
+        .service_v1
+        .cancel_review_request(
+            &fixture.producer,
+            cancelled_id,
+            ReviewCancelRequest {
+                subject: cancelled.subject,
+                reason: "no longer needed".to_owned(),
+            },
+            "cancel-producer-cancelled",
+        )
+        .await
+        .expect("cancel the second review");
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_requests SET producer_id='Registry_Service' WHERE request_id=$1",
+            &[&in_flight],
+        )
+        .await
+        .expect("store the producer id the previous release admitted");
+
+    let mut renamed = project("1");
+    renamed.review_producers[0].id = "registry-service".to_owned();
+    renamed.check().expect("candidate project");
+    let digest = format!("sha256:{}", "c".repeat(64));
+    let candidate = registry_casework::ActivationCandidate {
+        database_id: "casework-review-test",
+        package_digest: &digest,
+        acknowledged_stranded_work: None,
+        project: &renamed,
+        adapters: &[],
+    };
+
+    let plan = fixture
+        .store
+        .plan_activation(&candidate)
+        .await
+        .expect("plan while the review is in flight");
+    let stranded: Vec<_> = plan
+        .refusals
+        .iter()
+        .filter(|refusal| refusal.code == "casework.activation.stranded-work")
+        .collect();
+    assert_eq!(stranded.len(), 1, "{:?}", plan.refusals);
+    assert_eq!(
+        stranded[0].path,
+        "runtime.yaml:/package/acknowledgeStrandedWork"
+    );
+    assert!(
+        stranded[0].message.contains(
+            "1 in-flight review came from review producer Registry_Service, \
+             which the package no longer declares"
+        ),
+        "{}",
+        stranded[0].message
+    );
+    assert!(
+        !stranded[0].message.contains("record-producer-open"),
+        "the refusal names the producer and a count, never a subject"
+    );
+    assert!(!plan.changes_pending);
+    let pinned = plan.effects.expect("effects").pinned_work;
+    assert_eq!(pinned.verdict, "refused");
+    // The cancelled review is terminal, so the producer the package still
+    // lacks for it is not a conflict.
+    assert_eq!(
+        pinned.stranded,
+        vec![registry_casework::StrandedWork::ProducerRemoved {
+            producer: "Registry_Service".to_owned(),
+            reviews: 1,
+        }]
+    );
+
+    for (stage_index, reviewer) in [(0, &fixture.reviewer_a), (1, &fixture.reviewer_b)] {
+        let task = task_id(&fixture, in_flight, stage_index).await;
+        fixture
+            .service_v1
+            .claim_review_task(
+                reviewer,
+                task,
+                None,
+                "",
+                1,
+                &format!("claim-producer-open-{stage_index}"),
+            )
+            .await
+            .expect("claim the stage task");
+        fixture
+            .service_v1
+            .decide_review_task(
+                reviewer,
+                task,
+                ReviewTaskDecisionRequest {
+                    decision: ReviewerDecisionKind::Approve,
+                },
+                None,
+                "",
+                2,
+                &format!("approve-producer-open-{stage_index}"),
+            )
+            .await
+            .expect("approve the stage task");
+    }
+    let lifecycle: String = fixture
+        .database
+        .query_one(
+            "SELECT lifecycle FROM casework_review_requests WHERE request_id=$1",
+            &[&in_flight],
+        )
+        .await
+        .expect("settled review")
+        .get(0);
+    assert_eq!(lifecycle, "approved");
+
+    let plan = fixture
+        .store
+        .plan_activation(&candidate)
+        .await
+        .expect("plan after the review settled");
+    assert!(
+        plan.refusals
+            .iter()
+            .all(|refusal| refusal.code != "casework.activation.stranded-work"),
+        "{:?}",
+        plan.refusals
+    );
+    let pinned = plan.effects.expect("effects").pinned_work;
+    assert_eq!(pinned.verdict, "clear");
+    assert!(pinned.stranded.is_empty());
 }
 
 #[tokio::test]
@@ -3111,7 +3276,7 @@ async fn accountability_read_requires_live_retention_and_a_committed_audit() {
     );
     let read_audit = audited_response(
         &audit,
-        "review_accountability_read",
+        "review-accountability-read",
         "accountabilityEventId",
         &accountability_event.to_string(),
     );
@@ -3172,7 +3337,7 @@ async fn accountability_read_requires_live_retention_and_a_committed_audit() {
         Err(ReviewRuntimeError::NotFound)
     ));
     let reads_after_expiry = audit
-        .responses("review_accountability_read")
+        .responses("review-accountability-read")
         .into_iter()
         .filter(|record| record["accountabilityEventId"] == accountability_event.to_string())
         .count();
@@ -3908,7 +4073,7 @@ async fn review_decisions_are_audited_after_the_decision_commits() {
         .get(0);
     let decision_audit = audited_response(
         &audit,
-        "review_decided",
+        "review-decided",
         "accountabilityEventId",
         &accountability_event.to_string(),
     );
@@ -3918,7 +4083,7 @@ async fn review_decisions_are_audited_after_the_decision_commits() {
             &fixture,
             created.accepted.request_id,
             task,
-            "review_decided"
+            "review-decided"
         )
         .await
         .to_string()
@@ -3969,7 +4134,7 @@ async fn review_decisions_are_audited_after_the_decision_commits() {
             .database
             .query_one(
                 "SELECT count(*) FROM casework_review_history
-                 WHERE request_id=$1 AND kind='review_decided'",
+                 WHERE request_id=$1 AND kind='review-decided'",
                 &[&second_created.accepted.request_id],
             )
             .await
@@ -4036,12 +4201,12 @@ async fn review_decisions_are_audited_after_the_decision_commits() {
     let entries = refused.entries();
     assert_eq!(entries.len(), 1, "only the request entry was accepted");
     assert_eq!(entries[0]["phase"], "request");
-    assert_eq!(entries[0]["record"]["event"], "casework.review_decided");
+    assert_eq!(entries[0]["record"]["event"], "casework.review-decided");
 
     // Retrying the same idempotency key replays the committed decision; it
     // writes a request entry and a replayed outcome, never a second decision
     // response.
-    let responses_before = audit.responses("review_decided");
+    let responses_before = audit.responses("review-decided");
     service
         .decide_review_task(
             &fixture.reviewer_a,
@@ -4055,11 +4220,11 @@ async fn review_decisions_are_audited_after_the_decision_commits() {
         .await
         .expect("a retried decision replays");
     assert_eq!(decided_history().await, 1);
-    let responses_after = audit.responses("review_decided");
+    let responses_after = audit.responses("review-decided");
     assert_eq!(responses_after.len(), responses_before.len() + 1);
     assert_eq!(
         responses_after[responses_before.len()],
-        json!({"event": "casework.review_decided", "outcome": "replayed"}),
+        json!({"event": "casework.review-decided", "outcome": "replayed"}),
         "the replay appends only its terminal outcome"
     );
 }
@@ -4086,7 +4251,7 @@ async fn review_cancellation_is_audited_after_the_cancel_commits() {
         )
         .await
         .expect("cancel audit review");
-    let cancellations = audit.responses("review_cancelled");
+    let cancellations = audit.responses("review-cancelled");
     assert_eq!(cancellations.len(), 1, "one cancellation response");
     let cancel_audit = &cancellations[0];
     assert_eq!(
@@ -4134,7 +4299,7 @@ async fn review_notes_are_audited_without_their_text() {
         .expect("add note");
     let record = audited_response(
         &audit,
-        "review_note_added",
+        "review-note-added",
         "eventId",
         &added.event_id.to_string(),
     );
@@ -4147,7 +4312,7 @@ async fn review_notes_are_audited_without_their_text() {
         .entries()
         .into_iter()
         .filter(|entry| {
-            entry["phase"] == "request" && entry["record"]["event"] == "casework.review_note_added"
+            entry["phase"] == "request" && entry["record"]["event"] == "casework.review-note-added"
         })
         .collect();
     assert_eq!(requested.len(), 1, "{requested:?}");
@@ -4168,7 +4333,7 @@ async fn review_notes_are_audited_without_their_text() {
         )
         .await
         .expect("replay note");
-    assert_replay_audited(&replay_audit, "review_note_added");
+    assert_replay_audited(&replay_audit, "review-note-added");
 
     // A refused note still pairs the request entry it wrote.
     let (refused_service, refused_audit) = service_with_audit(&fixture, project("1"));
@@ -4192,7 +4357,7 @@ async fn review_notes_are_audited_without_their_text() {
     assert_eq!(entries[1]["correlation"], entries[0]["correlation"]);
     assert_eq!(
         entries[1]["record"],
-        json!({"event": "casework.review_note_added", "outcome": "unfinished"})
+        json!({"event": "casework.review-note-added", "outcome": "unfinished"})
     );
 }
 
@@ -4261,10 +4426,10 @@ async fn review_task_ownership_transitions_are_audited() {
         .await
         .expect("claim ownership audit task");
     for (event, actor) in [
-        ("task_assigned", &fixture.supervisor),
-        ("task_delegated", &fixture.reviewer_a),
-        ("task_released", &fixture.reviewer_b),
-        ("task_claimed", &fixture.reviewer_a),
+        ("task-assigned", &fixture.supervisor),
+        ("task-delegated", &fixture.reviewer_a),
+        ("task-released", &fixture.reviewer_b),
+        ("task-claimed", &fixture.reviewer_a),
     ] {
         // The response entry names the protected history row's event id, so
         // the audit destination records who took or transferred
@@ -5106,7 +5271,7 @@ async fn reclaiming_a_held_task_advances_the_revision_like_the_client_contract_r
         .database
         .query_one(
             "SELECT count(*) FROM casework_review_history
-             WHERE request_id=$1 AND kind='task_claimed'",
+             WHERE request_id=$1 AND kind='task-claimed'",
             &[&created.accepted.request_id],
         )
         .await
@@ -5372,7 +5537,7 @@ async fn delegation_requires_the_selected_profile_in_pinned_deciding_profiles() 
         .database
         .query_one(
             "SELECT count(*) FROM casework_review_history
-             WHERE request_id=$1 AND kind='task_delegated'",
+             WHERE request_id=$1 AND kind='task-delegated'",
             &[&created.accepted.request_id],
         )
         .await
@@ -5505,7 +5670,7 @@ async fn delegation_requires_membership_matching_the_selected_role_in_a_mixed_st
         .database
         .query_one(
             "SELECT count(*) FROM casework_review_history
-             WHERE request_id=$1 AND kind='task_delegated'",
+             WHERE request_id=$1 AND kind='task-delegated'",
             &[&created.accepted.request_id],
         )
         .await
@@ -5635,7 +5800,7 @@ async fn assignment_requires_a_selected_supervisor_profile_despite_directory_mem
         .database
         .query_one(
             "SELECT count(*) FROM casework_review_history
-             WHERE request_id=$1 AND kind='task_assigned'",
+             WHERE request_id=$1 AND kind='task-assigned'",
             &[&created.accepted.request_id],
         )
         .await
@@ -5734,7 +5899,7 @@ async fn reviewer_mutation_replays_require_current_exact_role_authority() {
         .database
         .query_one(
             "SELECT actor_ref,detail FROM casework_review_history
-             WHERE request_id=$1 AND task_id=$2 AND kind='task_claimed'",
+             WHERE request_id=$1 AND task_id=$2 AND kind='task-claimed'",
             &[&created.accepted.request_id, &task],
         )
         .await
@@ -5778,12 +5943,12 @@ async fn reviewer_mutation_replays_require_current_exact_role_authority() {
             .expect("replay claim through restored staff authority"),
         claimed
     );
-    assert_replay_audited(&replay_audit, "task_claimed");
+    assert_replay_audited(&replay_audit, "task-claimed");
     let claim_history_count = fixture
         .database
         .query_one(
             "SELECT count(*) FROM casework_review_history
-             WHERE request_id=$1 AND task_id=$2 AND kind='task_claimed'",
+             WHERE request_id=$1 AND task_id=$2 AND kind='task-claimed'",
             &[&created.accepted.request_id, &task],
         )
         .await
@@ -5827,7 +5992,7 @@ async fn reviewer_mutation_replays_require_current_exact_role_authority() {
         .database
         .query_one(
             "SELECT actor_ref,detail FROM casework_review_history
-             WHERE request_id=$1 AND task_id=$2 AND kind='task_released'",
+             WHERE request_id=$1 AND task_id=$2 AND kind='task-released'",
             &[&created.accepted.request_id, &task],
         )
         .await
@@ -5864,12 +6029,12 @@ async fn reviewer_mutation_replays_require_current_exact_role_authority() {
             .expect("replay release through restored staff authority"),
         released
     );
-    assert_replay_audited(&replay_audit, "task_released");
+    assert_replay_audited(&replay_audit, "task-released");
     let release_history_count = fixture
         .database
         .query_one(
             "SELECT count(*) FROM casework_review_history
-             WHERE request_id=$1 AND task_id=$2 AND kind='task_released'",
+             WHERE request_id=$1 AND task_id=$2 AND kind='task-released'",
             &[&created.accepted.request_id, &task],
         )
         .await
@@ -5891,12 +6056,12 @@ async fn reviewer_mutation_replays_require_current_exact_role_authority() {
     let claimed_entry = history
         .items
         .iter()
-        .find(|entry| entry.kind == "task_claimed")
+        .find(|entry| entry.kind == "task-claimed")
         .expect("claimed transition is readable");
     let released_entry = history
         .items
         .iter()
-        .find(|entry| entry.kind == "task_released")
+        .find(|entry| entry.kind == "task-released")
         .expect("released transition is readable");
     assert_eq!(
         claimed_entry.actor_ref.as_deref(),
@@ -5986,7 +6151,7 @@ async fn reviewer_mutation_replays_require_current_exact_role_authority() {
             .expect("replay terminal decision through restored staff authority"),
         decided
     );
-    assert_replay_audited(&replay_audit, "review_decided");
+    assert_replay_audited(&replay_audit, "review-decided");
 }
 
 #[tokio::test]
@@ -6064,12 +6229,12 @@ async fn a_retained_decision_replay_is_withheld_until_its_response_entry_is_acce
     let entries = refused.entries();
     assert_eq!(entries.len(), 1, "only the request entry was accepted");
     assert_eq!(entries[0]["phase"], "request");
-    assert_eq!(entries[0]["record"]["event"], "casework.review_decided");
+    assert_eq!(entries[0]["record"]["event"], "casework.review-decided");
     let decided_events = fixture
         .database
         .query_one(
             "SELECT count(*) FROM casework_review_history
-             WHERE request_id=$1 AND kind='review_decided'",
+             WHERE request_id=$1 AND kind='review-decided'",
             &[&answer.accepted.request_id],
         )
         .await
@@ -6578,7 +6743,7 @@ async fn a_display_schema_the_source_disclosure_fails_is_logged_for_the_operator
     let fields = diagnostics[0]["fields"].as_object().expect("log fields");
     assert_eq!(fields["review_kind"], "registry-correction");
     assert_eq!(fields["reason"], "display_schema_rejected");
-    assert_eq!(fields["validation_reason"], "schema_mismatch");
+    assert_eq!(fields["validation_reason"], "schema-mismatch");
     assert_eq!(fields["path"], "$.display");
     assert_eq!(
         fields
@@ -7457,7 +7622,7 @@ async fn review_task_lists_recheck_queue_after_source_io() {
             });
             if index + 1 < tasks.len() {
                 expected["nextCursor"] = json!(task_id);
-                expected["status"] = json!("budget_exhausted");
+                expected["status"] = json!("budget-exhausted");
             }
             assert_eq!(serde_json::to_value(&page).unwrap(), expected);
             if let Some(cursor) = page.next_cursor {
@@ -7588,7 +7753,7 @@ async fn review_task_lists_recheck_queue_after_source_io() {
                 if index + 1 < expected_tasks.len() {
                     expected["nextCursor"] = json!(task_id);
                     if source_read_budget == 1 || queue.is_some() || !destination_served {
-                        expected["status"] = json!("budget_exhausted");
+                        expected["status"] = json!("budget-exhausted");
                     }
                 }
                 assert_eq!(
@@ -8005,6 +8170,22 @@ async fn subject_clock_pauses_and_continues_across_review_rounds() {
         )
         .await
         .expect("request changes for first round");
+    // The reviewer's own receipt reads the stored decision word back.
+    let receipt = fixture
+        .service_v1
+        .review_task(&fixture.reviewer_a, task, None, "")
+        .await
+        .expect("read the changes-requested decision back")
+        .decision_receipt
+        .expect("retained changes-requested receipt");
+    assert_eq!(
+        receipt.decision,
+        registry_casework_core::ReviewDecisionType::ChangesRequested
+    );
+    assert_eq!(
+        serde_json::to_value(&receipt).unwrap()["decision"],
+        json!("changes-requested")
+    );
     let paused = fixture
         .service_v1
         .review_clocks(
@@ -8440,7 +8621,7 @@ async fn review_activity_clock_recovers_after_holiday_publication_and_applies_ef
         .await
         .expect("activity clock occurrence");
     let occurrence_id: Uuid = occurrence.get(0);
-    assert_eq!(occurrence.get::<_, String>(1), "source_facts_missing");
+    assert_eq!(occurrence.get::<_, String>(1), "source-facts-missing");
     fixture
         .database
         .execute(
@@ -8550,7 +8731,7 @@ async fn review_activity_clock_recovers_after_holiday_publication_and_applies_ef
             .database
             .query_one(
                 "SELECT count(*) FROM casework_review_history
-                 WHERE request_id=$1 AND kind IN ('clock_reminder','clock_step_applied')",
+                 WHERE request_id=$1 AND kind IN ('clock-reminder','clock-step-applied')",
                 &[&created.accepted.request_id],
             )
             .await
@@ -8680,7 +8861,7 @@ async fn review_clock_reassignment_to_an_unserved_queue_defers_until_the_queue_i
             .database
             .query_one(
                 "SELECT count(*) FROM casework_review_history
-                 WHERE request_id=$1 AND kind='clock_step_applied'",
+                 WHERE request_id=$1 AND kind='clock-step-applied'",
                 &[&request_id],
             )
             .await
@@ -9055,7 +9236,7 @@ async fn later_stage_activity_clock_uses_the_current_requests_pinned_definition(
         .expect("create old clock definition review");
 
     let mut current_project = activity_clock_project();
-    current_project.casework.version = "activity-clock-2".to_owned();
+    current_project.project.version = "activity-clock-2".to_owned();
     current_project.review_kinds[0].version = "activity-clock-2".to_owned();
     current_project.review_kinds[0].stages = stages;
     let ClockPolicy::Activity { due_time, .. } = &mut current_project.clocks[0] else {
@@ -9404,7 +9585,7 @@ async fn review_task_coordination_preserves_exclusions_drafts_history_and_absenc
         .await
         .expect("covered task assignment")
         .get(0);
-    assert_eq!(assignment_kind, "absence_cover");
+    assert_eq!(assignment_kind, "absence-cover");
     fixture
         .database
         .execute(

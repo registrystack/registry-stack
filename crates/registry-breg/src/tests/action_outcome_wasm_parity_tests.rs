@@ -41,22 +41,22 @@ use serde_json::{json, Map, Value};
 /// cases have real declarations to check against.
 fn person_action(script: &str) -> CompiledAction {
     let source = json!({
-        "apiVersion":"registry.registrystack.org/v1alpha1", "kind":"RegistryProject",
-        "registry":{"id":"wasm-parity","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://example.test"},
+        "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
+        "project":{"id":"wasm-parity","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://example.test"},
         "entities":[{"id":"person","primaryDataset":"parity","route":"people","mutationMode":"mutable","fields":[
-            {"id":"name","type":"string","maxLength":160,"required":true,"classification":"restricted"},
+            {"id":"name","type":"string","maximumLength":160,"required":true,"classification":"restricted"},
             {"id":"friend","type":"reference","target":"person","classification":"restricted"}
         ]}],
         "actions":[{"id":"register-person","inputs":[
-            {"id":"given-name","apiName":"givenName","type":"string","maxLength":80,"required":true,"classification":"restricted"},
-            {"id":"family-name","type":"string","maxLength":80,"classification":"restricted"},
+            {"id":"given-name","apiName":"givenName","type":"string","maximumLength":80,"required":true,"classification":"restricted"},
+            {"id":"family-name","type":"string","maximumLength":80,"classification":"restricted"},
             {"id":"person","type":"reference","target":"person","required":true,"classification":"restricted"}
-        ],"handler":{"kind":"rhai","script":"handlers/register.rhai","abi":"registry.action-handler/v1","refusals":[{"code":"blank-name","label":"A name is required."}],"writes":[
+        ],"handler":{"type":"rhai","script":"handlers/register.rhai","abi":"registry.action-handler/v1","refusals":[{"code":"blank-name","label":"A name is required."}],"writes":[
             {"id":"person","target":{"entity":"person"},"operation":"create","fields":["name","friend"]},
             {"id":"friend","target":{"entity":"person"},"operation":"create","fields":["name","friend"]},
             {"id":"existing","target":{"fromField":"person"},"operation":"patch","fields":["name","friend"]}
         ]}}],
-        "accessProfiles":[{"id":"registrar","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{"action":"register-person","operations":["invoke"],"targets":[{"entity":"person","rowBoundaries":"unrestricted"}],"results":["person","friend","existing"]}]}]
+        "accessProfiles":[{"id":"registrar","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"actions":[{"action":"register-person","operations":["invoke"],"targets":[{"entity":"person","rowBoundaries":"unrestricted"}],"results":["person","friend","existing"]}]}}]
     });
     let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
     compile_project_with_assets(
@@ -85,23 +85,25 @@ fn person_inputs() -> Map<String, Value> {
 /// The fixture with int64 and decimal fields, for exact-value parity.
 fn record_action(script: &str) -> CompiledAction {
     let source = json!({
-        "apiVersion":"registry.registrystack.org/v1alpha1", "kind":"RegistryProject",
-        "registry":{"id":"wasm-parity-records","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://example.test"},
+        "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
+        "project":{"id":"wasm-parity-records","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://example.test"},
         "entities":[{"id":"record","primaryDataset":"parity","route":"records","mutationMode":"mutable","fields":[
-            {"id":"label","type":"string","maxLength":160,"required":true,"classification":"restricted"},
+            {"id":"label","type":"string","maximumLength":160,"required":true,"classification":"restricted"},
             {"id":"count","type":"int64","classification":"restricted"},
             {"id":"amount","type":"decimal","precision":20,"scale":2,"classification":"restricted"}
         ]}],
         "actions":[{"id":"register-record","inputs":[
-            {"id":"label","apiName":"displayLabel","type":"string","maxLength":80,"required":true,"classification":"restricted"},
+            {"id":"label","apiName":"displayLabel","type":"string","maximumLength":80,"required":true,"classification":"restricted"},
             {"id":"count","type":"int64","required":true,"classification":"restricted"},
             {"id":"amount","type":"decimal","precision":20,"scale":2,"required":true,"classification":"restricted"}
-        ],"handler":{"kind":"rhai","script":"handlers/register.rhai","abi":"registry.action-handler/v1","refusals":[{"code":"blank-label","label":"A label is required."}],
+        ],"handler":{"type":"rhai","script":"handlers/register.rhai","abi":"registry.action-handler/v1","refusals":[{"code":"blank-label","label":"A label is required."}],
             "writes":[{"id":"record","target":{"entity":"record"},"operation":"create","fields":["label","count","amount"]}]
         }}],
-        "accessProfiles":[{"id":"writer","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[
-            {"action":"register-record","operations":["invoke"],"targets":[{"entity":"record","rowBoundaries":"unrestricted"}],"results":["record"]}
-        ]}]
+        "accessProfiles":[{"id":"writer","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{
+            "actions":[
+                {"action":"register-record","operations":["invoke"],"targets":[{"entity":"record","rowBoundaries":"unrestricted"}],"results":["record"]}
+            ]
+        }}]
     });
     let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
     compile_project_with_assets(

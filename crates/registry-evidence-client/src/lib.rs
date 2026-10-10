@@ -213,12 +213,12 @@ pub use private_key_jwt::{
 pub use profile::{
     ContractsProfile, EvidenceClientProfile, ExpectedDefinitionProfile, ExpectedServiceProfile,
     PrivateKeyReference, ReviewedContracts, TrustProfile, VerificationProfile,
-    DEFAULT_METADATA_CACHE_SECONDS, EVIDENCE_CLIENT_CONTRACTS_SCHEMA_V1,
-    EVIDENCE_CLIENT_PROFILE_SCHEMA_V1, MAXIMUM_METADATA_CACHE_SECONDS,
+    DEFAULT_METADATA_CACHE_SECONDS, EVIDENCE_CLIENT_CONTRACTS_API_VERSION,
+    EVIDENCE_CLIENT_CONTRACTS_KIND, EVIDENCE_CLIENT_PROFILE_API_VERSION,
+    EVIDENCE_CLIENT_PROFILE_KIND, MAXIMUM_METADATA_CACHE_SECONDS,
 };
 pub use profile_file::{
-    read_client_profile, read_reviewed_contracts, EVIDENCE_CLIENT_CONTRACTS_KIND,
-    EVIDENCE_CLIENT_CONTRACTS_SCHEMA_ID, EVIDENCE_CLIENT_PROFILE_KIND,
+    read_client_profile, read_reviewed_contracts, EVIDENCE_CLIENT_CONTRACTS_SCHEMA_ID,
     EVIDENCE_CLIENT_PROFILE_SCHEMA_ID,
 };
 pub use progressive::{

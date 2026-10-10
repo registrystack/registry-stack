@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://id.registrystack.org/schemas/casework/source-add-report/source-add-report.v1alpha3.schema.json",
-  "title": "SourceAddReport",
+  "title": "CaseworkSourceAddReport",
   "description": "Versioned JSON report emitted by caseworkctl for source add.",
   "type": "object",
   "required": [
@@ -10,10 +10,10 @@
   ],
   "properties": {
     "apiVersion": {
-      "const": "registry.registrystack.org/caseworkctl/v1alpha3"
+      "const": "id.registrystack.org/formats/casework/source-add-report/v1alpha3"
     },
     "kind": {
-      "const": "SourceAddReport"
+      "const": "CaseworkSourceAddReport"
     }
   },
   "unevaluatedProperties": false,
@@ -53,10 +53,10 @@
           ]
         },
         "apiVersion": {
-          "const": "registry.registrystack.org/caseworkctl/v1alpha3"
+          "const": "id.registrystack.org/formats/casework/source-add-report/v1alpha3"
         },
         "kind": {
-          "const": "SourceAddReport"
+          "const": "CaseworkSourceAddReport"
         },
         "sourceId": {
           "type": "string"
@@ -202,7 +202,7 @@
           "$ref": "#/$defs/warnings"
         },
         "activation": {
-          "const": "not_performed"
+          "const": "not-performed"
         },
         "next": {
           "type": "array",
@@ -237,10 +237,10 @@
           ]
         },
         "apiVersion": {
-          "const": "registry.registrystack.org/caseworkctl/v1alpha3"
+          "const": "id.registrystack.org/formats/casework/source-add-report/v1alpha3"
         },
         "kind": {
-          "const": "SourceAddReport"
+          "const": "CaseworkSourceAddReport"
         },
         "diagnostics": {
           "$ref": "#/$defs/diagnostics"

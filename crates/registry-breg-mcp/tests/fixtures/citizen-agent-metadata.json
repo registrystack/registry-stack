@@ -36,7 +36,8 @@
         },
         "review": {
           "authority": "casework",
-          "policyId": "citizen-address-correction"
+          "policyId": "citizen-address-correction",
+          "type": "required"
         }
       },
       "datasetIdentifier": "citizen-address-correction",
@@ -654,9 +655,9 @@
         "defaultPageSize": 100,
         "filterableFields": [],
         "kind": "list",
-        "maxFilterClauses": 32,
-        "maxInValues": 100,
-        "maxPageSize": 100,
+        "maximumFilterClauses": 32,
+        "maximumInValues": 100,
+        "maximumPageSize": 100,
         "pagination": {
           "exclusive": true,
           "parameter": "$skiptoken",
@@ -780,6 +781,6 @@
       ]
     }
   ],
-  "revision": "sha256:7392fa6331306723acc2f46f86b398569175c06c2e6cced6a2ba512ee5fdf1bc",
+  "revision": "sha256:4600457a8fc7beea6a89e8f3e7c5500900ec65f1dda08574234696d578ac0b22",
   "version": "0.1.0"
 }

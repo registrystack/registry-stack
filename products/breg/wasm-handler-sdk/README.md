@@ -144,7 +144,7 @@ Module-size ceilings, enforced with a failing build:
   that fits here runs anywhere.
 - 5 MiB for a pre-initialized library module (the `--preinit` variant).
   A module this size needs an operator who configures
-  `wasmExecution.maxModuleBytes` accordingly; the default-budget runtime
+  `wasmExecution.maximumModuleBytes` accordingly; the default-budget runtime
   refuses it typed at execution while admission still accepts it, which the
   admission proof demonstrates.
 - Above both sits the 5 MiB structural ceiling the compiler enforces at
@@ -162,7 +162,7 @@ script:
 
 ```json
 "handler": {
-  "kind": "wasm",
+  "type": "wasm",
   "module": "wasm/handler.wasm",
   "abi": "registry.action-handler/v1",
   "refusals": [

@@ -582,7 +582,7 @@ impl StartupError {
         match self {
             Self::RuntimeConfig(_) => "the Registry runtime configuration was refused",
             Self::PackageRefused(PackageError::RetiredApiVersion) => {
-                "the Registry package carries the retired apiVersion registry.registrystack.org/package/v2; rebuild it with this release's `bregctl package`, naming the deployed package with --baseline-package, then run `bregctl plan --package DIR` and `bregctl apply --package DIR`"
+                "the Registry package carries the retired apiVersion registry.registrystack.org/package/v2; rebuild it with this release's `bregctl package`, then run `bregctl apply --initial --package DIR` against a new database"
             }
             Self::PackageRefused(_) => "the Registry package was refused",
             Self::PackageEnvelopeRefused(_) => "the Registry package was refused",

@@ -460,42 +460,42 @@ async fn real_postgres_reference_and_temporal_races_leave_no_dangling_or_overlap
 fn compiled_registry() -> registry_breg::CompiledRegistry {
     let project = parse_project_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"constraint-race-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"constraint-race-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
-            "id":"parent","primaryDataset":"test-dataset","route":"parents","mutationMode":"create_only","classification":"public",
-            "fields":[{"id":"name","type":"string","maxLength":64,"required":true,"classification":"public"}]
+            "id":"parent","primaryDataset":"test-dataset","route":"parents","mutationMode":"create-only","classification":"public",
+            "fields":[{"id":"name","type":"string","maximumLength":64,"required":true,"classification":"public"}]
           },{
-            "id":"child","primaryDataset":"test-dataset","route":"children","mutationMode":"create_only","classification":"public",
+            "id":"child","primaryDataset":"test-dataset","route":"children","mutationMode":"create-only","classification":"public",
             "fields":[
               {"id":"parent","type":"reference","target":"parent","onDelete":"restrict","required":true,"classification":"public"},
               {"id":"alternate-parent","type":"reference","target":"parent","onDelete":"restrict","classification":"public"},
-              {"id":"name","type":"string","maxLength":64,"required":true,"classification":"public"}
+              {"id":"name","type":"string","maximumLength":64,"required":true,"classification":"public"}
             ]
           },{
-            "id":"unique-entry","primaryDataset":"test-dataset","route":"unique-entries","mutationMode":"create_only","classification":"public",
+            "id":"unique-entry","primaryDataset":"test-dataset","route":"unique-entries","mutationMode":"create-only","classification":"public",
             "fields":[
-              {"id":"scope","type":"string","maxLength":64,"required":true,"classification":"public"},
-              {"id":"code","type":"string","maxLength":64,"required":true,"classification":"public"}
+              {"id":"scope","type":"string","maximumLength":64,"required":true,"classification":"public"},
+              {"id":"code","type":"string","maximumLength":64,"required":true,"classification":"public"}
             ],
-            "constraints":[{"kind":"unique","fields":["scope","code"]}]
+            "constraints":[{"type":"unique","fields":["scope","code"]}]
           },{
-            "id":"period","primaryDataset":"test-dataset","route":"periods","mutationMode":"create_only","classification":"public",
+            "id":"period","primaryDataset":"test-dataset","route":"periods","mutationMode":"create-only","classification":"public",
             "fields":[
-              {"id":"scope","type":"string","maxLength":64,"required":true,"classification":"public"},
+              {"id":"scope","type":"string","maximumLength":64,"required":true,"classification":"public"},
               {"id":"valid-from","type":"timestamp","required":true,"classification":"public"},
               {"id":"valid-to","type":"timestamp","required":false,"classification":"public"}
             ],
             "temporal":{"startField":"valid-from","endField":"valid-to","scopeFields":["scope"]},
             "constraints":[{
-              "kind":"temporal-non-overlap","scopeFields":["scope"],
+              "type":"temporal-non-overlap","scopeFields":["scope"],
               "startField":"valid-from","endField":"valid-to"
             }]
           }],
           "accessProfiles":[{
             "id":"operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","requiredPurposes":["operations"],
-            "permissions":[{
+            "permissions":{"entities":[{
               "entity":"parent","operations":["create","get"],"readableFields":["name"],"writableFields":["name"],
               "rowBoundaries": "unrestricted"
             },{
@@ -509,7 +509,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
               "readableFields":["scope","valid-from","valid-to"],
               "writableFields":["scope","valid-from","valid-to"],
               "rowBoundaries": "unrestricted"
-            }]
+            }]}
           }]
         }"#,
     )

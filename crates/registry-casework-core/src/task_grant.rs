@@ -16,6 +16,8 @@ pub const TASK_ASSERTION_LIFETIME_SECONDS: u64 = 60;
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TaskTemplate {
+    #[serde(deserialize_with = "crate::typed::local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
     pub version: String,
     pub label: String,
@@ -53,6 +55,11 @@ pub struct TaskTemplate {
     pub evidence_context: Option<EvidenceRequesterContext>,
     /// Exact token identity keys mapped to governed source logical fields.
     /// Values are extracted from the approving caller's disclosed source read.
+    #[serde(deserialize_with = "crate::typed::external_id_keys")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "BTreeMap<registry_platform_yaml::ExternalId, String>")
+    )]
     pub subjects: BTreeMap<String, String>,
     #[serde(deserialize_with = "crate::typed::bounded_u64::<_, 1, TASK_GRANT_LIFETIME_SECONDS>")]
     #[cfg_attr(
@@ -139,7 +146,7 @@ registry_platform_yaml::tagged_union!(TaskGrantBounds);
 /// The serialized form of [`TaskGrantBounds`], kept byte-identical to the
 /// stored and published shape.
 #[derive(Serialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(tag = "type", rename_all = "kebab-case")]
 enum TaskGrantBoundsWire<'a> {
     Evidence {
         requirement: &'a str,
@@ -240,15 +247,12 @@ impl TaskGrantBounds {
                         32,
                     );
                     for (operation_index, operation) in permission.operations.iter().enumerate() {
-                        if !operation
-                            .bytes()
-                            .all(|byte| byte.is_ascii_lowercase() || byte == b'_')
-                        {
+                        if !crate::typed::valid_local_identifier(operation) {
                             findings.push(
                                 "casework.task-template.invalid-operation",
                                 format!("{at}/operations/{operation_index}"),
-                                "expected lowercase letters and '_'",
-                                "Write a registry operation, such as read or update_status.",
+                                "expected 1 to 64 characters: a lowercase letter, then lowercase letters, digits, '_', or '-'",
+                                "Write a registry operation, such as get or list.",
                             );
                         }
                     }
@@ -402,12 +406,12 @@ impl TaskTemplate {
                 "Add itemKinds and itemStates, or add reviewKinds.",
             );
         }
-        if !crate::valid_directory_identifier(&self.id) {
+        if !crate::typed::valid_local_identifier(&self.id) {
             findings.push(
                 "casework.task-template.invalid-id",
                 "/id",
-                crate::finding::DIRECTORY_IDENTIFIER_MESSAGE,
-                crate::finding::DIRECTORY_IDENTIFIER_ACTION,
+                crate::finding::IDENTIFIER_MESSAGE,
+                crate::finding::IDENTIFIER_ACTION,
             );
         }
         for (member, value, maximum) in
@@ -476,7 +480,7 @@ impl TaskTemplate {
                     "casework.task-template.empty-list",
                     "/itemStates",
                     "expected at least one entry",
-                    "List claimed, waiting_applicant, or waiting_application.",
+                    "List claimed, waiting-applicant, or waiting-application.",
                 );
             }
             for (index, state) in self.item_states.iter().enumerate() {
@@ -490,7 +494,7 @@ impl TaskTemplate {
                         "casework.task-template.unsupported-item-state",
                         format!("/itemStates/{index}"),
                         "a task grant is issued only on a claimed or waiting item",
-                        "Write claimed, waiting_applicant, or waiting_application.",
+                        "Write claimed, waiting-applicant, or waiting-application.",
                     );
                 }
             }
@@ -825,11 +829,91 @@ fn valid_operation(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn template_listing(item_states: serde_json::Value) -> serde_json::Value {
+        serde_json::json!({
+            "id":"summary", "version":"1", "label":"Prepare summary",
+            "eligibleTeams":["team"], "eligibleProfiles":["staff"], "source":"source",
+            "itemKinds":["request"], "itemStates": item_states,
+            "agent":{"issuer":"https://issuer.test", "subject":"agent"},
+            "client":"agent-client", "resource":"urn:test:breg", "scopes":["records:get"],
+            "purpose":"prepare-summary", "bounds":{"type":"breg", "permissions":[{"collection":"records", "operations":["get"]}]},
+            "subjects":{"subject_reference":"subject-reference"}, "lifetimeSeconds":900
+        })
+    }
+
+    #[test]
+    fn cfg_id_1_a_template_id_is_a_local_identifier() {
+        let with_id = |id: &str| {
+            let mut template = template_listing(serde_json::json!(["claimed"]));
+            template["id"] = serde_json::json!(id);
+            template
+        };
+        let project: CaseworkProject = serde_json::from_value(serde_json::json!({
+            "apiVersion": crate::CASEWORK_API_VERSION,
+            "kind": crate::CASEWORK_KIND,
+            "project": {"id": "templates", "version": "1"},
+            "accessProfiles": [{"id": "staff", "principalClaim": "sub", "requiredScopes": [], "role": "staff"}],
+            "queues": [{"id": "triage", "label": "Triage"}]
+        }))
+        .unwrap();
+        let invalid_id = |template: &TaskTemplate| {
+            template.findings(&project).iter().any(|finding| {
+                finding.code == "casework.task-template.invalid-id" && finding.pointer == "/id"
+            })
+        };
+        for valid in ["prepare_summary-2".to_owned(), "x".repeat(64)] {
+            let template: TaskTemplate = serde_json::from_value(with_id(&valid)).unwrap();
+            assert!(!invalid_id(&template));
+        }
+        for invalid in ["prepare.summary", "Summary", "1summary", ""] {
+            assert!(
+                serde_json::from_value::<TaskTemplate>(with_id(invalid)).is_err(),
+                "an id outside the grammar is refused where it is read"
+            );
+        }
+        let invalid = "x".repeat(65);
+        assert!(serde_json::from_value::<TaskTemplate>(with_id(&invalid)).is_err());
+        for invalid in ["prepare.summary".to_owned(), "x".repeat(65)] {
+            let mut template: TaskTemplate = serde_json::from_value(with_id("summary")).unwrap();
+            template.id = invalid;
+            assert!(invalid_id(&template));
+        }
+    }
+
+    #[test]
+    fn cfg_name_2_a_template_lists_the_waiting_states_in_kebab_case() {
+        let current = template_listing(serde_json::json!([
+            "claimed",
+            "waiting-applicant",
+            "waiting-application"
+        ]));
+        let template: TaskTemplate = serde_json::from_value(current.clone()).unwrap();
+        assert_eq!(
+            template.item_states,
+            [
+                OccurrenceState::Claimed,
+                OccurrenceState::WaitingApplicant,
+                OccurrenceState::WaitingApplication
+            ]
+        );
+        assert_eq!(serde_json::to_value(&template).unwrap(), current);
+        for previous in ["waiting_applicant", "waiting_application"] {
+            assert!(
+                serde_json::from_value::<TaskTemplate>(template_listing(serde_json::json!([
+                    previous
+                ])))
+                .is_err(),
+                "{previous} is refused"
+            );
+        }
+    }
+
     #[test]
     fn governed_scopes_and_purposes_require_explicit_bounded_oauth_names() {
         let project: CaseworkProject = serde_json::from_value(serde_json::json!({
             "apiVersion": crate::CASEWORK_API_VERSION, "kind": crate::CASEWORK_KIND,
-            "casework": {"id":"tasks", "version":"1"},
+            "project": {"id":"tasks", "version":"1"},
             "accessProfiles":[{"id":"staff", "principalClaim":"sub", "requiredScopes":["casework:staff"], "role":"staff"}],
             "queues":[{"id":"review", "label":"Review"}],
             "sources":[{"id":"source", "adapter":"test", "description":"Test source", "requests":[{"entity":"request", "queue":"review"}]}]
@@ -907,6 +991,61 @@ mod tests {
     }
 
     #[test]
+    fn cfg_id_1_a_registry_operation_is_a_local_identifier() {
+        let invalid_operations = |operation: &str| -> Vec<String> {
+            let bounds: TaskGrantBounds = serde_json::from_value(serde_json::json!({
+                "type":"breg",
+                "permissions":[{"collection":"records","operations":["get", operation]}]
+            }))
+            .unwrap();
+            bounds
+                .findings()
+                .into_iter()
+                .filter(|finding| finding.code == "casework.task-template.invalid-operation")
+                .map(|finding| finding.pointer)
+                .collect()
+        };
+        for valid in [
+            "apply-request".to_owned(),
+            "apply_request".to_owned(),
+            "read-live".to_owned(),
+            "revision2".to_owned(),
+            "x".repeat(64),
+        ] {
+            assert!(
+                invalid_operations(&valid).is_empty(),
+                "{valid} follows the identifier grammar"
+            );
+        }
+        for invalid in [
+            "Apply-request".to_owned(),
+            "apply request".to_owned(),
+            "apply.request".to_owned(),
+            "apply:request".to_owned(),
+            "apply/request".to_owned(),
+            "apply-*".to_owned(),
+            "-apply".to_owned(),
+            "_apply".to_owned(),
+            "2apply".to_owned(),
+            "appl\u{e9}".to_owned(),
+            String::new(),
+            "x".repeat(65),
+        ] {
+            assert_eq!(
+                invalid_operations(&invalid),
+                ["/permissions/0/operations/1"],
+                "{invalid:?} is outside the identifier grammar"
+            );
+            let bounds: TaskGrantBounds = serde_json::from_value(serde_json::json!({
+                "type":"breg",
+                "permissions":[{"collection":"records","operations":[invalid]}]
+            }))
+            .unwrap();
+            assert!(matches!(bounds.check(), Err(TaskGrantError::Policy)));
+        }
+    }
+
+    #[test]
     fn scheduling_bounds_match_the_runtime_claim_grammar() {
         let bounds: TaskGrantBounds = serde_json::from_value(serde_json::json!({
             "type":"scheduling",
@@ -937,7 +1076,7 @@ mod tests {
     fn evidence_templates_require_closed_requester_context_and_other_products_forbid_it() {
         let project: CaseworkProject = serde_json::from_value(serde_json::json!({
             "apiVersion": crate::CASEWORK_API_VERSION, "kind": crate::CASEWORK_KIND,
-            "casework": {"id":"tasks", "version":"1"},
+            "project": {"id":"tasks", "version":"1"},
             "accessProfiles":[{"id":"staff", "principalClaim":"sub", "requiredScopes":["casework:staff"], "role":"staff"}],
             "queues":[{"id":"review", "label":"Review"}],
             "sources":[{"id":"source", "adapter":"test", "description":"Test source", "requests":[{"entity":"request", "queue":"review"}]}]

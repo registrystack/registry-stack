@@ -111,11 +111,11 @@ transport authority in the existing source request object:
 ```yaml
 sources:
   source-a:
-    transport: http-json
+    type: http-json
     baseUrl: https://source.example
     forwardAccessAttribution: true
     posture: record-transformed
-    authentication: {kind: static-authorization, tokenRef: secret:file/source-token}
+    authentication: {type: static-authorization, tokenRef: secret:file/source-token}
     request:
       method: POST
       path: /v1/search
@@ -136,9 +136,9 @@ sources:
         maximumNormalizedBytes: 8192
       projection: [/total, /results]
       redirects: deny
-      timeoutMilliseconds: 3000
+      attemptTimeoutMilliseconds: 3000
       maximumResponseBytes: 65536
-      concurrencyLimit: 8
+      maximumConcurrency: 8
     responseSchema: schemas/source-a-response.schema.yaml
     extractScript: adapters/source-a-extract.rhai
     factSchema: schemas/source-a-facts.schema.yaml
@@ -149,7 +149,7 @@ sources:
       responseSchema: schemas/source-a-batch-response.schema.yaml
       projection: [/results/*/slot, /results/*/outcome, /results/*/facts]
 requirements:
-  - id: urn:example:requirement:relationship:v1
+  - uri: urn:example:requirement:relationship:v1
     derivation:
       script: derivations/relationship.rhai
       selectorInputs:
@@ -419,14 +419,15 @@ Rust executes only the requirement's closed acquisition: one request for
 validated match. A response cannot supply a source, URL, next page, retry, or
 third request.
 
-A bundle may define a Rust-owned `pathTemplate` with tagged complete-segment
-`pathBindings`. `from: selector` binds an already validated and authorized
-selector field. `from: prior-fact` is valid only on a fetch source and binds a
+A bundle may write `path` as a Rust-owned template with tagged complete-segment
+`pathBindings`. `type: selector` binds an already validated and authorized
+selector field. `type: prior-fact` is valid only on a fetch source and binds a
 scalar property required by the preceding search fact schema. Bindings are not
 `RequestParts` and are never selected by a script. Values reject `/`, `\`, `%`,
 controls, `.` and `..`, then Rust percent-encodes them exactly once. Expansion
 cannot change the configured origin, endpoint family, method, credentials, or
-request count. A source declares exactly one of fixed `path` or `pathTemplate`.
+request count. A `path` without placeholders is a literal and takes no
+`pathBindings`.
 
 Bundle-fixed `fixedHeaders` are ordered, non-secret constants. Names are unique
 after ASCII case folding and cannot set authentication, host/routing, cookies,

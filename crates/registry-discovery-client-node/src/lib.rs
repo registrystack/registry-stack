@@ -42,31 +42,31 @@ fn error(source: DiscoveryClientError) -> Error {
             "message": "the Discovery query is invalid"
         }),
         DiscoveryClientError::NoMatchingService => json!({
-            "kind": "no_matching_service",
+            "kind": "no-matching-service",
             "message": "no advertised service matched the exact selection"
         }),
         DiscoveryClientError::AmbiguousSelection => json!({
-            "kind": "ambiguous_selection",
+            "kind": "ambiguous-selection",
             "message": "the exact selection is ambiguous"
         }),
         DiscoveryClientError::NoMatchingAlternative => json!({
-            "kind": "no_matching_alternative",
+            "kind": "no-matching-alternative",
             "message": "no Evidence Type alternative matched the selection"
         }),
         DiscoveryClientError::AmbiguousAlternative => json!({
-            "kind": "ambiguous_alternative",
+            "kind": "ambiguous-alternative",
             "message": "the Evidence Type alternative selection is ambiguous"
         }),
         DiscoveryClientError::CapabilityMismatch => json!({
-            "kind": "capability_mismatch",
+            "kind": "capability-mismatch",
             "message": "the selected advertised capability does not match the service"
         }),
         DiscoveryClientError::LocalAcceptanceRefused => json!({
-            "kind": "local_acceptance_refused",
+            "kind": "local-acceptance-refused",
             "message": "the relying application refused the advertised service"
         }),
         DiscoveryClientError::SelectionChanged => json!({
-            "kind": "selection_changed",
+            "kind": "selection-changed",
             "message": "the current advertised service changed and requires new acceptance"
         }),
         DiscoveryClientError::Transport { kind } => json!({
@@ -96,9 +96,9 @@ fn error(source: DiscoveryClientError) -> Error {
 
 fn problem_name(problem: DiscoveryProblem) -> &'static str {
     match problem {
-        DiscoveryProblem::InvalidRequest => "invalid_request",
-        DiscoveryProblem::NotFound => "not_found",
-        DiscoveryProblem::ResultBoundExceeded => "result_bound_exceeded",
+        DiscoveryProblem::InvalidRequest => "invalid-request",
+        DiscoveryProblem::NotFound => "not-found",
+        DiscoveryProblem::ResultBoundExceeded => "result-bound-exceeded",
         DiscoveryProblem::Unavailable => "unavailable",
         _ => "unknown",
     }

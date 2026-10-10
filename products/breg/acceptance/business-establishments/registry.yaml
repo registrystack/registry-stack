@@ -1,6 +1,6 @@
-apiVersion: registry.registrystack.org/v1alpha1
-kind: RegistryProject
-registry:
+apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
   id: business-establishments
   canonicalBaseIri: "https://business-establishments.example.gov"
   version: 0.1.0
@@ -162,7 +162,7 @@ modules:
     digest: "sha256:feb8187258832cf7eb0a825f01a51b9ce9e8900559e4f8441483d4cd4af146b3"
   - id: business-establishments-core
     version: 0.1.0
-    digest: "sha256:baaed50edd516bd1a8dd22cd67902bf91db63ea4e37586ae932dd8025f40c2f2"
+    digest: "sha256:118094679b2d36e4ee1e327cfb873d03475872717723a7b4df90beefa3cb75b7"
 
 accessProfiles:
   - id: business-operator
@@ -173,124 +173,125 @@ accessProfiles:
     requiredPurposes:
       - business-administration
     permissions:
-      - entity: establishment
-        rowBoundaries: unrestricted
-        operations:
-          - create
-          - get
-          - list
-          - patch
-          - batch
-        readableFields:
-          - establishment-code
-          - site-name
-          - locality
-          - opened-on
-          - establishment-kind
-          - operating-status
-          - preferred-language
-        writableFields:
-          - establishment-code
-          - site-name
-          - locality
-          - opened-on
-          - establishment-kind
-          - operating-status
-          - preferred-language
-        filterableFields:
-          - establishment-code
-          - establishment-kind
-          - operating-status
-        sortableFields:
-          - establishment-code
-      - entity: business
-        rowBoundaries: unrestricted
-        operations:
-          - create
-          - get
-          - lookup
-          - list
-          - patch
-          - batch
-        readableFields:
-          - business-code
-          - local-registration-number
-          - registered-name
-          - administrative-area
-          - business-type
-          - head-office-count
-          - branch-count
-          - production-site-count
-          - suspended-site-count
-          - has-head-office
-          - has-production-site
-        writableFields:
-          - business-code
-          - local-registration-number
-          - registered-name
-          - administrative-area
-          - business-type
-        filterableFields:
-          - business-code
-          - local-registration-number
-          - administrative-area
-          - business-type
-          - head-office-count
-          - branch-count
-          - production-site-count
-          - suspended-site-count
-          - has-head-office
-          - has-production-site
-        sortableFields:
-          - local-registration-number
-          - business-code
-          - branch-count
-        allowCount: true
-        lookups:
-          - selector: by-local-reference
-            valueOrigin: request
-          - selector: by-business-code
-            valueOrigin: request
-        readPaths:
-          - path: establishments
-            readableFields:
-              - establishment-code
-              - site-name
-              - locality
-              - opened-on
-              - establishment-kind
-              - operating-status
-            filterableFields:
-              - establishment-kind
-              - operating-status
-            sortableFields:
-              - establishment-code
-            allowCount: true
-      - entity: operator-assignment
-        rowBoundaries: unrestricted
-        operations:
-          - create
-          - get
-          - list
-          - patch
-          - batch
-        readableFields:
-          - establishment
-          - business
-          - relationship
-          - valid-from
-          - valid-to
-        writableFields:
-          - establishment
-          - business
-          - relationship
-          - valid-from
-          - valid-to
-        filterableFields:
-          - establishment
-          - business
-          - relationship
-          - valid-from
+      entities:
+        - entity: establishment
+          rowBoundaries: unrestricted
+          operations:
+            - create
+            - get
+            - list
+            - patch
+            - batch
+          readableFields:
+            - establishment-code
+            - site-name
+            - locality
+            - opened-on
+            - establishment-kind
+            - operating-status
+            - preferred-language
+          writableFields:
+            - establishment-code
+            - site-name
+            - locality
+            - opened-on
+            - establishment-kind
+            - operating-status
+            - preferred-language
+          filterableFields:
+            - establishment-code
+            - establishment-kind
+            - operating-status
+          sortableFields:
+            - establishment-code
+        - entity: business
+          rowBoundaries: unrestricted
+          operations:
+            - create
+            - get
+            - lookup
+            - list
+            - patch
+            - batch
+          readableFields:
+            - business-code
+            - local-registration-number
+            - registered-name
+            - administrative-area
+            - business-type
+            - head-office-count
+            - branch-count
+            - production-site-count
+            - suspended-site-count
+            - has-head-office
+            - has-production-site
+          writableFields:
+            - business-code
+            - local-registration-number
+            - registered-name
+            - administrative-area
+            - business-type
+          filterableFields:
+            - business-code
+            - local-registration-number
+            - administrative-area
+            - business-type
+            - head-office-count
+            - branch-count
+            - production-site-count
+            - suspended-site-count
+            - has-head-office
+            - has-production-site
+          sortableFields:
+            - local-registration-number
+            - business-code
+            - branch-count
+          allowCount: true
+          lookups:
+            - selector: by-local-reference
+              valueOrigin: request
+            - selector: by-business-code
+              valueOrigin: request
+          readPaths:
+            - path: establishments
+              readableFields:
+                - establishment-code
+                - site-name
+                - locality
+                - opened-on
+                - establishment-kind
+                - operating-status
+              filterableFields:
+                - establishment-kind
+                - operating-status
+              sortableFields:
+                - establishment-code
+              allowCount: true
+        - entity: operator-assignment
+          rowBoundaries: unrestricted
+          operations:
+            - create
+            - get
+            - list
+            - patch
+            - batch
+          readableFields:
+            - establishment
+            - business
+            - relationship
+            - valid-from
+            - valid-to
+          writableFields:
+            - establishment
+            - business
+            - relationship
+            - valid-from
+            - valid-to
+          filterableFields:
+            - establishment
+            - business
+            - relationship
+            - valid-from
   - id: business-viewer
     principalClaim: registry_principal
     requiredScopes:
@@ -298,25 +299,26 @@ accessProfiles:
     requiredPurposes:
       - business-view
     permissions:
-      - entity: business
-        operations:
-          - get
-          - lookup
-        readableFields:
-          - business-code
-          - local-registration-number
-          - registered-name
-          - administrative-area
-          - business-type
-        rowBoundaries:
-          - field: id
-            claim: business_id
-            operator: equals
-        lookups:
-          - selector: by-business-code
-            valueOrigin: verified_claim
-            claimMapping:
-              business-code: business_code
+      entities:
+        - entity: business
+          operations:
+            - get
+            - lookup
+          readableFields:
+            - business-code
+            - local-registration-number
+            - registered-name
+            - administrative-area
+            - business-type
+          rowBoundaries:
+            - field: id
+              claim: business_id
+              operator: equals
+          lookups:
+            - selector: by-business-code
+              valueOrigin: verified-claim
+              claimMapping:
+                business-code: business_code
 vocabularies:
   - id: establishment-role
     values:

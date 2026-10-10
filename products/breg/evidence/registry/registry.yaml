@@ -1,6 +1,6 @@
-apiVersion: registry.registrystack.org/v1alpha1
-kind: RegistryProject
-registry:
+apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
   id: registry
   canonicalBaseIri: https://registry.example.test
   version: 0.1.0
@@ -41,15 +41,15 @@ entities:
   - id: code
     type: string
     required: true
-    minLength: 1
-    maxLength: 64
+    minimumLength: 1
+    maximumLength: 64
     classification: internal
   - id: registration-number
     apiName: registrationNumber
     type: string
     required: true
-    minLength: 1
-    maxLength: 64
+    minimumLength: 1
+    maximumLength: 64
     classification: internal
   - id: status
     type: vocabulary-code
@@ -58,13 +58,13 @@ entities:
   - id: label
     type: string
     required: true
-    maxLength: 100
+    maximumLength: 100
     classification: internal
   constraints:
-  - kind: unique
+  - type: unique
     fields:
     - code
-  - kind: unique
+  - type: unique
     fields:
     - registration-number
   selectorProfiles:
@@ -83,22 +83,23 @@ accessProfiles:
   requiredPurposes:
   - registry-operations
   permissions:
-  - entity: record
-    operations:
-    - create
-    - get
-    - patch
-    readableFields:
-    - code
-    - registration-number
-    - status
-    - label
-    writableFields:
-    - code
-    - registration-number
-    - status
-    - label
-    rowBoundaries: unrestricted
+    entities:
+    - entity: record
+      operations:
+      - create
+      - get
+      - patch
+      readableFields:
+      - code
+      - registration-number
+      - status
+      - label
+      writableFields:
+      - code
+      - registration-number
+      - status
+      - label
+      rowBoundaries: unrestricted
 - id: evidence-source
   principalClaim: registry_principal
   requiredScopes:
@@ -106,19 +107,20 @@ accessProfiles:
   requiredPurposes:
   - evidence-source-read
   permissions:
-  - entity: record
-    operations:
-    - lookup
-    readableFields:
-    - code
-    - registration-number
-    - status
-    lookups:
-    - selector: by-code
-      valueOrigin: request
-    - selector: by-registration-number
-      valueOrigin: request
-    rowBoundaries: unrestricted
+    entities:
+    - entity: record
+      operations:
+      - lookup
+      readableFields:
+      - code
+      - registration-number
+      - status
+      lookups:
+      - selector: by-code
+        valueOrigin: request
+      - selector: by-registration-number
+        valueOrigin: request
+      rowBoundaries: unrestricted
 vocabularies:
 - id: record-status
   values:

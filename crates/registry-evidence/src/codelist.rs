@@ -1,41 +1,53 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The Evidence codelist format: one `codelists/*.yaml` file of a bundle.
 //!
-//! A codelist is a list of codes (`codes`) or a mapping from input codes to
-//! output codes (`entries` with `allowed_outputs`). The file is read through
-//! the shared configuration reader, so every refusal names the file, the
-//! member, its line and column, and the fix, and none repeats a value from
-//! the file (CFG-SEC-3).
+//! A codelist is a list of codes (`type: code-list` with `codes`) or a
+//! mapping from input codes to output codes (`type: mapping` with `entries`
+//! and `allowedOutputs`). The file is read through the shared configuration
+//! reader, so every refusal names the file, the member, its line and column,
+//! and the fix, and none repeats a value from the file (CFG-SEC-3).
 
 use std::collections::BTreeMap;
 
 use registry_platform_yaml::{
-    Document, EnvelopeRule, Expect, FormatSpec, Invalid, Reader, Report, Severity, UniqueList,
+    tagged_union, ApiVersion, Document, EnvelopeRule, Expect, FormatSpec, Invalid, Reader,
+    RemovedKey, Report, Severity, UniqueList,
 };
 use serde::{Deserialize, Deserializer};
 
 use crate::bundle::Codelist;
 use crate::config::BundleExpressions;
 
+/// The `apiVersion` a codelist file declares.
+pub const EVIDENCE_CODELIST_API_VERSION: &str =
+    "id.registrystack.org/formats/evidence/codelist/v1alpha1";
+
 /// The kind the reader names an Evidence codelist by in its diagnostics.
 pub const EVIDENCE_CODELIST_KIND: &str = "EvidenceCodelist";
 
-/// The Evidence codelist format. The frozen Version 1 grammar writes `id` and
-/// `version` and neither `apiVersion` nor `kind`; the envelope arrives with
-/// the move to the stable format line.
+/// The Evidence codelist format. A file opens with `apiVersion` and `kind`;
+/// the members `id` and `allowed_outputs` are refused with the member that
+/// replaced each one named.
 pub const EVIDENCE_CODELIST_FORMAT: FormatSpec<'static> = FormatSpec {
     kind: EVIDENCE_CODELIST_KIND,
-    envelope: EnvelopeRule::Exempt {
-        reason: "the frozen Version 1 codelist grammar declares id and version and no apiVersion or kind",
+    envelope: EnvelopeRule::ApiVersionKind {
+        api_versions: &[ApiVersion::current(EVIDENCE_CODELIST_API_VERSION)],
+        retired_api_versions: &[],
     },
-    removed_keys: &[],
+    removed_keys: &[
+        RemovedKey {
+            pointer: "/id",
+            replacement: "Write the codelist URI under `uri`.",
+        },
+        RemovedKey {
+            pointer: "/allowed_outputs",
+            replacement: "Write the output codes under `allowedOutputs`.",
+        },
+    ],
 };
 
 /// The most codes, mapping entries, or allowed outputs one codelist holds.
 const MAXIMUM_CODELIST_ITEMS: usize = 4_096;
-
-const FORM_ACTION: &str =
-    "Declare `codes`, or declare `entries` together with `allowed_outputs`, and nothing else.";
 
 /// Read one codelist file and check its rules. `file` is the name the
 /// diagnostics carry.
@@ -50,7 +62,7 @@ pub fn read_codelist(file: &str, bytes: &[u8]) -> Result<Codelist, Report> {
         .map_err(|diagnostic| Report::new(vec![*diagnostic]))
 }
 
-/// The `id` and `version` a codelist file declares, when the file reads as
+/// The `uri` and `version` a codelist file declares, when the file reads as
 /// YAML and declares both as text. Bucket schemes find their codelist this
 /// way; the codelist found is then read in full by [`read_codelist`].
 pub(crate) fn declared_identity(bytes: &[u8]) -> Option<(String, String)> {
@@ -61,40 +73,48 @@ pub(crate) fn declared_identity(bytes: &[u8]) -> Option<(String, String)> {
         .ok()??
         .to_json_value();
     Some((
-        root.get("id")?.as_str()?.to_owned(),
+        root.get("uri")?.as_str()?.to_owned(),
         root.get("version")?.as_str()?.to_owned(),
     ))
 }
 
-/// A codelist file as written. Exactly one form is declared: `codes`, or
-/// `entries` with `allowed_outputs`.
+/// A codelist file as written. The `type` member names its form.
 #[derive(Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(deny_unknown_fields)]
-pub(crate) struct CodelistDocument {
-    /// The absolute URI identifying the codelist; a bucket concept's
-    /// `bucketScheme` names it.
-    id: CodelistId,
-    /// The codelist version; a referencing concept's `codelistVersion` or
-    /// `schemeVersion` repeats it exactly.
-    version: CodelistVersion,
-    /// The exact code set, for a code list. Omit it in a mapping.
-    // The shared reader refuses `null` (CFG-EMPTY-1), so the schema names the
-    // member type alone and an absent member is the only way to omit it.
-    #[serde(default)]
-    #[cfg_attr(feature = "schema", schemars(with = "UniqueList<Code>"))]
-    codes: Option<UniqueList<Code>>,
-    /// The exact source-to-output mapping, for a mapping. Omit it in a code
-    /// list.
-    #[serde(default)]
-    #[cfg_attr(feature = "schema", schemars(with = "BTreeMap<Code, Code>"))]
-    entries: Option<BTreeMap<Code, Code>>,
-    /// The output codes a mapping may produce; every `entries` output is one
-    /// of them. Declared with `entries` and only with it.
-    #[serde(default)]
-    #[cfg_attr(feature = "schema", schemars(with = "UniqueList<Code>"))]
-    allowed_outputs: Option<UniqueList<Code>>,
+#[serde(
+    remote = "Self",
+    deny_unknown_fields,
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase"
+)]
+#[cfg_attr(feature = "schema", schemars(!remote, tag = "type"))]
+pub(crate) enum CodelistDocument {
+    /// An exact code set.
+    CodeList {
+        /// The absolute URI identifying the codelist; a bucket concept's
+        /// `bucketScheme` names it.
+        uri: CodelistUri,
+        /// The codelist version; a referencing concept's `codelistVersion`
+        /// or `schemeVersion` repeats it exactly.
+        version: CodelistVersion,
+        /// The exact code set.
+        codes: UniqueList<Code>,
+    },
+    /// An exact mapping from source codes to output codes.
+    Mapping {
+        /// The absolute URI identifying the codelist.
+        uri: CodelistUri,
+        /// The codelist version; a referencing concept's `codelistVersion`
+        /// repeats it exactly.
+        version: CodelistVersion,
+        /// The exact source-to-output mapping.
+        entries: BTreeMap<Code, Code>,
+        /// The output codes the mapping may produce; every `entries` output
+        /// is one of them.
+        allowed_outputs: UniqueList<Code>,
+    },
 }
+tagged_union!(CodelistDocument);
 
 /// The most codes, mapping entries, or allowed outputs one codelist holds, as
 /// the generated schema states it.
@@ -108,28 +128,27 @@ impl CodelistDocument {
         let refuse = |code: &str, pointer: &str, message: &str, action: &str| -> Refusal {
             Box::new(document.diagnostic_at_value(Severity::Error, code, pointer, message, action))
         };
-        let form = |pointer: &str, message: &str| {
-            refuse(
-                "evidence.codelist.invalid-form",
-                pointer,
-                message,
-                FORM_ACTION,
-            )
-        };
-        let id = self.id.0;
-        let version = self.version.0;
-        match (self.codes, self.entries, self.allowed_outputs) {
-            (Some(codes), None, None) => {
+        match self {
+            Self::CodeList {
+                uri,
+                version,
+                codes,
+            } => {
                 check_size(codes.len(), "/codes", &refuse)?;
                 Ok(Codelist::Codes {
-                    id,
-                    version,
+                    id: uri.0,
+                    version: version.0,
                     codes: codes.into_vec().into_iter().map(|code| code.0).collect(),
                 })
             }
-            (None, Some(entries), Some(allowed_outputs)) => {
+            Self::Mapping {
+                uri,
+                version,
+                entries,
+                allowed_outputs,
+            } => {
                 check_size(entries.len(), "/entries", &refuse)?;
-                check_size(allowed_outputs.len(), "/allowed_outputs", &refuse)?;
+                check_size(allowed_outputs.len(), "/allowedOutputs", &refuse)?;
                 for (input, output) in &entries {
                     if !allowed_outputs.contains(output) {
                         let pointer = format!(
@@ -139,14 +158,14 @@ impl CodelistDocument {
                         return Err(refuse(
                             "evidence.codelist.output-not-allowed",
                             &pointer,
-                            "a mapping entry names an output code that allowed_outputs does not list",
-                            "Map the input to a code listed under `allowed_outputs`, or list the output code there.",
+                            "a mapping entry names an output code that allowedOutputs does not list",
+                            "Map the input to a code listed under `allowedOutputs`, or list the output code there.",
                         ));
                     }
                 }
                 Ok(Codelist::Mapping {
-                    id,
-                    version,
+                    id: uri.0,
+                    version: version.0,
                     entries: entries
                         .into_iter()
                         .map(|(input, output)| (input.0, output.0))
@@ -158,29 +177,6 @@ impl CodelistDocument {
                         .collect(),
                 })
             }
-            (Some(_), Some(_), _) | (Some(_), None, Some(_)) => {
-                let pointer = if document.span_of("/entries").is_some() {
-                    "/entries"
-                } else {
-                    "/allowed_outputs"
-                };
-                Err(form(
-                    pointer,
-                    "a codelist declares codes or a mapping, not both",
-                ))
-            }
-            (None, Some(_), None) => Err(form(
-                "/entries",
-                "a mapping codelist declares allowed_outputs beside entries",
-            )),
-            (None, None, Some(_)) => Err(form(
-                "/allowed_outputs",
-                "allowed_outputs belongs to a mapping codelist, which declares entries",
-            )),
-            (None, None, None) => Err(form(
-                "",
-                "a codelist declares codes, or entries with allowed_outputs",
-            )),
         }
     }
 }
@@ -201,25 +197,35 @@ fn check_size(
     ))
 }
 
-/// The codelist identifier: an absolute URI of at most 512 bytes.
-struct CodelistId(String);
+/// The codelist identifier: an absolute URI of at most 512 characters, with
+/// no whitespace and no control character, kept as written.
+pub(crate) struct CodelistUri(String);
 
-impl<'de> Deserialize<'de> for CodelistId {
+impl<'de> Deserialize<'de> for CodelistUri {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let text = String::deserialize(deserializer)?;
-        if text.len() <= 512 && url::Url::parse(&text).is_ok() {
+        // The URI parser trims a space or control character at either end
+        // and drops a tab or line break anywhere, without an error. Refusing
+        // them first keeps the identifier as written and the URI as parsed
+        // the same URI.
+        if text.chars().count() <= 512
+            && !text
+                .chars()
+                .any(|character| character.is_whitespace() || character.is_control())
+            && url::Url::parse(&text).is_ok()
+        {
             return Ok(Self(text));
         }
         Err(Invalid::expected(
-            "an absolute URI of at most 512 bytes",
-            "Write the codelist identifier as an absolute URI, such as urn:example:codelist:regions.",
+            "an absolute URI of at most 512 characters, with no whitespace or control character",
+            "Write the codelist identifier as an absolute URI without spaces, tabs, or line breaks, such as urn:example:codelist:regions.",
         )
         .into_error())
     }
 }
 
 /// The codelist version: from 1 to 128 bytes of text without a NUL.
-struct CodelistVersion(String);
+pub(crate) struct CodelistVersion(String);
 
 impl<'de> Deserialize<'de> for CodelistVersion {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
@@ -238,7 +244,7 @@ impl<'de> Deserialize<'de> for CodelistVersion {
 /// One code: 1 to 128 ASCII bytes, starting with a letter or digit, then
 /// letters, digits, `.`, `_`, `:`, or `-`.
 #[derive(PartialEq, Eq, PartialOrd, Ord, Hash)]
-struct Code(String);
+pub(crate) struct Code(String);
 
 #[cfg(feature = "schema")]
 mod schema_impls {
@@ -246,20 +252,27 @@ mod schema_impls {
 
     use schemars::{json_schema, JsonSchema, Schema, SchemaGenerator};
 
-    use super::{Code, CodelistId, CodelistVersion};
+    use super::{Code, CodelistUri, CodelistVersion};
 
-    impl JsonSchema for CodelistId {
+    /// Text holding no character that `char::is_whitespace` or
+    /// `char::is_control` accepts, each listed by code point so that every
+    /// regular expression engine reads the same set.
+    const NO_WHITESPACE_OR_CONTROL_PATTERN: &str = "^[^\\u0000-\\u0020\\u007F-\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]+$";
+
+    impl JsonSchema for CodelistUri {
         fn schema_name() -> Cow<'static, str> {
-            Cow::Borrowed("CodelistId")
+            Cow::Borrowed("CodelistUri")
         }
 
-        fn json_schema(_generator: &mut SchemaGenerator) -> Schema {
+        fn json_schema(generator: &mut SchemaGenerator) -> Schema {
+            // The URI is an identifier other files cite (CFG-ID-2), so the
+            // schema names the shared definition beside the URI rule.
+            let external = generator.subschema_for::<registry_platform_yaml::ExternalId>();
             json_schema!({
-                "type": "string",
+                "allOf": [external],
                 "format": "uri",
-                "minLength": 1,
-                "maxLength": 512,
-                "description": "An absolute URI of at most 512 bytes, such as urn:example:codelist:regions.",
+                "pattern": NO_WHITESPACE_OR_CONTROL_PATTERN,
+                "description": "An absolute URI of at most 512 characters, with no whitespace or control character, such as urn:example:codelist:regions.",
             })
         }
     }
@@ -322,11 +335,19 @@ mod tests {
 
     const CANARY: &str = "CANARY-codelist-7f3a";
 
+    /// The two envelope lines every codelist opens with.
+    const ENVELOPE: &str =
+        "apiVersion: id.registrystack.org/formats/evidence/codelist/v1alpha1\nkind: EvidenceCodelist\n";
+
+    fn enveloped(body: &str) -> String {
+        format!("{ENVELOPE}{body}")
+    }
+
     fn refusal(text: &str) -> registry_platform_yaml::Diagnostic {
         let report = read_codelist("codelists/test.yaml", text.as_bytes())
             .expect_err("the codelist is refused");
         let diagnostics = report.diagnostics();
-        assert_eq!(diagnostics.len(), 1, "one diagnostic");
+        assert_eq!(diagnostics.len(), 1, "one diagnostic: {diagnostics:?}");
         let diagnostic = diagnostics[0].clone();
         let rendered = report.render_human();
         assert!(!rendered.contains(CANARY), "the refusal repeats no value");
@@ -342,7 +363,10 @@ mod tests {
     fn reads_both_codelist_forms() {
         let codes = read_codelist(
             "codelists/codes.yaml",
-            b"id: urn:example:codelist:status\nversion: '1'\ncodes: [ACTIVE, SUSPENDED]\n",
+            enveloped(
+                "uri: urn:example:codelist:status\nversion: '1'\ntype: code-list\ncodes: [ACTIVE, SUSPENDED]\n",
+            )
+            .as_bytes(),
         )
         .expect("a code list");
         assert_eq!(
@@ -355,7 +379,10 @@ mod tests {
         );
         let mapping = read_codelist(
             "codelists/map.yaml",
-            b"id: urn:example:codelist:map\nversion: '2026-01'\nentries:\n  R-101: NORTH\n  R-201: SOUTH\nallowed_outputs: [NORTH, SOUTH]\n",
+            enveloped(
+                "uri: urn:example:codelist:map\nversion: '2026-01'\ntype: mapping\nentries:\n  R-101: NORTH\n  R-201: SOUTH\nallowedOutputs: [NORTH, SOUTH]\n",
+            )
+            .as_bytes(),
         )
         .expect("a mapping");
         assert_eq!(
@@ -389,78 +416,71 @@ mod tests {
         let cases: &[(&str, String, &str, &str, usize)] = &[
             (
                 "unknown key",
-                format!("id: urn:example:c\nversion: '1'\ncodes: [A]\nextra: {CANARY}\n"),
+                format!("uri: urn:example:c\nversion: '1'\ntype: code-list\ncodes: [A]\nextra: {CANARY}\n"),
                 "config.unknown-key",
                 "/extra",
-                4,
+                7,
             ),
             (
                 "malformed code",
-                format!("id: urn:example:c\nversion: '1'\ncodes: [A, '{CANARY} x']\n"),
+                format!("uri: urn:example:c\nversion: '1'\ntype: code-list\ncodes: [A, '{CANARY} x']\n"),
                 "config.invalid-value",
                 "/codes/1",
-                3,
+                6,
             ),
             (
                 "malformed identifier",
-                format!("id: '{CANARY} x'\nversion: '1'\ncodes: [A]\n"),
+                format!("uri: '{CANARY} x'\nversion: '1'\ntype: code-list\ncodes: [A]\n"),
                 "config.invalid-value",
-                "/id",
-                1,
+                "/uri",
+                3,
             ),
             (
                 "repeated code",
-                "id: urn:example:c\nversion: '1'\ncodes: [A, B, A]\n".to_owned(),
+                "uri: urn:example:c\nversion: '1'\ntype: code-list\ncodes: [A, B, A]\n".to_owned(),
                 "config.duplicate-item",
                 "/codes/2",
-                3,
+                6,
             ),
             (
-                "both forms",
-                "id: urn:example:c\nversion: '1'\ncodes: [A]\nentries: {A: A}\nallowed_outputs: [A]\n".to_owned(),
-                "evidence.codelist.invalid-form",
+                "a code list with mapping members",
+                "uri: urn:example:c\nversion: '1'\ntype: code-list\ncodes: [A]\nentries: {A: A}\n".to_owned(),
+                "config.unknown-key",
                 "/entries",
-                4,
+                7,
             ),
             (
-                "mapping without outputs",
-                "id: urn:example:c\nversion: '1'\nentries: {A: B}\n".to_owned(),
-                "evidence.codelist.invalid-form",
-                "/entries",
-                3,
-            ),
-            (
-                "neither form",
-                "id: urn:example:c\nversion: '1'\n".to_owned(),
-                "evidence.codelist.invalid-form",
+                "a mapping without outputs",
+                "uri: urn:example:c\nversion: '1'\ntype: mapping\nentries: {A: B}\n".to_owned(),
+                "config.missing-key",
                 "",
                 1,
             ),
             (
                 "empty codes",
-                "id: urn:example:c\nversion: '1'\ncodes: []\n".to_owned(),
+                "uri: urn:example:c\nversion: '1'\ntype: code-list\ncodes: []\n".to_owned(),
                 "evidence.codelist.invalid-size",
                 "/codes",
-                3,
+                6,
             ),
             (
                 "output not allowed",
-                "id: urn:example:c\nversion: '1'\nentries:\n  A: B\n  C: D\nallowed_outputs: [B]\n".to_owned(),
+                "uri: urn:example:c\nversion: '1'\ntype: mapping\nentries:\n  A: B\n  C: D\nallowedOutputs: [B]\n".to_owned(),
                 "evidence.codelist.output-not-allowed",
                 "/entries/C",
-                5,
+                8,
             ),
             (
                 "substitution",
-                "id: urn:example:c\nversion: '${VERSION}'\ncodes: [A]\n".to_owned(),
+                "uri: urn:example:c\nversion: '${VERSION}'\ntype: code-list\ncodes: [A]\n".to_owned(),
                 "config.substitution-not-allowed",
                 "/version",
-                2,
+                4,
             ),
         ];
         for (label, text, code, path, line) in cases {
-            let diagnostic = refusal(text);
-            assert_eq!(diagnostic.code, *code, "{label}");
+            let diagnostic = refusal(&enveloped(text));
+            assert_eq!(diagnostic.code, *code, "{label}: {diagnostic:?}");
             assert_eq!(
                 position(&diagnostic),
                 ((*path).to_owned(), *line),
@@ -470,12 +490,167 @@ mod tests {
     }
 
     #[test]
+    fn a_codelist_names_its_form_with_the_type_member() {
+        for text in [
+            "uri: urn:example:c\nversion: '1'\ncodes: [A]\n",
+            "uri: urn:example:c\nversion: '1'\ntype: neither\ncodes: [A]\n",
+        ] {
+            let diagnostic = refusal(&enveloped(text));
+            assert!(
+                diagnostic.code.starts_with("config."),
+                "the shared reader refuses the form: {diagnostic:?}"
+            );
+            assert!(
+                diagnostic.path == "/type" || diagnostic.message.contains("`type`"),
+                "the refusal names the type member: {diagnostic:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_spellings_written_before_the_stable_form_are_refused_with_the_replacement_named() {
+        let report = read_codelist(
+            "codelists/test.yaml",
+            b"id: urn:example:c\nversion: '1'\ncodes: [A]\n",
+        )
+        .expect_err("a codelist without the envelope is refused");
+        let unenveloped = report.diagnostics();
+        assert_eq!(
+            unenveloped
+                .iter()
+                .map(|diagnostic| (diagnostic.code.as_str(), diagnostic.path.as_str()))
+                .collect::<Vec<_>>(),
+            [
+                ("config.missing-envelope", ""),
+                ("config.removed-key", "/id")
+            ]
+        );
+        assert!(
+            unenveloped[0]
+                .suggested_action
+                .contains(EVIDENCE_CODELIST_API_VERSION),
+            "the refusal names the apiVersion to write: {unenveloped:?}"
+        );
+        for (text, path, replacement, line) in [
+            (
+                "id: urn:example:c\nversion: '1'\ntype: code-list\ncodes: [A]\n",
+                "/id",
+                "uri",
+                3,
+            ),
+            (
+                "uri: urn:example:c\nversion: '1'\ntype: mapping\nentries: {A: B}\nallowed_outputs: [B]\n",
+                "/allowed_outputs",
+                "allowedOutputs",
+                7,
+            ),
+        ] {
+            let report = read_codelist("codelists/test.yaml", enveloped(text).as_bytes())
+                .expect_err("the removed key is refused");
+            let diagnostic = report
+                .diagnostics()
+                .iter()
+                .find(|diagnostic| diagnostic.code == "config.removed-key")
+                .unwrap_or_else(|| panic!("a removed-key refusal: {:?}", report.diagnostics()))
+                .clone();
+            assert_eq!(position(&diagnostic), (path.to_owned(), line));
+            assert!(
+                diagnostic.suggested_action.contains(replacement)
+                    || diagnostic.message.contains(replacement),
+                "the refusal names the replacement: {diagnostic:?}"
+            );
+        }
+    }
+
+    #[test]
     fn finds_the_declared_identity_without_reading_the_rest() {
         assert_eq!(
-            declared_identity(b"id: urn:example:c\nversion: '1'\ncodes: oops\n"),
+            declared_identity(b"uri: urn:example:c\nversion: '1'\ncodes: oops\n"),
             Some(("urn:example:c".to_owned(), "1".to_owned()))
         );
-        assert_eq!(declared_identity(b"id: [\n"), None);
+        assert_eq!(declared_identity(b"uri: [\n"), None);
         assert_eq!(declared_identity(b"version: '1'\n"), None);
+        assert_eq!(
+            declared_identity(b"id: urn:example:c\nversion: '1'\n"),
+            None,
+            "the member written before the stable form names no codelist"
+        );
+    }
+
+    /// A code list whose `uri` is the YAML scalar given.
+    fn with_identifier(scalar: &str) -> String {
+        enveloped(&format!(
+            "uri: {scalar}\nversion: '1'\ntype: code-list\ncodes: [A]\n"
+        ))
+    }
+
+    #[test]
+    fn the_identifier_limit_counts_characters() {
+        let prefix = "urn:example:codelist:";
+        let boundary = format!("{prefix}{}", "é".repeat(512 - prefix.chars().count()));
+        assert!(boundary.len() > 512, "the boundary exceeds 512 UTF-8 bytes");
+        let codelist = read_codelist("codelists/test.yaml", with_identifier(&boundary).as_bytes())
+            .expect("an identifier of 512 characters is read");
+        assert_eq!(
+            codelist,
+            Codelist::Codes {
+                id: boundary.clone(),
+                version: "1".to_owned(),
+                codes: vec!["A".to_owned()],
+            }
+        );
+
+        let diagnostic = refusal(&with_identifier(&format!("{boundary}é")));
+        assert_eq!(diagnostic.code, "config.invalid-value");
+        assert_eq!(position(&diagnostic), ("/uri".to_owned(), 3));
+        assert!(
+            diagnostic.message.contains("at most 512 characters"),
+            "the refusal states the limit in characters: {diagnostic:?}"
+        );
+    }
+
+    #[test]
+    fn the_identifier_holds_no_whitespace_and_no_control_character() {
+        for (case, scalar) in [
+            ("trailing space", format!("'urn:example:{CANARY} '")),
+            ("leading space", format!("' urn:example:{CANARY}'")),
+            ("inner space", format!("urn:example:{CANARY} x")),
+            ("tab escape", format!("\"urn:example:{CANARY}\\tx\"")),
+            ("literal tab", format!("\"urn:example:{CANARY}\tx\"")),
+            ("line feed escape", format!("\"urn:example:{CANARY}\\nx\"")),
+            (
+                "trailing line feed escape",
+                format!("\"urn:example:{CANARY}\\n\""),
+            ),
+            (
+                "carriage return escape",
+                format!("\"urn:example:{CANARY}\\rx\""),
+            ),
+            (
+                "no-break space escape",
+                format!("\"urn:example:{CANARY}\\_x\""),
+            ),
+            ("block scalar", format!("|\n  urn:example:{CANARY}")),
+        ] {
+            let diagnostic = refusal(&with_identifier(&scalar));
+            assert_eq!(
+                diagnostic.code, "config.invalid-value",
+                "{case}: {diagnostic:?}"
+            );
+            assert_eq!(diagnostic.path, "/uri", "{case}");
+            assert!(
+                diagnostic
+                    .message
+                    .contains("no whitespace or control character"),
+                "{case}: {diagnostic:?}"
+            );
+        }
+        for (case, scalar) in [
+            ("percent-encoded space", "urn:example:a%20b"),
+            ("stripped block scalar", "|-\n  urn:example:c"),
+        ] {
+            read_codelist("codelists/test.yaml", with_identifier(scalar).as_bytes())
+                .unwrap_or_else(|report| panic!("{case}: {:?}", report.diagnostics()));
+        }
     }
 }

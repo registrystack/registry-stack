@@ -111,7 +111,7 @@ CREATE TABLE IF NOT EXISTS messaging_dispatch_jobs (
     generation bigint NOT NULL CHECK (generation > 0),
     state text NOT NULL
         CONSTRAINT messaging_dispatch_jobs_state_values CHECK (
-            state IN ('pending', 'leased', 'delivered', 'dead_lettered',
+            state IN ('pending', 'leased', 'delivered', 'dead-lettered',
                       'expired', 'unknown', 'cancelled')
         ),
     attempt smallint NOT NULL CHECK (attempt >= 0),
@@ -151,7 +151,7 @@ CREATE TABLE IF NOT EXISTS messaging_dispatch_jobs (
             AND delivered_at IS NOT NULL
             AND dead_lettered_at IS NULL
             AND expired_at IS NULL)
-        OR (state = 'dead_lettered'
+        OR (state = 'dead-lettered'
             AND attempt > 0
             AND next_attempt_at IS NULL
             AND attempt_started_at IS NULL
@@ -200,13 +200,13 @@ ALTER TABLE messaging_dispatch_jobs
 
 -- Retention counts from the terminal state: a message's payload is erased
 -- `retention.payloadDays` after its dispatch job reached `delivered`,
--- `dead_lettered`, `expired`, or `cancelled`, and its record is deleted
+-- `dead-lettered`, `expired`, or `cancelled`, and its record is deleted
 -- `retention.recordDays` after. The job's `updated_at` is when it entered
 -- that state, since a terminal job changes again only when an operator
 -- requeues it, which makes it pending.
 CREATE INDEX messaging_dispatch_jobs_terminal_idx
     ON messaging_dispatch_jobs (updated_at, message_id)
-    WHERE state IN ('delivered', 'dead_lettered', 'expired', 'cancelled');
+    WHERE state IN ('delivered', 'dead-lettered', 'expired', 'cancelled');
 
 -- The metrics listener counts the messages held unknown on every scrape;
 -- pending and leased jobs already have their own partial indexes.

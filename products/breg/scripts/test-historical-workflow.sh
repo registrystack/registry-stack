@@ -257,7 +257,7 @@ render_runtime_config() {
   local migration_ref=$4
   local listener=$5
   cat >"$output" <<EOF
-apiVersion: registry.registrystack.org/breg-runtime/v1alpha1
+apiVersion: id.registrystack.org/formats/breg/runtime/v1alpha1
 kind: BRegRuntimeConfig
 listener:
   bind: $listener
@@ -273,7 +273,7 @@ database:
   runtimeUrlRef: $runtime_ref
   migrationUrlRef: $migration_ref
   pool:
-    maxSize: 4
+    maximumConnections: 4
     waitTimeoutMilliseconds: 1000
     createTimeoutMilliseconds: 1000
     recycleTimeoutMilliseconds: 1000
@@ -291,18 +291,17 @@ authentication:
     scopeClaim: scope
     scopeSeparator: " "
     allowedClients: [registry-history-client]
-    deniedKids: []
-    maxTokenLifetimeSeconds: 3600
+    maximumTokenLifetimeSeconds: 3600
     leewayMilliseconds: 60000
     jwksCache:
       cacheTtlSeconds: 600
       negativeCacheTtlSeconds: 60
       refreshCooldownSeconds: 30
-      maxDocumentBytes: 65536
-      requestTimeoutMilliseconds: 5000
+      maximumDocumentBytes: 65536
+      attemptTimeoutMilliseconds: 5000
       outageToleranceSeconds: 0
     jwksSource:
-      kind: static
+      type: static
       documentRef: secret:file/oidc-jwks
   authorityClaims:
     principal: registry_principal
@@ -312,7 +311,7 @@ audit:
   path: $temporary_root/audit/audit.jsonl
 cursor:
   secretRef: secret:file/cursor-key
-  maxAgeSeconds: 300
+  maximumAgeSeconds: 300
 eventDestinations: {}
 operationalTimeouts:
   httpRequestMilliseconds: 10000
@@ -933,8 +932,8 @@ import sys
 from pathlib import Path
 path = Path(sys.argv[1])
 source = path.read_text(encoding="utf-8")
-needle = "      - {id: source-reference, type: string, required: false, maxLength: 120, classification: internal}\n"
-replacement = needle + "      - {id: review-note, type: string, required: false, maxLength: 120, classification: internal}\n"
+needle = "      - {id: source-reference, type: string, required: false, maximumLength: 120, classification: internal}\n"
+replacement = needle + "      - {id: review-note, type: string, required: false, maximumLength: 120, classification: internal}\n"
 if needle not in source:
     raise SystemExit("membership field insertion point was not found")
 path.write_text(source.replace(needle, replacement, 1), encoding="utf-8")

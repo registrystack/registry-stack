@@ -52,7 +52,7 @@ event data or job source. The shape differs per adaptor.
   with the token endpoint, client ID, and a private JWK. The JWKS and revocation list are
   relying-party trust configuration. Verification never fetches keys from Evidence Gateway and
   never follows a key URL from a response.
-- **Profile mode** points `profilePath` at a reviewed `registry.evidence-client-profile/v1` JSON
+- **Profile mode** points `profilePath` at a reviewed `EvidenceClientProfile` JSON
   file mounted into the worker, optionally with `privateKeyJwk` from the credential. The profile
   owns service expectations, verification policy, and contracts. The two modes cannot be combined.
 
@@ -66,7 +66,7 @@ default. Record inputs and outputs stay in `data`, and the job is responsible fo
 before the next step.
 
 {/* Evidence: crates/registry-evidence-client-node/src/lib.rs exposes from_profile and
-crates/registry-evidence-client/src/profile.rs defines the registry.evidence-client-profile/v1
+crates/registry-evidence-client/src/profile.rs defines the EvidenceClientProfile
 document the adaptor's profile mode loads. */}
 
 ## What each adaptor does
@@ -132,8 +132,8 @@ Neither adaptor nor the native client retries or follows redirects. Retry policy
 workflow, where it can be tied to the idempotency key and the source-event correlation.
 
 {/* Evidence: crates/registry-evidence/src/problem.rs and crates/registry-evidence/src/contracts.rs
-define the evidence.unavailable problem code the Evidence adaptor maps to its
-evidence_not_available branch. */}
+define the evidence.unavailable problem code the Evidence adaptor maps to its branch for an
+unresolved subject. */}
 
 ## The v0.1.0 synthetic agriculture pilot
 

@@ -10,7 +10,6 @@ writes and reads back. Both are read by the shared Registry Stack reader and
 open with `apiVersion` and `kind`.
 
 ## BREAKING changes
-<!-- upgrade: 1=platform-task-connection-envelope; 2=platform-assertion-key-ref; 3=no-file; 4=platform-task-connection-reader-refusals; 5=no-file; 6=platform-task-connection-bounds; 7=platform-session-state; 8=platform-substituted-control-character; 9=platform-mapping-key-control-character -->
 
 1. **A task connection file opens with `apiVersion` and `kind`.** It begins
    with
@@ -74,6 +73,16 @@ open with `apiVersion` and `kind`.
    `yaml.control-character` at the key, and the diagnostic's path is the
    enclosing mapping, so it does not repeat the key. Migration: remove the
    control character from the key.
+10. **A URL holds no whitespace and no control character.** In every
+    product's files, a member typed as the shared URL that holds a space, a
+    tab, a line break, or any other whitespace or control character, at
+    either end or inside, is refused with `config.invalid-value` at the
+    member, and the `Url` definition in each schema refuses the same
+    characters. The URL parser removes a tab or a line break anywhere, and a
+    space or control character at either end, without an error, so the text
+    a product kept and the URL it parsed could differ. Migration: remove the
+    character from the URL, and write a space inside a path or query as
+    `%20`.
 
 ## Other changes
 
@@ -124,3 +133,144 @@ sentence after "the approved task grant could not be acquired".
 | "the registered assertion key file must be absolute" | `platform.task-connection.relative-path` at `/secretProviders/file/root` |
 | "the registered assertion key is invalid" | `platform.task-connection.invalid-assertion-key` |
 | (new) | `platform.task-connection.no-secret-provider`, `platform.task-connection.undeclared-secret-provider`, `platform.task-connection.unresolved-secret` |
+
+## Stable move
+
+The changes below move promised spellings to the form the configuration
+conventions give them. Each old spelling is refused with a diagnostic that
+names its replacement; no release reads both.
+
+### BREAKING: the shared `JwksSource` block is tagged by `type`
+
+`JwksSource` in `registry-platform-config`, the block every Registry Stack
+runtime reads for its OIDC issuer's signing keys, is a union tagged by `type`
+(CFG-ID-7), where it was tagged by `kind`. The values `discovery`, `uri`, and
+`static` and their members are unchanged, the default is still
+`type: discovery`, and the type serializes with `type`.
+
+| Old spelling | New spelling | Migration |
+|---|---|---|
+| `jwksSource: {kind: discovery}` | `jwksSource: {type: discovery}` | Rename the key; keep the value. |
+| `jwksSource: {kind: uri, uri: <URL>}` | `jwksSource: {type: uri, uri: <URL>}` | Rename the key; keep the value. |
+| `jwksSource: {kind: static, documentRef: <reference>}` | `jwksSource: {type: static, documentRef: <reference>}` | Rename the key; keep the value. |
+
+A runtime whose issuer block sits at `authentication.oidc` adds
+`REMOVED_OIDC_JWKS_SOURCE_KIND` to its removed-key table, and its loader then
+refuses the old tag as `config.removed-key` at
+`/authentication/oidc/jwksSource/kind` with the message naming `type`.
+Casework, Scheduling, and Messaging do. A runtime that keeps the block
+elsewhere declares its own entry at that path. The canonical schema
+`products/platform/generated/runtime-config-blocks.schema.json` and every
+runtime schema that embeds the block carry the `type` tag.
+
+### BREAKING: the shared hook handler declaration is tagged by `type`
+
+`HookHandlerSource` in `registry-platform-hooks`, the declaration a product
+reads for the handler of a hook, is a union tagged by `type` (CFG-ID-7), where
+it was tagged by `kind`. The values `rhai`, `wasm`, and `url`, the source
+reference each requires, and `abi` are unchanged, and the type serializes with
+`type`.
+
+| Old spelling | New spelling | Migration |
+|---|---|---|
+| `handler: {kind: url, destinationId: <id>}` | `handler: {type: url, destinationId: <id>}` | Rename the key; keep the value. |
+| `handler: {kind: rhai, script: <path>, abi: <abi>}` | `handler: {type: rhai, script: <path>, abi: <abi>}` | Rename the key; keep the value. |
+| `handler: {kind: wasm, module: <path>, abi: <abi>}` | `handler: {type: wasm, module: <path>, abi: <abi>}` | Rename the key; keep the value. |
+
+The declaration reads no alias: a handler written with `kind` does not
+deserialize. A product that reads the declaration from an authored file adds
+the old member to its removed-key table, so its reader refuses it as
+`config.removed-key` with a message naming `type`; the Base Registry Engine
+does, for entity hooks and governed actions. `HookHandlerKind`, its spellings,
+and the stored `handler_kind` column of the delivery tables are unchanged.
+Registry Scheduling keeps its own observer handler declaration, which is
+already tagged by `type`.
+
+### BREAKING: a client listed under `assertionIssuers` names at least one issuer
+
+`OidcClientsConfig` in `registry-platform-config`, the block the Casework,
+Scheduling, and Messaging runtimes read under `authentication.oidc`, refuses
+a client that `assertionIssuers` lists with an empty issuer list
+(CFG-EMPTY-2). The reader reports `config.invalid-value` at
+`/authentication/oidc/assertionIssuers/<client>`, and the block schema
+declares `minItems: 1` on the list.
+
+| Old spelling | New spelling | Migration |
+|---|---|---|
+| `assertionIssuers: {portal: [https://a.example], kiosk: []}` | `assertionIssuers: {portal: [https://a.example]}` | Remove the client that lists no issuer, or list its issuers. |
+
+A client that is not listed may exchange from no authority, so removing the
+client keeps what the empty list meant while another client stays listed. Do
+not delete the whole member to get there unless no assertion-issuer rule is
+wanted: with the member omitted, the block applies no rule.
+
+### BREAKING: `DatabaseIdCheck` is written in kebab-case
+
+`registry_platform_activation::DatabaseIdCheck` serializes `NotRecorded` as
+`not-recorded`, where it wrote `notRecorded` (CFG-NAME-2). `matches` and
+`differs` are unchanged, and so is the Rust type. The value appears in the
+plan reports of Casework (`databaseIdCheck`) and Messaging (`databaseId`);
+nothing reads it back and nothing stores it.
+
+Migration: a script that compares `notRecorded` compares `not-recorded`.
+
+### BREAKING: the shared `OidcClientsConfig` block requires `allowedClients`
+
+`OidcClientsConfig` in `registry-platform-config`, the block the Casework,
+Scheduling, and Messaging runtimes read under `authentication.oidc`, requires
+`allowedClients` (CFG-EMPTY-2). The member takes the keyword `unrestricted`,
+to admit a token from every client the issuer verifies, or a list of at least
+one client, none repeated (CFG-ID-6).
+
+| Written | Before | Now |
+|---|---|---|
+| member omitted | read as every client | refused, `config.missing-key` at `/authentication/oidc` |
+| `allowedClients: []` | read as every client | refused, `config.invalid-value` at `/authentication/oidc/allowedClients` |
+| `allowedClients: unrestricted` | refused | read as every client |
+| `allowedClients: [a, b]` | only `a` and `b` | unchanged |
+| `allowedClients: [a, b, a]` | only `a` and `b` | refused, `config.duplicate-item` at `/authentication/oidc/allowedClients/2` |
+
+The diagnostic names the fix and never repeats what was written. The block
+schema states the same shape: `allowedClients` is required, has no default,
+and is `$defs/OidcAllowedClients`, the constant `unrestricted` or a list with
+`minItems: 1` and `uniqueItems: true`.
+
+Each runtime keeps its own rule on top of the block. Casework accepts
+`unrestricted` only on development loopback, and Scheduling and Messaging
+accept it nowhere.
+
+Rust API: `OidcClientsConfig::allowed_clients` is still a `Vec<String>` in
+which an empty list admits every client, the form the token verifier takes.
+Deserializing the block requires the member, and serializing an empty list
+writes `unrestricted`.
+
+Migration: in each runtime file that reads the block, write
+`allowedClients` as the list of clients the deployment admits, written once
+each, or as `unrestricted` where the runtime accepts it.
+
+### BREAKING: four shared HTTP client error words are written in kebab-case
+
+`registry-platform-httputil` names a failed exchange and a failed token
+acquisition with fixed words: a caller branches on them, and every client
+binding carries them across its language boundary. Four of them carried an
+underscore (CFG-NAME-2).
+
+| Where | Old word | New word |
+|---|---|---|
+| `TransportKind::kind()` | `response_too_large` | `response-too-large` |
+| `TokenError::kind()` | `invalid_credential` | `invalid-credential` |
+| `TokenError::kind()` | `scope_narrowed` | `scope-narrowed` |
+| `OAuthErrorCode::as_str()`, a code outside RFC 6749 section 5.2 | `unregistered_error_code` | `unregistered-error-code` |
+
+The other words of the three functions are unchanged. The six codes RFC 6749
+section 5.2 registers (`invalid_request`, `invalid_client`, `invalid_grant`,
+`unauthorized_client`, `unsupported_grant_type`, `invalid_scope`) are the
+specification's and keep its spelling: `OAuthErrorCode::as_str()` still
+returns them as an authorization server writes them.
+
+The Node.js and Python clients carry these words as `transportKind` or
+`transport_kind`, `tokenKind` or `token_kind`, and the `code` of a refused
+token request. Each product fragment names the members its own client sets.
+
+No file an adopter writes changes. To migrate, change what a consumer of one
+of these words compares it with.

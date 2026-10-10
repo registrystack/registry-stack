@@ -4,13 +4,13 @@
       "enum": [
         "public",
         "restricted",
-        "non_public"
+        "non-public"
       ],
       "type": "string"
     },
     "AdmsStatus": {
       "enum": [
-        "under_development",
+        "under-development",
         "active",
         "completed",
         "deprecated",
@@ -1400,7 +1400,7 @@
         "quarterly",
         "annual",
         "irregular",
-        "as_needed",
+        "as-needed",
         "unknown"
       ],
       "type": "string"

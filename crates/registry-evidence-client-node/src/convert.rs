@@ -1113,7 +1113,7 @@ mod tests {
             }],
             "expectedOutputs": [{
                 "concept": "urn:example:client:concept:status-holds",
-                "form": "boolean",
+                "form": {"type": "boolean"},
             }],
             "maximumAssertionLifetimeSeconds": 300,
             "clockSkewSeconds": 60,
@@ -1892,7 +1892,7 @@ mod tests {
             trace_id: Some("4bf92f3577b34da6a3ce929d0e0e4736".to_owned()),
         };
         let mapped = map_client_error(&error);
-        assert_eq!(mapped["kind"], "not_available");
+        assert_eq!(mapped["kind"], "not-available");
         assert_eq!(mapped["traceId"], "4bf92f3577b34da6a3ce929d0e0e4736");
         assert_eq!(mapped.as_object().unwrap().len(), 3);
     }
@@ -1945,7 +1945,7 @@ mod tests {
             reason: "a bearer credential must be non-empty and within the accepted length",
         }));
         assert_eq!(invalid["kind"], "token");
-        assert_eq!(invalid["tokenKind"], "invalid_credential");
+        assert_eq!(invalid["tokenKind"], "invalid-credential");
         assert_eq!(invalid.as_object().unwrap().len(), 3);
 
         let configuration =

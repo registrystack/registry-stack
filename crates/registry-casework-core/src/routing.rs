@@ -16,7 +16,7 @@ pub const MAXIMUM_ROUTING_SOURCE_STAGES: usize = 32;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub enum RoutingActivity {
     Review,
     Apply,
@@ -26,6 +26,8 @@ pub enum RoutingActivity {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RoutingRule {
+    #[serde(deserialize_with = "crate::typed::local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
     pub because: String,
     pub when: RoutingCondition,
@@ -40,7 +42,15 @@ pub struct RoutingCondition {
     pub activity: Option<RoutingActivity>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stage: Option<String>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "BTreeMap::is_empty",
+        deserialize_with = "crate::typed::local_id_keys"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "BTreeMap<registry_platform_yaml::LocalId, RoutingPredicate>")
+    )]
     pub fields: BTreeMap<String, RoutingPredicate>,
 }
 
@@ -192,7 +202,7 @@ pub struct RoutingDecision {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub enum RoutingDiagnosticReason {
     TooManyRules,
     TooManyProjectionFields,
@@ -708,14 +718,24 @@ fn valid_identifier(value: &str) -> bool {
     !bytes.is_empty()
         && bytes.len() <= 64
         && bytes[0].is_ascii_lowercase()
-        && bytes[1..]
-            .iter()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'-')
+        && bytes[1..].iter().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(*byte, b'-' | b'_')
+        })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cfg_id_1_an_identifier_follows_the_local_identifier_grammar() {
+        assert!(valid_identifier("first_review-2"));
+        assert!(valid_identifier(&format!("a{}", "b".repeat(63))));
+        for refused in ["", "First", "1st", "_first", "first.review", "first review"] {
+            assert!(!valid_identifier(refused));
+        }
+        assert!(!valid_identifier(&format!("a{}", "b".repeat(64))));
+    }
     use serde_json::json;
 
     fn metadata() -> RoutingSourceMetadata {

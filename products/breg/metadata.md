@@ -38,7 +38,7 @@ writable fields. `readableFields`, `createWritableFields`, `patchWritableFields`
 and `titleFields` contain **logical IDs** and never grant rights to another
 operation. The create set is populated only on Create, and the patch set only on
 PATCH. `readableRequestFields` is present on every operation and lists the
-change-request metadata, such as `review_state`, that the operation's profile
+change-request metadata, such as `review-state`, that the operation's profile
 may read. It is empty when the profile holds no such grant. The maintained
 client refuses metadata whose operation omits it. Each field contains:
 
@@ -185,7 +185,7 @@ Lookup uses `body: "selector_values"` and `contentType: "application/json"`.
 ```
 
 For `request`, submit `{selector: "by-code", values: {recordCode: "..."}}` with
-exactly `requestFields`, all non-null. For `verified_claim`, `requestFields` is
+exactly `requestFields`, all non-null. For `verified-claim`, `requestFields` is
 empty and the request is `{selector: "by-code"}` with no `values` member. Selector
 field definitions describe the permitted lookup input, not read access. Private
 claim names, mappings, and claim values are absent. A claim-bound selector may
@@ -209,11 +209,11 @@ Collection `query` describes the selected compiled query plan:
 | --- | --- |
 | `kind` | `list`, `current`, `as_of`, or `snapshot` |
 | `selectableFields` | `{id, apiName}` entries |
-| `filterableFields` | `{id, apiName, operators}` entries; operators are `equals`, `in`, `range`, `is_null`, `is_not_null`, `prefix`, `contains` |
+| `filterableFields` | `{id, apiName, operators}` entries; operators are `equals`, `in`, `range`, `is-null`, `is-not-null`, `prefix`, `contains` |
 | `sortableFields` | `{id, apiName, directions}` entries; currently `asc` only |
 | `allowCount` | Whether `$count=true` is permitted |
-| `defaultPageSize`, `maxPageSize` | Compiled page bounds; `$top` must be at least 1 |
-| `maxFilterClauses`, `maxInValues` | Closed expression bounds |
+| `defaultPageSize`, `maximumPageSize` | Compiled page bounds; `$top` must be at least 1 |
+| `maximumFilterClauses`, `maximumInValues` | Closed expression bounds |
 | `pagination` | `{parameter: "$skiptoken", responsePath: "pageInfo.nextCursor", exclusive: true}` |
 | `temporal` | null, `{mode: "current"}`, the required `asOf` parameter contract, or `{mode: "snapshot", snapshot: {...}, validAt: {...}}` with the optional opaque snapshot reference and typed validity parameter |
 | `spatialQueries` | Optional `bbox` descriptor with `geometryProperty`, `maximumLongitudeSpanDegrees`, `maximumLatitudeSpanDegrees`, `coordinateReferenceSystem: "CRS84"`, and `semantics: "inclusive_2d_non_crossing"` |
@@ -224,8 +224,8 @@ They treat `%`, `_`, and backslash literally; they do not fold accents or rank
 results. `equals` and `in` retain exact, case-sensitive matching.
 
 Prefix and contains operands are quoted text search terms, so they can be shorter
-than a string's `minLength` or contain only part of a vocabulary code. They keep
-the query literal size bound and string/text `maxLength`, and reject control
+than a string's `minimumLength` or contain only part of a vocabulary code. They keep
+the query literal size bound and string/text `maximumLength`, and reject control
 characters. Empty terms are accepted and match every non-null value permitted by
 the caller's read profile.
 

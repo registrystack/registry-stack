@@ -291,7 +291,7 @@ fn configure_source(
         "clockSkewSeconds": 0
     });
     source["authentication"] = json!({
-        "kind": "oauth2-client-credentials",
+        "type": "oauth2-client-credentials",
         "tokenEndpoint": token_endpoint,
         "clientIdRef": "secret:file/source-c-username",
         "clientSecretRef": "secret:file/source-c-password",
@@ -508,7 +508,7 @@ async fn signed_evidence_source_feeds_a_verifiable_holder_bound_credential() {
         "expectedIssuancePurpose": request.purpose,
         "configurationRevision": fixture.runtime.bundle().configuration_revision(&request.requirement).unwrap(),
         "expectedSubjects": payload["subjects"],
-        "expectedOutputs": [{"handle": "region", "concept": "urn:example:fixture:concept:residence-region", "required": true, "form": "string"}],
+        "expectedOutputs": [{"handle": "region", "concept": "urn:example:fixture:concept:residence-region", "required": true, "form": {"type": "string"}}],
         "revokedKeyIds": [], "maximumAssertionLifetimeSeconds": 300,
         "keyBindingAudience": verifier_audience, "keyBindingNonce": challenge,
         "maximumKeyBindingAgeSeconds": 300, "clockSkewSeconds": 0,
@@ -752,10 +752,9 @@ async fn signed_evidence_source_schema_matches_runtime_constraints() {
             }
             "path" => source["request"]["path"] = json!("/v1/facts"),
             "template" => {
-                source["request"].as_object_mut().unwrap().remove("path");
-                source["request"]["pathTemplate"] = json!("/v1/{reference}/evidence");
+                source["request"]["path"] = json!("/v1/{reference}/evidence");
                 source["request"]["pathBindings"] = json!({"reference": {
-                    "from": "selector", "role": "subject", "profile": "residence-record-v1",
+                    "type": "selector", "role": "subject", "profile": "residence-record-v1",
                     "field": "record_reference"
                 }});
             }
@@ -802,7 +801,7 @@ async fn signed_evidence_source_schema_matches_runtime_constraints() {
             "non-canonical-revoked-key-id" => {
                 source["evidence"]["revokedKeyIds"] = json!([format!("{}B", "A".repeat(42))])
             }
-            "unauthenticated" => source["authentication"] = json!({"kind": "none"}),
+            "unauthenticated" => source["authentication"] = json!({"type": "none"}),
             "empty-trusted-jwk" => source["evidence"]["trustedJwks"]["keys"] = json!([{}]),
             "private-trusted-jwk" => {
                 source["evidence"]["trustedJwks"]["keys"][0]["d"] = json!("A".repeat(43))
@@ -888,7 +887,7 @@ async fn signed_evidence_source_refuses_unauthenticated_access() {
         &fs::read(fixture.downstream.bundle_root.join("evidence.yaml")).unwrap(),
     )
     .unwrap();
-    candidate["sources"]["source-b"]["authentication"] = json!({"kind": "none"});
+    candidate["sources"]["source-b"]["authentication"] = json!({"type": "none"});
     let Err(error) = crate::config::EvidenceConfig::parse_yaml_reporting_rule(
         &serde_json::to_vec(&candidate).unwrap(),
     ) else {

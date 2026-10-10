@@ -97,7 +97,7 @@ impl ReviewRetentionPolicy {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(
     tag = "scope",
-    rename_all = "snake_case",
+    rename_all = "kebab-case",
     rename_all_fields = "camelCase",
     deny_unknown_fields
 )]
@@ -137,7 +137,7 @@ impl ReviewClockCorrelation {
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub enum ReviewKindPurpose {
     Approval,
     Answer,
@@ -145,7 +145,7 @@ pub enum ReviewKindPurpose {
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub enum ReviewContextStrategy {
     Submitted,
     Source,
@@ -153,7 +153,7 @@ pub enum ReviewContextStrategy {
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub enum ReviewOutcomeSettlement {
     Rejected,
     ChangesRequested,
@@ -164,6 +164,8 @@ pub enum ReviewOutcomeSettlement {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReviewOutcomePolicy {
+    #[serde(deserialize_with = "crate::typed::local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
     pub label: String,
     pub settlement: ReviewOutcomeSettlement,
@@ -184,6 +186,8 @@ impl ReviewOutcomePolicy {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReviewStagePolicy {
+    #[serde(deserialize_with = "crate::typed::local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
     pub queue: String,
     pub deciding_profiles: Vec<String>,
@@ -285,6 +289,8 @@ impl ReviewStagePolicy {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReviewKindPolicy {
+    #[serde(deserialize_with = "crate::typed::local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
     pub version: String,
     pub purpose: ReviewKindPurpose,
@@ -434,7 +440,7 @@ impl ReviewKindPolicy {
                             "casework.review-kind.answered-outcome-in-approval",
                             format!("/outcomes/{index}/settlement"),
                             "an approval review kind cannot settle with answered",
-                            "Write settlement: rejected or changes_requested, or make the review kind's purpose answer.",
+                            "Write settlement: rejected or changes-requested, or make the review kind's purpose answer.",
                         );
                     }
                 }
@@ -730,7 +736,7 @@ impl ReviewKindPolicySnapshot {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub enum ReviewerTaskState {
     Open,
     Held { holder: IssuerPrincipal },
@@ -740,14 +746,14 @@ pub enum ReviewerTaskState {
 /// Select active review tasks by their current holder. Selection never grants
 /// reviewer eligibility or source authority.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub enum ReviewTaskOwnership {
     AssignedToMe,
     Unclaimed,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub enum ReviewDecisionType {
     Approve,
     Reject,
@@ -823,9 +829,9 @@ pub struct ReviewTaskPage {
     /// not a task identifier.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next_cursor: Option<Uuid>,
-    /// Whether the page stopped early: `budget_exhausted` when the source-read
+    /// Whether the page stopped early: `budget-exhausted` when the source-read
     /// budget, candidate scan, or page deadline ran out before the page
-    /// filled, and `source_unavailable` when a bound source did not answer in
+    /// filled, and `source-unavailable` when a bound source did not answer in
     /// time. Either comes with a `nextCursor` to continue from.
     pub status: crate::PageStatus,
 }
@@ -833,7 +839,7 @@ pub struct ReviewTaskPage {
 /// Operational discovery for a current supervisor of the task's serving team.
 /// This reference grants neither review eligibility nor access to task content.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub enum SupervisoryReviewTaskState {
     Open,
     Held,
@@ -866,7 +872,7 @@ pub struct SupervisoryReviewTaskPage {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub enum ReviewSourceBindingStatus {
     Current,
     BindingChanged,
@@ -887,7 +893,7 @@ pub struct ReviewSourceProjection {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(
     tag = "strategy",
-    rename_all = "snake_case",
+    rename_all = "kebab-case",
     rename_all_fields = "camelCase",
     deny_unknown_fields
 )]
@@ -942,7 +948,7 @@ pub struct ReviewTaskDraft {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub enum ReviewHistoryAudience {
     Reviewers,
     Requester,
@@ -993,7 +999,7 @@ pub struct ReviewAccountabilityRecord {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub enum ReviewClockState {
     Running,
     Paused,
@@ -1021,7 +1027,7 @@ pub struct ReviewClockOccurrence {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+#[serde(tag = "type", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum ReviewerDecisionKind {
     Approve,
     Reject {
@@ -1080,7 +1086,7 @@ pub struct ReviewerDecision {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
+#[serde(tag = "status", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum ReviewSettlement {
     Approved,
     Rejected {
@@ -1150,7 +1156,7 @@ impl ReviewProgress {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(tag = "type", rename_all = "kebab-case")]
 pub enum ReviewTransition {
     Recorded {
         remaining_approvals: u16,
@@ -1419,7 +1425,7 @@ pub enum ReviewDecisionValidationError {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub enum ReviewValidationReason {
     KindNotAllowed,
     ReferenceInvalid,
@@ -2140,9 +2146,9 @@ fn valid_identifier(value: &str) -> bool {
     !bytes.is_empty()
         && bytes.len() <= 64
         && bytes[0].is_ascii_lowercase()
-        && bytes[1..]
-            .iter()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'-')
+        && bytes[1..].iter().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(*byte, b'-' | b'_')
+        })
 }
 
 fn valid_version(value: &str) -> bool {
@@ -2170,6 +2176,16 @@ fn is_false(value: &bool) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cfg_id_1_an_identifier_follows_the_local_identifier_grammar() {
+        assert!(valid_identifier("first_review-2"));
+        assert!(valid_identifier(&format!("a{}", "b".repeat(63))));
+        for refused in ["", "First", "1st", "_first", "first.review", "first review"] {
+            assert!(!valid_identifier(refused));
+        }
+        assert!(!valid_identifier(&format!("a{}", "b".repeat(64))));
+    }
 
     fn person(subject: &str) -> IssuerPrincipal {
         IssuerPrincipal {
@@ -2979,6 +2995,163 @@ mod tests {
         let mut policy = answer_policy();
         policy.outcomes.push(policy.outcomes[0].clone());
         assert_eq!(policy.check(), Err(ReviewPolicyError::Outcomes));
+    }
+
+    /// A validation reason is a word a caller reads in the validation
+    /// problem, so it is spelled as every other value is: kebab-case.
+    #[test]
+    fn every_review_validation_reason_is_kebab_case() {
+        let expected = [
+            (ReviewValidationReason::KindNotAllowed, "kind-not-allowed"),
+            (
+                ReviewValidationReason::ReferenceInvalid,
+                "reference-invalid",
+            ),
+            (ReviewValidationReason::ObjectRequired, "object-required"),
+            (
+                ReviewValidationReason::MaximumBytesExceeded,
+                "maximum-bytes-exceeded",
+            ),
+            (
+                ReviewValidationReason::MaximumDepthExceeded,
+                "maximum-depth-exceeded",
+            ),
+            (ReviewValidationReason::SchemaMismatch, "schema-mismatch"),
+            (
+                ReviewValidationReason::OutcomeNotDeclared,
+                "outcome-not-declared",
+            ),
+            (ReviewValidationReason::ReasonRequired, "reason-required"),
+            (ReviewValidationReason::TextInvalid, "text-invalid"),
+            (
+                ReviewValidationReason::ResultNotDeclared,
+                "result-not-declared",
+            ),
+            (ReviewValidationReason::ResultRequired, "result-required"),
+            (
+                ReviewValidationReason::FieldNotDeclared,
+                "field-not-declared",
+            ),
+            (
+                ReviewValidationReason::ConstraintInvalid,
+                "constraint-invalid",
+            ),
+            (
+                ReviewValidationReason::ConstraintViolated,
+                "constraint-violated",
+            ),
+        ];
+        for (reason, word) in expected {
+            assert_eq!(serde_json::to_value(reason).unwrap(), word);
+            assert_eq!(
+                serde_json::from_value::<ReviewValidationReason>(serde_json::json!(word)).unwrap(),
+                reason
+            );
+            assert!(
+                serde_json::from_value::<ReviewValidationReason>(serde_json::json!(
+                    word.replace('-', "_")
+                ))
+                .is_err(),
+                "the previous spelling of {word} is refused"
+            );
+        }
+    }
+
+    #[test]
+    fn review_task_ownership_and_decision_receipt_words_are_kebab_case() {
+        for (value, word) in [
+            (
+                serde_json::to_value(ReviewTaskOwnership::AssignedToMe).unwrap(),
+                "assigned-to-me",
+            ),
+            (
+                serde_json::to_value(ReviewTaskOwnership::Unclaimed).unwrap(),
+                "unclaimed",
+            ),
+            (
+                serde_json::to_value(ReviewDecisionType::ChangesRequested).unwrap(),
+                "changes-requested",
+            ),
+            (
+                serde_json::to_value(SupervisoryReviewTaskState::Held).unwrap(),
+                "held",
+            ),
+        ] {
+            assert_eq!(value, word);
+        }
+        assert!(
+            serde_json::from_value::<ReviewTaskOwnership>(serde_json::json!("assigned_to_me"))
+                .is_err(),
+            "the ownership selector has one spelling"
+        );
+        assert!(
+            serde_json::from_value::<ReviewDecisionType>(serde_json::json!("changes_requested"))
+                .is_err(),
+            "the receipt decision has one spelling"
+        );
+    }
+
+    #[test]
+    fn multi_word_review_values_are_kebab_case() {
+        let decision: ReviewerDecisionKind = serde_json::from_value(serde_json::json!({
+            "type": "changes-requested",
+            "outcome": "needs-change",
+        }))
+        .expect("the decision type is read in kebab-case");
+        assert!(matches!(
+            decision,
+            ReviewerDecisionKind::ChangesRequested { .. }
+        ));
+        assert_eq!(
+            serde_json::to_value(&decision).unwrap()["type"],
+            "changes-requested"
+        );
+        assert!(
+            serde_json::from_value::<ReviewerDecisionKind>(serde_json::json!({
+                "type": "changes_requested",
+                "outcome": "needs-change",
+            }))
+            .is_err(),
+            "the previous spelling of the decision type is refused"
+        );
+
+        let settlement = ReviewSettlement::ChangesRequested {
+            outcome: "needs-change".to_owned(),
+            result: None,
+        };
+        let settled = serde_json::to_value(ReviewTransition::Settled {
+            settlement: settlement.clone(),
+        })
+        .unwrap();
+        assert_eq!(settled["settlement"]["status"], "changes-requested");
+        assert_eq!(
+            serde_json::from_value::<ReviewTransition>(settled.clone()).unwrap(),
+            ReviewTransition::Settled { settlement }
+        );
+        let mut previous = settled;
+        previous["settlement"]["status"] = serde_json::json!("changes_requested");
+        assert!(serde_json::from_value::<ReviewTransition>(previous).is_err());
+
+        let advanced = serde_json::to_value(ReviewTransition::StageAdvanced {
+            completed_stage: "technical".to_owned(),
+            next_stage: "authority".to_owned(),
+        })
+        .unwrap();
+        assert_eq!(advanced["type"], "stage-advanced");
+        let mut previous = advanced;
+        previous["type"] = serde_json::json!("stage_advanced");
+        assert!(serde_json::from_value::<ReviewTransition>(previous).is_err());
+
+        assert_eq!(
+            serde_json::to_value(ReviewSourceBindingStatus::BindingChanged).unwrap(),
+            "binding-changed"
+        );
+        assert!(
+            serde_json::from_value::<ReviewSourceBindingStatus>(serde_json::json!(
+                "binding_changed"
+            ))
+            .is_err()
+        );
     }
 
     #[test]

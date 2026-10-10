@@ -1,6 +1,6 @@
-apiVersion: registry.registrystack.org/v1alpha1
-kind: RegistryProject
-registry: {id: action-admission, version: "1", defaultLanguage: en, canonicalBaseIri: https://action-admission.example.test}
+apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project: {id: action-admission, version: "1", defaultLanguage: en, canonicalBaseIri: https://action-admission.example.test}
 entities:
   - id: case
     primaryDataset: test-dataset
@@ -8,13 +8,13 @@ entities:
     mutationMode: mutable
     classification: restricted
     fields:
-      - {id: label, type: string, maxLength: 40, required: true, classification: restricted}
-      - {id: region, type: string, maxLength: 20, required: true, classification: internal}
+      - {id: label, type: string, maximumLength: 40, required: true, classification: restricted}
+      - {id: region, type: string, maximumLength: 20, required: true, classification: internal}
 actions:
   - id: rename-case
     inputs:
       - {id: case-ref, apiName: caseId, type: reference, target: case, required: true, classification: restricted}
-      - {id: case-label, apiName: newLabel, type: string, maxLength: 40, required: true, classification: restricted}
+      - {id: case-label, apiName: newLabel, type: string, maximumLength: 40, required: true, classification: restricted}
     effects:
       - id: renamed
         target: {fromField: case-ref}
@@ -27,18 +27,20 @@ accessProfiles:
     requiredScopes: [case.rename]
     requiredPurposes: [case-management]
     permissions:
-      - action: rename-case
-        operations: [invoke]
-        targets:
-          - entity: case
-            rowBoundaries: [{field: region, claim: regions, operator: in}]
-        results: [renamed]
+      actions:
+        - action: rename-case
+          operations: [invoke]
+          targets:
+            - entity: case
+              rowBoundaries: [{field: region, claim: regions, operator: in}]
+          results: [renamed]
   - id: supervisor
     principalClaim: registry_principal
     requiredScopes: [case.supervise]
     requiredPurposes: [case-management]
     permissions:
-      - action: rename-case
-        operations: [invoke]
-        targets: [{entity: case, rowBoundaries: unrestricted}]
-        results: []
+      actions:
+        - action: rename-case
+          operations: [invoke]
+          targets: [{entity: case, rowBoundaries: unrestricted}]
+          results: []

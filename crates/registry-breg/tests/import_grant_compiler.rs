@@ -4,7 +4,7 @@
 //! every `breg.import.*` refusal names the grant it concerns.
 
 use registry_breg::compiler::{compile_project, CompileProfile};
-use registry_breg::contract::{parse_project_json, Operation};
+use registry_breg::contract::{parse_project_json, parse_project_yaml, Operation};
 use registry_breg::diagnostics::CompileFailure;
 use registry_breg::CompiledRegistry;
 use serde_json::{json, Value};
@@ -40,35 +40,35 @@ fn governed_project(required_for: &[&str], loader_operations: &[&str]) -> Value 
     let mut enrollment = json!({
         "id":"enrollment","primaryDataset":"test-dataset","route":"enrollments","mutationMode":"mutable",
         "batch":{"maximumItems":10,"maximumBytes":65536},
-        "fields":[{"id":"label","type":"string","maxLength":32,"required":true,"classification":"internal"}]
+        "fields":[{"id":"label","type":"string","maximumLength":32,"required":true,"classification":"internal"}]
     });
     if !required_for.is_empty() {
         enrollment["changeControl"] = json!({"requiredFor": required_for});
     }
     json!({
-      "apiVersion":"registry.registrystack.org/v1alpha1",
-      "kind":"RegistryProject",
-      "registry":{"id":"import-grants","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+      "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+      "kind":"BRegProject",
+      "project":{"id":"import-grants","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
       "entities":[enrollment,{
         "id":"enrollment-change","primaryDataset":"test-dataset","route":"enrollment-changes","mutationMode":"mutable",
         "fields":[
           {"id":"enrollment","type":"reference","target":"enrollment","required":true,"classification":"internal"},
-          {"id":"label","type":"string","maxLength":32,"required":true,"classification":"internal"}
+          {"id":"label","type":"string","maximumLength":32,"required":true,"classification":"internal"}
         ],
         "changeRequest":{"effects":[{"id":"apply-label","target":{"fromField":"enrollment"},"operation":"patch","set":{"label":{"fromField":"label"}}}],
-          "review":{"authority":"casework-main","policyId":"request-review"},"onApproved":{"mode":"manual"}}
+          "review":{"type":"required","authority":"casework-main","policyId":"request-review"},"onApproved":{"mode":"manual"}}
       }],
       "accessProfiles":[{
-        "id":"loader","principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
+        "id":"loader","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
           "entity":"enrollment","operations":loader_operations,"readableFields":["label"],"writableFields":["label"],
           "rowBoundaries": "unrestricted"
-        }]
+        }]}
       },{
-        "id":"reviewer","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
-          "entity":"enrollment-change","operations":["get","submit_request","apply_request"],"readableFields":["enrollment","label"],
+        "id":"reviewer","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
+          "entity":"enrollment-change","operations":["get","submit-request","apply-request"],"readableFields":["enrollment","label"],
           "applyTargets":[{"entity":"enrollment", "rowBoundaries": "unrestricted"}],
           "rowBoundaries": "unrestricted"
-        }]
+        }]}
       }]
     })
 }
@@ -172,6 +172,9 @@ fn import_requires_entity_batch_bounds() {
     );
 }
 
+/// An import run belongs to the principal that created it. A profile cannot
+/// be read without a principal claim, so no import grant reaches the compiler
+/// without one.
 #[test]
 fn import_refuses_a_profile_without_a_principal_claim() {
     let mut project = ungoverned_project();
@@ -179,10 +182,23 @@ fn import_refuses_a_profile_without_a_principal_claim() {
         .as_object_mut()
         .expect("profile object");
     loader.remove("principalClaim");
-    let failure = compile(&project).expect_err("runs are creator-scoped");
+    let source = serde_json::to_vec(&project).expect("project serializes");
+    let failure = parse_project_yaml(&source).expect_err("runs are creator-scoped");
     assert_eq!(
-        diagnostic(&failure, "breg.import.principal-required").path,
-        "entities[id=enrollment].accessProfiles[id=loader].operations"
+        diagnostic(&failure, "config.missing-key").path,
+        "project.accessProfiles[0]"
+    );
+
+    let mut project = ungoverned_project();
+    project["accessProfiles"][0]["principalClaim"] = json!("");
+    let failure = compile(&project).expect_err("runs are creator-scoped");
+    let codes = codes(&failure);
+    assert!(
+        !codes.is_empty()
+            && codes
+                .iter()
+                .all(|code| code == "breg.access-profile.principal-claim-required"),
+        "{codes:?}"
     );
 }
 
@@ -193,10 +209,10 @@ fn import_beside_batch_on_one_entity_is_refused_as_redundant() {
         .as_array_mut()
         .expect("profiles")
         .push(json!({
-            "id":"bulk-writer","principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
+            "id":"bulk-writer","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
               "entity":"enrollment","operations":["create","batch"],"readableFields":["label"],"writableFields":["label"],
               "rowBoundaries": "unrestricted"
-            }]
+            }]}
         }));
     let failure =
         compile(&project).expect_err("batch beside import leaves the authority bounding nothing");
@@ -206,7 +222,7 @@ fn import_beside_batch_on_one_entity_is_refused_as_redundant() {
     );
 
     let mut same = ungoverned_project();
-    same["accessProfiles"][0]["permissions"][0]["operations"] =
+    same["accessProfiles"][0]["permissions"]["entities"][0]["operations"] =
         json!(["create", "batch", "import"]);
     let same_profile =
         compile(&same).expect_err("one profile holding batch and import is refused too");
@@ -216,8 +232,8 @@ fn import_beside_batch_on_one_entity_is_refused_as_redundant() {
 #[test]
 fn import_is_unavailable_on_a_change_request_entity() {
     let mut project = governed_project(&["patch"], &["import"]);
-    project["accessProfiles"][1]["permissions"][0]["operations"] =
-        json!(["get", "submit_request", "apply_request", "import"]);
+    project["accessProfiles"][1]["permissions"]["entities"][0]["operations"] =
+        json!(["get", "submit-request", "apply-request", "import"]);
     project["entities"][1]["batch"] = json!({"maximumItems":10,"maximumBytes":65536});
     let failure = compile(&project).expect_err("request drafts are authored, never imported");
     assert!(

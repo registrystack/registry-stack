@@ -677,7 +677,7 @@ fn write_runtime(root: &Path, package: &Path, database: &str, providers: Value) 
         "authentication": {"oidc": {
             "issuer": ISSUER,
             "audience": AUDIENCE,
-            "jwksSource": {"kind": "static", "documentRef": format!("secret:env/{jwks_name}")},
+            "jwksSource": {"type": "static", "documentRef": format!("secret:env/{jwks_name}")},
             "allowedClients": ["case-system", "operations-console"]
         }},
         "audit": {

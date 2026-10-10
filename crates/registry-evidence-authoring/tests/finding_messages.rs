@@ -226,6 +226,70 @@ fn question_cases() -> Vec<Case<Question>> {
             build: || question(|document| document["disclosure"]["allow"] = json!(["other"])),
             message: "disclosure.allow must contain exactly the declared answer concepts",
         },
+        // The names the compiled bundle would refuse. These rules run last, on
+        // a document every rule above accepts; `tests/compiled_names.rs` holds
+        // each to the member it names.
+        Case {
+            rule: "question id longer than its compiled selector profile allows",
+            build: || question(|document| document["id"] = json!("a".repeat(48))),
+            message: "question id must be at most 47 bytes: the selector profile it compiles to, `local-subject-<id>-v1`, may hold 64",
+        },
+        Case {
+            rule: "question id and role longer than their compiled selector profile allows",
+            build: || {
+                question(|document| {
+                    object(document).remove("subject");
+                    document["subjects"] = json!([
+                        { "role": "holder", "selector": "record-key" },
+                        { "role": "b".repeat(35), "selector": "other-key", "derivation": true },
+                    ]);
+                })
+            },
+            message: "question id and subject role must be at most 46 bytes together: the selector profile they compile to, `local-subject-<id>-<role>-v1`, may hold 64",
+        },
+        Case {
+            rule: "dotted role that names a compiled selector profile",
+            build: || {
+                question(|document| {
+                    object(document).remove("subject");
+                    document["subjects"] = json!([
+                        { "role": "holder", "selector": "record-key" },
+                        { "role": "second.party", "selector": "other-key", "derivation": true },
+                    ]);
+                })
+            },
+            message: "subject role must not contain a dot: it names a selector profile in the compiled bundle",
+        },
+        Case {
+            rule: "dotted selector",
+            build: || question(|document| document["subject"]["selector"] = json!("record.key")),
+            message: "subject selector must not contain a dot: it names a selector field in the compiled bundle",
+        },
+        Case {
+            rule: "dotted named profile",
+            build: || {
+                question(|document| {
+                    document["source"] = json!({ "ref": "records" });
+                    document["subject"]["profile"] = json!("record-key.v1");
+                })
+            },
+            message: "subject profile must not contain a dot: it names a selector profile in the compiled bundle",
+        },
+        Case {
+            rule: "dotted alternative profile",
+            build: || {
+                question(|document| {
+                    document["source"] = json!({ "ref": "records" });
+                    document["subject"] = json!({ "role": "holder", "profiles": ["record-key.v1"] });
+                })
+            },
+            message: "subject profile must not contain a dot: it names a selector profile in the compiled bundle",
+        },
+        Case {
+            rule: "dotted source reference",
+            build: || question(|document| document["source"] = json!({ "ref": "record.source" })),
+            message: "source.ref must not contain a dot: it names a source in the compiled bundle",
+        },
     ]
 }
 
@@ -475,8 +539,10 @@ fn a_usable_question_and_derivation_report_nothing() {
 /// matching their text. Adding a rule is expected to change this list; renaming
 /// a code silently is not.
 ///
-/// One pair of cases shares a code on purpose: `fact-combination` covers the
-/// two ways one fact can disagree with its own path, and the field a finding
+/// Some cases share a code on purpose: `fact-combination` covers the two ways
+/// one fact can disagree with its own path, `compiled-name-length` the two
+/// selector profile names a question compiles to, and `compiled-name-dot` each
+/// member that names something in the compiled bundle. The field a finding
 /// names is what tells those cases apart.
 #[test]
 fn the_set_of_rule_codes_is_the_expected_one() {
@@ -490,7 +556,7 @@ fn the_set_of_rule_codes_is_the_expected_one() {
     for case in derivation_cases() {
         codes.push(first(&validate_authored_answer((case.build)())).code);
     }
-    assert_eq!(codes.len(), 43, "codes were: {codes:?}");
+    assert_eq!(codes.len(), 50, "codes were: {codes:?}");
     codes.sort_unstable();
     codes.dedup();
     assert_eq!(
@@ -508,6 +574,8 @@ fn the_set_of_rule_codes_is_the_expected_one() {
             "bounded-integer-bounds-missing",
             "bounded-integer-values",
             "collection-bounds",
+            "compiled-name-dot",
+            "compiled-name-length",
             "controlled-category-bounds",
             "controlled-category-values",
             "derivation-answer-count",

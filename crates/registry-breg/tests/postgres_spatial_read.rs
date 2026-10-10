@@ -2319,17 +2319,16 @@ fn compile_registry_source(source: &str) -> registry_breg::CompiledRegistry {
 fn spatial_registry_project_source(module_digest: &str) -> String {
     format!(
         r#"{{
-      "apiVersion":"registry.registrystack.org/v1alpha1",
-      "kind":"RegistryProject",
-      "registry":{{"id":"spatial-read-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
+      "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+      "kind":"BRegProject",
+      "project":{{"id":"spatial-read-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
       "modules":[{{"id":"core","version":"1","digest":"{module_digest}"}}]
     }}"#
     )
 }
 
 fn spatial_registry_module_source() -> &'static str {
-    r#"{
-      "id":"core",
+    r#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core",
       "version":"1",
       "entities":[{
         "id":"service-site",
@@ -2339,18 +2338,18 @@ fn spatial_registry_module_source() -> &'static str {
         "tombstone":true,
         "classification":"internal",
         "fields":[
-          {"id":"jurisdiction","type":"string","required":true,"maxLength":32,"classification":"internal"},
-          {"id":"code","type":"string","required":true,"maxLength":64,"classification":"internal"},
-          {"id":"label","type":"string","required":true,"maxLength":160,"classification":"internal"},
-          {"id":"notes","type":"text","maxLength":1500000,"classification":"internal"},
-          {"id":"secret","type":"string","required":true,"maxLength":160,"classification":"restricted"},
+          {"id":"jurisdiction","type":"string","required":true,"maximumLength":32,"classification":"internal"},
+          {"id":"code","type":"string","required":true,"maximumLength":64,"classification":"internal"},
+          {"id":"label","type":"string","required":true,"maximumLength":160,"classification":"internal"},
+          {"id":"notes","type":"text","maximumLength":1500000,"classification":"internal"},
+          {"id":"secret","type":"string","required":true,"maximumLength":160,"classification":"restricted"},
           {"id":"location","type":"crs84-point","precision":6,"classification":"internal"}
         ],
         "derived":[{
           "id":"map-label",
           "sql":"sql/map-label.sql",
           "key":"id",
-          "fields":[{"id":"map-label","type":"string","maxLength":192,"classification":"internal"}]
+          "fields":[{"id":"map-label","type":"string","maximumLength":192,"classification":"internal"}]
         },{
           "id":"zone-site-count",
           "sql":"sql/zone-site-count.sql",
@@ -2360,12 +2359,12 @@ fn spatial_registry_module_source() -> &'static str {
           "id":"zone-label",
           "sql":"sql/zone-label.sql",
           "key":"id",
-          "fields":[{"id":"zone-label","type":"string","maxLength":96,"classification":"internal"}]
+          "fields":[{"id":"zone-label","type":"string","maximumLength":96,"classification":"internal"}]
         },{
           "id":"region-label",
           "sql":"sql/region-label.sql",
           "key":"id",
-          "fields":[{"id":"region-label","type":"string","maxLength":96,"classification":"internal"}]
+          "fields":[{"id":"region-label","type":"string","maximumLength":96,"classification":"internal"}]
         }],
         "geojson":{"geometryField":"location"},
         "accessProfiles":[{
@@ -2425,8 +2424,8 @@ fn spatial_registry_module_source() -> &'static str {
         "mutationMode":"mutable",
         "classification":"internal",
         "fields":[
-          {"id":"jurisdiction","type":"string","required":true,"maxLength":32,"classification":"internal"},
-          {"id":"zone-label","type":"string","required":true,"maxLength":96,"classification":"internal"}
+          {"id":"jurisdiction","type":"string","required":true,"maximumLength":32,"classification":"internal"},
+          {"id":"zone-label","type":"string","required":true,"maximumLength":96,"classification":"internal"}
         ],
         "accessProfiles":[{
           "id":"map-reader",
@@ -2446,8 +2445,8 @@ fn spatial_registry_module_source() -> &'static str {
         "mutationMode":"mutable",
         "classification":"internal",
         "fields":[
-          {"id":"jurisdiction","type":"string","required":true,"maxLength":32,"classification":"internal"},
-          {"id":"region-label","type":"string","required":true,"maxLength":96,"classification":"internal"},
+          {"id":"jurisdiction","type":"string","required":true,"maximumLength":32,"classification":"internal"},
+          {"id":"region-label","type":"string","required":true,"maximumLength":96,"classification":"internal"},
           {"id":"region-location","type":"crs84-point","precision":6,"classification":"internal"}
         ],
         "geojson":{"geometryField":"region-location"},
@@ -2505,9 +2504,9 @@ fn spatial_region_label_sql() -> &'static str {
 
 fn plain_geojson_registry_source() -> &'static str {
     r#"{
-      "apiVersion":"registry.registrystack.org/v1alpha1",
-      "kind":"RegistryProject",
-      "registry":{"id":"plain-geojson-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+      "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+      "kind":"BRegProject",
+      "project":{"id":"plain-geojson-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
       "entities":[{
         "id":"plain-site",
         "primaryDataset":"test-dataset",
@@ -2515,7 +2514,7 @@ fn plain_geojson_registry_source() -> &'static str {
         "mutationMode":"mutable",
         "classification":"internal",
         "fields":[
-          {"id":"code","type":"string","required":true,"maxLength":64,"classification":"internal"},
+          {"id":"code","type":"string","required":true,"maximumLength":64,"classification":"internal"},
           {"id":"location","type":"crs84-point","precision":6,"classification":"internal"}
         ],
         "geojson":{"geometryField":"location"}
@@ -2525,13 +2524,13 @@ fn plain_geojson_registry_source() -> &'static str {
         "default":true,
         "principalClaim":"registry_principal",
         "requiredScopes":["registry.read"],
-        "permissions":[{
+        "permissions":{"entities":[{
           "entity":"plain-site",
           "operations":["create","get","list"],
           "readableFields":["code","location"],
           "writableFields":["code","location"],
           "rowBoundaries": "unrestricted"
-        }]
+        }]}
       }]
     }"#
 }

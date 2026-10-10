@@ -6,7 +6,7 @@ BREG verifies the exchanged access token and selected access profile, then
 checks current Casework status before each new governed mutation. Task agents
 use change-request drafts and lifecycle operations; a task grant does not
 authorize direct changes to the target records, including imports. A task-grant profile cannot
-hold `apply_request`: the compiler refuses it with
+hold `apply-request`: the compiler refuses it with
 `breg.access-profile.task-grant-operation-forbidden`.
 
 The authored access profile selects `actorKind: agent`, exact
@@ -58,7 +58,7 @@ grant carries the approval of the human who assigned the task; a standing
 agent carries none, so the human must confirm the change themselves by
 submitting it. A standing agent profile may read and may create, read, and
 patch change-request drafts. The compiler refuses it when it holds
-`submit_request`, `revise_request`, `cancel_request`, or `apply_request`,
+`submit-request`, `revise-request`, `cancel-request`, or `apply-request`,
 with `breg.access-profile.standing-agent-operation-forbidden`, and when it holds
 `create` or `patch` on an entity without a `changeRequest`, or `import`,
 `tombstone`, or `batch` on any entity, with

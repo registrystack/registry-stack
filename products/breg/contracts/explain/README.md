@@ -5,24 +5,31 @@ whose `explanation` field carries an envelope plus a subject-specific payload:
 
 ```json
 {
+  "apiVersion": "id.registrystack.org/formats/breg/ctl-report/v1alpha1",
+  "kind": "BRegCtlReport",
   "ok": true,
   "command": "explain",
   "profile": "authoring",
   "revision": "...",
   "findings": [],
   "explanation": {
-    "apiVersion": "registry.registrystack.org/breg-explain/v1alpha4",
-    "kind": "RoutesExplanation",
+    "apiVersion": "id.registrystack.org/formats/breg/routes-explanation/v1alpha4",
+    "kind": "BRegRoutesExplanation",
     "routes": [ "..." ]
   }
 }
 ```
 
-`apiVersion` and `kind` are injected into `explanation` after serialization by
-`explain_envelope` in `crates/registry-bregctl/src/lib.rs`; they are not
-fields on any `registry-breg` type. Nine `kind` values exist, one per
+The report's own `apiVersion` and `kind` name the `bregctl --format json`
+report format, which every command writes through `write_ctl_report` in
+`crates/registry-bregctl/src/lib.rs`. Inside `explanation`,
+`apiVersion` and `kind` are injected after serialization by
+`explain_envelope` in the same file; they are not
+fields on any `registry-breg` type. Nine formats exist, one per
 subject (ten invocations, because `explain access` produces a different
-`kind` with `--scenario` than without):
+format with `--scenario` than without). Each carries its own `apiVersion`,
+`id.registrystack.org/formats/breg/<format>/v1alpha4`, and a `kind` that names
+the product:
 
 `v1alpha2` adds `operation` and `source` to every immediate-action permission
 target. A consumer no longer has to join `permissions[].targets[]` back to the
@@ -32,7 +39,7 @@ invocation targets.
 `v1alpha3` adds `consent` to `AccessExplanation` (null for a project without
 consent configuration) and `recipients` to `AccessPreview`. `consent` states
 each consent-gated permission with its record, `on` key, scope, purposes,
-`maxDuration`, probe function, index names, readable-field classifications,
+`maximumDurationDays`, probe function, index names, readable-field classifications,
 admitted clients and issuing actions, plus the recipient set of every client
 with each group expanded. `recipients` is the recipient set of the scenario's
 `requesterClient`. The same version's `LifecycleExplanation` lists four request
@@ -48,17 +55,51 @@ statistical dataset, the access profiles that hold `read-live`, the one that
 holds `publish`, and every profile that reads its releases. The list is empty
 when the project declares no dataset.
 
-| Subject | `--scenario` | `kind` | Schema |
-|---|---|---|---|
-| `model` | n/a | `ModelExplanation` | `ModelExplanation.schema.json` |
-| `access` | absent | `AccessExplanation` | `AccessExplanation.schema.json` |
-| `access` | present | `AccessPreview` | `AccessPreview.schema.json` |
-| `routes` | n/a | `RoutesExplanation` | `RoutesExplanation.schema.json` |
-| `queries` | n/a | `QueriesExplanation` | `QueriesExplanation.schema.json` |
-| `actions` | n/a | `ActionsExplanation` | `ActionsExplanation.schema.json` |
-| `change-requests` | n/a | `ChangeRequestsExplanation` | `ChangeRequestsExplanation.schema.json` |
-| `events` | n/a | `EventsExplanation` | `EventsExplanation.schema.json` |
-| `lifecycle` | n/a | `LifecycleExplanation` | `LifecycleExplanation.schema.json` |
+The release that gave each format its own `apiVersion` also respells pinned
+keys and values, under the same `v1alpha4`: the value a consumer compares
+already changed in that release, so no further version marks these.
+`LifecycleExplanation` writes every enforcement layer `id` in lowercase
+kebab-case, for example `review-outcome` where it wrote `review_outcome`.
+Every identifier an explanation copies from the registry project (a module,
+action, effect, consent organization, or consent group `id`) and every
+lifecycle `id` is typed as `$defs/LocalId`, the grammar the project already
+holds them to, so no output changes.
+`ActionsExplanation` and `RoutesExplanation` tag every union with `type`
+where they wrote `kind` (a target `source`, an effect target `binding`, an
+effect field mutation and its `value`, and each entry of `routes[]`), and an
+effect field value reads `from-input` or `from-effect` where it read
+`from_input` or `from_effect`. A handler `kind` and an action route `kind`
+keep their earlier spelling.
+`ChangeRequestsExplanation` tags six unions the same way (a `planner`, its
+`declaringOrigin`, the `target` of each of its `possibleWrites`, an effect
+target `binding`, an effect field mutation, and its `value`) and writes
+`reserved-create`, `from-field`, and `from-effect` where it wrote
+`reserved_create`, `from_field`, and `from_effect`. Its `review` is tagged by
+`type` too, `required` or `none`, as the registry project writes it.
+`ActionsExplanation` writes what it states about a handler, its evidence, and
+a requirement in kebab-case, for example `reads: supplied-inputs-only` where
+it wrote `supplied_inputs_only`.
+`QueriesExplanation` names each member of `operations[].bounds`
+`maximum<Thing>`, for example `maximumPageSize` where it wrote `maxPageSize`.
+`ActionsExplanation` reports how long an accepted assertion is retained as
+`evidence.retentionDays` (`1`) where it wrote `retentionSeconds` (`86400`).
+`AccessExplanation` writes a `claimContractError` in kebab-case, for example
+`principal-claim-missing` where it wrote `principal_claim_missing`, and
+`AccessPreview` writes `mode: offline-synthetic` and `recordAccess:
+not-evaluated` where it wrote `offline_synthetic` and `not_evaluated`. The
+preview's `reason` is typed as a string and keeps its spelling.
+
+| Subject | `--scenario` | Format | `kind` | Schema |
+|---|---|---|---|---|
+| `model` | n/a | `model-explanation` | `BRegModelExplanation` | `ModelExplanation.schema.json` |
+| `access` | absent | `access-explanation` | `BRegAccessExplanation` | `AccessExplanation.schema.json` |
+| `access` | present | `access-preview` | `BRegAccessPreview` | `AccessPreview.schema.json` |
+| `routes` | n/a | `routes-explanation` | `BRegRoutesExplanation` | `RoutesExplanation.schema.json` |
+| `queries` | n/a | `queries-explanation` | `BRegQueriesExplanation` | `QueriesExplanation.schema.json` |
+| `actions` | n/a | `actions-explanation` | `BRegActionsExplanation` | `ActionsExplanation.schema.json` |
+| `change-requests` | n/a | `change-requests-explanation` | `BRegChangeRequestsExplanation` | `ChangeRequestsExplanation.schema.json` |
+| `events` | n/a | `events-explanation` | `BRegEventsExplanation` | `EventsExplanation.schema.json` |
+| `lifecycle` | n/a | `lifecycle-explanation` | `BRegLifecycleExplanation` | `LifecycleExplanation.schema.json` |
 
 `lifecycle` is the one subject that takes no PROJECT: `bregctl explain
 lifecycle` reports the request lifecycle the engine enforces, which no
@@ -187,7 +228,7 @@ Opaque nodes, in full:
   `access.actions`, `access.rowReach`, `access.claimContract`
 - `AccessPreview.effectiveProfile`
 - `RoutesExplanation`'s entity-route half of `routes[]` (every field other
-  than the injected `kind`)
+  than the injected `type`)
 - `fieldType` everywhere it appears (`QueriesExplanation`,
   `ActionsExplanation`)
 - `ActionsExplanation`'s `actions[].handler.possibleWrites`,
@@ -232,7 +273,7 @@ but the gate never instantiates it; a WASM handler fixture is a good addition
 to the tracked set the next time this contract needs to change.
 
 A further branch is visible in the same sense but not exercised today: the
-`"clear"` field-mutation kind in both `ActionsExplanation` and
+`"clear"` field mutation in both `ActionsExplanation` and
 `ChangeRequestsExplanation` (every tracked action and change request only
 ever `"set"`s a field). It is pinned from source and unexercised by the gate.
 

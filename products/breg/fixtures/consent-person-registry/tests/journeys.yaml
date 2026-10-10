@@ -2,8 +2,9 @@ apiVersion: id.registrystack.org/formats/breg/journeys/v1
 kind: BRegJourneys
 # Every timestamp on 2026-09-01 is an anchor: the PostgreSQL acceptance harness
 # rebases that date to the day before the run, so gives that must be in force
-# stay inside the 365-day maxDuration whenever the suite runs. Timestamps on
-# other dates are fixed on purpose: 2020 is past maxDuration, 2099 is future.
+# stay inside the 365 days of maximumDurationDays whenever the suite runs.
+# Timestamps on other dates are fixed on purpose: 2020 is past
+# maximumDurationDays, 2099 is future.
 journeys:
   - id: self-give-read-withdraw-and-backdated-regive
     steps:

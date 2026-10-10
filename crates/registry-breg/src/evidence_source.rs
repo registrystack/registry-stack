@@ -189,7 +189,7 @@ fn selector_schema(kind: &FieldTypeSource) -> Result<(Value, u64), Diagnostic> {
         ))
     };
     match kind {
-        FieldTypeSource::String { min_length: 0, .. } => Err(refusal("selectors", "the selector field accepts an empty value that Evidence's selector profile cannot express; declare minLength of at least 1 on the field or use a custom adapter")),
+        FieldTypeSource::String { min_length: 0, .. } => Err(refusal("selectors", "the selector field accepts an empty value that Evidence's selector profile cannot express; declare minimumLength of at least 1 on the field or use a custom adapter")),
         FieldTypeSource::String { max_length, .. } => string(u64::from(*max_length) * 4),
         FieldTypeSource::Date => Ok((json!({"type":"date"}),10)),
         FieldTypeSource::Boolean => Ok((json!({"type":"boolean"}),5)),
@@ -498,14 +498,14 @@ pub fn export_evidence_source(
         extract.into_bytes(),
     ));
     artifacts.push(enveloped_document(format!("sources/{prefix}.yaml"),SOURCE_HEADER,&json!({
-        "transport":"http-json","connection":options.connection,"behaviorRevision":behavior_revision,"posture":"field-projected",
+        "type":"http-json","connection":options.connection,"behaviorRevision":behavior_revision,"posture":"field-projected",
         "forwardAccessAttribution":entity.access_log.is_some(),
         "unresolvedProblem":{"status":404,"type":crate::problem::ProblemCode::LookupUnresolved.type_uri(),"code":"lookup.unresolved"},
         "request":{"method":"POST","path":route.path,"fixedHeaders":[{"name":"Accept","value":"application/json"}],
             "selectorInputs":[{"role":"subject","alternatives":alternatives}],"prepareScript":format!("adapters/{prefix}-prepare.rhai"),
             "adapterParameters":{},"adapterParametersSchema":format!("schemas/{prefix}-parameters.yaml"),
             "preparationLimits":{"query":"required","jsonBody":"required","maximumJsonDepth":8,"maximumCollectionItems":128,"maximumStringBytes":8192,"maximumNormalizedBytes":16384},
-            "projection":projection,"redirects":"deny","timeoutMilliseconds":5000,"maximumResponseBytes":65536},
+            "projection":projection,"redirects":"deny","attemptTimeoutMilliseconds":5000,"maximumResponseBytes":65536},
         "responseSchema":format!("schemas/{prefix}-response.yaml"),"extractScript":format!("adapters/{prefix}-extract.rhai"),"factSchema":format!("schemas/{prefix}-facts.yaml")
     }))?);
     artifacts.sort_by(|a, b| a.path.cmp(&b.path));

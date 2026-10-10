@@ -345,7 +345,7 @@ impl AuditOperation {
         let rows = transaction
             .query(
                 "SELECT event_id,item_id,detail->>'grantId' FROM casework_history
-                 WHERE kind='task_invalidated' AND profile_id=$1 AND occurred_at=now()
+                 WHERE kind='task-invalidated' AND profile_id=$1 AND occurred_at=now()
                    AND xmin=pg_current_xact_id()::xid
                  ORDER BY event_id",
                 &[&TASK_GRANT_SYSTEM_PROFILE],
@@ -365,7 +365,7 @@ impl AuditOperation {
             self.record(
                 event_id,
                 json!({
-                    "event": "casework.task_invalidated",
+                    "event": "casework.task-invalidated",
                     "eventId": event_id,
                     "itemId": item_id,
                     "grantId": grant_id.ok_or(StoreError::Corrupt)?,
@@ -894,7 +894,7 @@ mod tests {
             .record(first, json!({"event": "casework.claimed", "eventId": first, "itemId": item, "itemRevision": 2, "profileId": "officer"}))
             .unwrap();
         operation
-            .record(second, json!({"event": "casework.task_invalidated", "itemId": item, "grantId": Uuid::new_v4().to_string(), "profileId": "system:task-grants"}))
+            .record(second, json!({"event": "casework.task-invalidated", "itemId": item, "grantId": Uuid::new_v4().to_string(), "profileId": "system:task-grants"}))
             .unwrap();
         operation.complete().await.unwrap();
 
@@ -941,8 +941,8 @@ mod tests {
             .unwrap();
         for event in [
             "casework.claimed",
-            "casework.task_invalidated",
-            "casework.task_invalidated",
+            "casework.task-invalidated",
+            "casework.task-invalidated",
         ] {
             operation
                 .record(
@@ -1019,7 +1019,7 @@ mod tests {
     async fn a_requested_operation_without_a_response_record_is_refused() {
         let (audit, capture) = CaseworkAudit::capture();
         let operation = audit
-            .begin(request_record("task_claimed", None, "officer", json!({})))
+            .begin(request_record("task-claimed", None, "officer", json!({})))
             .await
             .unwrap();
         assert!(matches!(
@@ -1035,7 +1035,7 @@ mod tests {
         assert_eq!(entries[1]["correlation"], entries[0]["correlation"]);
         assert_eq!(
             entries[1]["record"],
-            json!({"event": "casework.task_claimed", "outcome": "unfinished"})
+            json!({"event": "casework.task-claimed", "outcome": "unfinished"})
         );
     }
 
@@ -1045,7 +1045,7 @@ mod tests {
         let actor = actor();
         let mut operation = audit
             .begin(request_record(
-                "review_decided",
+                "review-decided",
                 Some(&actor),
                 &actor.profile_id,
                 json!({"itemId": Uuid::new_v4()}),
@@ -1061,7 +1061,7 @@ mod tests {
         assert_eq!(entries[1]["correlation"], entries[0]["correlation"]);
         assert_eq!(
             entries[1]["record"],
-            json!({"event": "casework.review_decided", "outcome": "replayed"})
+            json!({"event": "casework.review-decided", "outcome": "replayed"})
         );
     }
 
@@ -1070,7 +1070,7 @@ mod tests {
         let (audit, capture) = CaseworkAudit::capture();
         let mut operation = audit
             .begin(request_record(
-                "review_cancelled",
+                "review-cancelled",
                 None,
                 "producer",
                 json!({}),
@@ -1090,7 +1090,7 @@ mod tests {
     async fn a_domain_event_is_the_terminal_entry_when_one_was_recorded() {
         let (audit, capture) = CaseworkAudit::capture();
         let mut operation = audit
-            .begin(request_record("task_revoked", None, "officer", json!({})))
+            .begin(request_record("task-revoked", None, "officer", json!({})))
             .await
             .unwrap();
         operation.record_outcome(AuditOutcome::Unchanged);
@@ -1098,7 +1098,7 @@ mod tests {
         operation
             .record(
                 event,
-                json!({"event": "casework.task_invalidated", "profileId": "system:task-grants"}),
+                json!({"event": "casework.task-invalidated", "profileId": "system:task-grants"}),
             )
             .unwrap();
         operation.complete().await.unwrap();
@@ -1125,21 +1125,21 @@ mod tests {
         operation
             .record(
                 first,
-                json!({"event": "casework.clock_expired", "itemId": "raw-item", "profileId": "system:clocks"}),
+                json!({"event": "casework.clock-expired", "itemId": "raw-item", "profileId": "system:clocks"}),
             )
             .unwrap();
         operation
             .record(
                 second,
-                json!({"event": "casework.task_invalidated", "profileId": "system:task-grants"}),
+                json!({"event": "casework.task-invalidated", "profileId": "system:task-grants"}),
             )
             .unwrap();
         operation.abandon_unresolved().await.unwrap();
         let entries = capture.entries();
         assert_eq!(entries.len(), 2, "{entries:?}");
         for (entry, (event, event_id)) in entries.iter().zip([
-            ("casework.clock_expired", first),
-            ("casework.task_invalidated", second),
+            ("casework.clock-expired", first),
+            ("casework.task-invalidated", second),
         ]) {
             assert_eq!(entry["phase"], "response");
             assert_eq!(entry["correlation"], entries[0]["correlation"]);
@@ -1154,7 +1154,7 @@ mod tests {
     async fn an_unresolved_requested_operation_is_answered_by_its_unfinished_request() {
         let (audit, capture) = CaseworkAudit::capture();
         let mut operation = audit
-            .begin(request_record("task_claimed", None, "officer", json!({})))
+            .begin(request_record("task-claimed", None, "officer", json!({})))
             .await
             .unwrap();
         operation
@@ -1169,7 +1169,7 @@ mod tests {
         assert_eq!(entries[1]["correlation"], entries[0]["correlation"]);
         assert_eq!(
             entries[1]["record"],
-            json!({"event": "casework.task_claimed", "outcome": "unfinished"})
+            json!({"event": "casework.task-claimed", "outcome": "unfinished"})
         );
     }
 
@@ -1188,7 +1188,7 @@ mod tests {
     #[test]
     fn audit_publication_separates_protected_identity_and_source_data() {
         let hasher = AuditKeyHasher::unkeyed_dev_only();
-        let raw = json!({"event":"casework.task_approved", "eventId":"event", "actor":{"issuer":"https://issuer.test","subject":"raw-human"}, "itemId":"raw-item", "grantId":"raw-grant", "detail":{"person_reference":"raw-person"}, "reason":"private reason", "sourceReceipt":{"body":"private body"}, "profileId":"staff"});
+        let raw = json!({"event":"casework.task-approved", "eventId":"event", "actor":{"issuer":"https://issuer.test","subject":"raw-human"}, "itemId":"raw-item", "grantId":"raw-grant", "detail":{"person_reference":"raw-person"}, "reason":"private reason", "sourceReceipt":{"body":"private body"}, "profileId":"staff"});
         let published = published_audit_record(raw.clone(), &hasher).unwrap();
         let serialized = published.to_string();
         for secret in [

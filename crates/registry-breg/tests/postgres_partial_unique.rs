@@ -21,30 +21,30 @@ const DATABASE_ID: &str = "partial-unique-database";
 async fn real_postgres_partial_unique_index_enforces_only_the_closed_predicate() {
     let project = parse_project_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"partial-unique","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"partial-unique","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
             "id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable",
             "fields":[
-              {"id":"code","type":"string","maxLength":32,"required":true,"classification":"internal"},
+              {"id":"code","type":"string","maximumLength":32,"required":true,"classification":"internal"},
               {"id":"status","type":"vocabulary-code","vocabulary":"status","classification":"internal"},
               {"id":"ended-on","type":"date","classification":"internal"}
             ],
             "constraints":[{
-              "kind":"unique","fields":["code"],
+              "type":"unique","fields":["code"],
               "when":[
-                {"kind":"field_equals","field":"status","value":"active"},
-                {"kind":"field_is_null","field":"ended-on"},
-                {"kind":"active_lifecycle"}
+                {"type":"field-equals","field":"status","value":"active"},
+                {"type":"field-is-null","field":"ended-on"},
+                {"type":"active-lifecycle"}
               ]
             }]
           }],
           "accessProfiles":[{
-            "id":"operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
+            "id":"operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
               "entity":"entry","operations":["get"],"readableFields":["code","status","ended-on"],
               "rowBoundaries": "unrestricted"
-            }]
+            }]}
           }],
           "vocabularies":[{"id":"status","values":["active","closed"]}]
         }"#,

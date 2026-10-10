@@ -1,3 +1,6 @@
-id: urn:example:fixture:scheme:date-bucket
+apiVersion: id.registrystack.org/formats/evidence/codelist/v1alpha1
+kind: EvidenceCodelist
+uri: urn:example:fixture:scheme:date-bucket
 version: '1'
+type: code-list
 codes: [current-period, boundary-period]

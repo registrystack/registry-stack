@@ -63,7 +63,7 @@ const REQUEST_REVIEW_OUTCOME_SQL: &str = "(SELECT CASE
         WHEN review_result.status IS NULL THEN 'pending'
         WHEN review_result.status = 'approved'
          AND review_result.available_until <= transaction_timestamp() THEN 'approvedExpired'
-        WHEN review_result.status = 'changes_requested' THEN 'changesRequested'
+        WHEN review_result.status = 'changes-requested' THEN 'changesRequested'
         ELSE review_result.status END
    FROM registry_internal.registry_request_review_submissions AS review_submission
    LEFT JOIN registry_internal.registry_request_review_results AS review_result
@@ -3530,14 +3530,14 @@ mod tests {
         let registry = compile_project(
             &parse_project_json(
                 br#"{
-                  "apiVersion":"registry.registrystack.org/v1alpha1",
-                  "kind":"RegistryProject",
-                  "registry":{"id":"retained-plaintext-shape","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+                  "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+                  "kind":"BRegProject",
+                  "project":{"id":"retained-plaintext-shape","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
                   "entities":[{
                     "id":"asset","primaryDataset":"test-dataset","route":"assets","mutationMode":"mutable",
-                    "fields":[{"id":"details","type":"structured","maxBytes":256,"classification":"restricted","encrypted":true,"schema":{"type":"object","additionalProperties":false,"properties":{"__bregEncryptedV1":{"type":"string"}},"required":["__bregEncryptedV1"]}}]
+                    "fields":[{"id":"details","type":"structured","maximumBytes":256,"classification":"restricted","encrypted":true,"schema":{"type":"object","additionalProperties":false,"properties":{"__bregEncryptedV1":{"type":"string"}},"required":["__bregEncryptedV1"]}}]
                   }],
-                  "accessProfiles":[{"id":"reader","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{"entity":"asset","operations":["get"],"readableFields":["details"],"rowBoundaries":"unrestricted"}]}]
+                  "accessProfiles":[{"id":"reader","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{"entity":"asset","operations":["get"],"readableFields":["details"],"rowBoundaries":"unrestricted"}]}}]
                 }"#,
             )
             .expect("fixture parses"),
@@ -3615,20 +3615,20 @@ mod tests {
         let registry = compile_project(
             &parse_project_json(
                 br#"{
-                  "apiVersion":"registry.registrystack.org/v1alpha1",
-                  "kind":"RegistryProject",
-                  "registry":{"id":"geojson-guard","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+                  "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+                  "kind":"BRegProject",
+                  "project":{"id":"geojson-guard","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
                   "entities":[{
                     "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"mutable","classification":"public",
                     "fields":[
-                      {"id":"code","type":"string","required":true,"maxLength":32,"classification":"public"},
+                      {"id":"code","type":"string","required":true,"maximumLength":32,"classification":"public"},
                       {"id":"location","type":"crs84-point","precision":6,"required":false,"classification":"public"}
                     ],
                     "geojson":{"geometryField":"location"}
                   }],
                   "accessProfiles":[{
                     "id":"public","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
-                    "permissions":[{"entity":"site","operations":["get","list"],"readableFields":["code","location"], "rowBoundaries": "unrestricted"}]
+                    "permissions":{"entities":[{"entity":"site","operations":["get","list"],"readableFields":["code","location"], "rowBoundaries": "unrestricted"}]}
                   }]
                 }"#,
             )
@@ -3665,26 +3665,26 @@ mod tests {
         let registry = compile_project(
             &parse_project_json(
                 br#"{
-                  "apiVersion":"registry.registrystack.org/v1alpha1",
-                  "kind":"RegistryProject",
-                  "registry":{"id":"spatial-span-guard","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+                  "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+                  "kind":"BRegProject",
+                  "project":{"id":"spatial-span-guard","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
                   "entities":[{
                     "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"mutable","classification":"public",
                     "fields":[
-                      {"id":"code","type":"string","required":true,"maxLength":32,"classification":"public"},
+                      {"id":"code","type":"string","required":true,"maximumLength":32,"classification":"public"},
                       {"id":"location","type":"crs84-point","precision":6,"required":false,"classification":"public"}
                     ],
                     "geojson":{"geometryField":"location"}
                   }],
                   "accessProfiles":[{
                     "id":"public","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
-                    "permissions":[{
+                    "permissions":{"entities":[{
                       "entity":"site",
                       "operations":["list"],
                       "readableFields":["code","location"],
                       "spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":0.3,"maximumLatitudeSpanDegrees":0.2}},
                       "rowBoundaries": "unrestricted"
-                    }]
+                    }]}
                   }]
                 }"#,
             )
@@ -3749,23 +3749,23 @@ mod tests {
         let registry = compile_project(
             &parse_project_json(
                 br#"{
-                  "apiVersion":"registry.registrystack.org/v1alpha1",
-                  "kind":"RegistryProject",
-                  "registry":{"id":"plan-guard","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+                  "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+                  "kind":"BRegProject",
+                  "project":{"id":"plan-guard","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
                   "entities":[{
                     "id":"case","primaryDataset":"test-dataset","route":"cases","mutationMode":"mutable","classification":"public",
                     "fields":[
-                      {"id":"label","type":"string","required":true,"maxLength":32,"classification":"public"},
-                      {"id":"secret","type":"string","required":true,"maxLength":32,"classification":"restricted"}
+                      {"id":"label","type":"string","required":true,"maximumLength":32,"classification":"public"},
+                      {"id":"secret","type":"string","required":true,"maximumLength":32,"classification":"restricted"}
                     ]
                   }],
                   "accessProfiles":[{
                     "id":"public","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
-                    "permissions":[{
+                    "permissions":{"entities":[{
                       "entity":"case","operations":["list"],
                       "readableFields":["label"],"filterableFields":["label"],"sortableFields":["label"],
                       "rowBoundaries": "unrestricted"
-                    }]
+                    }]}
                   }]
                 }"#,
             )
@@ -4014,26 +4014,26 @@ mod tests {
         let registry = compile_project(
             &parse_project_json(
                 br#"{
-                  "apiVersion":"registry.registrystack.org/v1alpha1",
-                  "kind":"RegistryProject",
-                  "registry":{"id":"spatial-relation-guard","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+                  "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+                  "kind":"BRegProject",
+                  "project":{"id":"spatial-relation-guard","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
                   "entities":[{
                     "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"mutable","classification":"public",
                     "fields":[
-                      {"id":"code","type":"string","required":true,"maxLength":32,"classification":"public"},
+                      {"id":"code","type":"string","required":true,"maximumLength":32,"classification":"public"},
                       {"id":"location","type":"crs84-point","precision":6,"required":false,"classification":"public"}
                     ],
                     "geojson":{"geometryField":"location"}
                   }],
                   "accessProfiles":[{
                     "id":"public","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
-                    "permissions":[{
+                    "permissions":{"entities":[{
                       "entity":"site",
                       "operations":["list"],
                       "readableFields":["code","location"],
                       "spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":1,"maximumLatitudeSpanDegrees":1}},
                       "rowBoundaries": "unrestricted"
-                    }]
+                    }]}
                   }]
                 }"#,
             )

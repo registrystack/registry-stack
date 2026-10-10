@@ -1,7 +1,7 @@
 {
-  "apiVersion": "registry.registrystack.org/v1alpha1",
-  "kind": "RegistryProject",
-  "registry": {
+  "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
+  "kind": "BRegProject",
+  "project": {
     "id": "request-attachments",
     "canonicalBaseIri": "https://request-attachments.example.test",
     "version": "0.1.0",
@@ -25,7 +25,7 @@
         {
           "id": "label",
           "type": "string",
-          "maxLength": 64,
+          "maximumLength": 64,
           "required": true,
           "classification": "internal"
         }
@@ -48,7 +48,7 @@
         {
           "id": "label",
           "type": "string",
-          "maxLength": 64,
+          "maximumLength": 64,
           "required": true,
           "classification": "internal"
         }
@@ -80,6 +80,7 @@
           }
         ],
         "review": {
+          "type": "required",
           "authority": "casework",
           "policyId": "attachment-correction"
         },
@@ -87,7 +88,7 @@
           "mode": "manual"
         },
         "retention": {
-          "mode": "operator_erase"
+          "mode": "operator-erase"
         }
       }
     }
@@ -99,23 +100,25 @@
       "requiredScopes": [
         "attachments:operate"
       ],
-      "permissions": [
-        {
-          "entity": "record",
-          "operations": [
-            "create",
-            "get",
-            "list"
-          ],
-          "readableFields": [
-            "label"
-          ],
-          "writableFields": [
-            "label"
-          ],
-          "rowBoundaries": "unrestricted"
-        }
-      ],
+      "permissions": {
+        "entities": [
+          {
+            "entity": "record",
+            "operations": [
+              "create",
+              "get",
+              "list"
+            ],
+            "readableFields": [
+              "label"
+            ],
+            "writableFields": [
+              "label"
+            ],
+            "rowBoundaries": "unrestricted"
+          }
+        ]
+      },
       "requiredPurposes": [
         "attachment-acceptance"
       ]
@@ -126,35 +129,37 @@
       "requiredScopes": [
         "attachments:submit"
       ],
-      "permissions": [
-        {
-          "entity": "correction-request",
-          "operations": [
-            "create",
-            "patch",
-            "get",
-            "list",
-            "submit_request",
-            "cancel_request"
-          ],
-          "readableFields": [
-            "record",
-            "label",
-            "supporting-file"
-          ],
-          "readableRequestFields": [
-            "reason",
-            "review_state"
-          ],
-          "writableFields": [
-            "record",
-            "label",
-            "supporting-file"
-          ],
-          "rowBoundaries": "unrestricted",
-          "requestVisibility": "owner"
-        }
-      ],
+      "permissions": {
+        "entities": [
+          {
+            "entity": "correction-request",
+            "operations": [
+              "create",
+              "patch",
+              "get",
+              "list",
+              "submit-request",
+              "cancel-request"
+            ],
+            "readableFields": [
+              "record",
+              "label",
+              "supporting-file"
+            ],
+            "readableRequestFields": [
+              "reason",
+              "review-state"
+            ],
+            "writableFields": [
+              "record",
+              "label",
+              "supporting-file"
+            ],
+            "rowBoundaries": "unrestricted",
+            "requestVisibility": "owner"
+          }
+        ]
+      },
       "requiredPurposes": [
         "attachment-acceptance"
       ]
@@ -165,35 +170,37 @@
       "requiredScopes": [
         "attachments:submit"
       ],
-      "permissions": [
-        {
-          "entity": "correction-request",
-          "operations": [
-            "create",
-            "patch",
-            "get",
-            "list",
-            "submit_request",
-            "cancel_request"
-          ],
-          "readableFields": [
-            "record",
-            "label",
-            "supporting-file"
-          ],
-          "readableRequestFields": [
-            "reason",
-            "review_state"
-          ],
-          "writableFields": [
-            "record",
-            "label",
-            "supporting-file"
-          ],
-          "rowBoundaries": "unrestricted",
-          "requestVisibility": "owner"
-        }
-      ],
+      "permissions": {
+        "entities": [
+          {
+            "entity": "correction-request",
+            "operations": [
+              "create",
+              "patch",
+              "get",
+              "list",
+              "submit-request",
+              "cancel-request"
+            ],
+            "readableFields": [
+              "record",
+              "label",
+              "supporting-file"
+            ],
+            "readableRequestFields": [
+              "reason",
+              "review-state"
+            ],
+            "writableFields": [
+              "record",
+              "label",
+              "supporting-file"
+            ],
+            "rowBoundaries": "unrestricted",
+            "requestVisibility": "owner"
+          }
+        ]
+      },
       "requiredPurposes": [
         "attachment-acceptance"
       ]
@@ -204,25 +211,27 @@
       "requiredScopes": [
         "attachments:review"
       ],
-      "permissions": [
-        {
-          "entity": "correction-request",
-          "operations": [
-            "get"
-          ],
-          "readableFields": [
-            "record",
-            "label",
-            "supporting-file"
-          ],
-          "readableRequestFields": [
-            "reason",
-            "review_state"
-          ],
-          "writableFields": [],
-          "rowBoundaries": "unrestricted"
-        }
-      ],
+      "permissions": {
+        "entities": [
+          {
+            "entity": "correction-request",
+            "operations": [
+              "get"
+            ],
+            "readableFields": [
+              "record",
+              "label",
+              "supporting-file"
+            ],
+            "readableRequestFields": [
+              "reason",
+              "review-state"
+            ],
+            "writableFields": [],
+            "rowBoundaries": "unrestricted"
+          }
+        ]
+      },
       "requiredPurposes": [
         "attachment-acceptance"
       ]
@@ -233,32 +242,34 @@
       "requiredScopes": [
         "attachments:apply"
       ],
-      "permissions": [
-        {
-          "entity": "correction-request",
-          "operations": [
-            "get",
-            "apply_request"
-          ],
-          "readableFields": [
-            "record",
-            "label",
-            "supporting-file"
-          ],
-          "readableRequestFields": [
-            "reason",
-            "review_state"
-          ],
-          "writableFields": [],
-          "rowBoundaries": "unrestricted",
-          "applyTargets": [
-            {
-              "entity": "record",
-              "rowBoundaries": "unrestricted"
-            }
-          ]
-        }
-      ],
+      "permissions": {
+        "entities": [
+          {
+            "entity": "correction-request",
+            "operations": [
+              "get",
+              "apply-request"
+            ],
+            "readableFields": [
+              "record",
+              "label",
+              "supporting-file"
+            ],
+            "readableRequestFields": [
+              "reason",
+              "review-state"
+            ],
+            "writableFields": [],
+            "rowBoundaries": "unrestricted",
+            "applyTargets": [
+              {
+                "entity": "record",
+                "rowBoundaries": "unrestricted"
+              }
+            ]
+          }
+        ]
+      },
       "requiredPurposes": [
         "attachment-acceptance"
       ]

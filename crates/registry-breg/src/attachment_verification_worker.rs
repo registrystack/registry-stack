@@ -197,7 +197,7 @@ impl AttachmentVerificationWorker {
                 attachment_store::retry_verification(&transaction, &job)
                     .await
                     .map_err(unavailable)?,
-                "retry_pending",
+                "retry-pending",
             ),
         };
         // Erasure or lease expiry can win while the external verifier runs.

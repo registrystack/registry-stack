@@ -2,19 +2,19 @@
   "ok": true,
   "command": "package",
   "status": "complete",
-  "apiVersion": "registry.registrystack.org/caseworkctl/v1alpha3",
+  "apiVersion": "id.registrystack.org/formats/casework/package-report/v1alpha3",
   "databaseAccess": false,
   "dryRun": true,
   "files": [
     {
-      "bytes": 1551,
+      "bytes": 1560,
       "path": "casework.yaml",
-      "sha256": "sha256:f1aa77e97267f33c9bee24b4ec86c552524e7840d7b333add642fc193ac3b9b8"
+      "sha256": "sha256:7e1ae9abf92de90d36ec4f33c687a4db7e266bd40cedf976a3cb6b9a68bc9b9e"
     }
   ],
-  "kind": "PackageReport",
+  "kind": "CaseworkPackageReport",
   "networkAccess": false,
-  "packageDigest": "sha256:2553e01c35ffbab48b56732dd700dafe0ca85b5d77668556a18713b3edb414cc",
+  "packageDigest": "sha256:3eae5a01350eb71dc9d9c6c2966e8c07a060d83a8656836a3dac6460d9ade3b7",
   "project": "products/casework/examples/standalone-decision",
   "revision": null,
   "runtimeConfigurationIncluded": false,

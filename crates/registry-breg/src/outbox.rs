@@ -343,6 +343,8 @@ fn condition_matches(
         changed,
         before_equals,
         after_equals,
+        before_is_null,
+        after_is_null,
     } = condition
     else {
         return Err(OutboxError::InvalidProjection);
@@ -374,12 +376,21 @@ fn condition_matches(
             return Ok(false);
         }
     }
+    for (snapshot, unset) in [(before, before_is_null), (after, after_is_null)] {
+        for field in unset {
+            let actual = snapshot
+                .and_then(|snapshot| snapshot.get(field))
+                .ok_or(OutboxError::InvalidProjection)?;
+            if !actual.is_null() {
+                return Ok(false);
+            }
+        }
+    }
     Ok(true)
 }
 
 fn scalar_value(value: &EventScalarValue) -> Value {
     match value {
-        EventScalarValue::Null => Value::Null,
         EventScalarValue::Boolean(value) => Value::Bool(*value),
         EventScalarValue::Number(value) => Value::Number(value.clone()),
         EventScalarValue::String(value) => Value::String(value.clone()),
@@ -512,13 +523,13 @@ fn classification_name(classification: Classification) -> &'static str {
 
 fn authentication_profile_name(profile: WebhookAuthenticationProfile) -> &'static str {
     match profile {
-        WebhookAuthenticationProfile::HmacSha256V1 => "hmac_sha256_v1",
+        WebhookAuthenticationProfile::HmacSha256V1 => "hmac-sha256-v1",
     }
 }
 
 fn delivery_mode_name(mode: CompiledWebhookDeliveryMode) -> &'static str {
     match mode {
-        CompiledWebhookDeliveryMode::AfterCommit => "after_commit",
+        CompiledWebhookDeliveryMode::AfterCommit => "after-commit",
     }
 }
 
@@ -533,7 +544,7 @@ fn trigger_name(trigger: EventTrigger) -> &'static str {
         EventTrigger::Created => "created",
         EventTrigger::Patched => "patched",
         EventTrigger::Tombstoned => "tombstoned",
-        EventTrigger::RequestLifecycle => "request_lifecycle",
+        EventTrigger::RequestLifecycle => "request-lifecycle",
     }
 }
 
@@ -548,6 +559,51 @@ mod tests {
 
     fn data_schemas() -> BTreeMap<String, String> {
         BTreeMap::from([("permit.granted".to_owned(), DATA_SCHEMA.to_owned())])
+    }
+
+    #[test]
+    fn a_field_condition_matches_an_unset_value_only_where_it_names_one() {
+        let condition: EventConditionSource = serde_json::from_value(serde_json::json!({
+            "type": "fields",
+            "beforeIsNull": ["closed-on"],
+            "afterIsNull": ["note"]
+        }))
+        .expect("a fields condition is read");
+        let snapshot = |closed_on: Value, note: Value| {
+            let Value::Object(map) = serde_json::json!({"closed-on": closed_on, "note": note})
+            else {
+                unreachable!("an object literal")
+            };
+            map
+        };
+        for (before, after, expected) in [
+            (
+                snapshot(Value::Null, "x".into()),
+                snapshot("2026-01-01".into(), Value::Null),
+                true,
+            ),
+            (
+                snapshot("2026-01-01".into(), "x".into()),
+                snapshot(Value::Null, Value::Null),
+                false,
+            ),
+            (
+                snapshot(Value::Null, Value::Null),
+                snapshot(Value::Null, "x".into()),
+                false,
+            ),
+        ] {
+            assert_eq!(
+                condition_matches(Some(&condition), Some(&before), Some(&after))
+                    .expect("both snapshots hold the named fields"),
+                expected
+            );
+        }
+        let missing = serde_json::Map::new();
+        assert!(matches!(
+            condition_matches(Some(&condition), Some(&missing), Some(&missing)),
+            Err(OutboxError::InvalidProjection)
+        ));
     }
 
     fn captured(data: Value) -> CapturedEvent<'static> {

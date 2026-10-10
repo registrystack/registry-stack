@@ -27,7 +27,7 @@ fn writes() -> Value {
 
 fn rhai_handler() -> Value {
     json!({
-        "kind": "rhai",
+        "type": "rhai",
         "script": "scripts/register-person.rhai",
         "abi": ACTION_HANDLER_ABI_V1,
         "writes": writes(),
@@ -37,7 +37,7 @@ fn rhai_handler() -> Value {
 
 fn wasm_handler() -> Value {
     json!({
-        "kind": "wasm",
+        "type": "wasm",
         "module": "wasm/register-person.wasm",
         "abi": ACTION_HANDLER_ABI_V1,
         "writes": writes(),
@@ -47,9 +47,9 @@ fn wasm_handler() -> Value {
 
 fn project_with_handler(handler: Value) -> Value {
     json!({
-        "apiVersion": "registry.registrystack.org/v1alpha1",
-        "kind": "RegistryProject",
-        "registry": {"id": "action-handler-contract", "version": "1", "defaultLanguage": "en",
+        "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
+        "kind": "BRegProject",
+        "project": {"id": "action-handler-contract", "version": "1", "defaultLanguage": "en",
                      "canonicalBaseIri": "https://action-handler.example.test"},
         "entities": [{
             "id": "person",
@@ -57,29 +57,29 @@ fn project_with_handler(handler: Value) -> Value {
             "route": "people",
             "mutationMode": "mutable",
             "fields": [
-                {"id": "person-code", "apiName": "personCode", "type": "string", "maxLength": 64,
+                {"id": "person-code", "apiName": "personCode", "type": "string", "maximumLength": 64,
                  "required": true, "classification": "restricted"},
-                {"id": "legal-name", "apiName": "legalName", "type": "string", "maxLength": 160,
+                {"id": "legal-name", "apiName": "legalName", "type": "string", "maximumLength": 160,
                  "required": true, "classification": "restricted"}
             ]
         }],
         "actions": [{
             "id": "register-person",
             "inputs": [
-                {"id": "person-code", "apiName": "personCode", "type": "string", "maxLength": 64,
+                {"id": "person-code", "apiName": "personCode", "type": "string", "maximumLength": 64,
                  "required": true, "classification": "restricted"},
-                {"id": "legal-name", "apiName": "legalName", "type": "string", "maxLength": 160,
+                {"id": "legal-name", "apiName": "legalName", "type": "string", "maximumLength": 160,
                  "required": true, "classification": "restricted"}
             ],
             "handler": handler
         }],
         "accessProfiles": [{
             "id": "registrar", "default": true, "principalClaim": "registry_principal", "requiredScopes": "unrestricted",
-            "permissions": [{
+            "permissions": {"actions": [{
                 "action": "register-person", "operations": ["invoke"],
                 "targets": [{"entity": "person", "rowBoundaries": "unrestricted"}],
                 "results": ["person"]
-            }]
+            }]}
         }]
     })
 }
@@ -235,7 +235,7 @@ fn an_action_handler_source_reference_follows_the_declared_backend() {
 fn a_remote_action_handler_kind_is_refused() {
     let failure = compile_with_assets(
         json!({
-            "kind": "url",
+            "type": "url",
             "destinationId": "person-operations",
             "writes": writes(),
             "refusals": []
@@ -249,7 +249,7 @@ fn a_remote_action_handler_kind_is_refused() {
         .find(|diagnostic| diagnostic.code == "breg.action.handler-kind-unsupported")
         .unwrap_or_else(|| panic!("missing refusal: {:?}", failure.diagnostics()));
     assert_eq!(
-        "actions[register-person].handler.kind", diagnostic.path,
+        "actions[register-person].handler.type", diagnostic.path,
         "the refusal names the member the author wrote"
     );
     assert!(

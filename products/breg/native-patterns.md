@@ -14,7 +14,7 @@ storage when the native pattern is required.
 fields:
   - id: identifier
     type: string
-    maxLength: 13
+    maximumLength: 13
     required: true
     classification: restricted
     pattern: '^[0-9]{13}$'
@@ -35,8 +35,8 @@ syntax. Derived fields, action inputs, and other field types cannot declare
 `pattern`; use a persisted target field for storage integrity.
 
 An expression is limited to 4096 UTF-8 bytes and cannot contain NUL. Values keep
-the existing field bounds: `string.maxLength` is at most 1,000,000 characters;
-`text.maxLength` is at most 10,000,000 characters. The HTTP request, transaction,
+the existing field bounds: `string.maximumLength` is at most 1,000,000 characters;
+`text.maximumLength` is at most 10,000,000 characters. The HTTP request, transaction,
 and database statement deadlines continue to bound execution, including native
 regex evaluation. A pathological expression can exhaust those limits. Review
 and schema-test expressions against representative values before activation.
@@ -105,7 +105,7 @@ Every pattern check has a stable identity derived from its entity and field,
 independent of the expression. Its physical-name inventory member is
 `pattern:<field-id>`. The generated schema fingerprint covers the native CHECK.
 
-Adding a rule emits `field_pattern_added`, classified `compatible_additive` like
+Adding a rule emits `field-pattern-added`, classified `compatible-additive` like
 existing added CHECK constraints. This classification permits the compiler-owned
 DDL path; it does not promise that existing rows or future writes satisfy the
 new rule. PostgreSQL validates every existing row before the addition commits.
@@ -128,8 +128,8 @@ useful. Reviewed steps use their packaged `lockTimeoutMilliseconds` and
 interlock. See PostgreSQL's [ALTER TABLE locking and validation](https://www.postgresql.org/docs/18/sql-altertable.html)
 and [statement and lock timeouts](https://www.postgresql.org/docs/18/runtime-config-client.html).
 
-Changing or removing a rule emits `field_pattern_changed` or
-`field_pattern_removed`, classified `destructive_or_irreversible` under the
+Changing or removing a rule emits `field-pattern-changed` or
+`field-pattern-removed`, classified `destructive-or-irreversible` under the
 existing reviewed migration contract. This includes loosening: the compiler does
 not attempt to prove containment between two regex languages. A reviewed change
 covers the authored field and its implicit `pattern:<field-id>` constraint;

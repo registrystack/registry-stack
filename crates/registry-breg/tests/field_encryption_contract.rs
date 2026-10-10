@@ -24,20 +24,20 @@ use serde_json::{json, Value};
 /// field with a unique normalized blind-index lookup.
 fn encrypted_project() -> Value {
     json!({
-        "apiVersion":"registry.registrystack.org/v1alpha1", "kind":"RegistryProject",
-        "registry":{"id":"field-encryption","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://encryption.example.test"},
+        "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
+        "project":{"id":"field-encryption","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://encryption.example.test"},
         "entities":[{
             "id":"case","primaryDataset":"test-dataset","route":"cases","mutationMode":"mutable",
             "fields":[
-                {"id":"label","type":"string","maxLength":64,"required":true,"classification":"internal"},
-                {"id":"secret","type":"string","maxLength":256,"classification":"restricted","encrypted":true,
+                {"id":"label","type":"string","maximumLength":64,"required":true,"classification":"internal"},
+                {"id":"secret","type":"string","maximumLength":256,"classification":"restricted","encrypted":true,
                  "lookup":{"normalization":["trim","uppercase"],"unique":true}}
             ]
         }],
-        "accessProfiles":[{"id":"caseworker","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
+        "accessProfiles":[{"id":"caseworker","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
             "entity":"case","rowBoundaries":"unrestricted","operations":["get","list","create","patch"],
             "readableFields":["label","secret"],"writableFields":["label","secret"]
-        }]}]
+        }]}}]
     })
 }
 
@@ -76,7 +76,7 @@ fn encrypted_field(registry: &CompiledRegistry) -> &registry_breg::model::Compil
 #[test]
 fn encrypted_field_shape_round_trips_and_defaults_stay_absent() {
     let source: FieldSource = serde_json::from_value(json!({
-        "id":"secret","type":"string","maxLength":256,"classification":"restricted",
+        "id":"secret","type":"string","maximumLength":256,"classification":"restricted",
         "encrypted":true,"lookup":{"normalization":["collapse-whitespace","remove-separators"],"unique":true}
     }))
     .unwrap();
@@ -99,7 +99,7 @@ fn encrypted_field_shape_round_trips_and_defaults_stay_absent() {
     assert_eq!(value["lookup"]["unique"], json!(true));
 
     let plaintext: FieldSource = serde_json::from_value(json!({
-        "id":"label","type":"string","maxLength":64,"classification":"internal"
+        "id":"label","type":"string","maximumLength":64,"classification":"internal"
     }))
     .unwrap();
     let value = serde_json::to_value(&plaintext).unwrap();
@@ -110,19 +110,19 @@ fn encrypted_field_shape_round_trips_and_defaults_stay_absent() {
 fn encrypted_field_shape_refuses_unsupported_declarations() {
     for (field, because) in [
         (
-            json!({"id":"secret","type":"string","maxLength":64,"classification":"internal","encrypted":true}),
+            json!({"id":"secret","type":"string","maximumLength":64,"classification":"internal","encrypted":true}),
             "encryption requires the restricted classification",
         ),
         (
-            json!({"id":"secret","type":"string","maxLength":64,"classification":"restricted","lookup":{"unique":true}}),
+            json!({"id":"secret","type":"string","maximumLength":64,"classification":"restricted","lookup":{"unique":true}}),
             "a lookup requires an encrypted field",
         ),
         (
-            json!({"id":"secret","type":"string","maxLength":64,"classification":"restricted","encrypted":true,"lookup":{"normalization":["shout"]}}),
+            json!({"id":"secret","type":"string","maximumLength":64,"classification":"restricted","encrypted":true,"lookup":{"normalization":["shout"]}}),
             "the normalization vocabulary is closed",
         ),
         (
-            json!({"id":"secret","type":"string","maxLength":64,"classification":"restricted","encrypted":true,"lookup":{"unique":true,"salt":"static"}}),
+            json!({"id":"secret","type":"string","maximumLength":64,"classification":"restricted","encrypted":true,"lookup":{"unique":true,"salt":"static"}}),
             "the lookup declaration carries no key material",
         ),
     ] {
@@ -141,19 +141,19 @@ fn encrypted_field_shape_refuses_unsupported_declarations() {
         );
     }
     assert!(serde_json::from_value::<DerivedFieldSource>(json!({
-        "id":"derived","type":"string","maxLength":8,"classification":"restricted","encrypted":true
+        "id":"derived","type":"string","maximumLength":8,"classification":"restricted","encrypted":true
     }))
     .is_err());
     assert!(serde_json::from_value::<DerivedFieldSource>(json!({
-        "id":"derived","type":"string","maxLength":8,"classification":"restricted","lookup":{"unique":true}
+        "id":"derived","type":"string","maximumLength":8,"classification":"restricted","lookup":{"unique":true}
     }))
     .is_err());
     assert!(serde_json::from_value::<ActionInputSource>(json!({
-        "id":"secret","type":"string","maxLength":64,"classification":"restricted","encrypted":true
+        "id":"secret","type":"string","maximumLength":64,"classification":"restricted","encrypted":true
     }))
     .is_err());
     assert!(serde_json::from_value::<ActionInputSource>(json!({
-        "id":"secret","type":"string","maxLength":64,"classification":"restricted","lookup":{"unique":true}
+        "id":"secret","type":"string","maximumLength":64,"classification":"restricted","lookup":{"unique":true}
     }))
     .is_err());
 
@@ -284,10 +284,11 @@ fn encrypted_field_refuses_pattern_with_a_pinned_diagnostic() {
 #[test]
 fn encrypted_field_bounds_fit_the_phase_one_seal_limit() {
     let mut string = encrypted_project();
-    string["entities"][0]["fields"][1]["maxLength"] = json!(MAX_ENCRYPTED_FIELD_STRING_CHARACTERS);
+    string["entities"][0]["fields"][1]["maximumLength"] =
+        json!(MAX_ENCRYPTED_FIELD_STRING_CHARACTERS);
     compile_value(&string).expect("the worst-case UTF-8 string boundary compiles");
 
-    string["entities"][0]["fields"][1]["maxLength"] =
+    string["entities"][0]["fields"][1]["maximumLength"] =
         json!(MAX_ENCRYPTED_FIELD_STRING_CHARACTERS + 1);
     let failure = compile_value(&string).expect_err("an oversized encrypted string is refused");
     let diagnostic = failure
@@ -295,28 +296,31 @@ fn encrypted_field_bounds_fit_the_phase_one_seal_limit() {
         .iter()
         .find(|diagnostic| diagnostic.code == "breg.field.encrypted-size-bound-exceeds-seal-limit")
         .expect("the encrypted string bound diagnostic is present");
-    assert_eq!(diagnostic.path, "entities[case].fields[secret].maxLength");
+    assert_eq!(
+        diagnostic.path,
+        "entities[case].fields[secret].maximumLength"
+    );
     assert_eq!(
         diagnostic.message,
-        "an encrypted string or text field maxLength must be at most 16384 characters so every valid UTF-8 value fits the 65536-byte Phase 1 seal limit"
+        "an encrypted string or text field maximumLength must be at most 16384 characters so every valid UTF-8 value fits the 65536-byte Phase 1 seal limit"
     );
 
     let mut text = encrypted_project();
     text["entities"][0]["fields"][1]["type"] = json!("text");
-    text["entities"][0]["fields"][1]["maxLength"] =
+    text["entities"][0]["fields"][1]["maximumLength"] =
         json!(MAX_ENCRYPTED_FIELD_STRING_CHARACTERS + 1);
     expect_code(&text, "breg.field.encrypted-size-bound-exceeds-seal-limit");
 
     let mut structured = encrypted_project();
     structured["entities"][0]["fields"][1] = json!({
         "id":"secret", "type":"structured",
-        "maxBytes":MAX_ENCRYPTED_FIELD_PLAINTEXT_BYTES,
+        "maximumBytes":MAX_ENCRYPTED_FIELD_PLAINTEXT_BYTES,
         "schema":{"type":"object","additionalProperties":false},
         "classification":"restricted", "encrypted":true
     });
     compile_value(&structured).expect("the canonical structured byte boundary compiles");
 
-    structured["entities"][0]["fields"][1]["maxBytes"] =
+    structured["entities"][0]["fields"][1]["maximumBytes"] =
         json!(MAX_ENCRYPTED_FIELD_PLAINTEXT_BYTES + 1);
     let failure =
         compile_value(&structured).expect_err("an oversized encrypted structured field is refused");
@@ -325,10 +329,13 @@ fn encrypted_field_bounds_fit_the_phase_one_seal_limit() {
         .iter()
         .find(|diagnostic| diagnostic.code == "breg.field.encrypted-size-bound-exceeds-seal-limit")
         .expect("the encrypted structured bound diagnostic is present");
-    assert_eq!(diagnostic.path, "entities[case].fields[secret].maxBytes");
+    assert_eq!(
+        diagnostic.path,
+        "entities[case].fields[secret].maximumBytes"
+    );
     assert_eq!(
         diagnostic.message,
-        "an encrypted structured field maxBytes must be at most 65536 bytes to fit the Phase 1 seal limit"
+        "an encrypted structured field maximumBytes must be at most 65536 bytes to fit the Phase 1 seal limit"
     );
 }
 
@@ -357,7 +364,7 @@ fn encrypted_field_count_bounds_snapshot_envelope_overhead() {
 fn encrypted_lookup_refuses_structured_values_and_unbounded_normalization() {
     let mut structured = encrypted_project();
     structured["entities"][0]["fields"][1] = json!({
-        "id":"secret", "type":"structured", "maxBytes":1024,
+        "id":"secret", "type":"structured", "maximumBytes":1024,
         "schema":{"type":"object","additionalProperties":false},
         "classification":"restricted", "encrypted":true,
         "lookup":{"normalization":["trim"]}
@@ -408,7 +415,7 @@ fn encrypted_lookup_refuses_structured_values_and_unbounded_normalization() {
 #[test]
 fn encrypted_field_refuses_valid_time_role_and_inconsistent_classification() {
     let mut source = encrypted_project();
-    source["entities"][0]["fields"][1]["validTimeRole"] = json!("valid_from");
+    source["entities"][0]["fields"][1]["validTimeRole"] = json!("valid-from");
     expect_code(&source, "breg.field.encrypted-valid-time-refused");
 
     // The compiler keeps its own refusal for programmatically assembled
@@ -427,7 +434,7 @@ fn encrypted_field_refuses_valid_time_role_and_inconsistent_classification() {
 fn encrypted_field_refuses_storage_constraints_and_authored_indexes() {
     let mut constrained = encrypted_project();
     constrained["entities"][0]["constraints"] =
-        json!([{"id":"secret-unique","kind":"unique","fields":["secret"]}]);
+        json!([{"id":"secret-unique","type":"unique","fields":["secret"]}]);
     expect_code(&constrained, "breg.constraint.field-encrypted");
 
     let mut indexed = encrypted_project();
@@ -438,12 +445,14 @@ fn encrypted_field_refuses_storage_constraints_and_authored_indexes() {
 #[test]
 fn encrypted_field_refuses_processing_row_boundaries_and_lookupless_selectors() {
     let mut processing = encrypted_project();
-    processing["accessProfiles"][0]["permissions"][0]["filterableFields"] = json!(["secret"]);
-    processing["accessProfiles"][0]["permissions"][0]["sortableFields"] = json!(["secret"]);
+    processing["accessProfiles"][0]["permissions"]["entities"][0]["filterableFields"] =
+        json!(["secret"]);
+    processing["accessProfiles"][0]["permissions"]["entities"][0]["sortableFields"] =
+        json!(["secret"]);
     expect_code(&processing, "breg.access-profile.processing-encrypted");
 
     let mut boundary = encrypted_project();
-    boundary["accessProfiles"][0]["permissions"][0]["rowBoundaries"] =
+    boundary["accessProfiles"][0]["permissions"]["entities"][0]["rowBoundaries"] =
         json!([{"field":"secret","claim":"secrets","operator":"equals"}]);
     expect_code(&boundary, "breg.access-profile.row-boundary-encrypted");
 
@@ -472,14 +481,14 @@ fn encrypted_fields_refuse_event_projection_and_conditions() {
     let mut conditioned = encrypted_project();
     conditioned["entities"][0]["hooks"] = json!([{
         "id":"secret-seen","phase":"after","trigger":"created","projection":["label"],
-        "when":{"kind":"fields","afterEquals":{"secret":"canary"}}
+        "when":{"type":"fields","afterEquals":{"secret":"canary"}}
     }]);
     expect_code(&conditioned, "breg.event.when-encrypted");
 
     let mut changed = encrypted_project();
     changed["entities"][0]["hooks"] = json!([{
         "id":"secret-seen","phase":"after","trigger":"patched","projection":["label"],
-        "when":{"kind":"fields","changed":["secret"]}
+        "when":{"type":"fields","changed":["secret"]}
     }]);
     expect_code(&changed, "breg.event.when-encrypted");
 }
@@ -529,8 +538,8 @@ fn derived_sql_resolves_qualified_columns_to_their_source_relation() {
         "id":"public-case","primaryDataset":"test-dataset","route":"public-cases",
         "mutationMode":"mutable",
         "fields":[
-            {"id":"label","type":"string","maxLength":64,"required":true,"classification":"internal"},
-            {"id":"secret","type":"string","maxLength":256,"classification":"restricted"}
+            {"id":"label","type":"string","maximumLength":64,"required":true,"classification":"internal"},
+            {"id":"secret","type":"string","maximumLength":256,"classification":"restricted"}
         ]
     }));
     source["entities"][0]["derived"] = json!([{
@@ -616,36 +625,36 @@ fn derived_sql_resolves_qualified_columns_to_their_source_relation() {
 
 fn change_request_project() -> Value {
     json!({
-        "apiVersion":"registry.registrystack.org/v1alpha1", "kind":"RegistryProject",
-        "registry":{"id":"request-encryption","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://example.test"},
+        "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
+        "project":{"id":"request-encryption","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://example.test"},
         "evidenceProviders":[{"id":"laboratory","contracts":"evidence/contracts.json","subjectResolution":"trusted-provider-exact-selector"}],
         "entities":[{
             "id":"lot","primaryDataset":"test-dataset","route":"lots","mutationMode":"mutable",
             "changeControl":{"requiredFor":["patch"]},
             "fields":[
-                {"id":"owner-reference","type":"string","maxLength":64,"required":true,"classification":"restricted"},
-                {"id":"lot-reference","type":"string","maxLength":64,"required":true,"classification":"restricted"},
+                {"id":"owner-reference","type":"string","maximumLength":64,"required":true,"classification":"restricted"},
+                {"id":"lot-reference","type":"string","maximumLength":64,"required":true,"classification":"restricted"},
                 {"id":"active","type":"boolean","required":true,"classification":"restricted"},
-                {"id":"release-state","type":"string","maxLength":16,"required":true,"classification":"restricted"}
+                {"id":"release-state","type":"string","maximumLength":16,"required":true,"classification":"restricted"}
             ]
         },{
             "id":"release-request","primaryDataset":"test-dataset","route":"release-requests","mutationMode":"mutable",
             "fields":[
                 {"id":"lot","type":"reference","target":"lot","required":true,"classification":"restricted"},
-                {"id":"owner-reference","type":"string","maxLength":64,"required":true,"classification":"restricted"},
-                {"id":"report-reference","type":"string","maxLength":64,"required":true,"classification":"restricted"},
-                {"id":"release-state","type":"string","maxLength":16,"required":true,"classification":"restricted"},
+                {"id":"owner-reference","type":"string","maximumLength":64,"required":true,"classification":"restricted"},
+                {"id":"report-reference","type":"string","maximumLength":64,"required":true,"classification":"restricted"},
+                {"id":"release-state","type":"string","maximumLength":16,"required":true,"classification":"restricted"},
                 {"id":"valid-from","type":"date","required":true,"classification":"restricted"},
                 {"id":"valid-through","type":"date","required":true,"classification":"restricted"}
             ],
             "changeRequest":{
                 "effects":[{"id":"release","target":{"fromField":"lot"}, "operation":"patch", "set":{"release-state":{"fromField":"release-state"}}}],
-                "review":{"authority":"casework-main","policyId":"lot-release"},
+                "review":{"type":"required","authority":"casework-main","policyId":"lot-release"},
                 "onApproved":{"mode":"manual"},
                 "application":{"preconditions":{
                     "request":[
-                        {"field":"valid-from","currentDate":"on_or_before"},
-                        {"field":"valid-through","currentDate":"on_or_after"}
+                        {"field":"valid-from","currentDate":"on-or-before"},
+                        {"field":"valid-through","currentDate":"on-or-after"}
                     ],
                     "targets":[{"id":"lot","entity":"lot","fromField":"lot","requires":[
                         {"field":"owner-reference","equalsFromRequestField":"owner-reference"},
@@ -654,8 +663,8 @@ fn change_request_project() -> Value {
                     "evidence":[{
                         "id":"release-check","provider":"laboratory","requirement":"urn:example:requirement:lot-release:v1",
                         "subjects":{"subject":{"profile":"lot-owner-v1","selectors":{
-                            "lot-reference":{"source":"target_field","target":"lot","field":"lot-reference"},
-                            "owner-reference":{"source":"request_field","field":"owner-reference"}
+                            "lot-reference":{"type":"target-field","target":"lot","field":"lot-reference"},
+                            "owner-reference":{"type":"request-field","field":"owner-reference"}
                         }}},
                         "requires":[
                             {"output":"report-reference","equalsFromRequestField":"report-reference"},
@@ -666,18 +675,19 @@ fn change_request_project() -> Value {
                 }}
             }
         }],
-        "accessProfiles":[{"id":"reviewer","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
+        "accessProfiles":[{"id":"reviewer","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
             "entity":"release-request",
-            "operations":["get","submit_request","apply_request"],
+            "operations":["get","submit-request","apply-request"],
             "readableFields":["lot","owner-reference","report-reference","release-state","valid-from","valid-through"],
             "applyTargets":[{"entity":"lot","rowBoundaries":"unrestricted"}],"rowBoundaries":"unrestricted"
-        }]}]
+        }]}}]
     })
 }
 
 fn evidence_contracts() -> Vec<u8> {
     serde_json::to_vec(&json!({
-        "schema": "registry.evidence-client-contracts/v1",
+        "apiVersion": "id.registrystack.org/formats/evidence/client-contracts/v1",
+        "kind": "EvidenceClientContracts",
         "assuranceProfile": "local",
         "audience": "urn:example:seed-registry",
         "issuedBy": "urn:example:laboratory",
@@ -702,8 +712,8 @@ fn evidence_contracts() -> Vec<u8> {
                 }
             }],
             "concepts": [
-                {"handle":"report-reference","concept":"urn:example:concept:report","required":true,"form":"string"},
-                {"handle":"germination","concept":"urn:example:concept:germination","required":true,"form":"integer"}
+                {"handle":"report-reference","concept":"urn:example:concept:report","required":true,"form":{"type":"string"}},
+                {"handle":"germination","concept":"urn:example:concept:germination","required":true,"form":{"type":"integer"}}
             ]
         }]
     }))
@@ -806,7 +816,7 @@ fn change_request_targets_and_value_sources_refuse_encrypted_fields() {
         .as_array_mut()
         .unwrap()
         .push(json!({
-            "id":"notes","type":"string","maxLength":64,"classification":"restricted"
+            "id":"notes","type":"string","maximumLength":64,"classification":"restricted"
         }));
     clear_base["entities"][1]["changeRequest"]["effects"]
         .as_array_mut()
@@ -1005,7 +1015,7 @@ fn encryption_flip_change_sets_classify_without_a_physical_rename() {
     // change its authored type.
     let mut structured = encrypted_project();
     structured["entities"][0]["fields"][1] = json!({
-        "id":"secret", "type":"structured", "maxBytes":1024,
+        "id":"secret", "type":"structured", "maximumBytes":1024,
         "schema":{"type":"object","additionalProperties":false},
         "classification":"restricted", "encrypted":true
     });
@@ -1022,8 +1032,10 @@ fn encryption_flip_change_sets_classify_without_a_physical_rename() {
         .as_array_mut()
         .expect("fields are an array")
         .retain(|field| field["id"] != "secret");
-    without_secret["accessProfiles"][0]["permissions"][0]["readableFields"] = json!(["label"]);
-    without_secret["accessProfiles"][0]["permissions"][0]["writableFields"] = json!(["label"]);
+    without_secret["accessProfiles"][0]["permissions"]["entities"][0]["readableFields"] =
+        json!(["label"]);
+    without_secret["accessProfiles"][0]["permissions"]["entities"][0]["writableFields"] =
+        json!(["label"]);
     let without_secret = compile_value(&without_secret).unwrap();
     let mut required_encrypted = encrypted_project();
     required_encrypted["entities"][0]["fields"][1]["required"] = json!(true);

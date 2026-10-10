@@ -8,10 +8,10 @@
   "required": ["apiVersion", "kind", "lifecycles"],
   "properties": {
     "apiVersion": {
-      "const": "registry.registrystack.org/breg-explain/v1alpha4"
+      "const": "id.registrystack.org/formats/breg/lifecycle-explanation/v1alpha4"
     },
     "kind": {
-      "const": "LifecycleExplanation"
+      "const": "BRegLifecycleExplanation"
     },
     "lifecycles": {
       "type": "array",
@@ -32,6 +32,11 @@
     }
   },
   "$defs": {
+    "LocalId": {
+      "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+      "type": "string"
+    },
     "requestLifecyclePin": {
       "$comment": "Applied unconditionally to the single entry `bregctl explain lifecycle` emits, never behind an `if` on the value being pinned: a condition keyed on `id` goes false the moment the machine is renamed, so the rename the constraint exists to reject would fall through to the generic shape and validate. Every list is pinned with `prefixItems` and `items: false` rather than an enum over its vocabulary: an enum admits the same names in a different order, or one entry duplicated in place of another, and each of those is a different machine reported under the same names. The request lifecycle is engine behaviour rather than project configuration, so its id, its states, its edges, and the order of its enforcement layers are wire contract in the same way the field names are, and changing any of them is a breaking change for every consumer that must fail here rather than merely update a Rust unit test alongside the change. The pin and each pinned entry are closed objects; a member the pin leaves free, such as a transition's `guard`, is declared `true` here and typed by its `$defs` shape.",
       "type": "object",
@@ -39,6 +44,7 @@
       "required": ["id", "states", "transitions", "enforcement"],
       "properties": {
         "id": {
+          "$ref": "#/$defs/LocalId",
           "const": "request"
         },
         "label": true,
@@ -48,6 +54,7 @@
               "additionalProperties": false,
               "properties": {
                 "id": {
+                  "$ref": "#/$defs/LocalId",
                   "const": "draft"
                 },
                 "initial": { "const": true },
@@ -61,6 +68,7 @@
               "additionalProperties": false,
               "properties": {
                 "id": {
+                  "$ref": "#/$defs/LocalId",
                   "const": "submitted"
                 },
                 "initial": { "const": false },
@@ -74,6 +82,7 @@
               "additionalProperties": false,
               "properties": {
                 "id": {
+                  "$ref": "#/$defs/LocalId",
                   "const": "cancelled"
                 },
                 "initial": { "const": false },
@@ -87,6 +96,7 @@
               "additionalProperties": false,
               "properties": {
                 "id": {
+                  "$ref": "#/$defs/LocalId",
                   "const": "applied"
                 },
                 "initial": { "const": false },
@@ -203,7 +213,8 @@
               "properties": {
                 "description": true,
                 "id": {
-                  "const": "caller_authentication"
+                  "$ref": "#/$defs/LocalId",
+                  "const": "caller-authentication"
                 },
                 "events": {
                   "prefixItems": [
@@ -223,7 +234,8 @@
               "properties": {
                 "description": true,
                 "id": {
-                  "const": "route_admission"
+                  "$ref": "#/$defs/LocalId",
+                  "const": "route-admission"
                 },
                 "events": {
                   "prefixItems": [
@@ -243,7 +255,8 @@
               "properties": {
                 "description": true,
                 "id": {
-                  "const": "review_evidence_load"
+                  "$ref": "#/$defs/LocalId",
+                  "const": "review-evidence-load"
                 },
                 "events": {
                   "prefixItems": [
@@ -259,7 +272,8 @@
               "properties": {
                 "description": true,
                 "id": {
-                  "const": "apply_evidence_acquisition"
+                  "$ref": "#/$defs/LocalId",
+                  "const": "apply-evidence-acquisition"
                 },
                 "events": {
                   "prefixItems": [
@@ -275,7 +289,8 @@
               "properties": {
                 "description": true,
                 "id": {
-                  "const": "apply_preflight"
+                  "$ref": "#/$defs/LocalId",
+                  "const": "apply-preflight"
                 },
                 "events": {
                   "prefixItems": [
@@ -291,7 +306,8 @@
               "properties": {
                 "description": true,
                 "id": {
-                  "const": "request_header_lookup"
+                  "$ref": "#/$defs/LocalId",
+                  "const": "request-header-lookup"
                 },
                 "events": {
                   "prefixItems": [
@@ -311,7 +327,8 @@
               "properties": {
                 "description": true,
                 "id": {
-                  "const": "submit_preparation"
+                  "$ref": "#/$defs/LocalId",
+                  "const": "submit-preparation"
                 },
                 "events": {
                   "prefixItems": [
@@ -327,7 +344,8 @@
               "properties": {
                 "description": true,
                 "id": {
-                  "const": "idempotency_replay"
+                  "$ref": "#/$defs/LocalId",
+                  "const": "idempotency-replay"
                 },
                 "events": {
                   "prefixItems": [
@@ -347,7 +365,8 @@
               "properties": {
                 "description": true,
                 "id": {
-                  "const": "row_visibility"
+                  "$ref": "#/$defs/LocalId",
+                  "const": "row-visibility"
                 },
                 "events": {
                   "prefixItems": [
@@ -367,7 +386,8 @@
               "properties": {
                 "description": true,
                 "id": {
-                  "const": "submitter_targets"
+                  "$ref": "#/$defs/LocalId",
+                  "const": "submitter-targets"
                 },
                 "events": {
                   "prefixItems": [
@@ -385,7 +405,8 @@
               "properties": {
                 "description": true,
                 "id": {
-                  "const": "applied_recovery"
+                  "$ref": "#/$defs/LocalId",
+                  "const": "applied-recovery"
                 },
                 "events": {
                   "prefixItems": [
@@ -401,7 +422,8 @@
               "properties": {
                 "description": true,
                 "id": {
-                  "const": "action_etag"
+                  "$ref": "#/$defs/LocalId",
+                  "const": "action-etag"
                 },
                 "events": {
                   "prefixItems": [
@@ -421,7 +443,8 @@
               "properties": {
                 "description": true,
                 "id": {
-                  "const": "request_ownership"
+                  "$ref": "#/$defs/LocalId",
+                  "const": "request-ownership"
                 },
                 "events": {
                   "prefixItems": [
@@ -440,7 +463,8 @@
               "properties": {
                 "description": true,
                 "id": {
-                  "const": "task_grant"
+                  "$ref": "#/$defs/LocalId",
+                  "const": "task-grant"
                 },
                 "events": {
                   "prefixItems": [
@@ -460,7 +484,8 @@
               "properties": {
                 "description": true,
                 "id": {
-                  "const": "review_outcome"
+                  "$ref": "#/$defs/LocalId",
+                  "const": "review-outcome"
                 },
                 "events": {
                   "prefixItems": [
@@ -477,7 +502,8 @@
               "properties": {
                 "description": true,
                 "id": {
-                  "const": "submit_commit_preconditions"
+                  "$ref": "#/$defs/LocalId",
+                  "const": "submit-commit-preconditions"
                 },
                 "events": {
                   "prefixItems": [
@@ -493,7 +519,8 @@
               "properties": {
                 "description": true,
                 "id": {
-                  "const": "apply_target_authorization"
+                  "$ref": "#/$defs/LocalId",
+                  "const": "apply-target-authorization"
                 },
                 "events": {
                   "prefixItems": [
@@ -509,7 +536,8 @@
               "properties": {
                 "description": true,
                 "id": {
-                  "const": "apply_preconditions"
+                  "$ref": "#/$defs/LocalId",
+                  "const": "apply-preconditions"
                 },
                 "events": {
                   "prefixItems": [
@@ -525,7 +553,8 @@
               "properties": {
                 "description": true,
                 "id": {
-                  "const": "apply_target_persistence"
+                  "$ref": "#/$defs/LocalId",
+                  "const": "apply-target-persistence"
                 },
                 "events": {
                   "prefixItems": [
@@ -541,7 +570,8 @@
               "properties": {
                 "description": true,
                 "id": {
-                  "const": "workflow_transition"
+                  "$ref": "#/$defs/LocalId",
+                  "const": "workflow-transition"
                 },
                 "events": {
                   "prefixItems": [
@@ -561,7 +591,8 @@
               "properties": {
                 "description": true,
                 "id": {
-                  "const": "persist_policy"
+                  "$ref": "#/$defs/LocalId",
+                  "const": "persist-policy"
                 },
                 "events": {
                   "prefixItems": [
@@ -588,7 +619,7 @@
       "required": ["id", "label", "states", "transitions", "enforcement"],
       "properties": {
         "id": {
-          "type": "string",
+          "$ref": "#/$defs/LocalId",
           "description": "Stable identifier for the machine, for example `request`."
         },
         "label": {
@@ -626,9 +657,8 @@
       "required": ["id", "description", "events"],
       "properties": {
         "id": {
-          "type": "string",
-          "minLength": 1,
-          "description": "Stable identifier for the layer, for example `action_etag`."
+          "$ref": "#/$defs/LocalId",
+          "description": "Stable identifier for the layer, for example `action-etag`."
         },
         "description": {
           "type": "string",
@@ -659,7 +689,7 @@
       ],
       "properties": {
         "id": {
-          "type": "string",
+          "$ref": "#/$defs/LocalId",
           "description": "The state's stored spelling, the same value a persisted row and the generated OpenAPI enums carry."
         },
         "initial": {

@@ -1,3 +1,5 @@
+apiVersion: id.registrystack.org/formats/breg/module/v1alpha1
+kind: BRegModule
 id: business-establishments-core
 version: 0.1.0
 entities:
@@ -18,17 +20,17 @@ entities:
       - id: establishment-code
         type: string
         required: true
-        maxLength: 64
+        maximumLength: 64
         classification: restricted
       - id: site-name
         type: string
         required: true
-        maxLength: 160
+        maximumLength: 160
         classification: restricted
       - id: locality
         type: string
         required: false
-        maxLength: 120
+        maximumLength: 120
         classification: restricted
       - id: opened-on
         type: date
@@ -40,7 +42,7 @@ entities:
         required: true
         classification: restricted
     constraints:
-      - kind: unique
+      - type: unique
         fields:
           - establishment-code
   - id: business
@@ -63,7 +65,7 @@ entities:
       - id: business-code
         type: string
         required: true
-        maxLength: 64
+        maximumLength: 64
         classification: restricted
       - id: local-registration-number
         type: int64
@@ -72,12 +74,12 @@ entities:
       - id: registered-name
         type: string
         required: true
-        maxLength: 160
+        maximumLength: 160
         classification: restricted
       - id: administrative-area
         type: string
         required: true
-        maxLength: 80
+        maximumLength: 80
         classification: restricted
       - id: business-type
         type: vocabulary-code
@@ -85,10 +87,10 @@ entities:
         required: true
         classification: restricted
     constraints:
-      - kind: unique
+      - type: unique
         fields:
           - business-code
-      - kind: unique
+      - type: unique
         fields:
           - administrative-area
           - local-registration-number
@@ -148,12 +150,12 @@ entities:
       scopeFields:
         - establishment
     constraints:
-      - kind: unique
+      - type: unique
         fields:
           - establishment
           - business
           - valid-from
-      - kind: temporal-non-overlap
+      - type: temporal-non-overlap
         scopeFields:
           - establishment
         startField: valid-from

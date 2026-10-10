@@ -72,11 +72,11 @@ impl fmt::Debug for AttachmentStorage {
 #[derive(Clone, Deserialize)]
 #[serde(
     remote = "Self",
-    rename_all = "camelCase",
+    rename_all = "kebab-case",
     rename_all_fields = "camelCase",
     deny_unknown_fields
 )]
-#[cfg_attr(feature = "schema", schemars(!remote, tag = "kind"))]
+#[cfg_attr(feature = "schema", schemars(!remote, tag = "type"))]
 // Read once from `runtime.yaml` at startup and converted at once, so the size
 // of the S3 variant costs nothing worth an indirection.
 #[allow(clippy::large_enum_variant)]
@@ -107,10 +107,10 @@ pub(crate) enum RawAttachmentStorageConfig {
                 with = "registry_platform_yaml::BoundedU64<100, MAXIMUM_TIMEOUT_MILLISECONDS>"
             )
         )]
-        timeout_milliseconds: u64,
+        attempt_timeout_milliseconds: u64,
     },
 }
-registry_platform_yaml::tagged_union!(RawAttachmentStorageConfig, tag = "kind");
+registry_platform_yaml::tagged_union!(RawAttachmentStorageConfig);
 
 #[cfg(feature = "schema")]
 impl serde::Serialize for RawAttachmentStorageConfig {
@@ -120,7 +120,7 @@ impl serde::Serialize for RawAttachmentStorageConfig {
     ) -> std::result::Result<S::Ok, S::Error> {
         crate::contract::serialize_tagged_union(
             Self::serialize(self, serde_json::value::Serializer),
-            "kind",
+            "type",
             serializer,
         )
     }
@@ -165,7 +165,7 @@ impl AttachmentStorageConfig {
             secret_access_key_ref,
             session_token_ref,
             ca_bundle_ref,
-            timeout_milliseconds,
+            attempt_timeout_milliseconds,
         } = raw
         else {
             return Ok(Self::default());
@@ -222,7 +222,7 @@ impl AttachmentStorageConfig {
             secret_access_key_ref,
             session_token_ref,
             ca_bundle_ref,
-            timeout: Duration::from_millis(timeout_milliseconds),
+            timeout: Duration::from_millis(attempt_timeout_milliseconds),
         })))
     }
 
@@ -616,7 +616,7 @@ mod tests {
     }
 
     fn raw(endpoint: &str) -> serde_json::Value {
-        json!({"kind":"s3", "endpoint":endpoint, "bucket":"breg-960-test", "region":"us-east-1", "accessKeyIdRef":"secret:file/access", "secretAccessKeyRef":"secret:file/secret"})
+        json!({"type":"s3", "endpoint":endpoint, "bucket":"breg-960-test", "region":"us-east-1", "accessKeyIdRef":"secret:file/access", "secretAccessKeyRef":"secret:file/secret"})
     }
 
     fn store(endpoint: &str, scope: &str) -> S3AttachmentStore {
@@ -777,7 +777,7 @@ mod tests {
         }
         // The timeout is bounded at decode.
         let mut input = raw("https://storage.example");
-        input["timeoutMilliseconds"] = json!(0);
+        input["attemptTimeoutMilliseconds"] = json!(0);
         assert!(serde_json::from_value::<RawAttachmentStorageConfig>(input).is_err());
         let mut input = raw("https://storage.example");
         input["accessKeyIdRef"] = json!("inline-secret-canary");
@@ -786,7 +786,7 @@ mod tests {
             .expect("an inline credential is not a secret reference");
         assert!(!error.to_string().contains("inline-secret-canary"));
         assert!(serde_json::from_value::<RawAttachmentStorageConfig>(
-            json!({"kind":"database", "endpoint":"https://ignored.example"})
+            json!({"type":"database", "endpoint":"https://ignored.example"})
         )
         .is_err());
         let mut input = raw("https://storage.example");
@@ -824,7 +824,7 @@ mod tests {
         input["accessKeyIdRef"] = json!("inline-credential-canary");
         assert!(!validator.is_valid(&input));
         assert!(
-            !validator.is_valid(&json!({"kind":"database", "endpoint":"https://ignored.example"}))
+            !validator.is_valid(&json!({"type":"database", "endpoint":"https://ignored.example"}))
         );
     }
 
@@ -832,7 +832,7 @@ mod tests {
     async fn database_default_needs_no_storage_service() {
         let files = SecretFiles::new();
         let config = AttachmentStorageConfig::from_raw(
-            serde_json::from_value(json!({"kind":"database"})).unwrap(),
+            serde_json::from_value(json!({"type":"database"})).unwrap(),
         )
         .unwrap();
         assert!(matches!(
@@ -914,7 +914,7 @@ mod tests {
             .unwrap();
         assert_ne!(first.binding_digest(), second.binding_digest());
         let mut input = raw(&endpoint);
-        input["timeoutMilliseconds"] = json!(5000);
+        input["attemptTimeoutMilliseconds"] = json!(5000);
         let tuning =
             AttachmentStorageConfig::from_raw(serde_json::from_value(input.clone()).unwrap())
                 .unwrap();

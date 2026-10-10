@@ -146,7 +146,7 @@
             "$ref": "#/components/schemas/WorkingDaysAfter"
           },
           "anchor": {
-            "const": "stageEnteredAt"
+            "const": "stage-entered-at"
           },
           "atRisk": {
             "anyOf": [
@@ -160,7 +160,7 @@
           },
           "calendar": {
             "maxLength": 64,
-            "pattern": "^[a-z][a-z0-9-]{0,63}$",
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$",
             "type": "string"
           },
           "dueTime": {
@@ -169,7 +169,7 @@
           },
           "id": {
             "maxLength": 64,
-            "pattern": "^[a-z][a-z0-9-]{0,63}$",
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$",
             "type": "string"
           },
           "reminders": {
@@ -181,9 +181,6 @@
             "uniqueItems": true,
             "x-unique-by": "id"
           },
-          "scope": {
-            "const": "activity"
-          },
           "steps": {
             "items": {
               "$ref": "#/components/schemas/ClockStep"
@@ -192,11 +189,14 @@
             "type": "array",
             "uniqueItems": true,
             "x-unique-by": "id"
+          },
+          "type": {
+            "const": "activity"
           }
         },
         "required": [
           "id",
-          "scope",
+          "type",
           "anchor",
           "calendar",
           "after",
@@ -362,12 +362,12 @@
         "properties": {
           "holidaySet": {
             "maxLength": 64,
-            "pattern": "^[a-z][a-z0-9-]{0,63}$",
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$",
             "type": "string"
           },
           "id": {
             "maxLength": 64,
-            "pattern": "^[a-z][a-z0-9-]{0,63}$",
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$",
             "type": "string"
           },
           "timezone": {
@@ -427,9 +427,9 @@
       "CaseloadItemOutcome": {
         "enum": [
           "moved",
-          "not_visible",
-          "not_eligible",
-          "attempt_in_progress",
+          "not-visible",
+          "not-eligible",
+          "attempt-in-progress",
           "conflict"
         ],
         "type": "string"
@@ -542,8 +542,8 @@
           "status": {
             "enum": [
               "complete",
-              "budget_exhausted",
-              "source_unavailable"
+              "budget-exhausted",
+              "source-unavailable"
             ],
             "type": "string"
           }
@@ -574,22 +574,6 @@
         ],
         "type": "object"
       },
-      "CaseworkIdentity": {
-        "additionalProperties": false,
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "version": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "id",
-          "version"
-        ],
-        "type": "object"
-      },
       "CaseworkProject": {
         "additionalProperties": false,
         "properties": {
@@ -600,7 +584,7 @@
             "type": "array"
           },
           "apiVersion": {
-            "const": "registry.registrystack.org/casework/v1alpha1"
+            "const": "id.registrystack.org/formats/casework/project/v1alpha1"
           },
           "calendars": {
             "items": {
@@ -610,9 +594,6 @@
             "type": "array",
             "uniqueItems": true,
             "x-unique-by": "id"
-          },
-          "casework": {
-            "$ref": "#/components/schemas/CaseworkIdentity"
           },
           "clocks": {
             "items": {
@@ -628,6 +609,9 @@
           },
           "kind": {
             "const": "CaseworkProject"
+          },
+          "project": {
+            "$ref": "#/components/schemas/ProjectIdentity"
           },
           "queues": {
             "items": {
@@ -664,7 +648,7 @@
         "required": [
           "apiVersion",
           "kind",
-          "casework",
+          "project",
           "accessProfiles",
           "queues"
         ],
@@ -847,7 +831,7 @@
       },
       "ClockPolicy": {
         "discriminator": {
-          "propertyName": "scope"
+          "propertyName": "type"
         },
         "oneOf": [
           {
@@ -1003,7 +987,7 @@
         "properties": {
           "id": {
             "maxLength": 64,
-            "pattern": "^[a-z][a-z0-9-]{0,63}$",
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$",
             "type": "string"
           },
           "workingDaysBefore": {
@@ -1024,8 +1008,8 @@
           "paused",
           "completed",
           "cancelled",
-          "verification_pending",
-          "source_facts_missing"
+          "verification-pending",
+          "source-facts-missing"
         ],
         "type": "string"
       },
@@ -1047,7 +1031,7 @@
           },
           "id": {
             "maxLength": 64,
-            "pattern": "^[a-z][a-z0-9-]{0,63}$",
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$",
             "type": "string"
           }
         },
@@ -1281,8 +1265,8 @@
           "status": {
             "enum": [
               "complete",
-              "budget_exhausted",
-              "source_unavailable"
+              "budget-exhausted",
+              "source-unavailable"
             ],
             "type": "string"
           }
@@ -1337,7 +1321,7 @@
         "properties": {
           "field": {
             "maxLength": 64,
-            "pattern": "^[a-z][a-z0-9-]{0,63}$",
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$",
             "type": "string"
           }
         },
@@ -1483,21 +1467,21 @@
               "claimed",
               "assigned",
               "delegated",
-              "caseload_moved",
-              "clock_reminder",
-              "clock_step_applied",
-              "clock_recomputed",
+              "caseload-moved",
+              "clock-reminder",
+              "clock-step-applied",
+              "clock-recomputed",
               "released",
-              "draft_saved",
-              "attempt_reserved",
-              "attempt_uncertain",
-              "action_completed",
-              "attempt_settled",
+              "draft-saved",
+              "attempt-reserved",
+              "attempt-uncertain",
+              "action-completed",
+              "attempt-settled",
               "superseded",
               "completed",
-              "task_approved",
-              "task_revoked",
-              "task_invalidated"
+              "task-approved",
+              "task-revoked",
+              "task-invalidated"
             ],
             "type": "string"
           },
@@ -1597,8 +1581,8 @@
           "status": {
             "enum": [
               "complete",
-              "budget_exhausted",
-              "source_unavailable"
+              "budget-exhausted",
+              "source-unavailable"
             ],
             "type": "string"
           }
@@ -1742,7 +1726,7 @@
       },
       "OperationName": {
         "maxLength": 64,
-        "pattern": "^[a-z][a-z0-9_]{0,63}$",
+        "pattern": "^[a-z][a-z0-9_-]{0,63}$",
         "type": "string"
       },
       "OwnReviewDecision": {
@@ -1794,8 +1778,8 @@
           "status": {
             "enum": [
               "complete",
-              "budget_exhausted",
-              "source_unavailable"
+              "budget-exhausted",
+              "source-unavailable"
             ],
             "type": "string"
           }
@@ -3145,6 +3129,22 @@
           }
         ]
       },
+      "ProjectIdentity": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "version"
+        ],
+        "type": "object"
+      },
       "QueuePolicy": {
         "additionalProperties": false,
         "properties": {
@@ -3307,7 +3307,7 @@
             "additionalProperties": false,
             "properties": {
               "outcome": {
-                "const": "already_terminal"
+                "const": "already-terminal"
               },
               "result": {
                 "$ref": "#/components/schemas/ReviewResult"
@@ -3416,7 +3416,7 @@
               "paused",
               "completed",
               "cancelled",
-              "source_facts_missing"
+              "source-facts-missing"
             ],
             "type": "string"
           }
@@ -3620,7 +3620,7 @@
                 "decision": {
                   "enum": [
                     "reject",
-                    "changes_requested",
+                    "changes-requested",
                     "answer"
                   ]
                 }
@@ -3668,7 +3668,7 @@
         "enum": [
           "approve",
           "reject",
-          "changes_requested",
+          "changes-requested",
           "answer"
         ],
         "type": "string"
@@ -3767,7 +3767,7 @@
                 "settlement": {
                   "enum": [
                     "rejected",
-                    "changes_requested",
+                    "changes-requested",
                     "answered"
                   ],
                   "type": "string"
@@ -3936,7 +3936,7 @@
                 "settlement": {
                   "enum": [
                     "rejected",
-                    "changes_requested",
+                    "changes-requested",
                     "answered"
                   ],
                   "type": "string"
@@ -4091,7 +4091,7 @@
           "settlement": {
             "enum": [
               "rejected",
-              "changes_requested",
+              "changes-requested",
               "answered"
             ],
             "type": "string"
@@ -4306,7 +4306,7 @@
               "reviewing",
               "approved",
               "rejected",
-              "changes_requested",
+              "changes-requested",
               "answered",
               "cancelled",
               "superseded"
@@ -4445,7 +4445,7 @@
             "enum": [
               "approved",
               "rejected",
-              "changes_requested",
+              "changes-requested",
               "answered",
               "cancelled",
               "superseded"
@@ -4751,7 +4751,7 @@
               "bindingStatus": {
                 "enum": [
                   "current",
-                  "binding_changed"
+                  "binding-changed"
                 ],
                 "type": "string"
               },
@@ -4882,7 +4882,7 @@
                     ]
                   },
                   "type": {
-                    "const": "changes_requested"
+                    "const": "changes-requested"
                   }
                 },
                 "required": [
@@ -5049,8 +5049,8 @@
           "status": {
             "enum": [
               "complete",
-              "budget_exhausted",
-              "source_unavailable"
+              "budget-exhausted",
+              "source-unavailable"
             ],
             "type": "string"
           }
@@ -5210,7 +5210,7 @@
           },
           "id": {
             "maxLength": 64,
-            "pattern": "^[a-z][a-z0-9-]{0,63}$",
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$",
             "type": "string"
           },
           "queue": {
@@ -5386,7 +5386,7 @@
             "anyOf": [
               {
                 "maxLength": 64,
-                "pattern": "^[a-z][a-z0-9-]{0,63}$",
+                "pattern": "^[a-z][a-z0-9_-]{0,63}$",
                 "type": "string"
               },
               {
@@ -5454,7 +5454,7 @@
       },
       "StaffingDiagnostic": {
         "enum": [
-          "no_cover_available"
+          "no-cover-available"
         ],
         "type": "string"
       },
@@ -5465,14 +5465,14 @@
             "$ref": "#/components/schemas/ElapsedDuration"
           },
           "anchor": {
-            "const": "firstSubmittedAt"
+            "const": "first-submitted-at"
           },
           "completeOn": {
-            "const": "reviewCompleted"
+            "const": "review-completed"
           },
           "id": {
             "maxLength": 64,
-            "pattern": "^[a-z][a-z0-9-]{0,63}$",
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$",
             "type": "string"
           },
           "pauseWhile": {
@@ -5480,18 +5480,18 @@
             "minItems": 1,
             "prefixItems": [
               {
-                "const": "awaitingApplicant"
+                "const": "awaiting-applicant"
               }
             ],
             "type": "array"
           },
-          "scope": {
+          "type": {
             "const": "subject"
           }
         },
         "required": [
           "id",
-          "scope",
+          "type",
           "anchor",
           "completeOn",
           "after",
@@ -5606,8 +5606,8 @@
           "status": {
             "enum": [
               "complete",
-              "budget_exhausted",
-              "source_unavailable"
+              "budget-exhausted",
+              "source-unavailable"
             ],
             "type": "string"
           }
@@ -6012,8 +6012,8 @@
             "items": {
               "enum": [
                 "claimed",
-                "waiting_applicant",
-                "waiting_application"
+                "waiting-applicant",
+                "waiting-application"
               ]
             },
             "type": "array"
@@ -6366,8 +6366,8 @@
             "enum": [
               "open",
               "claimed",
-              "waiting_applicant",
-              "waiting_application",
+              "waiting-applicant",
+              "waiting-application",
               "synchronizing",
               "completed",
               "superseded",
@@ -6428,8 +6428,8 @@
           "status": {
             "enum": [
               "complete",
-              "budget_exhausted",
-              "source_unavailable"
+              "budget-exhausted",
+              "source-unavailable"
             ],
             "type": "string"
           }
@@ -10207,7 +10207,7 @@
             "required": true,
             "schema": {
               "maxLength": 64,
-              "pattern": "^[a-z][a-z0-9-]{0,63}$",
+              "pattern": "^[a-z][a-z0-9_-]{0,63}$",
               "type": "string"
             }
           },
@@ -10392,7 +10392,7 @@
     },
     "/v1/directory/targets": {
       "get": {
-        "description": "Returns only directory members currently eligible for the requested use. Each member carries an issuer-qualified identity and may carry the display name stored on an authorized team membership. assignment is available to Staff currently serving the queue and Supervisors currently supervising it, and lists current Staff serving that queue across teams; Administrators use the existing full directory for assignment discovery. absence_person lists people the caller may currently manage; absence_cover rechecks authority over the exact person and lists valid current covers under the existing absence roles. Requester profiles are refused. Empty eligible sets return a complete page. No source profile is accepted, and teams and absence details are never returned.",
+        "description": "Returns only directory members currently eligible for the requested use. Each member carries an issuer-qualified identity and may carry the display name stored on an authorized team membership. assignment is available to Staff currently serving the queue and Supervisors currently supervising it, and lists current Staff serving that queue across teams; Administrators use the existing full directory for assignment discovery. absence-person lists people the caller may currently manage; absence-cover rechecks authority over the exact person and lists valid current covers under the existing absence roles. Requester profiles are refused. Empty eligible sets return a complete page. No source profile is accepted, and teams and absence details are never returned.",
         "operationId": "listDirectoryTargets",
         "parameters": [
           {
@@ -10417,15 +10417,15 @@
             }
           },
           {
-            "description": "Required target-discovery purpose. assignment requires queue and forbids person fields; absence_person forbids queue and person fields; absence_cover requires both exact personIssuer and personSubject and forbids queue.",
+            "description": "Required target-discovery purpose. assignment requires queue and forbids person fields; absence-person forbids queue and person fields; absence-cover requires both exact personIssuer and personSubject and forbids queue.",
             "in": "query",
             "name": "purpose",
             "required": true,
             "schema": {
               "enum": [
                 "assignment",
-                "absence_person",
-                "absence_cover"
+                "absence-person",
+                "absence-cover"
               ],
               "type": "string"
             }
@@ -10441,7 +10441,7 @@
             }
           },
           {
-            "description": "Exact issuer of the managed absent person. Required together with personSubject for absence_cover and forbidden otherwise.",
+            "description": "Exact issuer of the managed absent person. Required together with personSubject for absence-cover and forbidden otherwise.",
             "in": "query",
             "name": "personIssuer",
             "required": false,
@@ -10454,7 +10454,7 @@
             }
           },
           {
-            "description": "Exact subject of the managed absent person. Required together with personIssuer for absence_cover and forbidden otherwise.",
+            "description": "Exact subject of the managed absent person. Required together with personIssuer for absence-cover and forbidden otherwise.",
             "in": "query",
             "name": "personSubject",
             "required": false,
@@ -10971,7 +10971,7 @@
     },
     "/v1/holdings": {
       "get": {
-        "description": "Supervisor-only caller-visible holdings. Counts are grouped by principal and queue within this page; the same group may occur on later pages, so consumers must follow every page and sum matching groups. A source_unavailable page contains zero counts and supplies a cursor that retries the failed page. Source discovery alone does not issue a cursor; if status is budget_exhausted without nextCursor, retry without a cursor after reconciliation and replace the totals summed so far instead of adding to them.",
+        "description": "Supervisor-only caller-visible holdings. Counts are grouped by principal and queue within this page; the same group may occur on later pages, so consumers must follow every page and sum matching groups. A source-unavailable page contains zero counts and supplies a cursor that retries the failed page. Source discovery alone does not issue a cursor; if status is budget-exhausted without nextCursor, retry without a cursor after reconciliation and replace the totals summed so far instead of adding to them.",
         "operationId": "getHoldings",
         "parameters": [
           {
@@ -11008,7 +11008,7 @@
             }
           },
           {
-            "description": "Opaque cursor for the next caller-visible holdings page. Follow every page and sum matching principal and queue groups to obtain totals across the caller-visible caseload. When status is source_unavailable, the page contains zero counts and nextCursor retries the failed page.",
+            "description": "Opaque cursor for the next caller-visible holdings page. Follow every page and sum matching principal and queue groups to obtain totals across the caller-visible caseload. When status is source-unavailable, the page contains zero counts and nextCursor retries the failed page.",
             "in": "query",
             "name": "cursor",
             "required": false,
@@ -12011,20 +12011,20 @@
                 "description": "Stable, value-free reason for a typed review validation failure. Present together with Registry-Casework-Validation-Path.",
                 "schema": {
                   "enum": [
-                    "kind_not_allowed",
-                    "reference_invalid",
-                    "object_required",
-                    "maximum_bytes_exceeded",
-                    "maximum_depth_exceeded",
-                    "schema_mismatch",
-                    "outcome_not_declared",
-                    "reason_required",
-                    "text_invalid",
-                    "result_not_declared",
-                    "result_required",
-                    "field_not_declared",
-                    "constraint_invalid",
-                    "constraint_violated"
+                    "kind-not-allowed",
+                    "reference-invalid",
+                    "object-required",
+                    "maximum-bytes-exceeded",
+                    "maximum-depth-exceeded",
+                    "schema-mismatch",
+                    "outcome-not-declared",
+                    "reason-required",
+                    "text-invalid",
+                    "result-not-declared",
+                    "result-required",
+                    "field-not-declared",
+                    "constraint-invalid",
+                    "constraint-violated"
                   ],
                   "type": "string"
                 },
@@ -14165,13 +14165,13 @@
             }
           },
           {
-            "description": "Optional ownership filter applied before pagination. assigned_to_me selects tasks held by the current effective issuer-qualified principal, including a delegated holder. unclaimed selects open tasks. Omit it to list all eligible active tasks.",
+            "description": "Optional ownership filter applied before pagination. assigned-to-me selects tasks held by the current effective issuer-qualified principal, including a delegated holder. unclaimed selects open tasks. Omit it to list all eligible active tasks.",
             "in": "query",
             "name": "ownership",
             "required": false,
             "schema": {
               "enum": [
-                "assigned_to_me",
+                "assigned-to-me",
                 "unclaimed"
               ],
               "type": "string"
@@ -14982,7 +14982,7 @@
     },
     "/v1/review-tasks/{task_id}": {
       "get": {
-        "description": "A decided task read always carries decidedByCaller. When it is true, the read also carries decisionReceipt for the retained decision recorded by the current caller's exact issuer-qualified principal. The receipt pins the policy, decision type, optional configured outcome and decision-time outcomeLabel, and decision time. approve has no outcome or label; reject, changes_requested, and answer carry a selected outcome. Labels do not follow current policy edits. Active and supervisory task lists and mutation responses omit both fields. The separate own-decisions discovery returns the same own receipt. The response never names another reviewer or releases a reason or structured producer result; protected accountability stays with supervisors.",
+        "description": "A decided task read always carries decidedByCaller. When it is true, the read also carries decisionReceipt for the retained decision recorded by the current caller's exact issuer-qualified principal. The receipt pins the policy, decision type, optional configured outcome and decision-time outcomeLabel, and decision time. approve has no outcome or label; reject, changes-requested, and answer carry a selected outcome. Labels do not follow current policy edits. Active and supervisory task lists and mutation responses omit both fields. The separate own-decisions discovery returns the same own receipt. The response never names another reviewer or releases a reason or structured producer result; protected accountability stays with supervisors.",
         "operationId": "getReviewTask",
         "parameters": [
           {
@@ -16294,20 +16294,20 @@
                 "description": "Stable, value-free reason for a typed review validation failure. Present together with Registry-Casework-Validation-Path.",
                 "schema": {
                   "enum": [
-                    "kind_not_allowed",
-                    "reference_invalid",
-                    "object_required",
-                    "maximum_bytes_exceeded",
-                    "maximum_depth_exceeded",
-                    "schema_mismatch",
-                    "outcome_not_declared",
-                    "reason_required",
-                    "text_invalid",
-                    "result_not_declared",
-                    "result_required",
-                    "field_not_declared",
-                    "constraint_invalid",
-                    "constraint_violated"
+                    "kind-not-allowed",
+                    "reference-invalid",
+                    "object-required",
+                    "maximum-bytes-exceeded",
+                    "maximum-depth-exceeded",
+                    "schema-mismatch",
+                    "outcome-not-declared",
+                    "reason-required",
+                    "text-invalid",
+                    "result-not-declared",
+                    "result-required",
+                    "field-not-declared",
+                    "constraint-invalid",
+                    "constraint-violated"
                   ],
                   "type": "string"
                 },
@@ -20073,7 +20073,7 @@
     },
     "/v1/work-items": {
       "get": {
-        "description": "Reads source-backed work under the separate current source authority. A complete sourceId, subjectKind, and subjectId selector filters by one exact source-neutral subject. Exact reference lookup returns an item only when the current caller read still discloses the same configured reference. The cursor is bound to the full selector and selected sort; callers follow every page until nextCursor is absent. Source discovery alone does not issue a cursor; if status is budget_exhausted without nextCursor, retry without a cursor after reconciliation. The retried walk starts from the first position and can return items earlier pages already returned, so deduplicate by itemId. Callers serving no queue receive complete without a cursor. Unified review tasks are exposed only through /v1/review-tasks.",
+        "description": "Reads source-backed work under the separate current source authority. A complete sourceId, subjectKind, and subjectId selector filters by one exact source-neutral subject. Exact reference lookup returns an item only when the current caller read still discloses the same configured reference. The cursor is bound to the full selector and selected sort; callers follow every page until nextCursor is absent. Source discovery alone does not issue a cursor; if status is budget-exhausted without nextCursor, retry without a cursor after reconciliation. The retried walk starts from the first position and can return items earlier pages already returned, so deduplicate by itemId. Callers serving no queue receive complete without a cursor. Unified review tasks are exposed only through /v1/review-tasks.",
         "operationId": "listWorkItems",
         "parameters": [
           {
@@ -20117,10 +20117,10 @@
             "schema": {
               "enum": [
                 "mine",
-                "my_teams",
-                "team_holdings",
+                "my-teams",
+                "team-holdings",
                 "overdue",
-                "completed_by_me"
+                "completed-by-me"
               ],
               "type": "string"
             }
@@ -20411,7 +20411,7 @@
     },
     "/v1/work-items/next": {
       "get": {
-        "description": "Returns a WorkItemPage containing at most one caller-visible item. Empty complete and budget_exhausted pages remain successful responses; follow nextCursor when present. Source discovery alone does not issue a cursor; if status is budget_exhausted without nextCursor, retry without a cursor after reconciliation. The retried walk starts from the first position and can return items earlier pages already returned, so deduplicate by itemId. Callers serving no queue receive complete without a cursor. servedQueues is preserved on every page.",
+        "description": "Returns a WorkItemPage containing at most one caller-visible item. Empty complete and budget-exhausted pages remain successful responses; follow nextCursor when present. Source discovery alone does not issue a cursor; if status is budget-exhausted without nextCursor, retry without a cursor after reconciliation. The retried walk starts from the first position and can return items earlier pages already returned, so deduplicate by itemId. Callers serving no queue receive complete without a cursor. servedQueues is preserved on every page.",
         "operationId": "getNextWorkItem",
         "parameters": [
           {

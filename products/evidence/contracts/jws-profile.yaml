@@ -11,7 +11,7 @@ response:
 request_batch:
   route: POST /v1/evidence/batch
   media_type: application/vnd.registrystack.evidence.request-batch+json
-  rule: Every available item is one flattened JWS under this profile. The route admits no unsigned or SD-JWT VC serialization and performs no fallback between representations. An evidence_not_available item contains no JWS.
+  rule: Every available item is one flattened JWS under this profile. The route admits no unsigned or SD-JWT VC serialization and performs no fallback between representations. An evidence-not-available item contains no JWS.
   envelope_integrity: The complete exact JSON envelope is bounded to 1048576 bytes, serialized before durable terminal release audit, and returned byte-for-byte afterward. The envelope itself has no additional signature; each evidence member is independently signed.
   singular_noninteraction: This media type is not accepted by POST /v1/evidence. The singular holder-bound batch media type application/vnd.registrystack.evidence.batch+json is not accepted by this route.
 unsigned_envelope:
@@ -40,7 +40,7 @@ signing:
   governed_active_public_key: signing.activePublicJwkFile
   published_public_keys: signing.publishedPublicJwkFiles are bundle-owned public JWKs and never contain private members
   revoked_key_ids: signing.revokedKeyIds are excluded from the active and published sets and from JWKS
-  runtime_signer: local assurance uses signer.kind local-jwk; production and evidence-grade use signer.kind transit through a workload-local Unix socket with a pinned nonzero key version
+  runtime_signer: local assurance uses signer.type local-jwk; production and evidence-grade use signer.type transit through a workload-local Unix socket with a pinned nonzero key version
   provider_controls: Transit metadata must report ecdsa-p256 with signing enabled, derived false, exportable false, allow_plaintext_backup false, and an exact public-key match. Evidence receives no provider token.
   startup_proof: The runtime signer public key must equal the governed active public JWK and pass one sign-and-verify test before readiness.
   bundle_private_key_material: prohibited

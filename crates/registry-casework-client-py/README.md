@@ -10,7 +10,7 @@ client = casework.CaseworkClient("https://casework.example.invalid/")
 page = client.review_tasks(
     token,
     "staff",
-    {"queue": "review", "ownership": "assigned_to_me", "limit": 25},
+    {"queue": "review", "ownership": "assigned-to-me", "limit": 25},
 )
 supervised = client.supervisory_review_tasks(
     supervisor_token,

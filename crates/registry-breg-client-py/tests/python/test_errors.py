@@ -3,7 +3,7 @@
 The construction tests in `test_construction.py` cover kinds a client can
 raise before any I/O. This file covers the one kind that only exists after a
 real exchange: a 404 Base Registry Engine problem response promoted to
-`kind == "not_found"` instead of the generic `"problem"` every other refusal
+`kind == "not-found"` instead of the generic `"problem"` every other refusal
 shares. A minimal stdlib `http.server` stands in for Base Registry Engine;
 this crate has no shared stub-server helper of its own, so the server is
 defined here rather than borrowed from a sibling crate's test tree.
@@ -70,7 +70,7 @@ class NotFoundKindTests(unittest.TestCase):
     def test_a_missing_record_fails_with_its_own_not_found_kind(self) -> None:
         with self.assertRaises(BaseRegistryClientError) as raised:
             self.client.get_record("companies", MISSING_RECORD_ID)
-        self.assertEqual(raised.exception.kind, "not_found")
+        self.assertEqual(raised.exception.kind, "not-found")
         self.assertEqual(raised.exception.status, 404)
         self.assertEqual(raised.exception.code, "resource.not_found")
 

@@ -149,15 +149,15 @@ fn sdk_error(py: Python<'_>, error: RustClientError) -> PyErr {
     let mut mapped = MappedError::binding(
         match &error {
             RustClientError::Configuration { .. } => "configuration",
-            RustClientError::InvalidRequest { .. } => "invalid_request",
+            RustClientError::InvalidRequest { .. } => "invalid-request",
             RustClientError::Token(_) => "token",
             RustClientError::Transport { .. } => "transport",
-            // app-developer-22: a missing resource is its own kind, not_found,
+            // app-developer-22: a missing resource is its own kind, not-found,
             // rather than the generic problem kind every other refusal shares.
             RustClientError::Problem {
                 code: BRegProblemCode::ResourceNotFound,
                 ..
-            } => "not_found",
+            } => "not-found",
             RustClientError::Problem { .. } => "problem",
             RustClientError::Protocol { .. } => "protocol",
             _ => "client",
@@ -197,16 +197,16 @@ fn sdk_error(py: Python<'_>, error: RustClientError) -> PyErr {
             mapped.status = Some(status);
             mapped.code = Some(
                 match failure {
-                    BRegProtocolFailure::HeaderBounds => "header_bounds",
-                    BRegProtocolFailure::TraceContext => "trace_context",
-                    BRegProtocolFailure::MediaType => "media_type",
+                    BRegProtocolFailure::HeaderBounds => "header-bounds",
+                    BRegProtocolFailure::TraceContext => "trace-context",
+                    BRegProtocolFailure::MediaType => "media-type",
                     BRegProtocolFailure::Body => "body",
                     BRegProtocolFailure::Problem => "problem",
-                    BRegProtocolFailure::EntityTag => "entity_tag",
-                    BRegProtocolFailure::ProfileLink => "profile_link",
+                    BRegProtocolFailure::EntityTag => "entity-tag",
+                    BRegProtocolFailure::ProfileLink => "profile-link",
                     BRegProtocolFailure::Location => "location",
-                    BRegProtocolFailure::CachePolicy => "cache_policy",
-                    BRegProtocolFailure::RepresentationDigest => "representation_digest",
+                    BRegProtocolFailure::CachePolicy => "cache-policy",
+                    BRegProtocolFailure::RepresentationDigest => "representation-digest",
                     BRegProtocolFailure::Status => "status",
                     _ => "protocol",
                 }
@@ -221,7 +221,7 @@ fn sdk_error(py: Python<'_>, error: RustClientError) -> PyErr {
 }
 
 fn invalid(py: Python<'_>, message: impl Into<String>) -> PyErr {
-    to_py_err(py, MappedError::binding("invalid_request", message))
+    to_py_err(py, MappedError::binding("invalid-request", message))
 }
 
 /// The retry ceiling as a Python integer. Only an `int` in the `u8` range
@@ -463,7 +463,7 @@ fn projection_from_python<T: DeserializeOwned>(
     what: &str,
 ) -> PyResult<T> {
     let value =
-        python_to_json(value).map_err(|error| conversion_error(py, "invalid_request", error))?;
+        python_to_json(value).map_err(|error| conversion_error(py, "invalid-request", error))?;
     serde_json::from_value(value).map_err(|_| invalid(py, format!("{what} is invalid")))
 }
 
@@ -520,7 +520,7 @@ fn page_value<'py, T: Serialize>(
 
 fn patch_request(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<BRegPatchRequest> {
     let value =
-        python_to_json(value).map_err(|error| conversion_error(py, "invalid_request", error))?;
+        python_to_json(value).map_err(|error| conversion_error(py, "invalid-request", error))?;
     patch_request_from_value(py, value)
 }
 
@@ -587,7 +587,7 @@ fn json_object(
     what: &str,
 ) -> PyResult<serde_json::Map<String, Value>> {
     let value =
-        python_to_json(value).map_err(|error| conversion_error(py, "invalid_request", error))?;
+        python_to_json(value).map_err(|error| conversion_error(py, "invalid-request", error))?;
     let Value::Object(value) = value else {
         return Err(invalid(py, format!("{what} must be a mapping")));
     };
@@ -661,7 +661,7 @@ fn batch_request(
     change_context: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<breg_client_sdk::BRegBatchRequest> {
     let items =
-        python_to_json(items).map_err(|error| conversion_error(py, "invalid_request", error))?;
+        python_to_json(items).map_err(|error| conversion_error(py, "invalid-request", error))?;
     let Value::Array(items) = items else {
         return Err(invalid(py, "items must be a sequence"));
     };
@@ -730,7 +730,7 @@ fn batch_request(
     }
     if let Some(change_context) = change_context {
         let change_context = python_to_json(change_context)
-            .map_err(|error| conversion_error(py, "invalid_request", error))?;
+            .map_err(|error| conversion_error(py, "invalid-request", error))?;
         builder = builder.change_context(change_context_from_value(py, change_context)?);
     }
     builder
@@ -770,7 +770,7 @@ fn ingestion_run_request(
     value: &Bound<'_, PyAny>,
 ) -> PyResult<BRegIngestionRunRequest> {
     let value =
-        python_to_json(value).map_err(|error| conversion_error(py, "invalid_request", error))?;
+        python_to_json(value).map_err(|error| conversion_error(py, "invalid-request", error))?;
     let Value::Object(mut value) = value else {
         return Err(invalid(py, "run request must be a mapping"));
     };
@@ -932,7 +932,7 @@ fn encode_ingestion_chunk(
     prefix_digest: String,
 ) -> PyResult<IngestionChunk> {
     let items =
-        python_to_json(items).map_err(|error| conversion_error(py, "invalid_request", error))?;
+        python_to_json(items).map_err(|error| conversion_error(py, "invalid-request", error))?;
     let Value::Array(items) = items else {
         return Err(invalid(py, "items must be a sequence"));
     };
@@ -984,7 +984,7 @@ fn record_value(
     format: BRegRecordFormat,
 ) -> PyResult<breg_client_sdk::RegistryRecordSingleResponse> {
     let value =
-        python_to_json(value).map_err(|error| conversion_error(py, "invalid_request", error))?;
+        python_to_json(value).map_err(|error| conversion_error(py, "invalid-request", error))?;
     let representation = match format {
         BRegRecordFormat::Json => RegistryRecordRepresentation::Json,
         BRegRecordFormat::JsonLd => RegistryRecordRepresentation::JsonLdSharedContext,
@@ -1006,9 +1006,9 @@ fn state_name(value: BRegRequestState) -> &'static str {
 
 fn proposal_value(value: &BRegRequestProposal) -> Value {
     json!({"review": match value.review() {
-        BRegRequestReviewRequirement::None => json!({"mode":"none"}),
+        BRegRequestReviewRequirement::None => json!({"type":"none"}),
         BRegRequestReviewRequirement::External(requirement) => {
-            json!({"authority":requirement.authority(),"policy_id":requirement.policy_id()})
+            json!({"type":"required","authority":requirement.authority(),"policy_id":requirement.policy_id()})
         }
     }})
 }
@@ -1056,7 +1056,7 @@ fn attachment_state_value(value: &BRegAttachmentState) -> Value {
 
 fn attachment_slot_value(value: &BRegAttachmentSlotValue) -> Value {
     match value {
-        BRegAttachmentSlotValue::NotSelected => json!({"kind": "not_selected", "value": null}),
+        BRegAttachmentSlotValue::NotSelected => json!({"kind": "not-selected", "value": null}),
         BRegAttachmentSlotValue::Empty => json!({"kind": "empty", "value": null}),
         BRegAttachmentSlotValue::Filled(state) => json!({
             "kind": "filled",
@@ -1264,9 +1264,9 @@ fn change_request_capability_value(value: &breg_client_sdk::BRegChangeRequestCap
             })
             .collect::<Vec<_>>(),
         "review": match value.review() {
-            ReviewRequirement::None => json!({"mode":"none"}),
+            ReviewRequirement::None => json!({"type":"none"}),
             ReviewRequirement::External(requirement) => {
-                json!({"authority":requirement.authority(),"policy_id":requirement.policy_id()})
+                json!({"type":"required","authority":requirement.authority(),"policy_id":requirement.policy_id()})
             }
         },
         "on_approved": {
@@ -1304,7 +1304,7 @@ fn change_request_target_value(target: &breg_client_sdk::BRegChangeRequestTarget
 }
 
 fn attachment_error(py: Python<'_>, error: breg_client_sdk::BRegAttachmentError) -> PyErr {
-    to_py_err(py, MappedError::binding("invalid_request", error.reason()))
+    to_py_err(py, MappedError::binding("invalid-request", error.reason()))
 }
 
 #[pyclass(name = "BRegAttachmentSlot", module = "registry_breg_client", frozen)]
@@ -1783,7 +1783,7 @@ impl LifecycleAction {
             .map_err(|error| {
                 to_py_err(
                     py,
-                    MappedError::binding("invalid_request", error.to_string()),
+                    MappedError::binding("invalid-request", error.to_string()),
                 )
             })
     }
@@ -1994,15 +1994,15 @@ fn attachment_preconditions(
 }
 
 fn selection_error(py: Python<'_>, error: BRegMetadataSelectionError) -> PyErr {
-    let mut mapped = MappedError::binding("metadata_selection", error.to_string());
+    let mut mapped = MappedError::binding("metadata-selection", error.to_string());
     mapped.code = Some(
         match error.kind() {
-            BRegMetadataSelectionErrorKind::NotFound => "not_found",
-            BRegMetadataSelectionErrorKind::UnboundSource => "unbound_source",
-            BRegMetadataSelectionErrorKind::ProfileMismatch => "profile_mismatch",
-            BRegMetadataSelectionErrorKind::UnsupportedOperation => "unsupported_operation",
-            BRegMetadataSelectionErrorKind::RequiredCapability => "required_capability",
-            BRegMetadataSelectionErrorKind::ContractMismatch => "contract_mismatch",
+            BRegMetadataSelectionErrorKind::NotFound => "not-found",
+            BRegMetadataSelectionErrorKind::UnboundSource => "unbound-source",
+            BRegMetadataSelectionErrorKind::ProfileMismatch => "profile-mismatch",
+            BRegMetadataSelectionErrorKind::UnsupportedOperation => "unsupported-operation",
+            BRegMetadataSelectionErrorKind::RequiredCapability => "required-capability",
+            BRegMetadataSelectionErrorKind::ContractMismatch => "contract-mismatch",
         }
         .to_owned(),
     );
@@ -2822,7 +2822,7 @@ impl BaseRegistryClient {
         continuation: &Bound<'_, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let value = python_to_json(continuation)
-            .map_err(|error| conversion_error(py, "invalid_request", error))?;
+            .map_err(|error| conversion_error(py, "invalid-request", error))?;
         let projection: BRegContinuationProjection =
             serde_json::from_value(value).map_err(|_| invalid(py, "continuation is invalid"))?;
         let continuation = BRegContinuation::try_from_projection(projection)
@@ -2853,7 +2853,7 @@ impl BaseRegistryClient {
             .options(record_options(py, select, access_profile, format)?);
         if let Some(values) = values {
             let values = python_to_json(values)
-                .map_err(|error| conversion_error(py, "invalid_request", error))?;
+                .map_err(|error| conversion_error(py, "invalid-request", error))?;
             let Value::Object(values) = values else {
                 return Err(invalid(py, "values must be a mapping"));
             };
@@ -2882,7 +2882,7 @@ impl BaseRegistryClient {
         format: &str,
     ) -> PyResult<Bound<'py, PyAny>> {
         let data =
-            python_to_json(data).map_err(|error| conversion_error(py, "invalid_request", error))?;
+            python_to_json(data).map_err(|error| conversion_error(py, "invalid-request", error))?;
         let Value::Object(data) = data else {
             return Err(invalid(py, "data must be a mapping"));
         };
@@ -2911,7 +2911,7 @@ impl BaseRegistryClient {
         format: &str,
     ) -> PyResult<PreparedCreate> {
         let data =
-            python_to_json(data).map_err(|error| conversion_error(py, "invalid_request", error))?;
+            python_to_json(data).map_err(|error| conversion_error(py, "invalid-request", error))?;
         let Value::Object(data) = data else {
             return Err(invalid(py, "data must be a mapping"));
         };
@@ -3417,7 +3417,7 @@ impl BaseRegistryClient {
                     .collect()
             })
             .map_err(|error| {
-                let mut mapped = MappedError::binding("lifecycle_promotion", error.to_string());
+                let mut mapped = MappedError::binding("lifecycle-promotion", error.to_string());
                 mapped.code = Some(
                     match error {
                         BRegLifecyclePromotionError::Authority => "authority",

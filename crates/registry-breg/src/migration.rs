@@ -167,22 +167,20 @@ pub fn successor_plan_is_empty(package: &VerifiedPackage) -> bool {
         && !verified_metadata_only_plan(plan)
 }
 
-/// Whether a verified successor remains empty after accounting for what its
-/// verified predecessor lacks. Two compatibility exceptions have apply work
-/// with an unchanged authored model: a successor that installs an engine
-/// capability, such as the statistical release store or caller-scoped
-/// idempotency, that the current compiler declares and the predecessor's
-/// manifest does not; and a successor that replaces a predecessor carrying
-/// the retired package apiVersion, which the runtime no longer starts. Every
-/// ordinary empty successor is still refused.
+/// Whether a verified successor remains empty after accounting for an
+/// engine-owned capability absent from its verified predecessor. The sole
+/// compatibility exception installs an engine capability, such as the
+/// statistical release store or caller-scoped idempotency, that the current
+/// compiler declares and the predecessor's manifest does not; every ordinary
+/// empty successor is still refused.
 pub fn successor_plan_is_empty_for_predecessor(
     package: &VerifiedPackage,
     predecessor: &VerifiedPredecessorPackage,
 ) -> bool {
-    successor_plan_is_empty(package) && !replaces_what_predecessor_lacks(package, predecessor)
+    successor_plan_is_empty(package) && !installs_engine_capability(package, predecessor)
 }
 
-fn replaces_what_predecessor_lacks(
+fn installs_engine_capability(
     package: &VerifiedPackage,
     predecessor: &VerifiedPredecessorPackage,
 ) -> bool {
@@ -193,13 +191,12 @@ fn replaces_what_predecessor_lacks(
             .from_package_digest
             .as_deref()
             == Some(predecessor.package_digest())
-        && (predecessor.carries_retired_api_version()
-            || package
-                .manifest()
-                .engine_features
-                .difference(predecessor.engine_features())
-                .next()
-                .is_some())
+        && package
+            .manifest()
+            .engine_features
+            .difference(predecessor.engine_features())
+            .next()
+            .is_some()
 }
 
 fn verified_metadata_only_plan(plan: &MigrationPlan) -> bool {
@@ -808,11 +805,10 @@ impl<'a> ApplyVerifiedPackageRequest<'a> {
         self
     }
 
-    /// Bind engine-owned successor work to the hash-covered capabilities and
-    /// package apiVersion of the verified predecessor package. This grants no
-    /// predecessor SQL or runtime authority; it only distinguishes a closed
-    /// legacy capability or package-format transition from an ordinary empty
-    /// package plan.
+    /// Bind engine-owned successor work to the hash-covered capabilities of
+    /// the verified predecessor package. This grants no predecessor SQL or
+    /// runtime authority; it only distinguishes a closed legacy capability
+    /// transition from an ordinary empty package plan.
     #[must_use]
     pub fn with_predecessor_engine_capabilities(
         mut self,
@@ -957,37 +953,37 @@ impl PlannedActivation {
     fn checks(self) -> &'static [&'static str] {
         match self {
             Self::Initial => &[
-                "migrationRole",
-                "runtimeWriteAuthority",
+                "migration-role",
+                "runtime-write-authority",
                 "prerequisites",
-                "uninitializedDatabase",
+                "uninitialized-database",
             ],
             Self::Successor => &[
-                "successorBinding",
-                "migrationRole",
-                "runtimeWriteAuthority",
+                "successor-binding",
+                "migration-role",
+                "runtime-write-authority",
                 "prerequisites",
-                "requestProposals",
-                "historyCoverage",
-                "webhookBindings",
-                "activeState",
+                "request-proposals",
+                "history-coverage",
+                "webhook-bindings",
+                "active-state",
             ],
             Self::RoleChange => &[
-                "activeBinding",
-                "migrationRole",
-                "runtimeWriteAuthority",
+                "active-binding",
+                "migration-role",
+                "runtime-write-authority",
                 "prerequisites",
-                "activeRoles",
-                "historyCoverage",
-                "webhookBindings",
-                "activeState",
+                "active-roles",
+                "history-coverage",
+                "webhook-bindings",
+                "active-state",
             ],
             Self::AlreadyActive => &[
-                "activeBinding",
-                "migrationRole",
-                "runtimeWriteAuthority",
+                "active-binding",
+                "migration-role",
+                "runtime-write-authority",
                 "prerequisites",
-                "activeRoles",
+                "active-roles",
             ],
         }
     }
@@ -1074,13 +1070,12 @@ async fn activate(request: ApplyVerifiedPackageRequest<'_>, mode: ApplyMode) -> 
     } else {
         None
     };
-    let compatibility_only_upgrade = successor_plan_is_empty(request.package)
+    let engine_capability_only_upgrade = successor_plan_is_empty(request.package)
         && request
             .predecessor_engine_capabilities
-            .is_some_and(|predecessor| {
-                replaces_what_predecessor_lacks(request.package, predecessor)
-            });
-    let empty_successor = successor_plan_is_empty(request.package) && !compatibility_only_upgrade;
+            .is_some_and(|predecessor| installs_engine_capability(request.package, predecessor));
+    let empty_successor =
+        successor_plan_is_empty(request.package) && !engine_capability_only_upgrade;
     if current.is_some() && !role_change && empty_successor {
         return Err(MigrationError::EmptyPlan);
     }
@@ -1092,7 +1087,7 @@ async fn activate(request: ApplyVerifiedPackageRequest<'_>, mode: ApplyMode) -> 
         }
         _ => package_ledger_entry(request.package, current, request.roles, &compiler_checksums)?,
     };
-    if compatibility_only_upgrade {
+    if engine_capability_only_upgrade {
         // The package binds a successor activation but carries no authored
         // compiler statement: the engine reconciles its own control plane and
         // the final activation verifies the exact expanded catalog. Record it

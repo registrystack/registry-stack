@@ -41,8 +41,7 @@ use crate::{
     kernel::{EvidenceConstruction, EvidenceScope, KernelError, OfflineKernel, ValueProjection},
     model::{
         request_nonce_is_canonical, EvidenceDefinition, EvidenceDefinitionConcept,
-        EvidenceDefinitionForm, EvidenceDefinitionList, EvidenceDefinitionListForm,
-        EvidenceDefinitionListItemForm, EvidenceDefinitionScalarForm, EvidenceDefinitionSelector,
+        EvidenceDefinitionForm, EvidenceDefinitionListItemForm, EvidenceDefinitionSelector,
         EvidenceDefinitionSubject, EvidenceDefinitions, EvidenceRequest, EvidenceRequestBatch,
         EvidenceSelectorField, FlattenedJws, JwksDocument, LookupResult, RequestedSelector,
         RequestedSubject, SdJwtVcBatchEnvelope, SdJwtVcBatchEnvelopeType, SelectorValue,
@@ -327,7 +326,7 @@ pub async fn validate_verification_material(
             mount,
             key_name,
             key_version,
-            timeout_milliseconds,
+            attempt_timeout_milliseconds,
         } => {
             let config = TransitSignerConfig::new(
                 unix_socket_path,
@@ -335,7 +334,7 @@ pub async fn validate_verification_material(
                 key_name,
                 key_version.get(),
                 bundle.active_public_jwk.clone(),
-                Duration::from_millis(timeout_milliseconds.get()),
+                Duration::from_millis(attempt_timeout_milliseconds.get()),
             )
             .map_err(|_| {
                 RuntimeInitializationError::Signing(
@@ -956,7 +955,7 @@ impl EvidenceRuntime {
             audience: context.evidence_audience().to_owned(),
             issued_by: self.bundle().config.issuer.id.clone(),
             provided_by: self.bundle().config.service.provider_id.clone(),
-            holder_bound_batch_max_size: self.bundle().config.holder_bound_batch_ceiling(),
+            maximum_holder_bound_batch_size: self.bundle().config.holder_bound_batch_ceiling(),
             definitions,
         };
         let contract_value = serde_json::to_value(&response)
@@ -1065,32 +1064,18 @@ impl EvidenceRuntime {
         concept: &crate::config::ConceptConfig,
     ) -> Result<EvidenceDefinitionConcept, RuntimeFailure> {
         let form = match concept.form {
-            ConceptForm::Boolean => {
-                EvidenceDefinitionForm::Scalar(EvidenceDefinitionScalarForm::Boolean)
-            }
-            ConceptForm::BoundedInteger => {
-                EvidenceDefinitionForm::Scalar(EvidenceDefinitionScalarForm::Integer)
-            }
+            ConceptForm::Boolean => EvidenceDefinitionForm::Boolean {},
+            ConceptForm::BoundedInteger => EvidenceDefinitionForm::Integer {},
             ConceptForm::ControlledCode
             | ConceptForm::ControlledCategory
-            | ConceptForm::BoundedIdentifier => {
-                EvidenceDefinitionForm::Scalar(EvidenceDefinitionScalarForm::String)
-            }
-            ConceptForm::BoundedDecimal => {
-                EvidenceDefinitionForm::Scalar(EvidenceDefinitionScalarForm::String)
-            }
-            ConceptForm::DateBucket => {
-                EvidenceDefinitionForm::Scalar(EvidenceDefinitionScalarForm::DateBucket)
-            }
-            ConceptForm::TimeBucket => {
-                EvidenceDefinitionForm::Scalar(EvidenceDefinitionScalarForm::TimeBucket)
-            }
+            | ConceptForm::BoundedIdentifier => EvidenceDefinitionForm::String {},
+            ConceptForm::BoundedDecimal => EvidenceDefinitionForm::String {},
+            ConceptForm::DateBucket => EvidenceDefinitionForm::DateBucket {},
+            ConceptForm::TimeBucket => EvidenceDefinitionForm::TimeBucket {},
             ConceptForm::AudienceScopedEntityReference => {
-                EvidenceDefinitionForm::Scalar(EvidenceDefinitionScalarForm::EntityReference)
+                EvidenceDefinitionForm::EntityReference {}
             }
-            ConceptForm::ReviewedStructuredValue => {
-                EvidenceDefinitionForm::Scalar(EvidenceDefinitionScalarForm::Structured)
-            }
+            ConceptForm::ReviewedStructuredValue => EvidenceDefinitionForm::Structured {},
             ConceptForm::ControlledCodeList | ConceptForm::EntityReferenceList => {
                 let minimum_items = concept
                     .constraints
@@ -1112,14 +1097,12 @@ impl EvidenceRuntime {
                 } else {
                     EvidenceDefinitionListItemForm::EntityReference
                 };
-                EvidenceDefinitionForm::List(EvidenceDefinitionListForm {
-                    list: EvidenceDefinitionList {
-                        items,
-                        minimum_items,
-                        maximum_items,
-                        unique,
-                    },
-                })
+                EvidenceDefinitionForm::List {
+                    items,
+                    minimum_items,
+                    maximum_items,
+                    unique,
+                }
             }
         };
         Ok(EvidenceDefinitionConcept {
@@ -4216,11 +4199,70 @@ mod tests {
 
     #[test]
     fn bounded_identifier_discovery_projects_a_string_client_contract() {
-        let concept: crate::config::ConceptConfig = serde_norway::from_str("handle: report\nid: urn:example:concept:report\nform: bounded-identifier\nrequired: true\nconstraints: {prefix: 'urn:example:report:', minimumBytes: 20, maximumBytes: 64}\n").expect("concept parses");
+        let concept: crate::config::ConceptConfig = serde_norway::from_str("handle: report\nuri: urn:example:concept:report\ntype: bounded-identifier\nrequired: true\nconstraints: {prefix: 'urn:example:report:', minimumBytes: 20, maximumBytes: 64}\n").expect("concept parses");
         let discovered = EvidenceRuntime::discovery_concept(&concept).expect("concept projects");
         let wire = serde_json::to_value(discovered).expect("client contract serializes");
-        assert_eq!(wire["form"], "string");
+        assert_eq!(wire["form"], serde_json::json!({"type": "string"}));
         assert_eq!(wire["concept"], "urn:example:concept:report");
+    }
+
+    /// The published definitions document names every form by `type`, with a
+    /// list's members beside it, and reads back no other shape.
+    #[test]
+    fn a_published_concept_form_is_a_mapping_tagged_by_type() {
+        use serde_json::json;
+        for (form, written) in [
+            (EvidenceDefinitionForm::Boolean {}, "boolean"),
+            (EvidenceDefinitionForm::Integer {}, "integer"),
+            (EvidenceDefinitionForm::String {}, "string"),
+            (EvidenceDefinitionForm::DateBucket {}, "date-bucket"),
+            (EvidenceDefinitionForm::TimeBucket {}, "time-bucket"),
+            (
+                EvidenceDefinitionForm::EntityReference {},
+                "entity-reference",
+            ),
+            (EvidenceDefinitionForm::Structured {}, "structured"),
+        ] {
+            let wire = serde_json::to_value(&form).expect("the form serializes");
+            assert_eq!(wire, json!({"type": written}));
+            assert!(
+                serde_json::from_value::<EvidenceDefinitionForm>(wire).expect("reads back") == form
+            );
+            assert!(serde_json::from_value::<EvidenceDefinitionForm>(json!(written)).is_err());
+            assert!(serde_json::from_value::<EvidenceDefinitionForm>(
+                json!({"type": written, "unique": true})
+            )
+            .is_err());
+        }
+        let list = EvidenceDefinitionForm::List {
+            items: EvidenceDefinitionListItemForm::EntityReference,
+            minimum_items: 1,
+            maximum_items: 3,
+            unique: true,
+        };
+        let wire = serde_json::to_value(&list).expect("the list form serializes");
+        assert_eq!(
+            wire,
+            json!({
+                "type": "list",
+                "items": "entity-reference",
+                "minimumItems": 1,
+                "maximumItems": 3,
+                "unique": true
+            })
+        );
+        assert!(
+            serde_json::from_value::<EvidenceDefinitionForm>(wire).expect("reads back") == list
+        );
+        assert!(serde_json::from_value::<EvidenceDefinitionForm>(json!({
+            "list": {"items": "string", "minimumItems": 1, "maximumItems": 3, "unique": true}
+        }))
+        .is_err());
+        assert!(serde_json::from_value::<EvidenceDefinitionForm>(json!({
+            "type": "list", "items": "string", "minimumItems": 1, "maximumItems": 3,
+            "unique": true, "ordered": true
+        }))
+        .is_err());
     }
 
     #[test]

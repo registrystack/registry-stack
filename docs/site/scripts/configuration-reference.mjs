@@ -163,7 +163,7 @@ function alternativeLabel(document, schema) {
   if (node.properties === null || typeof node.properties !== 'object') {
     return null;
   }
-  const discriminatorNames = ['kind', 'transport', 'from', 'form', 'version'];
+  const discriminatorNames = ['type', 'kind', 'transport', 'from', 'form', 'version'];
   for (const name of discriminatorNames) {
     const property = node.properties[name];
     if (property === null || typeof property !== 'object' || Array.isArray(property)) {

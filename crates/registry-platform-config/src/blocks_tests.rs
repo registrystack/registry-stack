@@ -95,37 +95,50 @@ fn database_debug_redacts_every_reference() {
 }
 
 #[test]
-fn a_discovery_jwks_source_refuses_the_members_of_the_other_kinds() {
+fn a_discovery_jwks_source_refuses_the_members_of_the_other_types() {
     for text in [
-        "kind: discovery\nuri: https://keys.example.test/jwks",
-        "kind: discovery\ndocumentRef: secret:file/jwks",
+        "type: discovery\nuri: https://keys.example.test/jwks",
+        "type: discovery\ndocumentRef: secret:file/jwks",
     ] {
         let error =
             read_block::<JwksSource>(text).expect_err("a discovery source carries no other member");
         assert_eq!(codes(&error), ["config.unknown-key"], "{error}");
     }
-    let discovery: JwksSource = read_block("kind: discovery").unwrap();
+    let discovery: JwksSource = read_block("type: discovery").unwrap();
     assert_eq!(discovery, JwksSource::Discovery {});
 }
 
 #[test]
-fn a_jwks_source_refuses_a_missing_or_unknown_kind() {
-    for text in ["uri: https://keys.example.test/jwks", "kind: remote"] {
+fn a_jwks_source_refuses_a_missing_or_unknown_type() {
+    for text in ["uri: https://keys.example.test/jwks", "type: remote"] {
         assert!(read_block::<JwksSource>(text).is_err(), "{text}");
     }
 }
 
 #[test]
-fn jwks_source_has_three_kinds_and_defaults_to_discovery() {
+fn a_jwks_source_tagged_by_kind_is_refused() {
+    for text in [
+        "kind: discovery",
+        "kind: uri\nuri: https://keys.example.test/jwks",
+        "kind: static\ndocumentRef: secret:file/jwks",
+    ] {
+        let error = read_block::<JwksSource>(text).expect_err("the tag is spelled type");
+        assert!(!error.to_string().contains("keys.example.test"), "{error}");
+        assert!(!error.to_string().contains("secret:file/jwks"), "{error}");
+    }
+}
+
+#[test]
+fn jwks_source_has_three_types_and_defaults_to_discovery() {
     assert_eq!(JwksSource::default(), JwksSource::Discovery {});
-    let uri: JwksSource = read_block("kind: uri\nuri: https://issuer.example.test/jwks").unwrap();
+    let uri: JwksSource = read_block("type: uri\nuri: https://issuer.example.test/jwks").unwrap();
     assert_eq!(uri.uri(), Some("https://issuer.example.test/jwks"));
     uri.check("authentication.oidc.jwksSource", false)
         .expect("https uri");
     let static_source: JwksSource =
-        read_block("kind: static\ndocumentRef: secret:file/jwks").unwrap();
+        read_block("type: static\ndocumentRef: secret:file/jwks").unwrap();
     assert_eq!(static_source.document_ref(), Some("secret:file/jwks"));
-    assert!(read_block::<JwksSource>("kind: static\nuri: x").is_err());
+    assert!(read_block::<JwksSource>("type: static\nuri: x").is_err());
 
     for (uri, loopback) in [
         ("http://issuer.example.test/jwks", true),
@@ -286,7 +299,7 @@ fn blocks_serialize_back_to_the_form_they_were_read_from() {
         read_block("file: {root: /run/secrets}\nenvironment: {}").unwrap();
     let package: PackageConfig = read_block("root: /srv/package").unwrap();
     let listener: ListenerConfig = read_block("bind: \"[::1]:8080\"").unwrap();
-    let jwks: JwksSource = read_block("kind: uri\nuri: https://issuer.example.test/jwks").unwrap();
+    let jwks: JwksSource = read_block("type: uri\nuri: https://issuer.example.test/jwks").unwrap();
     assert_eq!(
         serde_json::to_value(&providers).unwrap(),
         serde_json::json!({"file": {"root": "/run/secrets"}, "environment": {}})
@@ -301,11 +314,11 @@ fn blocks_serialize_back_to_the_form_they_were_read_from() {
     );
     assert_eq!(
         serde_json::to_value(&jwks).unwrap(),
-        serde_json::json!({"kind": "uri", "uri": "https://issuer.example.test/jwks"})
+        serde_json::json!({"type": "uri", "uri": "https://issuer.example.test/jwks"})
     );
     assert_eq!(
         serde_json::to_value(JwksSource::Discovery {}).unwrap(),
-        serde_json::json!({"kind": "discovery"})
+        serde_json::json!({"type": "discovery"})
     );
     for (value, text) in [
         (serde_json::to_value(&providers).unwrap(), "providers"),
@@ -392,7 +405,7 @@ struct ProductOidc {
 fn the_oidc_issuer_embeds_beside_product_members() {
     let oidc: ProductOidc = read_block(
         "issuer: https://issuer.example.test\naudience: urn:example:api\n\
-         jwksSource: {kind: uri, uri: https://issuer.example.test/jwks}\ntokenTypes: [at+jwt]",
+         jwksSource: {type: uri, uri: https://issuer.example.test/jwks}\ntokenTypes: [at+jwt]",
     )
     .expect("embedded issuer parses");
     assert_eq!(oidc.issuer.issuer, "https://issuer.example.test");
@@ -586,7 +599,7 @@ fn clients(yaml: &str) -> OidcClientsConfig {
 #[test]
 fn oidc_clients_default_to_no_rule_and_bound_the_assertion_issuer_map() {
     let field = "authentication.oidc";
-    let empty = clients("{}");
+    let empty = clients("allowedClients: unrestricted");
     assert!(empty.allowed_clients.is_empty());
     assert!(empty.assertion_issuers.is_empty());
     empty.check(field).expect("no rule");
@@ -595,7 +608,7 @@ fn oidc_clients_default_to_no_rule_and_bound_the_assertion_issuer_map() {
         .expect("one client, one authority");
 
     let many_clients = (0..=MAX_ASSERTION_ISSUER_CLIENTS)
-        .map(|index| format!("c{index}: []"))
+        .map(|index| format!("c{index}: [https://a.example.test]"))
         .collect::<Vec<_>>()
         .join(", ");
     let many_issuers = (0..=MAX_ASSERTION_ISSUERS_PER_CLIENT)
@@ -605,34 +618,37 @@ fn oidc_clients_default_to_no_rule_and_bound_the_assertion_issuer_map() {
     for (reason, yaml) in [
         (
             "too many clients",
-            format!("assertionIssuers: {{{many_clients}}}"),
+            format!("allowedClients: unrestricted\nassertionIssuers: {{{many_clients}}}"),
         ),
-        ("an empty client", "assertionIssuers: {'': []}".to_owned()),
+        (
+            "an empty client",
+            "allowedClients: unrestricted\nassertionIssuers: {'': [https://a.example.test]}".to_owned(),
+        ),
         (
             "an oversized client",
             format!(
-                "assertionIssuers: {{{}: []}}",
+                "allowedClients: unrestricted\nassertionIssuers: {{{}: [https://a.example.test]}}",
                 "c".repeat(MAX_ASSERTION_ISSUER_CLIENT_BYTES + 1)
             ),
         ),
         (
             "too many issuers for one client",
-            format!("assertionIssuers: {{portal: [{many_issuers}]}}"),
+            format!("allowedClients: unrestricted\nassertionIssuers: {{portal: [{many_issuers}]}}"),
         ),
         (
             "an empty issuer",
-            "assertionIssuers: {portal: ['']}".to_owned(),
+            "allowedClients: unrestricted\nassertionIssuers: {portal: ['']}".to_owned(),
         ),
         (
             "an oversized issuer",
             format!(
-                "assertionIssuers: {{portal: [{}]}}",
+                "allowedClients: unrestricted\nassertionIssuers: {{portal: [{}]}}",
                 "i".repeat(MAX_ASSERTION_ISSUER_BYTES + 1)
             ),
         ),
         (
             "a repeated issuer",
-            "assertionIssuers: {portal: [https://a.example.test, https://a.example.test]}"
+            "allowedClients: unrestricted\nassertionIssuers: {portal: [https://a.example.test, https://a.example.test]}"
                 .to_owned(),
         ),
     ] {
@@ -645,7 +661,55 @@ fn oidc_clients_default_to_no_rule_and_bound_the_assertion_issuer_map() {
         assert_eq!(error.field(), "authentication.oidc.assertionIssuers");
         assert!(!error.to_string().contains("example.test"), "{reason}");
     }
-    assert!(read_block::<OidcClientsConfig>("allowedClients: portal").is_err());
+}
+
+#[test]
+fn cfg_empty_2_the_allowed_clients_are_decided_in_every_file() {
+    let listed = clients("allowedClients: [portal, kiosk]");
+    assert_eq!(listed.allowed_clients, ["portal", "kiosk"]);
+    assert_eq!(
+        serde_json::to_value(&listed).unwrap(),
+        serde_json::json!({"allowedClients": ["portal", "kiosk"]})
+    );
+    let unrestricted = clients("allowedClients: unrestricted");
+    assert!(unrestricted.allowed_clients.is_empty());
+    assert_eq!(
+        serde_json::to_value(&unrestricted).unwrap(),
+        serde_json::json!({"allowedClients": "unrestricted"})
+    );
+
+    let omitted = read_block::<OidcClientsConfig>("{}").expect_err("the omission is refused");
+    assert_eq!(codes(&omitted), ["config.missing-key"]);
+    assert!(
+        omitted.diagnostics()[0].message.contains("allowedClients"),
+        "{}",
+        omitted.diagnostics()[0].message
+    );
+
+    for refused in ["allowedClients: []", "allowedClients: portal"] {
+        let report = read_block::<OidcClientsConfig>(refused).expect_err(refused);
+        assert_eq!(codes(&report), ["config.invalid-value"], "{refused}");
+        let diagnostic = &report.diagnostics()[0];
+        assert_eq!(diagnostic.path, "/allowedClients", "{refused}");
+        assert!(
+            diagnostic.suggested_action.contains("write unrestricted"),
+            "{}",
+            diagnostic.suggested_action
+        );
+        assert!(
+            !diagnostic.message.contains("portal"),
+            "{}",
+            diagnostic.message
+        );
+    }
+}
+
+#[test]
+fn cfg_id_6_a_repeated_allowed_client_is_refused_at_the_repeated_item() {
+    let report = read_block::<OidcClientsConfig>("allowedClients: [portal, kiosk, portal]")
+        .expect_err("a repeated client is refused");
+    assert_eq!(codes(&report), ["config.duplicate-item"]);
+    assert_eq!(report.diagnostics()[0].path, "/allowedClients/2");
 }
 
 #[test]
@@ -653,8 +717,30 @@ fn an_empty_assertion_issuer_map_is_refused_and_omission_applies_no_rule() {
     let error = read_block::<OidcClientsConfig>("assertionIssuers: {}")
         .expect_err("an empty map is not how a file says no rule");
     assert!(error.to_string().contains("at least one client"), "{error}");
-    let omitted = serde_json::to_string(&clients("{}")).expect("serialize");
+    let omitted =
+        serde_json::to_string(&clients("allowedClients: unrestricted")).expect("serialize");
     assert!(!omitted.contains("assertionIssuers"), "{omitted}");
+}
+
+#[test]
+fn a_listed_client_with_no_assertion_issuers_is_refused_at_that_client() {
+    let report = read_block::<OidcClientsConfig>(
+        "allowedClients: unrestricted\nassertionIssuers:\n  portal: [https://assert.example.test]\n  kiosk: []\n",
+    )
+    .expect_err("an empty issuer list is not how a file says no authority");
+    assert_eq!(codes(&report), ["config.invalid-value"]);
+    let diagnostic = &report.diagnostics()[0];
+    assert_eq!(diagnostic.path, "/assertionIssuers/kiosk");
+    assert!(
+        diagnostic.message.contains("at least one assertion issuer"),
+        "{}",
+        diagnostic.message
+    );
+    assert!(
+        diagnostic.suggested_action.contains("remove the client"),
+        "{}",
+        diagnostic.suggested_action
+    );
 }
 
 #[test]

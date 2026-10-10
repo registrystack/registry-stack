@@ -20,31 +20,31 @@ fn fixture(effects: Value) -> CompiledRegistry {
 
 fn fixture_with(effects: Value, customize: impl FnOnce(&mut Value)) -> CompiledRegistry {
     let mut source = json!({
-        "apiVersion":"registry.registrystack.org/v1alpha1", "kind":"RegistryProject",
-        "registry":{"id":"request-preparation","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+        "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
+        "project":{"id":"request-preparation","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
         "entities":[{
             "id":"target","primaryDataset":"test-dataset","route":"targets","mutationMode":"mutable",
             "changeControl":{"requiredFor":["create","patch"]},
             "fields":[
-                {"id":"first","type":"string","maxLength":64,"classification":"internal"},
-                {"id":"second","type":"string","maxLength":64,"classification":"internal"},
+                {"id":"first","type":"string","maximumLength":64,"classification":"internal"},
+                {"id":"second","type":"string","maximumLength":64,"classification":"internal"},
                 {"id":"parent","type":"reference","target":"target","classification":"internal"},
-                {"id":"notes","type":"text","maxLength":1048576,"classification":"internal"}
+                {"id":"notes","type":"text","maximumLength":1048576,"classification":"internal"}
             ]
         },{
             "id":"request","primaryDataset":"test-dataset","route":"requests","mutationMode":"mutable",
             "fields":[
                 {"id":"one","type":"reference","target":"target","classification":"internal"},
                 {"id":"two","type":"reference","target":"target","classification":"internal"},
-                {"id":"value","type":"string","maxLength":64,"required":true,"classification":"internal"}
+                {"id":"value","type":"string","maximumLength":64,"required":true,"classification":"internal"}
             ],
-            "changeRequest":{"effects":effects,"review":{"authority":"casework-main","policyId":"request-review"}}
+            "changeRequest":{"effects":effects,"review":{"type":"required","authority":"casework-main","policyId":"request-review"}}
         }],
-        "accessProfiles":[{"id":"submitter","default":true,"principalClaim":"sub","requiredScopes":"unrestricted","permissions":[{
-            "entity":"request","operations":["get","submit_request","apply_request"],"readableFields":["one","two","value"],
+        "accessProfiles":[{"id":"submitter","default":true,"principalClaim":"sub","requiredScopes":"unrestricted","permissions":{"entities":[{
+            "entity":"request","operations":["get","submit-request","apply-request"],"readableFields":["one","two","value"],
             "applyTargets":[{"entity":"target", "rowBoundaries": "unrestricted"}],
           "rowBoundaries": "unrestricted"
-        }]}]
+        }]}}]
     });
     customize(&mut source);
     let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
@@ -59,9 +59,9 @@ fn omitted_optional_request_field_freezes_as_materialized_null() {
             source["entities"][1]["fields"]
                 .as_array_mut()
                 .unwrap()
-                .push(json!({"id":"optional-note","type":"string","maxLength":32,"classification":"internal"}));
+                .push(json!({"id":"optional-note","type":"string","maximumLength":32,"classification":"internal"}));
             source["entities"][1]["changeRequest"]["application"] =
-                json!({"preconditions":{"request":[{"field":"optional-note","equals":null}]}});
+                json!({"preconditions":{"request":[{"field":"optional-note","isNull":true}]}});
         },
     );
     let before = map(json!({"first":"old"}));
@@ -93,10 +93,10 @@ fn encrypted_participation_is_refused_before_targets_resolve() {
         json!([{"target":{"fromField":"one"},"operation":"patch","set":{"first":{"fromField":"value"}}}]),
         |source| {
             source["entities"][0]["fields"].as_array_mut().unwrap().push(json!({
-                "id":"secret","type":"string","maxLength":64,"classification":"restricted","encrypted":true
+                "id":"secret","type":"string","maximumLength":64,"classification":"restricted","encrypted":true
             }));
             source["entities"][1]["fields"].as_array_mut().unwrap().push(json!({
-                "id":"secret-value","type":"string","maxLength":64,"classification":"restricted","encrypted":true
+                "id":"secret-value","type":"string","maximumLength":64,"classification":"restricted","encrypted":true
             }));
         },
     );
@@ -197,7 +197,7 @@ fn preparation_refuses_a_guard_on_its_own_request_record() {
                     "requires":[{"field":"value","equals":"changed"}]
                 }]}
             });
-            let permission = &mut source["accessProfiles"][0]["permissions"][0];
+            let permission = &mut source["accessProfiles"][0]["permissions"]["entities"][0];
             permission["applyTargets"]
                 .as_array_mut()
                 .unwrap()
@@ -328,29 +328,29 @@ fn from_field_refuses_missing_null_and_wrong_type_without_partial_effects() {
 fn declarative_and_rhai_paths_produce_byte_equivalent_canonical_effects() {
     let project = |change_request: Value| {
         json!({
-            "apiVersion":"registry.registrystack.org/v1alpha1", "kind":"RegistryProject",
-            "registry":{"id":"request-differential","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+            "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
+            "project":{"id":"request-differential","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
             "entities":[{
                 "id":"target","primaryDataset":"test-dataset","route":"targets","mutationMode":"mutable",
                 "changeControl":{"requiredFor":["patch"]},
-                "fields":[{"id":"first","type":"string","maxLength":64,"classification":"internal"}]
+                "fields":[{"id":"first","type":"string","maximumLength":64,"classification":"internal"}]
             },{
                 "id":"request","primaryDataset":"test-dataset","route":"requests","mutationMode":"mutable",
                 "fields":[
                     {"id":"one","type":"reference","target":"target","required":true,"classification":"internal"},
-                    {"id":"value","type":"string","maxLength":64,"required":true,"classification":"internal"}
+                    {"id":"value","type":"string","maximumLength":64,"required":true,"classification":"internal"}
                 ],
                 "changeRequest":change_request
             }],
-            "accessProfiles":[{"id":"submitter","default":true,"principalClaim":"sub","requiredScopes":"unrestricted","permissions":[{
-                "entity":"request","operations":["get","submit_request","apply_request"],
+            "accessProfiles":[{"id":"submitter","default":true,"principalClaim":"sub","requiredScopes":"unrestricted","permissions":{"entities":[{
+                "entity":"request","operations":["get","submit-request","apply-request"],
                 "readableFields":["one","value"],
                 "applyTargets":[{"entity":"target", "rowBoundaries": "unrestricted"}],
               "rowBoundaries": "unrestricted"
-            }]}]
+            }]}}]
         })
     };
-    let review = json!({"authority":"casework-main","policyId":"request-review"});
+    let review = json!({"type":"required","authority":"casework-main","policyId":"request-review"});
     let declarative_source = project(json!({
         "effects":[{"target":{"fromField":"one"},"operation":"patch","set":{"first":{"fromField":"value"}}}],
         "review":review.clone()
@@ -478,7 +478,7 @@ fn unchanged_encrypted_members_fit_the_stored_packet_expansion_budget() {
                 json!({
                     "id": format!("secret-{index}"),
                     "type": "string",
-                    "maxLength": PLAINTEXT_BYTES_PER_FIELD,
+                    "maximumLength": PLAINTEXT_BYTES_PER_FIELD,
                     "classification": "restricted",
                     "encrypted": true
                 })
@@ -636,20 +636,20 @@ fn review_packet_refuses_extra_missing_or_altered_frozen_targets() {
 #[test]
 fn rhai_planner_refuses_authority_ceiling_escape_before_target_locks() {
     let source = json!({
-        "apiVersion":"registry.registrystack.org/v1alpha1", "kind":"RegistryProject",
-        "registry":{"id":"planner-ceiling","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+        "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
+        "project":{"id":"planner-ceiling","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
         "entities":[{
             "id":"target","primaryDataset":"test-dataset","route":"targets","mutationMode":"mutable",
             "changeControl":{"requiredFor":["patch"]},
             "fields":[
-                {"id":"allowed","type":"string","maxLength":64,"classification":"internal"},
-                {"id":"forbidden","type":"string","maxLength":64,"classification":"internal"}
+                {"id":"allowed","type":"string","maximumLength":64,"classification":"internal"},
+                {"id":"forbidden","type":"string","maximumLength":64,"classification":"internal"}
             ]
         },{
             "id":"request","primaryDataset":"test-dataset","route":"requests","mutationMode":"mutable",
             "fields":[
                 {"id":"target-ref","type":"reference","target":"target","required":true,"classification":"internal"},
-                {"id":"value","type":"string","maxLength":64,"required":true,"classification":"internal"}
+                {"id":"value","type":"string","maximumLength":64,"required":true,"classification":"internal"}
             ],
             "changeRequest":{
                 "planner":{
@@ -657,15 +657,15 @@ fn rhai_planner_refuses_authority_ceiling_escape_before_target_locks() {
                     "requestFields":["target-ref","value"],
                     "writes":[{"target":{"fromField":"target-ref"},"operation":"patch","fields":["allowed"]}]
                 },
-                "review":{"authority":"casework-main","policyId":"request-review"}
+                "review":{"type":"required","authority":"casework-main","policyId":"request-review"}
             }
         }],
-        "accessProfiles":[{"id":"submitter","default":true,"principalClaim":"sub","requiredScopes":"unrestricted","permissions":[{
-            "entity":"request","operations":["get","submit_request","apply_request"],
+        "accessProfiles":[{"id":"submitter","default":true,"principalClaim":"sub","requiredScopes":"unrestricted","permissions":{"entities":[{
+            "entity":"request","operations":["get","submit-request","apply-request"],
             "readableFields":["target-ref","value"],
             "applyTargets":[{"entity":"target", "rowBoundaries": "unrestricted"}],
           "rowBoundaries": "unrestricted"
-        }]}]
+        }]}}]
     });
     let project = parse_project_json(&serde_json::to_vec(&source).expect("source serializes"))
         .expect("source parses");

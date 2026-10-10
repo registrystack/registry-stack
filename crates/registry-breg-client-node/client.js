@@ -61,19 +61,19 @@ function inputError(kind) {
 
 function plainDataObject(value, expectedFields) {
   if (value === null || typeof value !== 'object' || Array.isArray(value) || isProxy(value)) {
-    throw inputError('invalid_request');
+    throw inputError('invalid-request');
   }
   const prototype = Object.getPrototypeOf(value);
-  if (prototype !== Object.prototype && prototype !== null) throw inputError('invalid_request');
+  if (prototype !== Object.prototype && prototype !== null) throw inputError('invalid-request');
   const keys = Reflect.ownKeys(value);
   if (keys.some((key) => typeof key !== 'string')
     || keys.length !== expectedFields.length
-    || keys.some((key) => !expectedFields.includes(key))) throw inputError('invalid_request');
+    || keys.some((key) => !expectedFields.includes(key))) throw inputError('invalid-request');
   const result = Object.create(null);
   for (const field of expectedFields) {
     const descriptor = Object.getOwnPropertyDescriptor(value, field);
     if (!descriptor || !descriptor.enumerable || !Object.hasOwn(descriptor, 'value')) {
-      throw inputError('invalid_request');
+      throw inputError('invalid-request');
     }
     result[field] = descriptor.value;
   }
@@ -82,19 +82,19 @@ function plainDataObject(value, expectedFields) {
 
 function webhookHeaders(value) {
   if (value === null || typeof value !== 'object' || Array.isArray(value) || isProxy(value)) {
-    throw inputError('invalid_request');
+    throw inputError('invalid-request');
   }
   const prototype = Object.getPrototypeOf(value);
-  if (prototype !== Object.prototype && prototype !== null) throw inputError('invalid_request');
+  if (prototype !== Object.prototype && prototype !== null) throw inputError('invalid-request');
   const keys = Reflect.ownKeys(value);
   if (keys.some((key) => typeof key !== 'string')) {
-    throw inputError('invalid_request');
+    throw inputError('invalid-request');
   }
   const result = Object.create(null);
   for (const name of keys) {
     const descriptor = Object.getOwnPropertyDescriptor(value, name);
     if (!descriptor || !descriptor.enumerable || !Object.hasOwn(descriptor, 'value')
-      || typeof descriptor.value !== 'string') throw inputError('invalid_request');
+      || typeof descriptor.value !== 'string') throw inputError('invalid-request');
     result[name] = descriptor.value;
   }
   return result;
@@ -106,14 +106,14 @@ function verifyWebhookDelivery(value) {
     if (typeof input.method !== 'string' || typeof input.path !== 'string'
       || !Buffer.isBuffer(input.body) || !Buffer.isBuffer(input.key)
       || isSharedArrayBuffer(input.body.buffer) || isSharedArrayBuffer(input.key.buffer)) {
-      throw inputError('invalid_request');
+      throw inputError('invalid-request');
     }
     input.headers = webhookHeaders(input.headers);
     input.body = Buffer.from(input.body);
     input.key = Buffer.from(input.key);
     return native.verifyWebhookDelivery(input);
   } catch (error) {
-    throw normalize(error, 'invalid_request');
+    throw normalize(error, 'invalid-request');
   }
 }
 
@@ -185,10 +185,10 @@ function sanitizeArguments(args, jsonIndexes, requiredIndexes) {
   return args.map((value, index) => {
     if (!jsonIndexes.has(index)) return value;
     if (value === undefined || value === null) {
-      if (requiredIndexes.has(index)) throw inputError('invalid_request');
+      if (requiredIndexes.has(index)) throw inputError('invalid-request');
       return value;
     }
-    return cloneJson(value, budget, 0, 'invalid_request');
+    return cloneJson(value, budget, 0, 'invalid-request');
   });
 }
 
@@ -199,7 +199,7 @@ function wrapAsync(name, jsonIndexes = [], requiredIndexes = []) {
       const sanitized = sanitizeArguments(args, new Set(jsonIndexes), new Set(requiredIndexes));
       return original.apply(this, sanitized).catch((error) => { throw normalize(error); });
     } catch (error) {
-      throw normalize(error, 'invalid_request');
+      throw normalize(error, 'invalid-request');
     }
   };
 }
@@ -253,7 +253,7 @@ for (const [method, jsonIndexes, requiredIndexes] of [
         args, new Set(jsonIndexes), new Set(requiredIndexes),
       ));
     } catch (error) {
-      throw normalize(error, 'invalid_request');
+      throw normalize(error, 'invalid-request');
     }
   };
 }
@@ -273,10 +273,10 @@ function preparedClass(Class, label) {
     fromBytes: {
       value(bytes) {
         try {
-          if (!Buffer.isBuffer(bytes)) throw inputError('invalid_request');
+          if (!Buffer.isBuffer(bytes)) throw inputError('invalid-request');
           return Class.fromBytes(bytes);
         } catch (error) {
-          throw normalize(error, 'invalid_request');
+          throw normalize(error, 'invalid-request');
         }
       },
     },
@@ -297,17 +297,17 @@ const BRegPreparedLifecycle = preparedClass(
 const withReason = native.BRegLifecycleAction.prototype.withReason;
 native.BRegLifecycleAction.prototype.withReason = function (reason) {
   try {
-    if (typeof reason !== 'string' || !reason.isWellFormed()) throw inputError('invalid_request');
+    if (typeof reason !== 'string' || !reason.isWellFormed()) throw inputError('invalid-request');
     return withReason.call(this, reason);
   } catch (error) {
-    throw normalize(error, 'invalid_request');
+    throw normalize(error, 'invalid-request');
   }
 };
 
 const lifecycleActionsJson = native.BaseRegistryClient.prototype.lifecycleActionsJson;
 native.BaseRegistryClient.prototype.lifecycleActionsJson = function (...args) {
   try { return lifecycleActionsJson.apply(this, args); }
-  catch (error) { throw normalize(error, 'invalid_request'); }
+  catch (error) { throw normalize(error, 'invalid-request'); }
 };
 
 const lifecycleActions = native.BaseRegistryClient.prototype.lifecycleActions;
@@ -316,7 +316,7 @@ native.BaseRegistryClient.prototype.lifecycleActions = function (...args) {
     const sanitized = sanitizeArguments(args, new Set([1]), new Set([1]));
     return lifecycleActions.apply(this, sanitized);
   } catch (error) {
-    throw normalize(error, 'invalid_request');
+    throw normalize(error, 'invalid-request');
   }
 };
 
@@ -326,7 +326,7 @@ native.BaseRegistryClient.prototype.requestHistory = function (...args) {
     const sanitized = sanitizeArguments(args, new Set([0]), new Set([0]));
     return requestHistory.apply(this, sanitized);
   } catch (error) {
-    throw normalize(error, 'invalid_request');
+    throw normalize(error, 'invalid-request');
   }
 };
 
@@ -337,11 +337,11 @@ for (const name of ['findProposal', 'findApplication']) {
       const proposalVersion = args[2];
       if (!Number.isSafeInteger(proposalVersion)
         || proposalVersion < 1 || proposalVersion > 0xffff_ffff) {
-        throw inputError('invalid_request');
+        throw inputError('invalid-request');
       }
       return original.apply(this, args);
     } catch (error) {
-      throw normalize(error, 'invalid_request');
+      throw normalize(error, 'invalid-request');
     }
   };
 }
@@ -351,7 +351,7 @@ native.BRegAttachmentSlot.prototype.valueIn = function (...args) {
   try {
     return valueIn.apply(this, sanitizeArguments(args, new Set([0]), new Set([0])));
   } catch (error) {
-    throw normalize(error, 'invalid_request');
+    throw normalize(error, 'invalid-request');
   }
 };
 
@@ -361,7 +361,7 @@ for (const name of ['prepareUpload', 'acceptsContentType']) {
     try {
       return original.apply(this, args);
     } catch (error) {
-      throw normalize(error, 'invalid_request');
+      throw normalize(error, 'invalid-request');
     }
   };
 }
@@ -375,20 +375,20 @@ for (const name of [
     try {
       return original.apply(this, args);
     } catch (error) {
-      throw normalize(error, 'invalid_request');
+      throw normalize(error, 'invalid-request');
     }
   };
 }
 
 function encodeIngestionChunk(chunkIndex, items, prefixDigest) {
   try {
-    if (!Number.isSafeInteger(chunkIndex)) throw inputError('invalid_request');
+    if (!Number.isSafeInteger(chunkIndex)) throw inputError('invalid-request');
     const sanitized = sanitizeArguments(
       [chunkIndex, items, prefixDigest], new Set([1]), new Set([1]),
     );
     return native.encodeIngestionChunk(...sanitized);
   } catch (error) {
-    throw normalize(error, 'invalid_request');
+    throw normalize(error, 'invalid-request');
   }
 }
 
@@ -397,10 +397,10 @@ function encodeIngestionChunk(chunkIndex, items, prefixDigest) {
 const ingestionChunkReceipt = native.BaseRegistryClient.prototype.ingestionChunkReceipt;
 native.BaseRegistryClient.prototype.ingestionChunkReceipt = function (...args) {
   try {
-    if (!Number.isSafeInteger(args[2])) throw inputError('invalid_request');
+    if (!Number.isSafeInteger(args[2])) throw inputError('invalid-request');
     return ingestionChunkReceipt.apply(this, args).catch((error) => { throw normalize(error); });
   } catch (error) {
-    throw normalize(error, 'invalid_request');
+    throw normalize(error, 'invalid-request');
   }
 };
 
@@ -408,11 +408,11 @@ const ingestionPrefixDigestUpdate = native.BRegIngestionPrefixDigest.prototype.u
 native.BRegIngestionPrefixDigest.prototype.update = function (data) {
   try {
     if (!Buffer.isBuffer(data) || isSharedArrayBuffer(data.buffer)) {
-      throw inputError('invalid_request');
+      throw inputError('invalid-request');
     }
     return ingestionPrefixDigestUpdate.call(this, data);
   } catch (error) {
-    throw normalize(error, 'invalid_request');
+    throw normalize(error, 'invalid-request');
   }
 };
 

@@ -28,8 +28,8 @@ pub use model::*;
 pub use query::{parse_service_filters, Directory, QueryError};
 #[cfg(feature = "runtime-config")]
 pub use runtime_config::{
-    check_runtime, LogLevel, RuntimeCheck, RuntimeConfig, RuntimeLimits, RUNTIME_API_VERSION,
-    RUNTIME_KIND,
+    check_runtime, LogLevel, RuntimeCheck, RuntimeConfig, RuntimeLimits, RuntimeListener,
+    RUNTIME_API_VERSION, RUNTIME_KIND,
 };
 #[cfg(feature = "server")]
 pub use server::{router, DiscoveryService, ServiceConfigError};

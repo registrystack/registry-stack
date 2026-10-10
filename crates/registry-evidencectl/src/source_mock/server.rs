@@ -26,19 +26,19 @@ const MAX_CONCURRENT_REQUESTS: usize = 64;
 const MAX_REQUEST_TARGET_BYTES: usize = 8 * 1024;
 
 const NOT_FOUND_PROBLEM: &[u8] =
-    br#"{"type":"about:blank","title":"not found","status":404,"code":"source_mock.not_found"}
+    br#"{"type":"about:blank","title":"not found","status":404,"code":"source-mock.not-found"}
 "#;
 const METHOD_NOT_ALLOWED_PROBLEM: &[u8] =
-    br#"{"type":"about:blank","title":"method not allowed","status":405,"code":"source_mock.method_not_allowed"}
+    br#"{"type":"about:blank","title":"method not allowed","status":405,"code":"source-mock.method-not-allowed"}
 "#;
 const UNSUPPORTED_PROBLEM: &[u8] =
-    br#"{"type":"about:blank","title":"route not implemented","status":501,"code":"source_mock.unsupported_route"}
+    br#"{"type":"about:blank","title":"route not implemented","status":501,"code":"source-mock.unsupported-route"}
 "#;
 const GENERATION_FAILED_PROBLEM: &[u8] =
-    br#"{"type":"about:blank","title":"response generation failed","status":500,"code":"source_mock.generation_failed"}
+    br#"{"type":"about:blank","title":"response generation failed","status":500,"code":"source-mock.generation-failed"}
 "#;
 const BUSY_PROBLEM: &[u8] =
-    br#"{"type":"about:blank","title":"server busy","status":503,"code":"source_mock.busy"}
+    br#"{"type":"about:blank","title":"server busy","status":503,"code":"source-mock.busy"}
 "#;
 
 type ResponseGenerator = dyn Fn(&BTreeMap<String, String>) -> Result<Option<Vec<u8>>> + Send + Sync;
@@ -560,6 +560,21 @@ mod tests {
             Some(&APPLICATION_JSON)
         );
         assert_eq!(body_text(response).await, r#"{"kind":"literal"}"#);
+    }
+
+    #[test]
+    fn every_fixed_problem_carries_a_kebab_case_code() {
+        for (problem, code) in [
+            (NOT_FOUND_PROBLEM, "source-mock.not-found"),
+            (METHOD_NOT_ALLOWED_PROBLEM, "source-mock.method-not-allowed"),
+            (UNSUPPORTED_PROBLEM, "source-mock.unsupported-route"),
+            (GENERATION_FAILED_PROBLEM, "source-mock.generation-failed"),
+            (BUSY_PROBLEM, "source-mock.busy"),
+        ] {
+            let body: serde_json::Value =
+                serde_json::from_slice(problem).expect("a fixed problem is JSON");
+            assert_eq!(body["code"], code);
+        }
     }
 
     #[test]

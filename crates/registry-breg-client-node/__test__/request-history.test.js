@@ -85,7 +85,7 @@ test('request history refuses malformed shapes without I/O', () => {
   for (const mutate of candidates) {
     const value = record();
     mutate(value);
-    assert.throws(() => client.requestHistory(value), error => error.kind === 'invalid_request');
+    assert.throws(() => client.requestHistory(value), error => error.kind === 'invalid-request');
   }
 });
 
@@ -99,7 +99,7 @@ test('request history lookup helpers normalize invalid identities and versions',
     () => page.findApplication('request', requestId, 2, 'not-a-uuid'),
   ]) {
     assert.throws(invoke, error => (
-      error instanceof BaseRegistryClientError && error.kind === 'invalid_request'
+      error instanceof BaseRegistryClientError && error.kind === 'invalid-request'
     ));
   }
 });

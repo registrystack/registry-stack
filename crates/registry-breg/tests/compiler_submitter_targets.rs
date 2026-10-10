@@ -19,11 +19,11 @@ fn create_only_guard_source() -> Value {
     let mut candidate = source();
     candidate["entities"].as_array_mut().unwrap().push(json!({
         "id":"enrolment", "primaryDataset":"directory", "route":"enrolments",
-        "mutationMode":"create_only", "classification":"restricted",
+        "mutationMode":"create-only", "classification":"restricted",
         "changeControl":{"requiredFor":["create"]},
         "fields":[{
             "id":"supporting-reference", "type":"string", "required":true,
-            "classification":"restricted", "minLength":1, "maxLength":500
+            "classification":"restricted", "minimumLength":1, "maximumLength":500
         }]
     }));
     candidate["entities"][1]["changeRequest"]["effects"] = json!([{
@@ -42,7 +42,7 @@ fn create_only_guard_source() -> Value {
         .iter_mut()
         .find(|profile| profile["id"] == "reviewer")
         .unwrap();
-    reviewer["permissions"][1]["applyTargets"]
+    reviewer["permissions"]["entities"][1]["applyTargets"]
         .as_array_mut()
         .expect("reviewer apply targets")
         .push(json!({"entity":"enrolment", "rowBoundaries":"unrestricted"}));
@@ -77,10 +77,12 @@ fn native_reference_admission_requires_complete_manual_same_profile_authority() 
             .find(|profile| profile["id"] == "holder")
             .unwrap();
         match case {
-            "missing-get" => holder["permissions"][0]["operations"] = json!(["list"]),
-            "unknown-target" => holder["permissions"][1]["submitterTargets"] = json!(["unknown"]),
+            "missing-get" => holder["permissions"]["entities"][0]["operations"] = json!(["list"]),
+            "unknown-target" => {
+                holder["permissions"]["entities"][1]["submitterTargets"] = json!(["unknown"])
+            }
             "unreadable-reference" => {
-                holder["permissions"][1]["readableFields"] = json!([
+                holder["permissions"]["entities"][1]["readableFields"] = json!([
                     "licensed-activities",
                     "authorization-conditions",
                     "reason",
@@ -92,14 +94,15 @@ fn native_reference_admission_requires_complete_manual_same_profile_authority() 
                     json!({"mode":"automatic", "executor":"scope-correction-executor"})
             }
             "request-target" => {
-                holder["permissions"][1]["submitterTargets"] = json!(["scope-correction"]);
+                holder["permissions"]["entities"][1]["submitterTargets"] =
+                    json!(["scope-correction"]);
                 candidate["entities"][1]["fields"][0]["target"] = json!("scope-correction");
             }
             "optional-reference" => {
                 candidate["entities"][1]["fields"][0]["required"] = json!(false)
             }
             "unwritable-reference" => {
-                holder["permissions"][1]["writableFields"] = json!([
+                holder["permissions"]["entities"][1]["writableFields"] = json!([
                     "licensed-activities",
                     "authorization-conditions",
                     "reason",
@@ -182,7 +185,8 @@ fn create_only_requests_admit_exact_existing_application_guard_targets() {
         .iter_mut()
         .find(|profile| profile["id"] == "holder")
         .unwrap();
-    holder["permissions"][1]["submitterTargets"] = json!(["professional-license", "enrolment"]);
+    holder["permissions"]["entities"][1]["submitterTargets"] =
+        json!(["professional-license", "enrolment"]);
     let project = parse_project_json(&serde_json::to_vec(&widened).unwrap()).unwrap();
     let failure = compile_project(&project, &[], CompileProfile::Authoring).unwrap_err();
     assert!(failure

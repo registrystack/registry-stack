@@ -134,18 +134,18 @@ impl MessagingClient {
 
 fn bearer(value: String) -> Result<BearerToken> {
     BearerToken::new(value)
-        .map_err(|_| binding_error("invalid_request", "the bearer token is invalid"))
+        .map_err(|_| binding_error("invalid-request", "the bearer token is invalid"))
 }
 
 fn input<T: serde::de::DeserializeOwned>(value: Value) -> Result<T> {
     if contains_unsafe_integer(&value) {
         return Err(binding_error(
-            "invalid_request",
+            "invalid-request",
             "Messaging client arguments are invalid",
         ));
     }
     serde_json::from_value(value)
-        .map_err(|_| binding_error("invalid_request", "Messaging client arguments are invalid"))
+        .map_err(|_| binding_error("invalid-request", "Messaging client arguments are invalid"))
 }
 
 fn outcome<T: Serialize>(
@@ -208,7 +208,7 @@ fn error_envelope(error: MessagingClientError) -> Value {
             "message": "Messaging client configuration is invalid",
         }),
         MessagingClientError::InvalidRequest { .. } => json!({
-            "kind": "invalid_request",
+            "kind": "invalid-request",
             "message": "Messaging client arguments are invalid",
         }),
         MessagingClientError::Transport { kind } => json!({
@@ -253,9 +253,9 @@ fn error_envelope(error: MessagingClientError) -> Value {
 
 fn protocol_failure(failure: MessagingProtocolFailure) -> &'static str {
     match failure {
-        MessagingProtocolFailure::HeaderBounds => "header_bounds",
-        MessagingProtocolFailure::TraceContext => "trace_context",
-        MessagingProtocolFailure::MediaType => "media_type",
+        MessagingProtocolFailure::HeaderBounds => "header-bounds",
+        MessagingProtocolFailure::TraceContext => "trace-context",
+        MessagingProtocolFailure::MediaType => "media-type",
         MessagingProtocolFailure::Body => "body",
         MessagingProtocolFailure::Problem => "problem",
         MessagingProtocolFailure::Status => "status",
@@ -326,15 +326,15 @@ mod tests {
     fn protocol_failures_use_the_public_snake_case_vocabulary() {
         assert_eq!(
             protocol_failure(MessagingProtocolFailure::HeaderBounds),
-            "header_bounds"
+            "header-bounds"
         );
         assert_eq!(
             protocol_failure(MessagingProtocolFailure::TraceContext),
-            "trace_context"
+            "trace-context"
         );
         assert_eq!(
             protocol_failure(MessagingProtocolFailure::MediaType),
-            "media_type"
+            "media-type"
         );
         assert_eq!(protocol_failure(MessagingProtocolFailure::Body), "body");
         assert_eq!(

@@ -50,14 +50,14 @@ class ErrorMappingTest(unittest.TestCase):
         self.server.routes["POST /v1/evidence"] = StubRoute(
             status=401,
             headers={"Content-Type": PROBLEM_MEDIA_TYPE},
-            body=fixtures.problem_body(401, "auth.invalid_credential"),
+            body=fixtures.problem_body(401, "auth.invalid-credential"),
         )
         with self.assertRaises(revc.DeniedError) as raised:
             self._send(self._client())
         error = raised.exception
         self.assertEqual(error.kind, "denied")
         self.assertEqual(error.status, 401)
-        self.assertEqual(error.code, "auth.invalid_credential")
+        self.assertEqual(error.code, "auth.invalid-credential")
         self.assertIsNone(error.retry_after_seconds)
         self.assertEqual(error.trace_id, TRACE_ID)
 
@@ -77,7 +77,7 @@ class ErrorMappingTest(unittest.TestCase):
         self.server.routes["POST /v1/evidence"] = StubRoute(
             status=429,
             headers={"Content-Type": PROBLEM_MEDIA_TYPE, "Retry-After": "30"},
-            body=fixtures.problem_body(429, "evidence.rate_limited"),
+            body=fixtures.problem_body(429, "evidence.rate-limited"),
         )
         with self.assertRaises(revc.DeniedError) as raised:
             self._send(self._client())
@@ -94,21 +94,21 @@ class ErrorMappingTest(unittest.TestCase):
         with self.assertRaises(revc.NotAvailableError) as raised:
             self._send(self._client())
         error = raised.exception
-        self.assertEqual(error.kind, "not_available")
+        self.assertEqual(error.kind, "not-available")
         self.assertEqual(error.trace_id, TRACE_ID)
 
     def test_400_with_an_ordinary_code_maps_to_protocol(self):
         self.server.routes["POST /v1/evidence"] = StubRoute(
             status=400,
             headers={"Content-Type": PROBLEM_MEDIA_TYPE},
-            body=fixtures.problem_body(400, "evidence.invalid_request"),
+            body=fixtures.problem_body(400, "evidence.invalid-request"),
         )
         with self.assertRaises(revc.ProtocolError) as raised:
             self._send(self._client())
         error = raised.exception
         self.assertEqual(error.kind, "protocol")
         self.assertEqual(error.status, 400)
-        self.assertEqual(error.code, "evidence.invalid_request")
+        self.assertEqual(error.code, "evidence.invalid-request")
 
     def test_a_success_with_the_wrong_media_type_maps_to_protocol(self):
         self.server.routes["POST /v1/evidence"] = StubRoute(
@@ -132,7 +132,7 @@ class ErrorMappingTest(unittest.TestCase):
             self._send(self._client(max_response_bytes=16))
         error = raised.exception
         self.assertEqual(error.kind, "transport")
-        self.assertEqual(error.transport_kind, "response_too_large")
+        self.assertEqual(error.transport_kind, "response-too-large")
 
 
 if __name__ == "__main__":

@@ -56,9 +56,9 @@ const TRACESTATE_CANARY: &str = "registry=breg-v1-25-tracestate-canary";
 static TRACING_CAPTURE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 const PROJECT: &str = r#"
-apiVersion: registry.registrystack.org/v1alpha1
-kind: RegistryProject
-registry:
+apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
   id: startup-http
   version: "1"
   defaultLanguage: en
@@ -67,21 +67,22 @@ entities:
   - id: public-record
     primaryDataset: test-dataset
     route: public-records
-    mutationMode: create_only
+    mutationMode: create-only
     tombstone: false
     classification: public
     fields:
-      - {id: label, type: string, required: true, maxLength: 80, classification: public}
+      - {id: label, type: string, required: true, maximumLength: 80, classification: public}
 accessProfiles:
   - id: public
     default: true
     principalClaim: registry_principal
     requiredScopes: unrestricted
     permissions:
-      - entity: public-record
-        rowBoundaries: unrestricted
-        operations: [list]
-        readableFields: [label]
+      entities:
+        - entity: public-record
+          rowBoundaries: unrestricted
+          operations: [list]
+          readableFields: [label]
 "#;
 
 #[derive(Default)]
@@ -1315,7 +1316,7 @@ async fn configured_metrics_record_served_requests_with_closed_value_free_labels
     ));
     assert!(
         body.contains(
-            "breg_http_requests_total{route=\"/v1/records/public-records\",method=\"GET\",status=\"client_error\"} 1\n"
+            "breg_http_requests_total{route=\"/v1/records/public-records\",method=\"GET\",status=\"client-error\"} 1\n"
         ),
         "the refusal is recorded under its registered route template"
     );
@@ -1411,7 +1412,7 @@ async fn unauthenticated_requests_are_refused_before_any_profile_or_query_is_rea
     let body = std::str::from_utf8(&body).expect("scrape body is UTF-8");
     assert!(
         body.contains(
-            "breg_http_requests_total{route=\"/v1/records/public-records\",method=\"GET\",status=\"client_error\"} 3\n"
+            "breg_http_requests_total{route=\"/v1/records/public-records\",method=\"GET\",status=\"client-error\"} 3\n"
         ),
         "the refusals are counted under their registered route template: {body}"
     );
@@ -1530,7 +1531,7 @@ fn assert_forbidden_values_absent(text: &str) {
 
 fn canary_runtime_document() -> String {
     format!(
-        r#"apiVersion: registry.registrystack.org/breg-runtime/v1alpha1
+        r#"apiVersion: id.registrystack.org/formats/breg/runtime/v1alpha1
 kind: BRegRuntimeConfig
 telemetry:
   rawPrincipal: {RAW_PRINCIPAL_CANARY}
@@ -1552,7 +1553,7 @@ telemetry:
 fn runtime_without_telemetry(root: &Path) -> String {
     let audit_path = root.join("audit").join("audit.jsonl").display().to_string();
     format!(
-        r#"apiVersion: registry.registrystack.org/breg-runtime/v1alpha1
+        r#"apiVersion: id.registrystack.org/formats/breg/runtime/v1alpha1
 kind: BRegRuntimeConfig
 listener:
   bind: 127.0.0.1:8080
@@ -1569,7 +1570,7 @@ database:
   runtimeUrlRef: secret:env/BREG_RUNTIME_CONFIG_DATABASE_URL
   migrationUrlRef: secret:env/BREG_RUNTIME_CONFIG_MIGRATION_DATABASE_URL
   pool:
-    maxSize: 4
+    maximumConnections: 4
     waitTimeoutMilliseconds: 1000
     createTimeoutMilliseconds: 1000
     recycleTimeoutMilliseconds: 1000
@@ -1588,14 +1589,14 @@ authentication:
     scopeSeparator: " "
     allowedClients: [registry-client]
     deniedKids: [denied-kid]
-    maxTokenLifetimeSeconds: 300
+    maximumTokenLifetimeSeconds: 300
     leewayMilliseconds: 60000
     jwksCache:
       cacheTtlSeconds: 600
       negativeCacheTtlSeconds: 60
       refreshCooldownSeconds: 30
-      maxDocumentBytes: 65536
-      requestTimeoutMilliseconds: 5000
+      maximumDocumentBytes: 65536
+      attemptTimeoutMilliseconds: 5000
       outageToleranceSeconds: 900
   authorityClaims:
     principal: registry_principal
@@ -1605,7 +1606,7 @@ audit:
   path: {audit_path}
 cursor:
   secretRef: secret:file/cursor-key
-  maxAgeSeconds: 300
+  maximumAgeSeconds: 300
 eventDestinations: {{}}
 operationalTimeouts:
   httpRequestMilliseconds: 10000

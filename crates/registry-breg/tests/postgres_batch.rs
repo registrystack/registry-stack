@@ -683,18 +683,18 @@ async fn real_postgres_batch_is_bounded_authorized_atomic_and_exactly_replayable
 fn compiled_registry() -> registry_breg::CompiledRegistry {
     let project = parse_project_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"batch-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"batch-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
             "id":"widget","primaryDataset":"test-dataset","route":"widgets","mutationMode":"mutable","classification":"public",
             "batch":{"maximumItems":3,"maximumBytes":8192},
-            "constraints":[{"kind":"unique","fields":["label"]}],
+            "constraints":[{"type":"unique","fields":["label"]}],
             "fields":[
-              {"id":"jurisdiction","type":"string","maxLength":32,"required":true,"classification":"public"},
-              {"id":"label","type":"string","maxLength":128,"required":true,"classification":"public"},
-              {"id":"locked","type":"string","maxLength":128,"classification":"internal"},
-              {"id":"secret","type":"string","maxLength":128,"classification":"restricted"},
+              {"id":"jurisdiction","type":"string","maximumLength":32,"required":true,"classification":"public"},
+              {"id":"label","type":"string","maximumLength":128,"required":true,"classification":"public"},
+              {"id":"locked","type":"string","maximumLength":128,"classification":"internal"},
+              {"id":"secret","type":"string","maximumLength":128,"classification":"restricted"},
               {"id":"quantity","type":"int64","required":true,"classification":"public"}
             ],
             "hooks":[
@@ -705,30 +705,30 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
           "accessProfiles":[{
             "id":"operator","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "requiredPurposes":["case-management","case-review"],
-            "permissions":[{
+            "permissions":{"entities":[{
               "entity":"widget","operations":["create","get","patch","batch"],
               "readableFields":["jurisdiction","label","locked","quantity"],
               "writableFields":["jurisdiction","label","secret","quantity"],
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
-            }]
+            }]}
           },{
             "id":"batch-creator","principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "requiredPurposes":["case-management"],
-            "permissions":[{
+            "permissions":{"entities":[{
               "entity":"widget","operations":["create","batch"],
               "readableFields":["jurisdiction","label","locked","quantity"],
               "writableFields":["jurisdiction","label","secret","quantity"],
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
-            }]
+            }]}
           },{
             "id":"operator-minimal","principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "requiredPurposes":["case-management"],
-            "permissions":[{
+            "permissions":{"entities":[{
               "entity":"widget","operations":["create","patch","batch"],
               "readableFields":["label"],
               "writableFields":["jurisdiction","label","secret","quantity"],
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
-            }]
+            }]}
           }]
         }"#,
     )

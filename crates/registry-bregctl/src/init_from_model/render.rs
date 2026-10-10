@@ -183,6 +183,10 @@ fn registry(plan: &Plan) -> String {
     let base = base_iri(plan);
     let id = &plan.registry_id;
     let title = &plan.registry_title;
+    yaml.line(
+        0,
+        "# yaml-language-server: $schema=https://id.registrystack.org/schemas/breg/project/project.v1alpha1.schema.json",
+    );
     yaml.comment(
         0,
         &format!(
@@ -194,8 +198,11 @@ fn registry(plan: &Plan) -> String {
             plan.model.display_name, plan.model.version
         ),
     );
-    yaml.line(0, "apiVersion: registry.registrystack.org/v1alpha1");
-    yaml.line(0, "kind: RegistryProject");
+    yaml.line(
+        0,
+        "apiVersion: id.registrystack.org/formats/breg/project/v1alpha1",
+    );
+    yaml.line(0, "kind: BRegProject");
     yaml.blank();
     yaml.comment(
         0,
@@ -203,7 +210,7 @@ fn registry(plan: &Plan) -> String {
          publishes, so point it at a hostname you control before a production package. Names \
          under `.example.invalid` never resolve.",
     );
-    yaml.line(0, "registry:");
+    yaml.line(0, "project:");
     yaml.entry(1, "id", id);
     yaml.line(1, "version: 0.1.0");
     yaml.line(1, "defaultLanguage: en");
@@ -263,7 +270,7 @@ fn registry(plan: &Plan) -> String {
         ),
     );
     yaml.entry(3, "owner", &format!("{title} Authority"));
-    yaml.line(3, "status: under_development");
+    yaml.line(3, "status: under-development");
     yaml.line(1, "dataServices:");
     yaml.entry(2, "- id", &format!("{id}-api"));
     yaml.entry(3, "title", &format!("{title} API"));
@@ -325,7 +332,7 @@ fn registry(plan: &Plan) -> String {
             yaml.entry(2, "- id", &vocabulary.id);
             yaml.entry(3, "schemeIri", &vocabulary.scheme_iri);
             yaml.entry(3, "version", &plan.model.version);
-            yaml.entry(3, "externalRef", &vocabulary.scheme_iri);
+            yaml.entry(3, "externalReference", &vocabulary.scheme_iri);
             yaml.line(3, "concepts:");
             for code in &vocabulary.values {
                 let mut concept = format!("- {{code: {}", scalar(&code.code));
@@ -400,7 +407,7 @@ fn registry(plan: &Plan) -> String {
         yaml.line(
             3,
             &format!(
-                "- {{kind: unique, fields: [{}]}}",
+                "- {{type: unique, fields: [{}]}}",
                 scalar(&entity.identifier.id)
             ),
         );
@@ -455,6 +462,7 @@ fn registry(plan: &Plan) -> String {
     );
     yaml.line(2, "requiredPurposes: [registry-operations]");
     yaml.line(2, "permissions:");
+    yaml.line(3, "entities:");
     for entity in &plan.entities {
         let all: Vec<&str> = entity.all_fields().map(|field| field.id.as_str()).collect();
         let filterable: Vec<&str> = entity
@@ -462,12 +470,12 @@ fn registry(plan: &Plan) -> String {
             .filter(|field| field.kind.filterable())
             .map(|field| field.id.as_str())
             .collect();
-        yaml.entry(3, "- entity", &entity.id);
-        yaml.line(4, "rowBoundaries: unrestricted");
-        yaml.line(4, "operations: [create, get, list, patch]");
-        yaml.line(4, &format!("readableFields: {}", flow_list(&all)));
-        yaml.line(4, &format!("writableFields: {}", flow_list(&all)));
-        yaml.line(4, &format!("filterableFields: {}", flow_list(&filterable)));
+        yaml.entry(4, "- entity", &entity.id);
+        yaml.line(5, "rowBoundaries: unrestricted");
+        yaml.line(5, "operations: [create, get, list, patch]");
+        yaml.line(5, &format!("readableFields: {}", flow_list(&all)));
+        yaml.line(5, &format!("writableFields: {}", flow_list(&all)));
+        yaml.line(5, &format!("filterableFields: {}", flow_list(&filterable)));
     }
     let readers = reader_entities(plan);
     if !readers.is_empty() {
@@ -487,18 +495,19 @@ fn registry(plan: &Plan) -> String {
         );
         yaml.line(2, "requiredPurposes: [registry-reporting]");
         yaml.line(2, "permissions:");
+        yaml.line(3, "entities:");
         for entity in readers {
             let readable: Vec<&str> = entity
                 .all_fields()
                 .filter(|field| field.classification != Classification::Restricted)
                 .map(|field| field.id.as_str())
                 .collect();
-            yaml.entry(3, "- entity", &entity.id);
-            yaml.line(4, "rowBoundaries: unrestricted");
-            yaml.line(4, "operations: [get, list]");
-            yaml.line(4, &format!("readableFields: {}", flow_list(&readable)));
+            yaml.entry(4, "- entity", &entity.id);
+            yaml.line(5, "rowBoundaries: unrestricted");
+            yaml.line(5, "operations: [get, list]");
+            yaml.line(5, &format!("readableFields: {}", flow_list(&readable)));
             yaml.line(
-                4,
+                5,
                 &format!(
                     "filterableFields: {}",
                     flow_list(&[entity.identifier.id.as_str()])
@@ -524,9 +533,9 @@ fn field_source(yaml: &mut Yaml, indent: usize, field: &PlannedField) {
             max_length,
         } => {
             if *min_length > 0 {
-                format!("type: string{required}, minLength: {min_length}, maxLength: {max_length}")
+                format!("type: string{required}, minimumLength: {min_length}, maximumLength: {max_length}")
             } else {
-                format!("type: string{required}, maxLength: {max_length}")
+                format!("type: string{required}, maximumLength: {max_length}")
             }
         }
         FieldKind::Int64 => format!("type: int64{required}"),
@@ -551,7 +560,7 @@ fn field_source(yaml: &mut Yaml, indent: usize, field: &PlannedField) {
                 yaml.line(indent + 1, "required: true");
             }
             yaml.line(indent + 1, &format!("classification: {classification}"));
-            yaml.line(indent + 1, &format!("maxBytes: {max_bytes}"));
+            yaml.line(indent + 1, &format!("maximumBytes: {max_bytes}"));
             yaml.line(indent + 1, "schema:");
             for line in schema_lines(schema) {
                 yaml.line(indent + 2, &line);
@@ -1901,7 +1910,7 @@ mod tests {
         let (plan, selection) = starter_plan("household");
         let files = render(&plan, &selection);
         let registry = yaml(&files, "registry.yaml");
-        assert_eq!(registry["registry"]["id"], "household-registry");
+        assert_eq!(registry["project"]["id"], "household-registry");
         assert_eq!(
             registry["package"],
             yaml_value("sourceRevision: household-registry-0.1.0")
@@ -1918,7 +1927,7 @@ mod tests {
         let fields = person["fields"].as_array().expect("fields");
         assert_eq!(fields[0]["id"], "person-code");
         assert_eq!(fields[0]["required"], true);
-        assert_eq!(fields[0]["minLength"], 1);
+        assert_eq!(fields[0]["minimumLength"], 1);
         let marital = fields
             .iter()
             .find(|field| field["id"] == "marital-status")
@@ -1988,7 +1997,7 @@ mod tests {
         let profiles = registry["accessProfiles"].as_array().expect("profiles");
         assert_eq!(profiles[0]["id"], OPERATOR_PROFILE);
         assert_eq!(profiles[1]["id"], READER_PROFILE);
-        let reader_person = &profiles[1]["permissions"][0];
+        let reader_person = &profiles[1]["permissions"]["entities"][0];
         assert_eq!(reader_person["entity"], "person");
         let readable = reader_person["readableFields"]
             .as_array()

@@ -53,9 +53,9 @@ const RECORD_ID: &str = "00000000-0000-4000-8000-000000000001";
 const ACTOR_ID: &str = "00000000-0000-4000-8000-0000000000aa";
 
 const PROJECT: &str = r#"
-apiVersion: registry.registrystack.org/v1alpha1
-kind: RegistryProject
-registry:
+apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
   id: authenticated-read-surface
   version: 0.1.0
   defaultLanguage: en
@@ -68,37 +68,39 @@ entities:
     tombstone: false
     classification: public
     fields:
-      - {id: label, type: string, required: true, maxLength: 100, classification: public}
-      - {id: secret, type: string, required: true, maxLength: 100, classification: restricted}
-      - {id: jurisdiction, type: string, required: true, maxLength: 100, classification: internal}
-      - {id: tenant, type: string, required: true, maxLength: 100, classification: internal}
+      - {id: label, type: string, required: true, maximumLength: 100, classification: public}
+      - {id: secret, type: string, required: true, maximumLength: 100, classification: restricted}
+      - {id: jurisdiction, type: string, required: true, maximumLength: 100, classification: internal}
+      - {id: tenant, type: string, required: true, maximumLength: 100, classification: internal}
 accessProfiles:
   - id: public
     default: true
     principalClaim: registry_principal
     requiredScopes: [registry.read]
     permissions:
-      - entity: case
-        operations: [get]
-        readableFields: [label]
-        rowBoundaries: unrestricted
+      entities:
+        - entity: case
+          operations: [get]
+          readableFields: [label]
+          rowBoundaries: unrestricted
   - id: caseworker
     principalClaim: registry_principal
     requiredScopes: [registry.read]
     requiredPurposes: [case-management-never-rendered]
     permissions:
-      - entity: case
-        operations: [get]
-        readableFields: [label, secret]
-        rowBoundaries:
-          - {field: jurisdiction, claim: jurisdictions, operator: in}
-          - {field: tenant, claim: tenant, operator: equals}
+      entities:
+        - entity: case
+          operations: [get]
+          readableFields: [label, secret]
+          rowBoundaries:
+            - {field: jurisdiction, claim: jurisdictions, operator: in}
+            - {field: tenant, claim: tenant, operator: equals}
 "#;
 
 const CANONICAL_ID_BOUNDARY_PROJECT: &str = r#"
-apiVersion: registry.registrystack.org/v1alpha1
-kind: RegistryProject
-registry:
+apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
   id: canonical-id-auth-boundary
   version: 0.1.0
   defaultLanguage: en
@@ -111,25 +113,26 @@ entities:
     tombstone: false
     classification: public
     fields:
-      - {id: label, type: string, required: true, maxLength: 100, classification: public}
-      - {id: tenant, type: string, required: true, maxLength: 100, classification: internal}
+      - {id: label, type: string, required: true, maximumLength: 100, classification: public}
+      - {id: tenant, type: string, required: true, maximumLength: 100, classification: internal}
 accessProfiles:
   - id: caseworker
     default: true
     principalClaim: registry_principal
     requiredScopes: unrestricted
     permissions:
-      - entity: case
-        operations: [get]
-        readableFields: [label]
-        rowBoundaries:
-          - {field: id, claim: record_id, operator: equals}
+      entities:
+        - entity: case
+          operations: [get]
+          readableFields: [label]
+          rowBoundaries:
+            - {field: id, claim: record_id, operator: equals}
 "#;
 
 const CONTEXTUAL_PROJECT: &str = r#"
-apiVersion: registry.registrystack.org/v1alpha1
-kind: RegistryProject
-registry: {id: contextual-auth, version: 0.1.0, defaultLanguage: en, canonicalBaseIri: https://authoring.example.test}
+apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project: {id: contextual-auth, version: 0.1.0, defaultLanguage: en, canonicalBaseIri: https://authoring.example.test}
 entities:
   - id: case
     primaryDataset: test-dataset
@@ -138,8 +141,8 @@ entities:
     tombstone: false
     classification: public
     fields:
-      - {id: label, type: string, required: true, maxLength: 100, classification: public}
-      - {id: tenant, type: string, required: true, maxLength: 100, classification: internal}
+      - {id: label, type: string, required: true, maximumLength: 100, classification: public}
+      - {id: tenant, type: string, required: true, maximumLength: 100, classification: internal}
 accessProfiles:
   - id: standing-human
     principalClaim: sub
@@ -148,7 +151,8 @@ accessProfiles:
     requiredScopes: [registry.read]
     requiredPurposes: [record-review]
     permissions:
-      - {entity: case, operations: [get], readableFields: [label], rowBoundaries: unrestricted}
+      entities:
+        - {entity: case, operations: [get], readableFields: [label], rowBoundaries: unrestricted}
   - id: standing-agent
     principalClaim: sub
     requiredScopes: unrestricted
@@ -156,7 +160,8 @@ accessProfiles:
     requesterClients: [agent-client]
     requiredPurposes: [citizen-self-service]
     permissions:
-      - {entity: case, operations: [get], readableFields: [label], rowBoundaries: unrestricted}
+      entities:
+        - {entity: case, operations: [get], readableFields: [label], rowBoundaries: unrestricted}
   - id: delegated-agent
     default: true
     principalClaim: sub
@@ -166,11 +171,12 @@ accessProfiles:
     requiredPurposes: [record-review]
     taskGrant: {sourceIssuer: https://casework.example}
     permissions:
-      - entity: case
-        operations: [get]
-        readableFields: [label]
-        rowBoundaries:
-          - {field: tenant, claim: tenant_claim, operator: equals}
+      entities:
+        - entity: case
+          operations: [get]
+          readableFields: [label]
+          rowBoundaries:
+            - {field: tenant, claim: tenant_claim, operator: equals}
 "#;
 
 #[derive(Default)]
@@ -846,8 +852,8 @@ async fn trusted_actor_makes_the_token_an_agent_whatever_kind_it_carries() {
 #[test]
 fn task_profiles_allow_governed_draft_authoring_and_refuse_direct_target_mutation() {
     let direct = CONTEXTUAL_PROJECT.replace(
-        "operations: [get]\n        readableFields: [label]\n        rowBoundaries:",
-        "operations: [create, get]\n        readableFields: [label]\n        writableFields: [label]\n        rowBoundaries:",
+        "operations: [get]\n          readableFields: [label]\n          rowBoundaries:",
+        "operations: [create, get]\n          readableFields: [label]\n          writableFields: [label]\n          rowBoundaries:",
     );
     let project = parse_project_yaml(direct.as_bytes()).expect("direct mutation project parses");
     let failure = compile_project(&project, &[], CompileProfile::Authoring)
@@ -861,25 +867,25 @@ fn task_profiles_allow_governed_draft_authoring_and_refuse_direct_target_mutatio
         "  - id: reviewer\n    default: true\n    principalClaim: registry_principal\n    actorKind: agent\n    requesterClients: [agent-client]\n    requiredPurposes: [record-review]\n    taskGrant: {sourceIssuer: https://casework.example}",
     );
 
-    // A task-grant profile cannot hold apply_request, so applying the
+    // A task-grant profile cannot hold apply-request, so applying the
     // change request needs its own, non-delegated profile; otherwise the
     // fixture's applyTargets completeness check has nothing to satisfy it.
     let governed = task_grant_reviewer
         .replace(
-            "operations: [get, submit_request, apply_request",
-            "operations: [create, get, patch, submit_request",
+            "operations: [get, submit-request, apply-request",
+            "operations: [create, get, patch, submit-request",
         )
         .replace(
-            "        applyTargets:\n          - entity: asset\n            rowBoundaries: [{field: label, claim: apply_label, operator: equals}]\n",
+            "          applyTargets:\n            - entity: asset\n              rowBoundaries: [{field: label, claim: apply_label, operator: equals}]\n",
             "",
         )
-        + "  - id: applier\n    principalClaim: registry_principal\n    requiredScopes: unrestricted\n    permissions:\n      - entity: correction\n        operations: [apply_request]\n        readableFields: [asset, label]\n        rowBoundaries: unrestricted\n        applyTargets:\n          - entity: asset\n            rowBoundaries: [{field: label, claim: apply_label, operator: equals}]\n";
+        + "  - id: applier\n    principalClaim: registry_principal\n    requiredScopes: unrestricted\n    permissions:\n      entities:\n        - entity: correction\n          operations: [apply-request]\n          readableFields: [asset, label]\n          rowBoundaries: unrestricted\n          applyTargets:\n            - entity: asset\n              rowBoundaries: [{field: label, claim: apply_label, operator: equals}]\n";
     let project = parse_project_yaml(governed.as_bytes()).expect("governed draft project parses");
     compile_project(&project, &[], CompileProfile::Authoring)
         .expect("governed request draft create and patch remain available");
 
     let project = parse_project_yaml(task_grant_reviewer.as_bytes())
-        .expect("task-grant apply_request project parses");
+        .expect("task-grant apply-request project parses");
     let failure = compile_project(&project, &[], CompileProfile::Authoring)
         .expect_err("a task-grant profile cannot apply a reviewed request");
     assert!(failure.diagnostics().iter().any(|diagnostic| {
@@ -1048,7 +1054,7 @@ async fn principal_reuse_refuses_incompatible_or_colliding_authority_mappings() 
         );
         if field_type != "string" {
             source = source.replace(
-                "id: tenant, type: string, required: true, maxLength: 100",
+                "id: tenant, type: string, required: true, maximumLength: 100",
                 &format!("id: tenant, type: {field_type}, required: true"),
             );
         }
@@ -1681,7 +1687,7 @@ async fn refusals_and_debug_output_are_value_free() {
 fn action_only_claim_source() -> Value {
     let mut source = action_source::project();
     source["accessProfiles"][0]["requiredPurposes"] = json!([PURPOSE]);
-    source["accessProfiles"][0]["permissions"][0]["targets"][0]["rowBoundaries"][0] =
+    source["accessProfiles"][0]["permissions"]["actions"][0]["targets"][0]["rowBoundaries"][0] =
         json!({"field": "zone", "claim": "allowed_owners", "operator": "in"});
     source
 }
@@ -1783,7 +1789,7 @@ async fn action_only_principal_purpose_and_claim_shape_conflicts_are_checked() {
     let mut conflicting = source;
     conflicting["accessProfiles"].as_array_mut().unwrap().push(json!({
         "id": "reader", "principalClaim": "registry_principal", "requiredScopes": ["registry:parent:process"],
-        "permissions": [{"entity": "parent", "operations": ["get"], "readableFields": ["status"], "rowBoundaries": [{"field": "zone", "claim": "allowed_owners", "operator": "equals"}]}]
+        "permissions": {"entities": [{"entity": "parent", "operations": ["get"], "readableFields": ["status"], "rowBoundaries": [{"field": "zone", "claim": "allowed_owners", "operator": "equals"}]}]}
     }));
     let registry = compile_action_claim_source(&conflicting);
     assert_eq!(
@@ -1965,8 +1971,8 @@ async fn constructor_requires_one_exact_bounded_verifier_profile() {
 #[tokio::test]
 async fn constructor_accepts_the_compiled_canonical_id_as_a_row_boundary() {
     let source = PROJECT.replace(
-        "        rowBoundaries:\n          - {field: jurisdiction, claim: jurisdictions, operator: in}",
-        "        rowBoundaries:\n          - {field: id, claim: case_id, operator: equals}\n          - {field: jurisdiction, claim: jurisdictions, operator: in}",
+        "          rowBoundaries:\n            - {field: jurisdiction, claim: jurisdictions, operator: in}",
+        "          rowBoundaries:\n            - {field: id, claim: case_id, operator: equals}\n            - {field: jurisdiction, claim: jurisdictions, operator: in}",
     );
     let project = parse_project_yaml(source.as_bytes()).expect("canonical id project parses");
     let registry = compile_project(&project, &[], CompileProfile::Authoring)
@@ -2154,7 +2160,7 @@ async fn explicitly_selected_subject_can_also_supply_scalar_ownership_without_fa
     // scalar field applies its ordinary validation, without an identifier whitelist.
     let dated = CANONICAL_ID_BOUNDARY_PROJECT
         .replace(
-            "type: string, required: true, maxLength: 100",
+            "type: string, required: true, maximumLength: 100",
             "type: date, required: true",
         )
         .replace(

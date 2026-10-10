@@ -260,13 +260,13 @@ fn a_baseline_without_input_vocabularies_keeps_every_widening_under_review() {
 #[test]
 fn a_raised_text_limit_on_a_targeted_entity_keeps_the_action_contracts() {
     const SOURCE_REFERENCE: &str =
-        "{id: source-reference, type: string, maxLength: 255, classification: internal}";
+        "{id: source-reference, type: string, maximumLength: 255, classification: internal}";
     let with_limit = |max_length: u32| {
         replace_once(
             CONSENT_MODULE,
             SOURCE_REFERENCE,
             &format!(
-                "{SOURCE_REFERENCE}\n  - {{id: review-note, type: text, maxLength: {max_length}, classification: internal}}"
+                "{SOURCE_REFERENCE}\n  - {{id: review-note, type: text, maximumLength: {max_length}, classification: internal}}"
             ),
         )
     };
@@ -326,13 +326,13 @@ fn a_raised_text_limit_on_a_targeted_entity_keeps_the_action_contracts() {
 #[test]
 fn a_lowered_string_minimum_on_a_targeted_entity_keeps_the_action_contracts() {
     const SOURCE_REFERENCE: &str =
-        "{id: source-reference, type: string, maxLength: 255, classification: internal}";
+        "{id: source-reference, type: string, maximumLength: 255, classification: internal}";
     let with_minimum = |min_length: u32| {
         replace_once(
             CONSENT_MODULE,
             SOURCE_REFERENCE,
             &format!(
-                "{SOURCE_REFERENCE}\n  - {{id: review-code, type: string, minLength: {min_length}, maxLength: 64, classification: internal}}"
+                "{SOURCE_REFERENCE}\n  - {{id: review-code, type: string, minimumLength: {min_length}, maximumLength: 64, classification: internal}}"
             ),
         )
     };

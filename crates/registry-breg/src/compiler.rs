@@ -14,8 +14,8 @@ use crate::artifacts::{event_data_schema_binding, generate_artifacts};
 use crate::contract::{
     parsed_bbox, valid_decimal_bounds, valid_structured_schema, AccessProfileSource, ActionSource,
     Classification, ConstraintSource, DerivedExecutionSource, DerivedFieldSource,
-    EntityExtensionSource, EntitySource, EventConditionSource, EventScalarValue, EventTrigger,
-    FieldSource, FieldTypeSource, GeoJsonSource, HookHandlerSource, HookPhase, LookupValueOrigin,
+    EntityExtensionSource, EntitySource, EventConditionSource, EventTrigger, FieldSource,
+    FieldTypeSource, GeoJsonSource, HookHandlerSource, HookPhase, LookupValueOrigin,
     ManifestProjectionTextSource, ModuleAssetSource, MutationMode, Operation,
     ReadPathPermissionSource, RegistryModule, RegistryProject, SpatialBboxPermissionSource,
     SpatialQueryPermissionSource, UniqueWhenPredicate, ValidTimeRole, WebhookAuthenticationProfile,
@@ -60,8 +60,8 @@ use crate::physical_names::{
 mod attachments;
 mod statistics;
 
-pub const AUTHORING_API_VERSION: &str = "registry.registrystack.org/v1alpha1";
-pub const AUTHORING_KIND: &str = "RegistryProject";
+pub const AUTHORING_API_VERSION: &str = "id.registrystack.org/formats/breg/project/v1alpha1";
+pub const AUTHORING_KIND: &str = "BRegProject";
 pub const MAX_BATCH_ITEMS: u16 = 100;
 pub const MAX_BATCH_BYTES: u32 = 2_097_152;
 /// The transport ceiling a chunk-submission request body is read under: the
@@ -273,7 +273,7 @@ pub fn compile_project_with_assets(
     expand_project_access(project, &mut sources, &mut diagnostics);
     let vocabularies =
         resolve_vocabularies(project, &mut sources, &mut action_sources, &mut diagnostics);
-    validate_entities(&project.registry.id, &sources, profile, &mut diagnostics);
+    validate_entities(&project.project.id, &sources, profile, &mut diagnostics);
     crate::access::validate_access_requirements(&sources, &mut diagnostics);
     crate::membership::validate(&sources, &mut diagnostics);
     crate::consent::validate(project, &sources, &mut diagnostics);
@@ -332,8 +332,8 @@ pub fn compile_project_with_assets(
     ));
     let (route_inventory, access_inventory) = compile_routes_and_access(&entities)?;
     let metadata_inventory = compile_metadata_inventory(
-        &project.registry.id,
-        &project.registry.version,
+        &project.project.id,
+        &project.project.version,
         &entities,
         &route_inventory,
         &access_inventory,
@@ -344,7 +344,7 @@ pub fn compile_project_with_assets(
         findings.extend(unindexed_list_findings(&entities));
     }
     let event_delivery_inventory =
-        compile_event_delivery_inventory(&project.registry.id, &entities, &origins.hooks, assets)
+        compile_event_delivery_inventory(&project.project.id, &entities, &origins.hooks, assets)
             .map_err(CompileFailure::from_one)?;
     validate_manifest_projection(project, &entities, &mut diagnostics);
     if !diagnostics.is_empty() {
@@ -353,9 +353,9 @@ pub fn compile_project_with_assets(
     let ddl = generate_ddl_with_actions(&entities, &physical_names, &action_inventory);
     let manifest_projection = compile_manifest_projection(project, &entities);
     let artifacts = generate_artifacts(
-        &project.registry.id,
-        &project.registry.version,
-        &project.registry.default_language,
+        &project.project.id,
+        &project.project.version,
+        &project.project.default_language,
         manifest_projection.as_ref(),
         &module_order,
         &module_closure,
@@ -383,9 +383,9 @@ pub fn compile_project_with_assets(
     findings.sort();
 
     Ok(CompiledRegistry::new(
-        project.registry.id.clone(),
-        project.registry.version.clone(),
-        project.registry.default_language.clone(),
+        project.project.id.clone(),
+        project.project.version.clone(),
+        project.project.default_language.clone(),
         project.package.clone(),
         manifest_projection,
         module_order,
@@ -427,17 +427,17 @@ fn validate_project_header(
             "the project uses an unsupported document kind",
         ));
     }
-    validate_id(&project.registry.id, "project.registry.id", errors);
+    validate_id(&project.project.id, "project.project.id", errors);
     nonempty(
-        &project.registry.version,
-        "project.registry.version",
+        &project.project.version,
+        "project.project.version",
         "breg.project.version-empty",
         errors,
     );
-    validate_language(&project.registry.default_language, errors);
+    validate_language(&project.project.default_language, errors);
     nonempty(
-        &project.registry.canonical_base_iri,
-        "project.registry.canonicalBaseIri",
+        &project.project.canonical_base_iri,
+        "project.project.canonicalBaseIri",
         "breg.registry.canonical-base-iri-required",
         errors,
     );
@@ -962,7 +962,7 @@ fn compile_manifest_projection(
     entities: &BTreeMap<String, CompiledEntity>,
 ) -> Option<CompiledManifestProjection> {
     let projection = project.manifest_projection.as_ref()?;
-    let canonical_base_iri = project.registry.canonical_base_iri.clone();
+    let canonical_base_iri = project.project.canonical_base_iri.clone();
     let entity_datasets = entities
         .values()
         .map(|entity| {
@@ -1846,7 +1846,7 @@ pub(crate) fn expand_project_access(
                 "an access profile identifier is duplicated",
             ));
         }
-        if profile.principal_claim.as_deref().is_none_or(str::is_empty) {
+        if profile.principal_claim.is_empty() {
             errors.push(Diagnostic::error(
                 "breg.access-profile.principal-claim-required",
                 "project.accessProfiles[].principalClaim",
@@ -1889,15 +1889,26 @@ pub(crate) fn expand_project_access(
         // cannot grant `invoke` at all.
         if profile.actor_kind == Some(crate::contract::ActorKindSource::Agent)
             && profile.task_grant.is_none()
-            && profile.permissions.iter().any(|permission| {
-                permission.action.is_some() || permission.operations.contains(&Operation::Invoke)
-            })
         {
-            errors.push(Diagnostic::error(
-                "breg.access-profile.standing-agent-action-forbidden",
-                "project.accessProfiles[].permissions[]",
-                "a standing agent profile without a taskGrant cannot invoke an immediate action; a human confirms every change it proposes",
-            ));
+            let path = if !profile.permissions.actions.is_empty() {
+                Some("project.accessProfiles[].permissions.actions[]")
+            } else if profile
+                .permissions
+                .entities
+                .iter()
+                .any(|permission| permission.operations.contains(&Operation::Invoke))
+            {
+                Some("project.accessProfiles[].permissions.entities[]")
+            } else {
+                None
+            };
+            if let Some(path) = path {
+                errors.push(Diagnostic::error(
+                    "breg.access-profile.standing-agent-action-forbidden",
+                    path,
+                    "a standing agent profile without a taskGrant cannot invoke an immediate action; a human confirms every change it proposes",
+                ));
+            }
         }
         if let Some(task_grant) = &profile.task_grant {
             if !task_grant.source_issuer.starts_with("https://")
@@ -1909,30 +1920,49 @@ pub(crate) fn expand_project_access(
                     "taskGrant must declare an absolute sourceIssuer URI",
                 ));
             }
-            if profile.permissions.iter().any(|permission| {
-                let governed_request_draft = !permission.entity.is_empty()
-                    && entities
+            // Every list of operations the profile writes, with the path it
+            // is written at and whether it is on an entity whose changes go
+            // through governed requests.
+            let listed_operations = || {
+                let on_entities = profile.permissions.entities.iter().map(|permission| {
+                    let governed_request_draft = entities
                         .get(&permission.entity)
                         .is_some_and(|entity| entity.change_request.is_some());
-                permission.operations.iter().any(|operation| {
-                    *operation == Operation::Invoke
-                        || is_direct_target_mutation(*operation, governed_request_draft)
+                    (
+                        "project.accessProfiles[].permissions.entities[].operations",
+                        &permission.operations,
+                        governed_request_draft,
+                    )
+                });
+                let on_actions = profile.permissions.actions.iter().map(|permission| {
+                    (
+                        "project.accessProfiles[].permissions.actions[].operations",
+                        &permission.operations,
+                        false,
+                    )
+                });
+                on_entities.chain(on_actions)
+            };
+            if let Some((path, _, _)) =
+                listed_operations().find(|(_, operations, governed_request_draft)| {
+                    operations.iter().any(|operation| {
+                        *operation == Operation::Invoke
+                            || is_direct_target_mutation(*operation, *governed_request_draft)
+                    })
                 })
-            }) {
+            {
                 errors.push(Diagnostic::error(
                     "breg.access-profile.task-grant-direct-mutation-forbidden",
-                    "project.accessProfiles[].permissions[].operations",
+                    path,
                     "a task-grant profile can author only governed request drafts; direct target mutations, imports, batch operations, tombstones, and immediate actions are forbidden",
                 ));
             }
-            if profile
-                .permissions
-                .iter()
-                .any(|permission| permission.operations.contains(&Operation::ApplyRequest))
+            if let Some((path, _, _)) = listed_operations()
+                .find(|(_, operations, _)| operations.contains(&Operation::ApplyRequest))
             {
                 errors.push(Diagnostic::error(
                     "breg.access-profile.task-grant-operation-forbidden",
-                    "project.accessProfiles[].permissions[].operations",
+                    path,
                     "a task-grant profile cannot apply a reviewed request; review-decision operations require a non-delegated authority",
                 ));
             }
@@ -1940,13 +1970,13 @@ pub(crate) fn expand_project_access(
         let compiled_task_grant = profile.task_grant.as_ref().map(|task_grant| {
             let permissions = profile
                 .permissions
+                .entities
                 .iter()
-                .filter(|permission| !permission.entity.is_empty())
                 .filter_map(|permission| {
                     entities.get(&permission.entity).map(|entity| {
                         crate::contract::CompiledTaskGrantPermissionSource {
                             collection: entity.route.clone(),
-                            operations: permission.operations.clone().into(),
+                            operations: permission.operations.clone(),
                         }
                     })
                 })
@@ -1957,36 +1987,11 @@ pub(crate) fn expand_project_access(
             }
         });
         let mut granted_entities = BTreeSet::new();
-        for grant in &profile.permissions {
-            if grant.action.is_some() {
-                if !grant.entity.is_empty() {
-                    errors.push(Diagnostic::error(
-                        "breg.access-profile.permission-target-exclusive",
-                        "project.accessProfiles[].permissions[]",
-                        "an access permission must name either one entity or one action",
-                    ));
-                }
-                continue;
-            }
-            if !grant.targets.is_empty() || !grant.results.is_empty() {
-                errors.push(Diagnostic::error(
-                    "breg.access-profile.permission-action-fields-forbidden",
-                    "project.accessProfiles[].permissions[]",
-                    "entity access permissions cannot declare action target or result fields",
-                ));
-            }
-            if grant.entity.is_empty() {
-                errors.push(Diagnostic::error(
-                    "breg.access-profile.permission-target-missing",
-                    "project.accessProfiles[].permissions[]",
-                    "an access permission must name one entity, one action, or one statistical dataset",
-                ));
-                continue;
-            }
+        for grant in &profile.permissions.entities {
             if !granted_entities.insert(grant.entity.as_str()) {
                 errors.push(Diagnostic::error(
                     "breg.access-profile.permission-duplicate",
-                    "project.accessProfiles[].permissions[].entity",
+                    "project.accessProfiles[].permissions.entities[].entity",
                     "an access profile contains duplicate entity permissions",
                 ));
                 continue;
@@ -1994,7 +1999,7 @@ pub(crate) fn expand_project_access(
             let Some(entity) = entities.get_mut(&grant.entity) else {
                 errors.push(Diagnostic::error(
                     "breg.access-profile.permission-entity-unknown",
-                    "project.accessProfiles[].permissions[].entity",
+                    "project.accessProfiles[].permissions.entities[].entity",
                     "an access permission refers to an unknown entity",
                 ));
                 continue;
@@ -2020,12 +2025,12 @@ pub(crate) fn expand_project_access(
                 principal_claim: profile.principal_claim.clone(),
                 required_scopes: profile.required_scopes.clone(),
                 required_purposes: profile.required_purposes.clone(),
-                operations: grant.operations.clone().into(),
-                readable_fields: grant.readable_fields.clone().into(),
-                readable_request_fields: grant.readable_request_fields.clone().into(),
-                writable_fields: grant.writable_fields.clone().into(),
-                filterable_fields: grant.filterable_fields.clone().into(),
-                sortable_fields: grant.sortable_fields.clone().into(),
+                operations: grant.operations.clone(),
+                readable_fields: grant.readable_fields.clone(),
+                readable_request_fields: grant.readable_request_fields.clone(),
+                writable_fields: grant.writable_fields.clone(),
+                filterable_fields: grant.filterable_fields.clone(),
+                sortable_fields: grant.sortable_fields.clone(),
                 spatial_queries: grant.spatial_queries.clone(),
                 row_boundaries: grant.row_boundaries.clone(),
                 membership_boundaries: grant.membership_boundaries.clone(),
@@ -2034,7 +2039,7 @@ pub(crate) fn expand_project_access(
                 lookups: grant.lookups.clone(),
                 read_paths: grant.read_paths.clone(),
                 apply_targets: grant.apply_targets.clone(),
-                submitter_targets: grant.submitter_targets.clone().into(),
+                submitter_targets: grant.submitter_targets.clone(),
                 request_presence: grant.request_presence.clone(),
                 allow_count: grant.allow_count,
                 revision_access: grant.revision_access,
@@ -2248,7 +2253,7 @@ fn validate_access_log(
             "breg.access-log.subject-field-invalid",
             format!("{path}.subjectField"),
             &format!(
-                "subjectField must name a required plaintext stored string or text field with maxLength at most {MAX_ACCESS_LOG_SUBJECT_CHARACTERS}"
+                "subjectField must name a required plaintext stored string or text field with maximumLength at most {MAX_ACCESS_LOG_SUBJECT_CHARACTERS}"
             ),
         )),
     }
@@ -2476,9 +2481,9 @@ fn validate_entity_fields(
                 {
                     errors.push(Diagnostic::error(
                         "breg.field.encrypted-size-bound-exceeds-seal-limit",
-                        format!("entities[{}].fields[{}].maxLength", entity.id, field.id),
+                        format!("entities[{}].fields[{}].maximumLength", entity.id, field.id),
                         &format!(
-                            "an encrypted string or text field maxLength must be at most {MAX_ENCRYPTED_FIELD_STRING_CHARACTERS} characters so every valid UTF-8 value fits the {MAX_ENCRYPTED_FIELD_PLAINTEXT_BYTES}-byte Phase 1 seal limit"
+                            "an encrypted string or text field maximumLength must be at most {MAX_ENCRYPTED_FIELD_STRING_CHARACTERS} characters so every valid UTF-8 value fits the {MAX_ENCRYPTED_FIELD_PLAINTEXT_BYTES}-byte Phase 1 seal limit"
                         ),
                     ));
                 }
@@ -2487,9 +2492,9 @@ fn validate_entity_fields(
                 {
                     errors.push(Diagnostic::error(
                         "breg.field.encrypted-size-bound-exceeds-seal-limit",
-                        format!("entities[{}].fields[{}].maxBytes", entity.id, field.id),
+                        format!("entities[{}].fields[{}].maximumBytes", entity.id, field.id),
                         &format!(
-                            "an encrypted structured field maxBytes must be at most {MAX_ENCRYPTED_FIELD_PLAINTEXT_BYTES} bytes to fit the Phase 1 seal limit"
+                            "an encrypted structured field maximumBytes must be at most {MAX_ENCRYPTED_FIELD_PLAINTEXT_BYTES} bytes to fit the Phase 1 seal limit"
                         ),
                     ));
                 }
@@ -2537,7 +2542,7 @@ fn validate_entity_fields(
             {
                 errors.push(Diagnostic::error(
                     "breg.field.text-bound-invalid",
-                    "entities[].fields[].maxLength",
+                    "entities[].fields[].maximumLength",
                     "text length bound must be positive",
                 ));
             }
@@ -3455,10 +3460,10 @@ fn reaches<'a>(
 }
 
 /// An `import` grant creates records only through a durable ingestion run,
-/// so it needs the entity's chunk bounds, a creator the run can be scoped to,
-/// and no raw batch grant beside it on the entity: a batch grant would write
-/// the same records outside any import authority, leaving the authority
-/// bounding nothing.
+/// so it needs the entity's chunk bounds and no raw batch grant beside it on
+/// the entity: a batch grant would write the same records outside any import
+/// authority, leaving the authority bounding nothing. The creator a run is
+/// scoped to is the principal claim every profile names.
 fn validate_import_grant(
     entity: &EntitySource,
     access: &AccessProfileSource,
@@ -3473,13 +3478,6 @@ fn validate_import_grant(
             "breg.import.batch-bounds-required",
             path.clone(),
             "an import grant loads records in chunks, so the entity must declare batch maximumItems and maximumBytes",
-        ));
-    }
-    if access.principal_claim.as_deref().is_none_or(str::is_empty) {
-        errors.push(Diagnostic::error(
-            "breg.import.principal-required",
-            path.clone(),
-            "an import run belongs to the principal that created it, so an import grant needs an authenticated profile with a principal claim",
         ));
     }
     if entity
@@ -3519,7 +3517,7 @@ fn validate_profiles(
                 "an access profile must grant at least one operation",
             ));
         }
-        if access.principal_claim.as_deref().is_none_or(str::is_empty) {
+        if access.principal_claim.is_empty() {
             errors.push(Diagnostic::error(
                 "breg.access-profile.principal-claim-required",
                 "entities[].accessProfiles[].principalClaim",
@@ -4229,8 +4227,8 @@ fn validate_hooks(
             Some(HookHandlerSource::Url { .. }) if hook.phase != HookPhase::After => {
                 errors.push(Diagnostic::error(
                     "breg.hook.handler-kind-unsupported",
-                    "entities[].hooks[].handler.kind",
-                    "handler kind url cannot run in phase before; declare phase: after",
+                    "entities[].hooks[].handler.type",
+                    "handler type url cannot run in phase before; declare phase: after",
                 ));
                 continue;
             }
@@ -4317,7 +4315,7 @@ fn validate_hook_assets(
                 // compiled could only fail when it fires.
                 errors.push(Diagnostic::error(
                     "breg.hook.handler-wasm-build-unsupported",
-                    "entities[].hooks[].handler.kind",
+                    "entities[].hooks[].handler.type",
                     "this build of the compiler does not admit WASM hook handlers",
                 ));
                 continue;
@@ -4477,8 +4475,15 @@ fn validate_event_condition(
             changed,
             before_equals,
             after_equals,
+            before_is_null,
+            after_is_null,
         }) => {
-            if changed.is_empty() && before_equals.is_empty() && after_equals.is_empty() {
+            if changed.is_empty()
+                && before_equals.is_empty()
+                && after_equals.is_empty()
+                && before_is_null.is_empty()
+                && after_is_null.is_empty()
+            {
                 errors.push(Diagnostic::error(
                     "breg.event.when-empty",
                     "entities[].hooks[].when",
@@ -4486,9 +4491,13 @@ fn validate_event_condition(
                 ));
             }
             let compatible = match event.trigger {
-                EventTrigger::Created => changed.is_empty() && before_equals.is_empty(),
+                EventTrigger::Created => {
+                    changed.is_empty() && before_equals.is_empty() && before_is_null.is_empty()
+                }
                 EventTrigger::Patched => true,
-                EventTrigger::Tombstoned => changed.is_empty() && after_equals.is_empty(),
+                EventTrigger::Tombstoned => {
+                    changed.is_empty() && after_equals.is_empty() && after_is_null.is_empty()
+                }
                 EventTrigger::RequestLifecycle => false,
             };
             if !compatible {
@@ -4517,6 +4526,28 @@ fn validate_event_condition(
                     ));
                 }
             }
+            for (path, unset) in [
+                ("entities[].hooks[].when.beforeIsNull", before_is_null),
+                ("entities[].hooks[].when.afterIsNull", after_is_null),
+            ] {
+                for field in unset {
+                    let Some(source) = fields.get(field.as_str()) else {
+                        errors.push(Diagnostic::error(
+                            "breg.event.when-field-unknown",
+                            path,
+                            "an event condition refers to an unknown field",
+                        ));
+                        continue;
+                    };
+                    if source.encrypted {
+                        errors.push(Diagnostic::error(
+                            "breg.event.when-encrypted",
+                            path,
+                            "an event condition cannot name an encrypted field",
+                        ));
+                    }
+                }
+            }
             for (path, predicates) in [
                 ("entities[].hooks[].when.beforeEquals", before_equals),
                 ("entities[].hooks[].when.afterEquals", after_equals),
@@ -4536,9 +4567,6 @@ fn validate_event_condition(
                             path,
                             "an event condition cannot name an encrypted field",
                         ));
-                    }
-                    if matches!(value, EventScalarValue::Null) {
-                        continue;
                     }
                     let value = serde_json::to_value(value).expect("event scalar value serializes");
                     if canonical_field_literal(&value, &source.field_type).is_none() {
@@ -5096,11 +5124,15 @@ fn event_condition_fields(
             changed,
             before_equals,
             after_equals,
+            before_is_null,
+            after_is_null,
         }) => Box::new(
             changed
                 .iter()
                 .chain(before_equals.keys())
-                .chain(after_equals.keys()),
+                .chain(after_equals.keys())
+                .chain(before_is_null.iter())
+                .chain(after_is_null.iter()),
         ),
         Some(EventConditionSource::RequestLifecycle { .. }) | None => Box::new(std::iter::empty()),
     }
@@ -6732,10 +6764,10 @@ pub(crate) fn operation_id(operation: Operation) -> &'static str {
         Operation::Batch => "batch",
         Operation::Revisions => "revisions",
         Operation::Snapshot => "snapshot",
-        Operation::SubmitRequest => "submit_request",
-        Operation::ReviseRequest => "revise_request",
-        Operation::CancelRequest => "cancel_request",
-        Operation::ApplyRequest => "apply_request",
+        Operation::SubmitRequest => "submit-request",
+        Operation::ReviseRequest => "revise-request",
+        Operation::CancelRequest => "cancel-request",
+        Operation::ApplyRequest => "apply-request",
         Operation::Invoke => "invoke",
         Operation::Import => "import",
     }
@@ -7056,8 +7088,8 @@ fn unique_when_predicate_sort_key(predicate: &UniqueWhenPredicate) -> String {
         UniqueWhenPredicate::FieldEquals { field, value } => {
             format!("field:{field}:equals:{}", value)
         }
-        UniqueWhenPredicate::FieldIsNull { field } => format!("field:{field}:is_null"),
-        UniqueWhenPredicate::FieldIsNotNull { field } => format!("field:{field}:is_not_null"),
+        UniqueWhenPredicate::FieldIsNull { field } => format!("field:{field}:is-null"),
+        UniqueWhenPredicate::FieldIsNotNull { field } => format!("field:{field}:is-not-null"),
         UniqueWhenPredicate::ActiveLifecycle {} => "lifecycle:active".to_owned(),
     }
 }
@@ -7090,7 +7122,7 @@ fn validate_language(value: &str, errors: &mut Vec<Diagnostic>) {
     {
         errors.push(Diagnostic::error(
             "breg.project.default-language-invalid",
-            "project.registry.defaultLanguage",
+            "project.project.defaultLanguage",
             "the default language tag is invalid",
         ));
     }

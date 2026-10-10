@@ -118,7 +118,7 @@ impl NonceError {
     pub fn kind(&self) -> &'static str {
         match self {
             Self::Entropy => "entropy",
-            Self::NotCanonical => "not_canonical",
+            Self::NotCanonical => "not-canonical",
         }
     }
 }
@@ -218,7 +218,7 @@ mod tests {
     fn every_nonce_failure_reports_its_own_stable_kind() {
         let cases = [
             (NonceError::Entropy, "entropy"),
-            (NonceError::NotCanonical, "not_canonical"),
+            (NonceError::NotCanonical, "not-canonical"),
         ];
         for (error, kind) in &cases {
             assert_eq!(error.kind(), *kind, "{error}");

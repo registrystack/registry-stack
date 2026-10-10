@@ -56,14 +56,14 @@ pub enum TransportKind {
 }
 
 impl TransportKind {
-    /// Stable machine-readable classification.
+    /// Stable machine-readable classification, written in kebab-case.
     #[must_use]
     pub fn kind(&self) -> &'static str {
         match self {
             Self::Connect => "connect",
             Self::Timeout => "timeout",
             Self::Exchange => "exchange",
-            Self::ResponseTooLarge => "response_too_large",
+            Self::ResponseTooLarge => "response-too-large",
         }
     }
 }
@@ -168,6 +168,21 @@ pub struct ServiceBaseUrlJoinError;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The kind is what a binding carries across a language boundary, so
+    /// every variant has one fixed kebab-case word.
+    #[test]
+    fn every_transport_failure_reports_its_own_kebab_case_kind() {
+        let cases = [
+            (TransportKind::Connect, "connect"),
+            (TransportKind::Timeout, "timeout"),
+            (TransportKind::Exchange, "exchange"),
+            (TransportKind::ResponseTooLarge, "response-too-large"),
+        ];
+        for (kind, word) in cases {
+            assert_eq!(kind.kind(), word);
+        }
+    }
 
     #[test]
     fn service_base_urls_preserve_prefixes_and_refuse_credential_leaks() {

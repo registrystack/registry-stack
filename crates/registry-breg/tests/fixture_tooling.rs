@@ -945,7 +945,7 @@ fn compiled_contact_request_fixture() -> registry_breg::CompiledRegistry {
         .unwrap()
         .clone();
     limited_applier.id = "household-contact-limited-applier".to_owned();
-    limited_applier.permissions[0]
+    limited_applier.permissions.entities[0]
         .apply_targets
         .retain(|target| target.entity != "person");
     project.access_profiles.push(limited_applier);
@@ -1156,40 +1156,40 @@ fn fixture_tooling_capture_results_refuses_other_request_lifecycle_steps() {
 fn compiled_request_fixture() -> registry_breg::CompiledRegistry {
     let project = parse_project_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"fixture-request-actions","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"fixture-request-actions","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
             "id":"target","primaryDataset":"test-dataset","route":"targets","mutationMode":"mutable","changeControl":{"requiredFor":["patch"]},
-            "fields":[{"id":"label","type":"string","required":true,"maxLength":64,"classification":"public"}]
+            "fields":[{"id":"label","type":"string","required":true,"maximumLength":64,"classification":"public"}]
           },{
             "id":"correction-request","primaryDataset":"test-dataset","route":"correction-requests","mutationMode":"mutable","classification":"public",
             "fields":[
               {"id":"target","type":"reference","target":"target","required":true,"classification":"public"},
-              {"id":"value","type":"string","required":true,"maxLength":64,"classification":"public"}
+              {"id":"value","type":"string","required":true,"maximumLength":64,"classification":"public"}
             ],
             "changeRequest":{
               "effects":[{"target":{"fromField":"target"},"operation":"patch","set":{"label":{"fromField":"value"}}}],
-              "review":{"authority":"casework-main","policyId":"correction-review"},
+              "review":{"type":"required","authority":"casework-main","policyId":"correction-review"},
               "onApproved":{"mode":"manual"}
             }
           }],
           "accessProfiles":[{
-            "id":"submitter","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted","permissions":[{
-              "entity":"correction-request","operations":["create","submit_request","revise_request","cancel_request"],"readableFields":["target","value"],"writableFields":["target","value"],
+            "id":"submitter","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted","permissions":{"entities":[{
+              "entity":"correction-request","operations":["create","submit-request","revise-request","cancel-request"],"readableFields":["target","value"],"writableFields":["target","value"],
               "rowBoundaries": "unrestricted"
-            }]
+            }]}
           },{
-            "id":"reviewer","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted","permissions":[{
+            "id":"reviewer","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted","permissions":{"entities":[{
               "entity":"correction-request","operations":["get","list"],"readableFields":["target","value"],
               "rowBoundaries": "unrestricted"
-            }]
+            }]}
           },{
-            "id":"applier","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted","permissions":[{
-              "entity":"correction-request","operations":["apply_request"],"readableFields":["target"],
+            "id":"applier","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted","permissions":{"entities":[{
+              "entity":"correction-request","operations":["apply-request"],"readableFields":["target"],
               "applyTargets":[{"entity":"target","rowBoundaries":"unrestricted"}],
               "rowBoundaries": "unrestricted"
-            }]
+            }]}
           }]
         }"#,
     )
@@ -1200,21 +1200,21 @@ fn compiled_request_fixture() -> registry_breg::CompiledRegistry {
 fn compiled_crud_alias_fixture() -> registry_breg::CompiledRegistry {
     let project = parse_project_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"fixture-crud-aliases","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"fixture-crud-aliases","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
             "id":"person","primaryDataset":"test-dataset","route":"people","mutationMode":"mutable","classification":"restricted",
             "fields":[
-              {"id":"jurisdiction","type":"string","maxLength":32,"required":true,"classification":"restricted"},
-              {"id":"person-code","apiName":"personCode","type":"string","maxLength":64,"required":true,"classification":"restricted"},
-              {"id":"legal-name","apiName":"legalName","type":"string","maxLength":160,"required":true,"classification":"restricted"}
+              {"id":"jurisdiction","type":"string","maximumLength":32,"required":true,"classification":"restricted"},
+              {"id":"person-code","apiName":"personCode","type":"string","maximumLength":64,"required":true,"classification":"restricted"},
+              {"id":"legal-name","apiName":"legalName","type":"string","maximumLength":160,"required":true,"classification":"restricted"}
             ],
-            "constraints":[{"kind":"unique","fields":["person-code"]}]
+            "constraints":[{"type":"unique","fields":["person-code"]}]
           }],
           "accessProfiles":[{
             "id":"registrar","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted","requiredPurposes":["case-management"],
-            "permissions":[{
+            "permissions":{"entities":[{
               "entity":"person","operations":["create","get","list","patch"],
               "readableFields":["jurisdiction","person-code","legal-name"],
               "writableFields":["jurisdiction","person-code","legal-name"],
@@ -1222,7 +1222,7 @@ fn compiled_crud_alias_fixture() -> registry_breg::CompiledRegistry {
               "sortableFields":["person-code"],
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}],
               "allowCount":true
-            }]
+            }]}
           }]
         }"#,
     )
@@ -1233,28 +1233,28 @@ fn compiled_crud_alias_fixture() -> registry_breg::CompiledRegistry {
 fn compiled_action_fixture() -> registry_breg::CompiledRegistry {
     let project = parse_project_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"fixture-immediate-actions","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"fixture-immediate-actions","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
             "id":"person","primaryDataset":"test-dataset","route":"people","mutationMode":"mutable","classification":"restricted",
             "fields":[
-              {"id":"jurisdiction","type":"string","maxLength":32,"required":true,"classification":"restricted"},
-              {"id":"person-code","apiName":"personCode","type":"string","maxLength":64,"required":true,"classification":"restricted"},
-              {"id":"legal-name","apiName":"legalName","type":"string","maxLength":160,"required":true,"classification":"restricted"}
+              {"id":"jurisdiction","type":"string","maximumLength":32,"required":true,"classification":"restricted"},
+              {"id":"person-code","apiName":"personCode","type":"string","maximumLength":64,"required":true,"classification":"restricted"},
+              {"id":"legal-name","apiName":"legalName","type":"string","maximumLength":160,"required":true,"classification":"restricted"}
             ],
-            "constraints":[{"kind":"unique","fields":["person-code"]}]
+            "constraints":[{"type":"unique","fields":["person-code"]}]
           },{
             "id":"household","primaryDataset":"test-dataset","route":"households","mutationMode":"mutable","classification":"restricted",
             "fields":[
-              {"id":"jurisdiction","type":"string","maxLength":32,"required":true,"classification":"restricted"},
-              {"id":"household-code","type":"string","maxLength":64,"required":true,"classification":"restricted"},
+              {"id":"jurisdiction","type":"string","maximumLength":32,"required":true,"classification":"restricted"},
+              {"id":"household-code","type":"string","maximumLength":64,"required":true,"classification":"restricted"},
               {"id":"contact-person","apiName":"contactPerson","type":"reference","target":"person","classification":"restricted"}
             ]
           },{
             "id":"group-membership","primaryDataset":"test-dataset","route":"group-memberships","mutationMode":"mutable","classification":"restricted",
             "fields":[
-              {"id":"jurisdiction","type":"string","maxLength":32,"required":true,"classification":"restricted"},
+              {"id":"jurisdiction","type":"string","maximumLength":32,"required":true,"classification":"restricted"},
               {"id":"person","type":"reference","target":"person","required":true,"classification":"restricted"},
               {"id":"household","type":"reference","target":"household","required":true,"classification":"restricted"}
             ]
@@ -1263,9 +1263,9 @@ fn compiled_action_fixture() -> registry_breg::CompiledRegistry {
             "id":"register-household-contact",
             "inputs":[
               {"id":"household","apiName":"householdId","type":"reference","target":"household","required":true,"classification":"restricted"},
-              {"id":"jurisdiction","type":"string","maxLength":32,"required":true,"classification":"restricted"},
-              {"id":"person-code","apiName":"personCode","type":"string","maxLength":64,"required":true,"classification":"restricted"},
-              {"id":"legal-name","apiName":"legalName","type":"string","maxLength":160,"required":true,"classification":"restricted"}
+              {"id":"jurisdiction","type":"string","maximumLength":32,"required":true,"classification":"restricted"},
+              {"id":"person-code","apiName":"personCode","type":"string","maximumLength":64,"required":true,"classification":"restricted"},
+              {"id":"legal-name","apiName":"legalName","type":"string","maximumLength":160,"required":true,"classification":"restricted"}
             ],
             "effects":[
               {"id":"person","target":{"entity":"person"},"operation":"create",
@@ -1278,14 +1278,14 @@ fn compiled_action_fixture() -> registry_breg::CompiledRegistry {
           }],
           "accessProfiles":[{
             "id":"household-seed","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted","requiredPurposes":["case-management"],
-            "permissions":[{
+            "permissions":{"entities":[{
               "entity":"household","operations":["create","get"],"readableFields":["jurisdiction","household-code","contact-person"],
               "writableFields":["jurisdiction","household-code"],"rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
-            }]
+            }]}
           },{
             "id":"contact-registrar","default":true,"principalClaim":"registry_principal",
             "requiredScopes":["registry:contact:register"],"requiredPurposes":["contact-registration"],
-            "permissions":[{
+            "permissions":{"actions":[{
               "action":"register-household-contact","operations":["invoke"],
               "targets":[
                 {"entity":"household","rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]},
@@ -1293,13 +1293,13 @@ fn compiled_action_fixture() -> registry_breg::CompiledRegistry {
                 {"entity":"group-membership","rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]}
               ],
               "results":["person","household"]
-            }]
+            }]}
           },{
             "id":"person-reader","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted","requiredPurposes":["case-management"],
-            "permissions":[{
+            "permissions":{"entities":[{
               "entity":"person","operations":["get"],"readableFields":["jurisdiction","person-code","legal-name"],
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
-            }]
+            }]}
           }]
         }"#,
     )
@@ -1347,28 +1347,28 @@ fn underlying_fixture_error(error: &FixtureError) -> &FixtureError {
 fn compiled_spatial_fixture() -> registry_breg::CompiledRegistry {
     let project = parse_project_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"spatial-fixture","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"spatial-fixture","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "package":{"sourceRevision":"spatial-fixture-source"},
           "entities":[{
             "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"mutable","classification":"public",
             "fields":[
-              {"id":"code","type":"string","maxLength":32,"required":true,"classification":"public"},
+              {"id":"code","type":"string","maximumLength":32,"required":true,"classification":"public"},
               {"id":"location","type":"crs84-point","precision":9,"required":false,"classification":"public"}
             ],
             "geojson":{"geometryField":"location"}
           }],
           "accessProfiles":[
-            {"id":"map-reader","default":true,"principalClaim":"sub","requiredScopes":["sites.read"],"permissions":[{
+            {"id":"map-reader","default":true,"principalClaim":"sub","requiredScopes":["sites.read"],"permissions":{"entities":[{
               "entity":"site","operations":["get","list"],"readableFields":["code","location"],
               "spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":1,"maximumLatitudeSpanDegrees":1}},
               "rowBoundaries": "unrestricted"
-            }]},
-            {"id":"directory-reader","principalClaim":"sub","requiredScopes":["sites.read"],"permissions":[{
+            }]}},
+            {"id":"directory-reader","principalClaim":"sub","requiredScopes":["sites.read"],"permissions":{"entities":[{
               "entity":"site","operations":["list"],"readableFields":["code"],
               "rowBoundaries": "unrestricted"
-            }]}
+            }]}}
           ]
         }"#,
     )

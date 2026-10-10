@@ -170,7 +170,7 @@ class StatisticsTests(unittest.TestCase):
         ):
             with self.assertRaises(BaseRegistryClientError) as cache_error:
                 invalid_cache_read()
-            self.assertEqual(cache_error.exception.code, "cache_policy")
+            self.assertEqual(cache_error.exception.code, "cache-policy")
 
         maximum_cursor = "c" * 10_978
         self.client.statistics_releases(
@@ -201,18 +201,18 @@ class StatisticsTests(unittest.TestCase):
             self.client.statistics_publish(
                 "digest-missing", "2025-01", "final", "publisher", "digest-missing-key"
             )
-        self.assertEqual(missing_digest.exception.code, "representation_digest")
+        self.assertEqual(missing_digest.exception.code, "representation-digest")
 
         with self.assertRaises(BaseRegistryClientError) as mismatched_digest:
             self.client.statistics_withdraw(
                 "digest-mismatch", "2025-01", 7, "source-data-error",
                 "publisher", "digest-mismatch-key"
             )
-        self.assertEqual(mismatched_digest.exception.code, "representation_digest")
+        self.assertEqual(mismatched_digest.exception.code, "representation-digest")
 
         with self.assertRaises(BaseRegistryClientError) as missing:
             self.client.statistics_live("missing")
-        self.assertEqual(missing.exception.kind, "not_found")
+        self.assertEqual(missing.exception.kind, "not-found")
         self.assertEqual(missing.exception.code, "resource.not_found")
 
         with self.assertRaises(BaseRegistryClientError) as refused:

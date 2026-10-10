@@ -5,8 +5,11 @@ step that migrates a file or a script. Registry Messaging is experimental, so
 each normalization lands in this release rather than with the move of the
 promised formats to stable. The Messaging `CHANGELOG.md` points here.
 
+The items of this fragment were written as each change was made, and where
+two of them disagree about a spelling or a diagnostic code, the one further
+down states what v0.40.0 reads and reports.
+
 ## BREAKING: the runtime file's keys and apiVersion are renamed
-<!-- upgrade: messaging-runtime-keys -->
 
 The `messaging` runtime and every `messagingctl` command that reads a runtime
 file (`check`, `plan`, `apply`, `status`, `messages`, and `retention
@@ -16,11 +19,12 @@ as `config.removed-key`, and the message names its replacement; the old
 `apiVersion` is refused as `config.retired-api-version` with the new one.
 Every value keeps its meaning unless the step below says otherwise.
 
-A package the previous release built is refused too, so upgrade in this
-order: apply the steps in this note to the project and to the runtime file,
-build the package again with this release's `messagingctl package` (it writes
-a new directory), point `package.root` at it, run `messagingctl plan` and
-then `messagingctl apply`, and only then start the runtime.
+A package the previous release built is refused too, and this release does
+not upgrade `v0.39.0` state in place: apply the steps in this note to the
+project and to the runtime file, build the package again with this release's
+`messagingctl package` (it writes a new directory), point `package.root` at
+it, run `messagingctl plan` and then `messagingctl apply` against a new
+database, and only then start the runtime.
 
 | Old spelling | New spelling | Migration |
 |---|---|---|
@@ -36,8 +40,9 @@ then `messagingctl apply`, and only then start the runtime.
 | `providers.<id>.timeoutMilliseconds` (`http`) | `providers.<id>.attemptTimeoutMilliseconds` | Rename the key; keep the value (1 to 10000). |
 | `providers.<id>.concurrencyLimit` (`http`) | `providers.<id>.maximumConcurrentRequests` | Rename the key; keep the value (1 to 64, and at most the provider package's limit). |
 
-`authentication.oidc.jwksSource.kind` keeps its spelling: it is the shared
-OIDC block every Registry Stack runtime reads, not a Messaging member.
+`authentication.oidc.jwksSource.kind` is not part of this step: it is the
+shared OIDC block every Registry Stack runtime reads, and the section "Stable
+move" renames it to `type`.
 
 To find every old spelling in a file, run
 `messagingctl check --runtime-config FILE --project PROJECT` (or with
@@ -52,7 +57,6 @@ and `messagingctl init` writes
 `runtime.example.yaml`.
 
 ## BREAKING: retention periods are named with the runtime file's keys everywhere
-<!-- upgrade: no-file -->
 
 The `messaging.runtime.started`, `messaging.retention.requested`, and
 `messaging.retention.erased` audit events, and the `messagingctl --format
@@ -60,10 +64,9 @@ json` reports that state the retention periods, name them `payloadRetentionDays`
 `recordRetentionDays`, and `submissionReceiptRetentionDays`, where they
 named them `payloadDays`, `recordDays`, and `submissionReceiptDays`.
 Migration: update audit queries, dashboards, and scripts that read the old
-names; events written before the upgrade keep the old names.
+names; events an earlier release wrote keep the old names.
 
 ## BREAKING: provider connection members are refused by the reader, at the member
-<!-- upgrade: already-wrong -->
 
 An `http` connection's `attemptTimeoutMilliseconds` (1 to 10000),
 `maximumResponseBytes` (1 to 1048576), and `maximumConcurrentRequests` (1 to
@@ -85,7 +88,6 @@ at that key, where the first one was reported for the block. Migration: none;
 those files were already refused.
 
 ## BREAKING: `messagingctl check --runtime-config` reports every refusal at its position
-<!-- upgrade: no-file -->
 
 - Each refusal is its own diagnostic with its own code (table below), a
   JSON Pointer `path` (`/package/expectedDigest`), and a `source` with the
@@ -158,7 +160,6 @@ the local identifiers the file declares.
 | the file, exit 3, when the runtime file cannot be read | `platform.runtime-config.unavailable` | the file |
 
 ## BREAKING: the project, template, and provider files carry the shared envelope
-<!-- upgrade: messaging-project-envelope, messaging-template-envelope, messaging-provider-envelope -->
 
 `messaging.yaml`, every `templates/<id>/<version>/template.yaml`, and every
 `providers/<id>/provider.yaml` are read by the shared reader under their own
@@ -190,7 +191,6 @@ new `apiVersion`. Migration: update the file, then reopen the folder or rerun
 `python3 editors/configure.py messaging DIRECTORY`.
 
 ## BREAKING: three authored members are renamed
-<!-- upgrade: messaging-project-renames, messaging-provider-capabilities -->
 
 Each old key is refused at its position as `config.removed-key`, and the
 message names its replacement. A required replacement that is absent is also
@@ -207,7 +207,6 @@ answers `429 rate-limit.exceeded` past it; the
 `messaging_limit_refusals_total` label is unchanged.
 
 ## BREAKING: authored members are typed and bounded when the file is read
-<!-- upgrade: messaging-required-scopes, messaging-authored-bounds -->
 
 Each member below is refused when the file is read, at its line and column,
 with the shared code (`config.invalid-value`, `config.out-of-range`,
@@ -241,7 +240,6 @@ write `requiredScopes: unrestricted` without a list, or list the items
 meant.
 
 ## BREAKING: an optional member written as `null` is refused
-<!-- upgrade: messaging-project-null-members, messaging-runtime-null-members -->
 
 The reader refuses an explicit `null` at its member with `config.null-value`
 where it read `null` as the member left out. Migration: remove the key, in
@@ -253,7 +251,6 @@ without one serves no metrics listener). Leaving a member out has the
 meaning `null` had.
 
 ## BREAKING: `messagingctl check --project`, `package`, and the runtime report every finding at its file
-<!-- upgrade: no-file -->
 
 - A refused project or package prints the shared report, one diagnostic per
   finding, each with its code, JSON Pointer `path`, and a `source` naming the
@@ -278,7 +275,6 @@ meaning `null` had.
   its package.
 
 ## BREAKING: every `messagingctl --format json` report names its format
-<!-- upgrade: no-file -->
 
 - Every JSON report names its format with `apiVersion` and `kind`, written
   after `ok`, `command`, and `status`:
@@ -296,7 +292,6 @@ meaning `null` had.
   two new members; a script that reads members by name needs no change.
 
 ## BREAKING: the `check` and `package` reports name the project like the flag
-<!-- upgrade: no-file -->
 
 | Old member | New member | Migration |
 |---|---|---|
@@ -310,28 +305,111 @@ names the package a runtime activated, as the HTTP contract does.
 Human output is unchanged.
 
 ## BREAKING: `authentication.oidc.assertionIssuers: {}` is refused
-<!-- upgrade: messaging-runtime-empty-assertion-issuers -->
 
 | Before | Now | Migration |
 |---|---|---|
 | `authentication.oidc.assertionIssuers: {}`, which applied no assertion-issuer rule | `config.invalid-value` at `/authentication/oidc/assertionIssuers` | Delete the member: omitting it applies no assertion-issuer rule. |
 
 ## BREAKING: a repeated `authentication.oidc.allowedClients` item is refused
-<!-- upgrade: messaging-duplicate-allowed-client -->
 
 | Before | Now | Migration |
 |---|---|---|
 | A client listed twice in `authentication.oidc.allowedClients` was accepted | `config.duplicate-item` at the second item, naming the first as a related position | List each client once. |
 
 ## BREAKING: a repeated key in `schema.json` or `sample.json` is refused
-<!-- upgrade: messaging-template-duplicate-key -->
 
 | Before | Now | Migration |
 |---|---|---|
 | An object key repeated in a template's `schema.json` or `sample.json` was accepted and the last value won | `messaging.template.schema-syntax` or `messaging.template.sample-syntax` at the line where the repeat is read | Keep one value for each key. |
 
+## Protocol words
+
+Every value Registry Messaging itself defines and writes outside the process
+follows CFG-NAME-2, lowercase kebab-case. The message, dispatch, report, and
+attempt words of the HTTP contract, the problem codes, the words Messaging
+stores in its own columns, and the audit event names already did, and are
+unchanged. The dispatch queue takes its job words from the shared dispatch
+primitive, which respells four of them in this release. Messaging stores one
+of the four in its job table; the other three are written to the audit
+journal only.
+
+### BREAKING: the `artifact` words of a refused `messagingctl --format json` report are kebab-case
+
+A refused report names what each diagnostic is about in `artifact`. Eight of
+those words were written with underscores:
+
+| Old `artifact` | New `artifact` | Codes that carry it |
+|---|---|---|
+| `command_arguments` | `command-arguments` | `usage.invalid`, `messagingctl.activation.invalid-reference`, `retention.future-cutoff` |
+| `package_output` | `package-output` | `package.refused` |
+| `runtime_configuration` | `runtime-configuration` | `config.refused` |
+| `template_data` | `template-data` | `data.unreadable`, `data.invalid` |
+| `runtime_dependency` | `runtime-dependency` | `runtime.unavailable`, `output.failed`, and an operational failure without its own entry |
+| `database_activation` | `database-activation` | the `messagingctl.activation.*` codes other than `invalid-reference` |
+| `dev_session` | `dev-session` | `dev.refused`, `dev.failed`, `dev.interrupted` |
+| `messaging_package` | `messaging-package` | a domain refusal without its own entry |
+
+`filesystem`, `database`, `audit`, and `message` are unchanged, and a
+diagnostic the shared reader places in a file keeps the `kind` of that file.
+No alias is written or read. The codes, the exit codes, and human output are
+unchanged.
+
+Migration: a script that matches `artifact` matches the new word. Matching
+`code` needs no change.
+
+### BREAKING: the dispatch queue's job words are kebab-case
+
+| Old | New | Where Messaging writes it |
+|---|---|---|
+| `dead_lettered` | `dead-lettered` | the `messaging_dispatch_jobs.state` column, and the `from` and `disposition` members of the `messaging.attempt.finished`, `messaging.dispatch.transition`, and `messaging.message.quarantined` audit records |
+| `retry_pending` | `retry-pending` | the `disposition` member of the `messaging.attempt.finished` and `messaging.dispatch.transition` audit records |
+| `replay_pending` | `replay-pending` | the `disposition` member of a `messaging.dispatch.transition` audit record whose `transition` is `replayed` |
+| `lease_lapsed` | `lease-lapsed` | the `transition` member of the `messaging.dispatch.transition` audit record |
+
+A message that exhausted its attempts, or was refused permanently, is held
+in the job state `dead-lettered`. The HTTP contract and `messagingctl` report
+that message as `failed`, as before: no request, response, or command output
+changes. The old spellings are not read: this runtime refuses a job row
+whose state is `dead_lettered`, and its retention would never erase one.
+
+No schema version rewrites a stored job state: v0.40.0 does not upgrade
+v0.39.0 state in place; apply to a new database. The schema `messagingctl
+apply` creates names the new word in the two check constraints on the state
+(`messaging_dispatch_jobs_state_values` and `messaging_dispatch_jobs_shape`)
+and in the partial index retention reads terminal jobs through
+(`messaging_dispatch_jobs_terminal_idx`), so the database refuses a write of
+the old spelling.
+
+Audit records an earlier release wrote keep the words they were written
+with; none is rewritten.
+
+Migration: a query, alert, or dashboard that matches one of the four words
+in the job table or the audit journal must match the new spelling, and one
+that also reads records an earlier release wrote must match both.
+
+### BREAKING: five client error words are written in kebab-case
+
+The Node.js and Python Messaging clients name a failure with fixed words a
+caller branches on. Five of them carried an underscore (CFG-NAME-2): four
+are the client's own, and the transport word comes from the shared HTTP
+primitives, which respell it in this release.
+
+| Member of `MessagingClientError` (Node.js, Python) | Old word | New word |
+|---|---|---|
+| `kind` | `invalid_request` | `invalid-request` |
+| `protocolFailure`, `protocol_failure` | `header_bounds` | `header-bounds` |
+| `protocolFailure`, `protocol_failure` | `trace_context` | `trace-context` |
+| `protocolFailure`, `protocol_failure` | `media_type` | `media-type` |
+| `transportKind`, `transport_kind` | `response_too_large` | `response-too-large` |
+
+The other words of the three members are unchanged, and so is the Rust
+client, whose errors are enum variants with no word of their own.
+`@registrystack/client` and `registry-stack-client` carry the same words.
+
+No file an adopter writes changes. To migrate, change what a consumer of a
+client error compares each of these members with.
+
 ## BREAKING: Rust API
-<!-- upgrade: no-file -->
 
 - `registry-messaging-core`: `MessagingPackage` is `MessagingProject`, read
   with `MessagingProject::decode` through the shared reader;
@@ -368,3 +446,79 @@ A passed `messagingctl check` ends with the shared summary line
 (`0 errors, 0 warnings in 18 files`), and a refused one opens with
 `messagingctl check refused the input.` and ends with the summary line.
 Migration: a script that parsed the human output reads `--format json`.
+
+## Stable move
+
+The changes below move promised spellings to the form the configuration
+conventions give them. Each old spelling is refused with a diagnostic that
+names its replacement; no release reads both.
+
+### BREAKING: `authentication.oidc.jwksSource` is tagged by `type`
+
+The shared OIDC key source block is a union tagged by `type` (CFG-ID-7),
+where it was tagged by `kind`. The `messaging` runtime and every command
+that reads a runtime file refuse `kind` under `jwksSource` as
+`config.removed-key` at `/authentication/oidc/jwksSource/kind`, and the
+message names `type`. The values and their members are unchanged.
+
+| Old spelling | New spelling | Migration |
+|---|---|---|
+| `authentication.oidc.jwksSource.kind` | `authentication.oidc.jwksSource.type` | Rename the key; keep the value (`discovery`, `uri`, or `static`). |
+
+`jwksSource: {kind: static, documentRef: secret:file/jwks}` becomes
+`jwksSource: {type: static, documentRef: secret:file/jwks}`. A file that
+omits `jwksSource` needs no change: the default is still `type: discovery`.
+`messagingctl check --runtime-config FILE --project PROJECT` reports the old
+key at its line and column.
+
+### A client listed with no assertion issuer is refused by the reader
+
+`authentication.oidc.assertionIssuers` in the runtime file already refused a
+client written with an empty issuer list. The shared block now refuses it
+when the file is read, so the code changes:
+
+| Member | Code before | Code now |
+|---|---|---|
+| `/authentication/oidc/assertionIssuers/<client>` with `[]` | `messaging.runtime.empty-assertion-issuers` | `config.invalid-value` |
+
+The pointer is unchanged, and the runtime schema declares `minItems: 1` on
+the list. `messaging.runtime.empty-assertion-issuers` stays in the catalogue
+for a configuration that is not read from a file.
+
+Migration: no file changes. A script that matches the product code must
+match `config.invalid-value`.
+
+### BREAKING: `messagingctl plan` writes `databaseId: not-recorded`
+
+The plan's `databaseId` comparison is the shared `DatabaseIdCheck` of
+`registry-platform-activation`, which is written in kebab-case (CFG-NAME-2):
+`notRecorded` becomes `not-recorded`. `matches` and `differs` are unchanged.
+
+Migration: no file changes; a script that compares `notRecorded` compares
+`not-recorded`.
+
+### BREAKING: a client repeated in `allowedClients` is refused
+
+`authentication.oidc.allowedClients` in the runtime file is read by the
+shared block, which requires the member and reads its list as a set
+(CFG-EMPTY-2, CFG-ID-6). Messaging already refused an omitted member and an
+empty list; a repeated client was accepted.
+
+| Written | Before | Now |
+|---|---|---|
+| `allowedClients: [a, b, a]` | only `a` and `b` admitted | refused, `config.duplicate-item` at `/authentication/oidc/allowedClients/2` |
+| member omitted | refused, `messaging.runtime.allowed-clients-required` at `/authentication/oidc/allowedClients` | refused, `config.missing-key` at `/authentication/oidc` |
+| `allowedClients: []` | refused, `messaging.runtime.allowed-clients-required` | refused, `config.invalid-value` at `/authentication/oidc/allowedClients` |
+| `allowedClients: unrestricted` | refused by the reader, which took only a list | refused, `messaging.runtime.allowed-clients-required` at `/authentication/oidc/allowedClients` |
+| `allowedClients: [a, b]` | only `a` and `b` admitted | unchanged |
+
+The shared block accepts the keyword `unrestricted`, which the Casework and
+Scheduling runtimes take on development loopback. Messaging accepts it in no
+mode: an access profile resolves its caller from the matched client, so an
+open client list reaches no profile. The runtime schema states the list with
+`minItems: 1` and `uniqueItems: true`.
+
+Migration: write a client that `allowedClients` repeats once, then run
+`messagingctl check --runtime-config runtime.yaml`. A script that matches
+`messaging.runtime.allowed-clients-required` for an omitted member or an
+empty list must match `config.missing-key` or `config.invalid-value`.

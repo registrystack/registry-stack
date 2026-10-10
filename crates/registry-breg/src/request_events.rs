@@ -109,7 +109,7 @@ pub async fn insert_request_lifecycle_events(
             "entity": event.request_entity_id,
             "recordId": event.request_id.to_string(),
             "revision": event.request_record_revision,
-            "trigger": "request_lifecycle",
+            "trigger": "request-lifecycle",
             "packageRevision": event.package_digest,
             "request": {
                 "proposalVersion": event.proposal_version,
@@ -169,7 +169,7 @@ pub async fn insert_request_lifecycle_events(
                      (event_id, event_type, trigger, entity_id, record_reference,
                       record_revision, package_revision, schema_fingerprint, payload,
                       created_at, payload_expires_at)
-                 VALUES ($1, $2, 'request_lifecycle', $3, $4, $5, $6, $7, $8, $9,
+                 VALUES ($1, $2, 'request-lifecycle', $3, $4, $5, $6, $7, $8, $9,
                          $9::timestamptz + $10::bigint * interval '1 millisecond')
                  ON CONFLICT (event_id) DO NOTHING",
                 &[

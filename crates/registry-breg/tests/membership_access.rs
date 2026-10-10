@@ -45,17 +45,17 @@ fn membership_boundaries_compile_for_distinct_registry_models() {
 fn membership_boundaries_refuse_unenforced_authority_paths() {
     for (path, value, code) in [
         (
-            "/accessProfiles/0/permissions/0/operations",
+            "/accessProfiles/0/permissions/entities/0/operations",
             json!(["get", "patch"]),
             "breg.access.membership-read-only",
         ),
         (
-            "/accessProfiles/0/permissions/0/applyTargets",
+            "/accessProfiles/0/permissions/entities/0/applyTargets",
             json!([{"entity":"facility","rowBoundaries":"unrestricted"}]),
             "breg.access.membership-read-only",
         ),
         (
-            "/accessProfiles/0/permissions/0/requestPresence",
+            "/accessProfiles/0/permissions/entities/0/requestPresence",
             json!([{"requestType":"request","rowBoundaries":"unrestricted"}]),
             "breg.access.membership-read-only",
         ),
@@ -65,22 +65,22 @@ fn membership_boundaries_refuse_unenforced_authority_paths() {
             "breg.access.requirements-scope-missing",
         ),
         (
-            "/accessProfiles/0/permissions/0/membershipBoundaries/0/field",
+            "/accessProfiles/0/permissions/entities/0/membershipBoundaries/0/field",
             json!("label"),
             "breg.access.membership-key-type",
         ),
         (
-            "/accessProfiles/0/permissions/0/membershipBoundaries/0/principalField",
+            "/accessProfiles/0/permissions/entities/0/membershipBoundaries/0/principalField",
             json!("active"),
             "breg.access.membership-principal-type",
         ),
         (
-            "/accessProfiles/0/permissions/0/membershipBoundaries/0/activeField",
+            "/accessProfiles/0/permissions/entities/0/membershipBoundaries/0/activeField",
             json!("principal"),
             "breg.access.membership-active-type",
         ),
         (
-            "/accessProfiles/0/permissions/0/membershipBoundaries/0/membershipEntity",
+            "/accessProfiles/0/permissions/entities/0/membershipBoundaries/0/membershipEntity",
             json!("facility"),
             "breg.access.membership-source-recursive",
         ),
@@ -107,7 +107,7 @@ fn membership_boundaries_refuse_unenforced_authority_paths() {
     let mut value = source("facility");
     value["entities"][0]["readPaths"] =
         json!([{"id":"facilities","through":"membership","to":"facility","route":"facilities"}]);
-    value["accessProfiles"][1]["permissions"][0]["readPaths"] =
+    value["accessProfiles"][1]["permissions"]["entities"][0]["readPaths"] =
         json!([{"path":"facilities","readableFields":["label"]}]);
     let failure =
         compile(&value).expect_err("read paths cannot ignore protected target membership");
@@ -117,12 +117,22 @@ fn membership_boundaries_refuse_unenforced_authority_paths() {
         .any(|diagnostic| diagnostic.code == "breg.access.membership-read-path-target"));
 
     let mut action = action_requirements::project();
-    action["accessProfiles"][0]["permissions"][0]["membershipBoundaries"] =
-        source("facility")["accessProfiles"][0]["permissions"][0]["membershipBoundaries"].clone();
-    let failure = compile(&action)
+    action["accessProfiles"][0]["permissions"]["actions"][0]["membershipBoundaries"] =
+        source("facility")["accessProfiles"][0]["permissions"]["entities"][0]
+            ["membershipBoundaries"]
+            .clone();
+    let failure = registry_breg::parse_project_yaml(&serde_json::to_vec(&action).unwrap())
         .expect_err("an action grant must not silently ignore entity membership rules");
-    assert!(failure
+    let refusals: Vec<_> = failure
         .diagnostics()
         .iter()
-        .any(|diagnostic| diagnostic.code == "breg.action.permission-entity-fields-forbidden"));
+        .map(|diagnostic| (diagnostic.code.as_str(), diagnostic.path.as_str()))
+        .collect();
+    assert_eq!(
+        refusals,
+        [(
+            "config.unknown-key",
+            "project.accessProfiles[0].permissions.actions[0].membershipBoundaries"
+        )]
+    );
 }

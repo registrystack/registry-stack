@@ -1,6 +1,6 @@
-apiVersion: registry.registrystack.org/v1alpha1
-kind: RegistryProject
-registry:
+apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
   id: household-history
   canonicalBaseIri: "https://household-history.example.gov"
   version: 0.1.0
@@ -47,16 +47,16 @@ entities:
     mutationMode: mutable
     batch: {maximumItems: 4, maximumBytes: 16384}
     fields:
-      - {id: subject, type: string, required: true, maxLength: 80, classification: internal}
+      - {id: subject, type: string, required: true, maximumLength: 80, classification: internal}
       - {id: group, type: vocabulary-code, vocabulary: membership-group, required: true, classification: internal}
       - {id: valid-from, type: date, required: true, classification: internal}
       - {id: valid-to, type: date, required: false, classification: internal}
-      - {id: source-reference, type: string, required: false, maxLength: 120, classification: internal}
+      - {id: source-reference, type: string, required: false, maximumLength: 120, classification: internal}
     temporal:
       startField: valid-from
       endField: valid-to
     constraints:
-      - {kind: temporal-non-overlap, scopeFields: [subject], startField: valid-from, endField: valid-to}
+      - {type: temporal-non-overlap, scopeFields: [subject], startField: valid-from, endField: valid-to}
     indexes:
       - {id: by-group, fields: [group]}
       - {id: by-valid-from, fields: [valid-from]}
@@ -68,12 +68,14 @@ accessProfiles:
     requiredPurposes: [history-maintenance]
     requiredScopes: [history-maintain]
     permissions:
-      - {entity: membership-record, operations: [create, get, list, patch, batch, snapshot], readableFields: [subject, group, valid-from, valid-to, source-reference], writableFields: [subject, group, valid-from, valid-to, source-reference], filterableFields: [subject, group, valid-from, valid-to], rowBoundaries: unrestricted}
+      entities:
+        - {entity: membership-record, operations: [create, get, list, patch, batch, snapshot], readableFields: [subject, group, valid-from, valid-to, source-reference], writableFields: [subject, group, valid-from, valid-to, source-reference], filterableFields: [subject, group, valid-from, valid-to], rowBoundaries: unrestricted}
   - id: eligibility-consumer
     principalClaim: registry_principal
     requiredPurposes: [eligibility-evaluation]
     requiredScopes: [eligibility-read]
     permissions:
-      - {entity: membership-record, operations: [list, snapshot], readableFields: [subject, group, valid-from, valid-to], filterableFields: [subject, group, valid-from, valid-to], rowBoundaries: unrestricted}
+      entities:
+        - {entity: membership-record, operations: [list, snapshot], readableFields: [subject, group, valid-from, valid-to], filterableFields: [subject, group, valid-from, valid-to], rowBoundaries: unrestricted}
 vocabularies:
   - {id: membership-group, values: [A, B]}

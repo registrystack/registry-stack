@@ -2,6 +2,212 @@
 
 ## Unreleased
 
+- BREAKING: the Rust, Node.js, and Python clients write eight error words in
+  kebab-case (CFG-NAME-2): kind `invalid-request` (was `invalid_request`);
+  the `protocol` codes `header-bounds`, `trace-context`, and `media-type`
+  (were `header_bounds`, `trace_context`, `media_type`); the transport kind
+  `response-too-large`; the token kinds `invalid-credential` and
+  `scope-narrowed`; and the refused-token code `unregistered-error-code`.
+  The codes RFC 6749 section 5.2 registers keep the specification's
+  spelling. Migration: change what a consumer of a client error compares.
+  No file an adopter writes changes.
+- BREAKING: the Rust, Node.js, and Python clients write their own remaining
+  eighteen words in kebab-case (CFG-NAME-2): the kinds `not-found`,
+  `metadata-selection`, `lifecycle-promotion`, and `webhook-verification`;
+  the `protocol` codes `entity-tag`, `profile-link`, `cache-policy`, and
+  `representation-digest`; the `metadata-selection` codes `not-found`,
+  `unbound-source`, `profile-mismatch`, `unsupported-operation`,
+  `required-capability`, and `contract-mismatch`; the webhook verification
+  codes `missing-header`, `malformed-signature`, `signature-mismatch`, and
+  `unsupported-version`; and the attachment slot value kind `not-selected`.
+  Each was the same word with an underscore. The Problem `code` the registry
+  answers (`resource.not_found` among them) is unchanged. Migration: change
+  what a consumer of a client error, a webhook verification refusal, or an
+  attachment slot value compares. No file an adopter writes changes.
+- BREAKING: `registry.yaml` opens with
+  `apiVersion: id.registrystack.org/formats/breg/project/v1alpha1` and
+  `kind: BRegProject`, and names the registry in a top-level `project` block
+  (was `registry.registrystack.org/v1alpha1`, `RegistryProject`, and the
+  `registry` block). The earlier header and block are refused by name.
+  Migration steps are in `release/notes/config-conventions/breg.md` under
+  "Stable move".
+- BREAKING: `module.yaml` opens with
+  `apiVersion: id.registrystack.org/formats/breg/module/v1alpha1` and
+  `kind: BRegModule` (it had no header). A module without them is refused with
+  `config.missing-envelope`. Module digests are unchanged. Migration steps are
+  in `release/notes/config-conventions/breg.md` under "Stable move".
+- BREAKING: `runtime.yaml` writes
+  `apiVersion: id.registrystack.org/formats/breg/runtime/v1alpha1` (was
+  `registry.registrystack.org/breg-runtime/v1alpha1`). The earlier value is
+  refused with `config.retired-api-version`. Migration steps are in
+  `release/notes/config-conventions/breg.md` under "Stable move".
+- BREAKING: each `bregctl explain` payload carries its own `apiVersion`,
+  `id.registrystack.org/formats/breg/<format>/v1alpha4`, and a kind that opens
+  with `BReg`, such as `BRegAccessExplanation` (all nine shared
+  `registry.registrystack.org/breg-explain/v1alpha4` and wrote kinds such as
+  `AccessExplanation`). The table of values is in
+  `release/notes/config-conventions/breg.md` under "Stable move".
+- Every `bregctl --format json` report opens with
+  `apiVersion: id.registrystack.org/formats/breg/ctl-report/v1alpha1` and
+  `kind: BRegCtlReport`, ahead of `ok` and `command`. The change is additive:
+  the members a command already wrote are unchanged.
+- BREAKING: a consent record states the longest a give lasts as
+  `consentRecord.validity.maximumDurationDays`, a whole number of days from 1
+  to 3652 (was `maxDuration`, an ISO 8601 duration text such as `P365D`), in
+  `registry.yaml`, in `module.yaml`, in the compiled package, and in
+  `bregctl explain access`. `maxDuration` is refused with
+  `config.removed-key`. A duration in years, months, or weeks is written as
+  the days it stands for, and the smallest duration is one day. Lock the
+  project and rebuild the package after the edit. A package the previous
+  release built states `maxDuration` and is refused, as a current package and
+  as a predecessor. No stored row is rewritten. Migration steps are in
+  `release/notes/config-conventions/breg.md` under "Stable move".
+- BREAKING: a vocabulary under `manifestProjection.vocabularies` names the
+  page that publishes it as `externalReference` (was `externalRef`), in
+  `registry.yaml` and in the compiled package. `externalRef` is refused with
+  `config.removed-key`. The rendered Registry Manifest keeps its own
+  `external_ref`. Rebuild the package after the edit; no stored row changes.
+  Migration steps are in `release/notes/config-conventions/breg.md` under
+  "Stable move".
+- BREAKING: a client listed under `authentication.oidc.assertionIssuers` in
+  `runtime.yaml` names at least one issuer. `assertionIssuers: {kiosk: []}`
+  is refused with `config.invalid-value` at
+  `/authentication/oidc/assertionIssuers/kiosk`: remove the client, which
+  then may exchange from no authority as before, or list its issuers.
+  Migration steps are in `release/notes/config-conventions/breg.md` under
+  "Stable move".
+- BREAKING: `authentication.oidc.deniedKids` in `runtime.yaml` names at
+  least one key or is left out. `deniedKids: []` is refused with
+  `config.invalid-value`, and the refusal says to delete the member. A file
+  with no `deniedKids` denies no key, as `[]` did. `bregctl init` and
+  `bregctl dev` no longer write the empty list. Migration steps are in
+  `release/notes/config-conventions/breg.md` under "Stable move".
+- BREAKING: `attachmentStorage`, `attachmentVerification`, and
+  `fieldEncryption.provider` in `runtime.yaml` name their variant in `type`
+  (was `kind`), and the field encryption variant `localFile` is written
+  `local-file`. The `kind` member is refused with `config.removed-key`, and
+  `type: localFile` with `config.unknown-variant`. The other variant words
+  are unchanged. Nothing stored changes.
+  Migration steps are in `release/notes/config-conventions/breg.md` under
+  "Stable move".
+- BREAKING: the issuer key source names its variant in `type` (was `kind`):
+  `authentication.oidc.jwksSource.type` in the engine's `runtime.yaml` and
+  `resourceServer.jwksSource.type` in the `breg-mcp` runtime file. The words
+  `discovery`, `uri`, and `static` are unchanged. The `kind` member is
+  refused with `config.removed-key`, naming `type`. Nothing stored changes.
+  Migration steps are in `release/notes/config-conventions/breg.md` under
+  "Stable move".
+- BREAKING: `runtime.yaml` reads the keys of `eventDestinations` as local
+  identifiers and the client keys of `assertionIssuers` and `trustedActors`
+  as external identifiers, and refuses a key that is not one with
+  `config.invalid-value` at the key. No event destination key that was read
+  before is refused. A client key that carries a control character is newly
+  refused; an OAuth client identifier never does. Nothing stored changes.
+  Details are in `release/notes/config-conventions/breg.md` under "Stable
+  move".
+- BREAKING: an access profile that writes no `principalClaim` is refused
+  with `config.missing-key` when `registry.yaml` or `module.yaml` is read.
+  The compiler already refused it, so no accepted project changes. The
+  compiler keeps `breg.access-profile.principal-claim-required` for a claim
+  written empty and no longer reports `breg.import.principal-required` or
+  `breg.access.membership-authentication`. The published project schema
+  lists `principalClaim` as required. Details are in
+  `release/notes/config-conventions/breg.md` under "Stable move".
+- An `entities` list that writes one `id` twice in a `registry.yaml` or a
+  `module.yaml` is refused when the file is read, with `config.duplicate-id`
+  at the `id` of the second item (was `breg.entity.id-duplicate` at the list,
+  from the compiler). `breg.entity.id-duplicate` stays for an entity that
+  more than one file contributes. No accepted project changes.
+- `bregctl init` opens `registry.yaml`, `modules/record-notes/module.yaml`,
+  and `runtime.example.yaml` with a `# yaml-language-server: $schema=` line
+  naming the published schema of the file, so an editor checks the file with
+  no setup. The line is a comment: the reader, module digests, and package
+  digests do not see it, and an existing project needs no edit.
+- BREAKING: `bregctl test --baseline-package`, `bregctl package
+  --baseline-package`, and `bregctl diff` do not read a deployed package the
+  previous release built as a baseline. It carries the retired package
+  `apiVersion` and the retired spellings, and is refused before its sources
+  are read, with `package.baseline.retired_api_version` or
+  `diff.baseline.retired_api_version`, and `bregctl plan` and `bregctl
+  apply` refuse the package as a predecessor. A history descriptor a database
+  retained under the earlier bound names is refused when it is read. Build
+  the package with this release and apply it to a new database.
+- BREAKING: a field type writes its bounds as `minimumLength`,
+  `maximumLength`, and `maximumBytes` (were `minLength`, `maxLength`, and
+  `maxBytes`) in `registry.yaml`, in `module.yaml`, in the compiled package,
+  in the registry metadata document, and in `bregctl explain` output. An
+  earlier name in a project or module is refused with `config.removed-key`.
+  JSON Schema keywords inside a structured field's `schema` and in the
+  generated OpenAPI document are unchanged. Lock the project and rebuild the
+  package after the edit. Action and change-request contract fingerprints,
+  statistical dataset definition digests, and the Evidence export
+  `behaviorRevision` hash the bounds under the names a project writes, and a
+  fingerprint no longer hashes the `anonymous` member a permission once
+  carried: every action and change-request fingerprint changes, with the row
+  policies in the generated DDL that state it, and a consumer that pinned a
+  `behaviorRevision` generates its Evidence source export again. No SQL
+  migration runs. Migration steps are in
+  `release/notes/config-conventions/breg.md` under "Stable move".
+- BREAKING: `runtime.yaml` writes the event destination profile words in
+  kebab-case: `networkProfile` is `production-https` or
+  `loopback-development-http`, and `dnsFamily` is `dual-stack-strict` or
+  `ipv4-only`. An earlier word is refused with `config.unknown-variant`. The
+  stored binding digest of a destination is unchanged. Migration steps are in
+  `release/notes/config-conventions/breg.md` under "Stable move".
+- BREAKING: `runtime.yaml` renames eleven members to the shared spellings:
+  `database.pool.maxSize` to `maximumConnections`,
+  `authentication.oidc.maxTokenLifetimeSeconds` to
+  `maximumTokenLifetimeSeconds`, `jwksCache.maxDocumentBytes` to
+  `maximumDocumentBytes`, `jwksCache.requestTimeoutMilliseconds` to
+  `attemptTimeoutMilliseconds`, `audit.retainDays` to `retentionDays`,
+  `cursor.maxAgeSeconds` to `maximumAgeSeconds`, `wasmExecution.maxModuleBytes`
+  and `maxGuestMemoryBytes` to `maximumModuleBytes` and
+  `maximumGuestMemoryBytes`, and `timeoutMilliseconds` to
+  `attemptTimeoutMilliseconds` under `fieldEncryption.provider`,
+  `attachmentStorage`, and `attachmentVerification`. Values are unchanged. An
+  earlier key is refused with `config.removed-key`. Migration steps are in
+  `release/notes/config-conventions/breg.md` under "Stable move".
+- BREAKING: `bregctl --format json explain lifecycle` spells the `id` of each
+  of its twenty-one enforcement layers in lowercase kebab-case, such as
+  `caller-authentication` (was `caller_authentication`). The table of values
+  is in `release/notes/config-conventions/breg.md` under "Stable move".
+- The `bregctl explain` contract schemas type the module, action, effect,
+  consent organization, consent group, and lifecycle `id` members as
+  `$defs/LocalId`. The registry project already holds these identifiers to that
+  grammar, so no output changes.
+- BREAKING: `bregctl --format json explain actions` and `explain routes` tag
+  every union with `type` (was `kind`): a target `source`, an effect target
+  `binding`, an effect field mutation and its `value`, and each entry of
+  `routes[]`. An effect field value reads `from-input` or `from-effect` (was
+  `from_input`, `from_effect`). The table is in
+  `release/notes/config-conventions/breg.md` under "Stable move".
+- BREAKING: `bregctl --format json explain actions` spells what it states
+  about a handler, its evidence, and a requirement in lowercase kebab-case,
+  such as `reads: supplied-inputs-only` (was `supplied_inputs_only`). The
+  eleven values are in `release/notes/config-conventions/breg.md` under
+  "Stable move".
+- BREAKING: `bregctl --format json explain queries` names each of the eight
+  members of `operations[].bounds` `maximum<Thing>`, such as `maximumPageSize`
+  (was `maxPageSize`). The table is in
+  `release/notes/config-conventions/breg.md` under "Stable move".
+- BREAKING: `bregctl --format json explain actions` reports how long an
+  accepted Evidence assertion is retained as `evidence.retentionDays: 1` (was
+  `retentionSeconds: 86400`). The retention itself is unchanged.
+- BREAKING: `bregctl --format json explain access` spells its own constants
+  in lowercase kebab-case: each of the seven `claimContractError` values, such
+  as `principal-claim-missing` (was `principal_claim_missing`), and, with
+  `--scenario`, `mode: offline-synthetic` and `recordAccess: not-evaluated`
+  (were `offline_synthetic`, `not_evaluated`). The table is in
+  `release/notes/config-conventions/breg.md` under "Stable move".
+- BREAKING: `bregctl --format json explain change-requests` tags six unions
+  with `type` (was `kind`): a `planner`, its `declaringOrigin`, the `target`
+  of each of its `possibleWrites`, an effect target `binding`, an effect field
+  mutation, and its `value`. It writes `reserved-create`, `from-field`, and
+  `from-effect` (were `reserved_create`, `from_field`, `from_effect`).
+  `requests[].review` is unchanged. A Casework source imported from this
+  output is imported again with the same release's `caseworkctl source add`.
+  The table is in `release/notes/config-conventions/breg.md` under "Stable
+  move".
 - BREAKING: the access profiles a module writes on an entity
   (`module.yaml` `/entities/*/accessProfiles` and
   `/extendEntities/*/accessProfiles`) are read with the same rules as a
@@ -36,6 +242,11 @@
   steps are in `release/notes/config-conventions/breg.md`.
 - `editors/configure.py` maps the JSON formats `*-binding.json` and
   `examples/scenarios.json` beside the YAML formats for VS Code and Zed.
+- A reviewed migration descriptor has a published JSON Schema generated from
+  the types its reader decodes,
+  `products/breg/generated/tools/migration-descriptor.v1alpha1.schema.json`,
+  and `editors/configure.py` maps `modules/*/migrations/*/descriptor.json`
+  anywhere below the project directory to it for VS Code and Zed.
 - BREAKING: `registry.yaml` and `module.yaml` are read by the shared
   configuration reader. A file that writes null, an unquoted number where text
   is expected (`version: 1`), an ambiguous number, or a YAML anchor, alias,
@@ -101,6 +312,13 @@
   refuses a repeated item as `config.duplicate-item` instead of collapsing
   it. Delete the repeat to migrate. The member list is in
   `release/notes/config-conventions/breg.md`.
+- BREAKING: `provenanceFields` on a permission or an entity access profile is
+  read as a set: a repeated item is refused with `config.duplicate-item`
+  where the file is read (was `breg.access-profile.provenance-fields-invalid`
+  at compile). Delete the repeat to migrate. Its words are unchanged, the
+  published schemas mark them as member names, and the project schema now
+  lists the member on an entity permission. A module profile's
+  `taskGrant.sourceIssuer` is read as a URL, as a project profile's is.
 - BREAKING: every configuration diagnostic code is named
   `breg.<area>.<condition>` in kebab segments, such as
   `breg.access.profile-unrestricted-collection` for
@@ -124,11 +342,12 @@
   Migration steps are in `release/notes/config-conventions/breg.md`.
 - BREAKING: a package's `package.json` declares `apiVersion:
   id.registrystack.org/formats/breg/package/v2` and `kind: BRegPackage`.
-  `breg` refuses a package with the retired
-  `registry.registrystack.org/package/v2` header; `bregctl` still reads one as
-  the deployed predecessor named by `--baseline-package`. Rebuild the deployed
-  package with this release against it, then `plan` and `apply` the rebuild,
-  which is recorded as a metadata-only activation. Migration steps are in
+  `breg` and every `bregctl` command refuse a package with the retired
+  `registry.registrystack.org/package/v2` header, as a current package and as
+  the predecessor `--baseline-package` or a runtime file names, and the
+  refusal names the current apiVersion. Rebuild the package from the migrated
+  project with this release and apply it to a new database with `bregctl
+  apply --initial`. Migration steps are in
   `release/notes/config-conventions/breg.md`.
 - BREAKING: experimental statistical datasets in `registry.yaml` tag their
   period with `type: flow` or `type: stock` in place of `kind`, and a
@@ -152,6 +371,22 @@
   export an earlier release generated is refused by `evidencectl source`;
   generate it again. Every change and its migration step is in the "BReg
   tool and output formats" section of
+  `release/notes/config-conventions/breg.md`.
+- BREAKING: the words that name a change between two compiled registries are
+  written in kebab-case (CFG-NAME-2) in a reviewed migration `descriptor.json`
+  (`changeClass`, `covers[].code`, `covers[].target.kind`, `recovery`), in a
+  compiled package's `migrationPlan.changes`, and in the JSON and human
+  output of `bregctl diff`, `plan`, `apply`, and `migration explain`:
+  `data-backfill-required`, `access-or-disclosure-change`,
+  `field-added-required`, `access-profile`, `exact-target-resume`,
+  `lock-or-rewrite-risk`, `review-required`, `compatible-additive`,
+  `role-change`, and the others, with the `checks` of `bregctl plan`
+  (`migration-role`, `history-coverage`, and eight more). A descriptor in
+  snake_case is refused with `config.unknown-variant` at the word, naming the
+  kebab-case word. Rewrite the words in each descriptor, recompute the
+  `planDigest` of its `rehearsal.json`, build the package again, and update
+  what reads the commands' output. No stored word changes. The tables of
+  every word are in the "BReg tool and output formats" section of
   `release/notes/config-conventions/breg.md`.
 - BREAKING: a `${...}` substitution expression in a file `bregctl` reads as
   written (fixture journeys, schema-test credentials, model selection,
@@ -199,28 +434,21 @@
   idempotency.conflict`. The spent rows themselves are kept indefinitely; see
   `SECURITY-REVIEW-NOTES.md`.
 - BREAKING: the caller-keyed idempotency store is a new engine capability, so
-  a package an earlier release built no longer loads. Rebuild it unchanged
-  with this `bregctl package --baseline-package <deployed package>` and apply
-  it once before starting the upgraded runtime.
-- The upgrade keeps existing idempotency records as tombstones no caller can
-  find: each carries no raw caller or key and loses its held response and
-  receipt, while the immediate action results, immediate action
-  applications, and request idempotency links that reference it stay, so a
-  revision an earlier release's immediate action wrote keeps its history
-  provenance. A request committed before the upgrade and retried after it
-  executes again.
+  a package an earlier release built no longer loads. Rebuild it with this
+  release and apply it to a new database with `bregctl apply --initial`.
+- The new database holds no idempotency record: a request the earlier
+  release committed and a caller retries against this one executes again.
 - Ingestion runs belong to the verified caller that created them, not to its
   audit pseudonym (#1930). A run stores the configured OIDC issuer and the
   verified principal, and listing, reading, chunk submission, receipt
   recovery, and cancellation compare those; the run's bound claim context is
   an unkeyed SHA-256 digest. Rotating `audit.hashKeyRef` no longer hides an
   open run from its creator, and another principal still finds none of it.
-- BREAKING: the upgrade discards every stored ingestion run with its chunks
-  and receipts, since a run stored before it names no verified creator. The
-  records committed chunks wrote stay, and an import authority keeps the
-  volume they consumed. Finish or cancel open runs before upgrading. A
-  `bregctl data import` whose run was discarded refuses to resume; import
-  only the uncommitted lines under a fresh checkpoint path.
+- BREAKING: no stored ingestion run is carried across, since a run the
+  earlier release stored names no verified creator and this release starts
+  on a new database. A `bregctl data import` checkpoint written against the
+  earlier registry refuses to resume; import the data again under a fresh
+  checkpoint path.
 - BREAKING: `breg-mcp` and `breg-review` read `runtime.yaml` through the
   shared configuration reader, as
   `id.registrystack.org/formats/breg/mcp-runtime/v1alpha1` and
@@ -303,6 +531,114 @@
   `action.handler_failed` and `statistical_dataset.domain_violation` answers
   are rolled back before commit, so they are known outcomes and are not
   resent; neither is any answer with a 4xx status line.
+- BREAKING: the hook delivery, review result, and attachment verification
+  words the engine stores, audits, and reports are written in kebab-case:
+  `bregctl webhook list` reports `dead-lettered` (was `dead_lettered`) and
+  kebab-case dead letter reasons, the audit journal writes webhook outcomes
+  such as `http-non-success` and dispositions `retry-pending`,
+  `dead-lettered`, and `replay-pending`, and stored rows hold
+  `hmac-sha256-v1`, `after-commit`, `dead-lettered`, and `changes-requested`.
+  A database written by an earlier release is not migrated in place; start on
+  a new database. The table is in `release/notes/config-conventions/breg.md`
+  under "Stable move".
+- BREAKING: every enumerated word is written in kebab-case, in `registry.yaml`
+  and module files and in everything the engine writes: `submit-request`,
+  `revise-request`, `cancel-request`, `apply-request`, `create-only`,
+  `operator-erase`, `on-or-after`, `less-than`, `int-range`,
+  `request-lifecycle`, `verified-claim`, `field-is-null`, `valid-from`,
+  `as-of`, `is-null`, `from-field`, `reserved-create`, and the others. A
+  snake_case or camelCase word is refused where the file is read. The HTTP
+  metadata document and `x-registry-queryProfile` name the query bounds
+  `maximumPageSize`, `maximumFilterClauses`, and `maximumInValues`, and the
+  Rust client fields follow. `bregctl access preview` writes its refusal
+  reasons in kebab-case. Rewrite the words, run `bregctl project lock`, build
+  the package again, and apply it to a new database: a package or a database
+  written by an earlier release is refused. Both tables of words are in
+  `release/notes/config-conventions/breg.md` under "Stable move".
+- BREAKING: an `id` outside `^[a-z][a-z0-9_-]{0,63}$`, and a mapping key
+  outside the grammar of its position, is refused when `registry.yaml`, a
+  module file, or `runtime.yaml` is read, as `config.invalid-value` at the
+  line of the identifier (was `breg.identifier.invalid` from the compiler).
+  The grammar is unchanged, so a project that passed `bregctl check` still
+  passes. The published schemas type each `id` as `LocalId` and name the keys
+  of each mapping. The table is in
+  `release/notes/config-conventions/breg.md` under "Stable move".
+- BREAKING: a union of `registry.yaml` and of a module file is tagged by
+  `type`: a constraint, a predicate of a unique constraint, and an event
+  condition (were tagged by `kind`), a selector of a change request Evidence
+  subject (was tagged by `source`), and the review of a change request, which
+  is `{type: required, authority, policyId}` or `{type: none}` (was
+  `{authority, policyId}` or `{mode: none}`). The earlier form is refused with
+  `config.missing-key` naming `type`. The review is written the same way in
+  the package, the `x-registry-changeRequest` extension, the metadata
+  document, a change request record, `bregctl explain change-requests`, and
+  the Node.js and Python clients. Module digests and proposal digests change:
+  run `bregctl project lock`, build the package again, and apply it to a new
+  database. The table is in `release/notes/config-conventions/breg.md` under
+  "Stable move".
+- BREAKING: an access profile in `registry.yaml` groups its `permissions` by
+  what each names (CFG-ID-7, CFG-SCHEMA-8): `permissions` is a mapping of
+  three lists, `entities`, `actions`, and `datasets`, where it was one list
+  whose entries were told apart by the member each carried. The members of a
+  permission are unchanged. A list at `permissions`, `[]` among them, is
+  refused when the file is read, with `config.invalid-value` naming the three
+  groups, and a member that belongs to another kind of permission is refused
+  with `config.unknown-key` where it is written. Five compiler diagnostics
+  that refused a permission naming both an entity and an action, or neither,
+  are removed with the shape they refused. The compiled model does not
+  change: the registry revision, every `bregctl explain` report, and every
+  generated output are the ones the list compiled to. A module file is not
+  affected. Move each permission under its group, and build the package
+  again: its digest changes. The tables are in
+  `release/notes/config-conventions/breg.md` under "Stable move".
+- BREAKING: the handler of an entity hook and of a governed action is tagged
+  by `type` (CFG-ID-7), where it was tagged by `kind`:
+  `handler: {type: url, destinationId: <id>}`, `type: rhai`, `type: wasm`, in
+  `registry.yaml` and in a module file. A handler written with `kind` is
+  refused when the file is read, with `config.removed-key` naming `type`, and
+  the compiler refusals that pointed at `handler.kind` point at
+  `handler.type` under their unchanged codes. The planner of a change
+  request, the compiled handler in the package and in `bregctl explain
+  actions`, and the stored `handler_kind` of a hook delivery keep `kind`.
+  Rename the member, run `bregctl project lock` for a module you changed, and
+  build the package again: its digest changes. The table is in
+  `release/notes/config-conventions/breg.md` under "Stable move".
+- BREAKING: `null` is no longer a comparison value in `registry.yaml` or a
+  module file. A change request precondition predicate and an action
+  requirement state an unset value with `isNull: true` (was `equals: null`),
+  and an event condition lists the field in `beforeIsNull` or `afterIsNull`
+  (was `beforeEquals: {field: null}` or `afterEquals: {field: null}`). A
+  `null` comparison is refused when the file is read, with
+  `config.null-value`; `isNull: false` is refused with `config.invalid-value`.
+  The compiled predicate is the one `equals: null` compiled to, and a module
+  that never compared with `null` keeps its digest. Replace each `null`
+  comparison, run `bregctl project lock` for a module you changed, and build
+  the package again.
+- BREAKING: the metric label values the registry defines are spelled in
+  kebab-case. The `status` label of `breg_http_requests_total` and
+  `breg_http_request_duration_seconds` is `client-error` or `server-error`
+  in place of `client_error` or `server_error`, and so is the `status` field
+  of the structured request log. The `state` label of
+  `breg_pool_connections` reports `maximum-size` (was `max_size`), the `worker`
+  label of `breg_worker_last_success_age_seconds` reports
+  `attachment-verification` and `subject-access-log-retention`, and the
+  `queue` label of `breg_queue_oldest_pending_age_seconds` reports
+  `webhook-delivery`, `review-submission`, and `review-application`. Metric
+  names and label names are unchanged. Migration: respell the label values
+  in every dashboard query, recording rule, alert rule, and log filter. The
+  table is in `release/notes/config-conventions/breg.md` under "Stable move".
+- BREAKING: the thirteen webhook audit words that still carried an
+  underscore are written in kebab-case. In a webhook delivery record of the
+  audit journal, the `outcome` words `attempt_started`,
+  `destination_resolution_refused`, `destination_transport_unavailable`,
+  `payload_expired`, `replay_requested`, `replay_committed`,
+  `replay_refused`, `replay_unfinished`, `discard_requested`,
+  `discard_committed`, `discard_refused`, and `discard_unfinished`, and the
+  `disposition` word `discard_pending`, are now spelled with hyphens
+  (`attempt-started`, `discard-pending`). Records already written keep their
+  spelling and nothing stored changes. Migration: a query, alert, or report
+  that matches one of these words matches the new spelling for records
+  written from this release on.
 
 ## v0.39.0 - 2026-10-06
 

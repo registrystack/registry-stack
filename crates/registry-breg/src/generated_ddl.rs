@@ -870,10 +870,10 @@ pub(crate) fn replace_vocabulary_check_statement(
 
 /// The statement that relaxes a stored column's length check to the candidate
 /// field's bound, or `None` for an encrypted column, which stores envelopes
-/// and carries no length check. A raised `text` `maxLength` or a lowered
-/// nonzero `string` `minLength` replaces the inline check exactly as
+/// and carries no length check. A raised `text` `maximumLength` or a lowered
+/// nonzero `string` `minimumLength` replaces the inline check exactly as
 /// [`replace_vocabulary_check_statement`] does, under the same lock and row
-/// validation. A `string` `minLength` lowered to zero drops the check, since
+/// validation. A `string` `minimumLength` lowered to zero drops the check, since
 /// a fresh install of the candidate declares none.
 #[cfg(feature = "runtime")]
 pub(crate) fn replace_length_check_statement(
@@ -3446,10 +3446,10 @@ fn operation_name(operation: Operation) -> &'static str {
 
 fn change_request_operation_name(operation: Operation) -> &'static str {
     match operation {
-        Operation::SubmitRequest => "submit_request",
-        Operation::ReviseRequest => "revise_request",
-        Operation::CancelRequest => "cancel_request",
-        Operation::ApplyRequest => "apply_request",
+        Operation::SubmitRequest => "submit-request",
+        Operation::ReviseRequest => "revise-request",
+        Operation::CancelRequest => "cancel-request",
+        Operation::ApplyRequest => "apply-request",
         _ => "unsupported",
     }
 }
@@ -4081,8 +4081,8 @@ fn unique_when_predicate_sort_key(predicate: &UniqueWhenPredicate) -> String {
         UniqueWhenPredicate::FieldEquals { field, value } => {
             format!("field:{field}:equals:{}", value)
         }
-        UniqueWhenPredicate::FieldIsNull { field } => format!("field:{field}:is_null"),
-        UniqueWhenPredicate::FieldIsNotNull { field } => format!("field:{field}:is_not_null"),
+        UniqueWhenPredicate::FieldIsNull { field } => format!("field:{field}:is-null"),
+        UniqueWhenPredicate::FieldIsNotNull { field } => format!("field:{field}:is-not-null"),
         UniqueWhenPredicate::ActiveLifecycle {} => "lifecycle:active".to_owned(),
     }
 }
@@ -4477,23 +4477,23 @@ mod tests {
     fn compile_spatial_registry() -> crate::CompiledRegistry {
         let project = parse_project_json(
             br#"{
-              "apiVersion":"registry.registrystack.org/v1alpha1",
-              "kind":"RegistryProject",
-              "registry":{"id":"spatial-ddl","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://spatial-ddl.example.test"},
+              "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+              "kind":"BRegProject",
+              "project":{"id":"spatial-ddl","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://spatial-ddl.example.test"},
               "entities":[{
                 "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"mutable","classification":"internal",
                 "fields":[
-                  {"id":"code","type":"string","maxLength":32,"required":true,"classification":"internal"},
+                  {"id":"code","type":"string","maximumLength":32,"required":true,"classification":"internal"},
                   {"id":"location","type":"crs84-point","precision":6,"required":true,"classification":"internal"}
                 ],
                 "geojson":{"geometryField":"location"}
               }],
               "accessProfiles":[{
-                "id":"map-reader","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
+                "id":"map-reader","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
                   "entity":"site","operations":["get","list"],"readableFields":["code","location"],
                   "spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":0.25,"maximumLatitudeSpanDegrees":1.5}},
                   "rowBoundaries": "unrestricted"
-                }]
+                }]}
               }]
             }"#,
         )

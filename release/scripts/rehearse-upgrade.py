@@ -9,10 +9,14 @@ activated registry package with records and revisions, a Casework review
 queue with answered and in-flight work, an Evidence audit stream with a
 signed response, and a Messaging package ledger with scheduled and cancelled
 messages. It then points the binaries built from this source at that
-exact state, runs the documented upgrade steps, and fails unless the state is
-still served unchanged and no table lost a row.
+exact state and those exact files, runs the upgrade an operator runs, and
+fails unless the state is still served unchanged and no table lost a row.
 A product the previous release did not ship has no state to carry forward,
 so its leg is omitted and the report says why.
+
+While no release on the forward state path is published, there is no
+predecessor to download: the rehearsal then runs every leg with this source's
+binaries on both sides, so the legs stay exercised until that release exists.
 
 Only the release download reaches the network. PostgreSQL runs in one
 disposable, loopback-bound container, and every credential is synthetic,
@@ -53,7 +57,6 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import release_roster  # noqa: E402
-import upgrade_steps  # noqa: E402
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -73,8 +76,10 @@ FIPS_LIBRARY = re.compile(r"^libaws_lc_fips_[A-Za-z0-9_]+\.dylib$")
 # rehearsal refuses to start from any earlier release.
 # docs/site/src/content/docs/reference/api-stability.mdx states the same.
 # check_floor_is_current holds it to the release before the workspace version's
-# minor line, so a patch release does not move it.
-FORWARD_PATH_FLOOR = (0, 39, 0)
+# minor line, so a patch release does not move it, or to a later release up to
+# the workspace version: the forward state path then starts at that release,
+# and this source reads no state an earlier release wrote.
+FORWARD_PATH_FLOOR = (0, 40, 0)
 STACK_VERSION = re.compile(r"\Astack:\n(?:  .*\n)*?  version: (\S+)\n")
 STACK_RELEASED = re.compile(r"\Astack:\n(?:  .*\n)*?  status: released\n")
 
@@ -108,78 +113,6 @@ HTTP_TIMEOUT_SECONDS = 30
 
 class RehearsalError(RuntimeError):
     """The rehearsal cannot continue, or the upgraded state is not intact."""
-
-
-# Documented operator steps (release/notes/config-conventions/upgrade-steps.yaml)
-# the rehearsal applies on disk after the previous release wrote state and
-# before the new binaries run. Each id must name an `edit` step.
-BREG_UPGRADE_STEPS = (
-    "breg-journeys",
-    "breg-access-unrestricted",
-)
-# The runtime file is rewritten by the rehearsal for every package build and
-# serve, so these steps follow each write instead of running once.
-BREG_RUNTIME_UPGRADE_STEPS = ("breg-runtime-allowed-clients",)
-CASEWORK_UPGRADE_STEPS = ("casework-fixture-spelling", "casework-dev-clients-envelope")
-EVIDENCE_UPGRADE_STEPS = (
-    "evidence-project-envelope",
-    "evidence-question-envelope",
-    "evidence-question-answer-uri",
-    "evidence-source-envelope",
-    "evidence-selector-envelope",
-    "evidence-fixture-envelope",
-    "evidence-target-governance-envelope",
-)
-# The project steps change the package digest, so the Messaging leg builds the
-# package again and applies it as the successor of the one the previous
-# release activated. The manual step `messaging-project-envelope` goes with
-# them: `write_messaging_project_envelope` performs it.
-MESSAGING_UPGRADE_STEPS = (
-    "messaging-template-envelope",
-    "messaging-provider-envelope",
-    "messaging-project-renames",
-    "messaging-provider-capabilities",
-)
-MESSAGING_RUNTIME_UPGRADE_STEPS = ("messaging-runtime-keys",)
-
-
-# Catalog `edit` steps no rehearsal leg applies, each with the reason. A unit
-# test in test_upgrade_steps.py holds every other edit step to a leg list above
-# and holds this list to steps that exist and are not in a leg.
-UNIT_TESTED_ONLY_STEPS = {
-    "casework-simulation-spelling": "the Casework starter writes no simulation file",
-    "casework-holiday-set-envelope": "the Casework starter writes no holiday set",
-    "evidence-access-policy-envelope": "the Evidence starter writes no access policy file",
-    "evidence-access-client-envelope": "the Evidence starter writes no access client file",
-    "evidence-target-settings-envelope": "the Evidence starter writes no target settings file",
-    "evidence-source-resolution-envelope": "the Evidence starter writes no source resolution file",
-    "evidence-mock-plan-envelope": "the Evidence starter writes no mock plan",
-    "messaging-required-scopes": "the Messaging starter gives every access profile a non-empty requiredScopes list",
-    "breg-example-inputs": "the BReg starter writes no example input file",
-    "breg-schema-test-credentials": "the BReg starter writes no schema test credentials file",
-    "breg-model-selection": "the BReg starter writes no model selection file",
-    "breg-example-scenarios": "the BReg starter writes no example scenarios file",
-    "breg-statistical-period": "the BReg starter registry declares no statistical period",
-    "breg-module-access-unrestricted": "the BReg starter module contributes no access profile",
-    "scheduling-project-keys": "no Scheduling leg for the previous release",
-    "scheduling-records-envelope": "no Scheduling leg for the previous release",
-    "scheduling-fixture-keys": "no Scheduling leg for the previous release",
-    "scheduling-runtime-keys": "no Scheduling leg for the previous release",
-    "render-manifest-keys": "no Render leg for the previous release",
-    "render-runtime-keys": "no Render leg for the previous release",
-    "platform-task-connection-envelope": "no product starter writes a task connection file",
-}
-
-
-def apply_upgrade_steps(product: str, ids: tuple[str, ...], **roots: Path) -> None:
-    """Apply the documented steps to the on-disk roots; report manual ones."""
-
-    try:
-        manual = upgrade_steps.apply_steps(list(ids), roots)
-    except upgrade_steps.StepError as error:
-        raise RehearsalError(f"{product} upgrade step failed: {error}") from error
-    for instruction in manual:
-        print(f"{product} manual upgrade step (not applied): {instruction}", flush=True)
 
 
 # ---------------------------------------------------------------------------
@@ -272,16 +205,21 @@ def released_versions(repo: Path) -> list[str]:
 
 
 def check_floor_is_current(released: list[str], version: str) -> None:
-    """Refuse a floor that is not the release before the workspace minor line.
+    """Refuse a floor the workspace version has left behind, or not reached.
 
-    That release is the newest released manifest version below the first
-    release of the workspace version's minor line, so a patch release keeps the
-    floor its minor line opened with. It changes once main both records a
-    release as published and names the next minor version, and the change that
-    completes the two has to move the floor.
+    The floor is one of two things. It is the release before the workspace
+    minor line: the newest released manifest version below the first release
+    of that line, so a patch release keeps the floor its minor line opened
+    with. That floor changes once main both records a release as published and
+    names the next minor version, and the change that completes the two has to
+    move it. Or the forward state path starts later than that release: the
+    floor is newer than it and no newer than the workspace version. Such a
+    floor needs no move when its release is published and the next minor
+    version is named, because it is then the release before the minor line.
     """
 
-    major, minor, _ = parse_version(version)
+    workspace = parse_version(version)
+    major, minor, _ = workspace
     earlier = sorted(
         candidate
         for candidate in map(parse_version, released)
@@ -292,13 +230,19 @@ def check_floor_is_current(released: list[str], version: str) -> None:
             "no released manifest precedes the minor line of workspace version "
             f"{version}"
         )
-    if FORWARD_PATH_FLOOR != earlier[-1]:
+    if FORWARD_PATH_FLOOR < earlier[-1]:
         raise RehearsalError(
             "FORWARD_PATH_FLOOR is v{}.{}.{}, but the release before the minor "
             "line of workspace version {} is v{}.{}.{}; move the floor as "
             "release/OPERATIONS.md describes".format(
                 *FORWARD_PATH_FLOOR, version, *earlier[-1]
             )
+        )
+    if FORWARD_PATH_FLOOR > workspace:
+        raise RehearsalError(
+            "FORWARD_PATH_FLOOR is v{}.{}.{}, newer than workspace version {}; "
+            "set it to the release this source reads state from, at most the "
+            "workspace version".format(*FORWARD_PATH_FLOOR, version)
         )
 
 
@@ -496,47 +440,22 @@ def audit_event_count(directory: Path, name: str, event: str) -> int:
     return count
 
 
-def ledger_plan_differences(activated: str | None, planned: dict[str, Any]) -> list[str]:
-    """Name what keeps a `messagingctl plan` report from describing the upgrade
-    of the previous release's activation. `activated` is the package digest
-    the previous release's `messagingctl status` reported active: the plan
-    must name it as active, and must name another package on disk, the one
-    built again from the upgraded project."""
+def ledger_digest_differences(activated: str | None, planned: dict[str, Any]) -> list[str]:
+    """Name what keeps a `messagingctl plan` report from describing the
+    previous release's activation, left as it was. `activated` is the package
+    digest the previous release's `messagingctl status` reported active: the
+    plan must name it both as active and as the package on disk, with no
+    change to apply."""
 
     if not activated:
         return ["the previous release's ledger recorded no active package"]
     differences = []
-    if planned.get("activeDigest") != activated:
-        differences.append("the ledger activeDigest is not the package the previous "
-                           "release activated")
-    if not planned.get("packageDigest"):
-        differences.append("the plan names no packageDigest")
-    elif planned["packageDigest"] == activated:
-        differences.append("the plan's packageDigest is the package the previous release "
-                           "activated, not one built again from the upgraded project")
-    return differences
-
-
-def ledger_activation_differences(activated: str, planned: dict[str, Any],
-                                  settled: dict[str, Any],
-                                  active: dict[str, Any]) -> list[str]:
-    """Name what keeps the ledger from recording the planned package as the
-    successor of the one the previous release activated. `planned` and
-    `settled` are the `messagingctl plan` reports before and after the apply,
-    and `active` is the activation `messagingctl status` reports after it."""
-
-    differences = []
-    package = planned.get("packageDigest")
-    if settled.get("packageDigest") != package:
-        differences.append("the ledger packageDigest changed across the apply")
-    if settled.get("change") != "none" or settled.get("activeDigest") != settled.get(
-            "packageDigest"):
-        differences.append("the package ledger does not name the applied package")
-    if active.get("packageDigest") != package:
-        differences.append("the ledger's active activation is not the planned package")
-    if active.get("predecessorPackageDigest") != activated:
-        differences.append("the ledger's active activation does not name the package the "
-                           "previous release activated as its predecessor")
+    for member in ("activeDigest", "packageDigest"):
+        if planned.get(member) != activated:
+            differences.append(f"the ledger {member} is not the package the previous "
+                               "release activated")
+    if planned.get("change") != "none":
+        differences.append("the package ledger still names a change to apply")
     return differences
 
 
@@ -1049,14 +968,11 @@ BREG_AUDIENCE = "breg"
 BREG_CLIENT = "upgrade-rehearsal"
 BREG_KID = "upgrade-rehearsal-issuer"
 BREG_DATABASE_ID = "upgrade-rehearsal-db"
-# The schema-test credentials envelope each side reads. `from` is the envelope
-# the release at FORWARD_PATH_FLOOR reads; `to` is the one the format registry
-# (products/platform/config-formats.yaml) records for this source.
+# The schema-test credentials envelope the format registry
+# (products/platform/config-formats.yaml) records.
 BREG_CREDENTIALS_ENVELOPE = {
-    "from": {"apiVersion": "registry.registrystack.org/breg-schema-test-credentials/v1",
-             "kind": "SchemaTestCredentials"},
-    "to": {"apiVersion": "id.registrystack.org/formats/breg/schema-test-credentials/v1",
-           "kind": "BRegSchemaTestCredentials"},
+    "apiVersion": "id.registrystack.org/formats/breg/schema-test-credentials/v1",
+    "kind": "BRegSchemaTestCredentials",
 }
 BREG_ENVIRONMENT = "staging"
 BREG_INSTANCE_ID = "upgrade-rehearsal-instance"
@@ -1117,9 +1033,6 @@ class Breg:
         self.runtime = work / "runtime.yaml"
         self.port = free_port()
         self.operator: dict[str, Any] = {}
-        # Set once the documented steps ran: runtime files written from then
-        # on carry the steps' edits, as an upgraded operator's file would.
-        self.upgraded = False
 
     def provision(self) -> None:
         passwords = {role: secrets.token_hex(16)
@@ -1192,7 +1105,7 @@ class Breg:
 
     def write_runtime(self, path: Path, database: str, package_root: Path, port: int) -> None:
         dump_yaml(path, {
-            "apiVersion": "registry.registrystack.org/breg-runtime/v1alpha1",
+            "apiVersion": "id.registrystack.org/formats/breg/runtime/v1alpha1",
             "kind": "BRegRuntimeConfig",
             "listener": {"bind": f"127.0.0.1:{port}",
                          "publicOrigin": f"http://127.0.0.1:{port}"},
@@ -1203,7 +1116,7 @@ class Breg:
             "secretProviders": {"file": {"root": str(self.secrets)}},
             "database": {"runtimeUrlRef": f"secret:file/runtime-url-{database}",
                          "migrationUrlRef": f"secret:file/migration-url-{database}",
-                         "pool": {"maxSize": 8},
+                         "pool": {"maximumConnections": 8},
                          "roles": {"migration": "registry_migration",
                                    "runtime": "registry_runtime"}},
             "package": {"root": str(package_root)},
@@ -1211,9 +1124,9 @@ class Breg:
                 "oidc": {"issuer": BREG_ISSUER, "audience": BREG_AUDIENCE,
                          "allowedAlgorithm": "EdDSA", "accessTokenType": "at+jwt",
                          "scopeClaim": "scope", "scopeSeparator": " ",
-                         "allowedClients": self.clients, "deniedKids": [],
-                         "maxTokenLifetimeSeconds": 300, "leewayMilliseconds": 30000,
-                         "jwksSource": {"kind": "static",
+                         "allowedClients": self.clients,
+                         "maximumTokenLifetimeSeconds": 300, "leewayMilliseconds": 30000,
+                         "jwksSource": {"type": "static",
                                         "documentRef": "secret:file/jwks.json"}},
                 "authorityClaims": {"principal": "registry_principal",
                                     "purpose": "registry_purpose"}},
@@ -1221,14 +1134,8 @@ class Breg:
                       "path": str(private_directory(path.parent / "audit") / "breg.jsonl")},
             "cursor": {"secretRef": "secret:file/cursor-key"},
         })
-        if self.upgraded:
-            for step_id in BREG_RUNTIME_UPGRADE_STEPS:
-                try:
-                    upgrade_steps.apply_step_to_file(step_id, path)
-                except upgrade_steps.StepError as error:
-                    raise RehearsalError(f"BReg upgrade step failed: {error}") from error
 
-    def credentials(self, path: Path, side: Side) -> None:
+    def credentials(self, path: Path) -> None:
         journeys = load_yaml(self.project / "tests" / "journeys.yaml")
         bindings = []
         for journey in journeys["journeys"]:
@@ -1244,10 +1151,10 @@ class Breg:
                 credential = {"type": "bearer", "tokenRef": f"secret:file/{name}"}
                 bindings.append({"journeyId": journey["id"], "stepId": step["id"],
                                  "credential": credential})
-        path.write_text(json.dumps({**BREG_CREDENTIALS_ENVELOPE[side.label],
-                                    "bindings": bindings}, indent=1))
+        path.write_text(json.dumps({**BREG_CREDENTIALS_ENVELOPE, "bindings": bindings},
+                                   indent=1))
 
-    def test_runtime(self, side: Side, build: Path) -> tuple[Path, Path]:
+    def test_runtime(self, build: Path) -> tuple[Path, Path]:
         """Prepare an empty schema-test database; return its runtime and credentials."""
 
         private_directory(build)
@@ -1256,7 +1163,7 @@ class Breg:
         test_runtime = build / "runtime-test.yaml"
         self.write_runtime(test_runtime, "schematest", empty, free_port())
         credentials = build / "credentials.json"
-        self.credentials(credentials, side)
+        self.credentials(credentials)
         return test_runtime, credentials
 
     def package(self, side: Side, build: Path, baseline: Path | None = None) -> tuple[Path, str]:
@@ -1265,7 +1172,7 @@ class Breg:
         `baseline` is the active package this one succeeds.
         """
 
-        test_runtime, credentials = self.test_runtime(side, build)
+        test_runtime, credentials = self.test_runtime(build)
         baseline_args = ["--baseline-package", str(baseline)] if baseline else []
         side.run_json("bregctl", "--format", "json", "test", str(self.project),
                       "--runtime-config", str(test_runtime), "--credentials",
@@ -1397,8 +1304,6 @@ def rehearse_breg(work: Path, keys: Keys, postgres: Postgres, old: Side, new: Si
     # digest, so an unchanged registry shows only as bregctl refusing the
     # rebuild as an empty plan; the operator then keeps the active package.
     predecessor_activation = "initial"
-    apply_upgrade_steps("BReg", BREG_UPGRADE_STEPS, project=breg.project)
-    breg.upgraded = True
     upgraded, upgraded_digest = breg.package(new, work / "build-upgraded", baseline=package)
     if breg_rebuild_changes(new, breg.runtime, upgraded):
         apply(upgraded, upgraded_digest)
@@ -1420,7 +1325,7 @@ def rehearse_breg(work: Path, keys: Keys, postgres: Postgres, old: Side, new: Si
     # An additive successor proves the upgraded ledger moves forward.
     registry = load_yaml(breg.project / "registry.yaml")
     group = next(entity for entity in registry["entities"] if entity["id"] == "record-group")
-    group["fields"].append({"id": "rehearsal-note", "type": "string", "maxLength": 200,
+    group["fields"].append({"id": "rehearsal-note", "type": "string", "maximumLength": 200,
                             "classification": "public"})
     dump_yaml(breg.project / "registry.yaml", registry)
     successor, successor_digest = breg.package(new, work / "build-successor", baseline=package)
@@ -1534,7 +1439,7 @@ class Casework:
         dump_yaml(self.project / "casework.yaml", project)
         side.run("caseworkctl", "package", str(self.project), "--output", str(self.package))
         dump_yaml(self.runtime, {
-            "apiVersion": "registry.registrystack.org/casework-runtime/v1alpha1",
+            "apiVersion": "id.registrystack.org/formats/casework/runtime/v1alpha1",
             "kind": "CaseworkRuntimeConfig",
             "package": {"root": str(self.package)},
             "listener": {"bind": f"127.0.0.1:{self.port}",
@@ -1546,9 +1451,9 @@ class Casework:
                          "trustedRootCertificateRef": "secret:file/database-root.pem"},
             "authentication": {"oidc": {
                 "issuer": CASEWORK_ISSUER, "audience": CASEWORK_AUDIENCE,
-                "scopeClaim": "scope",
+                "scopeClaim": "scope", "allowedClients": "unrestricted",
                 "humanIdentity": {"claim": "registry_actor_kind", "value": "human"},
-                "jwksSource": {"kind": "static", "documentRef": "secret:file/jwks.json"}}},
+                "jwksSource": {"type": "static", "documentRef": "secret:file/jwks.json"}}},
             "audit": {"path": str(self.audit / "casework.ndjson"),
                       "hashKeyRef": "secret:file/audit-key"},
         })
@@ -1687,7 +1592,6 @@ def rehearse_casework(work: Path, keys: Keys, postgres: Postgres, old: Side, new
     before_counts = postgres.row_counts("casework")
     records_before = audit_record_count(casework.audit, "casework.ndjson")
 
-    apply_upgrade_steps("Casework", CASEWORK_UPGRADE_STEPS, project=casework.project)
     activation = casework.activate(new, seeded)
     losses = row_count_losses(before_counts, postgres.row_counts("casework"))
     service = Service(new, "casework", [*runtime, "serve"], work / "casework-new.log", ready)
@@ -1745,37 +1649,13 @@ MESSAGING_RETENTION_ERASED = "messaging.retention.erased"
 # `rehearse_messaging`, at the least. The runtime writes its start record, and
 # a request record and an outcome record each for the idempotent resubmission,
 # the cancellation, and the new submission; a key the upgrade freed sends once
-# more and adds two. `messagingctl` writes the successor activation's requested
-# and finished records and the retention erase run's requested and erased
-# records.
-MESSAGING_UPGRADED_AUDIT_RECORDS = {MESSAGING_AUDIT: 7, MESSAGING_OPERATOR_AUDIT: 4}
-# The manual catalog step `messaging-project-envelope` leaves the project id
-# and its version label to the operator. These are the rehearsal's choice.
-MESSAGING_PROJECT_API_VERSION = "id.registrystack.org/formats/messaging/project/v1alpha1"
-MESSAGING_PROJECT_KIND = "MessagingProject"
-MESSAGING_PROJECT_ID = "upgrade-rehearsal"
-MESSAGING_PROJECT_VERSION = "1"
+# more and adds two. `messagingctl` writes the retention erase run's requested
+# and erased records.
+MESSAGING_UPGRADED_AUDIT_RECORDS = {MESSAGING_AUDIT: 7, MESSAGING_OPERATOR_AUDIT: 2}
 # The table each Messaging schema version empties by design. Version 3
 # discards the idempotency records keyed by the caller's audit pseudonym, so
 # every key spent before it can be used again.
 MESSAGING_EMPTYING_SCHEMA_VERSIONS = {3: MESSAGING_IDEMPOTENCY}
-
-
-def write_messaging_project_envelope(project: Path) -> None:
-    """Perform the manual catalog step `messaging-project-envelope` on a
-    project directory: replace the apiVersion and kind of messaging.yaml and
-    add the project id and version label. No `edit` step can, because the
-    operator chooses both."""
-
-    path = project / "messaging.yaml"
-    document = load_yaml(path)
-    if not isinstance(document, dict):
-        raise RehearsalError(f"Messaging upgrade step messaging-project-envelope failed: "
-                             f"{path} is not a mapping")
-    envelope = {"apiVersion": MESSAGING_PROJECT_API_VERSION, "kind": MESSAGING_PROJECT_KIND,
-                "project": {"id": MESSAGING_PROJECT_ID, "version": MESSAGING_PROJECT_VERSION}}
-    dump_yaml(path, {**envelope, **{key: value for key, value in document.items()
-                                    if key not in envelope}})
 
 
 class Messaging:
@@ -1787,10 +1667,6 @@ class Messaging:
         self.audit = private_directory(work / "audit")
         self.project = work / "project"
         self.package = work / "package"
-        # `messagingctl package` writes into a new directory, so the package
-        # built again from the upgraded project sits beside the one the
-        # previous release built.
-        self.upgraded_package = work / "package-upgraded"
         self.runtime = work / "runtime.yaml"
         self.port = free_port()
         # Every message is scheduled a day out, so no dispatch attempt can
@@ -1830,7 +1706,7 @@ class Messaging:
         side.run("messagingctl", "package", str(self.project), "--output", str(self.package))
         side.run("messagingctl", "check", "--package", str(self.package))
         dump_yaml(self.runtime, {
-            "apiVersion": "registry.registrystack.org/messaging-runtime/v1alpha1",
+            "apiVersion": "id.registrystack.org/formats/messaging/runtime/v1alpha1",
             "kind": "MessagingRuntimeConfig",
             "identity": {"databaseId": "messaging-upgrade-rehearsal"},
             "package": {"root": str(self.package)},
@@ -1844,7 +1720,7 @@ class Messaging:
             "authentication": {"oidc": {
                 "issuer": MESSAGING_ISSUER, "audience": MESSAGING_AUDIENCE,
                 "allowedClients": ["case-system", "operations-console"],
-                "jwksSource": {"kind": "static", "documentRef": "secret:file/jwks.json"}}},
+                "jwksSource": {"type": "static", "documentRef": "secret:file/jwks.json"}}},
             "audit": {"path": str(self.audit / MESSAGING_AUDIT),
                       "hashKeyRef": "secret:file/messaging-audit-key"},
         })
@@ -1886,46 +1762,26 @@ class Messaging:
             views[f"message/{message_id}"] = body
         return views
 
-    def repackage(self, side: Side) -> None:
-        """Carry the files the previous release wrote to a package `side`
-        reads, the way the release notes tell an operator to: apply the
-        documented steps to the runtime file and the project, check the
-        project, build the package into a new directory, check it, and point
-        the runtime file at it."""
-        apply_upgrade_steps("Messaging", MESSAGING_RUNTIME_UPGRADE_STEPS, runtime=self.work)
-        apply_upgrade_steps("Messaging", MESSAGING_UPGRADE_STEPS, project=self.project)
-        write_messaging_project_envelope(self.project)
-        side.run("messagingctl", "check", "--project", str(self.project))
-        side.run("messagingctl", "package", str(self.project),
-                 "--output", str(self.upgraded_package))
-        side.run("messagingctl", "check", "--package", str(self.upgraded_package))
-        runtime = load_yaml(self.runtime)
-        runtime["package"]["root"] = str(self.upgraded_package)
-        dump_yaml(self.runtime, runtime)
-        side.run("messagingctl", "check", "--runtime-config", str(self.runtime))
-
     def upgrade(self, side: Side, activated: str | None) -> tuple[list[str], set[str]]:
-        """Plan with `side` and apply the package on disk with the migration
-        credential, the upgrade step the Messaging changelog names. `activated`
-        is the package digest the previous release reported active. A plan
-        that does not name that activation as active and another package on
-        disk is never applied over. Returns every difference between the
-        ledger after the apply and the plan before it, and the tables the
-        applied schema versions empty by design."""
+        """Check the runtime file and plan with `side` over the package the
+        previous release activated. When that plan only has schema versions
+        pending, apply them with the migration credential, the upgrade step
+        the Messaging changelog names, and plan again. Returns what keeps the
+        settled plan from naming the previous release's activation with
+        nothing left to change, and the tables the applied schema versions
+        empty by design."""
         config = ["--runtime-config", str(self.runtime)]
+        side.run("messagingctl", "check", *config)
         planned = side.run_json("messagingctl", "--format", "json", "plan", *config)
-        differences = ledger_plan_differences(activated, planned)
-        if differences:
-            raise RehearsalError("messagingctl plan does not describe the upgrade of the "
-                                 "previous release's activation: " + "; ".join(differences))
-        side.run("messagingctl", "apply", *config)
-        emptied = {MESSAGING_EMPTYING_SCHEMA_VERSIONS[version]
-                   for version in planned.get("pendingSchemaVersions") or []
-                   if version in MESSAGING_EMPTYING_SCHEMA_VERSIONS}
-        settled = side.run_json("messagingctl", "--format", "json", "plan", *config)
-        status = side.run_json("messagingctl", "--format", "json", "status", *config)
-        return ledger_activation_differences(activated, planned, settled,
-                                             status.get("active") or {}), emptied
+        emptied: set[str] = set()
+        pending = planned.get("pendingSchemaVersions")
+        if pending and activated and (
+                planned.get("activeDigest") == planned.get("packageDigest") == activated):
+            side.run("messagingctl", "apply", *config)
+            emptied = {MESSAGING_EMPTYING_SCHEMA_VERSIONS[version] for version in pending
+                       if version in MESSAGING_EMPTYING_SCHEMA_VERSIONS}
+            planned = side.run_json("messagingctl", "--format", "json", "plan", *config)
+        return ledger_digest_differences(activated, planned), emptied
 
 
 def rehearse_messaging(work: Path, keys: Keys, postgres: Postgres, old: Side, new: Side,
@@ -1955,11 +1811,10 @@ def rehearse_messaging(work: Path, keys: Keys, postgres: Postgres, old: Side, ne
     records_before = {stream: audit_record_count(messaging.audit, stream)
                       for stream in MESSAGING_UPGRADED_AUDIT_RECORDS}
 
-    # The new binaries read neither the runtime file nor the package the
-    # previous release wrote, so the operator steps and a package built again
-    # come before the plan. The ledger must then record that package as the
-    # successor of the one the previous release activated.
-    messaging.repackage(new)
+    # The new binaries read the runtime file and the package the previous
+    # release wrote. The ledger must still name that package as active: a plan
+    # that reports a change once any pending schema versions are applied means
+    # the upgrade lost the activation.
     differences, emptied = messaging.upgrade(new, activated)
     losses = row_count_losses(before_counts, postgres.row_counts("messaging"),
                               emptied=emptied)
@@ -2052,7 +1907,7 @@ def evidence_production_governance(document: dict[str, Any], issuer: str,
                               "valueOrigin": "request"}]}]
     oidc = governance["authentication"]["oidc"]
     oidc["issuer"] = issuer
-    oidc["jwksSource"] = {"kind": "uri", "uri": f"{issuer}/oauth2/jwks"}
+    oidc["jwksSource"] = {"type": "uri", "uri": f"{issuer}/oauth2/jwks"}
     return governance
 
 
@@ -2093,9 +1948,9 @@ class Evidence:
         """Point a target runtime at this rehearsal's listener, audit file,
         extract, Transit signer, and installed package."""
 
-        runtime["signer"] = {"kind": "transit", "unixSocketPath": str(self.transit.socket_path),
+        runtime["signer"] = {"type": "transit", "unixSocketPath": str(self.transit.socket_path),
                              "mount": "transit", "keyName": TransitServer.KEY_NAME,
-                             "keyVersion": 1, "timeoutMilliseconds": 2000}
+                             "keyVersion": 1, "attemptTimeoutMilliseconds": 2000}
         # The package is installed at a stable path outside the candidate.
         runtime["package"]["root"] = str(self.installed)
         runtime["listener"]["bind"] = f"127.0.0.1:{self.port}"
@@ -2150,11 +2005,8 @@ class Evidence:
         """Package the unchanged target with this side's evidencectl, install
         the package, and point the operative runtime at it, the documented
         upgrade step. The audit stream, secrets, and keys stay where they are.
-        The documented authoring-file steps are applied first.
         """
 
-        apply_upgrade_steps("Evidence", EVIDENCE_UPGRADE_STEPS,
-                            project=self.project, target=self.target)
         self.package(side, self.work / "candidate-upgraded")
 
     def extract(self) -> Path:
@@ -2330,9 +2182,20 @@ def main(argv: list[str]) -> int:
         version = workspace_version(ROOT)
         check_floor_is_current(released_versions(ROOT), version)
         from_tag = args.from_tag or select_from_tag(published_tags(), version)
+        # While no release on the forward state path is published there is no
+        # predecessor to download, so this source's build stands on both sides.
+        unpublished = (args.from_tag is None and args.from_bin_dir is None
+                       and parse_tag(from_tag) < FORWARD_PATH_FLOOR)
+        if unpublished:
+            print("no release from v{}.{}.{} onward is published: rehearsing workspace "
+                  "version {} from its own build".format(*FORWARD_PATH_FLOOR, version),
+                  flush=True)
+            if args.fetch_only:
+                return 0
+            from_tag = f"v{version}"
         check_forward_path(from_tag, version)
         products, omitted = select_products(args.product, from_tag, args.platform,
-                                            args.from_bin_dir is None)
+                                            args.from_bin_dir is None and not unpublished)
         if args.work_dir.exists():
             raise RehearsalError(f"{args.work_dir} already exists")
         work = private_directory(args.work_dir.resolve())
@@ -2342,7 +2205,10 @@ def main(argv: list[str]) -> int:
         for product, reason in omitted.items():
             print(f"omitting {product}: {reason}", flush=True)
         binaries = product_binaries(products)
-        if args.from_bin_dir is None:
+        if unpublished:
+            from_bin = args.to_bin_dir.resolve()
+            report["fromProvenance"] = "this source's build, no published predecessor"
+        elif args.from_bin_dir is None:
             from_bin = work / "from-bin"
             fetch_release(from_tag, args.platform, work / "download", from_bin, binaries)
             report["fromProvenance"] = "cosign and SHA256SUMS verified"
@@ -2351,7 +2217,9 @@ def main(argv: list[str]) -> int:
             report["fromProvenance"] = "UNVERIFIED local override"
             print(f"warning: {from_bin} is not authenticated as {from_tag}", file=sys.stderr)
         old = Side("from", from_bin, tls / "ca.pem")
-        report["fromVersions"] = check_binaries(old, from_tag[1:], binaries)
+        # A build of this source reports a development version, not the tag.
+        report["fromVersions"] = check_binaries(
+            old, None if unpublished else from_tag[1:], binaries)
         if args.fetch_only:
             report["fromBinDir"] = str(from_bin)
             if args.report:

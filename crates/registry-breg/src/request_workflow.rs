@@ -241,7 +241,7 @@ impl RequestWorkflow {
             return Err(WorkflowError::ContractFingerprintMismatch);
         }
         match proposal.review_requirement() {
-            crate::model::CompiledChangeRequestReview::None(_) if review_evidence.is_none() => {}
+            crate::model::CompiledChangeRequestReview::None if review_evidence.is_none() => {}
             crate::model::CompiledChangeRequestReview::Required(requirement)
                 if review_evidence.is_some_and(|evidence| {
                     evidence.matches_proposal(
@@ -2374,10 +2374,7 @@ fn hex_lower(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod source_owned_review_tests {
     use super::*;
-    use crate::model::{
-        CompiledChangeRequestNoReview, CompiledChangeRequestNoReviewMode,
-        CompiledChangeRequestReviewRequirement,
-    };
+    use crate::model::CompiledChangeRequestReviewRequirement;
     use crate::review_integration::{
         AcceptedReviewBinding, AcceptedReviewEvidence, ReviewPolicyBinding, ReviewResultEnvelope,
         ReviewSubjectBinding, TerminalReviewStatus,
@@ -2451,9 +2448,7 @@ mod source_owned_review_tests {
     }
 
     fn no_review() -> FrozenReviewRequirement {
-        FrozenReviewRequirement::None(CompiledChangeRequestNoReview {
-            mode: CompiledChangeRequestNoReviewMode::None,
-        })
+        FrozenReviewRequirement::None
     }
 
     fn required_review() -> FrozenReviewRequirement {

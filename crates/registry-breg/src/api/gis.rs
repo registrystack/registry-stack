@@ -1149,18 +1149,18 @@ mod tests {
 
     fn compile_fixture() -> crate::model::CompiledRegistry {
         let source = r#"
-apiVersion: registry.registrystack.org/v1alpha1
-kind: RegistryProject
-registry: {id: gis-test, version: "1", defaultLanguage: en, canonicalBaseIri: https://gis-test.example.test}
+apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project: {id: gis-test, version: "1", defaultLanguage: en, canonicalBaseIri: https://gis-test.example.test}
 entities:
   - id: service-site
     primaryDataset: test-dataset
     route: service-sites
-    mutationMode: create_only
+    mutationMode: create-only
     geojson: {geometryField: location}
     fields:
-      - {id: code, type: string, maxLength: 32, classification: public, required: true}
-      - {id: label, type: string, maxLength: 80, classification: public}
+      - {id: code, type: string, maximumLength: 32, classification: public, required: true}
+      - {id: label, type: string, maximumLength: 80, classification: public}
       - {id: location, type: crs84-point, precision: 6, classification: public}
 accessProfiles:
   - id: map-reader
@@ -1168,30 +1168,33 @@ accessProfiles:
     principalClaim: principal
     requiredScopes: [registry:sites:read]
     permissions:
-      - entity: service-site
-        rowBoundaries: unrestricted
-        operations: [get, list]
-        readableFields: [code, label, location]
-        spatialQueries:
-          bbox:
-            maximumLongitudeSpanDegrees: 2
-            maximumLatitudeSpanDegrees: 2
+      entities:
+        - entity: service-site
+          rowBoundaries: unrestricted
+          operations: [get, list]
+          readableFields: [code, label, location]
+          spatialQueries:
+            bbox:
+              maximumLongitudeSpanDegrees: 2
+              maximumLatitudeSpanDegrees: 2
   - id: get-only
     principalClaim: principal
     requiredScopes: unrestricted
     permissions:
-      - entity: service-site
-        rowBoundaries: unrestricted
-        operations: [get]
-        readableFields: [code, label, location]
+      entities:
+        - entity: service-site
+          rowBoundaries: unrestricted
+          operations: [get]
+          readableFields: [code, label, location]
   - id: no-bbox
     principalClaim: principal
     requiredScopes: unrestricted
     permissions:
-      - entity: service-site
-        rowBoundaries: unrestricted
-        operations: [get, list]
-        readableFields: [code, label, location]
+      entities:
+        - entity: service-site
+          rowBoundaries: unrestricted
+          operations: [get, list]
+          readableFields: [code, label, location]
 "#;
         let project = parse_project_yaml(source.as_bytes()).expect("fixture parses");
         compile_project(&project, &[], CompileProfile::Authoring)

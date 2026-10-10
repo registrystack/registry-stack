@@ -337,9 +337,9 @@ fn query_metadata(surface: &AuthorizedSurface<'_>, query: &CompiledQueryOperatio
         }).collect::<Vec<_>>(),
         "allowCount": query.allow_count,
         "defaultPageSize": query.max_page_size,
-        "maxPageSize": query.max_page_size,
-        "maxFilterClauses": MAX_FILTER_CLAUSES,
-        "maxInValues": MAX_IN_VALUES,
+        "maximumPageSize": query.max_page_size,
+        "maximumFilterClauses": MAX_FILTER_CLAUSES,
+        "maximumInValues": MAX_IN_VALUES,
         "pagination": {"parameter": "$skiptoken", "responsePath": "pageInfo.nextCursor", "exclusive": true},
         "temporal": temporal_metadata(query),
     });
@@ -366,7 +366,7 @@ fn temporal_metadata(query: &CompiledQueryOperation) -> Value {
         CompiledQueryKind::List => Value::Null,
         CompiledQueryKind::Current => json!({"mode": "current"}),
         CompiledQueryKind::AsOf => {
-            json!({"mode": "as_of", "parameter": "asOf", "required": true, "schema": {"type": "string", "format": "date-time"}})
+            json!({"mode": "as-of", "parameter": "asOf", "required": true, "schema": {"type": "string", "format": "date-time"}})
         }
         CompiledQueryKind::Snapshot => {
             let mut value = json!({

@@ -112,7 +112,7 @@ fn startup_value_disclosure_and_listener_activation_threats_are_enforced_by_prep
     fs::write(
         &runtime_config,
         format!(
-            "apiVersion: registry.registrystack.org/breg-runtime/v1alpha1\nkind: BRegRuntimeConfig\nlistener:\n  bind: {address}\nunexpected: {CONFIG_VALUE_CANARY}\n"
+            "apiVersion: id.registrystack.org/formats/breg/runtime/v1alpha1\nkind: BRegRuntimeConfig\nlistener:\n  bind: {address}\nunexpected: {CONFIG_VALUE_CANARY}\n"
         ),
     )
     .expect("invalid runtime configuration is written");
@@ -176,14 +176,14 @@ fn doctor_names_a_missing_package_root_distinctly_from_other_configuration_cause
     fs::write(
         &runtime_config,
         format!(
-            "apiVersion: registry.registrystack.org/breg-runtime/v1alpha1\n\
+            "apiVersion: id.registrystack.org/formats/breg/runtime/v1alpha1\n\
 kind: BRegRuntimeConfig\n\
 listener:\n  bind: 127.0.0.1:0\n\
 identity:\n  environment: development\n  instanceId: generic-registry-1\n  databaseId: generic-registry-db-1\n  databaseInitializationEnvironment: development\n\
 secretProviders:\n  file:\n    root: {secrets}\n\
-database:\n  runtimeUrlRef: secret:file/runtime-database-url\n  migrationUrlRef: secret:file/migration-database-url\n  pool:\n    maxSize: 8\n  roles:\n    migration: registry_migration\n    runtime: registry_runtime\n\
+database:\n  runtimeUrlRef: secret:file/runtime-database-url\n  migrationUrlRef: secret:file/migration-database-url\n  pool:\n    maximumConnections: 8\n  roles:\n    migration: registry_migration\n    runtime: registry_runtime\n\
 package:\n  root: {missing}\n\
-authentication:\n  oidc:\n    issuer: https://issuer.example.invalid\n    audience: generic-registry\n    allowedAlgorithm: ES256\n    accessTokenType: at+jwt\n    scopeClaim: scope\n    scopeSeparator: \" \"\n    allowedClients: [generic-registry-client]\n    deniedKids: []\n    maxTokenLifetimeSeconds: 300\n    leewayMilliseconds: 30000\n    jwksSource:\n      kind: discovery\n  authorityClaims:\n    principal: registry_principal\n    purpose: registry_purpose\n\
+authentication:\n  oidc:\n    issuer: https://issuer.example.invalid\n    audience: generic-registry\n    allowedAlgorithm: ES256\n    accessTokenType: at+jwt\n    scopeClaim: scope\n    scopeSeparator: \" \"\n    allowedClients: [generic-registry-client]\n    maximumTokenLifetimeSeconds: 300\n    leewayMilliseconds: 30000\n    jwksSource:\n      type: discovery\n  authorityClaims:\n    principal: registry_principal\n    purpose: registry_purpose\n\
 audit:\n  hashKeyRef: secret:file/audit-key\n  path: {audit}\n\
 cursor:\n  secretRef: secret:file/cursor-key\n\
 eventDestinations: {{}}\n",

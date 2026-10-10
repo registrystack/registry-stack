@@ -162,7 +162,7 @@ class MutationRetryTests(unittest.TestCase):
             BaseRegistryClient(self.base_url).statistics_publish(
                 "enrolments", "2025-99", "final", "publisher", "invalid-period-key"
             )
-        self.assertEqual(raised.exception.kind, "invalid_request")
+        self.assertEqual(raised.exception.kind, "invalid-request")
         self.assertIs(raised.exception.outcome_unknown, False)
         self.assertEqual(_Scripted.observations, [])
 

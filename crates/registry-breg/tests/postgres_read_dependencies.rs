@@ -395,14 +395,14 @@ fn compiled_registry(
     combined_dependencies: bool,
 ) -> registry_breg::CompiledRegistry {
     let mut project = parse_project_json(br#"{
-        "apiVersion":"registry.registrystack.org/v1alpha1",
-        "kind":"RegistryProject",
-        "registry":{"id":"read-dependencies","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://example.test"},
+        "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+        "kind":"BRegProject",
+        "project":{"id":"read-dependencies","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://example.test"},
         "entities":[{
             "id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable",
             "fields":[
-                {"id":"code","type":"string","required":true,"maxLength":32,"classification":"internal"},
-                {"id":"tenant","type":"string","required":true,"maxLength":32,"classification":"internal"},
+                {"id":"code","type":"string","required":true,"maximumLength":32,"classification":"internal"},
+                {"id":"tenant","type":"string","required":true,"maximumLength":32,"classification":"internal"},
                 {"id":"amount","type":"int64","required":true,"classification":"internal"}
             ],
             "selectorProfiles":[{"id":"by-code","fields":["code"]}],
@@ -413,14 +413,14 @@ fn compiled_registry(
         }],
         "accessProfiles":[{
             "id":"reader","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
-            "permissions":[{
+            "permissions":{"entities":[{
                 "entity":"entry","operations":["create","get","list","lookup"],
                 "readableFields":["code","active","population"],
                 "writableFields":["code","tenant","amount"],
                 "filterableFields":["population"],"sortableFields":["population"],
                 "lookups":[{"selector":"by-code","valueOrigin":"request"}],"allowCount":true,
                 "rowBoundaries":[{"field":"tenant","claim":"tenant","operator":"equals"}]
-            }]
+            }]}
         }]
     }"#).expect("derived dependency fixture parses");
     let population = if invalid_population {
@@ -451,7 +451,7 @@ fn compiled_registry(
             }))
             .expect("third independent derived relation"),
         );
-        let grant = &mut project.access_profiles[0].permissions[0];
+        let grant = &mut project.access_profiles[0].permissions.entities[0];
         grant.readable_fields.insert("priority".to_owned());
         grant.readable_fields.insert("amount".to_owned());
         grant.filterable_fields.insert("code".to_owned());

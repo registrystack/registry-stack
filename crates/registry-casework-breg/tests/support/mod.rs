@@ -5,11 +5,11 @@ pub fn lifecycle_metadata(revision: &str) -> Value {
     json!({
         "id":"test", "version":"1.0.0", "revision":revision, "metadataVersion":"1",
         "entities":[{"id":"correction","datasetIdentifier":"primary","route":"corrections",
-            "operations":[{"operation":"apply_request","accessProfile":"reader"}],
+            "operations":[{"operation":"apply-request","accessProfile":"reader"}],
             "readableFields":["value"],"schema":"/v1/schemas/correction"}],
         "operations":[{
             "id":"records.correction.request.apply","method":"POST",
-            "path":"/v1/records/corrections/{record_id}/actions/apply","operation":"apply_request",
+            "path":"/v1/records/corrections/{record_id}/actions/apply","operation":"apply-request",
             "sourceEntity":"correction","responseEntity":"correction","accessProfile":"reader",
             "requiredCapabilities":["change_request_lifecycle"],"entityLabel":"Corrections",
             "identifier":{"apiName":"id","location":"envelope"},"titleFields":["value"],

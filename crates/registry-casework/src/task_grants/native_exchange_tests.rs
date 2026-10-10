@@ -307,7 +307,7 @@ fn prepare_evidence(
     fs::write(
         &runtime_path,
         format!(
-            r#"apiVersion: registry.registrystack.org/evidence-runtime/v1alpha1
+            r#"apiVersion: id.registrystack.org/formats/evidence/runtime/v1alpha1
 kind: EvidenceRuntimeConfig
 package:
   root: {bundle}
@@ -323,7 +323,7 @@ secretProviders:
   file:
     root: {secrets}
 signer:
-  kind: local-jwk
+  type: local-jwk
   privateKeyRef: secret:file/signing-key
 audit:
   path: {audit}
@@ -400,8 +400,8 @@ fn rewrite_evidence_fixture(
         ),
         ("algorithms: [ES256]", "algorithms: [RS256]"),
         (
-            "    principalClaim: sub\n    requesterTagsClaim: evidence_tags",
-            "    principalClaim: sub\n    allowedClients: [evidence-task-agent]\n    requesterTagsClaim: evidence_tags",
+            "allowedClients: unrestricted",
+            "allowedClients: [evidence-task-agent]",
         ),
         (
             "  statutory-caseworker-v1:\n    kind: statutory",
@@ -802,11 +802,11 @@ async fn fixture(issuer: &Issuer, key: registry_platform_crypto::PrivateJwk) -> 
         .agent_id
         .clone();
     let breg: Value = serde_json::from_str(resource::PROJECT).unwrap();
-    let operations = breg["accessProfiles"][1]["permissions"][0]["operations"].clone();
+    let operations = breg["accessProfiles"][1]["permissions"]["entities"][0]["operations"].clone();
     let template:TaskTemplate=serde_json::from_value(json!({"id":"draft","version":"1","label":"Prepare correction draft","eligibleTeams":["team"],"eligibleProfiles":["staff"],"source":"source","itemKinds":["request"],"itemStates":["claimed"],"agent":{"issuer":issuer.url(),"subject":agent},"client":"task-agent","resource":BREG_RESOURCE,"purpose":"review","scopes":["records:get"],"bounds":{"type":"breg","permissions":[{"collection":"correction-requests","operations":operations}]},"subjects":{"tenant_claim":"tenant"},"lifetimeSeconds":900})).unwrap();
     let evidence_template:TaskTemplate=serde_json::from_value(json!({"id":"evidence-check","version":"1","label":"Check adult status","eligibleTeams":["team"],"eligibleProfiles":["staff"],"source":"source","itemKinds":["request"],"itemStates":["claimed"],"agent":{"issuer":issuer.url(),"subject":evidence_agent},"client":"evidence-task-agent","resource":EVIDENCE_RESOURCE,"purpose":"fixture-eligibility","scopes":["evidence:invoke"],"bounds":{"type":"evidence","requirement":EVIDENCE_REQUIREMENT},"evidenceContext":{"requesterTags":[EVIDENCE_TAG],"audience":EVIDENCE_AUDIENCE},"subjects":{"birth_date":"birth_date","family_name":"family_name","given_name":"given_name"},"lifetimeSeconds":900})).unwrap();
     let scheduling_template:TaskTemplate=serde_json::from_value(json!({"id":"schedule-update","version":"1","label":"Book a registry update","eligibleTeams":["team"],"eligibleProfiles":["staff"],"source":"source","itemKinds":["request"],"itemStates":["claimed"],"agent":{"issuer":issuer.url(),"subject":agent},"client":"task-agent","resource":SCHEDULING_RESOURCE,"purpose":"schedule-registry-update","scopes":["scheduling:commit"],"bounds":{"type":"scheduling","permissions":[{"service":"registry-update","location":"bangkok-counter","actions":["appointment.create"]}]},"subjects":{"tenant_claim":"tenant"},"lifetimeSeconds":900})).unwrap();
-    let project:CaseworkProject=serde_json::from_value(json!({"apiVersion":CASEWORK_API_VERSION,"kind":CASEWORK_KIND,"casework":{"id":"native-tasks","version":"1"},"accessProfiles":[{"id":"staff","principalClaim":"sub","requiredScopes":["casework:staff"],"role":"staff"}],"queues":[{"id":"review","label":"Review"}],"sources":[{"id":"source","adapter":"test","description":"Synthetic source","requests":[{"entity":"request","queue":"review"}]}],"taskTemplates":[template,evidence_template,scheduling_template]})).unwrap();
+    let project:CaseworkProject=serde_json::from_value(json!({"apiVersion":CASEWORK_API_VERSION,"kind":CASEWORK_KIND,"project":{"id":"native-tasks","version":"1"},"accessProfiles":[{"id":"staff","principalClaim":"sub","requiredScopes":["casework:staff"],"role":"staff"}],"queues":[{"id":"review","label":"Review"}],"sources":[{"id":"source","adapter":"test","description":"Synthetic source","requests":[{"entity":"request","queue":"review"}]}],"taskTemplates":[template,evidence_template,scheduling_template]})).unwrap();
     store
         .activate_task_templates(&project.task_templates)
         .await

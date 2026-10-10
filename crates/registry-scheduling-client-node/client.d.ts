@@ -180,10 +180,10 @@ export type SchedulingProblemCode =
   | 'revision.mismatch'
   | 'schedule.unpublished'
   | 'service.unavailable'
-export type SchedulingProtocolFailure = 'header_bounds' | 'trace_context' | 'media_type' | 'body' | 'problem' | 'status' | 'protocol'
+export type SchedulingProtocolFailure = 'header-bounds' | 'trace-context' | 'media-type' | 'body' | 'problem' | 'status' | 'protocol'
 
 export class SchedulingClientError extends Error {
-  readonly kind: 'configuration' | 'invalid_request' | 'transport' | 'problem' | 'protocol'
+  readonly kind: 'configuration' | 'invalid-request' | 'transport' | 'problem' | 'protocol'
   /**
    * Whether the request may have taken effect although this error was
    * raised: a timeout or broken exchange after sending, an unusable answer,

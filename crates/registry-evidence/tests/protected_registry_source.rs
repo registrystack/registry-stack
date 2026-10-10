@@ -94,11 +94,11 @@ fn extract(source_response, parameters) {
 /// against the protected registry record path.
 fn protected_registry_source(base_url: &str, token_endpoint: &str) -> SourceConfig {
     serde_json::from_value(json!({
-        "transport": "http-json",
+        "type": "http-json",
         "baseUrl": base_url,
         "posture": "field-projected",
         "authentication": {
-            "kind": "oauth2-client-credentials",
+            "type": "oauth2-client-credentials",
             "tokenEndpoint": token_endpoint,
             "clientIdRef": "secret:file/registry-client-id",
             "clientSecretRef": "secret:file/registry-client-secret",
@@ -127,9 +127,9 @@ fn protected_registry_source(base_url: &str, token_endpoint: &str) -> SourceConf
             "preparationLimits": {"query": "required", "jsonBody": "forbidden"},
             "projection": ["/items/*/domainData/region", "/pageInfo/nextCursor"],
             "redirects": "deny",
-            "timeoutMilliseconds": 1000,
+            "attemptTimeoutMilliseconds": 1000,
             "maximumResponseBytes": 65536,
-            "concurrencyLimit": 4
+            "maximumConcurrency": 4
         },
         "responseSchema": "schemas/response.schema.yaml",
         "extractScript": "adapters/extract.rhai",

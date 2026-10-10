@@ -1,20 +1,20 @@
-apiVersion: registry.registrystack.org/v1alpha1
-kind: RegistryProject
-registry: {id: absent-optional-action-inputs, version: "1", defaultLanguage: en, canonicalBaseIri: https://absent-optional-action-inputs.example.test}
+apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project: {id: absent-optional-action-inputs, version: "1", defaultLanguage: en, canonicalBaseIri: https://absent-optional-action-inputs.example.test}
 entities:
   - id: entry
     primaryDataset: test-dataset
     route: entries
     mutationMode: mutable
     fields:
-      - {id: label, type: string, maxLength: 40, required: true, classification: internal}
-      - {id: note, type: string, maxLength: 80, required: false, classification: internal}
-      - {id: status, type: string, maxLength: 20, required: false, classification: internal}
+      - {id: label, type: string, maximumLength: 40, required: true, classification: internal}
+      - {id: note, type: string, maximumLength: 80, required: false, classification: internal}
+      - {id: status, type: string, maximumLength: 20, required: false, classification: internal}
 actions:
   - id: create-entry
     inputs:
-      - {id: label, type: string, maxLength: 40, required: true, classification: internal}
-      - {id: note, type: string, maxLength: 80, required: false, classification: internal}
+      - {id: label, type: string, maximumLength: 40, required: true, classification: internal}
+      - {id: note, type: string, maximumLength: 80, required: false, classification: internal}
     effects:
       - id: created
         target: {entity: entry}
@@ -23,8 +23,8 @@ actions:
   - id: update-entry
     inputs:
       - {id: entry, apiName: entryId, type: reference, target: entry, required: true, classification: internal}
-      - {id: status, type: string, maxLength: 20, required: true, classification: internal}
-      - {id: note, type: string, maxLength: 80, required: false, classification: internal}
+      - {id: status, type: string, maximumLength: 20, required: true, classification: internal}
+      - {id: note, type: string, maximumLength: 80, required: false, classification: internal}
     effects:
       - id: updated
         target: {fromField: entry}
@@ -36,11 +36,12 @@ accessProfiles:
     principalClaim: registry_principal
     requiredScopes: unrestricted
     permissions:
-      - action: create-entry
-        operations: [invoke]
-        targets: [{entity: entry, rowBoundaries: unrestricted}]
-        results: [created]
-      - action: update-entry
-        operations: [invoke]
-        targets: [{entity: entry, rowBoundaries: unrestricted}]
-        results: [updated]
+      actions:
+        - action: create-entry
+          operations: [invoke]
+          targets: [{entity: entry, rowBoundaries: unrestricted}]
+          results: [created]
+        - action: update-entry
+          operations: [invoke]
+          targets: [{entity: entry, rowBoundaries: unrestricted}]
+          results: [updated]

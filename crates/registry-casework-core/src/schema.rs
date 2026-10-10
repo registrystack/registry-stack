@@ -89,31 +89,7 @@ pub fn render(
     let mut derived = serde_json::to_value(schema)?;
     refuse_null(&mut derived);
     state_zero_minimum(&mut derived);
-    // A type used only as a map key is inlined as a pattern, so the
-    // definitions come from the types rather than from `$defs`.
-    let definitions = [
-        ("LocalId", definition::<registry_platform_yaml::LocalId>()?),
-        (
-            "ExternalId",
-            definition::<registry_platform_yaml::ExternalId>()?,
-        ),
-    ];
-    let identifiers = definitions
-        .iter()
-        .filter_map(|(name, definition)| {
-            let pattern = definition.get("pattern")?.as_str()?.to_owned();
-            Some((pattern, *name))
-        })
-        .collect::<BTreeMap<_, _>>();
-    type_map_keys(&mut derived, &identifiers);
-    for (name, definition) in definitions {
-        let pointer = format!("#/$defs/{name}");
-        if references(&derived, &pointer) {
-            if let Some(Value::Object(defs)) = derived.get_mut("$defs") {
-                defs.entry(name).or_insert(definition);
-            }
-        }
-    }
+    type_identifier_keyed_maps(&mut derived)?;
     set_const(&mut derived, "apiVersion", api_version);
     set_const(&mut derived, "kind", kind);
     let mut object = match derived {
@@ -188,6 +164,37 @@ fn state_zero_minimum(schema: &mut Value) {
         Value::Array(items) => items.iter_mut().for_each(state_zero_minimum),
         _ => {}
     }
+}
+
+/// Type every map keyed by a shared identifier type and add the identifier
+/// definitions those maps then reference.
+pub fn type_identifier_keyed_maps(schema: &mut Value) -> Result<(), serde_json::Error> {
+    // A type used only as a map key is inlined as a pattern, so the
+    // definitions come from the types rather than from `$defs`.
+    let definitions = [
+        ("LocalId", definition::<registry_platform_yaml::LocalId>()?),
+        (
+            "ExternalId",
+            definition::<registry_platform_yaml::ExternalId>()?,
+        ),
+    ];
+    let identifiers = definitions
+        .iter()
+        .filter_map(|(name, definition)| {
+            let pattern = definition.get("pattern")?.as_str()?.to_owned();
+            Some((pattern, *name))
+        })
+        .collect::<BTreeMap<_, _>>();
+    type_map_keys(schema, &identifiers);
+    for (name, definition) in definitions {
+        let pointer = format!("#/$defs/{name}");
+        if references(schema, &pointer) {
+            if let Some(Value::Object(defs)) = schema.get_mut("$defs") {
+                defs.entry(name).or_insert(definition);
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Schemars writes a map keyed by an identifier type as `patternProperties`
@@ -317,6 +324,50 @@ mod tests {
         let mut version = valid;
         version["apiVersion"] = Value::from("registry.registrystack.org/casework/v1alpha0");
         assert!(!schema.is_valid(&version));
+    }
+
+    #[test]
+    fn cfg_id_6_the_required_scopes_of_an_access_profile_are_a_set() {
+        let first = project_documents().unwrap();
+        let document: Value = serde_json::from_str(&first[PROJECT_SCHEMA_FILE]).unwrap();
+        let scopes = &document["$defs"]["AccessProfile"]["properties"]["requiredScopes"];
+        assert_eq!(scopes["uniqueItems"], true);
+        assert_eq!(scopes["minItems"], 1);
+    }
+
+    #[test]
+    fn cfg_id_1_every_declared_identifier_is_typed() {
+        let first = project_documents().unwrap();
+        let document: Value = serde_json::from_str(&first[PROJECT_SCHEMA_FILE]).unwrap();
+        let defs = &document["$defs"];
+        let local = serde_json::json!("#/$defs/LocalId");
+        for definition in [
+            "CalendarPolicy",
+            "ClockReminder",
+            "ClockStep",
+            "PassiveTargetPolicy",
+            "ReviewKindPolicy",
+            "ReviewOutcomePolicy",
+            "ReviewStagePolicy",
+            "RoutingRule",
+            "SourcePolicy",
+        ] {
+            assert_eq!(
+                defs[definition]["properties"]["id"]["$ref"], local,
+                "{definition}"
+            );
+        }
+        for variant in defs["ClockPolicy"]["oneOf"].as_array().unwrap() {
+            assert_eq!(variant["properties"]["id"]["$ref"], local);
+        }
+        assert_eq!(
+            defs["RoutingCondition"]["properties"]["fields"]["propertyNames"]["$ref"],
+            local
+        );
+        assert_eq!(
+            defs["TaskTemplate"]["properties"]["subjects"]["propertyNames"]["$ref"],
+            "#/$defs/ExternalId"
+        );
     }
 
     #[test]

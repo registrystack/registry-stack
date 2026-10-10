@@ -6,10 +6,10 @@ use async_trait::async_trait;
 use registry_casework::{CaseworkService, DatabaseConfig, PostgresStore, ServiceError};
 use registry_casework_core::{
     AccessProfile, ActiveSubjectsPage, ActorContext, AuthoritativeObservation,
-    BootstrapDirectoryRequest, CallerSubjectView, CaseworkIdentity, CaseworkProject, CaseworkRole,
-    DiscoveryCursor, EphemeralCredential, EqualsPredicate, EventRequest, ExecutePreparedRequest,
-    InboxPolicy, IssuerPrincipal, OccurrenceKind, OccurrenceState, PrepareActionRequest,
-    PreparedSourceAttempt, QueuePolicy, RoutingActivity, RoutingCondition, RoutingContext,
+    BootstrapDirectoryRequest, CallerSubjectView, CaseworkProject, CaseworkRole, DiscoveryCursor,
+    EphemeralCredential, EqualsPredicate, EventRequest, ExecutePreparedRequest, InboxPolicy,
+    IssuerPrincipal, OccurrenceKind, OccurrenceState, PrepareActionRequest, PreparedSourceAttempt,
+    ProjectIdentity, QueuePolicy, RoutingActivity, RoutingCondition, RoutingContext,
     RoutingFieldDescriptor, RoutingPredicate, RoutingRule, RoutingSourceMetadata, SourceAdapter,
     SourceAdapterError, SourceBinding, SourcePolicy, SourceReceipt, SourceRequestPolicy,
     SubjectRef, TransitionHint, WorkItemRouting,
@@ -150,8 +150,8 @@ fn routing_project() -> CaseworkProject {
         task_templates: Vec::new(),
         api_version: registry_casework_core::CASEWORK_API_VERSION.to_owned(),
         kind: registry_casework_core::CASEWORK_KIND.to_owned(),
-        casework: CaseworkIdentity {
-            id: "routing-test".to_owned(),
+        project: ProjectIdentity {
+            id: "routing-test".parse().unwrap(),
             version: "1".to_owned(),
         },
         access_profiles: vec![

@@ -8,9 +8,9 @@ use serde_json::{json, Value};
 
 fn source() -> Value {
     json!({
-        "apiVersion": "registry.registrystack.org/v1alpha1",
-        "kind": "RegistryProject",
-        "registry": {
+        "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
+        "kind": "BRegProject",
+        "project": {
             "id": "access-log-registry",
             "version": "1",
             "defaultLanguage": "en",
@@ -26,15 +26,15 @@ fn source() -> Value {
                 {
                     "id": "citizen-id",
                     "type": "string",
-                    "minLength": 1,
-                    "maxLength": 128,
+                    "minimumLength": 1,
+                    "maximumLength": 128,
                     "required": true,
                     "classification": "restricted"
                 },
                 {
                     "id": "display-name",
                     "type": "string",
-                    "maxLength": 200,
+                    "maximumLength": 200,
                     "required": true,
                     "classification": "restricted"
                 }
@@ -56,34 +56,34 @@ fn source() -> Value {
                 "default": true,
                 "principalClaim": "registry_principal",
                 "requiredScopes": "unrestricted",
-                "permissions": [{
+                "permissions": {"entities": [{
                     "entity": "person",
                     "operations": ["get", "list"],
                     "readableFields": ["citizen-id", "display-name"],
                     "rowBoundaries": "unrestricted"
-                }]
+                }]}
             },
             {
                 "id": "investigator",
                 "principalClaim": "registry_principal",
                 "requiredScopes": "unrestricted",
-                "permissions": [{
+                "permissions": {"entities": [{
                     "entity": "person",
                     "operations": ["get"],
                     "readableFields": ["display-name"],
                     "rowBoundaries": "unrestricted"
-                }]
+                }]}
             },
             {
                 "id": "writer",
                 "principalClaim": "registry_principal",
                 "requiredScopes": "unrestricted",
-                "permissions": [{
+                "permissions": {"entities": [{
                     "entity": "person",
                     "operations": ["create"],
                     "writableFields": ["citizen-id", "display-name"],
                     "rowBoundaries": "unrestricted"
-                }]
+                }]}
             }
         ]
     })
@@ -122,7 +122,7 @@ fn add_relationship_reader(value: &mut Value) {
             "mutationMode": "mutable",
             "classification": "restricted",
             "fields": [{
-                "id": "case-code", "type": "string", "maxLength": 64,
+                "id": "case-code", "type": "string", "maximumLength": 64,
                 "required": true, "classification": "restricted"
             }],
             "readPaths": [{
@@ -143,13 +143,13 @@ fn add_relationship_reader(value: &mut Value) {
         "id": "relationship-investigator",
         "principalClaim": "registry_principal",
         "requiredScopes": "unrestricted",
-        "permissions": [{
+        "permissions": {"entities": [{
             "entity": "case",
             "operations": ["get"],
             "readableFields": ["case-code"],
             "rowBoundaries": "unrestricted",
             "readPaths": [{"path": "people", "readableFields": ["display-name"]}]
-        }]
+        }]}
     });
     value["accessProfiles"]
         .as_array_mut()
@@ -288,7 +288,7 @@ fn subject_field_must_be_required_bounded_plaintext_text() {
     assert_refused(&wrong_type, "breg.access-log.subject-field-invalid");
 
     let mut too_long = source();
-    too_long["entities"][0]["fields"][0]["maxLength"] = json!(513);
+    too_long["entities"][0]["fields"][0]["maximumLength"] = json!(513);
     assert_refused(&too_long, "breg.access-log.subject-field-invalid");
 }
 
@@ -372,7 +372,7 @@ fn relationship_exemptions_bind_the_authority_entity_and_read_path() {
     assert_eq!(exemption.source_entity.as_deref(), Some("case"));
 
     let mut no_grant = value.clone();
-    no_grant["accessProfiles"][3]["permissions"][0]["readPaths"] = json!([]);
+    no_grant["accessProfiles"][3]["permissions"]["entities"][0]["readPaths"] = json!([]);
     assert_refused(&no_grant, "breg.access-log.exemption-profile-invalid");
 
     let mut wrong_target = value.clone();

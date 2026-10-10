@@ -331,7 +331,7 @@ pub const DERIVATION: &str = "fn answer(facts, selectors, context) {\n    #{is_a
 
 pub const SOURCE: &str = r#"apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1
 kind: EvidenceSource
-transport: http-json
+type: http-json
 baseUrl: https://source.invalid
 posture: field-projected
 authentication: {kind: static-bearer, tokenRef: 'secret:file/source-token'}
@@ -350,9 +350,9 @@ request:
   preparationLimits: {query: forbidden, jsonBody: required, maximumJsonDepth: 8, maximumCollectionItems: 16, maximumStringBytes: 256, maximumNormalizedBytes: 4096}
   projection: [/total, /date_of_birth]
   redirects: deny
-  timeoutMilliseconds: 3000
+  attemptTimeoutMilliseconds: 3000
   maximumResponseBytes: 65536
-  concurrencyLimit: 8
+  maximumConcurrency: 8
 responseSchema: <|response-schema|>schemas/people-response.schema.yaml
 extractScript: <|extract-script|>adapters/people-extract.rhai
 factSchema: <|fact-schema|>schemas/people-facts.schema.yaml

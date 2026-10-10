@@ -688,7 +688,7 @@ impl Fixture {
             .as_array()
             .into_iter()
             .flatten()
-            .find(|action| action["operation"] == "submit_request")
+            .find(|action| action["operation"] == "submit-request")
             .map(|action| {
                 action["ifMatch"]
                     .as_str()
@@ -844,7 +844,7 @@ impl Package {
             .package
             .as_ref()
             .expect("the acceptance project declares its package identity");
-        let database_id = format!("{}-database", sources.project.registry.id);
+        let database_id = format!("{}-database", sources.project.project.id);
         let prepared = prepare_package(PackageBuildRequest {
             from_package_digest: None,
             compiler_source_revision: identity.source_revision.clone(),
@@ -902,7 +902,7 @@ impl Package {
         fs::write(
             &path,
             format!(
-                r#"apiVersion: registry.registrystack.org/breg-runtime/v1alpha1
+                r#"apiVersion: id.registrystack.org/formats/breg/runtime/v1alpha1
 kind: BRegRuntimeConfig
 listener:
   bind: 127.0.0.1:9
@@ -918,7 +918,7 @@ database:
   runtimeUrlRef: secret:file/database-url
   migrationUrlRef: secret:file/migration-database-url
   pool:
-    maxSize: 8
+    maximumConnections: 8
     waitTimeoutMilliseconds: 2000
     createTimeoutMilliseconds: 2000
     recycleTimeoutMilliseconds: 2000
@@ -936,17 +936,17 @@ authentication:
     scopeClaim: scope
     scopeSeparator: " "
     allowedClients: [{GATEWAY_CLIENT}, {REVIEW_PAGE_CLIENT}, {STAFF_CLIENT}]
-    maxTokenLifetimeSeconds: 3600
+    maximumTokenLifetimeSeconds: 3600
     leewayMilliseconds: 60000
     jwksSource:
-      kind: static
+      type: static
       documentRef: secret:file/oidc-jwks
     jwksCache:
       cacheTtlSeconds: 60
       negativeCacheTtlSeconds: 1
       refreshCooldownSeconds: 1
-      maxDocumentBytes: 65536
-      requestTimeoutMilliseconds: 5000
+      maximumDocumentBytes: 65536
+      attemptTimeoutMilliseconds: 5000
       outageToleranceSeconds: 0
   authorityClaims:
     principal: sub
@@ -964,7 +964,7 @@ audit:
   path: {audit_path}
 cursor:
   secretRef: secret:file/cursor-key
-  maxAgeSeconds: 300
+  maximumAgeSeconds: 300
 operationalTimeouts:
   httpRequestMilliseconds: 5000
   shutdownGraceMilliseconds: 1000

@@ -18,12 +18,13 @@ use registry_casework::{
     PostgresStore, ReviewResultRead, ReviewTaskDecisionRequest,
 };
 use registry_casework_core::{
-    AccessProfile, ActorContext, CaseworkIdentity, CaseworkProject, CaseworkRole, ContentDigest,
-    InboxPolicy, IssuerPrincipal, QueuePolicy, ReviewCompletion, ReviewCompletionDestinationPolicy,
-    ReviewCompletionType, ReviewContext, ReviewContextStrategy, ReviewCreateRequest,
-    ReviewKindPolicy, ReviewKindPurpose, ReviewProducerPolicy, ReviewRequestAccepted, ReviewResult,
-    ReviewResultFeedPage, ReviewResultStatus, ReviewRetentionPolicy, ReviewStagePolicy,
-    ReviewTaskPage, ReviewerDecisionKind, SubjectBinding, CASEWORK_PROFILE_HEADER,
+    AccessProfile, ActorContext, CaseworkProject, CaseworkRole, ContentDigest, InboxPolicy,
+    IssuerPrincipal, ProjectIdentity, QueuePolicy, ReviewCompletion,
+    ReviewCompletionDestinationPolicy, ReviewCompletionType, ReviewContext, ReviewContextStrategy,
+    ReviewCreateRequest, ReviewKindPolicy, ReviewKindPurpose, ReviewProducerPolicy,
+    ReviewRequestAccepted, ReviewResult, ReviewResultFeedPage, ReviewResultStatus,
+    ReviewRetentionPolicy, ReviewStagePolicy, ReviewTaskPage, ReviewerDecisionKind, SubjectBinding,
+    CASEWORK_PROFILE_HEADER,
 };
 use registry_platform_config::{SecretProvider, SecretResolver};
 use registry_platform_httputil::FetchUrlPolicy;
@@ -324,8 +325,8 @@ fn project(issuer: &str) -> CaseworkProject {
     CaseworkProject {
         api_version: registry_casework_core::CASEWORK_API_VERSION.to_owned(),
         kind: registry_casework_core::CASEWORK_KIND.to_owned(),
-        casework: CaseworkIdentity {
-            id: "payment-review-fixture".to_owned(),
+        project: ProjectIdentity {
+            id: "payment-review-fixture".parse().unwrap(),
             version: "1".to_owned(),
         },
         access_profiles: vec![

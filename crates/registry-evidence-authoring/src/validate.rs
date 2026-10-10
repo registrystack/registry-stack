@@ -26,6 +26,9 @@ use crate::{
         AccessPolicy, AnswerType, FactCombination, Question, QuestionAnswer,
         QuestionResponseFormat, QuestionSubject,
     },
+    names::{
+        local_selector_profile_id, local_subject_selector_profile_id, MAX_COMPILED_NAME_BYTES,
+    },
 };
 
 fn one(field: FieldPath, code: &'static str, message: impl Into<String>) -> Vec<Finding> {
@@ -409,6 +412,92 @@ pub fn validate_question(question: &Question) -> Vec<Finding> {
             FieldPath::root().key("disclosure").key("allow"),
             "disclosure-allow",
             "disclosure.allow must contain exactly the declared answer concepts",
+        );
+    }
+    compiled_names(question, &subjects)
+}
+
+/// Refuse, at the member an author wrote it in, each name the compiled bundle
+/// would refuse.
+///
+/// The bundle names a selector profile, a selector field, and a source with a
+/// lowercase letter followed by up to 63 lowercase letters, digits, `_`, or
+/// `-`. The authoring form also accepts a dot, and a question that reads an
+/// OpenAPI operation has its selector profiles named after it, so a name the
+/// checks above accept can still be one the bundle turns away. This runs after
+/// them, so it reports only on a document they accept.
+fn compiled_names(question: &Question, subjects: &[&QuestionSubject]) -> Vec<Finding> {
+    let inline = question.source.source_ref.is_none();
+    let several = subjects.len() > 1;
+    if inline && !several {
+        let bound = MAX_COMPILED_NAME_BYTES - local_selector_profile_id("").len();
+        if question.id.len() > bound {
+            return one(
+                FieldPath::root().key("id"),
+                "compiled-name-length",
+                format!(
+                    "question id must be at most {bound} bytes: the selector profile it compiles to, `local-subject-<id>-v1`, may hold {MAX_COMPILED_NAME_BYTES}"
+                ),
+            );
+        }
+    }
+    for (position, subject) in subjects.iter().enumerate() {
+        let field = subject_path(question, position);
+        if inline && several {
+            if subject.role.contains('.') {
+                return one(
+                    field.key("role"),
+                    "compiled-name-dot",
+                    "subject role must not contain a dot: it names a selector profile in the compiled bundle",
+                );
+            }
+            let name =
+                local_subject_selector_profile_id(&question.id, &subject.role, subjects.len());
+            if name.len() > MAX_COMPILED_NAME_BYTES {
+                let bound = MAX_COMPILED_NAME_BYTES
+                    - local_subject_selector_profile_id("", "", subjects.len()).len();
+                return one(
+                    field.key("role"),
+                    "compiled-name-length",
+                    format!(
+                        "question id and subject role must be at most {bound} bytes together: the selector profile they compile to, `local-subject-<id>-<role>-v1`, may hold {MAX_COMPILED_NAME_BYTES}"
+                    ),
+                );
+            }
+        }
+        if subject.selector.contains('.') {
+            return one(
+                field.key("selector"),
+                "compiled-name-dot",
+                "subject selector must not contain a dot: it names a selector field in the compiled bundle",
+            );
+        }
+        let profile = "subject profile must not contain a dot: it names a selector profile in the compiled bundle";
+        if subject
+            .profile
+            .as_deref()
+            .is_some_and(|name| name.contains('.'))
+        {
+            return one(field.key("profile"), "compiled-name-dot", profile);
+        }
+        if let Some(alternative) = subject.profiles.iter().position(|name| name.contains('.')) {
+            return one(
+                field.key("profiles").index(alternative),
+                "compiled-name-dot",
+                profile,
+            );
+        }
+    }
+    if question
+        .source
+        .source_ref
+        .as_deref()
+        .is_some_and(|name| name.contains('.'))
+    {
+        return one(
+            FieldPath::root().key("source").key("ref"),
+            "compiled-name-dot",
+            "source.ref must not contain a dot: it names a source in the compiled bundle",
         );
     }
     Vec::new()

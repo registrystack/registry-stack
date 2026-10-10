@@ -5,7 +5,9 @@ mod support;
 use std::collections::{BTreeMap, BTreeSet};
 
 use oxjsonld::JsonLdParser;
-use registry_manifest_core::{compile_manifest, render_cpsv_ap, MetadataManifest};
+use registry_manifest_core::{
+    compile_manifest, render_cpsv_ap, validate_manifest, MetadataError, MetadataManifest,
+};
 use serde_json::{json, Value};
 
 #[test]
@@ -21,6 +23,25 @@ fn cpsv_ap_service_first_fixture_satisfies_jsonld_rdf_contract() {
     assert!(quad_count > 0, "CPSV-AP JSON-LD must produce RDF quads");
     validate_cpsv_ap_service_first_contract(&cpsv)
         .unwrap_or_else(|errors| panic!("CPSV-AP contract errors:\n{}", errors.join("\n")));
+}
+
+#[test]
+fn fulfillment_modes_in_snake_case_are_refused_naming_the_kebab_words() {
+    let raw = include_str!(
+        "../../../products/manifest/fixtures/cpsv-ap/health-linked-child-support.metadata.yaml"
+    )
+    .replace("manual-input", "manual_input");
+    let manifest: MetadataManifest = support::from_yaml(&raw).expect("fixture parses");
+    let error = validate_manifest(&manifest).expect_err("snake_case mode refused");
+    let MetadataError::Validation { errors } = error else {
+        panic!("unexpected error: {error:?}");
+    };
+    assert!(
+        errors.iter().any(|error| error.message.contains(
+            "manual-input, file-upload, registry-lookup, oots-evidence-exchange, self-declaration, or known-from-context"
+        )),
+        "the refusal must name the kebab-case modes; got {errors:?}"
+    );
 }
 
 #[test]

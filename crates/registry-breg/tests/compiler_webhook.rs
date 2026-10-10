@@ -16,9 +16,9 @@ use serde_json::{json, Value};
 
 fn project_value() -> Value {
     json!({
-        "apiVersion": "registry.registrystack.org/v1alpha1",
-        "kind": "RegistryProject",
-        "registry": {"id": "webhook-contract", "version": "1", "defaultLanguage": "en",
+        "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
+        "kind": "BRegProject",
+        "project": {"id": "webhook-contract", "version": "1", "defaultLanguage": "en",
                      "canonicalBaseIri": "https://webhook-contract.example.test"},
         "entities": [{
             "id": "case",
@@ -28,9 +28,9 @@ fn project_value() -> Value {
             "tombstone": true,
             "classification": "internal",
             "fields": [
-                {"id": "label", "type": "string", "maxLength": 64, "classification": "public"},
-                {"id": "region", "type": "string", "maxLength": 32, "classification": "internal"},
-                {"id": "secret", "type": "string", "maxLength": 64, "classification": "restricted"}
+                {"id": "label", "type": "string", "maximumLength": 64, "classification": "public"},
+                {"id": "region", "type": "string", "maximumLength": 32, "classification": "internal"},
+                {"id": "secret", "type": "string", "maximumLength": 64, "classification": "restricted"}
             ],
             "hooks": [{
                 "phase": "after",
@@ -38,11 +38,11 @@ fn project_value() -> Value {
                 "trigger": "created",
                 "projection": ["label", "region"],
                 "when": {
-                    "kind": "fields",
+                    "type": "fields",
                     "afterEquals": {"region": "north"}
                 },
                 "handler": {
-                    "kind": "url",
+                    "type": "url",
                     "destinationId": "case-operations"
                 }
             }, {
@@ -78,17 +78,17 @@ fn assert_compile_code(value: &Value, code: &str) {
 
 fn change_request_event_project() -> Value {
     json!({
-        "apiVersion":"registry.registrystack.org/v1alpha1",
-        "kind":"RegistryProject",
-        "registry":{"id":"request-events","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://request-events.example.test"},
+        "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+        "kind":"BRegProject",
+        "project":{"id":"request-events","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://request-events.example.test"},
         "entities":[{
             "id":"asset-site",
             "primaryDataset":"test-dataset",
             "route":"asset-sites",
-            "mutationMode":"create_only",
+            "mutationMode":"create-only",
             "classification":"internal",
             "fields":[
-                {"id":"name","type":"string","maxLength":80,"required":true,"classification":"internal"}
+                {"id":"name","type":"string","maximumLength":80,"required":true,"classification":"internal"}
             ]
         },{
             "id":"asset-placement",
@@ -109,14 +109,14 @@ fn change_request_event_project() -> Value {
             "fields":[
                 {"id":"placement","type":"reference","target":"asset-placement","required":true,"classification":"internal"},
                 {"id":"proposed-site","type":"reference","target":"asset-site","required":true,"classification":"internal"},
-                {"id":"reason","type":"text","maxLength":1000,"required":true,"classification":"restricted"}
+                {"id":"reason","type":"text","maximumLength":1000,"required":true,"classification":"restricted"}
             ],
             "hooks":[{
                 "phase": "after",
                 "id":"request-lifecycle",
-                "trigger":"request_lifecycle",
+                "trigger":"request-lifecycle",
                 "projection":["proposed-site","reason"],
-                "handler":{"kind":"url","destinationId":"review-operations"}
+                "handler":{"type":"url","destinationId":"review-operations"}
             }],
             "changeRequest":{
                 "effects":[{
@@ -124,7 +124,7 @@ fn change_request_event_project() -> Value {
                     "operation":"patch",
                     "set":{"site":{"fromField":"proposed-site"}}
                 }],
-                "review":{"authority":"casework-main","policyId":"placement-correction"},
+                "review":{"type":"required","authority":"casework-main","policyId":"placement-correction"},
                 "onApproved":{"mode":"manual"}
             }
         }],
@@ -133,34 +133,34 @@ fn change_request_event_project() -> Value {
             "default":true,
             "principalClaim":"registry_principal",
             "requiredScopes":"unrestricted",
-            "permissions":[{
+            "permissions":{"entities":[{
                 "entity":"placement-correction-request",
-                "operations":["create","get","list","patch","submit_request","revise_request","cancel_request"],
+                "operations":["create","get","list","patch","submit-request","revise-request","cancel-request"],
                 "readableFields":["placement","proposed-site","reason"],
                 "writableFields":["placement","proposed-site","reason"],
               "rowBoundaries": "unrestricted"
-            }]
+            }]}
         },{
             "id":"reviewer",
             "principalClaim":"registry_principal",
             "requiredScopes":"unrestricted",
-            "permissions":[{
+            "permissions":{"entities":[{
                 "entity":"placement-correction-request",
                 "operations":["get","list"],
                 "readableFields":["placement","proposed-site","reason"],
               "rowBoundaries": "unrestricted"
-            }]
+            }]}
         },{
             "id":"applier",
             "principalClaim":"registry_principal",
             "requiredScopes":"unrestricted",
-            "permissions":[{
+            "permissions":{"entities":[{
                 "entity":"placement-correction-request",
-                "operations":["get","list","apply_request"],
+                "operations":["get","list","apply-request"],
                 "readableFields":["placement","proposed-site","reason"],
                 "applyTargets":[{"entity":"asset-placement","rowBoundaries":"unrestricted"}],
               "rowBoundaries": "unrestricted"
-            }]
+            }]}
         }]
     })
 }
@@ -263,30 +263,30 @@ fn application_reason_webhooks_require_internal_delivery_unless_conditions_exclu
     for (condition, expected) in [
         (None, Classification::Internal),
         (
-            Some(json!({"kind":"request_lifecycle", "transitions":["cancel"]})),
+            Some(json!({"type":"request-lifecycle", "transitions":["cancel"]})),
             Classification::Public,
         ),
         (
-            Some(json!({"kind":"request_lifecycle", "toStates":["cancelled"]})),
+            Some(json!({"type":"request-lifecycle", "toStates":["cancelled"]})),
             Classification::Public,
         ),
         (
-            Some(json!({"kind":"request_lifecycle", "transitions":["apply"]})),
+            Some(json!({"type":"request-lifecycle", "transitions":["apply"]})),
             Classification::Internal,
         ),
         (
-            Some(json!({"kind":"request_lifecycle", "toStates":["applied"]})),
+            Some(json!({"type":"request-lifecycle", "toStates":["applied"]})),
             Classification::Internal,
         ),
         (
             Some(
-                json!({"kind":"request_lifecycle", "transitions":["cancel"], "toStates":["applied"]}),
+                json!({"type":"request-lifecycle", "transitions":["cancel"], "toStates":["applied"]}),
             ),
             Classification::Public,
         ),
         (
             Some(
-                json!({"kind":"request_lifecycle", "transitions":["apply","cancel"], "toStates":["applied"]}),
+                json!({"type":"request-lifecycle", "transitions":["apply","cancel"], "toStates":["applied"]}),
             ),
             Classification::Internal,
         ),
@@ -405,7 +405,7 @@ fn request_lifecycle_webhook_uses_classified_request_projection() {
     let schema_value = parse_json_strict(&schema.bytes).expect("event schema is strict JSON");
     assert_eq!(
         schema_value["properties"]["trigger"],
-        json!({"const":"request_lifecycle"})
+        json!({"const":"request-lifecycle"})
     );
     assert_eq!(
         schema_value["required"],
@@ -521,9 +521,9 @@ fn lifecycle_event_reason_schema_matches_application_presence_and_negative_trans
 fn lifecycle_event_schema_preserves_authored_filter_intersection() {
     let mut source = change_request_event_project();
     for condition in [
-        json!({"kind":"request_lifecycle", "transitions":["apply"]}),
-        json!({"kind":"request_lifecycle", "toStates":["applied"]}),
-        json!({"kind":"request_lifecycle", "transitions":["apply"], "toStates":["applied"]}),
+        json!({"type":"request-lifecycle", "transitions":["apply"]}),
+        json!({"type":"request-lifecycle", "toStates":["applied"]}),
+        json!({"type":"request-lifecycle", "transitions":["apply"], "toStates":["applied"]}),
     ] {
         source["entities"][2]["hooks"][0]["when"] = condition;
         let schema = lifecycle_request_schema(&source);
@@ -541,7 +541,7 @@ fn lifecycle_event_schema_preserves_authored_filter_intersection() {
         }
     }
     source["entities"][2]["hooks"][0]["when"] = json!({
-        "kind":"request_lifecycle", "transitions":["apply"],
+        "type":"request-lifecycle", "transitions":["apply"],
         "toStates":["applied"]
     });
     let schema = lifecycle_request_schema(&source);
@@ -558,7 +558,7 @@ fn lifecycle_event_schema_preserves_authored_filter_intersection() {
 #[test]
 fn lifecycle_events_are_request_only_and_use_closed_lifecycle_conditions() {
     let mut non_request = project_value();
-    non_request["entities"][0]["hooks"][0]["trigger"] = json!("request_lifecycle");
+    non_request["entities"][0]["hooks"][0]["trigger"] = json!("request-lifecycle");
     assert_compile_code(
         &non_request,
         "breg.event.trigger-request-lifecycle-requires-change-request",
@@ -566,12 +566,12 @@ fn lifecycle_events_are_request_only_and_use_closed_lifecycle_conditions() {
 
     let mut field_condition = change_request_event_project();
     field_condition["entities"][2]["hooks"][0]["when"] =
-        json!({"kind":"fields","afterEquals":{"reason":"notify"}});
+        json!({"type":"fields","afterEquals":{"reason":"notify"}});
     assert_compile_code(&field_condition, "breg.event.when-trigger-incompatible");
 
     let mut lifecycle_condition = change_request_event_project();
     lifecycle_condition["entities"][2]["hooks"][0]["when"] = json!({
-        "kind":"request_lifecycle",
+        "type":"request-lifecycle",
         "transitions":["apply"],
         "toStates":["applied"]
     });
@@ -598,7 +598,7 @@ fn unknown_lifecycle_predicates_list_the_closed_sets_the_runtime_accepts() {
 
     let mut lifecycle_condition = change_request_event_project();
     lifecycle_condition["entities"][2]["hooks"][0]["when"] = json!({
-        "kind":"request_lifecycle",
+        "type":"request-lifecycle",
         "transitions":["apply"],
         "toStates":["applied"]
     });
@@ -661,7 +661,7 @@ fn destination_auth_delivery_and_deployed_members_are_closed_and_value_free() {
         ("secret", "raw-webhook-secret-canary"),
         ("tlsCertificate", "raw-tls-certificate-canary"),
         ("classificationCeiling", "restricted"),
-        ("authenticationProfile", "hmac_sha256_v1"),
+        ("authenticationProfile", "hmac-sha256-v1"),
     ] {
         let mut source = project_value();
         webhook_mut(&mut source).insert(member.to_owned(), json!(canary));
@@ -736,7 +736,7 @@ fn webhook_projection_is_closed_and_classification_is_derived() {
     let mut condition_observes_restricted = project_value();
     condition_observes_restricted["entities"][0]["hooks"][0]["projection"] = json!(["label"]);
     condition_observes_restricted["entities"][0]["hooks"][0]["when"] = json!({
-        "kind": "fields",
+        "type": "fields",
         "afterEquals": {"secret": "eligible"}
     });
     assert_eq!(
@@ -750,14 +750,14 @@ fn webhook_projection_is_closed_and_classification_is_derived() {
     );
 
     let mut oversized = project_value();
-    oversized["entities"][0]["fields"][0]["maxLength"] = json!(300_000);
+    oversized["entities"][0]["fields"][0]["maximumLength"] = json!(300_000);
     assert_compile_code(&oversized, "breg.event.webhook-projection-too-large");
 
     let mut exact_envelope_boundary = project_value();
     exact_envelope_boundary["entities"][0]["fields"][0] = json!({
         "id": "label",
         "type": "structured",
-        "maxBytes": 1_046_234,
+        "maximumBytes": 1_046_234,
         "schema": {
             "type": "object",
             "properties": {"value": {"type": "string"}},
@@ -779,7 +779,7 @@ fn webhook_projection_is_closed_and_classification_is_derived() {
             .maximum_payload_bytes,
         1_048_576
     );
-    exact_envelope_boundary["entities"][0]["fields"][0]["maxBytes"] = json!(1_046_235);
+    exact_envelope_boundary["entities"][0]["fields"][0]["maximumBytes"] = json!(1_046_235);
     assert_compile_code(
         &exact_envelope_boundary,
         "breg.event.webhook-projection-too-large",
@@ -789,7 +789,7 @@ fn webhook_projection_is_closed_and_classification_is_derived() {
     exact_transport_mismatch["entities"][0]["fields"][0] = json!({
         "id": "label",
         "type": "structured",
-        "maxBytes": 1_048_576,
+        "maximumBytes": 1_048_576,
         "schema": {
             "type": "object",
             "properties": {"value": {"type": "string"}},
@@ -806,7 +806,7 @@ fn webhook_projection_is_closed_and_classification_is_derived() {
     decimal_quote_boundary["entities"][0]["fields"] = json!([{
         "id": "label",
         "type": "structured",
-        "maxBytes": 1_048_517,
+        "maximumBytes": 1_048_517,
         "schema": {
             "type": "object",
             "properties": {"value": {"type": "string"}},
@@ -830,7 +830,7 @@ fn webhook_projection_is_closed_and_classification_is_derived() {
     all_fractional_decimal_boundary["entities"][0]["fields"] = json!([{
         "id": "a",
         "type": "structured",
-        "maxBytes": 1_048_518,
+        "maximumBytes": 1_048_518,
         "schema": {"type": "string"},
         "required": true,
         "classification": "public"
@@ -853,14 +853,14 @@ fn webhook_projection_is_closed_and_classification_is_derived() {
     optional_null_boundary["entities"][0]["fields"] = json!([{
         "id": "a",
         "type": "structured",
-        "maxBytes": 1_048_564,
+        "maximumBytes": 1_048_564,
         "schema": {"type": "string"},
         "required": true,
         "classification": "public"
     }, {
         "id": "b",
         "type": "structured",
-        "maxBytes": 1,
+        "maximumBytes": 1,
         "schema": {"type": "string"},
         "classification": "public"
     }]);
@@ -876,26 +876,52 @@ fn field_conditions_are_typed_nonempty_and_trigger_compatible() {
     let mut patched = project_value();
     patched["entities"][0]["hooks"][0]["trigger"] = json!("patched");
     patched["entities"][0]["hooks"][0]["when"] = json!({
-        "kind": "fields",
+        "type": "fields",
         "changed": ["region"],
-        "beforeEquals": {"region": null},
+        "beforeIsNull": ["region"],
         "afterEquals": {"region": "north"}
     });
     compile(&patched).expect("patched events support all Version 1 field predicates");
-    // The shared reader reads `null` here as a comparison literal (CFG-EMPTY-1).
+    // An unset value is stated with `beforeIsNull` or `afterIsNull`; `null`
+    // is never a comparison literal (CFG-EMPTY-1).
     assert_eq!(
         parse_project_yaml(&serde_json::to_vec(&patched).expect("test project serializes"))
-            .expect("the reader accepts a null comparison literal"),
+            .expect("the reader accepts beforeIsNull"),
         parse_project(&patched)
     );
+    for member in ["beforeEquals", "afterEquals"] {
+        let mut null_literal = patched.clone();
+        null_literal["entities"][0]["hooks"][0]["when"] =
+            json!({"type": "fields", member: {"region": null}});
+        let refused = parse_project_yaml(
+            &serde_json::to_vec(&null_literal).expect("test project serializes"),
+        )
+        .expect_err("a null comparison literal is refused");
+        assert!(
+            format!("{refused:?}").contains("config.null-value"),
+            "{member}: {refused:?}"
+        );
+    }
+    for (trigger, member) in [("created", "beforeIsNull"), ("tombstoned", "afterIsNull")] {
+        let mut incompatible = project_value();
+        incompatible["entities"][0]["hooks"][0]["trigger"] = json!(trigger);
+        incompatible["entities"][0]["hooks"][0]["when"] =
+            json!({"type": "fields", member: ["region"]});
+        assert_compile_code(&incompatible, "breg.event.when-trigger-incompatible");
+    }
+    for member in ["beforeIsNull", "afterIsNull"] {
+        let mut unknown = patched.clone();
+        unknown["entities"][0]["hooks"][0]["when"] = json!({"type": "fields", member: ["unknown"]});
+        assert_compile_code(&unknown, "breg.event.when-field-unknown");
+    }
 
     let mut empty = project_value();
-    empty["entities"][0]["hooks"][0]["when"] = json!({"kind": "fields"});
+    empty["entities"][0]["hooks"][0]["when"] = json!({"type": "fields"});
     assert_compile_code(&empty, "breg.event.when-empty");
 
     let mut incompatible_created = project_value();
     incompatible_created["entities"][0]["hooks"][0]["when"] = json!({
-        "kind": "fields",
+        "type": "fields",
         "changed": ["region"]
     });
     assert_compile_code(
@@ -906,7 +932,7 @@ fn field_conditions_are_typed_nonempty_and_trigger_compatible() {
     let mut incompatible_tombstone = project_value();
     incompatible_tombstone["entities"][0]["hooks"][0]["trigger"] = json!("tombstoned");
     incompatible_tombstone["entities"][0]["hooks"][0]["when"] = json!({
-        "kind": "fields",
+        "type": "fields",
         "afterEquals": {"region": "north"}
     });
     assert_compile_code(
@@ -915,9 +941,9 @@ fn field_conditions_are_typed_nonempty_and_trigger_compatible() {
     );
 
     for when in [
-        json!({"kind": "fields", "changed": ["unknown"]}),
-        json!({"kind": "fields", "beforeEquals": {"unknown": "value"}}),
-        json!({"kind": "fields", "afterEquals": {"unknown": "value"}}),
+        json!({"type": "fields", "changed": ["unknown"]}),
+        json!({"type": "fields", "beforeEquals": {"unknown": "value"}}),
+        json!({"type": "fields", "afterEquals": {"unknown": "value"}}),
     ] {
         let mut source = patched.clone();
         source["entities"][0]["hooks"][0]["when"] = when;
@@ -926,14 +952,14 @@ fn field_conditions_are_typed_nonempty_and_trigger_compatible() {
 
     let mut wrong_type = patched;
     wrong_type["entities"][0]["hooks"][0]["when"] = json!({
-        "kind": "fields",
+        "type": "fields",
         "afterEquals": {"region": 7}
     });
     assert_compile_code(&wrong_type, "breg.event.when-value-invalid");
 
     let mut structured = project_value();
     structured["entities"][0]["hooks"][0]["when"] = json!({
-        "kind": "fields",
+        "type": "fields",
         "afterEquals": {"region": {"unexpected": true}}
     });
     let failure = parse_project_json(
@@ -1012,16 +1038,16 @@ fn event_ids_are_unique_across_entities_for_unambiguous_external_types() {
             "id": "appeal",
             "primaryDataset": "test-dataset",
             "route": "appeals",
-            "mutationMode": "create_only",
+            "mutationMode": "create-only",
             "fields": [
-                {"id": "label", "type": "string", "maxLength": 64, "classification": "public"}
+                {"id": "label", "type": "string", "maximumLength": 64, "classification": "public"}
             ],
             "hooks": [{
                 "phase": "after",
                 "id": "case-created",
                 "trigger": "created",
                 "projection": ["label"],
-                "handler": {"kind":"url","destinationId": "appeal-operations"}
+                "handler": {"type":"url","destinationId": "appeal-operations"}
             }]
         }));
     assert_compile_code(&source, "breg.event.id-registry-duplicate");
@@ -1058,6 +1084,7 @@ fn outbox_only_event_is_authoring_only_and_production_requires_delivery() {
 fn webhook_module(id: &str, event_id: &str, destination_id: &str) -> RegistryModule {
     parse_module_json(
         &serde_json::to_vec(&json!({
+            "apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule",
             "id": id,
             "version": "1",
             "extendEntities": [{
@@ -1068,7 +1095,7 @@ fn webhook_module(id: &str, event_id: &str, destination_id: &str) -> RegistryMod
                     "trigger": "created",
                     "projection": ["label"],
                     "handler": {
-                        "kind": "url",
+                        "type": "url",
                         "destinationId": destination_id
                     }
                 }]
@@ -1092,10 +1119,10 @@ fn non_apply_lifecycle_payload_bounds_exclude_impossible_application_text() {
     let mut source = change_request_event_project();
     let request = &mut source["entities"][2];
     request["hooks"][0]["projection"] = json!(["reason"]);
-    request["fields"][2]["maxLength"] = json!(173_000);
+    request["fields"][2]["maximumLength"] = json!(173_000);
     for condition in [
-        json!({"kind":"request_lifecycle", "transitions":["cancel"]}),
-        json!({"kind":"request_lifecycle", "toStates":["cancelled"]}),
+        json!({"type":"request-lifecycle", "transitions":["cancel"]}),
+        json!({"type":"request-lifecycle", "toStates":["cancelled"]}),
     ] {
         source["entities"][2]["hooks"][0]["when"] = condition;
         let compiled = compile(&source).expect("non-apply payload fits the webhook limit");
@@ -1108,7 +1135,7 @@ fn non_apply_lifecycle_payload_bounds_exclude_impossible_application_text() {
         assert!(delivery.maximum_payload_bytes < 1_048_576);
     }
     source["entities"][2]["hooks"][0]["when"] =
-        json!({"kind":"request_lifecycle", "transitions":["apply"]});
+        json!({"type":"request-lifecycle", "transitions":["apply"]});
     assert_compile_code(&source, "breg.event.webhook-projection-too-large");
 }
 
@@ -1135,7 +1162,7 @@ fn structured_label(maximum_bytes: u32) -> Value {
     json!({
         "id": "label",
         "type": "structured",
-        "maxBytes": maximum_bytes,
+        "maximumBytes": maximum_bytes,
         "schema": {
             "type": "object",
             "properties": {"value": {"type": "string"}},

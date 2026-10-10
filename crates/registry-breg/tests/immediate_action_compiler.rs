@@ -102,13 +102,13 @@ fn handler_response_schema_accepts_omitted_slots_across_overlapping_grant_result
         })
         .collect::<Vec<_>>();
     source["actions"][0]["handler"] = json!({
-        "kind": "rhai", "script": "scripts/handler.rhai", "abi": "registry.action-handler/v1",
+        "type": "rhai", "script": "scripts/handler.rhai", "abi": "registry.action-handler/v1",
         "writes": writes
     });
     let mut limited = source["accessProfiles"][0].clone();
     limited["id"] = json!("person-result-only");
     limited["default"] = json!(false);
-    limited["permissions"][0]["results"] = json!(["person"]);
+    limited["permissions"]["actions"][0]["results"] = json!(["person"]);
     source["accessProfiles"]
         .as_array_mut()
         .unwrap()
@@ -181,12 +181,12 @@ fn wasm_v2_handlers_are_refused_and_v1_needs_a_wasm_capable_build() {
         // supplied asset, so only it is given one.
         let (handler, assets) = if kind == "wasm" {
             (
-                json!({"kind": kind, "module": "modules/handler.wasm", "abi": abi, "writes": writes}),
+                json!({"type": kind, "module": "modules/handler.wasm", "abi": abi, "writes": writes}),
                 Vec::new(),
             )
         } else {
             (
-                json!({"kind": kind, "script": "scripts/handler.rhai", "abi": abi, "writes": writes}),
+                json!({"type": kind, "script": "scripts/handler.rhai", "abi": abi, "writes": writes}),
                 vec![ModuleAssetSource {
                     module: None,
                     path: "scripts/handler.rhai".to_owned(),
@@ -216,7 +216,7 @@ fn wasm_v2_handlers_are_refused_and_v1_needs_a_wasm_capable_build() {
             .expect("input-only WASM handlers name the missing build capability");
         assert_eq!(
             not_admitted.path,
-            "actions[register-household-contact].handler.kind"
+            "actions[register-household-contact].handler.type"
         );
     }
     #[cfg(feature = "wasm")]
@@ -244,7 +244,7 @@ fn wasm_v2_handlers_are_refused_and_v1_needs_a_wasm_capable_build() {
         .expect("Evidence-enabled WASM handlers are refused with their own diagnostic");
     assert_eq!(
         unsupported_abi.path,
-        "actions[register-household-contact].handler.kind"
+        "actions[register-household-contact].handler.type"
     );
 
     compile_with_handler_kind("rhai", ACTION_HANDLER_ABI_V1)
@@ -253,19 +253,19 @@ fn wasm_v2_handlers_are_refused_and_v1_needs_a_wasm_capable_build() {
 
 fn household_contact_project(extra: &str) -> String {
     r#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"immediate-actions","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"immediate-actions","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
             "id":"person","primaryDataset":"test-dataset","route":"people","mutationMode":"mutable",
             "fields":[
-              {"id":"person-code","apiName":"personCode","type":"string","maxLength":64,"required":true,"classification":"restricted"},
-              {"id":"legal-name","apiName":"legalName","type":"string","maxLength":160,"required":true,"classification":"restricted"}
+              {"id":"person-code","apiName":"personCode","type":"string","maximumLength":64,"required":true,"classification":"restricted"},
+              {"id":"legal-name","apiName":"legalName","type":"string","maximumLength":160,"required":true,"classification":"restricted"}
             ]
           },{
             "id":"household","primaryDataset":"test-dataset","route":"households","mutationMode":"mutable",
             "fields":[
-              {"id":"household-code","type":"string","maxLength":64,"required":true,"classification":"restricted"},
+              {"id":"household-code","type":"string","maximumLength":64,"required":true,"classification":"restricted"},
               {"id":"contact-person","apiName":"contactPerson","type":"reference","target":"person","classification":"restricted"}
             ]
           },{
@@ -279,8 +279,8 @@ fn household_contact_project(extra: &str) -> String {
             "id":"register-household-contact",
             "inputs":[
               {"id":"household","apiName":"householdId","type":"reference","target":"household","required":true,"classification":"restricted"},
-              {"id":"person-code","apiName":"personCode","type":"string","maxLength":64,"required":true,"classification":"restricted"},
-              {"id":"legal-name","apiName":"legalName","type":"string","maxLength":160,"required":true,"classification":"restricted"}
+              {"id":"person-code","apiName":"personCode","type":"string","maximumLength":64,"required":true,"classification":"restricted"},
+              {"id":"legal-name","apiName":"legalName","type":"string","maximumLength":160,"required":true,"classification":"restricted"}
             ],
             "effects":[
               {"id":"person","target":{"entity":"person"},"operation":"create",
@@ -297,7 +297,7 @@ fn household_contact_project(extra: &str) -> String {
             "principalClaim":"registry_principal",
             "requiredScopes":["registry:contact:register"],
             "requiredPurposes":["contact-registration"],
-            "permissions":[{
+            "permissions":{"actions":[{
               "action":"register-household-contact",
               "operations":["invoke"],
               "targets":[
@@ -306,7 +306,7 @@ fn household_contact_project(extra: &str) -> String {
                 {"entity":"group-membership","rowBoundaries":"unrestricted"}
               ],
               "results":["person","membership","household"]
-            }]
+            }]}
           }]
           __EXTRA__
         }"#
@@ -476,13 +476,22 @@ fn action_grants_refuse_request_metadata_projection_overrides() {
         serde_json::from_str(&household_contact_project("")).unwrap();
     compile_json(&serde_json::to_vec(&source).unwrap())
         .expect("action grant with omitted request metadata settings compiles");
-    source["accessProfiles"][0]["permissions"][0]["readableRequestFields"] = serde_json::json!([]);
-    let failure = compile_json(&serde_json::to_vec(&source).unwrap())
+    source["accessProfiles"][0]["permissions"]["actions"][0]["readableRequestFields"] =
+        serde_json::json!([]);
+    let failure = registry_breg::parse_project_yaml(&serde_json::to_vec(&source).unwrap())
         .expect_err("request metadata permissions do not apply to immediate actions");
-    assert!(failure
+    let refusals: Vec<_> = failure
         .diagnostics()
         .iter()
-        .any(|diagnostic| { diagnostic.code == "breg.action.permission-entity-fields-forbidden" }));
+        .map(|diagnostic| (diagnostic.code.as_str(), diagnostic.path.as_str()))
+        .collect();
+    assert_eq!(
+        refusals,
+        [(
+            "config.unknown-key",
+            "project.accessProfiles[0].permissions.actions[0].readableRequestFields"
+        )]
+    );
 }
 
 #[test]
@@ -519,9 +528,9 @@ fn action_grants_refuse_unused_target_locks() {
         .push(serde_json::json!({
             "id":"unused-record", "primaryDataset":"test-dataset",
             "route":"unused-records", "mutationMode":"mutable",
-            "fields":[{"id":"label", "type":"string", "maxLength":32, "classification":"internal"}]
+            "fields":[{"id":"label", "type":"string", "maximumLength":32, "classification":"internal"}]
         }));
-    source["accessProfiles"][0]["permissions"][0]["targets"]
+    source["accessProfiles"][0]["permissions"]["actions"][0]["targets"]
         .as_array_mut()
         .unwrap()
         .push(serde_json::json!({"entity":"unused-record", "rowBoundaries":"unrestricted"}));
@@ -548,22 +557,22 @@ fn immediate_actions_preserve_review_control_and_request_lifecycle_boundaries() 
         .any(|diagnostic| diagnostic.code == "breg.action.effect-controlled-target"));
 
     let request_target = br#"{
-      "apiVersion":"registry.registrystack.org/v1alpha1",
-      "kind":"RegistryProject",
-      "registry":{"id":"request-target-action","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+      "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+      "kind":"BRegProject",
+      "project":{"id":"request-target-action","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
       "entities":[{
         "id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"mutable",
         "changeControl":{"requiredFor":["patch"]},
-        "fields":[{"id":"label","type":"string","maxLength":64,"required":true,"classification":"internal"}]
+        "fields":[{"id":"label","type":"string","maximumLength":64,"required":true,"classification":"internal"}]
       },{
         "id":"record-change","primaryDataset":"test-dataset","route":"record-changes","mutationMode":"mutable",
         "fields":[
           {"id":"record","type":"reference","target":"record","required":true,"classification":"internal"},
-          {"id":"label","type":"string","maxLength":64,"required":true,"classification":"internal"}
+          {"id":"label","type":"string","maximumLength":64,"required":true,"classification":"internal"}
         ],
         "changeRequest":{
           "effects":[{"target":{"fromField":"record"},"operation":"patch","set":{"label":{"fromField":"label"}}}],
-          "review":{"authority":"casework-main","policyId":"record-change"},
+          "review":{"type":"required","authority":"casework-main","policyId":"record-change"},
           "onApproved":{"mode":"manual"}
         }
       }],
@@ -571,23 +580,23 @@ fn immediate_actions_preserve_review_control_and_request_lifecycle_boundaries() 
         "id":"create-record-change-directly",
         "inputs":[
           {"id":"record","type":"reference","target":"record","required":true,"classification":"internal"},
-          {"id":"label","type":"string","maxLength":64,"required":true,"classification":"internal"}
+          {"id":"label","type":"string","maximumLength":64,"required":true,"classification":"internal"}
         ],
         "effects":[{"id":"request","target":{"entity":"record-change"},"operation":"create","set":{"record":{"fromField":"record"},"label":{"fromField":"label"}}}]
       }],
       "accessProfiles":[{
         "id":"operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted",
-        "permissions":[{
+        "permissions":{"entities":[{
           "entity":"record-change",
-          "operations":["get","submit_request","apply_request"],
+          "operations":["get","submit-request","apply-request"],
           "readableFields":["record","label"],
           "applyTargets":[{"entity":"record","rowBoundaries":"unrestricted"}],
           "rowBoundaries": "unrestricted"
-        },{
+        }],"actions":[{
           "action":"create-record-change-directly",
           "operations":["invoke"],
           "targets":[{"entity":"record-change","rowBoundaries":"unrestricted"}]
-        }]
+        }]}
       }]
     }"#;
     let failure =
@@ -603,10 +612,10 @@ fn action_effect_graph_rejects_invalid_sources_cycles_and_overlaps() {
     let nullable_required = household_contact_project("").replace(
         r#""inputs":[
               {"id":"household","apiName":"householdId","type":"reference","target":"household","required":true,"classification":"restricted"},
-              {"id":"person-code","apiName":"personCode","type":"string","maxLength":64,"required":true,"classification":"restricted"},"#,
+              {"id":"person-code","apiName":"personCode","type":"string","maximumLength":64,"required":true,"classification":"restricted"},"#,
         r#""inputs":[
               {"id":"household","apiName":"householdId","type":"reference","target":"household","required":true,"classification":"restricted"},
-              {"id":"person-code","apiName":"personCode","type":"string","maxLength":64,"classification":"restricted"},"#,
+              {"id":"person-code","apiName":"personCode","type":"string","maximumLength":64,"classification":"restricted"},"#,
     );
     let failure = compile_json(nullable_required.as_bytes())
         .expect_err("nullable inputs cannot populate required fields");
@@ -626,25 +635,25 @@ fn action_effect_graph_rejects_invalid_sources_cycles_and_overlaps() {
         .any(|diagnostic| diagnostic.code == "breg.action.effect-overlapping-write"));
 
     let cycle = br#"{
-      "apiVersion":"registry.registrystack.org/v1alpha1",
-      "kind":"RegistryProject",
-      "registry":{"id":"action-cycle","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+      "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+      "kind":"BRegProject",
+      "project":{"id":"action-cycle","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
       "entities":[{
         "id":"alpha","primaryDataset":"test-dataset","route":"alphas","mutationMode":"mutable",
         "fields":[
-          {"id":"label","type":"string","maxLength":32,"required":true,"classification":"internal"},
+          {"id":"label","type":"string","maximumLength":32,"required":true,"classification":"internal"},
           {"id":"beta","type":"reference","target":"beta","classification":"internal"}
         ]
       },{
         "id":"beta","primaryDataset":"test-dataset","route":"betas","mutationMode":"mutable",
         "fields":[
-          {"id":"label","type":"string","maxLength":32,"required":true,"classification":"internal"},
+          {"id":"label","type":"string","maximumLength":32,"required":true,"classification":"internal"},
           {"id":"alpha","type":"reference","target":"alpha","classification":"internal"}
         ]
       }],
       "actions":[{
         "id":"make-cycle",
-        "inputs":[{"id":"label","type":"string","maxLength":32,"required":true,"classification":"internal"}],
+        "inputs":[{"id":"label","type":"string","maximumLength":32,"required":true,"classification":"internal"}],
         "effects":[{
           "id":"alpha",
           "target":{"entity":"alpha"},
@@ -657,11 +666,11 @@ fn action_effect_graph_rejects_invalid_sources_cycles_and_overlaps() {
           "set":{"label":{"fromField":"label"},"alpha":{"fromEffect":"alpha"}}
         }]
       }],
-      "accessProfiles":[{"id":"operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
+      "accessProfiles":[{"id":"operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"actions":[{
         "action":"make-cycle",
         "operations":["invoke"],
         "targets":[{"entity":"alpha","rowBoundaries":"unrestricted"},{"entity":"beta","rowBoundaries":"unrestricted"}]
-      }]}]
+      }]}}]
     }"#;
     let failure = compile_json(cycle).expect_err("create dependencies cannot cycle");
     assert!(failure
@@ -674,9 +683,9 @@ fn action_effect_graph_rejects_invalid_sources_cycles_and_overlaps() {
 fn action_inputs_resolve_project_vocabulary_values_for_type_compatibility() {
     let compiled = compile_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"action-vocabulary","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"action-vocabulary","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "vocabularies":[{"id":"asset-type","values":["bridge","road"]}],
           "entities":[{
             "id":"asset","primaryDataset":"test-dataset","route":"assets","mutationMode":"mutable",
@@ -687,12 +696,12 @@ fn action_inputs_resolve_project_vocabulary_values_for_type_compatibility() {
             "inputs":[{"id":"kind","type":"vocabulary-code","vocabulary":"asset-type","required":true,"classification":"internal"}],
             "effects":[{"id":"asset","target":{"entity":"asset"},"operation":"create","set":{"kind":{"fromField":"kind"}}}]
           }],
-          "accessProfiles":[{"id":"operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
+          "accessProfiles":[{"id":"operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"actions":[{
             "action":"create-asset",
             "operations":["invoke"],
             "targets":[{"entity":"asset","rowBoundaries":"unrestricted"}],
             "results":["asset"]
-          }]}]
+          }]}}]
         }"#,
     )
     .expect("action input vocabulary values resolve from project vocabularies");
@@ -708,23 +717,23 @@ fn action_inputs_resolve_project_vocabulary_values_for_type_compatibility() {
 fn action_inputs_reject_unknown_project_vocabulary_references() {
     let failure = compile_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"action-vocabulary","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"action-vocabulary","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
             "id":"asset","primaryDataset":"test-dataset","route":"assets","mutationMode":"mutable",
-            "fields":[{"id":"kind","type":"string","maxLength":32,"required":true,"classification":"internal"}]
+            "fields":[{"id":"kind","type":"string","maximumLength":32,"required":true,"classification":"internal"}]
           }],
           "actions":[{
             "id":"create-asset",
             "inputs":[{"id":"kind","type":"vocabulary-code","vocabulary":"asset-type","required":true,"classification":"internal"}],
             "effects":[{"id":"asset","target":{"entity":"asset"},"operation":"create","set":{"kind":{"fromField":"kind"}}}]
           }],
-          "accessProfiles":[{"id":"operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
+          "accessProfiles":[{"id":"operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"actions":[{
             "action":"create-asset",
             "operations":["invoke"],
             "targets":[{"entity":"asset","rowBoundaries":"unrestricted"}]
-          }]}]
+          }]}}]
         }"#,
     )
     .expect_err("unknown action input vocabularies are refused");
@@ -750,19 +759,19 @@ fn action_bounds_apply_before_runtime_target_work() {
         targets.push(r#"{"entity":"record","rowBoundaries":"unrestricted"}"#.to_owned());
     }
     inputs.push(
-        r#"{"id":"label","type":"string","maxLength":32,"required":true,"classification":"internal"}"#
+        r#"{"id":"label","type":"string","maximumLength":32,"required":true,"classification":"internal"}"#
             .to_owned(),
     );
     let source = format!(
         r#"{{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{{"id":"action-bounds","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{{"id":"action-bounds","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
           "entities":[{{"id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"mutable",
-            "fields":[{{"id":"label","type":"string","maxLength":32,"classification":"internal"}}]}}],
+            "fields":[{{"id":"label","type":"string","maximumLength":32,"classification":"internal"}}]}}],
           "actions":[{{"id":"bulk-fix","inputs":[{}],"effects":[{}]}}],
           "accessProfiles":[{{"id":"operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted",
-            "permissions":[{{"action":"bulk-fix","operations":["invoke"],"targets":[{}]}}]}}]
+            "permissions":{{"actions":[{{"action":"bulk-fix","operations":["invoke"],"targets":[{}]}}]}}}}]
         }}"#,
         inputs.join(","),
         effects.join(","),
@@ -788,7 +797,7 @@ fn action_field_and_snapshot_ceilings_refuse_otherwise_valid_plans() {
         ),
         (
             1,
-            json!({"type": "string", "maxLength": 1_000_000}),
+            json!({"type": "string", "maximumLength": 1_000_000}),
             "breg.action.bounds-snapshot-bytes",
         ),
     ] {
@@ -810,9 +819,9 @@ fn action_field_and_snapshot_ceilings_refuse_otherwise_valid_plans() {
             .unwrap()
             .extend(field_type.as_object().unwrap().clone());
         let project = json!({
-            "apiVersion": "registry.registrystack.org/v1alpha1",
-            "kind": "RegistryProject",
-            "registry": {"id": "action-size-bounds", "version": "1", "defaultLanguage": "en", "canonicalBaseIri": "https://authoring.example.test"},
+            "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
+            "kind": "BRegProject",
+            "project": {"id": "action-size-bounds", "version": "1", "defaultLanguage": "en", "canonicalBaseIri": "https://authoring.example.test"},
             "entities": [{
                 "id": "bounded-record", "primaryDataset": "test-dataset", "route": "bounded-records", "mutationMode": "mutable",
                 "fields": fields
@@ -826,10 +835,10 @@ fn action_field_and_snapshot_ceilings_refuse_otherwise_valid_plans() {
             }],
             "accessProfiles": [{
                 "id": "operator", "default": true, "principalClaim": "principal", "requiredScopes": "unrestricted",
-                "permissions": [{
+                "permissions": {"actions": [{
                     "action": "create-bounded-record", "operations": ["invoke"],
                     "targets": [{"entity": "bounded-record", "rowBoundaries": "unrestricted"}]
-                }]
+                }]}
             }]
         });
         let failure = compile_json(&serde_json::to_vec(&project).unwrap())

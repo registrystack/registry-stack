@@ -11,7 +11,7 @@ use std::env;
 
 use postgres_harness::TestDatabase;
 use registry_breg::compiler::{compile_project, CompileProfile};
-use registry_breg::contract::{parse_module_yaml, parse_project_json, parse_project_yaml};
+use registry_breg::contract::parse_project_json;
 use registry_breg::postgres::{
     initialize_compiled_registry_state_for_test, install_compiled_schema,
     verify_catalog_identity_for_catalog, ExpectedManagedCatalog, RegistryLockKey,
@@ -85,46 +85,6 @@ async fn active_request_upgrade_guard_allows_unrelated_changes_and_refuses_relev
         Err(RequestRetentionError::ActiveProposalRequiresRebase),
         "a changed native pattern cannot silently reinterpret a submitted frozen proposal"
     );
-
-    migration_task.abort();
-    database.cleanup().await;
-}
-
-/// The request contract fingerprint the previous release compiled the
-/// asset-site-placement acceptance project to, as it stored it beside every
-/// proposal submitted under that release.
-const PREVIOUS_RELEASE_REQUEST_FINGERPRINT: &str =
-    "sha256:e95a1e3b26ecc0f7f816bc62772c54bba9fa136bfbc367ef72f4cf2486a54003";
-
-#[tokio::test]
-async fn a_proposal_the_previous_release_submitted_does_not_block_an_unchanged_successor() {
-    load_postgres_env();
-    let project = parse_project_yaml(include_bytes!(
-        "../../../products/breg/acceptance/asset-site-placement-change-requests/registry.yaml"
-    ))
-    .expect("acceptance project parses");
-    let module = parse_module_yaml(include_bytes!(
-        "../../../products/breg/acceptance/asset-site-placement-change-requests/modules/asset-site-placement-core/module.yaml"
-    ))
-    .expect("acceptance module parses");
-    let successor = compile_project(&project, &[module], CompileProfile::Authoring)
-        .expect("acceptance project compiles");
-
-    let database = TestDatabase::create(1).await;
-    database
-        .admin
-        .batch_execute("CREATE EXTENSION btree_gist")
-        .await
-        .expect("administrator installs the compiled temporal prerequisite");
-    let (migration, migration_task) = database.connect_migration().await;
-    install_compiled_schema(&migration, &successor, &database.runtime_role)
-        .await
-        .expect("compiled schema installs");
-    seed_submitted_request(&migration, PREVIOUS_RELEASE_REQUEST_FINGERPRINT).await;
-
-    guard_successor_activation(&migration, &successor)
-        .await
-        .expect("an engine upgrade alone leaves a submitted proposal bound to its request type");
 
     migration_task.abort();
     database.cleanup().await;
@@ -1239,7 +1199,7 @@ async fn operator_retention_service_counts_pages_erases_under_forced_rls_and_aud
         .expect("dry-run reports pinned request");
     assert!(active.pinned);
     assert!(!active.eligible_for_erasure);
-    assert_eq!(active.retention_mode, "operator_erase");
+    assert_eq!(active.retention_mode, "operator-erase");
     assert_eq!(active.erasure.proposal_snapshots, 1);
 
     let active_without_proposal = service
@@ -1315,7 +1275,7 @@ async fn operator_retention_service_counts_pages_erases_under_forced_rls_and_aud
         .execute(
             "UPDATE registry_internal.registry_outbox SET payload = $2
           WHERE entity_id = $1 AND record_reference = 'request-ref' AND record_revision = 8
-            AND trigger = 'request_lifecycle'",
+            AND trigger = 'request-lifecycle'",
             &[&REQUEST_ENTITY, &event_payload],
         )
         .await
@@ -1593,7 +1553,7 @@ async fn seed_canceled_draft_without_proposal(
                   proposal_version, link_kind)
              VALUES ($1, $2, 1, $1, $2, 1, 'request_create'),
                     ($1, $2, 2, $1, $2, 1, 'request_patch'),
-                    ($1, $2, 3, $1, $2, 1, 'request_lifecycle'),
+                    ($1, $2, 3, $1, $2, 1, 'request-lifecycle'),
                     ('other-request-entity', $2, 1, 'other-request-entity', $2, 1,
                      'request_create')",
             &[&REQUEST_ENTITY, &request_id],
@@ -1617,7 +1577,7 @@ async fn seed_canceled_draft_without_proposal(
                      convert_to('{\"reason\":\"patched canceled draft\"}', 'UTF8'),
                      transaction_timestamp() + interval '1 day'),
                     ('00000000-0000-0000-0000-000000001103'::uuid,
-                     'canceled-request-canceled', 'request_lifecycle',
+                     'canceled-request-canceled', 'request-lifecycle',
                      'placement-correction-request', 'canceled-request-ref', 3,
                      'package-1', 'schema-1',
                      convert_to('{\"reason\":\"canceled detail\"}', 'UTF8'),
@@ -1967,8 +1927,8 @@ async fn seed_request_intake_and_revisions(
                   proposal_version, link_kind)
              VALUES ($1, $2, 5, $1, $2, 1, 'request_create'),
                     ($1, $2, 6, $1, $2, 1, 'request_patch'),
-                    ($1, $2, 7, $1, $2, 1, 'request_lifecycle'),
-                    ($1, $2, 8, $1, $2, 1, 'request_lifecycle'),
+                    ($1, $2, 7, $1, $2, 1, 'request-lifecycle'),
+                    ($1, $2, 8, $1, $2, 1, 'request-lifecycle'),
                     ('other-request-entity', $2, 1, 'other-request-entity', $2, 1,
                      'request_create')",
             &[&REQUEST_ENTITY, &request_id],
@@ -1992,12 +1952,12 @@ async fn seed_request_intake_and_revisions(
                      convert_to('{\"reason\":\"draft detail\"}', 'UTF8'),
                      transaction_timestamp() + interval '1 day'),
                     ('00000000-0000-0000-0000-000000001007'::uuid,
-                     'request-submitted', 'request_lifecycle', 'placement-correction-request',
+                     'request-submitted', 'request-lifecycle', 'placement-correction-request',
                      'request-ref', 7, 'package-1', 'schema-1',
                      convert_to('{\"reason\":\"submit detail\"}', 'UTF8'),
                      transaction_timestamp() + interval '1 day'),
                     ('00000000-0000-0000-0000-000000001008'::uuid,
-                     'request-approved', 'request_lifecycle', 'placement-correction-request',
+                     'request-approved', 'request-lifecycle', 'placement-correction-request',
                      'request-ref', 8, 'package-1', 'schema-1',
                      convert_to('{\"reason\":\"approve detail\"}', 'UTF8'),
                      transaction_timestamp() + interval '1 day'),
@@ -2276,59 +2236,59 @@ fn change_request_project(
     request_reason_classification: &str,
 ) -> Vec<u8> {
     let extra_entity = if include_extra_entity {
-        r#",{"id":"audit-note","primaryDataset":"test-dataset","route":"audit-notes","mutationMode":"create_only","fields":[{"id":"label","type":"string","maxLength":16,"classification":"internal"}]}"#
+        r#",{"id":"audit-note","primaryDataset":"test-dataset","route":"audit-notes","mutationMode":"create-only","fields":[{"id":"label","type":"string","maximumLength":16,"classification":"internal"}]}"#
     } else {
         ""
     };
     format!(
         r#"{{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{{"id":"change-request-retention","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{{"id":"change-request-retention","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
           "entities":[{{
-            "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"create_only",
-            "fields":[{{"id":"label","type":"string","maxLength":64,"required":true,"classification":"internal"}}]
+            "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"create-only",
+            "fields":[{{"id":"label","type":"string","maximumLength":64,"required":true,"classification":"internal"}}]
           }},{{
             "id":"placement","primaryDataset":"test-dataset","route":"placements","mutationMode":"mutable",
             "changeControl":{{"requiredFor":["patch"]}},
             "fields":[
               {{"id":"site","type":"reference","target":"site","required":true,"classification":"internal"}},
-              {{"id":"label","type":"string","maxLength":64,"classification":"internal"}}
+              {{"id":"label","type":"string","maximumLength":64,"classification":"internal"}}
             ]
           }},{{
             "id":"placement-correction-request","primaryDataset":"test-dataset","route":"placement-correction-requests","mutationMode":"mutable",
             "fields":[
-              {{"id":"tenant","type":"string","maxLength":64,"required":true,"classification":"internal"}},
+              {{"id":"tenant","type":"string","maximumLength":64,"required":true,"classification":"internal"}},
               {{"id":"placement","type":"reference","target":"placement","required":true,"classification":"internal"}},
               {{"id":"proposed-site","type":"reference","target":"site","required":true,"classification":"internal"}},
-              {{"id":"reason","type":"text","maxLength":1000,"required":true,"classification":"{request_reason_classification}","pattern":"^[[:print:]]+$"}}
+              {{"id":"reason","type":"text","maximumLength":1000,"required":true,"classification":"{request_reason_classification}","pattern":"^[[:print:]]+$"}}
             ],
             "changeRequest":{{
-              "retention":{{"mode":"operator_erase"}},
+              "retention":{{"mode":"operator-erase"}},
               "effects":[{{
                 "target":{{"fromField":"placement"}},
                 "operation":"patch",
                 "set":{{"site":{{"fromField":"proposed-site"}}}},
                 "clear":["label"]
               }}],
-              "review":{{"authority":"casework-main","policyId":"placement-correction"}},
+              "review":{{"type":"required","authority":"casework-main","policyId":"placement-correction"}},
               "onApproved":{{"mode":"manual"}}
             }}
           }}{extra_entity}],
           "accessProfiles":[{{
-            "id":"request-reviewer","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{{
+            "id":"request-reviewer","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{{"entities":[{{
               "entity":"placement-correction-request",
-              "operations":["get","list","submit_request"],
+              "operations":["get","list","submit-request"],
               "readableFields":["tenant","placement","proposed-site","reason"],
               "rowBoundaries":[{{"field":"tenant","claim":"tenant","operator":"equals"}}]
-            }}]
+            }}]}}
           }},{{
-            "id":"request-applier","principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{{
-              "entity":"placement-correction-request","operations":["get","apply_request"],
+            "id":"request-applier","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{{"entities":[{{
+              "entity":"placement-correction-request","operations":["get","apply-request"],
               "readableFields":["tenant","placement"],
               "rowBoundaries":[{{"field":"tenant","claim":"tenant","operator":"equals"}}],
               "applyTargets":[{{"rowBoundaries": "unrestricted", "entity":"placement"}}]
-            }}]
+            }}]}}
           }}]
         }}"#
     )

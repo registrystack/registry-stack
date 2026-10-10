@@ -1,5 +1,6 @@
 {
-  "schema": "registry.evidence-client-contracts/v1",
+  "apiVersion": "id.registrystack.org/formats/evidence/client-contracts/v1",
+  "kind": "EvidenceClientContracts",
   "assuranceProfile": "local",
   "audience": "urn:example:landholding",
   "issuedBy": "urn:example:farmer-authority",
@@ -41,7 +42,9 @@
           "handle": "active",
           "concept": "urn:example:farmer:active",
           "required": true,
-          "form": "boolean"
+          "form": {
+            "type": "boolean"
+          }
         }
       ]
     },
@@ -81,7 +84,9 @@
           "handle": "category",
           "concept": "urn:example:farmer:category",
           "required": true,
-          "form": "string"
+          "form": {
+            "type": "string"
+          }
         }
       ]
     }

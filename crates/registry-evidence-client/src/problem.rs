@@ -21,19 +21,19 @@ pub(crate) const MAXIMUM_PROBLEM_BYTES: usize = 4 * 1024;
 const REGISTERED_PROBLEMS: [(u16, &str, &str, &str); 10] = [
     (
         400,
-        "evidence.invalid_request",
+        "evidence.invalid-request",
         "Evidence request is invalid",
         "the Evidence request is invalid",
     ),
     (
         400,
-        "request.selector_invalid",
+        "request.selector-invalid",
         "Selector is invalid",
         "selector does not match an available request profile",
     ),
     (
         401,
-        "auth.invalid_credential",
+        "auth.invalid-credential",
         "Bearer access token is invalid",
         "bearer access token validation failed",
     ),
@@ -57,7 +57,7 @@ const REGISTERED_PROBLEMS: [(u16, &str, &str, &str); 10] = [
     ),
     (
         429,
-        "evidence.rate_limited",
+        "evidence.rate-limited",
         "Evidence request rate is exhausted",
         "the Evidence request rate is exhausted",
     ),
@@ -75,7 +75,7 @@ const REGISTERED_PROBLEMS: [(u16, &str, &str, &str); 10] = [
     ),
     (
         404,
-        "resource.not_found",
+        "resource.not-found",
         "Requested resource was not found",
         "the requested resource was not found",
     ),
@@ -219,12 +219,12 @@ mod tests {
     #[test]
     fn exact_registered_problems_preserve_the_typed_mapping() {
         for (status, code, kind) in [
-            (401, "auth.invalid_credential", "denied"),
+            (401, "auth.invalid-credential", "denied"),
             (403, "evidence.denied", "denied"),
-            (429, "evidence.rate_limited", "denied"),
-            (422, EVIDENCE_NOT_AVAILABLE, "not_available"),
-            (400, "evidence.invalid_request", "protocol"),
-            (404, "resource.not_found", "protocol"),
+            (429, "evidence.rate-limited", "denied"),
+            (422, EVIDENCE_NOT_AVAILABLE, "not-available"),
+            (400, "evidence.invalid-request", "protocol"),
+            (404, "resource.not-found", "protocol"),
             (503, "source.unavailable", "protocol"),
         ] {
             let mapped = map_problem(
@@ -245,6 +245,34 @@ mod tests {
                     }
                 ),
                 status == 429
+            );
+        }
+    }
+
+    #[test]
+    fn a_code_in_the_underscore_spelling_is_not_a_registered_problem() {
+        for (status, registered, underscored) in [
+            (401, "auth.invalid-credential", "auth.invalid_credential"),
+            (429, "evidence.rate-limited", "evidence.rate_limited"),
+            (400, "evidence.invalid-request", "evidence.invalid_request"),
+            (400, "request.selector-invalid", "request.selector_invalid"),
+            (404, "resource.not-found", "resource.not_found"),
+        ] {
+            let mut body: serde_json::Value =
+                serde_json::from_slice(&problem_json(status, registered, TRACE_ID))
+                    .expect("the fixture is JSON");
+            body["code"] = serde_json::json!(underscored);
+            body["type"] = serde_json::json!(expected_type_uri(underscored));
+            let mapped = map_problem(
+                status,
+                Some(PROBLEM_MEDIA_TYPE),
+                &serde_json::to_vec(&body).expect("the fixture serializes"),
+                Some(1),
+                Some(TRACE_ID),
+            );
+            assert!(
+                matches!(mapped, EvidenceClientError::Protocol { code: None, .. }),
+                "{status} {underscored}"
             );
         }
     }

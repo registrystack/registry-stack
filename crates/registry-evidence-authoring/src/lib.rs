@@ -26,6 +26,7 @@ pub mod formats;
 pub mod layout;
 pub mod marker;
 pub mod model;
+pub mod names;
 pub mod openapi;
 #[cfg(feature = "schema")]
 pub mod schema;
@@ -42,6 +43,10 @@ pub use model::{
     default_response_formats, AccessPolicy, AnswerType, FactCombination, Question, QuestionAnswer,
     QuestionDisclosure, QuestionFact, QuestionGovernance, QuestionResponseFormat, QuestionSdJwtVc,
     QuestionSdJwtVcDisclosure, QuestionSource, QuestionSubject, RequirementKind,
+};
+pub use names::{
+    local_selector_profile_id, local_source_id, local_subject_selector_profile_id,
+    MAX_COMPILED_NAME_BYTES,
 };
 pub use validate::{
     collection_pointers, question_subjects, valid_field_name, valid_local_identifier,

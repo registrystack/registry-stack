@@ -42,10 +42,7 @@
           "description": "Access profiles whose entries become subject-visible only after a policy delay.",
           "maxProperties": 64,
           "propertyNames": {
-            "maxLength": 64,
-            "minLength": 1,
-            "pattern": "^[a-z][a-z0-9_-]*$",
-            "type": "string"
+            "$ref": "#/$defs/LocalId"
           },
           "type": "object"
         },
@@ -79,19 +76,6 @@
       ],
       "type": "object"
     },
-    "AccessPermissionSource": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/EntityAccessPermissionSourceSchema"
-        },
-        {
-          "$ref": "#/$defs/ActionAccessPermissionSourceSchema"
-        },
-        {
-          "$ref": "#/$defs/DatasetPermissionSource"
-        }
-      ]
-    },
     "AccessProfileSource": {
       "additionalProperties": false,
       "properties": {
@@ -124,7 +108,7 @@
           "uniqueItems": true
         },
         "id": {
-          "type": "string"
+          "$ref": "#/$defs/LocalId"
         },
         "lookups": {
           "items": {
@@ -146,13 +130,15 @@
           "uniqueItems": true
         },
         "principalClaim": {
+          "description": "The token claim that names the caller. Every profile serves authenticated callers, so every profile names one.",
           "type": "string"
         },
         "provenanceFields": {
           "items": {
             "$ref": "#/$defs/ProvenanceFieldSource"
           },
-          "type": "array"
+          "type": "array",
+          "uniqueItems": true
         },
         "readPaths": {
           "items": {
@@ -253,6 +239,7 @@
       },
       "required": [
         "id",
+        "principalClaim",
         "requiredScopes",
         "operations",
         "rowBoundaries"
@@ -292,41 +279,6 @@
       },
       "type": "object"
     },
-    "ActionAccessPermissionSourceSchema": {
-      "additionalProperties": false,
-      "properties": {
-        "action": {
-          "type": "string"
-        },
-        "operations": {
-          "items": {
-            "$ref": "#/$defs/Operation"
-          },
-          "type": "array",
-          "uniqueItems": true
-        },
-        "results": {
-          "default": [],
-          "items": {
-            "type": "string"
-          },
-          "type": "array",
-          "uniqueItems": true
-        },
-        "targets": {
-          "default": [],
-          "items": {
-            "$ref": "#/$defs/ActionTargetPermissionSource"
-          },
-          "type": "array"
-        }
-      },
-      "required": [
-        "action",
-        "operations"
-      ],
-      "type": "object"
-    },
     "ActionEffectSource": {
       "additionalProperties": false,
       "properties": {
@@ -339,7 +291,7 @@
           "uniqueItems": true
         },
         "id": {
-          "type": "string"
+          "$ref": "#/$defs/LocalId"
         },
         "operation": {
           "$ref": "#/$defs/Operation"
@@ -349,6 +301,9 @@
             "$ref": "#/$defs/ActionValueSource"
           },
           "default": {},
+          "propertyNames": {
+            "$ref": "#/$defs/LocalId"
+          },
           "type": "object"
         },
         "target": {
@@ -365,7 +320,7 @@
       "additionalProperties": false,
       "properties": {
         "id": {
-          "type": "string"
+          "$ref": "#/$defs/LocalId"
         },
         "maximumObservationAgeSeconds": {
           "format": "uint64",
@@ -388,6 +343,9 @@
         "subjects": {
           "additionalProperties": {
             "$ref": "#/$defs/EvidenceSubjectSource"
+          },
+          "propertyNames": {
+            "$ref": "#/$defs/ExternalId"
           },
           "type": "object"
         }
@@ -428,7 +386,7 @@
     },
     "ActionHandlerSource": {
       "additionalProperties": false,
-      "description": "The authored action handler: the shared hook handler declaration, with the\nauthorization members a governed action adds.\n\n`handler` is [`HookHandlerSource`], the same declaration an entity hook\ncarries, so this product spells a handler one way. It is flattened, so the\nauthored member set stays `kind`, the source reference the kind names,\n`abi`, `writes`, and `refusals`. `writes` and `refusals` are this\nproduct's own: they bound what the handler may write and the refusals it\nmay return, and no hook declares them.\n\nTwo rules narrow the shared declaration to what this path runs. `abi` is\noptional there and required here, refused at deserialization, because\nevery backend an action may declare speaks one. The `url` kind is refused\nby the compiler at `actions[].handler.kind`, because an action handler\nruns inside the triggering transaction and cannot be remote.",
+      "description": "The authored action handler: the shared hook handler declaration, with the\nauthorization members a governed action adds.\n\n`handler` is [`HookHandlerSource`], the same declaration an entity hook\ncarries, so this product spells a handler one way. It is flattened, so the\nauthored member set stays `type`, the source reference the type names,\n`abi`, `writes`, and `refusals`. `writes` and `refusals` are this\nproduct's own: they bound what the handler may write and the refusals it\nmay return, and no hook declares them.\n\nTwo rules narrow the shared declaration to what this path runs. `abi` is\noptional there and required here, refused at deserialization, because\nevery backend an action may declare speaks one. The `url` kind is refused\nby the compiler at `actions[].handler.type`, because an action handler\nruns inside the triggering transaction and cannot be remote.",
       "properties": {
         "abi": {
           "enum": [
@@ -436,9 +394,6 @@
             "registry.action-handler/v2"
           ],
           "type": "string"
-        },
-        "kind": {
-          "$ref": "#/$defs/ActionHandlerKindSource"
         },
         "module": {
           "description": "The WASM handler module path, project-local. Declared for wasm\nhandlers only; the compiler enforces the pairing with the declared\nbackend.",
@@ -455,6 +410,9 @@
           "description": "The Rhai handler script path. Declared for rhai handlers only; the\ncompiler enforces the pairing with the declared backend.",
           "type": "string"
         },
+        "type": {
+          "$ref": "#/$defs/ActionHandlerKindSource"
+        },
         "writes": {
           "items": {
             "$ref": "#/$defs/ActionHandlerWriteSource"
@@ -463,7 +421,7 @@
         }
       },
       "required": [
-        "kind",
+        "type",
         "abi",
         "writes"
       ],
@@ -479,7 +437,7 @@
           "type": "array"
         },
         "id": {
-          "type": "string"
+          "$ref": "#/$defs/LocalId"
         },
         "operation": {
           "$ref": "#/$defs/Operation"
@@ -512,13 +470,13 @@
         },
         {
           "properties": {
-            "maxLength": {
+            "maximumLength": {
               "format": "uint32",
               "maximum": 1000000,
               "minimum": 1,
               "type": "integer"
             },
-            "minLength": {
+            "minimumLength": {
               "default": 0,
               "format": "uint32",
               "maximum": 1000000,
@@ -532,13 +490,13 @@
           },
           "required": [
             "type",
-            "maxLength"
+            "maximumLength"
           ],
           "type": "object"
         },
         {
           "properties": {
-            "maxLength": {
+            "maximumLength": {
               "format": "uint32",
               "maximum": 10000000,
               "minimum": 1,
@@ -551,7 +509,7 @@
           },
           "required": [
             "type",
-            "maxLength"
+            "maximumLength"
           ],
           "type": "object"
         },
@@ -702,7 +660,7 @@
         },
         {
           "properties": {
-            "maxBytes": {
+            "maximumBytes": {
               "format": "uint32",
               "maximum": 1048576,
               "minimum": 1,
@@ -718,7 +676,7 @@
           },
           "required": [
             "type",
-            "maxBytes",
+            "maximumBytes",
             "schema"
           ],
           "type": "object"
@@ -732,7 +690,7 @@
           "$ref": "#/$defs/Classification"
         },
         "id": {
-          "type": "string"
+          "$ref": "#/$defs/LocalId"
         },
         "required": {
           "default": false,
@@ -746,11 +704,47 @@
       "type": "object",
       "unevaluatedProperties": false
     },
+    "ActionPermissionSource": {
+      "additionalProperties": false,
+      "description": "What a profile may do with one action. An action has no rows of its own:\nthe row reach of what it touches is written on each target.",
+      "properties": {
+        "action": {
+          "type": "string"
+        },
+        "operations": {
+          "items": {
+            "$ref": "#/$defs/Operation"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "results": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "targets": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ActionTargetPermissionSource"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "action",
+        "operations"
+      ],
+      "type": "object"
+    },
     "ActionRequirementSource": {
       "additionalProperties": false,
       "properties": {
         "equals": {
-          "$ref": "#/$defs/DataLiteral"
+          "$ref": "#/$defs/ScalarLiteral"
         },
         "equalsInput": {
           "type": "string"
@@ -760,6 +754,11 @@
         },
         "input": {
           "type": "string"
+        },
+        "isNull": {
+          "const": true,
+          "description": "Requires the stored value to be unset. Only `true` is read.",
+          "type": "boolean"
         }
       },
       "required": [
@@ -792,7 +791,7 @@
           "$ref": "#/$defs/ActionHandlerSource"
         },
         "id": {
-          "type": "string"
+          "$ref": "#/$defs/LocalId"
         },
         "inputs": {
           "default": [],
@@ -893,7 +892,7 @@
           "type": "array"
         },
         "id": {
-          "type": "string"
+          "$ref": "#/$defs/LocalId"
         },
         "maximumBytes": {
           "format": "uint32",
@@ -936,12 +935,6 @@
       ],
       "type": "object"
     },
-    "BooleanFieldKindSchema": {
-      "enum": [
-        "boolean"
-      ],
-      "type": "string"
-    },
     "BooleanFieldSourceSchema": {
       "additionalProperties": false,
       "properties": {
@@ -952,14 +945,17 @@
           "$ref": "#/$defs/Classification"
         },
         "id": {
-          "type": "string"
+          "$ref": "#/$defs/LocalId"
         },
         "required": {
           "default": false,
           "type": "boolean"
         },
         "type": {
-          "$ref": "#/$defs/BooleanFieldKindSchema"
+          "enum": [
+            "boolean"
+          ],
+          "type": "string"
         },
         "validTimeRole": {
           "$ref": "#/$defs/ValidTimeRole"
@@ -1004,8 +1000,8 @@
     },
     "ChangeRequestCurrentDatePredicateSource": {
       "enum": [
-        "on_or_after",
-        "on_or_before"
+        "on-or-after",
+        "on-or-before"
       ],
       "type": "string"
     },
@@ -1021,7 +1017,7 @@
           "uniqueItems": true
         },
         "id": {
-          "type": "string"
+          "$ref": "#/$defs/LocalId"
         },
         "operation": {
           "$ref": "#/$defs/Operation"
@@ -1031,6 +1027,9 @@
             "$ref": "#/$defs/ChangeRequestValueSource"
           },
           "default": {},
+          "propertyNames": {
+            "$ref": "#/$defs/LocalId"
+          },
           "type": "object"
         },
         "target": {
@@ -1075,7 +1074,7 @@
       "additionalProperties": false,
       "properties": {
         "id": {
-          "type": "string"
+          "$ref": "#/$defs/LocalId"
         },
         "maximumObservationAgeSeconds": {
           "format": "uint64",
@@ -1100,6 +1099,9 @@
           "additionalProperties": {
             "$ref": "#/$defs/ChangeRequestEvidenceSubjectSource"
           },
+          "propertyNames": {
+            "$ref": "#/$defs/ExternalId"
+          },
           "type": "object"
         }
       },
@@ -1123,6 +1125,9 @@
             "$ref": "#/$defs/ChangeRequestSelectorSource"
           },
           "description": "Exact governed selector-profile field map. Every profile field must be\npresent exactly once and no undeclared field is admitted.",
+          "propertyNames": {
+            "$ref": "#/$defs/ExternalId"
+          },
           "type": "object"
         }
       },
@@ -1142,7 +1147,7 @@
           "type": "string"
         },
         "id": {
-          "type": "string"
+          "$ref": "#/$defs/LocalId"
         },
         "requires": {
           "default": [],
@@ -1156,24 +1161,6 @@
         "id",
         "entity",
         "fromField"
-      ],
-      "type": "object"
-    },
-    "ChangeRequestNoReviewModeSource": {
-      "enum": [
-        "none"
-      ],
-      "type": "string"
-    },
-    "ChangeRequestNoReviewSource": {
-      "additionalProperties": false,
-      "properties": {
-        "mode": {
-          "$ref": "#/$defs/ChangeRequestNoReviewModeSource"
-        }
-      },
-      "required": [
-        "mode"
       ],
       "type": "object"
     },
@@ -1320,13 +1307,18 @@
           "$ref": "#/$defs/ChangeRequestCurrentDatePredicateSource"
         },
         "equals": {
-          "$ref": "#/$defs/DataLiteral"
+          "$ref": "#/$defs/ScalarLiteral"
         },
         "equalsFromRequestField": {
           "type": "string"
         },
         "field": {
           "type": "string"
+        },
+        "isNull": {
+          "const": true,
+          "description": "Requires the stored value to be unset. Only `true` is read.",
+          "type": "boolean"
         }
       },
       "required": [
@@ -1337,7 +1329,7 @@
     "ChangeRequestRetentionModeSource": {
       "enum": [
         "retain",
-        "operator_erase"
+        "operator-erase"
       ],
       "type": "string"
     },
@@ -1351,32 +1343,44 @@
       },
       "type": "object"
     },
-    "ChangeRequestReviewRequirementSource": {
-      "additionalProperties": false,
-      "properties": {
-        "authority": {
-          "type": "string"
-        },
-        "policyId": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "authority",
-        "policyId"
-      ],
-      "type": "object"
-    },
     "ChangeRequestReviewSource": {
-      "anyOf": [
+      "description": "Either a required review, `type: required` naming `authority` and\n`policyId`, or `type: none`.",
+      "oneOf": [
         {
-          "$ref": "#/$defs/ChangeRequestReviewRequirementSource"
+          "additionalProperties": false,
+          "properties": {
+            "authority": {
+              "type": "string"
+            },
+            "policyId": {
+              "type": "string"
+            },
+            "type": {
+              "const": "required",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "authority",
+            "policyId"
+          ],
+          "type": "object"
         },
         {
-          "$ref": "#/$defs/ChangeRequestNoReviewSource"
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "none",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
         }
-      ],
-      "description": "Either a required review, naming `authority` and `policyId`, or\n`mode: none`. The members present select the form; a review mixing the two\nforms is refused."
+      ]
     },
     "ChangeRequestSelectorSource": {
       "oneOf": [
@@ -1386,13 +1390,13 @@
             "field": {
               "type": "string"
             },
-            "source": {
-              "const": "request_field",
+            "type": {
+              "const": "request-field",
               "type": "string"
             }
           },
           "required": [
-            "source",
+            "type",
             "field"
           ],
           "type": "object"
@@ -1403,16 +1407,16 @@
             "field": {
               "type": "string"
             },
-            "source": {
-              "const": "target_field",
+            "target": {
               "type": "string"
             },
-            "target": {
+            "type": {
+              "const": "target-field",
               "type": "string"
             }
           },
           "required": [
-            "source",
+            "type",
             "target",
             "field"
           ],
@@ -1492,10 +1496,10 @@
     },
     "ComparisonOperator": {
       "enum": [
-        "less_than",
-        "less_than_or_equal",
-        "greater_than",
-        "greater_than_or_equal"
+        "less-than",
+        "less-than-or-equal",
+        "greater-than",
+        "greater-than-or-equal"
       ],
       "type": "string"
     },
@@ -1529,7 +1533,7 @@
           "type": "array"
         },
         "sourceIssuer": {
-          "type": "string"
+          "$ref": "#/$defs/Url"
         }
       },
       "required": [
@@ -1647,24 +1651,27 @@
     },
     "ConsentValiditySource": {
       "additionalProperties": false,
-      "description": "Validity of a consent decision. Every give expires within `maxDuration`.",
+      "description": "Validity of a consent decision. Every give expires within\n`maximumDurationDays`.",
       "properties": {
         "from": {
           "description": "A required timestamp field; a give is active only from this time.",
           "type": "string"
         },
-        "maxDuration": {
-          "description": "An ISO 8601 duration such as `P365D`, at most ten years.",
-          "type": "string"
+        "maximumDurationDays": {
+          "description": "The longest a give lasts, in whole days of 24 hours: at most 3652,\nten years.",
+          "format": "uint32",
+          "maximum": 3652,
+          "minimum": 1,
+          "type": "integer"
         },
         "until": {
-          "description": "An optional timestamp field ending the give earlier than `maxDuration`.",
+          "description": "An optional timestamp field ending the give earlier than\n`maximumDurationDays`.",
           "type": "string"
         }
       },
       "required": [
         "from",
-        "maxDuration"
+        "maximumDurationDays"
       ],
       "type": "object"
     },
@@ -1680,9 +1687,9 @@
               "type": "array"
             },
             "id": {
-              "type": "string"
+              "$ref": "#/$defs/LocalId"
             },
-            "kind": {
+            "type": {
               "const": "unique",
               "type": "string"
             },
@@ -1694,7 +1701,7 @@
             }
           },
           "required": [
-            "kind",
+            "type",
             "fields"
           ],
           "type": "object"
@@ -1703,11 +1710,7 @@
           "additionalProperties": false,
           "properties": {
             "id": {
-              "type": "string"
-            },
-            "kind": {
-              "const": "compare",
-              "type": "string"
+              "$ref": "#/$defs/LocalId"
             },
             "left": {
               "type": "string"
@@ -1717,10 +1720,14 @@
             },
             "right": {
               "type": "string"
+            },
+            "type": {
+              "const": "compare",
+              "type": "string"
             }
           },
           "required": [
-            "kind",
+            "type",
             "left",
             "operator",
             "right"
@@ -1734,11 +1741,7 @@
               "type": "string"
             },
             "id": {
-              "type": "string"
-            },
-            "kind": {
-              "const": "int_range",
-              "type": "string"
+              "$ref": "#/$defs/LocalId"
             },
             "maximum": {
               "format": "int64",
@@ -1751,10 +1754,14 @@
               "maximum": 9223372036854775807,
               "minimum": -9223372036854775808,
               "type": "integer"
+            },
+            "type": {
+              "const": "int-range",
+              "type": "string"
             }
           },
           "required": [
-            "kind",
+            "type",
             "field"
           ],
           "type": "object"
@@ -1766,9 +1773,9 @@
               "type": "string"
             },
             "id": {
-              "type": "string"
+              "$ref": "#/$defs/LocalId"
             },
-            "kind": {
+            "type": {
               "const": "vocabulary",
               "type": "string"
             },
@@ -1780,7 +1787,7 @@
             }
           },
           "required": [
-            "kind",
+            "type",
             "field",
             "values"
           ],
@@ -1793,11 +1800,7 @@
               "type": "string"
             },
             "id": {
-              "type": "string"
-            },
-            "kind": {
-              "const": "temporal-non-overlap",
-              "type": "string"
+              "$ref": "#/$defs/LocalId"
             },
             "scopeFields": {
               "items": {
@@ -1807,10 +1810,14 @@
             },
             "startField": {
               "type": "string"
+            },
+            "type": {
+              "const": "temporal-non-overlap",
+              "type": "string"
             }
           },
           "required": [
-            "kind",
+            "type",
             "scopeFields"
           ],
           "type": "object"
@@ -1841,12 +1848,6 @@
       ],
       "type": "object"
     },
-    "Crs84PointFieldKindSchema": {
-      "enum": [
-        "crs84-point"
-      ],
-      "type": "string"
-    },
     "Crs84PointFieldSourceSchema": {
       "additionalProperties": false,
       "properties": {
@@ -1860,7 +1861,7 @@
           "$ref": "#/$defs/Classification"
         },
         "id": {
-          "type": "string"
+          "$ref": "#/$defs/LocalId"
         },
         "precision": {
           "format": "uint32",
@@ -1873,7 +1874,10 @@
           "type": "boolean"
         },
         "type": {
-          "$ref": "#/$defs/Crs84PointFieldKindSchema"
+          "enum": [
+            "crs84-point"
+          ],
+          "type": "string"
         },
         "validTimeRole": {
           "$ref": "#/$defs/ValidTimeRole"
@@ -1886,15 +1890,6 @@
         "precision"
       ],
       "type": "object"
-    },
-    "DataLiteral": {
-      "description": "A record value: null, a boolean, a number, or text.",
-      "type": [
-        "null",
-        "boolean",
-        "number",
-        "string"
-      ]
     },
     "DatasetOperation": {
       "description": "One thing a profile may do with a statistical dataset.",
@@ -1940,12 +1935,6 @@
       ],
       "type": "object"
     },
-    "DateFieldKindSchema": {
-      "enum": [
-        "date"
-      ],
-      "type": "string"
-    },
     "DateFieldSourceSchema": {
       "additionalProperties": false,
       "properties": {
@@ -1960,7 +1949,7 @@
           "type": "boolean"
         },
         "id": {
-          "type": "string"
+          "$ref": "#/$defs/LocalId"
         },
         "lookup": {
           "$ref": "#/$defs/FieldLookupSource"
@@ -1970,7 +1959,10 @@
           "type": "boolean"
         },
         "type": {
-          "$ref": "#/$defs/DateFieldKindSchema"
+          "enum": [
+            "date"
+          ],
+          "type": "string"
         },
         "validTimeRole": {
           "$ref": "#/$defs/ValidTimeRole"
@@ -1982,12 +1974,6 @@
         "classification"
       ],
       "type": "object"
-    },
-    "DecimalFieldKindSchema": {
-      "enum": [
-        "decimal"
-      ],
-      "type": "string"
     },
     "DecimalFieldSourceSchema": {
       "additionalProperties": false,
@@ -2003,7 +1989,7 @@
           "type": "boolean"
         },
         "id": {
-          "type": "string"
+          "$ref": "#/$defs/LocalId"
         },
         "lookup": {
           "$ref": "#/$defs/FieldLookupSource"
@@ -2031,7 +2017,10 @@
           "type": "integer"
         },
         "type": {
-          "$ref": "#/$defs/DecimalFieldKindSchema"
+          "enum": [
+            "decimal"
+          ],
+          "type": "string"
         },
         "validTimeRole": {
           "$ref": "#/$defs/ValidTimeRole"
@@ -2068,13 +2057,13 @@
         },
         {
           "properties": {
-            "maxLength": {
+            "maximumLength": {
               "format": "uint32",
               "maximum": 1000000,
               "minimum": 1,
               "type": "integer"
             },
-            "minLength": {
+            "minimumLength": {
               "default": 0,
               "format": "uint32",
               "maximum": 1000000,
@@ -2088,13 +2077,13 @@
           },
           "required": [
             "type",
-            "maxLength"
+            "maximumLength"
           ],
           "type": "object"
         },
         {
           "properties": {
-            "maxLength": {
+            "maximumLength": {
               "format": "uint32",
               "maximum": 10000000,
               "minimum": 1,
@@ -2107,7 +2096,7 @@
           },
           "required": [
             "type",
-            "maxLength"
+            "maximumLength"
           ],
           "type": "object"
         },
@@ -2258,7 +2247,7 @@
         },
         {
           "properties": {
-            "maxBytes": {
+            "maximumBytes": {
               "format": "uint32",
               "maximum": 1048576,
               "minimum": 1,
@@ -2274,7 +2263,7 @@
           },
           "required": [
             "type",
-            "maxBytes",
+            "maximumBytes",
             "schema"
           ],
           "type": "object"
@@ -2288,7 +2277,7 @@
           "$ref": "#/$defs/Classification"
         },
         "id": {
-          "type": "string"
+          "$ref": "#/$defs/LocalId"
         }
       },
       "required": [
@@ -2313,7 +2302,7 @@
           "type": "array"
         },
         "id": {
-          "type": "string"
+          "$ref": "#/$defs/LocalId"
         },
         "key": {
           "type": "string"
@@ -2334,8 +2323,9 @@
       "pattern": "^sha256:[0-9a-f]{64}$",
       "type": "string"
     },
-    "EntityAccessPermissionSourceSchema": {
+    "EntityPermissionSource": {
       "additionalProperties": false,
+      "description": "What a profile may do with one entity.",
       "properties": {
         "allowCount": {
           "default": false,
@@ -2371,6 +2361,7 @@
           "type": "array"
         },
         "membershipBoundaries": {
+          "default": [],
           "description": "Current active membership required for each stored reference key.",
           "items": {
             "$ref": "#/$defs/MembershipBoundarySource"
@@ -2380,6 +2371,14 @@
         "operations": {
           "items": {
             "$ref": "#/$defs/Operation"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "provenanceFields": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ProvenanceFieldSource"
           },
           "type": "array",
           "uniqueItems": true
@@ -2400,6 +2399,9 @@
           "uniqueItems": true
         },
         "readableRequestFields": {
+          "default": [
+            "reason"
+          ],
           "description": "Readable change-request decision detail.",
           "items": {
             "$ref": "#/$defs/RequestMetadataFieldSource"
@@ -2415,9 +2417,11 @@
           "type": "array"
         },
         "requestVisibility": {
-          "$ref": "#/$defs/RequestVisibilitySource"
+          "$ref": "#/$defs/RequestVisibilitySource",
+          "description": "Restricts change-request reads to rows owned by the authenticated principal."
         },
         "requireConsent": {
+          "default": [],
           "description": "Current subject-issued consent required for each row, ANDed.",
           "items": {
             "$ref": "#/$defs/ConsentRequirementSource"
@@ -2444,6 +2448,8 @@
           "$ref": "#/$defs/SpatialQueryPermissionSource"
         },
         "submitterTargets": {
+          "default": [],
+          "description": "Native-reference targets requiring current same-profile GET authority at intake and preparation.",
           "items": {
             "type": "string"
           },
@@ -2540,7 +2546,7 @@
           "type": "array"
         },
         "id": {
-          "type": "string"
+          "$ref": "#/$defs/LocalId"
         },
         "indexes": {
           "default": [],
@@ -2587,26 +2593,50 @@
       "type": "object"
     },
     "EventConditionSource": {
-      "description": "Closed Version 1 event selection language.\n\nA tagged shape leaves room for a later, separately governed rule ABI\nwithout turning fields into an ad hoc expression language. The shared\nreader's union helper decodes it, so an error inside a variant keeps its\nposition and a `null` comparison literal is read as a value (CFG-SCHEMA-8,\nCFG-EMPTY-1).",
+      "description": "Closed Version 1 event selection language.\n\nA tagged shape leaves room for a later, separately governed rule ABI\nwithout turning fields into an ad hoc expression language. The shared\nreader's union helper decodes it, so an error inside a variant keeps its\nposition (CFG-SCHEMA-8). An unset value is named in `beforeIsNull` or\n`afterIsNull`; `null` is never a comparison literal (CFG-EMPTY-1).",
       "oneOf": [
         {
           "additionalProperties": false,
           "properties": {
             "afterEquals": {
               "additionalProperties": {
-                "$ref": "#/$defs/DataLiteral"
+                "$ref": "#/$defs/ScalarLiteral"
               },
               "default": {},
               "description": "Required values after the change. Valid with created and patched triggers.",
+              "propertyNames": {
+                "$ref": "#/$defs/LocalId"
+              },
               "type": "object"
+            },
+            "afterIsNull": {
+              "default": [],
+              "description": "Fields that must be unset after the change. Valid with created and patched triggers.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array",
+              "uniqueItems": true
             },
             "beforeEquals": {
               "additionalProperties": {
-                "$ref": "#/$defs/DataLiteral"
+                "$ref": "#/$defs/ScalarLiteral"
               },
               "default": {},
               "description": "Required values before the change. Valid with patched and tombstoned triggers.",
+              "propertyNames": {
+                "$ref": "#/$defs/LocalId"
+              },
               "type": "object"
+            },
+            "beforeIsNull": {
+              "default": [],
+              "description": "Fields that must be unset before the change. Valid with patched and tombstoned triggers.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array",
+              "uniqueItems": true
             },
             "changed": {
               "default": [],
@@ -2617,23 +2647,19 @@
               "type": "array",
               "uniqueItems": true
             },
-            "kind": {
+            "type": {
               "const": "fields",
               "type": "string"
             }
           },
           "required": [
-            "kind"
+            "type"
           ],
           "type": "object"
         },
         {
           "additionalProperties": false,
           "properties": {
-            "kind": {
-              "const": "request_lifecycle",
-              "type": "string"
-            },
             "toStates": {
               "default": [],
               "items": {
@@ -2649,10 +2675,14 @@
               },
               "type": "array",
               "uniqueItems": true
+            },
+            "type": {
+              "const": "request-lifecycle",
+              "type": "string"
             }
           },
           "required": [
-            "kind"
+            "type"
           ],
           "type": "object"
         }
@@ -2663,7 +2693,7 @@
         "created",
         "patched",
         "tombstoned",
-        "request_lifecycle"
+        "request-lifecycle"
       ],
       "type": "string"
     },
@@ -2674,7 +2704,7 @@
           "type": "string"
         },
         "id": {
-          "type": "string"
+          "$ref": "#/$defs/LocalId"
         },
         "subjectResolution": {
           "$ref": "#/$defs/EvidenceSubjectResolution"
@@ -2704,6 +2734,13 @@
         "profile"
       ],
       "type": "object"
+    },
+    "ExternalId": {
+      "description": "An identifier another system issues, written exactly as its issuer gives it.",
+      "maxLength": 512,
+      "minLength": 1,
+      "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
+      "type": "string"
     },
     "FieldLookupSource": {
       "additionalProperties": false,
@@ -2787,17 +2824,17 @@
               "description": "The handler ABI the script speaks.",
               "type": "string"
             },
-            "kind": {
-              "const": "rhai",
-              "type": "string"
-            },
             "script": {
               "description": "Script path in the project.",
+              "type": "string"
+            },
+            "type": {
+              "const": "rhai",
               "type": "string"
             }
           },
           "required": [
-            "kind",
+            "type",
             "script"
           ],
           "type": "object"
@@ -2810,17 +2847,17 @@
               "description": "The handler ABI the module speaks.",
               "type": "string"
             },
-            "kind": {
-              "const": "wasm",
-              "type": "string"
-            },
             "module": {
               "description": "Module path in the project.",
+              "type": "string"
+            },
+            "type": {
+              "const": "wasm",
               "type": "string"
             }
           },
           "required": [
-            "kind",
+            "type",
             "module"
           ],
           "type": "object"
@@ -2833,13 +2870,13 @@
               "description": "Key in the runtime destination binding.",
               "type": "string"
             },
-            "kind": {
+            "type": {
               "const": "url",
               "type": "string"
             }
           },
           "required": [
-            "kind",
+            "type",
             "destinationId"
           ],
           "type": "object"
@@ -2870,8 +2907,8 @@
           "description": "Governed, destination-neutral delivery. `destinationId` is a key in\nruntime `eventDestinations`; the project carries no URL or secret, and\ndeployment configuration may tighten the bounds it binds but cannot\nsupply or widen this authority. Production compilation requires it."
         },
         "id": {
-          "description": "Stable hook contract identifier, sent as `ce-type`. Use a new identifier for a breaking payload change.",
-          "type": "string"
+          "$ref": "#/$defs/LocalId",
+          "description": "Stable hook contract identifier, sent as `ce-type`. Use a new identifier for a breaking payload change."
         },
         "phase": {
           "$ref": "#/$defs/HookPhase",
@@ -2916,7 +2953,7 @@
           "type": "array"
         },
         "id": {
-          "type": "string"
+          "$ref": "#/$defs/LocalId"
         }
       },
       "required": [
@@ -2924,12 +2961,6 @@
         "fields"
       ],
       "type": "object"
-    },
-    "Int64FieldKindSchema": {
-      "enum": [
-        "int64"
-      ],
-      "type": "string"
     },
     "Int64FieldSourceSchema": {
       "additionalProperties": false,
@@ -2941,14 +2972,17 @@
           "$ref": "#/$defs/Classification"
         },
         "id": {
-          "type": "string"
+          "$ref": "#/$defs/LocalId"
         },
         "required": {
           "default": false,
           "type": "boolean"
         },
         "type": {
-          "$ref": "#/$defs/Int64FieldKindSchema"
+          "enum": [
+            "int64"
+          ],
+          "type": "string"
         },
         "validTimeRole": {
           "$ref": "#/$defs/ValidTimeRole"
@@ -2974,6 +3008,9 @@
             "type": "string"
           },
           "default": {},
+          "propertyNames": {
+            "$ref": "#/$defs/LocalId"
+          },
           "type": "object"
         },
         "selector": {
@@ -2992,7 +3029,7 @@
     "LookupValueOrigin": {
       "enum": [
         "request",
-        "verified_claim"
+        "verified-claim"
       ],
       "type": "string"
     },
@@ -3000,7 +3037,7 @@
       "additionalProperties": false,
       "properties": {
         "id": {
-          "type": "string"
+          "$ref": "#/$defs/LocalId"
         },
         "version": {
           "type": "string"
@@ -3072,7 +3109,7 @@
           "$ref": "#/$defs/Url"
         },
         "id": {
-          "type": "string"
+          "$ref": "#/$defs/LocalId"
         },
         "iri": {
           "type": "string"
@@ -3122,7 +3159,7 @@
           "$ref": "#/$defs/ManifestProjectionTextSource"
         },
         "id": {
-          "type": "string"
+          "$ref": "#/$defs/LocalId"
         },
         "iri": {
           "type": "string"
@@ -3151,7 +3188,7 @@
     },
     "ManifestProjectionDatasetStatus": {
       "enum": [
-        "under_development",
+        "under-development",
         "active",
         "completed",
         "deprecated",
@@ -3181,7 +3218,7 @@
           "type": "string"
         },
         "id": {
-          "type": "string"
+          "$ref": "#/$defs/LocalId"
         },
         "iri": {
           "type": "string"
@@ -3216,7 +3253,7 @@
           "type": "array"
         },
         "id": {
-          "type": "string"
+          "$ref": "#/$defs/LocalId"
         },
         "identifiers": {
           "default": [],
@@ -3245,7 +3282,7 @@
           "type": "array"
         },
         "id": {
-          "type": "string"
+          "$ref": "#/$defs/LocalId"
         },
         "language": {
           "type": "string"
@@ -3285,7 +3322,7 @@
       "additionalProperties": false,
       "properties": {
         "id": {
-          "type": "string"
+          "$ref": "#/$defs/LocalId"
         },
         "title": {
           "$ref": "#/$defs/ManifestProjectionTextSource"
@@ -3304,7 +3341,7 @@
           "type": "string"
         },
         "id": {
-          "type": "string"
+          "$ref": "#/$defs/LocalId"
         },
         "iri": {
           "type": "string"
@@ -3401,6 +3438,9 @@
           "additionalProperties": {
             "type": "string"
           },
+          "propertyNames": {
+            "$ref": "#/$defs/ExternalId"
+          },
           "type": "object"
         }
       ],
@@ -3434,11 +3474,11 @@
           },
           "type": "array"
         },
-        "externalRef": {
+        "externalReference": {
           "type": "string"
         },
         "id": {
-          "type": "string"
+          "$ref": "#/$defs/LocalId"
         },
         "schemeIri": {
           "type": "string"
@@ -3489,7 +3529,7 @@
           "$ref": "#/$defs/Digest"
         },
         "id": {
-          "type": "string"
+          "$ref": "#/$defs/LocalId"
         },
         "version": {
           "type": "string"
@@ -3504,7 +3544,7 @@
     "MutationMode": {
       "enum": [
         "mutable",
-        "create_only"
+        "create-only"
       ],
       "type": "string"
     },
@@ -3540,10 +3580,10 @@
             "batch",
             "revisions",
             "snapshot",
-            "submit_request",
-            "revise_request",
-            "cancel_request",
-            "apply_request",
+            "submit-request",
+            "revise-request",
+            "cancel-request",
+            "apply-request",
             "invoke"
           ],
           "type": "string"
@@ -3567,6 +3607,37 @@
       ],
       "type": "object"
     },
+    "PermissionsSource": {
+      "additionalProperties": false,
+      "description": "What an access profile may do. Each member lists the permissions that name\none kind of subject, and a member that is omitted or empty grants nothing.",
+      "properties": {
+        "actions": {
+          "default": [],
+          "description": "The actions the profile may invoke: one permission for each action it names.",
+          "items": {
+            "$ref": "#/$defs/ActionPermissionSource"
+          },
+          "type": "array"
+        },
+        "datasets": {
+          "default": [],
+          "description": "What the profile may do with statistical datasets: one permission for each dataset it names.",
+          "items": {
+            "$ref": "#/$defs/DatasetPermissionSource"
+          },
+          "type": "array"
+        },
+        "entities": {
+          "default": [],
+          "description": "What the profile may do with entities: one permission for each entity it names.",
+          "items": {
+            "$ref": "#/$defs/EntityPermissionSource"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
     "ProjectAccessProfileSource": {
       "additionalProperties": false,
       "description": "One access profile as a project writes it.",
@@ -3579,17 +3650,19 @@
           "type": "boolean"
         },
         "id": {
-          "type": "string"
+          "$ref": "#/$defs/LocalId"
         },
         "permissions": {
-          "default": [],
-          "description": "What the profile may do: each permission names one entity, one action, or one statistical dataset.",
-          "items": {
-            "$ref": "#/$defs/AccessPermissionSource"
+          "$ref": "#/$defs/PermissionsSource",
+          "default": {
+            "actions": [],
+            "datasets": [],
+            "entities": []
           },
-          "type": "array"
+          "description": "What the profile may do, grouped by what each permission names. Omit when the profile grants nothing."
         },
         "principalClaim": {
+          "description": "The token claim that names the caller. Every profile serves authenticated callers, so every profile names one.",
           "type": "string"
         },
         "requesterClients": {
@@ -3620,18 +3693,21 @@
       },
       "required": [
         "id",
+        "principalClaim",
         "requiredScopes"
       ],
       "type": "object"
     },
     "ProvenanceFieldSource": {
+      "description": "A member of a revision's `changeContext` a profile may read. Each value\nis spelled as the member it names is (CFG-NAME-2).",
       "enum": [
         "kind",
         "reasonCode",
         "reasonText",
         "sourceReferences"
       ],
-      "type": "string"
+      "type": "string",
+      "x-registry-member-names": true
     },
     "ReadPathPermissionSource": {
       "additionalProperties": false,
@@ -3677,7 +3753,7 @@
       "additionalProperties": false,
       "properties": {
         "id": {
-          "type": "string"
+          "$ref": "#/$defs/LocalId"
         },
         "route": {
           "type": "string"
@@ -3702,7 +3778,7 @@
       "description": "A frozen, named list of declared organizations. Groups do not nest.",
       "properties": {
         "id": {
-          "type": "string"
+          "$ref": "#/$defs/LocalId"
         },
         "members": {
           "items": {
@@ -3735,7 +3811,7 @@
           "type": "string"
         },
         "id": {
-          "type": "string"
+          "$ref": "#/$defs/LocalId"
         },
         "name": {
           "type": "string"
@@ -3775,12 +3851,6 @@
       ],
       "type": "string"
     },
-    "ReferenceFieldKindSchema": {
-      "enum": [
-        "reference"
-      ],
-      "type": "string"
-    },
     "ReferenceFieldSourceSchema": {
       "additionalProperties": false,
       "properties": {
@@ -3791,7 +3861,7 @@
           "$ref": "#/$defs/Classification"
         },
         "id": {
-          "type": "string"
+          "$ref": "#/$defs/LocalId"
         },
         "onDelete": {
           "$ref": "#/$defs/ReferenceDelete",
@@ -3805,7 +3875,10 @@
           "type": "string"
         },
         "type": {
-          "$ref": "#/$defs/ReferenceFieldKindSchema"
+          "enum": [
+            "reference"
+          ],
+          "type": "string"
         },
         "validTimeRole": {
           "$ref": "#/$defs/ValidTimeRole"
@@ -3829,7 +3902,7 @@
           "type": "string"
         },
         "id": {
-          "type": "string"
+          "$ref": "#/$defs/LocalId"
         },
         "version": {
           "type": "string"
@@ -3846,9 +3919,9 @@
     "RequestMetadataFieldSource": {
       "description": "Fields of request decision metadata governed separately from stored record fields.",
       "enum": [
-        "actor_reference",
+        "actor-reference",
         "reason",
-        "review_state"
+        "review-state"
       ],
       "type": "string"
     },
@@ -3931,6 +4004,14 @@
       ],
       "type": "object"
     },
+    "ScalarLiteral": {
+      "description": "A comparison literal: a boolean, a number, or text.",
+      "type": [
+        "boolean",
+        "number",
+        "string"
+      ]
+    },
     "SelectorProfileSource": {
       "additionalProperties": false,
       "properties": {
@@ -3941,7 +4022,7 @@
           "type": "array"
         },
         "id": {
-          "type": "string"
+          "$ref": "#/$defs/LocalId"
         }
       },
       "required": [
@@ -4126,12 +4207,6 @@
       ],
       "description": "The scalar `temporal`, or a mapping naming the validity fields."
     },
-    "StringFieldKindSchema": {
-      "enum": [
-        "string"
-      ],
-      "type": "string"
-    },
     "StringFieldSourceSchema": {
       "additionalProperties": false,
       "properties": {
@@ -4146,18 +4221,18 @@
           "type": "boolean"
         },
         "id": {
-          "type": "string"
+          "$ref": "#/$defs/LocalId"
         },
         "lookup": {
           "$ref": "#/$defs/FieldLookupSource"
         },
-        "maxLength": {
+        "maximumLength": {
           "format": "uint32",
           "maximum": 1000000,
           "minimum": 1,
           "type": "integer"
         },
-        "minLength": {
+        "minimumLength": {
           "default": 0,
           "format": "uint32",
           "maximum": 1000000,
@@ -4172,7 +4247,10 @@
           "type": "boolean"
         },
         "type": {
-          "$ref": "#/$defs/StringFieldKindSchema"
+          "enum": [
+            "string"
+          ],
+          "type": "string"
         },
         "validTimeRole": {
           "$ref": "#/$defs/ValidTimeRole"
@@ -4182,15 +4260,9 @@
         "id",
         "type",
         "classification",
-        "maxLength"
+        "maximumLength"
       ],
       "type": "object"
-    },
-    "StructuredFieldKindSchema": {
-      "enum": [
-        "structured"
-      ],
-      "type": "string"
     },
     "StructuredFieldSourceSchema": {
       "additionalProperties": false,
@@ -4206,12 +4278,12 @@
           "type": "boolean"
         },
         "id": {
-          "type": "string"
+          "$ref": "#/$defs/LocalId"
         },
         "lookup": {
           "$ref": "#/$defs/FieldLookupSource"
         },
-        "maxBytes": {
+        "maximumBytes": {
           "format": "uint32",
           "maximum": 1048576,
           "minimum": 1,
@@ -4225,7 +4297,10 @@
           "x-registry-foreign": "json-schema-2020-12"
         },
         "type": {
-          "$ref": "#/$defs/StructuredFieldKindSchema"
+          "enum": [
+            "structured"
+          ],
+          "type": "string"
         },
         "validTimeRole": {
           "$ref": "#/$defs/ValidTimeRole"
@@ -4235,7 +4310,7 @@
         "id",
         "type",
         "classification",
-        "maxBytes",
+        "maximumBytes",
         "schema"
       ],
       "type": "object"
@@ -4275,12 +4350,6 @@
       ],
       "type": "object"
     },
-    "TextFieldKindSchema": {
-      "enum": [
-        "text"
-      ],
-      "type": "string"
-    },
     "TextFieldSourceSchema": {
       "additionalProperties": false,
       "properties": {
@@ -4295,12 +4364,12 @@
           "type": "boolean"
         },
         "id": {
-          "type": "string"
+          "$ref": "#/$defs/LocalId"
         },
         "lookup": {
           "$ref": "#/$defs/FieldLookupSource"
         },
-        "maxLength": {
+        "maximumLength": {
           "format": "uint32",
           "maximum": 10000000,
           "minimum": 1,
@@ -4314,7 +4383,10 @@
           "type": "boolean"
         },
         "type": {
-          "$ref": "#/$defs/TextFieldKindSchema"
+          "enum": [
+            "text"
+          ],
+          "type": "string"
         },
         "validTimeRole": {
           "$ref": "#/$defs/ValidTimeRole"
@@ -4324,15 +4396,9 @@
         "id",
         "type",
         "classification",
-        "maxLength"
+        "maximumLength"
       ],
       "type": "object"
-    },
-    "TimestampFieldKindSchema": {
-      "enum": [
-        "timestamp"
-      ],
-      "type": "string"
     },
     "TimestampFieldSourceSchema": {
       "additionalProperties": false,
@@ -4344,14 +4410,17 @@
           "$ref": "#/$defs/Classification"
         },
         "id": {
-          "type": "string"
+          "$ref": "#/$defs/LocalId"
         },
         "required": {
           "default": false,
           "type": "boolean"
         },
         "type": {
-          "$ref": "#/$defs/TimestampFieldKindSchema"
+          "enum": [
+            "timestamp"
+          ],
+          "type": "string"
         },
         "validTimeRole": {
           "$ref": "#/$defs/ValidTimeRole"
@@ -4372,14 +4441,14 @@
             "field": {
               "type": "string"
             },
-            "kind": {
-              "const": "field_equals",
+            "type": {
+              "const": "field-equals",
               "type": "string"
             },
             "value": true
           },
           "required": [
-            "kind",
+            "type",
             "field",
             "value"
           ],
@@ -4391,13 +4460,13 @@
             "field": {
               "type": "string"
             },
-            "kind": {
-              "const": "field_is_null",
+            "type": {
+              "const": "field-is-null",
               "type": "string"
             }
           },
           "required": [
-            "kind",
+            "type",
             "field"
           ],
           "type": "object"
@@ -4408,13 +4477,13 @@
             "field": {
               "type": "string"
             },
-            "kind": {
-              "const": "field_is_not_null",
+            "type": {
+              "const": "field-is-not-null",
               "type": "string"
             }
           },
           "required": [
-            "kind",
+            "type",
             "field"
           ],
           "type": "object"
@@ -4422,29 +4491,23 @@
         {
           "additionalProperties": false,
           "properties": {
-            "kind": {
-              "const": "active_lifecycle",
+            "type": {
+              "const": "active-lifecycle",
               "type": "string"
             }
           },
           "required": [
-            "kind"
+            "type"
           ],
           "type": "object"
         }
       ]
     },
     "Url": {
-      "description": "An absolute http or https URL with a host and no user information.",
+      "description": "An absolute http or https URL with a host, no user information, and no whitespace or control character.",
       "format": "uri",
       "maxLength": 2048,
-      "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://[^/?#@]+([/?#].*)?$",
-      "type": "string"
-    },
-    "UuidFieldKindSchema": {
-      "enum": [
-        "uuid"
-      ],
+      "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://[^/?#@\\u0000-\\u0020\\u007F-\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]+([/?#][^\\u0000-\\u0020\\u007F-\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*)?$",
       "type": "string"
     },
     "UuidFieldSourceSchema": {
@@ -4457,14 +4520,17 @@
           "$ref": "#/$defs/Classification"
         },
         "id": {
-          "type": "string"
+          "$ref": "#/$defs/LocalId"
         },
         "required": {
           "default": false,
           "type": "boolean"
         },
         "type": {
-          "$ref": "#/$defs/UuidFieldKindSchema"
+          "enum": [
+            "uuid"
+          ],
+          "type": "string"
         },
         "validTimeRole": {
           "$ref": "#/$defs/ValidTimeRole"
@@ -4479,14 +4545,8 @@
     },
     "ValidTimeRole": {
       "enum": [
-        "valid_from",
-        "valid_to"
-      ],
-      "type": "string"
-    },
-    "VocabularyCodeFieldKindSchema": {
-      "enum": [
-        "vocabulary-code"
+        "valid-from",
+        "valid-to"
       ],
       "type": "string"
     },
@@ -4500,14 +4560,17 @@
           "$ref": "#/$defs/Classification"
         },
         "id": {
-          "type": "string"
+          "$ref": "#/$defs/LocalId"
         },
         "required": {
           "default": false,
           "type": "boolean"
         },
         "type": {
-          "$ref": "#/$defs/VocabularyCodeFieldKindSchema"
+          "enum": [
+            "vocabulary-code"
+          ],
+          "type": "string"
         },
         "validTimeRole": {
           "$ref": "#/$defs/ValidTimeRole"
@@ -4535,7 +4598,7 @@
       "additionalProperties": false,
       "properties": {
         "id": {
-          "type": "string"
+          "$ref": "#/$defs/LocalId"
         },
         "values": {
           "items": {
@@ -4569,7 +4632,7 @@
       "type": "array"
     },
     "apiVersion": {
-      "const": "registry.registrystack.org/v1alpha1",
+      "const": "id.registrystack.org/formats/breg/project/v1alpha1",
       "type": "string"
     },
     "entities": {
@@ -4586,7 +4649,7 @@
       "type": "array"
     },
     "kind": {
-      "const": "RegistryProject",
+      "const": "BRegProject",
       "type": "string"
     },
     "manifestProjection": {
@@ -4602,12 +4665,12 @@
     "package": {
       "$ref": "#/$defs/PackageIdentitySource"
     },
+    "project": {
+      "$ref": "#/$defs/RegistryIdentitySource"
+    },
     "recipients": {
       "$ref": "#/$defs/RecipientsSource",
       "description": "Named organizations and frozen groups that consent may be given to."
-    },
-    "registry": {
-      "$ref": "#/$defs/RegistryIdentitySource"
     },
     "retiredConsentScopes": {
       "description": "Consent scope codes of removed gated profiles, kept so existing consent\nrows still validate. A retired scope matches nothing.",
@@ -4634,7 +4697,7 @@
   "required": [
     "apiVersion",
     "kind",
-    "registry"
+    "project"
   ],
   "title": "Base Registry Engine authored project",
   "type": "object"

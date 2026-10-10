@@ -32,8 +32,8 @@ use serde::Serialize;
 use super::{
     capture_project_source, compile_captured_project, ensure_source_entry_identity, file_check,
     has_parent_component, inspect_package_integrity, path_diagnostic, read_module_directory_names,
-    OutputFormat, ProfileArg, SafeDir, SafeEntry, SafePathError, DOMAIN_REFUSAL_EXIT,
-    OPERATIONAL_FAILURE_EXIT,
+    write_ctl_report, OutputFormat, ProfileArg, SafeDir, SafeEntry, SafePathError,
+    DOMAIN_REFUSAL_EXIT, OPERATIONAL_FAILURE_EXIT,
 };
 
 /// The registered kind of `registry.yaml`, named as the `artifact` of a
@@ -159,7 +159,7 @@ pub(super) fn run(
             package_digest: outcome.package_digest.as_deref().filter(|_| passed),
             diagnostics: outcome.report.diagnostics(),
         };
-        serde_json::to_writer_pretty(&mut *stdout, &report)
+        write_ctl_report(&mut *stdout, &report)
             .map_err(std::io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else if passed {
@@ -684,7 +684,7 @@ fn package_action(error: &PackageError) -> &'static str {
         PackageError::UnsafePath => "Point --package at the package directory itself, by a path without symbolic links.",
         PackageError::Permissions => "Remove group and other write permission from the package directory and its files (chmod -R go-w), then check again.",
         PackageError::Read => "Point --package at a readable package directory that bregctl package wrote.",
-        PackageError::RetiredApiVersion => "Rebuild the package with this bregctl: bregctl package PROJECT --test-receipt RECEIPT --output BUILD, adding --baseline-package DEPLOYED when a database runs the package DEPLOYED; then plan and apply the rebuilt package.",
+        PackageError::RetiredApiVersion => "Rebuild the package with this bregctl: bregctl package PROJECT --test-receipt RECEIPT --output BUILD, then apply the rebuilt package to a new database: bregctl apply --initial --package BUILD.",
         _ => REBUILD_PACKAGE,
     }
 }
@@ -817,9 +817,9 @@ fn module_target<'d>(documents: &'d Documents, steps: &[Step]) -> Option<(&'d Do
 /// Other spellings of a path in the project document. The compiler names an
 /// access profile's permission for an entity under the entity, and one for
 /// an action under the action, while the project writes both under the
-/// profile.
+/// profile, each in the list for its kind.
 fn alternatives(steps: &[Step]) -> Vec<Vec<Step>> {
-    let under_profile = |granted: &str, name: &str, profile: &str, rest: &[Step]| {
+    let under_profile = |group: &str, granted: &str, name: &str, profile: &str, rest: &[Step]| {
         let mut permission = vec![
             Step::Member("accessProfiles".to_owned()),
             Step::Select {
@@ -827,6 +827,7 @@ fn alternatives(steps: &[Step]) -> Vec<Vec<Step>> {
                 value: profile.to_owned(),
             },
             Step::Member("permissions".to_owned()),
+            Step::Member(group.to_owned()),
             Step::Select {
                 key: Some(granted.to_owned()),
                 value: name.to_owned(),
@@ -839,7 +840,7 @@ fn alternatives(steps: &[Step]) -> Vec<Vec<Step>> {
         [Step::Member(entities), Step::Select { value: entity, .. }, Step::Member(profiles), Step::Select { value: profile, .. }, rest @ ..]
             if entities == "entities" && profiles == "accessProfiles" =>
         {
-            under_profile("entity", entity, profile, rest)
+            under_profile("entities", "entity", entity, profile, rest)
         }
         [Step::Member(actions), Step::Select { value: action, .. }, Step::Member(permissions), Step::Select {
             key,
@@ -849,7 +850,7 @@ fn alternatives(steps: &[Step]) -> Vec<Vec<Step>> {
                 && permissions == "permissions"
                 && key.as_deref() == Some("profile") =>
         {
-            under_profile("action", action, profile, rest)
+            under_profile("actions", "action", action, profile, rest)
         }
         _ => Vec::new(),
     }
@@ -1081,7 +1082,7 @@ mod tests {
     #[test]
     fn a_compiler_path_resolves_to_the_pointer_of_the_value_it_names() {
         let project = document(
-            "apiVersion: registry.registrystack.org/v1alpha1\nkind: RegistryProject\nregistry:\n  id: example\n  canonicalBaseIri: https://example.invalid\n  version: 0.1.0\n  defaultLanguage: en\nentities:\n  - id: first\n    route: firsts\n    mutationMode: mutable\n    fields:\n      - id: label\n        type: string\n        maxLength: 20\n        required: true\n        classification: internal\n  - id: second\n    route: seconds\n    mutationMode: mutable\n    fields:\n      - id: code\n        type: string\n        maxLength: 20\n        required: true\n        classification: internal\n",
+            "apiVersion: id.registrystack.org/formats/breg/project/v1alpha1\nkind: BRegProject\nproject:\n  id: example\n  canonicalBaseIri: https://example.invalid\n  version: 0.1.0\n  defaultLanguage: en\nentities:\n  - id: first\n    route: firsts\n    mutationMode: mutable\n    fields:\n      - id: label\n        type: string\n        maximumLength: 20\n        required: true\n        classification: internal\n  - id: second\n    route: seconds\n    mutationMode: mutable\n    fields:\n      - id: code\n        type: string\n        maximumLength: 20\n        required: true\n        classification: internal\n",
         );
         let found = resolve(
             project.root(),
@@ -1124,7 +1125,7 @@ mod tests {
     #[test]
     fn an_entity_access_path_is_found_under_the_profile_that_grants_it() {
         let project = document(
-            "apiVersion: registry.registrystack.org/v1alpha1\nkind: RegistryProject\nregistry:\n  id: example\n  canonicalBaseIri: https://example.invalid\n  version: 0.1.0\n  defaultLanguage: en\naccessProfiles:\n  - id: clerk\n    principalClaim: registry_principal\n    requiredScopes: unrestricted\n    permissions:\n      - entity: other\n        operations: [get]\n        rowBoundaries: unrestricted\n      - entity: record\n        operations: [get]\n        rowBoundaries: unrestricted\n",
+            "apiVersion: id.registrystack.org/formats/breg/project/v1alpha1\nkind: BRegProject\nproject:\n  id: example\n  canonicalBaseIri: https://example.invalid\n  version: 0.1.0\n  defaultLanguage: en\naccessProfiles:\n  - id: clerk\n    principalClaim: registry_principal\n    requiredScopes: unrestricted\n    permissions:\n      entities:\n        - entity: other\n          operations: [get]\n          rowBoundaries: unrestricted\n        - entity: record\n          operations: [get]\n          rowBoundaries: unrestricted\n",
         );
         let steps = parse_steps("entities[id=record].accessProfiles[id=clerk].operations");
         let found = alternatives(&steps)
@@ -1132,13 +1133,16 @@ mod tests {
             .map(|alternative| resolve(project.root(), alternative))
             .find(|found| found.complete)
             .expect("the profile's permission names the entity");
-        assert_eq!(found.pointer, "/accessProfiles/0/permissions/1/operations");
+        assert_eq!(
+            found.pointer,
+            "/accessProfiles/0/permissions/entities/1/operations"
+        );
     }
 
     #[test]
     fn an_action_permission_path_is_found_under_the_profile_that_grants_it() {
         let project = document(
-            "apiVersion: registry.registrystack.org/v1alpha1\nkind: RegistryProject\nregistry:\n  id: example\n  canonicalBaseIri: https://example.invalid\n  version: 0.1.0\n  defaultLanguage: en\naccessProfiles:\n  - id: reader\n    principalClaim: registry_principal\n    requiredScopes: unrestricted\n    permissions: []\n  - id: steward\n    principalClaim: registry_principal\n    requiredScopes: unrestricted\n    permissions:\n      - entity: record\n        operations: [get]\n        rowBoundaries: unrestricted\n      - action: import-record\n        operations: [invoke]\n        targets:\n          - {entity: other, rowBoundaries: unrestricted}\n          - {entity: record, rowBoundaries: unrestricted}\n",
+            "apiVersion: id.registrystack.org/formats/breg/project/v1alpha1\nkind: BRegProject\nproject:\n  id: example\n  canonicalBaseIri: https://example.invalid\n  version: 0.1.0\n  defaultLanguage: en\naccessProfiles:\n  - id: reader\n    principalClaim: registry_principal\n    requiredScopes: unrestricted\n  - id: steward\n    principalClaim: registry_principal\n    requiredScopes: unrestricted\n    permissions:\n      entities:\n        - entity: record\n          operations: [get]\n          rowBoundaries: unrestricted\n      actions:\n        - action: import-record\n          operations: [invoke]\n          targets:\n            - {entity: other, rowBoundaries: unrestricted}\n            - {entity: record, rowBoundaries: unrestricted}\n",
         );
         let steps = parse_steps(
             "actions[id=import-record].permissions[profile=steward].targets[entity=record].rowBoundaries",
@@ -1150,7 +1154,7 @@ mod tests {
             .expect("the profile's permission names the action");
         assert_eq!(
             found.pointer,
-            "/accessProfiles/1/permissions/1/targets/1/rowBoundaries"
+            "/accessProfiles/1/permissions/actions/0/targets/1/rowBoundaries"
         );
     }
 }

@@ -21,9 +21,13 @@ use std::collections::BTreeMap;
 
 use serde_json::Value;
 
-use crate::profile_file::{
-    ContractsDocument, ProfileDocument, EVIDENCE_CLIENT_CONTRACTS_SCHEMA_ID,
-    EVIDENCE_CLIENT_PROFILE_SCHEMA_ID,
+use crate::{
+    profile_file::{
+        ContractsDocument, ProfileDocument, EVIDENCE_CLIENT_CONTRACTS_SCHEMA_ID,
+        EVIDENCE_CLIENT_PROFILE_SCHEMA_ID,
+    },
+    EVIDENCE_CLIENT_CONTRACTS_API_VERSION, EVIDENCE_CLIENT_CONTRACTS_KIND,
+    EVIDENCE_CLIENT_PROFILE_API_VERSION, EVIDENCE_CLIENT_PROFILE_KIND,
 };
 
 /// Where the client profile schema is written, below the output directory.
@@ -39,11 +43,15 @@ pub fn client_documents() -> Result<BTreeMap<&'static str, String>, serde_json::
         serde_json::to_value(schemars::schema_for!(ProfileDocument))?,
         EVIDENCE_CLIENT_PROFILE_SCHEMA_ID,
         "Evidence client profile",
+        EVIDENCE_CLIENT_PROFILE_API_VERSION,
+        EVIDENCE_CLIENT_PROFILE_KIND,
     )?;
     let contracts = document(
         serde_json::to_value(schemars::schema_for!(ContractsDocument))?,
         EVIDENCE_CLIENT_CONTRACTS_SCHEMA_ID,
         "Evidence client reviewed contracts",
+        EVIDENCE_CLIENT_CONTRACTS_API_VERSION,
+        EVIDENCE_CLIENT_CONTRACTS_KIND,
     )?;
     Ok([
         (CLIENT_PROFILE_SCHEMA_FILE, profile),
@@ -52,12 +60,33 @@ pub fn client_documents() -> Result<BTreeMap<&'static str, String>, serde_json::
     .into())
 }
 
-fn document(mut derived: Value, id: &str, title: &str) -> Result<String, serde_json::Error> {
+fn document(
+    mut derived: Value,
+    id: &str,
+    title: &str,
+    api_version: &str,
+    kind: &str,
+) -> Result<String, serde_json::Error> {
     refuse_null(&mut derived);
     let mut object = match derived {
         Value::Object(object) => object,
         _ => unreachable!("schemars derives a schema object for a reader document"),
     };
+    // The shared reader takes the envelope before the reader type sees the
+    // document, so the derived schema does not state it.
+    let Some(Value::Object(properties)) = object.get_mut("properties") else {
+        unreachable!("schemars derives the members of a reader document");
+    };
+    properties.insert(
+        "apiVersion".to_owned(),
+        serde_json::json!({"const": api_version}),
+    );
+    properties.insert("kind".to_owned(), serde_json::json!({"const": kind}));
+    let Some(Value::Array(required)) = object.get_mut("required") else {
+        unreachable!("a reader document requires members");
+    };
+    required.insert(0, Value::from("kind"));
+    required.insert(0, Value::from("apiVersion"));
     object.insert(
         "$schema".to_owned(),
         Value::String("https://json-schema.org/draft/2020-12/schema".to_owned()),
@@ -129,10 +158,11 @@ mod tests {
 
     fn profile_instance() -> Value {
         serde_json::json!({
-            "schema": "registry.evidence-client-profile/v1",
+            "apiVersion": "id.registrystack.org/formats/evidence/client-profile/v1",
+            "kind": "EvidenceClientProfile",
             "baseUrl": "https://evidence.example.org",
             "clientId": "relying-party",
-            "privateKey": {"source": "file", "path": "relying-party.private.jwk.json"},
+            "privateKey": {"type": "file", "path": "relying-party.private.jwk.json"},
             "trust": {"type": "pinned-jwks", "file": "evidence.jwks.json"},
             "contracts": {"type": "reviewed", "file": "evidence.contracts.json"},
             "verification": {"maximumAssertionLifetimeSeconds": 300, "clockSkewSeconds": 30},
@@ -161,7 +191,8 @@ mod tests {
 
     fn contracts_instance() -> Value {
         serde_json::json!({
-            "schema": "registry.evidence-client-contracts/v1",
+            "apiVersion": "id.registrystack.org/formats/evidence/client-contracts/v1",
+            "kind": "EvidenceClientContracts",
             "assuranceProfile": "production",
             "audience": "https://relying-party.example.org",
             "issuedBy": "https://evidence.example.org",
@@ -188,7 +219,7 @@ mod tests {
                     "handle": "adult",
                     "concept": "https://example.org/concepts/adult",
                     "required": true,
-                    "form": "boolean"
+                    "form": {"type": "boolean"}
                 }]
             }]
         })
@@ -242,14 +273,26 @@ mod tests {
         assert!(refused(&schema, &instance, &|document| document
             ["version"] =
             Value::from(1)));
-        assert!(refused(&schema, &instance, &|document| document["trust"] =
-            Value::Null));
         assert!(refused(&schema, &instance, &|document| {
-            document["privateKey"] = serde_json::json!({"source": "file"})
+            document["schema"] = Value::from("registry.evidence-client-profile/v1")
+        }));
+        assert!(refused(&schema, &instance, &|document| {
+            document.as_object_mut().unwrap().remove("apiVersion");
+        }));
+        assert!(refused(&schema, &instance, &|document| {
+            document["kind"] = Value::from("EvidenceClientContracts")
         }));
         assert!(refused(&schema, &instance, &|document| {
             document["privateKey"] =
-                serde_json::json!({"source": "environment", "variable": "1KEY"})
+                serde_json::json!({"source": "file", "path": "relying-party.private.jwk.json"})
+        }));
+        assert!(refused(&schema, &instance, &|document| document["trust"] =
+            Value::Null));
+        assert!(refused(&schema, &instance, &|document| {
+            document["privateKey"] = serde_json::json!({"type": "file"})
+        }));
+        assert!(refused(&schema, &instance, &|document| {
+            document["privateKey"] = serde_json::json!({"type": "environment", "variable": "1KEY"})
         }));
         assert!(refused(&schema, &instance, &|document| {
             document["trust"] = serde_json::json!({"type": "https-discovery", "file": "x"})
@@ -317,10 +360,17 @@ mod tests {
         .expect("the reader accepts the schema's sample");
 
         assert!(refused(&schema, &instance, &|document| {
-            document["schema"] = Value::from("registry.evidence-definitions/v1")
+            document["schema"] = Value::from("registry.evidence-client-contracts/v1")
         }));
         assert!(refused(&schema, &instance, &|document| {
-            document["holderBoundBatchMaxSize"] = Value::from(1)
+            document["apiVersion"] =
+                Value::from("id.registrystack.org/formats/evidence/client-profile/v1")
+        }));
+        assert!(refused(&schema, &instance, &|document| {
+            document.as_object_mut().unwrap().remove("kind");
+        }));
+        assert!(refused(&schema, &instance, &|document| {
+            document["maximumHolderBoundBatchSize"] = Value::from(1)
         }));
         assert!(refused(&schema, &instance, &|document| {
             document["definitions"][0]["handle"] = Value::from("Adult")
@@ -331,6 +381,12 @@ mod tests {
         }));
         assert!(refused(&schema, &instance, &|document| {
             document["definitions"][0]["concepts"][0]["form"] = Value::from("date")
+        }));
+        assert!(refused(&schema, &instance, &|document| {
+            document["definitions"][0]["concepts"][0]["form"] = Value::from("boolean")
+        }));
+        assert!(refused(&schema, &instance, &|document| {
+            document["definitions"][0]["concepts"][0]["form"]["unique"] = Value::from(true)
         }));
         assert!(refused(&schema, &instance, &|document| {
             let definition = document["definitions"][0].clone();

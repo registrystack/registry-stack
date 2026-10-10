@@ -1,6 +1,6 @@
-apiVersion: registry.registrystack.org/v1alpha1
-kind: RegistryProject
-registry:
+apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
   id: facility-registry-actions
   canonicalBaseIri: https://facility-registry-actions.example.gov
   version: 0.1.0
@@ -34,7 +34,7 @@ manifestProjection:
 modules:
   - id: facility-registry-actions-core
     version: 0.1.0
-    digest: "sha256:b6ddb2e5dff71c6fcd04697e74d233a5a3a04f96e22583faea0ace1b7711302d"
+    digest: "sha256:4dc0ea98412558f2c6fad99c5f5a01eb14c016e93ba7683151de8d3329e56749"
 entities: []
 accessProfiles:
   - id: facility-registrar
@@ -43,50 +43,54 @@ accessProfiles:
     requiredScopes: [registry:facility:register]
     requiredPurposes: [facility-administration]
     permissions:
-      - action: register-facility
-        operations: [invoke]
-        targets:
-          - entity: facility
-            rowBoundaries:
-              - {field: owner, claim: registry_principal, operator: equals}
-          - entity: initial-operator-assignment
-            rowBoundaries: unrestricted
-          - entity: operator
-            rowBoundaries: unrestricted
-        results: [facility, initial-assignment]
+      actions:
+        - action: register-facility
+          operations: [invoke]
+          targets:
+            - entity: facility
+              rowBoundaries:
+                - {field: owner, claim: registry_principal, operator: equals}
+            - entity: initial-operator-assignment
+              rowBoundaries: unrestricted
+            - entity: operator
+              rowBoundaries: unrestricted
+          results: [facility, initial-assignment]
   - id: facility-transfer
     principalClaim: registry_principal
     requiredScopes: [registry:facility:transfer]
     requiredPurposes: [facility-administration]
     permissions:
-      - action: transfer-facility
-        operations: [invoke]
-        targets:
-          - entity: facility
-            rowBoundaries:
-              - {field: owner, claim: allowed_owners, operator: in}
-        results: [facility]
+      actions:
+        - action: transfer-facility
+          operations: [invoke]
+          targets:
+            - entity: facility
+              rowBoundaries:
+                - {field: owner, claim: allowed_owners, operator: in}
+          results: [facility]
   - id: facility-owner
     principalClaim: registry_principal
     requiredScopes: [registry:facility:read]
     requiredPurposes: [facility-administration]
     permissions:
-      - entity: facility
-        operations: [get, list]
-        readableFields: [facility-code, label, owner]
-        filterableFields: [facility-code]
-        rowBoundaries:
-          - {field: owner, claim: registry_principal, operator: equals}
+      entities:
+        - entity: facility
+          operations: [get, list]
+          readableFields: [facility-code, label, owner]
+          filterableFields: [facility-code]
+          rowBoundaries:
+            - {field: owner, claim: registry_principal, operator: equals}
   - id: operator-administrator
     principalClaim: registry_principal
     requiredScopes: [registry:operator:manage]
     requiredPurposes: [facility-administration]
     permissions:
-      - entity: operator
-        rowBoundaries: unrestricted
-        operations: [create, get, patch]
-        readableFields: [operator-code, status]
-        writableFields: [operator-code, status]
+      entities:
+        - entity: operator
+          rowBoundaries: unrestricted
+          operations: [create, get, patch]
+          readableFields: [operator-code, status]
+          writableFields: [operator-code, status]
 vocabularies:
   - id: operator-status
     values: [active, inactive]

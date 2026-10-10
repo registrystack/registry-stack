@@ -9,7 +9,7 @@ governance:
     trustDomain: urn:example:trust:record-evidence
     publicOrigin: http://127.0.0.1:8080
   issuer:
-    id: urn:example:issuer:record-evidence
+    uri: urn:example:issuer:record-evidence
   authentication:
     oidc:
       issuer: http://127.0.0.1:8082
@@ -19,11 +19,13 @@ governance:
       algorithms:
       - ES256
       jwksSource:
-        kind: uri
+        type: uri
         uri: http://127.0.0.1:8082/.well-known/jwks.json
       principalClaim: sub
       requesterTagsClaim: evidence_tags
       evidenceAudienceClaim: evidence_audience
+      allowedClients: unrestricted
+      requiredScopes: unrestricted
       maximumTokenLifetimeSeconds: 300
       revokedKeyIds: []
   audit:
@@ -50,12 +52,12 @@ governance:
     registry:
       baseUrl: http://127.0.0.1:8090
       authentication:
-        kind: oauth2-client-credentials
+        type: oauth2-private-key-jwt
         tokenEndpoint: http://127.0.0.1:8091/token
         clientIdRef: secret:file/registry-client-id
         clientAssertionKeyRef: secret:file/registry-client-key
         maximumCacheSeconds: 60
-      concurrencyLimit: 4
+      maximumConcurrency: 4
       admissionTimeoutMilliseconds: 5000
       tokenTimeoutMilliseconds: 5000
   authorityProfiles:
@@ -74,7 +76,7 @@ governance:
           selectorProfile: breg-8-registry-6-record-7-by-code
           valueOrigin: request
 runtime:
-  apiVersion: registry.registrystack.org/evidence-runtime/v1alpha1
+  apiVersion: id.registrystack.org/formats/evidence/runtime/v1alpha1
   kind: EvidenceRuntimeConfig
   package:
     root: /absolute/path/to/package
@@ -90,7 +92,7 @@ runtime:
     file:
       root: /absolute/path/to/evidence/secrets
   signer:
-    kind: local-jwk
+    type: local-jwk
     privateKeyRef: secret:file/signing-p256-private-jwk
   audit:
     path: /absolute/path/to/evidence/audit/evidence.jsonl

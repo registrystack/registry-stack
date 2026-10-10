@@ -168,7 +168,7 @@ class MutationRetryTests(unittest.TestCase):
         self.script()
         with self.assertRaises(MessagingClientError) as raised:
             MessagingClient(self.base_url).submit("one-call-token", "two words", SUBMISSION)
-        self.assertEqual(raised.exception.kind, "invalid_request")
+        self.assertEqual(raised.exception.kind, "invalid-request")
         self.assertIs(raised.exception.outcome_unknown, False)
         self.assertEqual(_Scripted.observations, [])
 

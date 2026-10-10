@@ -497,20 +497,20 @@ fn compile_registry() -> CompiledRegistry {
         .expect("test Registry compiles")
 }
 
-const MODULE: &[u8] = br#"{"id":"core","version":"1","entities":[
+const MODULE: &[u8] = br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","entities":[
   {"id":"site","primaryDataset":"reference-index-registry","route":"sites","mutationMode":"mutable","classification":"internal",
-   "fields":[{"id":"name","type":"string","maxLength":40,"required":true,"classification":"internal"}]},
+   "fields":[{"id":"name","type":"string","maximumLength":40,"required":true,"classification":"internal"}]},
   {"id":"asset","primaryDataset":"reference-index-registry","route":"assets","mutationMode":"mutable","classification":"internal",
    "fields":[{"id":"site","type":"reference","target":"site","required":true,"classification":"internal"},
              {"id":"owner","type":"reference","target":"site","classification":"internal"},
-             {"id":"code","type":"string","maxLength":16,"required":true,"classification":"internal"}],
+             {"id":"code","type":"string","maximumLength":16,"required":true,"classification":"internal"}],
    "indexes":[{"id":"by-owner","fields":["owner","code"]}],
    "accessProfiles":[{"requiredScopes":"unrestricted","rowBoundaries":"unrestricted","id":"reader","principalClaim":"principal","operations":["get","list"],
      "readableFields":["site","owner","code"],"filterableFields":["site"]}]}]}"#;
 
 fn project_bytes(digest: &str) -> Vec<u8> {
     format!(
-        r#"{{"apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject","registry":{{"id":"reference-index-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://reference-index.example.test"}},"package":{{"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"internal","catalog":{{"baseUrl":"https://reference-index.example.test","title":"Reference Index Registry","publisher":{{"id":"reference-index-registry-authority","name":"Reference Index Publisher"}}}},"publicService":{{"id":"reference-index-registry-service","title":"Reference Index Registry"}},"datasets":[{{"id":"reference-index-registry","title":"Reference Index Dataset","owner":"Reference Index Publisher","status":"active"}}],"dataServices":[{{"id":"reference-index-registry-data-service","title":"Reference Index Registry","endpointUrl":"https://reference-index.example.test","servesDatasets":["reference-index-registry"]}}]}},"modules":[{{"id":"core","version":"1","digest":"{digest}"}}]}}"#
+        r#"{{"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject","project":{{"id":"reference-index-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://reference-index.example.test"}},"package":{{"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"internal","catalog":{{"baseUrl":"https://reference-index.example.test","title":"Reference Index Registry","publisher":{{"id":"reference-index-registry-authority","name":"Reference Index Publisher"}}}},"publicService":{{"id":"reference-index-registry-service","title":"Reference Index Registry"}},"datasets":[{{"id":"reference-index-registry","title":"Reference Index Dataset","owner":"Reference Index Publisher","status":"active"}}],"dataServices":[{{"id":"reference-index-registry-data-service","title":"Reference Index Registry","endpointUrl":"https://reference-index.example.test","servesDatasets":["reference-index-registry"]}}]}},"modules":[{{"id":"core","version":"1","digest":"{digest}"}}]}}"#
     )
     .into_bytes()
 }

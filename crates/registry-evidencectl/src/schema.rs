@@ -280,7 +280,7 @@ mod tests {
                 SOURCE_SCHEMA_FILE,
                 SOURCE,
                 "EvidenceSource",
-                "transport: http-json\n",
+                "type: http-json\n",
             ),
         ] {
             let schema = compile(file);

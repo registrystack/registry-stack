@@ -1107,7 +1107,7 @@ fn render_source_block(inputs: &EmitInputs, method: &str) -> String {
     let mut out = String::new();
     push_line(&mut out, 0, "sources:");
     push_line(&mut out, 1, &format!("{}:", render_key(&inputs.source_id)));
-    push_line(&mut out, 2, "transport: http-json");
+    push_line(&mut out, 2, "type: http-json");
     if let Some(base_url) = &inputs.base_url {
         push_line(
             &mut out,
@@ -1138,15 +1138,7 @@ fn render_source_block(inputs: &EmitInputs, method: &str) -> String {
     push_line(&mut out, 2, "request:");
     push_line(&mut out, 3, &format!("method: {method}"));
     let path = request_path(inputs);
-    if path.contains(['{', '}']) {
-        push_line(
-            &mut out,
-            3,
-            &format!("pathTemplate: {}", yaml_scalar_string(&path)),
-        );
-    } else {
-        push_line(&mut out, 3, &format!("path: {}", yaml_scalar_string(&path)));
-    }
+    push_line(&mut out, 3, &format!("path: {}", yaml_scalar_string(&path)));
     push_line(&mut out, 3, "fixedHeaders:");
     push_line(&mut out, 4, "- name: Accept");
     push_line(
@@ -1213,7 +1205,7 @@ fn render_authoring_source(inputs: &EmitInputs) -> String {
                 0,
                 "# Choose an authentication kind and logical secret:file references.",
             );
-            push_line(&mut out, 0, "authentication: {kind: review-required}");
+            push_line(&mut out, 0, "authentication: {type: review-required}");
         }
         push_line(&mut out, 0, line);
         if line.starts_with("  projection:") {
@@ -1242,9 +1234,9 @@ fn render_authoring_source(inputs: &EmitInputs) -> String {
             push_line(&mut out, 2, "jsonBody: forbidden");
             push_line(&mut out, 2, "maximumNormalizedBytes: 4096");
             push_line(&mut out, 1, "redirects: deny");
-            push_line(&mut out, 1, "timeoutMilliseconds: 3000");
+            push_line(&mut out, 1, "attemptTimeoutMilliseconds: 3000");
             push_line(&mut out, 1, "maximumResponseBytes: 65536");
-            push_line(&mut out, 1, "concurrencyLimit: 8");
+            push_line(&mut out, 1, "maximumConcurrency: 8");
         }
     }
     out

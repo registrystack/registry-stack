@@ -110,7 +110,6 @@ fn action_requirements_reject_unknown_fields_values_and_unbound_inputs() {
             json!("unknown-value-canary"),
             "breg.action.requires-value-invalid",
         ),
-        ("equals", Value::Null, "breg.action.requires-value-invalid"),
         (
             "input",
             json!("unknown-input-canary"),
@@ -131,6 +130,18 @@ fn action_requirements_reject_unknown_fields_values_and_unbound_inputs() {
             !report.contains("canary"),
             "diagnostics must not echo source values"
         );
+    }
+    // A required field is never unset, and `isNull` beside `equals` is two
+    // comparisons.
+    for keep_equals in [false, true] {
+        let mut source = support::project();
+        let requirement = source["actions"][0]["requires"][0].as_object_mut().unwrap();
+        if !keep_equals {
+            requirement.remove("equals");
+        }
+        requirement.insert("isNull".to_owned(), json!(true));
+        assert!(format!("{:?}", compile(source).unwrap_err())
+            .contains("breg.action.requires-value-invalid"));
     }
     let mut source = support::project();
     source["actions"][0]["requires"][0]["script"] = json!("true");
@@ -158,7 +169,7 @@ fn action_requirements_keep_mandatory_scope_and_processing_boundaries() {
         "link grants do not waive target processing requirements"
     );
     let mut source = support::project();
-    source["accessProfiles"][0]["permissions"][0]["targets"] =
+    source["accessProfiles"][0]["permissions"]["actions"][0]["targets"] =
         json!([{"entity": "child", "rowBoundaries": "unrestricted"}]);
     assert!(
         compile(source).is_err(),
@@ -233,7 +244,7 @@ fn action_requirements_do_not_bypass_reviewed_change_control() {
 }
 
 #[test]
-fn equality_inputs_must_be_required_and_explicit_null_is_preserved() {
+fn equality_inputs_must_be_required_and_an_unset_value_is_stated_explicitly() {
     let mut source = support::project();
     source["actions"][0]["inputs"]
         .as_array_mut()
@@ -253,12 +264,19 @@ fn equality_inputs_must_be_required_and_explicit_null_is_preserved() {
     let mut source = support::project();
     source["entities"][0]["fields"][0]["required"] = json!(false);
     source["actions"][0]["requires"][0]["equals"] = Value::Null;
-    // The shared reader reads `null` here as a comparison literal (CFG-EMPTY-1).
+    // `null` is never a comparison literal (CFG-EMPTY-1): the reader refuses it
+    // where it is written, and `isNull` states the unset value.
     let bytes = serde_json::to_vec(&source).unwrap();
-    assert_eq!(
-        parse_project_yaml(&bytes).expect("the reader accepts a null equality literal"),
-        parse_project_json(&bytes).unwrap()
-    );
+    let failure = parse_project_yaml(&bytes).unwrap_err();
+    let [diagnostic] = failure.diagnostics() else {
+        panic!("one refusal: {failure:?}");
+    };
+    assert_eq!(diagnostic.code, "config.null-value");
+    assert_eq!(diagnostic.path, "project.actions[0].requires[0].equals");
+    assert!(parse_project_json(&bytes).is_err());
+    let requirement = source["actions"][0]["requires"][0].as_object_mut().unwrap();
+    requirement.remove("equals");
+    requirement.insert("isNull".to_owned(), json!(true));
     let registry = compile(source.clone()).unwrap();
     assert_eq!(
         registry.actions().actions[0].requires[0].equals,
@@ -271,7 +289,7 @@ fn equality_inputs_must_be_required_and_explicit_null_is_preserved() {
     source["actions"][0]["requires"][0]
         .as_object_mut()
         .unwrap()
-        .remove("equals");
+        .remove("isNull");
     assert!(format!("{:?}", compile(source).unwrap_err())
         .contains("breg.action.requires-value-invalid"));
 }

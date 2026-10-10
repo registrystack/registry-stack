@@ -19,33 +19,33 @@ const MODULE_TASK_GRANT_FORBIDDEN: &str = "breg.access-profile.task-grant-module
 
 fn project() -> Value {
     json!({
-        "apiVersion": "registry.registrystack.org/v1alpha1",
-        "kind": "RegistryProject",
-        "registry": {"id": "standing-agent-ceiling", "version": "1", "defaultLanguage": "en", "canonicalBaseIri": "https://standing-agent.example.test"},
+        "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
+        "kind": "BRegProject",
+        "project": {"id": "standing-agent-ceiling", "version": "1", "defaultLanguage": "en", "canonicalBaseIri": "https://standing-agent.example.test"},
         "entities": [
             {
                 "id": "case", "primaryDataset": "test-dataset", "route": "cases",
                 "mutationMode": "mutable", "classification": "internal",
                 "batch": {"maximumItems": 3, "maximumBytes": 8192},
                 "changeControl": {"requiredFor": ["patch"]},
-                "fields": [{"id": "label", "type": "string", "maxLength": 32, "required": true, "classification": "internal"}]
+                "fields": [{"id": "label", "type": "string", "maximumLength": 32, "required": true, "classification": "internal"}]
             },
             {
                 "id": "note", "primaryDataset": "test-dataset", "route": "notes",
                 "mutationMode": "mutable", "tombstone": true, "classification": "internal",
                 "batch": {"maximumItems": 3, "maximumBytes": 8192},
-                "fields": [{"id": "label", "type": "string", "maxLength": 32, "required": true, "classification": "internal"}]
+                "fields": [{"id": "label", "type": "string", "maximumLength": 32, "required": true, "classification": "internal"}]
             },
             {
                 "id": "correction", "primaryDataset": "test-dataset", "route": "corrections",
                 "mutationMode": "mutable", "classification": "internal",
                 "fields": [
                     {"id": "case", "type": "reference", "target": "case", "required": true, "classification": "internal"},
-                    {"id": "label", "type": "string", "maxLength": 32, "required": true, "classification": "internal"}
+                    {"id": "label", "type": "string", "maximumLength": 32, "required": true, "classification": "internal"}
                 ],
                 "changeRequest": {
                     "effects": [{"id": "relabel", "target": {"fromField": "case"}, "operation": "patch", "set": {"label": {"fromField": "label"}}}],
-                    "review": {"authority": "casework-main", "policyId": "correction-review"},
+                    "review": {"type": "required", "authority": "casework-main", "policyId": "correction-review"},
                     "onApproved": {"mode": "manual"}
                 }
             }
@@ -55,7 +55,7 @@ fn project() -> Value {
                 "id": "relabel-note",
                 "inputs": [
                     {"id": "note-ref", "apiName": "noteId", "type": "reference", "target": "note", "required": true, "classification": "internal"},
-                    {"id": "new-label", "apiName": "newLabel", "type": "string", "maxLength": 32, "required": true, "classification": "internal"}
+                    {"id": "new-label", "apiName": "newLabel", "type": "string", "maximumLength": 32, "required": true, "classification": "internal"}
                 ],
                 "effects": [
                     {"id": "relabelled", "target": {"fromField": "note-ref"}, "operation": "patch", "set": {"label": {"fromField": "new-label"}}}
@@ -66,41 +66,47 @@ fn project() -> Value {
             {
                 "id": "clerk", "default": true, "principalClaim": "registry_principal", "requiredScopes": "unrestricted",
                 "actorKind": "human", "requesterClients": ["clerk-portal"],
-                "permissions": [
-                    {
-                        "entity": "case",
-                        "operations": ["create", "get", "list", "import"],
-                        "readableFields": ["label"], "writableFields": ["label"], "rowBoundaries": "unrestricted"
-                    },
-                    {
-                        "entity": "correction",
-                        "operations": ["create", "get", "list", "patch", "submit_request", "revise_request", "cancel_request", "apply_request"],
-                        "readableFields": ["case", "label"], "writableFields": ["case", "label"], "rowBoundaries": "unrestricted",
-                        "applyTargets": [{"entity": "case", "rowBoundaries": "unrestricted"}]
-                    },
-                    {
-                        "entity": "note",
-                        "operations": ["create", "get", "list", "patch", "tombstone", "batch"],
-                        "readableFields": ["label"], "writableFields": ["label"], "rowBoundaries": "unrestricted"
-                    },
-                    {
-                        "action": "relabel-note", "operations": ["invoke"],
-                        "targets": [{"entity": "note", "rowBoundaries": "unrestricted"}], "results": ["relabelled"]
-                    }
-                ]
+                "permissions": {
+                    "entities": [
+                        {
+                            "entity": "case",
+                            "operations": ["create", "get", "list", "import"],
+                            "readableFields": ["label"], "writableFields": ["label"], "rowBoundaries": "unrestricted"
+                        },
+                        {
+                            "entity": "correction",
+                            "operations": ["create", "get", "list", "patch", "submit-request", "revise-request", "cancel-request", "apply-request"],
+                            "readableFields": ["case", "label"], "writableFields": ["case", "label"], "rowBoundaries": "unrestricted",
+                            "applyTargets": [{"entity": "case", "rowBoundaries": "unrestricted"}]
+                        },
+                        {
+                            "entity": "note",
+                            "operations": ["create", "get", "list", "patch", "tombstone", "batch"],
+                            "readableFields": ["label"], "writableFields": ["label"], "rowBoundaries": "unrestricted"
+                        }
+                    ],
+                    "actions": [
+                        {
+                            "action": "relabel-note", "operations": ["invoke"],
+                            "targets": [{"entity": "note", "rowBoundaries": "unrestricted"}], "results": ["relabelled"]
+                        }
+                    ]
+                }
             },
             {
                 "id": "assistant", "principalClaim": "registry_principal", "requiredScopes": "unrestricted",
                 "actorKind": "agent", "requesterClients": ["assistant-client"],
-                "permissions": [
-                    {"entity": "case", "operations": ["get", "list"], "readableFields": ["label"], "rowBoundaries": "unrestricted"},
-                    {
-                        "entity": "correction",
-                        "operations": ["create", "get", "list", "patch"],
-                        "readableFields": ["case", "label"], "writableFields": ["case", "label"], "rowBoundaries": "unrestricted"
-                    },
-                    {"entity": "note", "operations": ["get", "list"], "readableFields": ["label"], "writableFields": ["label"], "rowBoundaries": "unrestricted"}
-                ]
+                "permissions": {
+                    "entities": [
+                        {"entity": "case", "operations": ["get", "list"], "readableFields": ["label"], "rowBoundaries": "unrestricted"},
+                        {
+                            "entity": "correction",
+                            "operations": ["create", "get", "list", "patch"],
+                            "readableFields": ["case", "label"], "writableFields": ["case", "label"], "rowBoundaries": "unrestricted"
+                        },
+                        {"entity": "note", "operations": ["get", "list"], "readableFields": ["label"], "writableFields": ["label"], "rowBoundaries": "unrestricted"}
+                    ]
+                }
             }
         ]
     })
@@ -137,7 +143,7 @@ fn refused(
 /// without change control.
 fn with_assistant_operation(permission: usize, operation: &str) -> Value {
     let mut value = project();
-    value["accessProfiles"][1]["permissions"][permission]["operations"]
+    value["accessProfiles"][1]["permissions"]["entities"][permission]["operations"]
         .as_array_mut()
         .expect("operations array")
         .push(json!(operation));
@@ -169,10 +175,10 @@ fn human_profile_may_import_records() {
 #[test]
 fn standing_agent_cannot_hold_a_request_lifecycle_operation() {
     for operation in [
-        "submit_request",
-        "revise_request",
-        "cancel_request",
-        "apply_request",
+        "submit-request",
+        "revise-request",
+        "cancel-request",
+        "apply-request",
     ] {
         let failure = refused(
             compile(&with_assistant_operation(1, operation)),
@@ -231,13 +237,10 @@ fn standing_agent_cannot_batch_change_request_drafts() {
 /// An immediate action commits its effects at once, with no draft for a human
 /// to confirm, so a standing agent may not hold one.
 fn with_assistant_action(value: &mut Value) {
-    value["accessProfiles"][1]["permissions"]
-        .as_array_mut()
-        .expect("permissions array")
-        .push(json!({
-            "action": "relabel-note", "operations": ["invoke"],
-            "targets": [{"entity": "note", "rowBoundaries": "unrestricted"}], "results": ["relabelled"]
-        }));
+    value["accessProfiles"][1]["permissions"]["actions"] = json!([{
+        "action": "relabel-note", "operations": ["invoke"],
+        "targets": [{"entity": "note", "rowBoundaries": "unrestricted"}], "results": ["relabelled"]
+    }]);
 }
 
 #[test]
@@ -288,12 +291,13 @@ fn module_contributed_standing_agent_profiles_meet_the_same_ceiling() {
     let project = parse_project_json(&serde_json::to_vec(&value).expect("project serializes"))
         .expect("project parses");
     for (entity, operation, code) in [
-        ("correction", "submit_request", OPERATION_FORBIDDEN),
+        ("correction", "submit-request", OPERATION_FORBIDDEN),
         ("note", "patch", DIRECT_MUTATION_FORBIDDEN),
         ("case", "import", DIRECT_MUTATION_FORBIDDEN),
     ] {
         let module = parse_module_json(
             &serde_json::to_vec(&json!({
+                "apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule",
                 "id": "assistant-extension", "version": "1",
                 "extendEntities": [{
                     "entity": entity,
@@ -335,29 +339,29 @@ fn task_grant_and_human_profiles_keep_their_ceilings() {
     delegated["accessProfiles"][1]["requiredPurposes"] = json!(["correction-review"]);
     delegated["accessProfiles"][1]["taskGrant"] =
         json!({"sourceIssuer": "https://casework.example"});
-    delegated["accessProfiles"][1]["permissions"][1]["operations"] = json!([
+    delegated["accessProfiles"][1]["permissions"]["entities"][1]["operations"] = json!([
         "create",
         "get",
         "list",
         "patch",
-        "submit_request",
-        "revise_request",
-        "cancel_request"
+        "submit-request",
+        "revise-request",
+        "cancel-request"
     ]);
     compile(&delegated).expect("a task grant keeps submit, revise and cancel");
 
     let mut delegated_apply = delegated.clone();
-    delegated_apply["accessProfiles"][1]["permissions"][1]["operations"]
+    delegated_apply["accessProfiles"][1]["permissions"]["entities"][1]["operations"]
         .as_array_mut()
         .expect("operations array")
-        .push(json!("apply_request"));
+        .push(json!("apply-request"));
     let failure = refused(compile(&delegated_apply), "a task grant still cannot apply");
     let apply_codes = codes(&failure);
     assert!(apply_codes.contains(&"breg.access-profile.task-grant-operation-forbidden"));
     assert!(!apply_codes.contains(&OPERATION_FORBIDDEN));
 
     let mut delegated_direct = delegated;
-    delegated_direct["accessProfiles"][1]["permissions"][2]["operations"] =
+    delegated_direct["accessProfiles"][1]["permissions"]["entities"][2]["operations"] =
         json!(["get", "list", "patch"]);
     let failure = refused(
         compile(&delegated_direct),
@@ -384,7 +388,7 @@ fn task_grant_and_human_profiles_keep_their_ceilings() {
     delegated_import["accessProfiles"][1]["requiredPurposes"] = json!(["correction-review"]);
     delegated_import["accessProfiles"][1]["taskGrant"] =
         json!({"sourceIssuer": "https://casework.example"});
-    delegated_import["accessProfiles"][1]["permissions"][0]["operations"] =
+    delegated_import["accessProfiles"][1]["permissions"]["entities"][0]["operations"] =
         json!(["get", "list", "import"]);
     let failure = refused(
         compile(&delegated_import),
@@ -414,15 +418,17 @@ fn module_contributed_profiles_cannot_declare_a_task_grant() {
     });
     for module in [
         json!({
+            "apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule",
             "id": "assistant-extension", "version": "1",
             "extendEntities": [{"entity": "note", "accessProfiles": [delegated_profile.clone()]}]
         }),
         json!({
+            "apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule",
             "id": "assistant-extension", "version": "1",
             "entities": [{
                 "id": "memo", "primaryDataset": "test-dataset", "route": "memos",
                 "mutationMode": "mutable", "classification": "internal",
-                "fields": [{"id": "label", "type": "string", "maxLength": 32, "required": true, "classification": "internal"}],
+                "fields": [{"id": "label", "type": "string", "maximumLength": 32, "required": true, "classification": "internal"}],
                 "accessProfiles": [delegated_profile.clone()]
             }]
         }),

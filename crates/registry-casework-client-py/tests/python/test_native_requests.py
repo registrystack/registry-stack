@@ -59,7 +59,7 @@ class _Handler(BaseHTTPRequestHandler):
                     "digest": f"sha256:{'b' * 64}",
                 },
                 "submissionDigest": f"sha256:{'c' * 64}",
-                "status": "changes_requested",
+                "status": "changes-requested",
                 "outcome": "needs-correction",
                 "result": ["not", "an", "object"],
                 "completedAt": "2026-09-19T00:00:00Z",
@@ -248,7 +248,7 @@ class _Handler(BaseHTTPRequestHandler):
             self.respond({
                 "items": [],
                 "nextCursor": "resume-next",
-                "status": "budget_exhausted",
+                "status": "budget-exhausted",
                 "servedQueues": ["review"],
             })
         elif self.path.startswith("/tenant/v1/directory/targets?"):
@@ -574,7 +574,7 @@ class NativeRequestTests(unittest.TestCase):
             with self.subTest(call=call):
                 with self.assertRaises(CaseworkClientError) as error:
                     call()
-                self.assertEqual(error.exception.kind, "invalid_request")
+                self.assertEqual(error.exception.kind, "invalid-request")
         self.assertEqual(_Handler.observations, [])
 
     def test_review_responses_enforce_object_results_and_exact_tasks(self) -> None:
@@ -624,14 +624,14 @@ class NativeRequestTests(unittest.TestCase):
             self.client.create_or_recover_review_request(
                 "requester-token", "requester", "review-array", request, digest
             )
-        self.assertEqual(shape_error.exception.kind, "invalid_request")
+        self.assertEqual(shape_error.exception.kind, "invalid-request")
 
         request["resultConstraints"] = {"maximum": 9_007_199_254_740_992}
         with self.assertRaises(CaseworkClientError) as range_error:
             self.client.create_or_recover_review_request(
                 "requester-token", "requester", "review-unsafe", request, digest
             )
-        self.assertEqual(range_error.exception.kind, "invalid_request")
+        self.assertEqual(range_error.exception.kind, "invalid-request")
         self.assertEqual(_Handler.observations, [])
 
     def test_expiry_is_typed_and_never_retried(self) -> None:
@@ -758,7 +758,7 @@ class NativeRequestTests(unittest.TestCase):
         self.assertEqual(page["value"], {
             "items": [],
             "nextCursor": "resume-next",
-            "status": "budget_exhausted",
+            "status": "budget-exhausted",
             "servedQueues": ["review"],
         })
         self.assertEqual(
@@ -780,7 +780,7 @@ class NativeRequestTests(unittest.TestCase):
             "supervisor-token",
             "supervisor",
             {
-                "purpose": "absence_cover",
+                "purpose": "absence-cover",
                 "personIssuer": "https://id.example",
                 "personSubject": "absent-officer",
                 "cursor": "opaque-target-cursor",
@@ -801,7 +801,7 @@ class NativeRequestTests(unittest.TestCase):
         self.assertEqual(
             parse_qs(urlsplit(observation["path"]).query),
             {
-                "purpose": ["absence_cover"],
+                "purpose": ["absence-cover"],
                 "personIssuer": ["https://id.example"],
                 "personSubject": ["absent-officer"],
                 "cursor": ["opaque-target-cursor"],

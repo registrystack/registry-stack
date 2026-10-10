@@ -858,10 +858,10 @@ fn operational_logs_carry_only_the_reviewed_fields_and_disclose_no_value() {
     // placeholder rather than omitting the field.
     assert_eq!(served[0]["fields"]["category"], json!("none"));
     assert_eq!(served[1]["fields"]["route"], json!("/v1/evidence"));
-    assert_eq!(served[1]["fields"]["status"], json!("client_error"));
+    assert_eq!(served[1]["fields"]["status"], json!("client-error"));
     assert_eq!(
         served[1]["fields"]["error"],
-        json!("auth.invalid_credential")
+        json!("auth.invalid-credential")
     );
     // The runtime's internal classification for this rejection, distinct from
     // (and narrower than) the public problem code above.
@@ -1265,7 +1265,7 @@ async fn metrics_report_bounded_series_without_disclosing_request_content() {
         "evidence_http_requests_total{route=\"/health\",method=\"GET\",status=\"success\",error=\"none\"} 2\n"
     ));
     assert!(body.contains(
-        "evidence_http_requests_total{route=\"/v1/evidence-definitions\",method=\"GET\",status=\"client_error\",error=\"auth.invalid_credential\"} 1\n"
+        "evidence_http_requests_total{route=\"/v1/evidence-definitions\",method=\"GET\",status=\"client-error\",error=\"auth.invalid-credential\"} 1\n"
     ));
     assert!(body.contains("evidence_http_request_duration_seconds_count{route=\"/health\""));
 
@@ -1353,7 +1353,7 @@ async fn a_configured_metrics_listener_serves_beside_the_evidence_listener() {
             .json::<Value>()
             .await
             .expect("problem body")["code"],
-        json!("resource.not_found")
+        json!("resource.not-found")
     );
 
     let _ = stop.send(());
@@ -1601,7 +1601,7 @@ async fn discovery_requires_authentication_and_returns_no_unentitled_definitions
     assert_eq!(missing.status_code(), axum::http::StatusCode::UNAUTHORIZED);
     assert_eq!(
         missing.json::<Value>()["code"],
-        json!("auth.invalid_credential")
+        json!("auth.invalid-credential")
     );
 
     let filtered = http
@@ -1611,7 +1611,7 @@ async fn discovery_requires_authentication_and_returns_no_unentitled_definitions
     assert_eq!(filtered.status_code(), axum::http::StatusCode::BAD_REQUEST);
     assert_eq!(
         filtered.json::<Value>()["code"],
-        json!("evidence.invalid_request")
+        json!("evidence.invalid-request")
     );
 
     let body_response = build_app(Arc::clone(&fixture.runtime))
@@ -1925,7 +1925,7 @@ async fn discovery_uses_the_bounded_per_principal_request_budget() {
     );
     assert_eq!(
         limited.json::<Value>()["code"],
-        json!("evidence.rate_limited")
+        json!("evidence.rate-limited")
     );
     assert_eq!(limited.header("retry-after"), "1");
     assert!(prepared
@@ -2907,8 +2907,8 @@ fn bind_adult_source_path_to_family_name(bundle_root: &Path) {
         fs::read_to_string(&configuration_path).expect("copied configuration is readable");
     replace_exact(
         &mut configuration,
-        "    authentication: {kind: static-authorization, tokenRef: secret:file/source-a-token}\n    request:\n      method: POST\n      path: /v1/facts",
-        "    authentication: {kind: static-authorization, tokenRef: secret:file/source-a-token}\n    request:\n      method: POST\n      pathTemplate: /v1/facts/{family_name}\n      pathBindings:\n        family_name: {from: selector, role: subject, profile: person-demographics-v1, field: family_name}",
+        "    authentication: {type: static-authorization, tokenRef: secret:file/source-a-token}\n    request:\n      method: POST\n      path: /v1/facts",
+        "    authentication: {type: static-authorization, tokenRef: secret:file/source-a-token}\n    request:\n      method: POST\n      path: /v1/facts/{family_name}\n      pathBindings:\n        family_name: {type: selector, role: subject, profile: person-demographics-v1, field: family_name}",
         1,
     );
     fs::write(configuration_path, configuration).expect("path-bound configuration is written");
@@ -3446,7 +3446,7 @@ async fn request_nonce_is_strict_and_never_reaches_source_or_audit() {
         assert_eq!(response.status_code(), axum::http::StatusCode::BAD_REQUEST);
         assert_eq!(
             response.json::<Value>()["code"],
-            json!("evidence.invalid_request")
+            json!("evidence.invalid-request")
         );
     }
     // A duplicate requestNonce member fails strict JSON parsing.
@@ -3544,10 +3544,10 @@ async fn request_batch_bounds_unique_nonces_and_every_item_before_source_access(
         );
 
     for (request, expected_code) in [
-        (adult_request_batch(0), "evidence.invalid_request"),
-        (adult_request_batch(17), "evidence.invalid_request"),
-        (duplicate, "evidence.invalid_request"),
-        (invalid_later_item, "request.selector_invalid"),
+        (adult_request_batch(0), "evidence.invalid-request"),
+        (adult_request_batch(17), "evidence.invalid-request"),
+        (duplicate, "evidence.invalid-request"),
+        (invalid_later_item, "request.selector-invalid"),
     ] {
         let response = http
             .post("/v1/evidence/batch")
@@ -3812,11 +3812,11 @@ async fn request_batch_larger_than_the_burst_is_refused_without_a_retry_hint() {
     assert_eq!(
         problem,
         json!({
-            "type": "https://id.registrystack.org/problems/registry-evidence/evidence/invalid_request",
+            "type": "https://id.registrystack.org/problems/registry-evidence/evidence/invalid-request",
             "title": "Evidence request is invalid",
             "status": 400,
             "detail": "the Evidence request is invalid",
-            "code": "evidence.invalid_request",
+            "code": "evidence.invalid-request",
             "traceId": trace_id,
         })
     );
@@ -4825,7 +4825,7 @@ async fn absent_and_malformed_bearer_tokens_agree_when_the_request_body_is_other
     );
     assert_eq!(
         missing_header.json::<Value>()["code"],
-        json!("auth.invalid_credential")
+        json!("auth.invalid-credential")
     );
 
     let malformed_token = http
@@ -4839,7 +4839,7 @@ async fn absent_and_malformed_bearer_tokens_agree_when_the_request_body_is_other
     );
     assert_eq!(
         malformed_token.json::<Value>()["code"],
-        json!("auth.invalid_credential")
+        json!("auth.invalid-credential")
     );
 
     // Compared whole, not just by code: a title or detail that differed by
@@ -5288,8 +5288,8 @@ async fn holder_bound_acceptance() -> PreparedAcceptance {
     );
     replace_exact(
         &mut configuration,
-        "  - handle: adult-status\n    id: urn:example:fixture:requirement:adult-status:v1\n    kind: criterion",
-        "  - handle: adult-status\n    id: urn:example:fixture:requirement:adult-status:v1\n    kind: criterion\n    subjectBinding: holder-bound",
+        "  - handle: adult-status\n    uri: urn:example:fixture:requirement:adult-status:v1\n    kind: criterion",
+        "  - handle: adult-status\n    uri: urn:example:fixture:requirement:adult-status:v1\n    kind: criterion\n    subjectBinding: holder-bound",
         1,
     );
     fs::write(&configuration_path, &configuration).expect("test configuration is rewritten");
@@ -5377,7 +5377,7 @@ async fn a_missing_holder_key_is_answered_after_authorization_not_before_it() {
     assert_eq!(malformed.status_code(), axum::http::StatusCode::BAD_REQUEST);
     assert_eq!(
         malformed.json::<Value>()["code"],
-        json!("evidence.invalid_request")
+        json!("evidence.invalid-request")
     );
 
     assert!(
@@ -6177,7 +6177,7 @@ async fn the_holder_bound_acceptance_bundle_batches_every_definition_under_its_c
         );
         assert_eq!(
             refused.json::<Value>()["code"],
-            json!("evidence.invalid_request")
+            json!("evidence.invalid-request")
         );
     }
     assert!(
@@ -6288,7 +6288,7 @@ async fn holder_bound_batch_acceptance(ceiling: u16) -> PreparedAcceptance {
         &mut configuration,
         "\nresponseFormats: [signed-jws, unsigned-json]",
         &format!(
-            "\nresponseFormats: [signed-jws, unsigned-json, sd-jwt-vc, sd-jwt-vc-batch]\nholderBoundBatchMaxSize: {ceiling}"
+            "\nresponseFormats: [signed-jws, unsigned-json, sd-jwt-vc, sd-jwt-vc-batch]\nmaximumHolderBoundBatchSize: {ceiling}"
         ),
         1,
     );
@@ -6300,8 +6300,8 @@ async fn holder_bound_batch_acceptance(ceiling: u16) -> PreparedAcceptance {
     );
     replace_exact(
         &mut configuration,
-        "  - handle: adult-status\n    id: urn:example:fixture:requirement:adult-status:v1\n    kind: criterion",
-        "  - handle: adult-status\n    id: urn:example:fixture:requirement:adult-status:v1\n    kind: criterion\n    subjectBinding: holder-bound",
+        "  - handle: adult-status\n    uri: urn:example:fixture:requirement:adult-status:v1\n    kind: criterion",
+        "  - handle: adult-status\n    uri: urn:example:fixture:requirement:adult-status:v1\n    kind: criterion\n    subjectBinding: holder-bound",
         1,
     );
     fs::write(&configuration_path, &configuration).expect("test configuration is rewritten");
@@ -6424,7 +6424,7 @@ async fn a_batch_above_the_declared_ceiling_is_refused_before_source_access() {
     assert_eq!(refused.status_code(), axum::http::StatusCode::BAD_REQUEST);
     assert_eq!(
         refused.json::<Value>()["code"],
-        json!("evidence.invalid_request")
+        json!("evidence.invalid-request")
     );
     assert!(
         prepared
@@ -6455,7 +6455,7 @@ async fn a_batch_above_the_declared_ceiling_is_refused_before_source_access() {
     assert_eq!(refused.status_code(), axum::http::StatusCode::BAD_REQUEST);
     assert_eq!(
         refused.json::<Value>()["code"],
-        json!("evidence.invalid_request")
+        json!("evidence.invalid-request")
     );
 }
 
@@ -6493,7 +6493,7 @@ async fn a_repeated_holder_key_thumbprint_is_refused_before_source_access() {
         assert_eq!(refused.status_code(), axum::http::StatusCode::BAD_REQUEST);
         assert_eq!(
             refused.json::<Value>()["code"],
-            json!("evidence.invalid_request")
+            json!("evidence.invalid-request")
         );
     }
 
@@ -6528,7 +6528,7 @@ async fn the_singular_media_type_requires_exactly_one_holder_key() {
     assert_eq!(refused.status_code(), axum::http::StatusCode::BAD_REQUEST);
     assert_eq!(
         refused.json::<Value>()["code"],
-        json!("evidence.invalid_request")
+        json!("evidence.invalid-request")
     );
 
     // One key is a batch of one, so the batch media type still serves it.
@@ -6629,7 +6629,7 @@ async fn audience_scoped_credential_issuance_answers_at_most_one_holder_key() {
     assert_eq!(crowded.status_code(), axum::http::StatusCode::BAD_REQUEST);
     assert_eq!(
         crowded.json::<Value>()["code"],
-        json!("evidence.invalid_request")
+        json!("evidence.invalid-request")
     );
 }
 
@@ -6870,7 +6870,7 @@ async fn sd_jwt_holder_key_with_private_member_rejected() {
             "a holder key carrying private material is not a request"
         );
         let problem = response.json::<Value>();
-        assert_eq!(problem["code"], json!("evidence.invalid_request"));
+        assert_eq!(problem["code"], json!("evidence.invalid-request"));
         let text = response.text();
         assert!(
             !text.contains("nWGxne") && !text.contains("c2VjcmV0"),
@@ -6921,7 +6921,7 @@ async fn sd_jwt_holder_key_wrong_algorithm_rejected() {
         );
         assert_eq!(
             response.json::<Value>()["code"],
-            json!("evidence.invalid_request")
+            json!("evidence.invalid-request")
         );
     }
 
@@ -7013,7 +7013,7 @@ async fn sd_jwt_vc_demo_serves_a_credential_for_curl() {
     let credential_path = state_root.join("credential.txt");
     let metadata_path = state_root.join("issuer-metadata.json");
     let jwks_path = state_root.join("trusted.jwks.json");
-    let policy_path = state_root.join("verification-policy.yaml");
+    let policy_path = state_root.join("verification.policy.yaml");
     for stale in [
         &signed_path,
         &credential_path,
@@ -7183,6 +7183,9 @@ async fn sd_jwt_vc_demo_serves_a_credential_for_curl() {
 /// the `evidence verify` command parses.
 fn demo_verification_policy_document(policy: &EvidenceVerificationPolicy) -> String {
     let document = json!({
+        "apiVersion": crate::verification_policy::VERIFICATION_POLICY_API_VERSION,
+        "kind": crate::verification_policy::VERIFICATION_POLICY_KIND,
+        "expectedAssuranceProfile": policy.assurance_profile,
         "issuedBy": policy.issued_by,
         "providedBy": policy.provided_by,
         "requirement": policy.requirement,
@@ -7216,19 +7219,20 @@ fn demo_verification_policy_document(policy: &EvidenceVerificationPolicy) -> Str
 /// The closed expected value-form vocabulary as a policy document writes it.
 fn expected_form_document(form: &ExpectedValueForm) -> Value {
     match form {
-        ExpectedValueForm::Boolean => json!("boolean"),
-        ExpectedValueForm::Integer => json!("integer"),
-        ExpectedValueForm::String => json!("string"),
-        ExpectedValueForm::DateBucket => json!("date-bucket"),
-        ExpectedValueForm::TimeBucket => json!("time-bucket"),
-        ExpectedValueForm::EntityReference => json!("entity-reference"),
-        ExpectedValueForm::Structured => json!("structured"),
+        ExpectedValueForm::Boolean => json!({"type": "boolean"}),
+        ExpectedValueForm::Integer => json!({"type": "integer"}),
+        ExpectedValueForm::String => json!({"type": "string"}),
+        ExpectedValueForm::DateBucket => json!({"type": "date-bucket"}),
+        ExpectedValueForm::TimeBucket => json!({"type": "time-bucket"}),
+        ExpectedValueForm::EntityReference => json!({"type": "entity-reference"}),
+        ExpectedValueForm::Structured => json!({"type": "structured"}),
         ExpectedValueForm::List {
             item_form,
             minimum_items,
             maximum_items,
             unique,
-        } => json!({"list": {
+        } => json!({
+            "type": "list",
             "items": match item_form {
                 crate::verifier::ExpectedListItemForm::String => "string",
                 crate::verifier::ExpectedListItemForm::EntityReference => "entity-reference",
@@ -7239,7 +7243,7 @@ fn expected_form_document(form: &ExpectedValueForm) -> Value {
             "minimumItems": minimum_items,
             "maximumItems": maximum_items,
             "unique": unique
-        }}),
+        }),
     }
 }
 
@@ -8922,8 +8926,8 @@ async fn declared_unresolved_fetch_after_unique_search_is_dependency_failure() {
             let mut config = fs::read_to_string(&path).expect("config is readable");
             replace_exact(
                 &mut config,
-                "  source-a-fetch:\n    transport: http-json\n",
-                "  source-a-fetch:\n    transport: http-json\n    unresolvedProblem: {status: 404, type: https://id.example.invalid/problems/unresolved, code: consultation.unresolved}\n",
+                "  source-a-fetch:\n    type: http-json\n",
+                "  source-a-fetch:\n    type: http-json\n    unresolvedProblem: {status: 404, type: https://id.example.invalid/problems/unresolved, code: consultation.unresolved}\n",
                 1,
             );
             fs::write(path, config).expect("fetch declaration is written");
@@ -9086,8 +9090,8 @@ fn search_then_fetch_rejects_an_unbound_prior_fact_at_startup() {
                 fs::read_to_string(&configuration_path).expect("chained configuration is readable");
             replace_exact(
                 &mut configuration,
-                "record_id: {from: prior-fact, field: record_id}",
-                "record_id: {from: prior-fact, field: missing_record_id}",
+                "record_id: {type: prior-fact, field: record_id}",
+                "record_id: {type: prior-fact, field: missing_record_id}",
                 1,
             );
             fs::write(configuration_path, configuration)
@@ -9484,8 +9488,8 @@ async fn declared_unresolved_fetch_set_member_after_unique_search_is_dependency_
             let mut config = fs::read_to_string(&path).expect("fetch-set config is readable");
             replace_exact(
                 &mut config,
-                "  source-a-fetch:\n    transport: http-json\n",
-                "  source-a-fetch:\n    transport: http-json\n    unresolvedProblem: {status: 404, type: https://id.example.invalid/problems/unresolved, code: consultation.unresolved}\n",
+                "  source-a-fetch:\n    type: http-json\n",
+                "  source-a-fetch:\n    type: http-json\n    unresolvedProblem: {status: 404, type: https://id.example.invalid/problems/unresolved, code: consultation.unresolved}\n",
                 1,
             );
             fs::write(path, config).expect("fetch-set unresolved declaration is written");
@@ -10060,8 +10064,8 @@ fn configure_exact_registry_lookup_source(bundle_root: &Path) {
     let mut source_b = config[source_b_start..source_b_end].to_owned();
     replace_exact(
         &mut source_b,
-        "  source-b:\n    transport: http-json\n    baseUrl:",
-        "  source-b:\n    transport: http-json\n    unresolvedProblem: {status: 404, type: https://fixture.example/problems/record-unresolved, code: consultation.unresolved}\n    baseUrl:",
+        "  source-b:\n    type: http-json\n    baseUrl:",
+        "  source-b:\n    type: http-json\n    unresolvedProblem: {status: 404, type: https://fixture.example/problems/record-unresolved, code: consultation.unresolved}\n    baseUrl:",
         1,
     );
     replace_exact(
@@ -10460,9 +10464,9 @@ fn adult_search_request_for(given_name: &str, requested_fields: &[&str]) -> Valu
 fn declare_unresolved_problem(bundle_root: &Path, source_id: &str) {
     let path = bundle_root.join("evidence.yaml");
     let mut config = fs::read_to_string(&path).expect("source config is readable");
-    let source = format!("  {source_id}:\n    transport: http-json\n");
+    let source = format!("  {source_id}:\n    type: http-json\n");
     let declared = format!(
-        "  {source_id}:\n    transport: http-json\n    unresolvedProblem: {{status: 404, type: https://id.example.invalid/problems/unresolved, code: consultation.unresolved}}\n"
+        "  {source_id}:\n    type: http-json\n    unresolvedProblem: {{status: 404, type: https://id.example.invalid/problems/unresolved, code: consultation.unresolved}}\n"
     );
     replace_exact(&mut config, &source, &declared, 1);
     fs::write(path, config).expect("declared unresolved source config is written");
@@ -10471,9 +10475,9 @@ fn declare_unresolved_problem(bundle_root: &Path, source_id: &str) {
 fn enable_access_attribution(bundle_root: &Path, source_id: &str) {
     let path = bundle_root.join("evidence.yaml");
     let mut config = fs::read_to_string(&path).expect("source config is readable");
-    let source = format!("  {source_id}:\n    transport: http-json\n");
+    let source = format!("  {source_id}:\n    type: http-json\n");
     let attributed =
-        format!("  {source_id}:\n    transport: http-json\n    forwardAccessAttribution: true\n");
+        format!("  {source_id}:\n    type: http-json\n    forwardAccessAttribution: true\n");
     replace_exact(&mut config, &source, &attributed, 1);
     fs::write(path, config).expect("attributed source config is written");
 }
@@ -10922,7 +10926,7 @@ fn configure_sqlite_adult_source(bundle_root: &Path) -> PathBuf {
     configuration.replace_range(
         source_start..source_end,
         r#"  source-a:
-    transport: sqlite-extract
+    type: sqlite-extract
     posture: field-projected
     extractProfile: adult-register-extract
     maximumExtractAgeSeconds: 86400
@@ -10933,16 +10937,16 @@ fn configure_sqlite_adult_source(bundle_root: &Path) -> PathBuf {
         - role: subject
           alternatives: [{profile: person-demographics-v1, fields: [given_name, family_name, birth_date]}]
       parameterBindings:
-        given_name: {kind: selector, role: subject, profile: person-demographics-v1, field: given_name}
-        family_name: {kind: selector, role: subject, profile: person-demographics-v1, field: family_name}
-        birth_date: {kind: selector, role: subject, profile: person-demographics-v1, field: birth_date}
+        given_name: {type: selector, role: subject, profile: person-demographics-v1, field: given_name}
+        family_name: {type: selector, role: subject, profile: person-demographics-v1, field: family_name}
+        birth_date: {type: selector, role: subject, profile: person-demographics-v1, field: birth_date}
       projection: [/rows/*/date_of_birth]
       maximumRows: 2
       maximumCellBytes: 256
       maximumStatementSteps: 100000
-      timeoutMilliseconds: 3000
+      attemptTimeoutMilliseconds: 3000
       maximumResponseBytes: 65536
-      concurrencyLimit: 8
+      maximumConcurrency: 8
     responseSchema: schemas/adult-status-response.schema.yaml
     extractScript: adapters/adult-status-source.rhai
     factSchema: schemas/adult-status-facts.schema.yaml
@@ -11035,24 +11039,24 @@ fn configure_search_then_fetch(bundle_root: &Path, source_origin: &str) {
         fs::read_to_string(&configuration_path).expect("copied configuration is readable");
     replace_exact(
         &mut configuration,
-        "    acquisition:\n      kind: single\n      source: source-a",
-        "    acquisition:\n      kind: search-then-fetch\n      search: source-a\n      fetch: source-a-fetch",
+        "    acquisition:\n      type: single\n      source: source-a",
+        "    acquisition:\n      type: search-then-fetch\n      search: source-a\n      fetch: source-a-fetch",
         1,
     );
     replace_exact(
         &mut configuration,
         &format!(
-            "  source-a:\n    transport: http-json\n    baseUrl: {source_origin}\n    posture: field-projected"
+            "  source-a:\n    type: http-json\n    baseUrl: {source_origin}\n    posture: field-projected"
         ),
         &format!(
-            "  source-a:\n    transport: http-json\n    baseUrl: {source_origin}\n    posture: record-transformed"
+            "  source-a:\n    type: http-json\n    baseUrl: {source_origin}\n    posture: record-transformed"
         ),
         1,
     );
     replace_exact(
         &mut configuration,
-        "    authentication: {kind: static-authorization, tokenRef: secret:file/source-a-token}\n    request:\n      method: POST\n      path: /v1/facts",
-        "    authentication: {kind: static-authorization, tokenRef: secret:file/source-a-token}\n    request:\n      method: POST\n      path: /v1/search",
+        "    authentication: {type: static-authorization, tokenRef: secret:file/source-a-token}\n    request:\n      method: POST\n      path: /v1/facts",
+        "    authentication: {type: static-authorization, tokenRef: secret:file/source-a-token}\n    request:\n      method: POST\n      path: /v1/search",
         1,
     );
     replace_exact(
@@ -11071,15 +11075,15 @@ fn configure_search_then_fetch(bundle_root: &Path, source_origin: &str) {
         &mut configuration,
         "  source-b:\n",
         r#"  source-a-fetch:
-    transport: http-json
+    type: http-json
     baseUrl: https://source.invalid
     posture: field-projected
-    authentication: {kind: static-authorization, tokenRef: secret:file/source-a-token}
+    authentication: {type: static-authorization, tokenRef: secret:file/source-a-token}
     request:
       method: GET
-      pathTemplate: /v1/records/{record_id}
+      path: /v1/records/{record_id}
       pathBindings:
-        record_id: {from: prior-fact, field: record_id}
+        record_id: {type: prior-fact, field: record_id}
       fixedHeaders: [{name: Accept, value: application/json}]
       selectorInputs: []
       prepareScript: adapters/adult-status-fetch-prepare.rhai
@@ -11088,9 +11092,9 @@ fn configure_search_then_fetch(bundle_root: &Path, source_origin: &str) {
       preparationLimits: {query: allowed, jsonBody: forbidden, maximumNormalizedBytes: 4096}
       projection: [/date_of_birth]
       redirects: deny
-      timeoutMilliseconds: 3000
+      attemptTimeoutMilliseconds: 3000
       maximumResponseBytes: 65536
-      concurrencyLimit: 8
+      maximumConcurrency: 8
     responseSchema: schemas/adult-status-fetch-response.schema.yaml
     extractScript: adapters/adult-status-fetch-source.rhai
     factSchema: schemas/adult-status-fetch-facts.schema.yaml
@@ -11284,9 +11288,9 @@ fn configure_fetch_set(bundle_root: &Path, source_origin: &str) {
     );
     replace_exact(
         &mut configuration,
-        "    acquisition:\n      kind: single\n      source: source-a",
+        "    acquisition:\n      type: single\n      source: source-a",
         r#"    acquisition:
-      kind: search-then-fetch-set
+      type: search-then-fetch-set
       search: source-a
       fetch:
         - {source: source-a-fetch, factInputs: [record_id]}
@@ -11297,17 +11301,17 @@ fn configure_fetch_set(bundle_root: &Path, source_origin: &str) {
     replace_exact(
         &mut configuration,
         &format!(
-            "  source-a:\n    transport: http-json\n    baseUrl: {source_origin}\n    posture: field-projected"
+            "  source-a:\n    type: http-json\n    baseUrl: {source_origin}\n    posture: field-projected"
         ),
         &format!(
-            "  source-a:\n    transport: http-json\n    baseUrl: {source_origin}\n    posture: record-transformed"
+            "  source-a:\n    type: http-json\n    baseUrl: {source_origin}\n    posture: record-transformed"
         ),
         1,
     );
     replace_exact(
         &mut configuration,
-        "    authentication: {kind: static-authorization, tokenRef: secret:file/source-a-token}\n    request:\n      method: POST\n      path: /v1/facts",
-        "    authentication: {kind: static-authorization, tokenRef: secret:file/source-a-token}\n    request:\n      method: POST\n      path: /v1/search",
+        "    authentication: {type: static-authorization, tokenRef: secret:file/source-a-token}\n    request:\n      method: POST\n      path: /v1/facts",
+        "    authentication: {type: static-authorization, tokenRef: secret:file/source-a-token}\n    request:\n      method: POST\n      path: /v1/search",
         1,
     );
     replace_exact(
@@ -11326,15 +11330,15 @@ fn configure_fetch_set(bundle_root: &Path, source_origin: &str) {
         &mut configuration,
         "  source-b:\n",
         r#"  source-a-fetch:
-    transport: http-json
+    type: http-json
     baseUrl: https://source.invalid
     posture: field-projected
-    authentication: {kind: static-authorization, tokenRef: secret:file/source-a-token}
+    authentication: {type: static-authorization, tokenRef: secret:file/source-a-token}
     request:
       method: POST
-      pathTemplate: /v1/records/{record_id}
+      path: /v1/records/{record_id}
       pathBindings:
-        record_id: {from: prior-fact, field: record_id}
+        record_id: {type: prior-fact, field: record_id}
       fixedHeaders: [{name: Accept, value: application/json}]
       selectorInputs: []
       prepareScript: adapters/adult-status-fetch-prepare.rhai
@@ -11343,17 +11347,17 @@ fn configure_fetch_set(bundle_root: &Path, source_origin: &str) {
       preparationLimits: {query: forbidden, jsonBody: required, maximumJsonDepth: 8, maximumCollectionItems: 16, maximumStringBytes: 256, maximumNormalizedBytes: 4096}
       projection: [/date_of_birth]
       redirects: deny
-      timeoutMilliseconds: 3000
+      attemptTimeoutMilliseconds: 3000
       maximumResponseBytes: 65536
-      concurrencyLimit: 8
+      maximumConcurrency: 8
     responseSchema: schemas/adult-status-fetch-response.schema.yaml
     extractScript: adapters/adult-status-fetch-source.rhai
     factSchema: schemas/adult-status-fetch-facts.schema.yaml
   source-a-partner:
-    transport: http-json
+    type: http-json
     baseUrl: https://source.invalid
     posture: field-projected
-    authentication: {kind: static-authorization, tokenRef: secret:file/source-a-token}
+    authentication: {type: static-authorization, tokenRef: secret:file/source-a-token}
     request:
       method: POST
       path: /v1/partners
@@ -11365,9 +11369,9 @@ fn configure_fetch_set(bundle_root: &Path, source_origin: &str) {
       preparationLimits: {query: forbidden, jsonBody: required, maximumJsonDepth: 8, maximumCollectionItems: 16, maximumStringBytes: 256, maximumNormalizedBytes: 4096}
       projection: [/partner_status]
       redirects: deny
-      timeoutMilliseconds: 3000
+      attemptTimeoutMilliseconds: 3000
       maximumResponseBytes: 65536
-      concurrencyLimit: 8
+      maximumConcurrency: 8
     responseSchema: schemas/adult-status-partner-response.schema.yaml
     extractScript: adapters/adult-status-partner-source.rhai
     factSchema: schemas/adult-status-partner-facts.schema.yaml
@@ -11534,10 +11538,10 @@ fn widen_fetch_set_to_four_bulk_members(bundle_root: &Path, source_origin: &str)
         &mut configuration,
         "  source-b:\n",
         r#"  source-a-third:
-    transport: http-json
+    type: http-json
     baseUrl: https://source.invalid
     posture: field-projected
-    authentication: {kind: static-authorization, tokenRef: secret:file/source-a-token}
+    authentication: {type: static-authorization, tokenRef: secret:file/source-a-token}
     request:
       method: POST
       path: /v1/third
@@ -11549,17 +11553,17 @@ fn widen_fetch_set_to_four_bulk_members(bundle_root: &Path, source_origin: &str)
       preparationLimits: {query: forbidden, jsonBody: required, maximumJsonDepth: 8, maximumCollectionItems: 16, maximumStringBytes: 256, maximumNormalizedBytes: 4096}
       projection: [/third_status, /third_detail]
       redirects: deny
-      timeoutMilliseconds: 3000
+      attemptTimeoutMilliseconds: 3000
       maximumResponseBytes: 65536
-      concurrencyLimit: 8
+      maximumConcurrency: 8
     responseSchema: schemas/adult-status-third-response.schema.yaml
     extractScript: adapters/adult-status-third-source.rhai
     factSchema: schemas/adult-status-third-facts.schema.yaml
   source-a-fourth:
-    transport: http-json
+    type: http-json
     baseUrl: https://source.invalid
     posture: field-projected
-    authentication: {kind: static-authorization, tokenRef: secret:file/source-a-token}
+    authentication: {type: static-authorization, tokenRef: secret:file/source-a-token}
     request:
       method: POST
       path: /v1/fourth
@@ -11571,9 +11575,9 @@ fn widen_fetch_set_to_four_bulk_members(bundle_root: &Path, source_origin: &str)
       preparationLimits: {query: forbidden, jsonBody: required, maximumJsonDepth: 8, maximumCollectionItems: 16, maximumStringBytes: 256, maximumNormalizedBytes: 4096}
       projection: [/fourth_status, /fourth_detail]
       redirects: deny
-      timeoutMilliseconds: 3000
+      attemptTimeoutMilliseconds: 3000
       maximumResponseBytes: 65536
-      concurrencyLimit: 8
+      maximumConcurrency: 8
     responseSchema: schemas/adult-status-fourth-response.schema.yaml
     extractScript: adapters/adult-status-fourth-source.rhai
     factSchema: schemas/adult-status-fourth-facts.schema.yaml
@@ -11764,8 +11768,8 @@ fn apply_fixture_ceilings(bundle_root: &Path, ceilings: &FixtureCeilings) {
     );
     replace_exact(
         &mut text,
-        "concurrencyLimit: 8",
-        &format!("concurrencyLimit: {}", ceilings.source_concurrency_limit),
+        "maximumConcurrency: 8",
+        &format!("maximumConcurrency: {}", ceilings.source_concurrency_limit),
         4,
     );
     fs::write(path, text).expect("deployment-only ceiling rewrite succeeds");
@@ -11779,7 +11783,7 @@ fn write_runtime_config(
     ceilings: &FixtureCeilings,
 ) {
     let document = format!(
-        r#"apiVersion: registry.registrystack.org/evidence-runtime/v1alpha1
+        r#"apiVersion: id.registrystack.org/formats/evidence/runtime/v1alpha1
 kind: EvidenceRuntimeConfig
 package:
   root: {}
@@ -11795,7 +11799,7 @@ secretProviders:
   file:
     root: {}
 signer:
-  kind: local-jwk
+  type: local-jwk
   privateKeyRef: secret:file/signing-key
 audit:
   path: {}
@@ -12399,10 +12403,10 @@ const CONSTANT_SOURCE_BODY: &str = r#"{"total":1,"date_of_birth":"2000-01-01"}"#
 ///
 /// - `requestsPerPrincipalPerMinute: 60` with `burstPerPrincipal: 10` is one
 ///   request per second per principal, so an unlifted run measures the rate
-///   limiter returning `evidence.rate_limited`.
+///   limiter returning `evidence.rate-limited`.
 /// - `maximumConcurrentRequests: 64` admits fewer requests than this driver
 ///   offers, so an unlifted run measures admission queueing.
-/// - `concurrencyLimit: 8` per source caps outbound calls in flight, so an
+/// - `maximumConcurrency: 8` per source caps outbound calls in flight, so an
 ///   unlifted run measures the source semaphore.
 /// - `rotateBytes: 10485760` rotates the audit file several times inside a
 ///   measured window, so an unlifted run measures file rotation.

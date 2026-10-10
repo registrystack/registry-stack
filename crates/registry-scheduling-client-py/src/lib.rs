@@ -100,7 +100,7 @@ fn client_error(py: Python<'_>, error: RustClientError) -> PyErr {
             ..MappedError::default()
         },
         RustClientError::InvalidRequest { .. } => MappedError {
-            kind: "invalid_request",
+            kind: "invalid-request",
             message: INVALID_ARGUMENTS.to_owned(),
             ..MappedError::default()
         },
@@ -148,9 +148,9 @@ fn client_error(py: Python<'_>, error: RustClientError) -> PyErr {
 
 fn protocol_failure(failure: SchedulingProtocolFailure) -> &'static str {
     match failure {
-        SchedulingProtocolFailure::HeaderBounds => "header_bounds",
-        SchedulingProtocolFailure::TraceContext => "trace_context",
-        SchedulingProtocolFailure::MediaType => "media_type",
+        SchedulingProtocolFailure::HeaderBounds => "header-bounds",
+        SchedulingProtocolFailure::TraceContext => "trace-context",
+        SchedulingProtocolFailure::MediaType => "media-type",
         SchedulingProtocolFailure::Body => "body",
         SchedulingProtocolFailure::Problem => "problem",
         SchedulingProtocolFailure::Status => "status",
@@ -161,22 +161,22 @@ fn protocol_failure(failure: SchedulingProtocolFailure) -> &'static str {
 fn input<T: DeserializeOwned>(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<T> {
     let value = python_to_json(value).map_err(|error| {
         let _ = error.message();
-        binding_error(py, "invalid_request", INVALID_ARGUMENTS)
+        binding_error(py, "invalid-request", INVALID_ARGUMENTS)
     })?;
     serde_json::from_value(value)
-        .map_err(|_| binding_error(py, "invalid_request", INVALID_ARGUMENTS))
+        .map_err(|_| binding_error(py, "invalid-request", INVALID_ARGUMENTS))
 }
 
 fn bearer(py: Python<'_>, value: &str) -> PyResult<BearerToken> {
     BearerToken::new(value.to_owned())
-        .map_err(|_| binding_error(py, "invalid_request", "the bearer token is invalid"))
+        .map_err(|_| binding_error(py, "invalid-request", "the bearer token is invalid"))
 }
 
 /// One RFC 3339 instant, normalized to UTC.
 fn instant(py: Python<'_>, value: &str) -> PyResult<DateTime<Utc>> {
     DateTime::parse_from_rfc3339(value)
         .map(|parsed| parsed.with_timezone(&Utc))
-        .map_err(|_| binding_error(py, "invalid_request", INVALID_ARGUMENTS))
+        .map_err(|_| binding_error(py, "invalid-request", INVALID_ARGUMENTS))
 }
 
 fn optional_instant(py: Python<'_>, value: Option<&str>) -> PyResult<Option<DateTime<Utc>>> {
@@ -188,7 +188,7 @@ fn page_limit(py: Python<'_>, value: Option<i64>) -> PyResult<Option<u32>> {
     value
         .map(|value| {
             u32::try_from(value)
-                .map_err(|_| binding_error(py, "invalid_request", INVALID_ARGUMENTS))
+                .map_err(|_| binding_error(py, "invalid-request", INVALID_ARGUMENTS))
         })
         .transpose()
 }

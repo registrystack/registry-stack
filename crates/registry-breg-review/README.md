@@ -129,7 +129,7 @@ person may not read renders the same neutral not-found page as a missing draft,
 with no form. When both reads succeed, the page shows the current values next to
 the proposed ones, labelled from caller-filtered registry metadata.
 
-The submit form appears only when the registry offers `submit_request` on the
+The submit form appears only when the registry offers `submit-request` on the
 draft. The page remembers that exact action, the target record revision it
 showed, and a fresh idempotency key as a view bound to the session and the
 request; the form carries only the view's random identifier. The action's

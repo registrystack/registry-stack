@@ -1,11 +1,12 @@
-version: 1
+apiVersion: id.registrystack.org/formats/evidence/bundle/v1
+kind: EvidenceBundle
 assuranceProfile: evidence-grade
 service:
   providerId: urn:gov:example:evidence:dhis2
   publicOrigin: https://evidence.example.org
   trustDomain: urn:gov:example:trust-domain:social-protection
 issuer:
-  id: urn:gov:example:issuer:population-authority
+  uri: urn:gov:example:issuer:population-authority
 authentication:
   oidc:
     issuer: https://identity.gov.example
@@ -13,11 +14,13 @@ authentication:
     tokenTypes: [at+jwt]
     algorithms: [ES256]
     jwksSource:
-      kind: uri
+      type: uri
       uri: https://identity.gov.example/.well-known/jwks.json
     principalClaim: sub
     requesterTagsClaim: evidence_tags
     evidenceAudienceClaim: evidence_audience
+    allowedClients: unrestricted
+    requiredScopes: unrestricted
     maximumTokenLifetimeSeconds: 300
     revokedKeyIds: []
 audit:
@@ -51,12 +54,12 @@ selectorProfiles:
         maximumBytes: 64
 sources:
   population-tracker:
-    transport: http-json
+    type: http-json
     baseUrl: https://dhis2.gov.example
     posture: record-transformed
     tlsTrustProfile: government-internal-pki
     authentication:
-      kind: basic
+      type: basic
       usernameRef: secret:file/dhis2-username
       passwordRef: secret:file/dhis2-password
     request:
@@ -96,20 +99,20 @@ sources:
         - /trackedEntities/*/attributes/*/attribute
         - /trackedEntities/*/attributes/*/value
       redirects: deny
-      timeoutMilliseconds: 3000
+      attemptTimeoutMilliseconds: 3000
       maximumResponseBytes: 65536
-      concurrencyLimit: 8
+      maximumConcurrency: 8
     # Shape contract for the projected response, checked before extraction runs.
     responseSchema: schemas/adult-status-response.schema.yaml
     extractScript: adapters/adult-status-extract.rhai
     factSchema: schemas/adult-status-facts.schema.yaml
   professional-licence-register:
-    transport: http-json
+    type: http-json
     baseUrl: https://dhis2.gov.example
     posture: record-transformed
     tlsTrustProfile: government-internal-pki
     authentication:
-      kind: basic
+      type: basic
       usernameRef: secret:file/dhis2-username
       passwordRef: secret:file/dhis2-password
     request:
@@ -157,9 +160,9 @@ sources:
         - /trackedEntities/*/enrollments/*/events/*/programStage
         - /trackedEntities/*/enrollments/*/events/*/status
       redirects: deny
-      timeoutMilliseconds: 3000
+      attemptTimeoutMilliseconds: 3000
       maximumResponseBytes: 65536
-      concurrencyLimit: 8
+      maximumConcurrency: 8
     # Shape contract for the projected response, checked before extraction runs.
     responseSchema: schemas/professional-licence-response.schema.yaml
     extractScript: adapters/professional-licence-extract.rhai
@@ -191,10 +194,10 @@ authorityProfiles:
             valueOrigin: request
 requirements:
   - handle: adult-status
-    id: urn:gov:example:requirement:adult-status:v1
+    uri: urn:gov:example:requirement:adult-status:v1
     kind: criterion
     acquisition:
-      kind: single
+      type: single
       source: population-tracker
     purposes: [benefit-eligibility]
     subjectRoles:
@@ -215,8 +218,8 @@ requirements:
       parameters: {minimum_age_years: 18}
     concepts:
       - handle: adult-status
-        id: urn:gov:example:concept:adult-status
-        form: boolean
+        uri: urn:gov:example:concept:adult-status
+        type: boolean
         required: true
         constraints: {}
     fixtures: fixtures/adult-status-cases.yaml
@@ -224,10 +227,10 @@ requirements:
       families: [urn:gov:example:disclosure-family:adult-status]
     existenceDisclosure: collapse-unresolved
   - handle: professional-licence-status
-    id: urn:gov:example:requirement:professional-licence-status:v1
+    uri: urn:gov:example:requirement:professional-licence-status:v1
     kind: criterion
     acquisition:
-      kind: single
+      type: single
       source: professional-licence-register
     purposes: [professional-registration-verification]
     subjectRoles:
@@ -278,13 +281,13 @@ requirements:
             code: later
     concepts:
       - handle: licence-active
-        id: urn:gov:example:concept:professional-licence-active
-        form: boolean
+        uri: urn:gov:example:concept:professional-licence-active
+        type: boolean
         required: true
         constraints: {}
       - handle: licence-expiry-category
-        id: urn:gov:example:concept:professional-licence-expiry-category
-        form: controlled-category
+        uri: urn:gov:example:concept:professional-licence-expiry-category
+        type: controlled-category
         required: true
         constraints:
           categoryScheme: urn:gov:example:scheme:professional-licence-expiry

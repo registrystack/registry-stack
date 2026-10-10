@@ -1,6 +1,6 @@
-apiVersion: registry.registrystack.org/v1alpha1
-kind: RegistryProject
-registry:
+apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
   id: publicschema-household
   canonicalBaseIri: "https://publicschema-household.example.gov"
   version: 0.1.0
@@ -96,7 +96,7 @@ manifestProjection:
     - id: household-relationship
       schemeIri: https://publicschema.org/GroupRole
       version: "0.3.0"
-      externalRef: https://publicschema.org/GroupRole
+      externalReference: https://publicschema.org/GroupRole
       concepts:
         - {code: head, iri: https://publicschema.org/GroupRole/head, label: {en: Head, fr: Chef}}
         - {code: spouse, iri: https://publicschema.org/GroupRole/spouse, label: {en: Spouse, fr: Conjoint}}
@@ -109,11 +109,11 @@ manifestProjection:
       schemeIri: https://publicschema-household.example.gov/vocab/residency-status
     - id: preferred-language
       schemeIri: https://id.loc.gov/vocabulary/iso639-1
-      externalRef: https://id.loc.gov/vocabulary/iso639-1.html
+      externalReference: https://id.loc.gov/vocabulary/iso639-1.html
     - id: person-sex
       schemeIri: https://publicschema.org/Sex
       version: "0.3.0"
-      externalRef: https://publicschema.org/Sex
+      externalReference: https://publicschema.org/Sex
       concepts:
         - {code: female, iri: https://publicschema.org/Sex/female, label: {en: Female, fr: Féminin}}
         - {code: male, iri: https://publicschema.org/Sex/male, label: {en: Male, fr: Masculin}}
@@ -127,7 +127,7 @@ manifestProjection:
 modules:
   - id: publicschema-household-core
     version: 0.1.0
-    digest: "sha256:219861d0446cb43d732adf6cb52a065dce512ab18e69d41073084bf940e262d2"
+    digest: "sha256:d966403925ac8428d854efd7bd981c40e65dd2de17f4938e9273512916f6f4b1"
   - id: publicschema-household-demographics
     version: 0.1.0
     digest: "sha256:a6cee2013ce963009c7367aefcfdb7cb4dfa2709643adca445643dd92df5286e"
@@ -138,39 +138,41 @@ accessProfiles:
     requiredScopes: [registry:household:operate]
     requiredPurposes: [household-administration]
     permissions:
-      - {entity: person, operations: [create, get, list, patch], readableFields: [person-code, legal-name, family-name, date-of-birth, person-sex, residency-status, preferred-language], writableFields: [person-code, legal-name, family-name, date-of-birth, person-sex, residency-status, preferred-language], filterableFields: [person-code, person-sex, residency-status], sortableFields: [person-code], rowBoundaries: unrestricted}
-      - entity: household
-        rowBoundaries: unrestricted
-        operations: [create, get, lookup, list, patch]
-        readableFields: [household-code, local-household-number, household-name, administrative-area, household-type, head-count, child-count, child-under-5-count, elderly-count, single-headed, woman-headed]
-        writableFields: [household-code, local-household-number, household-name, administrative-area, household-type]
-        filterableFields: [household-code, local-household-number, administrative-area, household-type, head-count, child-count, child-under-5-count, elderly-count, single-headed, woman-headed]
-        sortableFields: [local-household-number, household-code, child-count]
-        allowCount: true
-        lookups:
-          - {selector: by-local-reference, valueOrigin: request}
-          - {selector: by-household-code, valueOrigin: request}
-        readPaths:
-          - path: people
-            readableFields: [person-code, legal-name, family-name, date-of-birth, person-sex, residency-status]
-            filterableFields: [person-sex, residency-status]
-            sortableFields: [person-code]
-            allowCount: true
-      - {entity: group-membership, operations: [create, get, list, patch], readableFields: [person, household, relationship, valid-from, valid-to], writableFields: [person, household, relationship, valid-from, valid-to], filterableFields: [person, household, relationship, valid-from], rowBoundaries: unrestricted}
+      entities:
+        - {entity: person, operations: [create, get, list, patch], readableFields: [person-code, legal-name, family-name, date-of-birth, person-sex, residency-status, preferred-language], writableFields: [person-code, legal-name, family-name, date-of-birth, person-sex, residency-status, preferred-language], filterableFields: [person-code, person-sex, residency-status], sortableFields: [person-code], rowBoundaries: unrestricted}
+        - entity: household
+          rowBoundaries: unrestricted
+          operations: [create, get, lookup, list, patch]
+          readableFields: [household-code, local-household-number, household-name, administrative-area, household-type, head-count, child-count, child-under-5-count, elderly-count, single-headed, woman-headed]
+          writableFields: [household-code, local-household-number, household-name, administrative-area, household-type]
+          filterableFields: [household-code, local-household-number, administrative-area, household-type, head-count, child-count, child-under-5-count, elderly-count, single-headed, woman-headed]
+          sortableFields: [local-household-number, household-code, child-count]
+          allowCount: true
+          lookups:
+            - {selector: by-local-reference, valueOrigin: request}
+            - {selector: by-household-code, valueOrigin: request}
+          readPaths:
+            - path: people
+              readableFields: [person-code, legal-name, family-name, date-of-birth, person-sex, residency-status]
+              filterableFields: [person-sex, residency-status]
+              sortableFields: [person-code]
+              allowCount: true
+        - {entity: group-membership, operations: [create, get, list, patch], readableFields: [person, household, relationship, valid-from, valid-to], writableFields: [person, household, relationship, valid-from, valid-to], filterableFields: [person, household, relationship, valid-from], rowBoundaries: unrestricted}
   - id: household-viewer
     principalClaim: registry_principal
     requiredScopes: [registry:household:view]
     requiredPurposes: [household-view]
     permissions:
-      - entity: household
-        operations: [get, lookup]
-        readableFields: [household-code, local-household-number, household-name, administrative-area, household-type]
-        rowBoundaries:
-          - {field: id, claim: household_id, operator: equals}
-        lookups:
-          - selector: by-household-code
-            valueOrigin: verified_claim
-            claimMapping: {household-code: household_code}
+      entities:
+        - entity: household
+          operations: [get, lookup]
+          readableFields: [household-code, local-household-number, household-name, administrative-area, household-type]
+          rowBoundaries:
+            - {field: id, claim: household_id, operator: equals}
+          lookups:
+            - selector: by-household-code
+              valueOrigin: verified-claim
+              claimMapping: {household-code: household_code}
 vocabularies:
   - {id: household-relationship, values: [head, spouse, child, dependent, other]}
   - {id: household-type, values: [private, collective, institutional]}

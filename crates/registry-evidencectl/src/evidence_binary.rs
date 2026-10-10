@@ -17,10 +17,26 @@ use anyhow::{Context as _, Result};
 /// reads. evidencectl writes runtime documents; the runtime owns the grammar
 /// and refuses any other envelope.
 pub(crate) const EVIDENCE_RUNTIME_API_VERSION: &str =
-    "registry.registrystack.org/evidence-runtime/v1alpha1";
+    "id.registrystack.org/formats/evidence/runtime/v1alpha1";
 
 /// The `kind` of the runtime document the matching `evidence` binary reads.
 pub(crate) const EVIDENCE_RUNTIME_KIND: &str = "EvidenceRuntimeConfig";
+
+/// The `apiVersion` of the bundle the matching `evidence` binary reads.
+/// evidencectl writes bundles; the runtime owns the grammar and refuses any
+/// other envelope.
+pub(crate) const EVIDENCE_BUNDLE_API_VERSION: &str =
+    "id.registrystack.org/formats/evidence/bundle/v1";
+
+/// The `kind` of the bundle the matching `evidence` binary reads.
+pub(crate) const EVIDENCE_BUNDLE_KIND: &str = "EvidenceBundle";
+
+/// The `apiVersion` of a codelist the matching `evidence` binary reads.
+pub(crate) const EVIDENCE_CODELIST_API_VERSION: &str =
+    "id.registrystack.org/formats/evidence/codelist/v1alpha1";
+
+/// The `kind` of a codelist the matching `evidence` binary reads.
+pub(crate) const EVIDENCE_CODELIST_KIND: &str = "EvidenceCodelist";
 
 /// How long a delegated `evidence` run may take before evidencectl stops it.
 ///

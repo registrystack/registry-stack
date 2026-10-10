@@ -20,10 +20,11 @@ use serde::{de::IgnoredAny, Deserialize, Deserializer, Serialize, Serializer};
 
 use super::{
     AccessProfileSource, AccessRequirementsSource, ActorKindSource, ApplyTargetPermissionSource,
-    CompiledTaskGrantSource, ConsentRequirementSource, LookupPermissionSource,
-    MembershipBoundarySource, Operation, ProvenanceFieldSource, ReadPathPermissionSource,
-    RequestMetadataFieldSource, RequestPresencePermissionSource, RequestVisibilitySource,
-    RowBoundarySource, SpatialQueryPermissionSource, UniqueSet,
+    CompiledTaskGrantSource, ConsentRequirementSource, EntityPermissionSource,
+    LookupPermissionSource, MembershipBoundarySource, Operation, PermissionsSource,
+    ProvenanceFieldSource, ReadPathPermissionSource, RequestMetadataFieldSource,
+    RequestPresencePermissionSource, RequestVisibilitySource, RowBoundarySource,
+    SpatialQueryPermissionSource, UniqueSet,
 };
 
 const UNRESTRICTED: &str = "unrestricted";
@@ -90,10 +91,11 @@ impl<M> schemars::JsonSchema for Unrestricted<M> {
     }
 }
 
-/// A scalar written where a member takes only a list. It is never accepted.
-pub(super) struct NotAList<M>(Infallible, PhantomData<M>);
+/// A shape a member never takes. It is never accepted, and the refusal carries
+/// the member's own fix.
+pub(super) struct Refused<M>(Infallible, PhantomData<M>);
 
-impl<'de, M: Member> Deserialize<'de> for NotAList<M> {
+impl<'de, M: Member> Deserialize<'de> for Refused<M> {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         IgnoredAny::deserialize(deserializer)?;
         Err(refused::<M, _>())
@@ -232,20 +234,20 @@ pub(super) fn serialize_required_scopes<S: Serializer>(
     }
 }
 
+impl RowBoundaries {
+    /// The boundaries the compiler holds, where `unrestricted` is none.
+    fn into_boundaries(self) -> Vec<RowBoundarySource> {
+        match self {
+            Self::Unrestricted(_) => Vec::new(),
+            Self::Listed(Listed(boundaries, _)) => boundaries,
+        }
+    }
+}
+
 pub(super) fn row_boundaries<'de, D: Deserializer<'de>>(
     deserializer: D,
 ) -> Result<Vec<RowBoundarySource>, D::Error> {
-    Ok(match RowBoundaries::deserialize(deserializer)? {
-        RowBoundaries::Unrestricted(_) => Vec::new(),
-        RowBoundaries::Listed(Listed(boundaries, _)) => boundaries,
-    })
-}
-
-/// The row reach of a permission that may be written without one.
-pub(super) fn written_row_boundaries<'de, D: Deserializer<'de>>(
-    deserializer: D,
-) -> Result<Option<Vec<RowBoundarySource>>, D::Error> {
-    row_boundaries(deserializer).map(Some)
+    RowBoundaries::deserialize(deserializer).map(RowBoundaries::into_boundaries)
 }
 
 pub(super) fn serialize_row_boundaries<S: Serializer>(
@@ -273,7 +275,7 @@ macro_rules! narrowing_member {
         }
 
         enum $shapes {
-            Scalar(NotAList<$member>),
+            Scalar(Refused<$member>),
             Listed(Listed<$list, $member>),
         }
 
@@ -281,7 +283,7 @@ macro_rules! narrowing_member {
 
         pub(super) fn $read<'de, D: Deserializer<'de>>(deserializer: D) -> Result<$list, D::Error> {
             Ok(match $shapes::deserialize(deserializer)? {
-                $shapes::Scalar(NotAList(never, _)) => match never {},
+                $shapes::Scalar(Refused(never, _)) => match never {},
                 $shapes::Listed(Listed(items, _)) => items,
             })
         }
@@ -410,6 +412,8 @@ pub(super) fn serialize_access_requirements<S: Serializer>(
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(super) struct AuthoredModuleProfile {
+    #[serde(deserialize_with = "super::local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     id: String,
     #[serde(default)]
     default: bool,
@@ -428,8 +432,8 @@ pub(super) struct AuthoredModuleProfile {
     requester_clients: UniqueSet<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     task_grant: Option<CompiledTaskGrantSource>,
-    #[serde(default)]
-    principal_claim: Option<String>,
+    /// The token claim that names the caller. Every profile serves authenticated callers, so every profile names one.
+    principal_claim: String,
     /// The scopes the verified token must carry: `unrestricted`, or a list of at least one scope, all of which must be present.
     #[serde(
         deserialize_with = "required_scopes",
@@ -504,7 +508,15 @@ pub(super) struct AuthoredModuleProfile {
     allow_count: bool,
     #[serde(default)]
     revision_access: bool,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        deserialize_with = "super::unique_items",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "UniqueSet<ProvenanceFieldSource>")
+    )]
     provenance_fields: Vec<ProvenanceFieldSource>,
     #[serde(default)]
     allow_data_export: bool,
@@ -594,6 +606,138 @@ pub(super) fn serialize_module_access_profiles<S: Serializer>(
     serializer: S,
 ) -> Result<S::Ok, S::Error> {
     serializer.collect_seq(profiles.iter().cloned().map(AuthoredModuleProfile::from))
+}
+
+/// A profile's permissions written as anything but the mapping that groups
+/// them.
+pub(super) enum UngroupedPermissions {}
+
+impl Member for UngroupedPermissions {
+    const EXPECTED: &'static str = "a mapping with entities, actions, and datasets";
+    const ACTION: &'static str =
+        "Group the permissions by what each names: write every permission that names an entity under permissions.entities, every one that names an action under permissions.actions, and every one that names a statistical dataset under permissions.datasets. A profile that grants nothing omits permissions.";
+}
+
+enum PermissionsShapes {
+    Scalar(Refused<UngroupedPermissions>),
+    List(Refused<UngroupedPermissions>),
+    Grouped(PermissionsSource),
+}
+
+shape_union!(PermissionsShapes { scalar => Scalar, list => List, mapping => Grouped });
+
+/// Reads a profile's permissions. One list of permissions is refused with the
+/// grouping named, so its author is told where each permission goes.
+pub(super) fn permissions<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<PermissionsSource, D::Error> {
+    Ok(match PermissionsShapes::deserialize(deserializer)? {
+        PermissionsShapes::Scalar(Refused(never, _))
+        | PermissionsShapes::List(Refused(never, _)) => match never {},
+        PermissionsShapes::Grouped(permissions) => permissions,
+    })
+}
+
+// The authored form of `EntityPermissionSource`. It holds the row reach as
+// written, so a permission that omits it is told what to write.
+/// What a profile may do with one entity.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", schemars(rename = "EntityPermissionSource"))]
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(super) struct AuthoredEntityPermission {
+    entity: String,
+    operations: UniqueSet<Operation>,
+    #[serde(default)]
+    readable_fields: UniqueSet<String>,
+    /// Readable change-request decision detail.
+    #[serde(default = "readable_request_fields")]
+    readable_request_fields: UniqueSet<RequestMetadataFieldSource>,
+    #[serde(default)]
+    writable_fields: UniqueSet<String>,
+    #[serde(default)]
+    filterable_fields: UniqueSet<String>,
+    #[serde(default)]
+    sortable_fields: UniqueSet<String>,
+    #[serde(default)]
+    spatial_queries: Option<SpatialQueryPermissionSource>,
+    /// Row reach: `unrestricted`, or a list of at least one row boundary.
+    #[cfg_attr(feature = "schema", schemars(with = "RowBoundaries"))]
+    row_boundaries: Option<RowBoundaries>,
+    /// Current active membership required for each stored reference key.
+    #[serde(default)]
+    membership_boundaries: Vec<MembershipBoundarySource>,
+    /// Current subject-issued consent required for each row, ANDed.
+    #[serde(default)]
+    require_consent: Vec<ConsentRequirementSource>,
+    /// Restricts change-request reads to rows owned by the authenticated principal.
+    #[serde(default)]
+    request_visibility: Option<RequestVisibilitySource>,
+    #[serde(default)]
+    lookups: Vec<LookupPermissionSource>,
+    #[serde(default)]
+    read_paths: Vec<ReadPathPermissionSource>,
+    #[serde(default, deserialize_with = "apply_targets")]
+    #[cfg_attr(feature = "schema", schemars(with = "Vec<AuthoredApplyTarget>"))]
+    apply_targets: Vec<ApplyTargetPermissionSource>,
+    /// Native-reference targets requiring current same-profile GET authority at intake and preparation.
+    #[serde(default)]
+    submitter_targets: UniqueSet<String>,
+    #[serde(default, deserialize_with = "request_presence")]
+    #[cfg_attr(feature = "schema", schemars(with = "Vec<AuthoredRequestPresence>"))]
+    request_presence: Vec<RequestPresencePermissionSource>,
+    #[serde(default)]
+    allow_count: bool,
+    #[serde(default)]
+    revision_access: bool,
+    #[serde(default, deserialize_with = "super::unique_items")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "UniqueSet<ProvenanceFieldSource>")
+    )]
+    provenance_fields: Vec<ProvenanceFieldSource>,
+    #[serde(default)]
+    allow_data_export: bool,
+}
+
+fn readable_request_fields() -> UniqueSet<RequestMetadataFieldSource> {
+    super::default_readable_request_fields()
+}
+
+impl TryFrom<AuthoredEntityPermission> for EntityPermissionSource {
+    type Error = Invalid;
+
+    fn try_from(authored: AuthoredEntityPermission) -> Result<Self, Invalid> {
+        let Some(row_boundaries) = authored.row_boundaries else {
+            return Err(Invalid::expected(
+                "an entity permission with rowBoundaries",
+                "Declare rowBoundaries on the permission: list the row boundaries that bind rows to the caller's claims, or write unrestricted to reach every row.",
+            ));
+        };
+        Ok(Self {
+            entity: authored.entity,
+            operations: authored.operations,
+            readable_fields: authored.readable_fields,
+            readable_request_fields: authored.readable_request_fields,
+            writable_fields: authored.writable_fields,
+            filterable_fields: authored.filterable_fields,
+            sortable_fields: authored.sortable_fields,
+            spatial_queries: authored.spatial_queries,
+            row_boundaries: row_boundaries.into_boundaries(),
+            membership_boundaries: authored.membership_boundaries,
+            require_consent: authored.require_consent,
+            request_visibility: authored.request_visibility,
+            lookups: authored.lookups,
+            read_paths: authored.read_paths,
+            apply_targets: authored.apply_targets,
+            submitter_targets: authored.submitter_targets,
+            request_presence: authored.request_presence,
+            allow_count: authored.allow_count,
+            revision_access: authored.revision_access,
+            provenance_fields: authored.provenance_fields,
+            allow_data_export: authored.allow_data_export,
+        })
+    }
 }
 
 // The authored form of `ApplyTargetPermissionSource`.
