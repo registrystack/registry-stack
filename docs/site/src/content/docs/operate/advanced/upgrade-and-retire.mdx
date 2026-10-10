@@ -40,13 +40,22 @@ Before 1.0, a release reads only the state its immediate predecessor wrote, and 
 reverse path. If you run an older release, upgrade one release at a time, and finish this runbook
 for each release before you start the next. See
 [Compatibility direction](../../../reference/api-stability/#compatibility-direction).
+For v0.39.0 to v0.40.0, the new release reads less than that. It does not read a Scheduling
+database the earlier release wrote, so you start Scheduling from a new database in
+[step 7](#upgrade-in-this-order). It also refuses a configuration file that keeps a retired key or
+`apiVersion`, naming the replacement (`config.removed-key`, `config.retired-api-version`), until
+you make the project and runtime-file changes the release notes list.
 
 {/* Evidence: Cargo.toml, [workspace.package] version (every crate uses version.workspace);
     crates/registry-casework-breg/src/lib.rs, same_release() and PeerVersionMismatch;
     crates/registry-evidencectl/src/evidence_binary.rs and source_add.rs, check_public_bregctl();
     crates/registry-breg-client/src/response.rs, deny_unknown_fields;
     docs/site/src/content/docs/operate/breg-changes.mdx, "Activate the successor";
-    release/scripts/rehearse-upgrade.py, FORWARD_PATH_FLOOR. */}
+    release/scripts/rehearse-upgrade.py, FORWARD_PATH_FLOOR;
+    release/notes/config-conventions/scheduling.md, "BREAKING: a database an earlier release
+    wrote is not read"; crates/registry-scheduling/src/store.rs, StoreError::EarlierRelease;
+    products/platform/CONFIG-CONVENTIONS.md, CFG-CHANGE-2;
+    crates/registry-platform-yaml/src/envelope.rs, RemovedKey and RetiredApiVersion. */}
 
 ## Upgrade in this order
 
