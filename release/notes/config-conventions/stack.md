@@ -11,9 +11,9 @@ the breaking changes of the same release that sit outside the program.
 
 No production deployment of `v0.39.0` exists, so this release carries no
 forward state path from it. Configuration, packages, and databases written by
-`v0.39.0` are not read by `v0.40.0`. Start from a fresh project and a fresh
-database, and use each product's `BREAKING` sections in this directory to
-rewrite the configuration you carry over. From `v0.40.0` on the forward state
+`v0.39.0` have no supported in-place upgrade to `v0.40.0`. Start from a fresh
+project and a fresh database, and use each product's `BREAKING` sections in
+this directory to rewrite the configuration you carry over. From `v0.40.0` on the forward state
 path holds again: each release reads the state its immediate predecessor
 wrote, and `release/scripts/rehearse-upgrade.py` rehearses it.
 

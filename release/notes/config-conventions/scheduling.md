@@ -12,7 +12,7 @@ and hold documents, and the Rust, Node.js, and Python clients keep
 This fragment describes the final v0.40.0 interface. An `Old` or `Before`
 example is a v0.39.0 file, request, response, or value to replace. Reauthor the
 files, build the package with v0.40.0, and apply it to a new database;
-v0.40.0 does not read a v0.39.0 Scheduling database in place.
+v0.40.0 supports no in-place upgrade of a v0.39.0 Scheduling database.
 
 ## BREAKING: the authored files are read by the shared configuration reader
 
