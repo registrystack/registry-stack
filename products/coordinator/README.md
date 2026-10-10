@@ -306,5 +306,11 @@ The action and notice are not resubmitted, and duplicate start admission returns
 the original run. This proves message acceptance, not provider delivery.
 Reconstruction replaces Rust objects; it does not restart the Coordinator OS
 process. The separate `process_restart` target retains process restart coverage.
-The combined BReg, Casework, Scheduling and Messaging journey remains deferred.
+The separate `scripts/test-real-services.py` journey composes BReg, Casework,
+Scheduling and Messaging with a persisted wait and an actual worker restart.
+Its default 961-second wait crosses the immediate approval limit. It checks
+fresh credentials bounded by the original deferred approval, original-receipt
+recovery after lost booking and notice replies, and refusal of expired, unknown
+or mismatched approvals without additional effects. Waits shorter than 901
+seconds are smoke checks and do not establish the long-wait boundary.
 The helper remains an explicit contributor check, not a new CI gate.

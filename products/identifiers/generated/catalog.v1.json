@@ -3793,11 +3793,11 @@
       "description": "Registry Coordinator runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-coordinator/src/runtime.rs",
-        "sha256": "b4f9ca8b2a2032edb4156a3e76dfbad9b44cbeb01d94783081fcee0679d302f1"
+        "sha256": "74cb8ca1a80692a3ccec711ff814592930a71d04a7553c9eb9ccdd05b5650e04"
       },
       "artifact": {
         "path": "products/coordinator/generated/runtime/runtime.schema.json",
-        "sha256": "e3ed437201c4e74881cca0ba6cbaf520932db08c0df88971b2998db0f3525d0b",
+        "sha256": "56dadec62e34da375cb271a3324585e5d260c42f1a5ec966ae9b5d44589fbc11",
         "mediaType": "application/schema+json"
       }
     },

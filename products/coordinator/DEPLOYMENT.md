@@ -430,11 +430,12 @@ lease. It preserves the original command and deadline, invalidates stale worker
 completions, and starts no work. Prepared mutating commands left pending after
 a definite retryable response are also held as failed work for an explicit
 `retry-same` or cancellation, with their original command, key and deadline.
-Schema revision 3 represents these command-free holds without inventing an
-attempt. Existing revision 2 databases require an explicit `coordinatorctl apply`
-upgrade before serving; runtime startup does not migrate them. Apply preserves
-stored identities and protected payloads. Earlier Coordinator executables refuse
-the upgraded control revision rather than silently resuming this held state.
+Schema revision 3 introduced these command-free holds without inventing an
+attempt. The current schema revision 4 also adopts the shared Dispatch state
+spelling. Stop old workers and explicitly run `coordinatorctl apply` to upgrade
+revision 2 or 3 before serving; runtime startup does not migrate them. Apply
+preserves stored identities, protected payloads and hold state. Earlier
+Coordinator executables refuse the upgraded control revision.
 
 Pending calls that have not prepared a command, and pending waits or local
 steps also become held failed work. Attestation and
