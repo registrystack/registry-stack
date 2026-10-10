@@ -1,8 +1,8 @@
 # Registry Evidence: configuration conventions
 
-The items of this fragment were written as each change was made, and where
-two of them disagree about a spelling or a diagnostic code, the one further
-down states what v0.40.0 reads and reports.
+This fragment describes the final v0.40.0 interface. An `Old` or `Before`
+example is an earlier file, request, response, or value to replace; every
+current example and diagnostic below uses the final v0.40.0 spelling.
 
 ## Evidence clients and OID4VCI
 
@@ -573,15 +573,19 @@ them.
    first (the edited file no longer matches its `SHA256SUMS`) and hides these
    content errors. Migration: replace the `fixture: <id>` line with the two
    envelope lines, then rebuild the package with `evidencectl package`.
-6. **Code lists are read by the shared reader.** An unknown key, a
-   `${...}` expression, or a repeated code is refused (`config.unknown-key`,
-   `config.substitution-not-allowed`, `config.duplicate-item`). A code list
-   declares `codes`, or `entries` with `allowed_outputs`, and not both
-   (`evidence.codelist.invalid-form`); each list or mapping holds from 1 to
-   4096 items (`evidence.codelist.invalid-size`); a mapping names only
-   outputs `allowed_outputs` lists (`evidence.codelist.output-not-allowed`).
-   Migration: remove empty lists and repeated codes, and correct the file as
-   the diagnostic names.
+6. **Code lists are read by the shared reader.** A code list opens with the
+   `EvidenceCodelist` envelope and declares `uri`, `version`, and `type`. A
+   `type: code-list` file declares `codes`; a `type: mapping` file declares
+   `entries` and `allowedOutputs`. An unknown key, a `${...}` expression, or
+   a repeated code is refused (`config.unknown-key`,
+   `config.substitution-not-allowed`, `config.duplicate-item`). Each list or
+   mapping holds from 1 to 4096 items (`evidence.codelist.invalid-size`), and
+   a mapping names only outputs listed under `allowedOutputs`
+   (`evidence.codelist.output-not-allowed`). The old `id` and
+   `allowed_outputs` members are `config.removed-key`; the tagged form makes
+   `evidence.codelist.invalid-form` obsolete. Migration: add the envelope and
+   `type`, rename the two removed members, remove empty lists and repeated
+   codes, and correct the file as the diagnostics name.
 7. **Fact schemas are read by the shared reader** and accept only the shared
    YAML subset. Migration: remove anchors, aliases, tags, merge keys, and
    duplicate keys.
@@ -633,7 +637,7 @@ unchanged.
 | `deployment artifact closure is invalid: ...` | `evidence.bundle.unknown-file` |
 | `deployment exceeds a Version 1 size bound` | `evidence.bundle.too-large` |
 | `deployment configuration is invalid: ...` | `evidence.bundle.invalid-configuration` |
-| `deployment artifact is invalid: ...` | `evidence.bundle.invalid-artifact`; for a code list `evidence.codelist.invalid-form`, `evidence.codelist.invalid-size`, `evidence.codelist.output-not-allowed`; for a fixture `evidence.fixture.not-synthetic`, `evidence.fixture.missing-cases`, `evidence.fixture.invalid-case-count`, `evidence.fixture.invalid-case`, `evidence.fixture.invalid-case-id`, `evidence.fixture.unresolved-not-declared`, `evidence.fixture.invalid-unresolved-marker`, `evidence.fixture.incomplete-coverage`; for a CA bundle `evidence.runtime.invalid-ca-bundle` |
+| `deployment artifact is invalid: ...` | `evidence.bundle.invalid-artifact`; for a code list `evidence.codelist.invalid-size`, `evidence.codelist.output-not-allowed`; for a fixture `evidence.fixture.not-synthetic`, `evidence.fixture.missing-cases`, `evidence.fixture.invalid-case-count`, `evidence.fixture.invalid-case`, `evidence.fixture.invalid-case-id`, `evidence.fixture.unresolved-not-declared`, `evidence.fixture.incomplete-coverage`; for a CA bundle `evidence.runtime.invalid-ca-bundle` |
 | `deployment artifact is invalid: runtime signer kind does not match the bundle assurance profile` | `evidence.runtime.signer-assurance-mismatch` |
 | `deployment artifact is invalid: a bundle secret reference names a provider ...` | `evidence.runtime.secret-provider-not-enabled` |
 | `deployment artifact is invalid: the local signing key reference must be distinct ...` | `evidence.runtime.signing-key-shared` |
@@ -827,6 +831,23 @@ revision digests the bundle as read and every artifact a requirement reaches.
 The member and its `sha256:` form are unchanged. A verification policy or a
 relying party that pins a revision re-pins it after the rewritten bundle is
 deployed.
+
+### BREAKING: the four frozen contract schemas use resolver identifiers
+
+The committed schema files stay at the same paths. Their `$id` values move to
+the Registry Stack identifier resolver:
+
+| Contract | Old `$id` | New `$id` |
+|---|---|---|
+| bundle | `https://registrystack.org/schemas/evidence/bundle-v1.json` | `https://id.registrystack.org/schemas/evidence/bundle/bundle.v1.schema.json` |
+| runtime | `https://registrystack.org/schemas/evidence/runtime-v1.json` | `https://id.registrystack.org/schemas/evidence/runtime/runtime.v1alpha1.schema.json` |
+| verification policy | `https://registrystack.org/schemas/evidence/verification-policy-v1.json` | `https://id.registrystack.org/schemas/evidence/verification-policy/verification-policy.v1.schema.json` |
+| holder-bound verification policy | `https://registrystack.org/schemas/evidence/holder-bound-verification-policy-v1.json` | `https://id.registrystack.org/schemas/evidence/holder-bound-verification-policy/holder-bound-verification-policy.v1.schema.json` |
+
+Migration: replace an old `$id` in schema registries, validator allowlists,
+cached schema metadata, and editor mappings with the corresponding new value.
+For a Registry Stack deployment project, rerun `python3 editors/configure.py
+evidence-deployment PROJECT` so the editor mapping reads the current schemas.
 
 ### BREAKING: the bundle has an envelope
 

@@ -103,9 +103,16 @@ config files, manifests, and persisted state written for any earlier release of 
 Before 1.0, persisted state has a narrower promise: a release reads only the state its
 immediate predecessor wrote, and documents the forward state path from that predecessor. If you
 run an older release, upgrade one release at a time, and complete each release's upgrade steps
-before you start the next. This release reads state written by `v0.38.0`, and no earlier release.
+before you start the next.
 
-{/* Evidence: release/scripts/rehearse-upgrade.py, FORWARD_PATH_FLOOR and check_forward_path(). */}
+`v0.40.0` is the exception: it does not upgrade state `v0.39.0` wrote in place. Rewrite the
+configuration you carry over, rebuild packages, and apply them to new databases as the
+[upgrade runbook](../../operate/advanced/upgrade-and-retire/#upgrade-in-this-order) describes.
+The forward state path starts at `v0.40.0`; subsequent pre-1.0 releases read the state their
+immediate predecessor wrote.
+
+{/* Evidence: CONTRIBUTING.md, predecessor readability and the v0.40.0 exception;
+    release/scripts/rehearse-upgrade.py, FORWARD_PATH_FLOOR and check_forward_path(). */}
 
 The reverse is not promised. Evidence Gateway parses config with `deny_unknown_fields`, so a config
 file that uses keys introduced in a newer release fails to load on an older binary. Pin your config
@@ -114,13 +121,14 @@ to the release you deploy.
 Evidence Gateway and Registry Manifest have no migrated state or migration command. Evidence
 Gateway writes the audit log named by the `audit` block in its runtime file.
 
-Base Registry Engine, Casework, and Scheduling each own migrated PostgreSQL state with their own
-migration command:
+Base Registry Engine, Casework, Scheduling, and Messaging each own migrated PostgreSQL state with
+their own migration command:
 [`bregctl apply`](../../operate/breg-changes/#activate-the-successor) activates a package and runs
 its migration, [`caseworkctl apply`](../../operate/casework/#plan-apply-and-serve) activates a
 Casework package and runs its migrations, and `schedulingctl apply` activates a Scheduling package
-and runs its migrations. Before 1.0, an upgrade between releases of any of the three can require the
-migration steps that release's notes name; read them before upgrading.
+and runs its migrations. `messagingctl apply` activates a Messaging package and runs its migrations.
+Before 1.0, an upgrade between releases of these products can require the migration steps that
+release's notes name; read them before upgrading. The `v0.40.0` exception above applies to all four.
 Base Registry Engine's Beta pilot conditions are under
 [Stability](../../operate/breg-requirements/#stability) in its requirements.
 
@@ -179,20 +187,25 @@ The promise is machine-checked where a checker exists:
   catalog and its reviewed digest record.
 - Forward state path: the release upgrade rehearsal workflow runs
   `release/scripts/rehearse-upgrade.py` on every pull request that changes a release manifest, and
-  on manual dispatch. It downloads the previous release's Base Registry Engine, Casework, and
-  Evidence Gateway binaries, verifies them against the signed `SHA256SUMS` as `release/VERIFY.md`
-  describes, and writes records, review work, and audit entries with them against disposable
-  PostgreSQL. It then runs the upgrade steps with the binaries built from the pull request and
+  on manual dispatch. It downloads the previous release's Base Registry Engine, Casework,
+  Evidence Gateway, and Messaging binaries, verifies them against the signed `SHA256SUMS` as
+  `release/VERIFY.md` describes, and writes records, review work, messages, and audit entries with
+  them against disposable PostgreSQL. It then runs the upgrade steps with the binaries built from
+  the pull request and
   fails when captured domain data or stored revisions change, other captured views differ, or
   retained tables lose rows. Base Registry Engine rebuilds its package with the current compiler,
   applies it as a successor when the rebuilt digest changes, and serves; it then applies an
-  additive successor and serves again. Its package-bound ETags may change. The upgraded Casework
-  and Evidence Gateway runtimes continue the audit files the previous release wrote, and the
-  rehearsal fails when a file was empty before the upgrade or holds fewer entries after it than
-  before plus the number the upgraded runtime must write. It refuses to start from a release
-  before `v0.39.0`. Scheduling state is not rehearsed: the rehearsal has no Scheduling leg.
+  additive successor and serves again. Its package-bound ETags may change. The upgraded Casework,
+  Evidence Gateway, and Messaging runtimes continue the audit files the previous release wrote,
+  and the rehearsal fails when a file was empty before the upgrade or holds fewer entries after
+  it than before plus the number the upgraded runtime must write. It refuses to start from a
+  release before `v0.40.0`. While no release from that floor onward is published, the rehearsal uses the
+  binaries under test on both sides and reports that it has no published predecessor. This
+  exercises the scenarios with the same build; it does not demonstrate compatibility between
+  releases. Once a release on the forward state path is published, the default run downloads it.
+  Scheduling state is not rehearsed: the rehearsal has no Scheduling leg.
 
-{/* Evidence: .github/workflows/release-upgrade-rehearsal.yml; release/scripts/rehearse-upgrade.py, fetch_release(), breg_view_differences(), view_differences(), row_count_losses(), audit_stream_losses(), and check_forward_path(). */}
+{/* Evidence: .github/workflows/release-upgrade-rehearsal.yml; release/scripts/rehearse-upgrade.py, main(), fetch_release(), breg_view_differences(), view_differences(), row_count_losses(), audit_stream_losses(), and check_forward_path(). */}
 
 A change that a gate flags as breaking lands only in a release whose version number permits
 it, together with the deprecation and migration steps required by the

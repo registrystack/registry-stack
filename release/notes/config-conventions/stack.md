@@ -33,21 +33,20 @@ every word they list changed with no alias.
 | Base Registry Engine | 70 | `breg.md` |
 | Casework | 43 | `casework.md` |
 | Discovery | 9 | `discovery.md` |
-| Evidence | 67 | `evidence.md` |
+| Evidence | 68 | `evidence.md` |
 | Manifest | 6 | `manifest.md` |
 | Messaging | 21 | `messaging.md` |
 | Platform files and tooling | 16 | `platform.md` |
 | Render | 11 | `render.md` |
-| Scheduling | 17 | `scheduling.md` |
+| Scheduling | 16 | `scheduling.md` |
 | Total | 260 | |
 
 A fragment's "Stable move" section holds the respellings and retaggings this
 release makes with no alias, and its `BREAKING` headings are counted like any
 other.
 
-The items of a fragment were written as each change was made, and where two
-of them disagree about a spelling or a diagnostic code, the one further down
-states what v0.40.0 reads and reports.
+Each fragment gives the final v0.40.0 spelling and diagnostic code beside the
+earlier form it replaces. Apply those final forms when rewriting a project.
 
 ### Changes stated in more than one fragment
 

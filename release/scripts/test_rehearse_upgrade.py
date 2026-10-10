@@ -1427,13 +1427,14 @@ class GateWiringTest(unittest.TestCase):
         for refused in ("--from-bin-dir", "contents: write", "id-token: write"):
             self.assertFalse(refused in workflow, f"workflow carries {refused!r}")
 
-    def test_floor_is_the_release_before_the_workspace_version(self) -> None:
+    def test_forward_path_floor_is_current_for_the_workspace(self) -> None:
         MODULE.check_floor_is_current(MODULE.released_versions(ROOT),
                                       MODULE.workspace_version(ROOT))
 
     def test_api_stability_states_the_promise_and_its_rehearsal(self) -> None:
         page = API_STABILITY.read_text(encoding="utf-8")
-        for required in ("immediate predecessor", "rehearse-upgrade.py"):
+        floor = "v{}.{}.{}".format(*MODULE.FORWARD_PATH_FLOOR)
+        for required in ("immediate predecessor", "rehearse-upgrade.py", floor):
             self.assertTrue(required in page, f"api-stability page lacks {required!r}")
 
 

@@ -3,9 +3,13 @@
 Every Registry Casework change the configuration conventions make, with the
 step that migrates a file or a script. The Casework `CHANGELOG.md` points here.
 
-The items of this fragment were written as each change was made, and where
-two of them disagree about a spelling or a diagnostic code, the one further
-down states what v0.40.0 reads and reports.
+This fragment describes the final v0.40.0 interface. An `Old` or `Before`
+example is a v0.39.0 file, request, response, or value to replace. Reauthor the
+files, build the package with v0.40.0, and apply it to a new database;
+v0.40.0 does not read a v0.39.0 Casework database in place.
+The database clean break does not require a new `audit.path`: the runtime
+appends to the configured audit file, and retained v0.39.0 records keep their
+old spellings.
 
 ## BREAKING: `casework.yaml` is read by the shared configuration reader
 
@@ -757,11 +761,10 @@ every other member are unchanged. Every command that reads a project and the
 `casework` runtime refuse the old value as `config.retired-api-version` at
 `/apiVersion`, and the diagnostic names the new one.
 
-Migration: write
-`apiVersion: id.registrystack.org/formats/casework/project/v1alpha1` in
-`casework.yaml`, then run `caseworkctl package`, `caseworkctl plan`, and
-`caseworkctl apply`: the header is part of the packaged policy, so the
-package digest changes while no stored review, clock, or task record does.
+Migration: reauthor `casework.yaml` with
+`apiVersion: id.registrystack.org/formats/casework/project/v1alpha1`, build the
+package with v0.40.0, and apply it to a new database. The header is part of the
+packaged policy, so the package digest changes.
 
 ### BREAKING: the identifiers `casework.yaml` declares are local identifiers
 
@@ -783,9 +786,8 @@ that validates responses against a copied pattern must take the new one.
 
 Migration: a source id or a target id that is not a local identifier must be
 rewritten, in `casework.yaml` and as the matching key under `sources` in
-`runtime.yaml`; then run `caseworkctl package`, `caseworkctl plan`, and
-`caseworkctl apply`. Work already stored under the old source id keeps that
-id, so settle or drain it before the rename. No other file changes.
+`runtime.yaml`. Reauthor the project, build the package with v0.40.0, and apply
+it to a new database. No other file changes.
 
 ### A repeated id in `casework.yaml` is refused by the reader
 
@@ -1021,22 +1023,13 @@ lifecycle` prints the two state identifiers in it. The Rust client, the
 Node.js and Python bindings, and `@registrystack/client` carry the new
 spellings in their types.
 
-Stored state: schema migration 22 respells what the previous release stored.
-It rewrites `itemStates` in each stored task template document and in the
-template each task grant record embeds, then the `state` of every work item,
-and replaces the constraint on that column, in that order, so a live task
-grant stays valid across the upgrade. `caseworkctl apply` runs the migration.
-A stored template document carries no digest and is compared with the
-packaged template as JSON, so it is rewritten in place. An authored file in
-the old spelling is refused. A retained replay response of a claim or a
-release never holds a waiting state, so none is rewritten.
+Database: the v0.40.0 schema stores only the new values. It does not convert
+the task templates, grants, or work items of a database v0.39.0 wrote.
 
 Migration: in `casework.yaml`, respell the two values under
-`taskTemplates[].itemStates`, keeping each template's `version`, then run
-`caseworkctl package`, `caseworkctl plan`, and `caseworkctl apply`. Stop the
-previous release's runtime before the apply: it cannot read the new
-spelling. Update a caller that compares a work item's `state` with either
-value.
+`taskTemplates[].itemStates`, keeping each template's `version`; build the
+package with v0.40.0 and apply it to a new database. Update a caller that
+compares a work item's `state` with either old value.
 
 ### BREAKING: the settlement that asks for changes is `changes-requested`
 
@@ -1057,7 +1050,7 @@ review pins, and the HTTP responses that carry a snapshot.
 Three other words carried the same value in another vocabulary: the
 `lifecycle` of a review request, the `status` of a review result (the review
 protocol a producer such as BReg reads), and the `type` of a reviewer's
-decision. They are respelled too, with a schema migration of their own: see
+decision. They use the final spelling too: see
 "the review protocol words are kebab-case" under "Protocol words".
 
 HTTP: `outcomes[].settlement` carries the new spelling in the review kind
@@ -1079,9 +1072,8 @@ an outcome.
 
 Migration: in `casework.yaml`, respell `settlement: changes_requested` to
 `settlement: changes-requested` under each review kind, keeping the kind's
-`version`, then run `caseworkctl package`, `caseworkctl plan`, and
-`caseworkctl apply`. Update a caller that compares an outcome's `settlement`
-with the old value.
+`version`; build the package with v0.40.0 and apply it to a new database.
+Update a caller that compares an outcome's `settlement` with the old value.
 
 ### BREAKING: four more ids `casework.yaml` declares are local identifiers
 
@@ -1107,43 +1099,12 @@ and a queue id in a directory request keep their 128-byte bound; a name
 outside the grammar selects no profile and no queue. The ids themselves are
 returned where they were: a renamed id is returned under its new name.
 
-Stored state: an id cannot be respelled mechanically, so no schema migration
-runs and stored rows keep the id they were written under.
-
-- A queue id is stored with every open work item, every review task, and the
-  directory's team assignments. `caseworkctl plan` refuses a package that no
-  longer declares a queue holding in-flight reviews or open work items, as
-  `casework.activation.stranded-work`, naming the queue and the two counts.
-- An access profile id is pinned in the policy snapshot of every in-flight
-  review whose remaining stages it decides. `caseworkctl plan` refuses a
-  package that no longer declares it, under the same code, naming the profile
-  and the count. History rows keep the profile name they were written with.
-- A review producer id is stored with every review request the producer
-  submitted, and the producer reads its requests, its results, and its result
-  feed by that id. `caseworkctl plan` refuses a package that no longer
-  declares the producer of an in-flight review, under the same code, naming
-  the producer and the count; the plan, apply, and doctor reports carry the
-  conflict with the reason `producer-removed`. A review that has reached a
-  result is not counted, and its producer still reads the result and the
-  result feed only by the old id: step 1 below is the only guard for a result
-  not read yet.
-- A task template id is stored with each template version and each task
-  grant. `caseworkctl plan` lists a version the package no longer declares as
-  `deactivated`; apply invalidates its live grants, which last at most 15
-  minutes.
-
-Migration: an id already inside the grammar needs no change. To rename one:
-
-1. Let the work stored under the old id finish: decide or cancel the
-   in-flight reviews and close the open work items of a queue or an access
-   profile, let a producer's in-flight requests reach a result and read the
-   result feed to its end, and let a template's live grants expire.
-2. Rename the id and every reference to it in `casework.yaml`, and
-   `accessProfile` or a team's `queue` in `dev-clients.yaml`.
-3. Run `caseworkctl package`, `caseworkctl plan`, and `caseworkctl apply`.
-4. For a renamed queue, assign its teams to the new id through the
-   Administrator directory routes; for a renamed access profile, have each
-   caller send the new name in `Registry-Casework-Profile`.
+Database: v0.40.0 does not convert rows stored under a v0.39.0 identifier.
+An identifier already inside the new grammar needs no change. Otherwise,
+rename the identifier and every reference to it in `casework.yaml`, and
+rename `accessProfile` or a team's `queue` in `dev-clients.yaml`; build the
+package with v0.40.0 and apply it to a new database. Update callers to send
+the new access-profile and queue identifiers.
 
 ### BREAKING: a registry operation in a task template is a local identifier
 
@@ -1203,23 +1164,14 @@ refused and imported again; no reader accepts the earlier shape.
 HTTP: no response member changes. A diagnostic's related pointer into a
 one-entity description reads `/requests/0/...` where it read `/request/...`.
 
-Stored state: no schema migration runs. The description's digest is part of
-the source binding generation, so the imported description gives the source a
-new generation. `caseworkctl plan` reports that source's generation as
-changed, and `caseworkctl apply` rebinds the state stored under the previous
-generation. Plan refuses while a source attempt is pending or uncertain under
-the previous generation. A draft saved, or an item displayed, under the
-previous generation is answered as moved and is prepared again.
+Migration, for each source in `casework.yaml`, regenerate the description
+before building the v0.40.0 package:
 
-Migration, for each source in `casework.yaml`:
-
-1. Settle every source attempt that is pending or uncertain, with
-   `caseworkctl attempt settle`.
-2. Move the description aside:
+1. Move the description aside:
    `test ! -e sources/SOURCE_ID.json.previous && mv sources/SOURCE_ID.json sources/SOURCE_ID.json.previous`.
-3. Import it again:
+2. Import it again:
    `caseworkctl source add BREG_PROJECT --project DIR --source-id SOURCE_ID --apply`.
-4. Run `caseworkctl package`, `caseworkctl plan`, and `caseworkctl apply`.
+3. Run `caseworkctl package`, then apply the package to a new database.
 
 ### BREAKING: `caseworkctl check` and `caseworkctl init` summarize in the human format
 
@@ -1304,7 +1256,9 @@ outcome, a reason, an event kind. Each one is lowercase kebab-case
 (CFG-NAME-2), the spelling the configuration files already use. Nothing an
 operator writes in `casework.yaml` or `runtime.yaml` changes in this section.
 There is no alias: the old spelling is not read from a request, and the new
-spelling is the only one written.
+spelling is the only one written. Audit consumers and archival queries that
+span retained v0.39.0 and v0.40.0 records must match both the old and new
+spellings listed below.
 
 ### BREAKING: the review protocol words are kebab-case
 
@@ -1332,35 +1286,14 @@ committed OpenAPI document, the Rust clients (`registry-casework-client`,
 `@registrystack/client` carry the new values. A producer that reads a
 review result, as the Base Registry Engine does, reads `changes-requested`.
 
-Stored state: migration `0023_review_outcome_spelling.sql` runs with
-`caseworkctl apply`. It rewrites `changes_requested` to `changes-requested`
-in the `lifecycle` of a stored review request, the `decision` of a stored
-decision and of its accountability record, and the `status` of a stored
-result; it rewrites the `detail` of stored review history entries as the
-table above shows; and it rewrites the retained replay responses of the
-decide and cancel operations, so a retried request under the same
-idempotency key is answered in the new spelling. The five `CHECK`
-constraints that named the old value are replaced in the same migration, so
-the database refuses the old spelling afterwards. No row is removed, and no
-idempotency request hash changes. A review's pinned policy snapshot is not
-touched (see "the settlement that asks for changes is `changes-requested`").
+Database and audit: the v0.40.0 schema stores only the new values, and new
+audit records carry them. It does not convert v0.39.0 review rows, replay
+records, or audit history.
 
-One retry is not matched across the upgrade: a `changes-requested` decision
-retried after it under the idempotency key of a decision sent before it is
-refused with the `idempotency.key-reused` problem (HTTP 409) and commits no
-second decision, because the stored request hash covers the decision type
-in the spelling it was sent with; the first decision stands, so read the
-review request instead of retrying.
-
-Audit: a `casework.review-decided` record written after the upgrade carries
-`decision` and `transition` in the new spelling. Records already written are
-not rewritten and keep the spelling they were written with, so a reader of
-the audit stream meets both spellings across the upgrade.
-
-Migration: stop the previous release's runtime, then run `caseworkctl plan`
-and `caseworkctl apply`: the previous runtime cannot read the new spelling.
-Update a caller that compares one of the values above, and a caller that
-sends a `changes_requested` decision.
+Migration: reauthor the project, build the package with v0.40.0, and apply it
+to a new database. Update callers that compare one of the values above or
+send a `changes_requested` decision. Audit queries over retained v0.39.0 and
+v0.40.0 records must match both spellings.
 
 ### BREAKING: the words `caseworkctl` prints in its reports are kebab-case
 
@@ -1530,32 +1463,16 @@ HTTP: the committed OpenAPI document, the Rust client
 `caseworkctl attempt settle --outcome` option already read `not-applied`; its
 JSON report now prints the same word.
 
-Stored state: migration `0024_history_event_spelling.sql` runs with
-`caseworkctl apply`. It rewrites the `kind` of stored work item history
-entries and of the durable events that mirror them, the `kind` of stored
-review history entries, and the kind of stored directory events, as the
-tables above show. It rewrites `outcome` in the detail of a stored
-settlement entry, and the `reason` of a release Casework itself recorded
-during source or directory reconciliation; a reason a caller wrote is text
-and is never touched, whatever it spells. It renames the retained
-idempotency operation of a caseload move (`item.caseload_moved` to
-`item.caseload-moved`), so a retried move under the same key is still
-answered from its record. It replaces the database function that records a
-task invalidation and the partial index that serves it, so both name
-`task-invalidated`. No row is removed, and no idempotency request hash
-changes.
+Database and audit: the v0.40.0 schema stores only the new values, and new
+audit records carry them, for example `casework.review-decided` and
+`casework.task-invalidated`. It does not convert v0.39.0 history, durable
+events, replay records, or audit history.
 
-Audit: a record written after the upgrade names its event in the new
-spelling, for example `casework.review-decided` and
-`casework.task-invalidated`. Records already written are not rewritten and
-keep the spelling they were written with, so a reader of the audit stream
-meets both spellings across the upgrade: match both when a query spans it.
-
-Migration: stop the previous release's runtime, then run `caseworkctl plan`
-and `caseworkctl apply`: the previous runtime cannot read a history kind in
-the new spelling. Update a caller that compares a history `kind`, an audit
-consumer that selects by event name, and a script that reads the `outcome`
-of a settlement report.
+Migration: reauthor the project, build the package with v0.40.0, and apply it
+to a new database. Update callers that compare a history `kind`, audit
+consumers that select by event name, and scripts that read the `outcome` of a
+settlement report. Audit queries over retained v0.39.0 and v0.40.0 records
+must match both spellings.
 
 ### BREAKING: the clock, staffing, inbox, paging, and caseload words are kebab-case
 
@@ -1590,33 +1507,14 @@ HTTP: the committed OpenAPI document, the Rust client
 (`registry-casework-client`), the Node.js declarations, the Python stubs, and
 `@registrystack/client` carry the new values.
 
-Stored state: migration `0025_clock_staffing_inbox_spelling.sql` runs with
-`caseworkctl apply`. It rewrites the state of stored work item and review
-clock occurrences, the staffing diagnostic of stored work items and review
-tasks, and the assignment kind of stored review tasks, and replaces the
-`CHECK` constraint of each of those columns and the two partial indexes
-that select on a clock state, so the database admits the new spelling
-only. It rewrites `assignmentKind` in the detail of a stored review
-assignment entry; the reason a caller wrote beside it is text and is never
-touched. It rewrites the staffing diagnostic inside a retained work item
-idempotency response, so a retried claim, release, assignment, delegation,
-or caseload move under the same key is still answered from its record; no
-idempotency request hash changes. It rewrites the view inside a stored
-inbox cursor, so a listing that was being paged across the upgrade
-continues. No row is removed.
+Database: the v0.40.0 schema, indexes, stored responses, and cursors use only
+the new values. It does not convert v0.39.0 clock, staffing, inbox, replay, or
+cursor state.
 
-A directory target cursor is the one record that does not carry over: it is
-bound to a digest of the listing it continues, and the digest covers the
-purpose. A cursor issued before the upgrade for `absence_person` or
-`absence_cover` is refused with the `cursor.invalid` problem (HTTP 400)
-after it; start that listing again without a cursor. Cursors live 15
-minutes.
-
-Migration: stop the previous release's runtime, then run `caseworkctl plan`
-and `caseworkctl apply`: the previous runtime cannot read a clock state in
-the new spelling. Update a caller that sends `view` or `purpose`, that
-compares the `status` of a page, the `state` of a clock occurrence, the
-`result` of a moved item, or `staffingDiagnostic`.
+Migration: build the package with v0.40.0 and apply it to a new database.
+Update callers that send `view` or `purpose`, or compare the `status` of a
+page, the `state` of a clock occurrence, the `result` of a moved item, or
+`staffingDiagnostic`.
 
 ### BREAKING: the correction action is named `request-correction`
 
@@ -1647,14 +1545,10 @@ executed, and no correction context is retained for it.
 HTTP: the name is not an enumerated value of the OpenAPI document, so the
 document and the generated clients do not change.
 
-Stored state: no schema migration rewrites a stored action name. v0.40.0
-does not upgrade v0.39.0 state in place; apply to a new database.
-
-Audit: an audit record keeps the spelling it was written with. Audit
-records are never rewritten.
-
-Migration: update the source adapter that offers the action and every
-caller that sends it or compares `actions[].operation`.
+Database and audit: v0.40.0 does not convert stored action names or audit
+records from v0.39.0. Migration: update the source adapter that offers the
+action and every caller that sends it or compares `actions[].operation`, then
+apply the rebuilt package to a new database.
 
 ### BREAKING: five client error words are written in kebab-case
 

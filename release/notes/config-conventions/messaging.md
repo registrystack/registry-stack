@@ -5,9 +5,13 @@ step that migrates a file or a script. Registry Messaging is experimental, so
 each normalization lands in this release rather than with the move of the
 promised formats to stable. The Messaging `CHANGELOG.md` points here.
 
-The items of this fragment were written as each change was made, and where
-two of them disagree about a spelling or a diagnostic code, the one further
-down states what v0.40.0 reads and reports.
+This fragment describes the final v0.40.0 interface. An `Old` or `Before`
+example is a v0.39.0 file, request, response, or value to replace. Reauthor the
+files, build the package with v0.40.0, and apply it to a new database;
+v0.40.0 does not read a v0.39.0 Messaging database in place.
+The database clean break does not require a new `audit.path`: the runtime
+appends to the configured audit file, and retained v0.39.0 records keep their
+old spellings.
 
 ## BREAKING: the runtime file's keys and apiVersion are renamed
 
@@ -64,7 +68,8 @@ json` reports that state the retention periods, name them `payloadRetentionDays`
 `recordRetentionDays`, and `submissionReceiptRetentionDays`, where they
 named them `payloadDays`, `recordDays`, and `submissionReceiptDays`.
 Migration: update audit queries, dashboards, and scripts that read the old
-names; events an earlier release wrote keep the old names.
+names. New v0.40.0 records use the new names; queries that span retained
+v0.39.0 and v0.40.0 audit records must match both the old and new names.
 
 ## BREAKING: provider connection members are refused by the reader, at the member
 
@@ -380,12 +385,10 @@ and in the partial index retention reads terminal jobs through
 (`messaging_dispatch_jobs_terminal_idx`), so the database refuses a write of
 the old spelling.
 
-Audit records an earlier release wrote keep the words they were written
-with; none is rewritten.
-
-Migration: a query, alert, or dashboard that matches one of the four words
-in the job table or the audit journal must match the new spelling, and one
-that also reads records an earlier release wrote must match both.
+The supported v0.40.0 path starts a new database, so queries of the job table
+match the new spellings only. Migration: update every query, alert, or
+dashboard that matches one of the four words. Audit queries that span retained
+v0.39.0 and v0.40.0 records must match both the old and new spellings.
 
 ### BREAKING: five client error words are written in kebab-case
 

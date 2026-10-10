@@ -1,9 +1,5 @@
 # Configuration conventions: Base Registry Engine
 
-The items of this fragment were written as each change was made, and where
-two of them disagree about a spelling or a diagnostic code, the one further
-down states what v0.40.0 reads and reports.
-
 ## BReg authored formats
 
 This section covers the formats an adopter and an operator write for the
@@ -13,14 +9,14 @@ package a `bregctl package` run seals around them.
 ### BREAKING: the shared reader reads `registry.yaml` and `module.yaml`
 
 `bregctl`, the package builder, and `breg` read a project and its modules
-through the shared Registry Stack reader. A file that was already outside the
-documented grammar is now refused, and every refusal carries a code, a JSON
+through the shared Registry Stack reader. A file outside the documented
+grammar is refused, and every refusal carries a code, a JSON
 Pointer path, a line, a column, and the edit that fixes it.
 
 | A file that writes | is refused as | Migrate by |
 |---|---|---|
-| `null`, `~`, or a key with no value, anywhere but a comparison literal | `config.null-value` | Deleting the key; an optional member is written by leaving it out. |
-| an unquoted number where text is expected, such as `version: 1` or `version: 1.5` under `registry`, in a module, or in a module lock | `config.expected-string` | Quoting the value: `version: "1"`. A dotted version such as `0.1.0` is already text. |
+| `null`, `~`, or a key with no value | `config.null-value` | Leaving an optional member out, writing a required member's value, or replacing a comparison with `isNull`, `beforeIsNull`, or `afterIsNull` as the migration table under "an unset value is stated with `isNull`" shows. |
+| an unquoted number where text is expected, such as `version: 1` or `version: 1.5` under `project`, in a module, or in a module lock | `config.expected-string` | Quoting the value: `version: "1"`. A dotted version such as `0.1.0` is already text. |
 | an unquoted value that looks like a number but is not a plain decimal: a leading zero (`0123`), a bare point (`.5`, `5.`), a base prefix (`0x1F`, `0o17`, `0b101`), `.inf`, or `.nan` | `yaml.ambiguous-number` | Quoting the value when it is text, or writing the plain decimal when it is a number. |
 | a YAML anchor (`&name`), alias (`*name`), merge key (`<<`), or tag (`!tag`) | `yaml.anchor`, `yaml.alias`, `yaml.merge-key`, `yaml.tag` | Writing the shared value out in full at every place that used the alias. |
 | `${NAME}`, `${NAME:-default}`, or `${NAME:?message}` in a value | `config.substitution-not-allowed` (was `source.environment_expression`) | Writing the literal value; a project and a module are reviewed artifacts, and only `runtime.yaml` takes environment values. |
@@ -34,25 +30,31 @@ A tool that matched `source.yaml.invalid` or `source.environment_expression`
 in `bregctl --format json` output must match the reader codes instead.
 
 The members that take one of several forms are read as the shared reader's
-unions, and the forms each accepts are unchanged: an entity constraint and a
-partial unique `when` predicate (named by `kind`), a statistical dataset's
-`period` (named by `kind`) and its `validity` (`temporal` or a mapping), a
-change-request evidence selector (named by `source`), a change request's
-`review` (`mode: none`, or `authority` with `policyId`), and a manifest
-projection text (a string, or a mapping from language tag to text). A problem
-inside the chosen form is reported at its own member: an unknown `kind` as
-`config.unknown-variant` at `kind`, a missing member as `config.missing-key`,
-and a `review` that mixes `mode` with `authority` or `policyId` as
-`config.invalid-value` at the review.
+unions. An entity constraint, a partial unique `when` predicate, an event
+condition, a statistical dataset's `period`, a change-request evidence
+selector, and a change request's `review` name their form in `type`. A review
+writes either `type: none`, or `type: required` with `authority` and
+`policyId`. A statistical dataset's `validity` is still `temporal` or a
+mapping, and a manifest projection text is still a string or a mapping from
+language tag to text. A problem inside the chosen form is reported at its own
+member: an unknown `type` as `config.unknown-variant` at `type`, a missing
+member as `config.missing-key`, and an extra member beside `type: none` as
+`config.unknown-key` at that member. The earlier `kind`, `source`, `mode`, and
+untagged required-review forms are refused; the migration table under "a
+union of the project and the module is tagged by `type`" gives each
+replacement.
 
-A comparison literal is a record value, and `null` is one: an action
-requirement's `equals`, a change-request predicate's `equals`, and a value
-under a hook condition's `afterEquals` or `beforeEquals` still accept `null`,
-and it still means "the stored value is null". A list or a mapping written
-there was refused when the project compiled, as `action.requires.value_invalid`,
+A comparison literal is a scalar record value: a boolean, a number, or text.
+`null` is refused there too. An action requirement or change-request
+predicate states an unset stored value with `isNull: true`; an event condition
+uses `beforeIsNull` or `afterIsNull`. The migration table under "an unset value
+is stated with `isNull`" gives each replacement for an earlier `null`
+comparison. A list or a mapping written as an `equals`, `afterEquals`, or
+`beforeEquals` value was refused when the project compiled, as
+`action.requires.value_invalid`,
 `change_request.preconditions.predicate_value_invalid`, or
 `source.shape.invalid`; the reader now refuses it as `config.invalid-type` at
-the literal, and the published schemas type the literal as `DataLiteral`.
+the literal, and the published schemas type the literal as `ScalarLiteral`.
 
 A package rederives its project from the `source/registry.yaml` and module
 files it seals, at `bregctl package` and every time `breg` or `bregctl` loads
@@ -65,13 +67,16 @@ and apply it to a new database with `bregctl apply --initial`.
 The project, module, and runtime JSON Schemas are generated from the same
 types the reader decodes, and now say what it refuses:
 
-- No member admits `null` and none declares `default: null`, except a
-  comparison literal (`$defs/DataLiteral`), where `null` is a record value.
-  An optional member is written by leaving it out. A file the schema now
-  refuses for a `null` was already refused by the reader.
-- The project schema states `apiVersion: registry.registrystack.org/v1alpha1`
-  and `kind: RegistryProject` as constants, the values the compiler already
-  required.
+- No member admits `null` and none declares `default: null`. An optional
+  member is written by leaving it out. A comparison value is a boolean, a
+  number, or text (`$defs/ScalarLiteral`); an unset value uses `isNull`,
+  `beforeIsNull`, or `afterIsNull` as the migration table under "an unset
+  value is stated with `isNull`" shows.
+- The project schema states
+  `apiVersion: id.registrystack.org/formats/breg/project/v1alpha1` and
+  `kind: BRegProject` as constants. The retired header is listed with its
+  replacement under "`registry.yaml` opens as a `BRegProject` with a
+  `project` block".
 - A structured field's or action input's `schema` member, which holds the
   adopter's own JSON Schema, carries `x-registry-foreign: json-schema-2020-12`.
 - The project schema is published as
@@ -111,26 +116,29 @@ package as described above.
 Every integer member of the project and module formats now states its
 minimum and maximum in the published schemas, and the reader refuses a value
 outside them when it reads the file, at the member, rather than the compiler
-refusing it later at the enclosing object. No value that compiled before is
-refused now; what changes is the code and the path a tool matching
-`bregctl --format json` output sees.
+refusing it later at the enclosing object. After the v0.39 member names are
+migrated, no numeric value that compiled before is refused by this change;
+what changes is the code and the path a tool matching `bregctl --format json`
+output sees. The table uses the v0.40 member names; the field-bound migration
+section gives the v0.39 names they replace.
 
-| A file that writes | was refused at compile as | is refused at read as |
+| v0.40 member and value | The equivalent v0.39 value was refused at compile as | Is refused at read as |
 |---|---|---|
-| a string field `maxLength` of 0, or a `minLength` above 1000000 | `field.string.bounds_invalid` at the field | `config.out-of-range` at `maxLength` or `minLength` |
-| a string field `maxLength` from 1000001 to 10000000 | `field.string.bounds_invalid` | `config.invalid-value` at the field, which names `text` for longer values; above 10000000, `config.out-of-range` at `maxLength` |
-| a text field `maxLength` of 0 or above 10000000 | `field.text.bound_invalid` | `config.out-of-range` at `maxLength` |
+| a string field `maximumLength` of 0, or a `minimumLength` above 1000000 | `field.string.bounds_invalid` at the field | `config.out-of-range` at `maximumLength` or `minimumLength` |
+| a string field `maximumLength` from 1000001 to 10000000 | `field.string.bounds_invalid` | `config.invalid-value` at the field, which names `text` for longer values; above 10000000, `config.out-of-range` at `maximumLength` |
+| a text field `maximumLength` of 0 or above 10000000 | `field.text.bound_invalid` | `config.out-of-range` at `maximumLength` |
 | a decimal field `precision` or `scale` above 38 | `field.decimal.bounds_invalid` | `config.out-of-range` at the member |
 | a decimal field `precision` of 0 | `field.decimal.bounds_invalid` | `config.invalid-value` at the field |
 | a CRS84 point field `precision` from 10 to 38 | `field.crs84_point.bounds_invalid` | `config.invalid-value` at the field; above 38, `config.out-of-range` at `precision` |
-| a structured field `maxBytes` of 0 or above 1048576 | `field.structured.schema_invalid` | `config.out-of-range` at `maxBytes` |
+| a structured field `maximumBytes` of 0 or above 1048576 | `field.structured.schema_invalid` | `config.out-of-range` at `maximumBytes` |
 | an entity `batch.maximumItems` of 0 or above 100, or `batch.maximumBytes` of 0 or above 2097152 | `entity.batch.bounds_invalid` at the batch | `config.out-of-range` at the member |
 | an attachment slot `maximumBytes` of 0 or above 16777216 | `attachment.maximum_bytes.bounds_invalid` | `config.out-of-range` at `maximumBytes` |
 | a statistical dataset `disclosure.minimumCount` or `roundingBase` below 2 or above 9007199254740991 | `statistical_dataset.disclosure.minimum_count`, `minimum_count_exceeded`, `rounding_base`, or `rounding_base_exceeded` | `config.out-of-range` at the member |
 | an action evidence `maximumObservationAgeSeconds` of 0 or above 300 | `action.evidence.capability.invalid` | `config.out-of-range` at the member |
 
 The compile-time codes, under their `breg.*` names below, stay for the
-conditions the reader cannot decide alone: a string `minLength` above its `maxLength`, a decimal `scale` above
+conditions the reader cannot decide alone: a string `minimumLength` above its
+`maximumLength`, a decimal `scale` above
 its `precision` or bounds that do not fit them, a CRS84 bounding box, a
 structured field's schema, and a statistical dataset with no `disclosure`.
 A change-request or action-requirement `atLeast` or `atMost`, and an integer
@@ -258,28 +266,33 @@ member as `secret:file/<name>` or `secret:env/<NAME>`.
 Every integer member of `runtime.yaml` is read with the minimum and maximum
 the published runtime schema already stated, so a value outside them is
 refused when the file is read, as `config.out-of-range` at the member, rather
-than after decoding under the enclosing block's code. No value that was
-accepted before is refused now; what changes is the code and the path a tool
-matching `bregctl --format json` output sees.
+than after decoding under the enclosing block's code. After the v0.39 member
+names are migrated, no numeric value that was accepted before is refused by
+this change; what changes is the code and the path a tool matching
+`bregctl --format json` output sees. The table uses the v0.40 member names;
+the runtime-bound migration section gives the v0.39 names they replace.
 
-| A file that writes | was refused as | is refused as |
+| v0.40 member and value | The equivalent v0.39 value was refused as | Is refused as |
 |---|---|---|
-| `database.pool.maxSize` of 0 or above 128, or a pool `waitTimeoutMilliseconds`, `createTimeoutMilliseconds`, or `recycleTimeoutMilliseconds` of 0 or above 60000 | `runtime_config.invalid_bounds` at `/operationalTimeouts` | `config.out-of-range` at the member |
+| `database.pool.maximumConnections` of 0 or above 128, or a pool `waitTimeoutMilliseconds`, `createTimeoutMilliseconds`, or `recycleTimeoutMilliseconds` of 0 or above 60000 | `runtime_config.invalid_bounds` at `/operationalTimeouts` | `config.out-of-range` at the member |
 | an `operationalTimeouts` member outside its range: `httpRequestMilliseconds` 1 to 60000, `shutdownGraceMilliseconds` and `migrationLockMilliseconds` 1 to 300000, `recordLockMilliseconds` 1 to 30000, `migrationStatementMilliseconds` 1 to 3600000 | `runtime_config.invalid_bounds` | `config.out-of-range` at the member |
-| `cursor.maxAgeSeconds`, `eventDelivery.payloadRetentionDays`, or `idempotency.receiptRetentionDays` of 0 or above 86400, 30, or 365 | `runtime_config.invalid_bounds` | `config.out-of-range` at the member |
-| `authentication.oidc.maxTokenLifetimeSeconds` of 0 or above 7200, or a `jwksCache` member outside its range | `runtime_config.invalid_bounds`, or `runtime_config.invalid_oidc` for `maxDocumentBytes` | `config.out-of-range` at the member |
+| `cursor.maximumAgeSeconds`, `eventDelivery.payloadRetentionDays`, or `idempotency.receiptRetentionDays` of 0 or above 86400, 30, or 365 | `runtime_config.invalid_bounds` | `config.out-of-range` at the member |
+| `authentication.oidc.maximumTokenLifetimeSeconds` of 0 or above 7200, or a `jwksCache` member outside its range | `runtime_config.invalid_bounds`, or `runtime_config.invalid_oidc` for `maximumDocumentBytes` | `config.out-of-range` at the member |
 | `authentication.oidc.leewayMilliseconds` above 300000 | `runtime_config.invalid_oidc_leeway` | `config.out-of-range` at the member; a value that is not a whole number of seconds is refused as `breg.runtime.invalid-oidc-leeway` |
-| `audit.rotateBytes` below 1048576 or above 4294967295, or `audit.retainDays` of 0 or above 36500 | `runtime_config.invalid_audit` at `/audit` | `config.out-of-range` at the member |
-| `wasmExecution.maxModuleBytes` outside 1024 to 5242880, or `maxGuestMemoryBytes` outside 1048576 to 1073741824 | `runtime_config.invalid_wasm_execution` at `/wasmExecution` | `config.out-of-range` at the member |
+| `audit.rotateBytes` below 1048576 or above 4294967295, or `audit.retentionDays` of 0 or above 36500 | `runtime_config.invalid_audit` at `/audit` | `config.out-of-range` at the member |
+| `wasmExecution.maximumModuleBytes` outside 1024 to 5242880, or `maximumGuestMemoryBytes` outside 1048576 to 1073741824 | `runtime_config.invalid_wasm_execution` at `/wasmExecution` | `config.out-of-range` at the member |
 | a review authority `recoveryDays` of 0 or above 3650 | `runtime_config.invalid_binding` at `""` | `config.out-of-range` at `/reviewAuthorities/<id>/recoveryDays` |
 | an event destination `deliveryCeilings.attemptTimeoutMilliseconds` outside 100 to 5000, or `maximumAttempts` outside 1 to 5 | `runtime_config.invalid_event_destination` at `/eventDestinations` | `config.out-of-range` at the member |
-| `attachmentStorage.timeoutMilliseconds` or `attachmentVerification.timeoutMilliseconds` outside 100 to 60000 | `runtime_config.invalid_attachment_storage` or `runtime_config.invalid_attachment_verification` | `config.out-of-range` at the member |
-| a Transit `fieldEncryption.provider.timeoutMilliseconds` of 0 or above 30000 | `runtime_config.invalid_field_encryption` at `/fieldEncryption` | `config.out-of-range` at the member |
+| `attachmentStorage.attemptTimeoutMilliseconds` or `attachmentVerification.attemptTimeoutMilliseconds` outside 100 to 60000 | `runtime_config.invalid_attachment_storage` or `runtime_config.invalid_attachment_verification` | `config.out-of-range` at the member |
+| a Transit `fieldEncryption.provider.attemptTimeoutMilliseconds` of 0 or above 30000 | `runtime_config.invalid_field_encryption` at `/fieldEncryption` | `config.out-of-range` at the member |
 
 `attachmentStorage`, `attachmentVerification`, and `fieldEncryption.provider`
-are read as the shared reader's tagged unions: `kind` still names the form and
-the accepted spellings are unchanged, and every problem the decoding pass finds inside the chosen form
-is now reported at its own member, line, and column rather than at the block.
+are read as the shared reader's tagged unions: `type` names the form. Their
+v0.40 values are `database` or `s3`, `disabled` or `http`, and `transit` or
+`local-file`, respectively. Every problem the decoding pass finds inside the
+chosen form is reported at its own member, line, and column rather than at the
+block. The runtime-union migration section gives the earlier `kind` forms and
+the `localFile` spelling they replace.
 
 ### BREAKING: `bregctl check` reports in the shared diagnostic shape
 
@@ -401,11 +414,11 @@ with no command prefix and with its fix after the message. `bregctl check`
 reported a package it refused as `check.package.<cause>`; it now reports
 `breg.package.<cause>`.
 
-Codes that name a `bregctl` operation or a usage error rather than a
-problem in a file are unchanged: `apply.*`, `history.*`, `test.*`,
-`status.*`, `init.*`, `migration.*`, `data.*`, `import.*`, `webhook.*`,
-`artifact.*`, `field_encryption.*`, `bregctl doctor`'s `startup.*`,
-`<command>.runtime_config.path_invalid`,
+Codes that name a `bregctl` operation or a usage error rather than a problem
+in a file are outside this renaming. Examples include `apply.*`, `history.*`,
+`test.*`, `status.*`, `migration.*`, `data.*`, `statistics.*`, `webhook.*`,
+`field_encryption.*`, the retention-command codes, `usage.invalid`,
+`bregctl doctor`'s `startup.*`, `<command>.runtime_config.path_invalid`,
 `import_authority.runtime_config.invalid`,
 `instance_claim.runtime_config.invalid`, `package.baseline.*`,
 `package.build.refused`, `package.identity.refused`,
@@ -413,10 +426,11 @@ problem in a file are unchanged: `apply.*`, `history.*`, `test.*`,
 `module.consent.*`, `module.lock.concurrent_change`,
 `module.lock.render_failed`, `module.lock.write_failed`, and the
 `bregctl explain` usage codes. HTTP problem codes and the runtime's request
-error codes are unchanged too, including `action.handler.entrypoint`,
-`action.handler.execution`, and `change_request.planner.entrypoint` as a
-running handler or planner reports them; the compile-time refusals that
-shared those spellings are renamed in the table.
+error codes are outside the renaming too, including
+`action.handler.entrypoint`, `action.handler.execution`, and
+`change_request.planner.entrypoint` as a running handler or planner reports
+them; the compile-time refusals that shared those spellings are renamed in
+the table.
 
 To migrate, replace each code below wherever a script, a CI step, an alert, or
 a dashboard matches `bregctl --format json` output or `breg` startup output.
@@ -1658,12 +1672,15 @@ with `bregctl test` and `bregctl package`.
 
 ### `bregctl check --format json` carries `status`; `dev grant` carries `diagnostics`
 
-Both changes add a member; no existing member moves or changes meaning.
+These changes add report members; no existing member moves or changes
+meaning.
 
-- The `bregctl check --format json` report opens with `ok`, `command`, and
-  `status`, the head the other Registry Stack ctl reports share. `status` is
-  `complete` (exit 0), `domain-refusal` (exit 1), or `operational-failure`
-  (exit 3). `apiVersion` and `kind` follow when the format moves to stable.
+- The `bregctl check --format json` report opens with `apiVersion`, `kind`,
+  `ok`, `command`, and `status`, the head the other Registry Stack ctl reports
+  share. The header is
+  `id.registrystack.org/formats/breg/ctl-report/v1alpha1` and
+  `BRegCtlReport`. `status` is `complete` (exit 0), `domain-refusal` (exit 1),
+  or `operational-failure` (exit 3).
 - The `bregctl dev grant` JSON report carries `diagnostics`, always an empty
   list on success, like every other report.
 
@@ -1697,17 +1714,17 @@ The nine `bregctl explain` output schemas under
 Stack identifier catalog. A consumer that resolves these schemas by `$id`, or
 pins the old identifiers, replaces each with its new one:
 
-| `kind` | Old `$id` | New `$id` |
+| Contract file | Old `$id` | Current `$id` |
 |---|---|---|
-| `AccessExplanation` | `https://registrystack.org/breg-explain/v1alpha3/AccessExplanation.schema.json` | `https://id.registrystack.org/schemas/breg/access-explanation/access-explanation.v1alpha4.schema.json` |
-| `AccessPreview` | `https://registrystack.org/breg-explain/v1alpha3/AccessPreview.schema.json` | `https://id.registrystack.org/schemas/breg/access-preview/access-preview.v1alpha4.schema.json` |
-| `ActionsExplanation` | `https://registrystack.org/breg-explain/v1alpha3/ActionsExplanation.schema.json` | `https://id.registrystack.org/schemas/breg/actions-explanation/actions-explanation.v1alpha4.schema.json` |
-| `ChangeRequestsExplanation` | `https://registrystack.org/breg-explain/v1alpha3/ChangeRequestsExplanation.schema.json` | `https://id.registrystack.org/schemas/breg/change-requests-explanation/change-requests-explanation.v1alpha4.schema.json` |
-| `EventsExplanation` | `https://registrystack.org/breg-explain/v1alpha3/EventsExplanation.schema.json` | `https://id.registrystack.org/schemas/breg/events-explanation/events-explanation.v1alpha4.schema.json` |
-| `LifecycleExplanation` | `https://registrystack.org/breg-explain/v1alpha3/LifecycleExplanation.schema.json` | `https://id.registrystack.org/schemas/breg/lifecycle-explanation/lifecycle-explanation.v1alpha4.schema.json` |
-| `ModelExplanation` | `https://registrystack.org/breg-explain/v1alpha3/ModelExplanation.schema.json` | `https://id.registrystack.org/schemas/breg/model-explanation/model-explanation.v1alpha4.schema.json` |
-| `QueriesExplanation` | `https://registrystack.org/breg-explain/v1alpha3/QueriesExplanation.schema.json` | `https://id.registrystack.org/schemas/breg/queries-explanation/queries-explanation.v1alpha4.schema.json` |
-| `RoutesExplanation` | `https://registrystack.org/breg-explain/v1alpha3/RoutesExplanation.schema.json` | `https://id.registrystack.org/schemas/breg/routes-explanation/routes-explanation.v1alpha4.schema.json` |
+| `AccessExplanation.schema.json` | `https://registrystack.org/breg-explain/v1alpha3/AccessExplanation.schema.json` | `https://id.registrystack.org/schemas/breg/access-explanation/access-explanation.v1alpha4.schema.json` |
+| `AccessPreview.schema.json` | `https://registrystack.org/breg-explain/v1alpha3/AccessPreview.schema.json` | `https://id.registrystack.org/schemas/breg/access-preview/access-preview.v1alpha4.schema.json` |
+| `ActionsExplanation.schema.json` | `https://registrystack.org/breg-explain/v1alpha3/ActionsExplanation.schema.json` | `https://id.registrystack.org/schemas/breg/actions-explanation/actions-explanation.v1alpha4.schema.json` |
+| `ChangeRequestsExplanation.schema.json` | `https://registrystack.org/breg-explain/v1alpha3/ChangeRequestsExplanation.schema.json` | `https://id.registrystack.org/schemas/breg/change-requests-explanation/change-requests-explanation.v1alpha4.schema.json` |
+| `EventsExplanation.schema.json` | `https://registrystack.org/breg-explain/v1alpha3/EventsExplanation.schema.json` | `https://id.registrystack.org/schemas/breg/events-explanation/events-explanation.v1alpha4.schema.json` |
+| `LifecycleExplanation.schema.json` | `https://registrystack.org/breg-explain/v1alpha3/LifecycleExplanation.schema.json` | `https://id.registrystack.org/schemas/breg/lifecycle-explanation/lifecycle-explanation.v1alpha4.schema.json` |
+| `ModelExplanation.schema.json` | `https://registrystack.org/breg-explain/v1alpha3/ModelExplanation.schema.json` | `https://id.registrystack.org/schemas/breg/model-explanation/model-explanation.v1alpha4.schema.json` |
+| `QueriesExplanation.schema.json` | `https://registrystack.org/breg-explain/v1alpha3/QueriesExplanation.schema.json` | `https://id.registrystack.org/schemas/breg/queries-explanation/queries-explanation.v1alpha4.schema.json` |
+| `RoutesExplanation.schema.json` | `https://registrystack.org/breg-explain/v1alpha3/RoutesExplanation.schema.json` | `https://id.registrystack.org/schemas/breg/routes-explanation/routes-explanation.v1alpha4.schema.json` |
 
 The schemas also state what `bregctl` already writes. Every integer has a
 minimum and a maximum: the range of the Rust type `bregctl` writes, or 0 to
@@ -1716,9 +1733,11 @@ is wider. Lists that are sets declare `uniqueItems`, a module digest is
 `sha256:` followed by 64 lowercase hex digits, the request lifecycle pin
 refuses a member the lifecycle does not declare, and
 `requests[].fields[].schema` is marked as an embedded JSON Schema. The
-`apiVersion` moves from `registry.registrystack.org/breg-explain/v1alpha3` to
-`registry.registrystack.org/breg-explain/v1alpha4` for the reasons the
-"BReg access" section gives.
+payloads move from the shared `apiVersion`
+`registry.registrystack.org/breg-explain/v1alpha3` to one registered
+`apiVersion` per explain format. The final values and `BReg` kinds are listed
+under "each `bregctl explain` format carries its own `apiVersion` and a `BReg`
+kind".
 
 ## BReg access
 
@@ -1763,11 +1782,13 @@ claims its profile requires, and the schema-test credentials file refuses
 `type: anonymous` as `config.unknown-variant`: bind every step with
 `type: bearer` and a `tokenRef`.
 
-`bregctl explain` reports `registry.registrystack.org/breg-explain/v1alpha4`.
-An immediate-action permission in `ActionsExplanation` has no `anonymous`
-member, and `claimContractError` in `AccessExplanation` no longer takes
+`bregctl explain access` reports
+`id.registrystack.org/formats/breg/access-explanation/v1alpha4` with kind
+`BRegAccessExplanation`. An immediate-action permission in
+`BRegActionsExplanation` has no `anonymous` member, and `claimContractError`
+in `BRegAccessExplanation` no longer takes
 `anonymous_profile_carries_authority`. A consumer that pins `v1alpha3`
-moves to the `v1alpha4` schemas and stops reading the member.
+moves to the registered `v1alpha4` schemas and stops reading the member.
 
 The compiled model changes, so a project's compiled revision changes. A
 package whose governed model states an `anonymous` member, whatever its
@@ -2053,8 +2074,10 @@ states a bound: see "field bounds are written `minimumLength`,
 `bregctl explain access` gains `statisticalDatasets`: one entry per dataset,
 in dataset id order, with the profiles holding `readLive`, `publish`, and
 `readReleases`. It is `[]` for a project without datasets. The member is
-added to `breg-explain/v1alpha4` and to the `AccessExplanation` contract,
-where it is required; no member is removed or renamed.
+added to the
+`id.registrystack.org/formats/breg/access-explanation/v1alpha4` format and to
+the `BRegAccessExplanation` contract, where it is required; no member is
+removed or renamed.
 
 To migrate a registry project, for each entry under `statisticalDatasets`:
 
@@ -2423,11 +2446,12 @@ with `BReg`.
 | `events` | `EventsExplanation` | `id.registrystack.org/formats/breg/events-explanation/v1alpha4` | `BRegEventsExplanation` |
 | `lifecycle` | `LifecycleExplanation` | `id.registrystack.org/formats/breg/lifecycle-explanation/v1alpha4` | `BRegLifecycleExplanation` |
 
-Every one of them was `apiVersion:
-registry.registrystack.org/breg-explain/v1alpha4`. The payloads are otherwise
-the same, and the schema files keep their names and their `$id` values. Each
-schema now states its own two header values as constants, so a document with
-the earlier `apiVersion` or the earlier `kind` no longer validates.
+In v0.39, every one of them wrote `apiVersion:
+registry.registrystack.org/breg-explain/v1alpha3`. Other v0.40 payload changes
+are described in their own `BREAKING` sections; the schema files keep their
+names. Each schema now states its current `$id` and its two payload header
+values as constants, so a document
+with the earlier `apiVersion` or the earlier `kind` no longer validates.
 
 No file an adopter writes changes. To migrate, change what a consumer of
 `bregctl --format json explain` compares: read `explanation.kind` against the
