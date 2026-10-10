@@ -1990,6 +1990,279 @@ async fn open_item_fixture(prefix: &str) -> OpenItemFixture {
     }
 }
 
+/// Observe transaction and wall clock reads without changing their values.
+/// The trigger also checks finite reservation and release times.
+async fn store_with_observed_database_clock(client: &tokio_postgres::Client) -> PostgresStore {
+    let schema: String = client
+        .query_one("SELECT current_schema()", &[])
+        .await
+        .expect("the isolated fixture schema")
+        .get(0);
+    client
+        .batch_execute(
+            "CREATE FUNCTION now() RETURNS timestamptz LANGUAGE plpgsql STABLE AS $$
+             BEGIN
+                 PERFORM pg_catalog.set_config('casework_test.clock_read', 'transaction', true);
+                 RETURN pg_catalog.now();
+             END $$;
+             CREATE FUNCTION clock_timestamp() RETURNS timestamptz LANGUAGE plpgsql VOLATILE AS $$
+             BEGIN
+                 PERFORM pg_catalog.set_config('casework_test.clock_read', 'wall', true);
+                 RETURN pg_catalog.clock_timestamp();
+             END $$;
+             CREATE FUNCTION require_database_clock_for_lease() RETURNS trigger
+             LANGUAGE plpgsql AS $$
+             DECLARE expected_deadline timestamptz;
+             BEGIN
+                 IF TG_OP='INSERT' THEN
+                     IF pg_catalog.current_setting('casework_test.clock_read', true)
+                         IS DISTINCT FROM 'wall' THEN
+                         RAISE EXCEPTION 'reservation did not read the database wall clock';
+                     END IF;
+                     expected_deadline := pg_catalog.clock_timestamp()+interval '330 seconds';
+                     IF NEW.execution_lease_until < expected_deadline-interval '1 second'
+                         OR NEW.execution_lease_until > expected_deadline THEN
+                         RAISE EXCEPTION 'reservation did not retain a full execution lease';
+                     END IF;
+                 ELSIF NEW.state IS DISTINCT FROM OLD.state THEN
+                     IF pg_catalog.current_setting('casework_test.clock_read', true)
+                         IS DISTINCT FROM 'transaction' THEN
+                         RAISE EXCEPTION 'settlement did not read the database clock';
+                     END IF;
+                     expected_deadline := pg_catalog.now();
+                     IF NEW.execution_lease_until IS DISTINCT FROM expected_deadline THEN
+                         RAISE EXCEPTION 'settlement did not release the execution lease';
+                     END IF;
+                 END IF;
+                 RETURN NEW;
+             END $$;
+             CREATE TRIGGER require_database_clock_for_lease
+                 BEFORE INSERT OR UPDATE OF execution_lease_until ON casework_attempts
+                 FOR EACH ROW EXECUTE FUNCTION require_database_clock_for_lease();",
+        )
+        .await
+        .expect("observe the clock for this fixture's lease writes");
+    let base = env::var("CASEWORK_TEST_DATABASE_URL").expect("disposable database URL");
+    let separator = if base.contains('?') { '&' } else { '?' };
+    // Explicit catalog placement lets this pool observe now(); the returned
+    // time remains pg_catalog.now(), and other pools keep their normal path.
+    let scoped = format!("{base}{separator}options=-csearch_path%3D{schema}%2Cpg_catalog");
+    let secret = format!("CASEWORK_CLOCK_{}", uuid::Uuid::new_v4().simple()).to_ascii_uppercase();
+    env::set_var(&secret, scoped);
+    let secrets = SecretResolver::new([SecretProvider::Environment], "/private/tmp")
+        .expect("test secret resolver");
+    let config = DatabaseConfig {
+        runtime_url_ref: format!("secret:env/{secret}"),
+        migration_url_ref: format!("secret:env/{secret}"),
+        trusted_root_certificate_ref: None,
+        test_only_plaintext: true,
+    };
+    PostgresStore::connect_migration(&config, &secrets)
+        .expect("pool that observes the database clock")
+        .with_audit(registry_casework::CaseworkAudit::capture().0)
+}
+
+#[tokio::test]
+async fn reserving_an_attempt_sets_a_live_lease_on_the_database_clock() {
+    let fixture = open_item_fixture("attempt_reservation_clock").await;
+    let claimed = fixture
+        .store
+        .claim(
+            &fixture.holder,
+            fixture.item_id,
+            fixture.revision,
+            "claim-clock",
+        )
+        .await
+        .expect("holder claims the item");
+    let store = store_with_observed_database_clock(&fixture.client).await;
+    let prepared = PreparedSourceAttempt {
+        source_binding: claimed.binding.clone(),
+        recovery_evidence: RecoveryEvidence::new(b"clock recovery capsule".to_vec())
+            .expect("bounded evidence"),
+    };
+    let (attempt, _) = store
+        .reserve_attempt_for_execution(
+            &fixture.holder,
+            claimed.item_id,
+            claimed.revision,
+            "reviewer",
+            OperationName::parse("approve").expect("approve operation"),
+            None,
+            &[],
+            "decision-clock",
+            "sha256:request-clock",
+            &prepared,
+        )
+        .await
+        .expect("reserve with a 330-second lease on the database clock");
+    let live: bool = fixture
+        .client
+        .query_one(
+            "SELECT execution_lease_until>pg_catalog.now()
+                 AND execution_lease_until<=pg_catalog.now()+interval '330 seconds'
+             FROM casework_attempts WHERE attempt_id=$1",
+            &[&attempt.attempt_id],
+        )
+        .await
+        .expect("read the reservation on the ordinary database clock")
+        .get(0);
+    assert!(live, "the ordinary database clock sees a finite live lease");
+    assert!(matches!(
+        fixture
+            .store
+            .acquire_recovery_execution(&fixture.holder, attempt.attempt_id)
+            .await,
+        Err(StoreError::AttemptPending)
+    ));
+}
+
+#[tokio::test]
+async fn reservation_waiting_on_item_lock_starts_a_full_execution_lease_after_unblock() {
+    let fixture = open_item_fixture("attempt_reservation_lock_clock").await;
+    let claimed = fixture
+        .store
+        .claim(
+            &fixture.holder,
+            fixture.item_id,
+            fixture.revision,
+            "claim-lock-clock",
+        )
+        .await
+        .expect("holder claims the item");
+    let mut locker = connect_scoped(&fixture.schema).await;
+    let lock = locker.transaction().await.expect("begin item lock");
+    lock.query_one(
+        "SELECT item_id FROM casework_items WHERE item_id=$1 FOR UPDATE",
+        &[&claimed.item_id],
+    )
+    .await
+    .expect("hold item lock");
+    let locker_pid: i32 = lock
+        .query_one("SELECT pg_backend_pid()", &[])
+        .await
+        .expect("lock holder pid")
+        .get(0);
+
+    let store = fixture.store.clone();
+    let holder = fixture.holder.clone();
+    let prepared = PreparedSourceAttempt {
+        source_binding: claimed.binding.clone(),
+        recovery_evidence: RecoveryEvidence::new(b"lock clock capsule".to_vec())
+            .expect("bounded evidence"),
+    };
+    let reservation = tokio::spawn(async move {
+        store
+            .reserve_attempt_for_execution(
+                &holder,
+                claimed.item_id,
+                claimed.revision,
+                "reviewer",
+                OperationName::parse("approve").expect("approve operation"),
+                None,
+                &[],
+                "decision-lock-clock",
+                "sha256:request-lock-clock",
+                &prepared,
+            )
+            .await
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let waiting: i64 = fixture
+            .client
+            .query_one(
+                "SELECT count(*) FROM pg_stat_activity WHERE $1=ANY(pg_blocking_pids(pid))",
+                &[&locker_pid],
+            )
+            .await
+            .expect("read blocked reservation")
+            .get(0);
+        if waiting > 0 {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "reservation did not wait"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    // Two seconds is enough to distinguish a transaction-start deadline from
+    // one sampled after the lock, without waiting for the 330-second lease.
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    let released_at: chrono::DateTime<chrono::Utc> = lock
+        .query_one("SELECT pg_catalog.clock_timestamp()", &[])
+        .await
+        .expect("database time before unlock")
+        .get(0);
+    lock.commit().await.expect("release item lock");
+    let (attempt, _) = tokio::time::timeout(std::time::Duration::from_secs(10), reservation)
+        .await
+        .expect("reservation completes after unlock")
+        .expect("reservation task completed")
+        .expect("reservation succeeds");
+    let full_after_unlock: bool = fixture
+        .client
+        .query_one(
+            "SELECT execution_lease_until >= $2::timestamptz + interval '329 seconds' \
+             FROM casework_attempts WHERE attempt_id=$1",
+            &[&attempt.attempt_id, &released_at],
+        )
+        .await
+        .expect("read committed lease")
+        .get(0);
+    assert!(full_after_unlock, "lock wait consumed the execution lease");
+}
+
+#[tokio::test]
+async fn finishing_an_attempt_releases_its_lease_on_the_database_clock() {
+    let fixture = settlement_fixture("attempt_finish_clock", false).await;
+    let store = store_with_observed_database_clock(&fixture.client).await;
+    store
+        .mark_attempt_uncertain(&fixture.holder, fixture.attempt_id, fixture.execution_token)
+        .await
+        .expect("uncertainty releases the execution lease on the database clock");
+    let recovery_token = fixture
+        .store
+        .acquire_recovery_execution(&fixture.holder, fixture.attempt_id)
+        .await
+        .expect("the ordinary database clock immediately acquires the released lease");
+    store
+        .complete_attempt(
+            &fixture.holder,
+            fixture.attempt_id,
+            recovery_token,
+            &SourceReceipt {
+                source_revision: "2".to_owned(),
+                resulting_state: "approved".to_owned(),
+                binding: fixture
+                    .store
+                    .item(fixture.item_id)
+                    .await
+                    .expect("item")
+                    .binding,
+                actor_reference: None,
+                metadata: BTreeMap::new(),
+            },
+        )
+        .await
+        .expect("completion releases the execution lease on the database clock");
+    let released: bool = fixture
+        .client
+        .query_one(
+            "SELECT execution_lease_until<=pg_catalog.now()
+             FROM casework_attempts WHERE attempt_id=$1",
+            &[&fixture.attempt_id],
+        )
+        .await
+        .expect("read the completed lease on the ordinary database clock")
+        .get(0);
+    assert!(
+        released,
+        "the completed lease is expired on the database clock"
+    );
+}
+
 async fn settlement_fixture(prefix: &str, mark_uncertain: bool) -> SettlementFixture {
     let OpenItemFixture {
         store,
