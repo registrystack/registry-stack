@@ -908,6 +908,33 @@ converted: v0.40.0 does not upgrade v0.39.0 state in place; apply to a new
 database.
 
 
+## Client refusal vocabulary
+
+Threat: a caller branching on a retired error word misclassifies a refused
+request or a capacity mutation whose outcome remains unknown.
+
+The Node and Python mappings in
+`crates/registry-scheduling-client-node/src/lib.rs` and
+`crates/registry-scheduling-client-py/src/lib.rs` expose kebab-case failure
+words, including `invalid-request`, `header-bounds`, `trace-context`, and
+`media-type`, from the same closed Rust failure variants. Shared transport
+words come from `TransportKind::kind`. Response validation, retryability,
+unknown-outcome reporting and the fixed value-free error message are
+unchanged. Task-grant checks and capacity transaction decisions are unchanged.
+
+Tests: `protocol_failures_use_the_public_snake_case_vocabulary` in the Node
+binding's `src/lib.rs` asserts the current kebab-case protocol words.
+`an_answer_the_binding_cannot_convert_is_a_protocol_failure_with_an_unknown_outcome`
+in the Python binding's `src/lib.rs` asserts the protocol category, unknown
+outcome and fixed message. The shared
+`every_transport_failure_reports_its_own_kebab_case_kind` test in
+`crates/registry-platform-httputil/src/client/mod.rs` pins transport words.
+The Python test does not enumerate every protocol word; its closed source
+mapping defines those words. These are proof references, not execution claims.
+
+Callers must use the current vocabulary; no spelling alias or conversion is
+provided.
+
 ## Known deferrals
 
 The matrix records four deferrals with their compensating controls.

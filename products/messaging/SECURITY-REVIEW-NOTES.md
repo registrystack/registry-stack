@@ -75,6 +75,33 @@ such as an operator submitting, is refused `403 operation.not-authorized`.
   is consulted. The `postgres_messages` suite has a second sender read and
   cancel a real message.
 
+## Client refusal vocabulary
+
+Threat: a caller branching on a retired error word misclassifies a refused
+request or a failure whose submission outcome remains unknown.
+
+The Node and Python mappings in
+`crates/registry-messaging-client-node/src/lib.rs` and
+`crates/registry-messaging-client-py/src/lib.rs` expose kebab-case failure
+words, including `invalid-request`, `header-bounds`, `trace-context`, and
+`media-type`, from the same closed Rust failure variants. Shared transport
+words come from `TransportKind::kind`. Response validation, retryability,
+unknown-outcome reporting and the fixed value-free error message are
+unchanged. The caller's access profile and submission authority are unchanged.
+
+Tests: `protocol_failures_use_the_public_snake_case_vocabulary` in the Node
+binding's `src/lib.rs` asserts the current kebab-case protocol words.
+`an_answer_the_binding_cannot_convert_is_a_protocol_failure_with_an_unknown_outcome`
+in the Python binding's `src/lib.rs` asserts the protocol category, unknown
+outcome and fixed message. The shared
+`every_transport_failure_reports_its_own_kebab_case_kind` test in
+`crates/registry-platform-httputil/src/client/mod.rs` pins transport words.
+The Python test does not enumerate every protocol word; its closed source
+mapping defines those words. These are proof references, not execution claims.
+
+Callers must use the current vocabulary; no spelling alias or conversion is
+provided.
+
 ## Node request normalization
 
 The Node facade snapshots plain JSON before handing a request or token to
