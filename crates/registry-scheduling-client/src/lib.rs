@@ -32,6 +32,10 @@
 //! Re-exports are flat, so a caller names a document, a route constant, or a
 //! vocabulary entry through this crate exactly as the core spells it.
 
+//! `appointment_receipt` observes a retained original success by caller, key, and exact request
+//! without replaying the mutation. The single read is never retried, and a
+//! typed `receipt.unresolved` preserves uncertainty about the original effect.
+
 #![deny(unsafe_code)]
 
 mod client;
@@ -51,7 +55,8 @@ pub use registry_scheduling_core::{
     OfferingDocument, PageDocument, PartyCounts, ProblemCode, ReminderDocument,
     RescheduleAppointmentRequest, ResourceDocument, SchedulingModeDocument,
     SchedulingServiceDocument, ServiceDocument, WindowDocument, APPOINTMENTS_PATH,
-    AVAILABILITY_EXPLAIN_PATH, AVAILABILITY_PATH, CURSOR_QUERY_PARAMETER, HOLDS_PATH,
-    IDEMPOTENCY_KEY_HEADER, LIMIT_QUERY_PARAMETER, LOCATIONS_PATH, MAXIMUM_IDEMPOTENCY_KEY_BYTES,
-    OFFERINGS_PATH, RESOURCES_PATH, SCHEDULING_PATH, SCHEDULING_PROBLEM_TYPE_BASE, SERVICES_PATH,
+    APPOINTMENT_RECEIPT_PATH, AVAILABILITY_EXPLAIN_PATH, AVAILABILITY_PATH, CURSOR_QUERY_PARAMETER,
+    HOLDS_PATH, IDEMPOTENCY_KEY_HEADER, LIMIT_QUERY_PARAMETER, LOCATIONS_PATH,
+    MAXIMUM_IDEMPOTENCY_KEY_BYTES, OFFERINGS_PATH, RESOURCES_PATH, SCHEDULING_PATH,
+    SCHEDULING_PROBLEM_TYPE_BASE, SERVICES_PATH,
 };

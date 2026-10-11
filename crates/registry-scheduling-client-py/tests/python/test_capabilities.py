@@ -17,6 +17,7 @@ _METHODS = {
     "create_hold",
     "release_hold",
     "create_appointment",
+    "appointment_receipt",
     "get_appointment",
     "list_appointments",
     "reschedule_appointment",

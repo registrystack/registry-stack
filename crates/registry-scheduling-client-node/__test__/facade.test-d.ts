@@ -100,3 +100,10 @@ function mayHaveTakenEffect(error: SchedulingClientError): boolean {
   return unknown
 }
 void mayHaveTakenEffect
+
+const observedReceipt: Promise<SchedulingOutcome<AppointmentDocument>> = client.appointmentReceipt(token, 'original-key', { admission })
+void observedReceipt
+const unresolved: SchedulingProblemCode = 'receipt.unresolved'
+void unresolved
+// @ts-expect-error receipt observation requires the original caller key
+void client.appointmentReceipt(token, { admission })

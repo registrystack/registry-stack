@@ -118,6 +118,7 @@ for (const [method, jsonIndexes] of [
   ['createHold', [2]],
   ['releaseHold', []],
   ['createAppointment', [2]],
+  ['appointmentReceipt', [2]],
   ['getAppointment', []],
   ['listAppointments', [1, 2]],
   ['rescheduleAppointment', [3]],

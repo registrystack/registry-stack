@@ -847,6 +847,78 @@ impl SchedulingService {
         .await
     }
 
+    /// Observe the original success receipt without replaying a command.
+    /// Ordinary read authority is checked at the HTTP boundary; lookup stays
+    /// scoped to the verified issuer and subject even after task authority ends.
+    pub async fn appointment_receipt(
+        &self,
+        caller: &Caller,
+        key: &str,
+        request: &CreateAppointmentRequest,
+        now: DateTime<Utc>,
+    ) -> Result<AppointmentDocument, ServiceError> {
+        let (scope, request_hash) = match (&request.hold, &request.admission) {
+            (None, Some(admission)) => (
+                "appointment:create".to_owned(),
+                admission_request_hash(admission),
+            ),
+            (Some(hold), None) => {
+                let hold = Uuid::parse_str(hold)
+                    .map_err(|_| ServiceError::Problem(ProblemCode::RequestInvalid))?;
+                (
+                    format!("hold:{hold}:confirm"),
+                    canonical_hash(&json!({"hold": hold}))?,
+                )
+            }
+            _ => return Err(ServiceError::Problem(ProblemCode::RequestInvalid)),
+        };
+        let actor = caller.actor_pseudonym(&self.hasher, &self.scheduling_id)?;
+        let record = json!({"event": "scheduling.appointment.receipt-read", "actor": actor});
+        let mut audit = self.audit.begin(Uuid::new_v4(), record.clone(),
+            json!({"event": "scheduling.appointment.receipt-read", "actor": actor, "outcome": "unfinished"}))
+            .await.map_err(|_| ServiceError::Problem(ProblemCode::ServiceUnavailable))?;
+        let result = async {
+            let receipt = self
+                .store
+                .appointment_receipt(
+                    &caller.issuer,
+                    &caller.subject,
+                    &scope,
+                    key,
+                    &request_hash,
+                    now,
+                )
+                .await?
+                .ok_or(ServiceError::Problem(ProblemCode::ReceiptUnresolved))?;
+            let claim = receipt
+                .get("claim")
+                .cloned()
+                .and_then(|value| serde_json::from_value::<ClaimRow>(value).ok())
+                .ok_or(ServiceError::Problem(ProblemCode::ReceiptUnresolved))?;
+            if receipt.get("kind").and_then(Value::as_str) != Some("booking") {
+                return Err(ServiceError::Problem(ProblemCode::ReceiptUnresolved));
+            }
+            Ok(appointment_document(
+                &claim,
+                &self.policy,
+                self.revision(),
+                Some(&receipt),
+            ))
+        }
+        .await;
+        let mut response = record;
+        response["outcome"] = json!(if result.is_ok() {
+            "observed"
+        } else {
+            "unresolved"
+        });
+        audit
+            .respond(response)
+            .await
+            .map_err(|_| ServiceError::Problem(ProblemCode::ServiceUnavailable))?;
+        result
+    }
+
     /// One appointment by id, visible to the caller that owns it.
     pub async fn get_appointment(
         &self,

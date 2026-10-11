@@ -47,7 +47,7 @@ use axum::{Json, Router};
 use registry_messaging_core::{
     type_uri, AccessRole, Caller, ContentRefusal, MessageView, Package, ProblemCode,
     TemplatePreview, TemplatePreviewRequest, HEALTH_PATH, IDEMPOTENCY_KEY_HEADER, MESSAGES_PATH,
-    MESSAGE_CANCEL_PATH, MESSAGE_PATH, METRICS_PATH, PROVIDER_CALLBACK_PATH,
+    MESSAGE_CANCEL_PATH, MESSAGE_PATH, MESSAGE_RECEIPT_PATH, METRICS_PATH, PROVIDER_CALLBACK_PATH,
     PROVIDER_CALLBACK_TOKEN_PATH, READY_PATH, TEMPLATE_PREVIEW_PATH,
 };
 use registry_platform_authcommon::parse_bearer_token;
@@ -244,6 +244,24 @@ pub const OPERATIONS: &[Operation] = &[
         ],
     },
     Operation {
+        method: "post",
+        path: MESSAGE_RECEIPT_PATH,
+        operation_id: "readMessageReceipt",
+        summary: "Read the retained original acceptance receipt for this caller, key and exact request without submitting or rendering a message. An unresolved receipt does not establish that no effect occurred.",
+        authenticated: true,
+        success_status: 200,
+        idempotency_key: true,
+        request_body: RequestBody::Json("SubmitMessageRequest"),
+        response_body: Some("MessageReceipt"),
+        problems: &[
+            ProblemCode::AuthenticationRefused, ProblemCode::ProfileNotAuthorized,
+            ProblemCode::ReceiptUnresolved, ProblemCode::RateLimitExceeded,
+            ProblemCode::RequestInvalid, ProblemCode::RequestUnprocessable,
+            ProblemCode::RequestBodyTooLarge, ProblemCode::RequestUnsupportedMediaType,
+            ProblemCode::RequestMethodNotAllowed, ProblemCode::ServiceUnavailable,
+        ],
+    },
+    Operation {
         method: "get",
         path: MESSAGE_PATH,
         operation_id: "getMessage",
@@ -367,6 +385,7 @@ pub fn router(state: HttpState) -> Router {
             .route(HEALTH_PATH, get(health))
             .route(READY_PATH, get(ready))
             .route(MESSAGES_PATH, post(submit_message))
+            .route(MESSAGE_RECEIPT_PATH, post(message_receipt))
             .route(MESSAGE_PATH, get(get_message))
             .route(MESSAGE_CANCEL_PATH, post(cancel_message))
             .route(TEMPLATE_PREVIEW_PATH, post(preview_template))
@@ -654,6 +673,37 @@ async fn get_message(
         .await
         .map_err(HttpError)?;
     Ok(Json(message.view))
+}
+
+async fn message_receipt(
+    State(state): State<HttpState>,
+    request: Request,
+) -> Result<Response, HttpError> {
+    let caller = authenticate(&state, request.headers()).await?;
+    // Observation neither renders nor submits. Keep the original receipt
+    // available even when the caller has spent its submission budget.
+    if !is_json(request.headers()) {
+        return Err(HttpError(ProblemCode::RequestUnsupportedMediaType));
+    }
+    let key = request
+        .headers()
+        .get(IDEMPOTENCY_KEY_HEADER)
+        .filter(|key| valid_idempotency_key(key.as_bytes()))
+        .and_then(|key| key.to_str().ok())
+        .ok_or(HttpError(ProblemCode::RequestInvalid))?
+        .to_owned();
+    let body = read_request_body(request).await?;
+    let service = state
+        .messages
+        .as_ref()
+        .ok_or(HttpError(ProblemCode::ServiceUnavailable))?;
+    Ok(Json(
+        service
+            .message_receipt(&caller, &key, &body)
+            .await
+            .map_err(HttpError)?,
+    )
+    .into_response())
 }
 
 async fn cancel_message(

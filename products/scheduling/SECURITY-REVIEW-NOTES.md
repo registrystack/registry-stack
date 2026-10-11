@@ -1002,3 +1002,20 @@ field. This regression is excluded from `postgres-test` builds so a permissive
 test binary cannot satisfy the shipped-feature proof. The runtime guard and
 release build feature selection are unchanged; the existing default-feature
 test suite owns this check.
+
+## Original receipt observation
+
+Threat: recovery submits a second effect after cancellation, expiry, or restore,
+or accepts a different caller's receipt as evidence of its original command.
+The receipt lookup uses current ordinary read authority, the original verified
+issuer and subject, the exact operation key, and the existing canonical request
+hash. It reads only retained successful receipts and never renders, writes business state,
+replays, or creates an attempt. Task lineage already stored with the original
+operation is preserved. A different standing identity gains no ownership.
+
+Missing, changed, erased, expired, and non-success receipts all answer the
+value-free `409 receipt.unresolved`. That response establishes no absence of
+effect. A durable audit request precedes the database lookup and its response
+precedes disclosure of the receipt. Payloads, keys, and raw identities never
+enter these audit records. The focused PostgreSQL receipt tests exercise
+ownership, exact-request refusal, retention, and unchanged product state.

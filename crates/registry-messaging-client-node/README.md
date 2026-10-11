@@ -26,3 +26,9 @@ for a configuration or request defect, a connection never established, and
 every 4xx refusal. It is false for `410 idempotency.expired` too, but there an
 earlier submission under the key was accepted and its message may have been
 sent: reconcile that submission before choosing a new key.
+
+`messageReceipt` observes a retained original success using the original request and
+caller-chosen key with a current token. It makes one receipt request, never
+replays the mutation and never retries. `receipt.unresolved` leaves the
+original effect unknown; a missing or expired receipt does not prove absence.
+The error's `outcomeUnknown` describes this read, not the original effect.

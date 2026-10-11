@@ -36,21 +36,23 @@ callback verifier authenticates them instead.
     products/messaging/RUNTIME-CONFIG.md, Keys. */}
 
 `POST /v1/messages` requires an `Idempotency-Key` header of 1 to 128 visible ASCII characters,
-scoped to the calling principal, named by the token's issuer and subject. The same key with the
+scoped to the verified issuer and principal. The access profile's `principalClaim` selects that
+principal from the verified token; with `principalClaim: sub`, it is the token subject. The same key with the
 same request answers the stored receipt again, and the same key with a different request is refused
 with `idempotency.key-reused`, whatever the key's age. The same request under a key whose stored
 receipt is older than the deployment's `retention.submissionReceiptRetentionDays` is refused with
 `idempotency.expired`, because the first answer is no longer held. Retention then clears the raw
-issuer, subject, and key from the row and keeps only a SHA-256 digest of them beside the request
+issuer, principal, and key from the row and keeps only a SHA-256 digest of them beside the request
 hash, so the key stays spent for that caller alone; another caller's identical key is a fresh
 submission. A key whose message has since been deleted by `retention.recordRetentionDays` answers
 `idempotency.expired` with the same or a different request: the digest row stays with its message,
 request hash, and receipt nulled, so a repeat is refused rather than accepted as a new message to
 the same recipient. A rotation of the deployment's audit reference key frees no spent key. Choose a
 random key, such as a UUID: the digest takes no secret, so anyone who reads the database and can
-guess your issuer, subject, and key can confirm that you used it.
+guess your issuer, principal, and key can confirm that you used it.
 
 {/* Evidence: crates/registry-messaging-core/src/wire.rs, idempotency key bounds;
+    crates/registry-messaging-core/src/access.rs, resolve();
     crates/registry-messaging/src/messages.rs, SUBMIT_OPERATION, idempotency_key_reference(),
     lookup_key(), and replay();
     crates/registry-messaging/src/retention.rs, expire_submission_receipts() and delete_records();
@@ -67,8 +69,8 @@ up, so a key never outlives the caller's authority. An exact retry can therefore
 example with `403 profile.not-authorized` or `422 template.locale-unavailable` after the deployment
 activated a package that narrows what the caller may send, while the first attempt stays accepted
 and may already be sending. A `403` or `422` answer to an exact retry does not show that the first
-attempt failed; do not resubmit under a new key on that answer alone. To recover the first
-attempt's receipt, have the operator restore the caller's access with an active package that again
+attempt failed; do not resubmit under a new key on that answer alone. To retry the original
+submission through the submission route, have the operator restore the caller's access with an active package that again
 lists the sender profile, template, and locale and still carries the template version the first
 attempt named, then retry under the same key within `retention.submissionReceiptRetentionDays`. A package
 that retired that version answers the retry with `404 template.not-found`, and the retry must still
@@ -81,6 +83,20 @@ message `id`.
     crates/registry-messaging/tests/postgres_messages.rs,
     an_exact_retry_the_caller_may_no_longer_send_is_refused_while_the_first_attempt_stands;
     products/messaging/contracts/recorded-decisions.yaml, MESSAGING-DEC-07. */}
+
+`POST /v1/messages/receipt` observes the original submission with a current authenticated
+bearer token, the original `Idempotency-Key`, and the original submission body. It returns a
+retained successful receipt only for the exact verified issuer and configured principal that submitted the
+message. The lookup does not render the template, submit a message, or dispatch provider work,
+so it can observe acceptance after the sender's submission authority or template changes.
+It remains subject to current authentication and caller rate limits. A missing, expired, or
+mismatched receipt answers `409 receipt.unresolved`; that answer does not prove that no message
+was accepted. Another principal, including an operator reading someone else's message status,
+cannot use this route to recover the original principal's receipt.
+
+{/* Evidence: crates/registry-messaging/src/http.rs, message_receipt();
+    crates/registry-messaging/src/messages.rs, message_receipt();
+    crates/registry-messaging-core/src/problem.rs, ReceiptUnresolved. */}
 
 A refusal answers `application/problem+json` with `type`, `title`, `status`, `detail`, `code`, and
 `traceId`. The `type` is the code with each dot replaced by a slash under
@@ -108,7 +124,7 @@ elsewhere does not make a caller allowed to send.
 {/* Evidence: crates/registry-messaging-core/src/access.rs, AccessRole, resolve(), and
     authorize_submission(); crates/registry-messaging-core/src/visibility.rs. */}
 
-A message is visible to the principal that submitted it, named by the token's issuer and subject,
+A message is visible to the principal that submitted it, identified by the verified issuer and configured principal,
 and to every operator. Any other caller reading or cancelling it receives `404
 message.not-visible`, the same answer a message that does not exist receives.
 
@@ -118,7 +134,7 @@ message.not-visible`, the same answer a message that does not exist receives.
 ## Limits
 
 Each access profile limits its callers' submissions. `requestsPerMinute` and `burst` set a request
-rate kept per caller, by token issuer and subject, and `maximumMessagesPerDay` caps the messages the whole
+rate kept per caller, by verified issuer and configured principal, and `maximumMessagesPerDay` caps the messages the whole
 profile accepts in any 24 hours. A submission past either one is refused with `429` and a
 `Retry-After` header in seconds:
 
@@ -253,6 +269,7 @@ HTTP status listed beside it. `request.not-found` answers a path the contract do
 | `GET /health` | None | `200` while the process serves |
 | `GET /ready` | None | `200` when the database carries every expected migration and its package ledger names the package this process serves active, `503 service.unavailable` otherwise |
 | `POST /v1/messages` | Bearer, sender | Submit one message |
+| `POST /v1/messages/receipt` | Bearer, the exact original submitting principal | Observe a retained success receipt using the original key and request |
 | `GET /v1/messages/{message_id}` | Bearer, the submitting principal or an operator | Read one message's status and attempts |
 | `POST /v1/messages/{message_id}/cancel` | Bearer, the submitting principal or an operator | Cancel a queued message |
 | `POST /v1/templates/{template_id}/versions/{version}/preview` | Bearer, sender | Render a listed template version with given data, persisting nothing |
