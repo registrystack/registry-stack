@@ -62,7 +62,7 @@ const groups = [
     binaries: ['breg-mcp', 'breg-review'],
     product: 'registry-breg-services',
   },
-  { title: 'Registry Coordinator', binaries: ['coordinator', 'coordinatorctl'] },
+  { title: 'Registry Coordinator', binaries: ['coordinator', 'coordinatorctl'], product: 'registry-coordinator' },
   { title: 'Registry Casework', binaries: ['casework', 'caseworkctl'] },
   { title: 'Registry Scheduling', binaries: ['scheduling', 'schedulingctl'] },
   { title: 'Registry Messaging', binaries: ['messaging', 'messagingctl'], product: 'registry-messaging' },

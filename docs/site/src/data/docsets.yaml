@@ -35,6 +35,9 @@ docsets:
       registry-breg-services:
         version: main source (unreleased)
         ref: HEAD
+      registry-coordinator:
+        version: main source (unreleased)
+        ref: HEAD
   - id: v0.40.0
     label: v0.40.0
     path: /v/0.40.0/

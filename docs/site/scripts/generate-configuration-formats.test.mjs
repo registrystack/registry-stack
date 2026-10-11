@@ -91,6 +91,7 @@ test('gates formats by the docset product that publishes them', async () => {
   const document = await buildConfigurationFormats();
   const product = (id) => document.products.find((entry) => entry.id === id);
   assert.equal(product('messaging').docsetProduct, 'registry-messaging');
+  assert.equal(product('coordinator').docsetProduct, 'registry-coordinator');
   assert.equal(product('breg').docsetProduct, null);
   const formats = rows(document);
   assert.equal(formats.get('breg/mcp-runtime').docsetProduct, 'registry-breg-services');
@@ -110,6 +111,11 @@ test('publishes the three Coordinator formats with their owned check commands', 
   const document = await buildConfigurationFormats();
   const coordinator = document.products.find((product) => product.id === 'coordinator');
   assert.equal(coordinator.checkPage, 'reference/coordinator-configuration');
+  assert.deepEqual(coordinator.references.map((reference) => reference.page), [
+    'configure/coordinator',
+    'operate/coordinator',
+    'reference/coordinator-configuration',
+  ]);
   assert.deepEqual(coordinator.formats.map((format) => format.id), [
     'coordinator/project', 'coordinator/runtime', 'coordinator/scenarios',
   ]);

@@ -1,0 +1,237 @@
+---
+title: Registry Coordinator API
+description: Bearer authentication, caller policies, run admission and ownership, recovery requests, review completion events, problem codes, and routes for the generated Registry Coordinator OpenAPI operations.
+status: draft
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: unreviewed
+doc_type: reference
+locale: en
+standards_referenced:
+  - openapi
+---
+
+import ApiReferenceTable from '../../../../components/ApiReferenceTable.astro';
+
+Registry Coordinator serves one HTTP surface for starting a run of a served flow, following and
+recovering that run, operating the deployment, and taking Casework's review completion events.
+Every route except liveness, readiness, and completion events presents a bearer access token, and
+the caller policy that token resolves to decides what the caller may do. The contract is pre-1.0 and
+carries no frozen compatibility promise.
+
+[Open the Registry Coordinator API operations](../coordinator/) for every route, parameter, schema,
+and reachable problem code. This page holds the authentication, ownership, idempotency, and
+recovery rules those operations assume.
+
+## Contract boundary
+
+Every caller request presents `Authorization: Bearer <token>` holding an RFC 9068 access token,
+`typ: at+jwt`, signed with RS256 or ES256 by the one issuer the deployment names, for its audience,
+to a client listed in its `allowedClients`, with a lifetime of at most one hour. The token's scopes
+are read from `registry_scopes` unless the deployment sets `scopeClaim`. A missing, malformed, or
+unverified token answers `401 authentication.refused` with `WWW-Authenticate: Bearer`.
+
+{/* Evidence: crates/registry-coordinator/src/access.rs, access_token_typ_set, scope_claim;
+    products/coordinator/DEPLOYMENT.md, Configure the deployment. */}
+
+Each verified client resolves one caller policy, which lists the scopes it requires and the actions
+it allows:
+
+- The run actions `start`, `status`, `inspect`, `retry-same`, `cancel`, and `reconcile` reach only
+  the flows the policy lists in `flows`.
+- The deployment-wide actions `doctor`, `restore-hold`, `release-restore-hold`,
+  `release-admission-hold`, `complete-execution-recovery`, and `retain` act on every flow at once
+  and need `operator: true` on the policy.
+
+A resolved caller refused an action answers `403 operation.not-authorized`. Run ownership and the
+idempotency scope come from the token's exact verified `iss` and `sub`, never from input fields;
+input identifiers and grant references manufacture no caller authority. A caller allowed to start
+a run gains no authority over the products its flow calls: each call uses the identity the operator
+configured for that connection, and the receiving product decides it.
+
+{/* Evidence: products/coordinator/DEPLOYMENT.md, Configure the deployment;
+    products/coordinator/README.md, Package and deploy;
+    products/coordinator/PRODUCT-CONTRACT.md, Execution and authority. */}
+
+## Start a run
+
+`POST /v1/runs` takes a `Start` body with exactly two members: `flow`, the served flow's name of 1
+to 128 characters, and `input`, which the flow's declared input schema checks. It requires an
+`Idempotency-Key` header of 1 to 256 bytes. An admitted start answers `200` with the run's status,
+admitted under the named flow's active definition.
+
+The same key from the same issuer and subject returns the original run rather than creating new
+work, and the same key with different input answers `409 idempotency.key-reused`. A new flow version
+cannot reinterpret a repeated key. A fresh key is a fresh run, so a client that does not know
+whether a start was admitted resends it under its original key.
+
+{/* Evidence: crates/registry-coordinator/src/http.rs, start-key-invalid;
+    products/coordinator/generated/openapi/coordinator.openapi.json;
+    products/coordinator/DEPLOYMENT.md, Admit and inspect work;
+    products/coordinator/README.md, Package and deploy. */}
+
+A start is refused before admission when:
+
+- the caller's policy does not list the flow, with `403 operation.not-authorized`;
+- the policy lists the flow but the deployment does not serve it, with `404 flow.not-served`;
+- the input does not satisfy the flow's input schema and value bounds, with `400 input.invalid`;
+- the instance runs in recovery-only mode, with `409 admission.recovery-only`;
+- a restore left admissions held, with `409 admission.held`.
+
+## Read and inspect runs
+
+`GET /v1/runs/{run}` answers the run's `RunStatus`: its workflow ID and version, its
+`definitionDigest` and `bindingDigest`, its current step and state, when it was admitted and when
+its deadline falls, whether an effect is `uncertain`, whether cancellation was requested, and
+whether it needs restore review. A finished run adds its `outcome` and the reviewed `output` its
+flow declares. A failed run adds its `failureCode`, and `failurePath` when the failure concerns a
+call input: an RFC 6901 pointer into that input, never the value.
+
+A run that does not exist, a run another caller owns, and a run in a flow the caller's policy does
+not list all answer the same `404 run.not-visible`. An operator policy reaches every owner's runs
+in the flows it lists.
+
+{/* Evidence: products/coordinator/generated/openapi/coordinator.openapi.json, RunStatus;
+    crates/registry-coordinator/src/http.rs, run_caller, run-absent;
+    products/coordinator/README.md, Observe and recover. */}
+
+`GET /v1/runs` answers at most 100 of the most recently admitted runs the caller may see, newest
+first. `limit` takes 1 to 100 and defaults to 20; any other value answers
+`400 request.limit-out-of-range`. The list has no paging cursor and no state filter, so a client
+keeps the run ID a start returns to read an older run.
+
+`GET /v1/runs/{run}/inspect` answers the run, one entry per step with its state, attempt count,
+whether its command is prepared, whether its effect is uncertain, and whether its receipt expired,
+and a `recovery` block. `recovery.retryAllowed` and `recovery.reason` describe whether the run can
+be scheduled again. For a compatible current call, `recovery.operation` names the pinned operation's
+ID, version, product, effect, key and preparation requirements, recovery semantics, and
+`readReceipt` capability. Neither proves current product authority or that an original-key receipt
+exists. No status, list, or inspection answer carries a run's input, a product response, or a
+prepared command.
+
+{/* Evidence: products/coordinator/generated/openapi/coordinator.openapi.json, RunInspection,
+    StepStatus, OperationIdentity; products/coordinator/README.md, Observe and recover. */}
+
+## Recovery and operator requests
+
+Every recovery and operator `POST` carries a JSON body:
+
+- `cancel`, `reconcile`, `retry-same`, `restore-hold`, and `release-restore-hold` take a `Reason`,
+  whose `reason` is a bounded investigation reference of 1 to 256 characters without personal data,
+  such as `incident-2026-10-09`. The audit journal records a keyed `reasonRef`, never the reference.
+- `/v1/retention` takes a `Retention`: a `before` cutoff in the past and a `limit` of 1 to 100.
+  It answers how many payloads it `erased`.
+- `/v1/release-admission-hold` takes an `AdmissionRelease`: a `recoveryReference` and the two
+  attestations `admissionHistoryComplete` and `priorDeploymentFenced`. A false or omitted
+  attestation refuses the release.
+- `/v1/complete-execution-recovery` takes an `ExecutionRecovery`: a `recoveryReference` and the
+  attestations `executionHistoryComplete` and `priorDeploymentFenced`.
+
+The attestations are audited operator statements, not automated proof. A cancel answers the run's
+status, a reconcile its inspection, and a retry-same the run ID and its scheduled status.
+
+{/* Evidence: products/coordinator/generated/openapi/coordinator.openapi.json, Reason, Retention,
+    AdmissionRelease, ExecutionRecovery; products/coordinator/DEPLOYMENT.md, Admit and inspect
+    work and Backup and restore. */}
+
+These routes authenticate and authorize before they report a malformed body. A body is
+`application/json` or another application media type ending in `+json`; any other media type
+answers `415 request.unsupported-media-type`, after authorization. Bodies are bounded to 65,536
+bytes, and duplicate or unknown members are refused. An empty, overlong, or control-character
+reason answers `400 request.reason-invalid`, and an out-of-bounds cutoff or limit
+`400 request.retention-invalid`. State and recovery conflicts answer `409`.
+
+{/* Evidence: crates/registry-coordinator/src/http.rs, DefaultBodyLimit;
+    products/coordinator/DEPLOYMENT.md, Admit and inspect work. */}
+
+## Review completions
+
+`POST /v1/review-completions` takes Casework's completion events for a review producer connection.
+It authenticates the sender by the `Authorization: Bearer` completion token and the
+`Registry-Recipient-Binding` header together, comparing the token in constant time, and refuses
+any other sender with `401 authentication.refused` before reading the body. Without a configured
+`completion` block on the connection, it refuses every event.
+
+An authenticated event is `application/json` of at most 2048 bytes, with `type`, `eventId`,
+`requestId`, `resultId`, and `completedAt`. It repeats its `eventId` as the `Idempotency-Key`
+header, and its `completedAt` is no older than 365 days and no more than five minutes ahead of the
+Coordinator's clock. Anything else answers `400 request.invalid` or
+`415 request.unsupported-media-type`.
+
+Every authentic, well-formed event answers `204`, whether or not a run waits on its request. The
+event only brings forward the next result read of a run already waiting on that request: the run
+reads the result itself through the connection's producer credential. An event starts no run.
+`503 service.unavailable` asks Casework to deliver the event again.
+
+{/* Evidence: crates/registry-coordinator/src/completion.rs, receive_review_completion,
+    MAXIMUM_BODY_BYTES; products/coordinator/generated/openapi/coordinator.openapi.json,
+    ReviewCompletion; products/coordinator/DEPLOYMENT.md, Configure the deployment. */}
+
+## Problem documents and codes
+
+Every refusal, including a request refused before its route runs and a refused completion event, is
+an RFC 9457 `application/problem+json` document with `type`, `title`, `status`, `detail`, `code`,
+and `traceId`. The `type` is the code with its dot replaced by a slash under
+`https://id.registrystack.org/problems/registry-coordinator/`. The title and detail are fixed
+sentences that belong to the code, and no member repeats a submitted value. A refusal carries
+`Cache-Control: no-store` and a `traceparent` header whose trace matches `traceId`; a `401` also
+carries `WWW-Authenticate: Bearer`, and a `503` carries `Retry-After`.
+
+{/* Evidence: crates/registry-coordinator/src/problem.rs; products/coordinator/README.md, Observe
+    and recover; products/coordinator/generated/openapi/coordinator.openapi.json, Problem. */}
+
+Every problem response carries one `code` from this closed catalogue, answered with the HTTP status
+listed beside it. `request.not-found` answers a path the contract does not declare, and
+`request.unprocessable` a body the HTTP framework rejects before an operation reads it, so the
+operations page lists neither under an operation. `coordinatorctl` reports its own diagnostics
+with `coordinator.*` codes, which this catalogue does not hold.
+
+<ApiReferenceTable id="problem-codes" source="coordinator-api" />
+
+{/* Problem code table generated from docs/site/src/data/coordinator-api.yaml by
+    docs/site/scripts/generate-data.mjs. Run npm run generate from docs/site. */}
+
+{/* Evidence: crates/registry-coordinator/src/problem.rs, REQUEST_UNPROCESSABLE_PROBLEM;
+    crates/registry-coordinator/src/http.rs, normalize_framework_rejection, route_not_found;
+    products/coordinator/generated/openapi/coordinator.openapi.json;
+    docs/site/src/data/coordinator-api.yaml. */}
+
+## Routes
+
+<ApiReferenceTable id="routes" source="coordinator-api" />
+
+{/* Routes table generated from docs/site/src/data/coordinator-api.yaml by
+    docs/site/scripts/generate-data.mjs. Run npm run generate from docs/site. */}
+
+{/* Evidence: crates/registry-coordinator/src/http.rs, openapi;
+    products/coordinator/generated/openapi/coordinator.openapi.json. */}
+
+`GET /metrics` is not part of this surface. When the deployment configures a metrics listener, the
+metrics are served on that separate socket only, and the service listener has no metrics route.
+
+{/* Evidence: products/coordinator/DEPLOYMENT.md, Configure the deployment. */}
+
+## Source of truth
+
+The implementation is the source of truth, and the generated document is the published form of it.
+`coordinatorctl openapi` builds the document offline from the service's route inventory, wire
+schemas, and problem catalogue, and the committed document is regenerated with that command.
+
+{/* Evidence: crates/registry-coordinator/src/http.rs, openapi;
+    crates/registry-coordinator/src/cli.rs, Openapi;
+    products/coordinator/README.md, Verify a change. */}
+
+The problem code and route tables are generated from maintained data that a site test holds to the
+generated document: the same codes with the statuses that answer them, and the same methods and
+paths. The rest of this page is maintained by hand against the cited source.
+
+{/* Evidence: docs/site/src/data/coordinator-api.yaml;
+    docs/site/scripts/coordinator-api-reference.test.mjs. */}
+
+## Next
+
+- [Registry Coordinator API operations](../coordinator/) for every route, parameter, and schema.
+- [Author a Coordinator flow](../../../configure/coordinator/) for the flows a deployment serves.
+- [Deploy Registry Coordinator](../../../operate/coordinator/) for the runtime, its database, its
+  caller policies, and the operator commands.

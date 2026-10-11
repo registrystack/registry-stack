@@ -219,7 +219,7 @@ test('glossary defers issue 361 without describing an implemented project-root b
     /href="https:\/\/github\.com\/registrystack\/registry-stack\/issues\/361"/,
   );
   assert.match(glossary, /Current source does not generate, sign, verify, or activate a project-root bundle/);
-  assert.match(glossary, /no Registry Stack coordinator binds or atomically activates them/);
+  assert.match(glossary, /no Registry Stack component binds or atomically activates them/);
   assert.match(glossary, /this is not atomic project activation/);
   assert.doesNotMatch(glossary, /root manifest binds compatible Relay and Notary/i);
   assert.doesNotMatch(glossary, /One activated deployment-bundle generation/i);

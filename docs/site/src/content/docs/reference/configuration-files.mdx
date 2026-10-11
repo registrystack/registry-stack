@@ -47,6 +47,15 @@ Registry Messaging reads `MessagingRuntimeConfig` through the same reader.
 
 </DocsetProduct>
 
+<DocsetProduct product="registry-coordinator">
+
+Registry Coordinator reads `CoordinatorRuntimeConfig` through the same reader.
+
+{/* Evidence: crates/registry-coordinator/src/runtime.rs, KIND;
+    products/coordinator/DEPLOYMENT.md, Configure the deployment. */}
+
+</DocsetProduct>
+
 The shared reader is the `registry-platform-yaml` library. Every product's check command reads
 its authored files through it, as the runtimes above read their runtime files, so one YAML subset,
 one value table, one header check, and one diagnostic format apply to every file on this page that

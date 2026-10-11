@@ -129,7 +129,19 @@ test('wraps a docset-gated product group of the index in a DocsetProduct region'
   // no trace of it in a docset that does not publish the product.
   assert.doesNotMatch(index.replace(region[0], '\n'), /messaging/iu);
   // Only gated groups are wrapped.
-  assert.equal(index.match(/<DocsetProduct /gu).length, 2);
+  assert.equal(index.match(/<DocsetProduct /gu).length, 3);
+});
+
+test('wraps the Registry Coordinator group of the index in a DocsetProduct region', () => {
+  const index = renderCatalog(fixtureCatalog(), fixtureReviewMetadata()).get('index.mdx');
+  const region = index.match(
+    /\n<DocsetProduct product="registry-coordinator">\n([\s\S]*?)\n<\/DocsetProduct>\n/u,
+  );
+  assert.ok(region, 'the Registry Coordinator group must sit in a DocsetProduct region');
+  assert.match(region[1], /^## Registry Coordinator$/mu);
+  assert.match(region[1], /\(\.\/coordinator\/\)/u);
+  assert.match(region[1], /\(\.\/coordinatorctl\/\)/u);
+  assert.doesNotMatch(index.replace(region[0], '\n'), /coordinator/iu);
 });
 
 test('wraps the Base Registry Engine citizen gateway group of the index in a DocsetProduct region', () => {

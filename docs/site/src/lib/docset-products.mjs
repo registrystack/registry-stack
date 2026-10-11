@@ -28,6 +28,13 @@ export const PRODUCT_PAGES = Object.freeze({
     'operate/messaging',
     'reference/apis/registry-messaging',
   ]),
+  'registry-coordinator': Object.freeze([
+    'start/coordinator',
+    'configure/coordinator',
+    'operate/coordinator',
+    'reference/coordinator-configuration',
+    'reference/apis/registry-coordinator',
+  ]),
 });
 
 /**
@@ -38,6 +45,7 @@ export const PRODUCT_PAGES = Object.freeze({
 export const PRODUCT_CLI_BINARIES = Object.freeze({
   'registry-breg-services': Object.freeze(['breg-mcp', 'breg-review']),
   'registry-messaging': Object.freeze(['messaging', 'messagingctl']),
+  'registry-coordinator': Object.freeze(['coordinator', 'coordinatorctl']),
 });
 
 /**
