@@ -1,0 +1,11 @@
+resource_type: role
+id: 01990000-0000-7000-8000-000000000050
+name: Citizen applicant
+description: Grants only the citizen self-service and approved-member read scopes.
+ouHandle: __OU_HANDLE__
+permissions:
+  - resourceServerId: __RESOURCE_SERVER_ID__
+    permissions:
+      - registration:self
+      - registration:read
+assignments: []

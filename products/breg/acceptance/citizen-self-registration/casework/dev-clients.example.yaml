@@ -1,0 +1,62 @@
+apiVersion: id.registrystack.org/formats/casework/dev-clients/v1alpha1
+kind: CaseworkDevClients
+clients:
+  # These three clients seed a complete local Casework directory. The live
+  # journey replaces the fixture membership with the native reviewer account
+  # and uses registration-console, admitted below as a browser client.
+  - id: registration-reviewer-fixture
+    accessProfile: registration-reviewer
+    scopes: [registration:review]
+    claims:
+      registry_actor_kind: human
+      registry_principal: registration-reviewer-fixture
+  - id: registration-administrator-fixture
+    accessProfile: registration-administrator
+    scopes: [registration:casework-admin]
+    claims:
+      registry_actor_kind: human
+      registry_principal: registration-administrator-fixture
+  - id: registration-supervisor-fixture
+    accessProfile: registration-supervisor
+    scopes: [registration:casework-supervisor]
+    claims:
+      registry_actor_kind: human
+      registry_principal: registration-supervisor-fixture
+  - id: registration-producer
+    accessProfile: registration-producer
+    scopes: [casework:reviews:request]
+    claims:
+      registry_principal: registration-producer
+directory:
+  - team: registration-team
+    queue: registration-review
+    staff: [registration-reviewer-fixture]
+    supervisors: [registration-supervisor-fixture]
+integrations:
+  # Materialize this file and replace the resource with the exact resource
+  # reported by the ready BReg dev issuer owner.
+  resource: urn:replace:with-breg-resource
+  sources:
+    citizen-self-registration:
+      baseUrl: http://127.0.0.1:8090
+      readerProfile: casework-reader
+      tokenEndpoint: http://127.0.0.1:8091/oauth2/token
+      clientAssertionAudience: http://127.0.0.1:8091
+      resource: urn:replace:with-breg-resource
+      scopes: [casework:source-reader]
+      clientIdRef: secret:file/service-casework-reader-id
+      clientAssertionKeyRef: secret:file/service-casework-reader-key
+      webhookSecretRef: secret:file/source-breg-casework-webhook
+      eventSource: urn:registrystack:registry:citizen-self-registration:instance:replace-with-instance-id
+  # Materialize this path to BReg dev's private `secrets/webhook-casework`
+  # copy. BReg resolves REGISTRATION_CASEWORK_WEBHOOK_KEY and preserves its raw
+  # bytes there; the Casework dev session copies those same bytes privately.
+  secretFiles:
+    source-breg-casework-webhook: /REPLACE_WITH_OWNER_ONLY_BREG_CASEWORK_WEBHOOK
+  serviceClients:
+    - id: casework-reader
+      scopes: [casework:source-reader]
+      # Borrowed issuer registrations must match every service claim exactly.
+      claims:
+        registry_purpose: casework-sync
+  browserClients: [registration-console]

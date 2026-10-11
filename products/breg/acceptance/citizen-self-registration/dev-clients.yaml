@@ -1,0 +1,90 @@
+apiVersion: id.registrystack.org/formats/breg/dev-clients/v1alpha1
+kind: BRegDevClients
+secretProviders:
+  environment: {}
+clients:
+  - id: registration-applier
+    accessProfiles: [registration-applier]
+    scopes: [registration:apply]
+    claims: {}
+  - id: casework-reader
+    accessProfiles: [casework-reader]
+    scopes: [casework:source-reader]
+    claims:
+      registry_actor_kind: service
+      registry_purpose: casework-sync
+  - id: registration-producer
+    accessProfiles: []
+    scopes: [casework:reviews:request]
+    claims:
+      registry_principal: registration-producer
+  # Teaching clients used only to seed the disposable Casework directory when
+  # Casework borrows this issuer. The live review uses registration-console.
+  - id: registration-reviewer-fixture
+    accessProfiles: []
+    scopes: [registration:review]
+    allowHumanFixture: true
+    claims:
+      registry_principal: registration-reviewer-fixture
+      registry_actor_kind: human
+  - id: registration-administrator-fixture
+    accessProfiles: []
+    scopes: [registration:casework-admin]
+    allowHumanFixture: true
+    claims:
+      registry_principal: registration-administrator-fixture
+      registry_actor_kind: human
+  - id: registration-supervisor-fixture
+    accessProfiles: []
+    scopes: [registration:casework-supervisor]
+    allowHumanFixture: true
+    claims:
+      registry_principal: registration-supervisor-fixture
+      registry_actor_kind: human
+  # Declares the issuer's scope tree for the two browser applications. This
+  # service has no BReg profile or admission and is never used by the journey.
+  - id: registration-scope-catalog
+    accessProfiles: []
+    scopes: [registration:self, registration:read, registration:review, registration:casework-admin, registration:casework-supervisor, registry:steward]
+    claims: {}
+eventDestinations:
+  casework:
+    origin: http://127.0.0.1:8096
+    path: /events/sources/citizen-self-registration
+    hmacSha256KeyRef: secret:env/REGISTRATION_CASEWORK_WEBHOOK_KEY
+reviewAuthorities:
+  casework:
+    endpoint: http://127.0.0.1:8096/
+    profile: registration-producer
+    producerId: registration-producer
+    recoveryDays: 7
+    client: registration-producer
+reviewExecutors:
+  registration-applier:
+    accessProfile: registration-applier
+    client: registration-applier
+issuer:
+  interactiveApplications:
+    - id: citizen-portal
+      clientSecretRef: secret:env/REGISTRATION_CITIZEN_CLIENT_SECRET
+      origin: http://127.0.0.1:3000
+      redirectUris: [http://127.0.0.1:3000/callback]
+      grants:
+        - scopes: [registration:self, registration:read]
+      tokenAttributes: [registry_actor_kind]
+    - id: registration-console
+      clientSecretRef: secret:env/REGISTRATION_STAFF_CLIENT_SECRET
+      origin: http://127.0.0.1:3001
+      redirectUris: [http://127.0.0.1:3001/callback]
+      grants:
+        - scopes: [registration:review, registration:casework-admin, registry:steward]
+      tokenAttributes: [registry_principal, registry_actor_kind]
+  syntheticUsers:
+    - username: registration-reviewer
+      email: registration-reviewer@example.test
+      passwordRef: secret:env/REGISTRATION_STAFF_PASSWORD
+      attributes:
+        registry_principal: registration-reviewer
+        registry_actor_kind: human
+      grants:
+        - scopes: [registration:review, registration:casework-admin, registry:steward]

@@ -1938,33 +1938,19 @@ pub(super) fn assertion_issuers(
 pub(super) fn runtime(root: &Path, state: &State, clients: &Clients, test: bool) -> Result<()> {
     let final_root = state.root();
     let prefix = if test { "test-" } else { "" };
-    let compiled = if state.webhook_port.is_some()
-        || !clients.event_destinations.is_empty()
-        || !clients.review_executors.is_empty()
-    {
-        Some(
-            crate::compile(&root.join("project"), crate::ProfileArg::Production, "dev")
-                .map_err(|_| anyhow::anyhow!("captured local project no longer compiles"))?,
-        )
-    } else {
-        None
-    };
+    let compiled = crate::compile(&root.join("project"), crate::ProfileArg::Production, "dev")
+        .map_err(|_| anyhow::anyhow!("captured local project no longer compiles"))?;
+    let authority_claims = local_authority_claims(&compiled)?;
     let destinations = if state.webhook_port.is_some() || !clients.event_destinations.is_empty() {
-        let compiled = compiled
-            .as_ref()
-            .context("event bindings require a compiled local project")?;
         if let Some(port) = state.webhook_port {
-            event_destinations(compiled, port)
+            event_destinations(&compiled, port)
         } else {
-            external_event_destinations(compiled, &clients.event_destinations)?
+            external_event_destinations(&compiled, &clients.event_destinations)?
         }
     } else {
         json!({})
     };
-    let review_executors = match compiled.as_ref() {
-        Some(compiled) => local_review_executors(state, clients, compiled)?,
-        None => BTreeMap::new(),
-    };
+    let review_executors = local_review_executors(state, clients, &compiled)?;
     // A browser application explicitly using this session's default BREG
     // audience is a local OAuth client. Other-resource apps remain outside
     // BREG admission; governed profiles and token scopes still authorize calls.
@@ -2007,7 +1993,7 @@ pub(super) fn runtime(root: &Path, state: &State, clients: &Clients, test: bool)
         "secretProviders":{"file":{"root":final_root.join("secrets")}},
         "database":{"runtimeUrlRef":format!("secret:file/{runtime_url}"),"migrationUrlRef":format!("secret:file/{prefix}migration-database-url"),"pool":{"maximumConnections":4},"roles":{"migration":MIGRATION_ROLE,"runtime":runtime_role}},
         "package":{"root":final_root.join(if test {"empty-package"}else{"build/package"})},
-        "authentication":{"oidc":{"issuer":state.issuer_origin(),"audience":state.audience(),"allowedAlgorithm":"RS256","accessTokenType":"at+jwt","scopeClaim":"scope","scopeSeparator":" ","allowedClients":allowed_clients,"assertionIssuers":&assertion_issuers,"maximumTokenLifetimeSeconds":300,"leewayMilliseconds":30000,"jwksSource":{"type":"static","documentRef":"secret:file/issuer-jwks"}},"authorityClaims":{"principal":"registry_principal","purpose":"registry_purpose"}},
+        "authentication":{"oidc":{"issuer":state.issuer_origin(),"audience":state.audience(),"allowedAlgorithm":"RS256","accessTokenType":"at+jwt","scopeClaim":"scope","scopeSeparator":" ","allowedClients":allowed_clients,"assertionIssuers":&assertion_issuers,"maximumTokenLifetimeSeconds":300,"leewayMilliseconds":30000,"jwksSource":{"type":"static","documentRef":"secret:file/issuer-jwks"}},"authorityClaims":authority_claims},
         "audit":{"hashKeyRef":"secret:file/audit-key","destination":"file","path":final_root.join("audit").join(format!("{prefix}audit.jsonl"))},"cursor":{"secretRef":"secret:file/cursor-key"},"eventDestinations":destinations,
         "evidenceProviders":clients.evidence_providers.iter().map(|(id, provider)| (id.clone(), json!({
             "baseUrl":provider.base_url,
@@ -2038,6 +2024,15 @@ pub(super) fn runtime(root: &Path, state: &State, clients: &Clients, test: bool)
             .expect("the runtime document carries an oidc object")
             .remove("assertionIssuers");
     }
+    let rendered = serde_norway::to_string(&runtime)?;
+    let generated =
+        registry_breg::runtime_config::parse_runtime_config(&rendered).map_err(|error| {
+            anyhow::anyhow!("generated local runtime authentication is invalid: {error}")
+        })?;
+    generated
+        .authentication()
+        .check_against(&compiled)
+        .context("generated local runtime authentication does not match the compiled registry")?;
     write_yaml(
         &root.join(if test {
             "runtime-test.yaml"
@@ -2046,6 +2041,28 @@ pub(super) fn runtime(root: &Path, state: &State, clients: &Clients, test: bool)
         }),
         &runtime,
     )
+}
+
+fn local_authority_claims(compiled: &registry_breg::CompiledRegistry) -> Result<Value> {
+    let inventory = registry_breg::authority::authority_inventory(compiled)
+        .context("cannot inspect the compiled registry's authority claims")?;
+    let principal = match inventory
+        .principal_claims
+        .into_iter()
+        .collect::<Vec<_>>()
+        .as_slice()
+    {
+        [claim] => claim.clone(),
+        [] => "registry_principal".to_owned(),
+        claims => bail!(
+            "local development requires one common principal claim across compiled authenticated grants; the compiled registry declares multiple: {}",
+            claims.join(", ")
+        ),
+    };
+    Ok(json!({
+        "principal": principal,
+        "purpose": inventory.purpose_required.then_some("registry_purpose")
+    }))
 }
 
 fn omit_null_members(value: &mut Value) {

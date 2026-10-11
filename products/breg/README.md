@@ -339,6 +339,10 @@ handler, declared business refusal, coordinated creates and an optional patch.
 See [native string patterns](native-patterns.md) for stored integrity rules.
 Its synthetic CLI cases assert computed effects and its PostgreSQL journeys
 verify stored values and existing action authority and concurrency contracts.
+The [citizen self-registration project](acceptance/citizen-self-registration/README.md)
+combines native ThunderID SMS signup, account-owned applications, Casework
+review, and automatic Person creation, account linking, and program enrollment.
+Its live driver uses the native products and separate disposable databases.
 
 Run the current deterministic contract checks with:
 

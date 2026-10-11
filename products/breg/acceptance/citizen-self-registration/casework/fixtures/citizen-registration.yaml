@@ -1,0 +1,10 @@
+apiVersion: id.registrystack.org/formats/casework/fixture/v1alpha1
+kind: CaseworkFixture
+id: citizen-registration-offline
+request:
+  source: citizen-self-registration
+  entity: registration-application
+expect:
+  queue: registration-review
+  applicationMode: automatic
+  target: none

@@ -1309,6 +1309,91 @@ fn actions_contract_refuses_an_evidence_retention_in_seconds() {
     assert!(checked > 0, "{fixture} writes action evidence");
 }
 
+/// Casework `source add` reads this one pinned member of the otherwise opaque
+/// authority inventory. The real explanation carries it, malformed arrays are
+/// refused, an empty inventory is representable, and unrelated inventory
+/// members remain passthrough data.
+#[test]
+fn access_claim_contract_pins_principal_claims() {
+    let schema = load_schema("AccessExplanation");
+    let fixture = "products/breg/examples/access-review";
+    let explanation = explain("access", &fixture_path(fixture));
+    assert_matches_contract(fixture, "AccessExplanation", &explanation);
+    assert_eq!(
+        explanation["claimContract"]["principalClaims"],
+        json!(["registry_principal"])
+    );
+    assert!(explanation["claimContractError"].is_null());
+
+    let mut missing = explanation.clone();
+    missing["claimContract"]
+        .as_object_mut()
+        .unwrap()
+        .remove("principalClaims");
+    assert!(
+        !schema.is_valid(&missing),
+        "AccessExplanation accepts an inventory without principalClaims"
+    );
+
+    for malformed in [
+        json!([""]),
+        json!(["registry_principal", "registry_principal"]),
+        json!([1]),
+    ] {
+        let mut document = explanation.clone();
+        document["claimContract"]["principalClaims"] = malformed.clone();
+        assert!(
+            !schema.is_valid(&document),
+            "AccessExplanation accepts malformed principalClaims {malformed}"
+        );
+    }
+
+    let mut empty = explanation.clone();
+    empty["claimContract"]["principalClaims"] = json!([]);
+    assert!(
+        schema.is_valid(&empty),
+        "AccessExplanation refuses an empty successful authority inventory"
+    );
+
+    let mut passthrough = explanation.clone();
+    passthrough["claimContract"]["futureInventoryMember"] = json!({"shape":"opaque"});
+    assert!(
+        schema.is_valid(&passthrough),
+        "AccessExplanation seals authority inventory members that remain opaque"
+    );
+}
+
+/// Authority inventory construction is a result: exactly one of the compiled
+/// inventory and its value-free error is present.
+#[test]
+fn access_claim_contract_pins_the_inventory_error_relation() {
+    let schema = load_schema("AccessExplanation");
+    let fixture = "products/breg/examples/access-review";
+    let explanation = explain("access", &fixture_path(fixture));
+    assert_matches_contract(fixture, "AccessExplanation", &explanation);
+
+    let mut success_with_error = explanation.clone();
+    success_with_error["claimContractError"] = json!("principal-claim-missing");
+    assert!(
+        !schema.is_valid(&success_with_error),
+        "AccessExplanation accepts both an inventory and its error"
+    );
+
+    let mut failure = explanation.clone();
+    failure["claimContract"] = Value::Null;
+    failure["claimContractError"] = json!("principal-claim-missing");
+    assert!(
+        schema.is_valid(&failure),
+        "AccessExplanation refuses a pinned authority inventory failure"
+    );
+
+    failure["claimContractError"] = Value::Null;
+    assert!(
+        !schema.is_valid(&failure),
+        "AccessExplanation accepts neither an inventory nor its error"
+    );
+}
+
 /// The access explanation and the access preview spell their own constants
 /// in kebab-case: every claim contract error the engine can report, and the
 /// preview's `mode` and `recordAccess`. Each contract refuses the snake_case
@@ -1339,6 +1424,7 @@ fn access_contracts_refuse_a_snake_case_constant() {
             "the engine writes claimContractError {word}, which is not kebab-case"
         );
         let mut document = explanation.clone();
+        document["claimContract"] = Value::Null;
         document["claimContractError"] = written.clone();
         assert!(
             schema.is_valid(&document),

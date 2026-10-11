@@ -105,12 +105,7 @@ seed: []
         binaries: BTreeMap::new(),
         failure: None,
     };
-    (
-        temporary,
-        state,
-        clients,
-        BTreeMap::from([("registry.yaml".into(), b"synthetic".to_vec())]),
-    )
+    (temporary, state, clients, crate::init_files())
 }
 
 /// Enables a file secret provider rooted at a private directory inside
@@ -183,6 +178,118 @@ fn initialization_keeps_distinct_keys_and_private_state_without_service_dependen
     .unwrap();
     assert_eq!(runtime["identity"]["environment"], "local");
     assert_eq!(runtime["database"]["roles"]["runtime"], RUNTIME_ROLE);
+    assert_eq!(
+        runtime["authentication"]["authorityClaims"]["principal"],
+        "registry_principal"
+    );
+    assert_eq!(
+        runtime["authentication"]["authorityClaims"]["purpose"],
+        "registry_purpose"
+    );
+}
+
+#[test]
+fn generated_runtime_infers_sub_as_the_common_principal_claim() {
+    let (_temp, state, clients, mut files) = fixture();
+    let registry = String::from_utf8(files.remove("registry.yaml").unwrap()).unwrap();
+    let registry = registry.replace("principalClaim: registry_principal", "principalClaim: sub");
+    assert!(!registry.contains("principalClaim: registry_principal"));
+    files.insert("registry.yaml".into(), registry.into_bytes());
+
+    initialize(&state.root(), &state, &clients, &files).expect("sub-principal initialization");
+    let runtime: Value = serde_norway::from_slice(
+        &private::read(&state.root().join("runtime-test.yaml"), MAX_BYTES).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        runtime["authentication"]["authorityClaims"]["principal"],
+        "sub"
+    );
+}
+
+#[test]
+fn access_free_runtime_preserves_the_legacy_registry_principal() {
+    let (_temp, state, clients, mut files) = fixture();
+    let mut registry: Value =
+        serde_norway::from_slice(files.get("registry.yaml").unwrap()).unwrap();
+    let profiles = registry["accessProfiles"].as_array_mut().unwrap();
+    assert!(!profiles.is_empty());
+    profiles.clear();
+    registry
+        .as_object_mut()
+        .unwrap()
+        .remove("manifestProjection");
+    files.insert(
+        "registry.yaml".into(),
+        serde_norway::to_string(&registry).unwrap().into_bytes(),
+    );
+
+    initialize(&state.root(), &state, &clients, &files)
+        .expect("access-free registry initialization");
+    let runtime: Value = serde_norway::from_slice(
+        &private::read(&state.root().join("runtime-test.yaml"), MAX_BYTES).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        runtime["authentication"]["authorityClaims"]["principal"],
+        "registry_principal"
+    );
+    assert!(runtime["authentication"]["authorityClaims"]
+        .get("purpose")
+        .is_none());
+}
+
+#[test]
+fn generated_runtime_refuses_principal_collisions_before_dev_state_is_published() {
+    for principal_claim in ["scope", "registry_purpose"] {
+        let (_temp, state, clients, mut files) = fixture();
+        let registry = String::from_utf8(files.remove("registry.yaml").unwrap()).unwrap();
+        let registry = registry.replace(
+            "principalClaim: registry_principal",
+            &format!("principalClaim: {principal_claim}"),
+        );
+        assert!(!registry.contains("principalClaim: registry_principal"));
+        files.insert("registry.yaml".into(), registry.into_bytes());
+
+        let error = initialize(&state.root(), &state, &clients, &files)
+            .expect_err("a principal claim cannot overlap another authentication claim role");
+        assert!(
+            error.to_string().contains("runtime authentication"),
+            "unexpected refusal for {principal_claim}: {error:#}"
+        );
+        assert!(
+            !state.root().exists(),
+            "a refused authentication preflight must not publish retained dev state"
+        );
+    }
+}
+
+#[test]
+fn mixed_principal_claims_are_refused_before_dev_state_is_published() {
+    let (_temp, state, clients, mut files) = fixture();
+    let registry = String::from_utf8(files.remove("registry.yaml").unwrap()).unwrap();
+    let registry = registry.replacen(
+        "principalClaim: registry_principal",
+        "principalClaim: sub",
+        1,
+    );
+    assert!(registry.contains("principalClaim: sub"));
+    assert!(registry.contains("principalClaim: registry_principal"));
+    files.insert("registry.yaml".into(), registry.into_bytes());
+
+    let error = initialize(&state.root(), &state, &clients, &files)
+        .expect_err("mixed principal claims must fail before startup");
+    let message = error.to_string();
+    assert!(
+        message.contains("requires one common principal claim")
+            && message.contains("registry_principal")
+            && message.contains("sub"),
+        "unexpected refusal: {message}"
+    );
+    assert!(
+        !state.root().exists(),
+        "a refused preflight must not publish retained dev state"
+    );
 }
 
 #[test]
@@ -3827,7 +3934,7 @@ fn local_review_executor_uses_refreshing_service_identity_for_this_registry() {
             "id":"automatic-applier",
             "actorKind":"service",
             "requesterClients":["automatic-applier"],
-            "principalClaim":"sub",
+            "principalClaim":"registry_principal",
             "requiredScopes":["registry:generic:apply"],
             "requiredPurposes":["registry-application"],
             "permissions":{"entities":[{
@@ -3852,6 +3959,7 @@ fn local_review_executor_uses_refreshing_service_identity_for_this_registry() {
             "accessProfiles":["automatic-applier"],
             "scopes":["registry:generic:apply", "registry:unused"],
             "claims":{
+                "registry_principal":"automatic-applier",
                 "registry_purpose":"registry-application"
             }
         }));
