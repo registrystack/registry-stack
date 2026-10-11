@@ -96,6 +96,10 @@ change it.
 - `ListenerConfig` and `PrivateListenerConfig`: `bind` as `host:port` with an
   IP address host, and for private listeners the declared TLS termination and
   network exposure.
+- `TaskGrantStatusConfig`: one `taskGrantStatus` entry naming a task
+  authority's issuer, its base URL and status route, and the runtime's own
+  private-key JWT credentials for the status check. `statusPath` and
+  `statusScope` default to Casework's route and scope.
 
 ## Package
 

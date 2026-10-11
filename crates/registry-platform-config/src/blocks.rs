@@ -14,7 +14,7 @@ use std::net::{IpAddr, Ipv6Addr, SocketAddr};
 use std::path::{Component, Path, PathBuf};
 use std::str::FromStr;
 
-use registry_platform_yaml::Url;
+use registry_platform_yaml::{ExternalId, Url};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::{SecretError, SecretProvider, SecretReference, SecretResolver, MAX_SECRET_BYTES};
@@ -978,6 +978,67 @@ impl PrivateListenerConfig {
 
 fn is_unique_local(address: Ipv6Addr) -> bool {
     address.octets()[0] & 0xfe == 0xfc
+}
+
+/// The status route a task-grant status check appends to `baseUrl` when
+/// `statusPath` is omitted, Casework's route.
+pub const DEFAULT_TASK_GRANT_STATUS_PATH: &str = "/v1/task-grants/{grantId}/status";
+
+/// The scope a task-grant status credential is requested with when
+/// `statusScope` is omitted, Casework's status scope.
+pub const DEFAULT_TASK_GRANT_STATUS_SCOPE: &str = "casework:grants:status";
+
+/// One task authority whose grants a runtime checks for fresh status, and the
+/// runtime's own credentials for that check, written as one entry of
+/// `taskGrantStatus`. The status route and scope default to Casework's.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TaskGrantStatusConfig {
+    /// The task authority's issuer, exactly as the authority states it,
+    /// including an absolute URN issuer. It is compared rather than fetched
+    /// and must be an absolute resource URI.
+    pub source_issuer: ExternalId,
+    /// The authority's base URL the status check calls. It is `https`;
+    /// `http` is accepted only for a loopback host, for local development.
+    pub base_url: Url,
+    pub token_endpoint: Url,
+    pub client_assertion_audience: ExternalId,
+    pub client_id: ExternalId,
+    pub private_key_ref: SecretReference,
+    /// The audience the runtime requests its status credential for, an
+    /// absolute resource URI.
+    pub casework_resource: ExternalId,
+    /// The one scope the runtime requests its status credential with.
+    /// Omitted, `casework:grants:status`.
+    #[serde(default = "default_task_grant_status_scope")]
+    pub status_scope: ExternalId,
+    /// The status route appended to `baseUrl`'s path. It starts with `/` and
+    /// has exactly one whole `{grantId}` segment; every other segment uses
+    /// only letters, digits, `-`, `.`, `_`, and `~`. Omitted,
+    /// `/v1/task-grants/{grantId}/status`.
+    #[serde(default = "default_task_grant_status_path")]
+    pub status_path: String,
+    /// PEM CA bundle for the authority and its token endpoint. Omitted, the
+    /// platform's trusted roots verify them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(with = "SecretReference"))]
+    pub ca_bundle_ref: Option<SecretReference>,
+}
+
+impl fmt::Debug for TaskGrantStatusConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("TaskGrantStatusConfig(<configured>)")
+    }
+}
+
+fn default_task_grant_status_scope() -> ExternalId {
+    ExternalId::new(DEFAULT_TASK_GRANT_STATUS_SCOPE)
+        .expect("the default status scope is an external id")
+}
+
+fn default_task_grant_status_path() -> String {
+    DEFAULT_TASK_GRANT_STATUS_PATH.to_owned()
 }
 
 #[cfg(test)]

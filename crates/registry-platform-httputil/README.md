@@ -28,6 +28,10 @@ Outbound HTTP utilities for registry services.
   `RedeemedAuthorizationCode`: the access token, a monotonic expiry when the
   issuer stated one, and the unverified ID token, which the caller verifies
   before reading any claim.
+  `PrivateKeyJwtConfig::check_identity` exposes the constructor's nonsecret
+  client, assertion-audience and token-endpoint checks for offline configuration
+  validation. Key import, certificate and provider readiness remain construction
+  checks.
 - `ExchangeAuthorization` for one immutable host-verified person or task-grant
   context. The first-party source signs a bounded grantless JWT; the remote
   source obtains a new assertion with a narrowly configured bootstrap on each

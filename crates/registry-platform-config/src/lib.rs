@@ -23,9 +23,10 @@ pub use blocks::{
     ConfigBlockErrorKind, DatabaseConfig, EnvironmentSecretProviderConfig,
     FileSecretProviderConfig, JwksSource, ListenerBind, ListenerConfig, ListenerNetworkExposure,
     OidcClientsConfig, OidcIssuerConfig, PackageConfig, PackageDigestMismatch,
-    PrivateListenerConfig, SecretProvidersConfig, TlsTermination, MAX_ASSERTION_ISSUERS_PER_CLIENT,
-    MAX_ASSERTION_ISSUER_BYTES, MAX_ASSERTION_ISSUER_CLIENTS, MAX_ASSERTION_ISSUER_CLIENT_BYTES,
-    MAX_LISTENER_BIND_CHARACTERS, MAX_OIDC_AUDIENCE_CHARACTERS,
+    PrivateListenerConfig, SecretProvidersConfig, TaskGrantStatusConfig, TlsTermination,
+    DEFAULT_TASK_GRANT_STATUS_PATH, DEFAULT_TASK_GRANT_STATUS_SCOPE,
+    MAX_ASSERTION_ISSUERS_PER_CLIENT, MAX_ASSERTION_ISSUER_BYTES, MAX_ASSERTION_ISSUER_CLIENTS,
+    MAX_ASSERTION_ISSUER_CLIENT_BYTES, MAX_LISTENER_BIND_CHARACTERS, MAX_OIDC_AUDIENCE_CHARACTERS,
 };
 pub use loader::{
     contains_environment_expression, reject_environment_expressions_in_authored_yaml,
