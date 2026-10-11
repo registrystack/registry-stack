@@ -80,9 +80,10 @@ place; apply to a new database. No installation step repairs an earlier table.
 10. **A URL holds no backslash, whitespace, or control character and preserves its host.**
     In every product's files, a member typed as the shared URL refuses those
     characters anywhere with `config.invalid-value` at the member. The schema
-    pattern continues to exclude whitespace and control characters; raw-backslash
-    schema tightening is deferred to preserve frozen Version 1 contracts. The
-    reader also refuses a host the URL parser rewrites, including Unicode host
+    pattern now excludes raw backslashes as well as whitespace and control
+    characters. The Evidence bundle receives the same narrow URL pattern and
+    description correction before v0.40.0, without changing other frozen
+    schema members. The reader also refuses a host the URL parser rewrites, including Unicode host
     names and percent-encoded host text.
     Ordinary ASCII DNS names, case differences, punycode, and IPv6 literals
     remain allowed. The URL stays as written; issuer equality stays textual.

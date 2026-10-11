@@ -153,9 +153,10 @@
   control character from the key.
 - BREAKING: `registry-platform-yaml` `Url` refuses a backslash, whitespace,
   or control character anywhere with `config.invalid-value`. The schema
-  pattern continues to exclude whitespace and control characters; raw-backslash
-  schema tightening is deferred to preserve frozen Version 1 contracts. The
-  reader also refuses a host the URL parser rewrites, including Unicode and
+  pattern now excludes raw backslashes as well as whitespace and control
+  characters. The Evidence bundle receives the same narrow URL pattern and
+  description correction before v0.40.0, without changing other frozen
+  schema members. The reader also refuses a host the URL parser rewrites, including Unicode and
   percent-encoded host text. ASCII DNS case
   differences, punycode, and IPv6 spellings remain allowed. Issuers are still
   compared as written. Shared `OidcIssuerConfig.issuer` and `JwksSource::Uri.uri`

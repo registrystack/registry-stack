@@ -679,9 +679,9 @@ mod schema {
     /// The class in [`URL_PATTERN`] lists every character that
     /// `char::is_whitespace` or `char::is_control` accepts, by code point, so
     /// that every regular expression engine reads the same set.
-    // Keep this definition identical to the frozen Version 1 contracts.
-    // The reader additionally refuses backslashes and rewritten hosts.
-    const URL_PATTERN: &str = "^[Hh][Tt][Tt][Pp][Ss]?://[^/?#@\\u0000-\\u0020\\u007F-\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]+([/?#][^\\u0000-\\u0020\\u007F-\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*)?$";
+    // Keep this definition identical to the Evidence bundle contract.
+    // The reader additionally checks that the host is preserved.
+    const URL_PATTERN: &str = "^[Hh][Tt][Tt][Pp][Ss]?://[^/?#@\\u005C\\u0000-\\u0020\\u007F-\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]+([/?#][^\\u005C\\u0000-\\u0020\\u007F-\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*)?$";
 
     impl JsonSchema for Url {
         fn schema_name() -> Cow<'static, str> {
@@ -694,7 +694,7 @@ mod schema {
                 "format": "uri",
                 "maxLength": MAXIMUM_URL_CHARS,
                 "pattern": URL_PATTERN,
-                "description": "An absolute http or https URL with a host, no user information, and no whitespace or control character.",
+                "description": "An absolute http or https URL with a host preserved as written, no user information, and no backslash, whitespace or control character. DNS case and equivalent IPv6 literals are permitted.",
             })
         }
     }
