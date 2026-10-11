@@ -47,7 +47,11 @@ use zeroize::Zeroizing;
 const DATABASE_NAME: &str = "casework_dev";
 const MIGRATION_ROLE: &str = "casework_dev_migration";
 const RUNTIME_ROLE: &str = "casework_dev_runtime";
+// Pull the digest-identical Docker Official Images mirror. Public help keeps
+// the canonical upstream tag and digest, whose image identity is unchanged.
 const IMAGE: &str =
+    "public.ecr.aws/docker/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675";
+const CANONICAL_IMAGE: &str =
     "postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675";
 const LABEL: &str = "org.registrystack.caseworkctl.dev-owner";
 /// Loopback ports a first start takes when no flag names one. Each lies below
@@ -3770,7 +3774,10 @@ fn inspect_with_termination(
 fn verified_container(state: &State, container: &Value) -> Result<()> {
     if container["Name"] != format!("/{}", state.container_name())
         || container["Config"]["Labels"][LABEL] != state.owner
-        || container["Config"]["Image"] != IMAGE
+        || !matches!(
+            container["Config"]["Image"].as_str(),
+            Some(IMAGE | CANONICAL_IMAGE)
+        )
         || state
             .container_id
             .as_ref()

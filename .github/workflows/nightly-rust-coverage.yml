@@ -60,7 +60,7 @@ jobs:
     # ci.yml, which .github/scripts/test_ci_changes.py holds.
     services:
       postgres:
-        image: postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675
+        image: public.ecr.aws/docker/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675
         env:
           POSTGRES_DB: dispatch
           POSTGRES_USER: dispatch

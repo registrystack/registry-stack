@@ -1644,6 +1644,53 @@ fn private_files_refuse_symlinks_hardlinks_and_public_modes() {
 }
 
 #[test]
+fn retained_database_inspection_accepts_only_verified_image_aliases() {
+    let (_temp, mut state, _, _) = fixture();
+    state.container_id = Some("retained-container-id".to_owned());
+    let container = json!({
+        "Id": "retained-container-id",
+        "Name": format!("/{}", state.container_name()),
+        "Config": { "Labels": { (LABEL): state.owner }, "Image": IMAGE },
+    });
+    for image in [CANONICAL_IMAGE, IMAGE] {
+        let mut owned = container.clone();
+        owned["Config"]["Image"] = json!(image);
+        verified_container(&state, &owned).unwrap();
+        for (pointer, replacement) in [
+            ("/Name", "different-container"),
+            ("/Id", "different-container-id"),
+            (
+                "/Config/Labels/org.registrystack.bregctl.dev-owner",
+                "different-owner",
+            ),
+        ] {
+            let mut changed = owned.clone();
+            *changed.pointer_mut(pointer).unwrap() = json!(replacement);
+            assert!(verified_container(&state, &changed).is_err());
+        }
+    }
+    for image in [
+        IMAGE.replace("67f41722", "07f41722"),
+        CANONICAL_IMAGE.replace("67f41722", "07f41722"),
+        format!("untrusted.example/{CANONICAL_IMAGE}"),
+        "postgres:17.11".to_owned(),
+        "public.ecr.aws/docker/library/postgres:17.11".to_owned(),
+    ] {
+        let mut changed = container.clone();
+        changed["Config"]["Image"] = json!(image);
+        assert!(verified_container(&state, &changed).is_err());
+    }
+    state.requires_postgis = true;
+    let mut spatial = container.clone();
+    spatial["Config"]["Image"] = json!(SPATIAL_IMAGE);
+    verified_container(&state, &spatial).unwrap();
+    for image in [CANONICAL_IMAGE, IMAGE] {
+        spatial["Config"]["Image"] = json!(image);
+        assert!(verified_container(&state, &spatial).is_err());
+    }
+}
+
+#[test]
 fn state_refuses_changed_ownership_without_touching_paths() {
     let (_temp, state, clients, files) = fixture();
     initialize(&state.root(), &state, &clients, &files).unwrap();
@@ -2020,7 +2067,7 @@ fn generated_postgres_leaf_verifies_against_its_distinct_ca() {
 
 /// The pinned image and the two deadlines are facts an operator checks before
 /// a first start. Hold the owning document, the command's own help text and
-/// the supervisor's constants equal so they cannot drift apart.
+/// the supervisor's canonical identity equal so they cannot drift apart.
 #[test]
 fn the_documented_image_and_deadlines_are_the_supervisors_own() {
     let document = fs::read_to_string(
@@ -2041,8 +2088,12 @@ fn the_documented_image_and_deadlines_are_the_supervisors_own() {
         .and_then(|command| command.get_long_about())
         .expect("dev start describes its own supervision")
         .to_string();
+    assert!(
+        document.contains(IMAGE),
+        "the owning document names the pull source"
+    );
     for fact in [
-        IMAGE.to_owned(),
+        CANONICAL_IMAGE.to_owned(),
         SPATIAL_IMAGE.to_owned(),
         format!("{} seconds", CHILD_DEADLINE.as_secs()),
         format!("{} seconds", READY_DEADLINE.as_secs()),
