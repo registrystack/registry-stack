@@ -2880,10 +2880,9 @@ struct RawRuntimeConfig {
     package: RawPackageConfig,
     authentication: RawAuthenticationConfig,
     /// The task grant status services, at most 32, one for each source
-    /// issuer. A `sourceIssuer` here must be an `https://` URL, which is
-    /// narrower than the entry's own description: it is compared as written
-    /// with an access profile's `taskGrant.sourceIssuer`, and a project
-    /// writes that member only as an `https://` URL.
+    /// issuer. A `sourceIssuer` here is accepted only as an `https://` URL,
+    /// because it is compared as written with an access profile's
+    /// `taskGrant.sourceIssuer`.
     #[serde(default)]
     task_grant_status: Vec<crate::task_grant::TaskGrantStatusConfig>,
     audit: RawAuditConfig,
