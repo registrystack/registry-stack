@@ -5,4 +5,4 @@
 # Starlight excludes the pages while this record is a draft, because the
 # generator emits `draft: true`.
 status: current
-last_reviewed: 2026-10-11
+last_reviewed: 2026-10-10
