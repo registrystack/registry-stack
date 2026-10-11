@@ -20,6 +20,7 @@ NAMES = {
     "ctl": "registry-messagingctl",
     "breg": "registry-breg",
     "coordinator": "registry-coordinator",
+    "coordinator-client": "registry-coordinator-client",
     "casework-core": "registry-casework-core",
     "scheduling-core": "registry-scheduling-core",
     "evidence-client": "registry-evidence-client",
@@ -39,6 +40,7 @@ INTENDED = {
     "ctl": ["runtime", "core"],
     "breg": [],
     "coordinator": [],
+    "coordinator-client": [],
     "casework-core": [],
     "scheduling-core": [],
     "evidence-client": [],
@@ -187,6 +189,28 @@ class DependencyDirectionTests(unittest.TestCase):
         failures = "\n".join(MODULE.violations(graph))
         self.assertIn("registry-coordinator transitively depends on Messaging runtime package(s): registry-messaging", failures)
         self.assertEqual(MODULE.violations(metadata(coordinator=["client", "core"])), [])
+
+    def test_a_messaging_crate_reaching_any_coordinator_crate_is_refused(self):
+        for crate in ("core", "client", "client-node", "client-py", "runtime", "ctl"):
+            for coordinator in ("coordinator", "coordinator-client"):
+                with self.subTest(crate=crate, coordinator=coordinator):
+                    edges = [*INTENDED[crate], coordinator]
+                    failures = "\n".join(MODULE.violations(metadata(**{crate: edges})))
+                    self.assertIn(
+                        f"{NAMES[crate]} transitively depends on other-product "
+                        f"package(s): {NAMES[coordinator]}",
+                        failures,
+                    )
+
+    def test_the_coordinator_client_reaching_the_messaging_runtime_is_refused(self):
+        failures = "\n".join(
+            MODULE.violations(metadata(**{"coordinator-client": ["runtime"]}))
+        )
+        self.assertIn(
+            "registry-coordinator-client transitively depends on Messaging runtime "
+            "package(s): registry-messaging",
+            failures,
+        )
 
     def test_a_product_may_use_the_messaging_client(self):
         self.assertEqual(MODULE.violations(metadata(breg=["client"])), [])

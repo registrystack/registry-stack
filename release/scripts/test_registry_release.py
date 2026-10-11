@@ -1864,6 +1864,7 @@ class RegistryReleaseTest(TestCase):
                 "messaging-contracts",
                 "messaging-postgres",
                 "messaging-smtp",
+                "coordinator-postgres",
                 "config-conformance",
             },
             set(rust_result["needs"]),

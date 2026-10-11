@@ -9,6 +9,12 @@ import subprocess
 import sys
 from pathlib import Path
 
+# The Coordinator composes products through their public clients. It may use
+# the Casework client and core, never the runtime, its tooling, or the BReg
+# adapter, and no Casework, review, or BReg crate may reach a Coordinator crate.
+COORDINATOR_PREFIX = "registry-coordinator"
+CASEWORK_FOR_COORDINATOR = ("registry-casework-client", "registry-casework-core")
+
 
 def package_graph(metadata: dict) -> tuple[dict[str, str], dict[str, set[str]]]:
     names = {package["id"]: package["name"] for package in metadata["packages"]}
@@ -84,6 +90,27 @@ def violations(metadata: dict) -> list[str]:
             failures.append(
                 f"{breg_name} transitively depends on Casework package(s): {', '.join(forbidden)}"
             )
+
+    for package_id, package_name in sorted(names.items(), key=lambda item: item[1]):
+        reached = {names[item] for item in closure(package_id, edges)}
+        if package_name.startswith(("registry-casework", "registry-review-", "registry-breg")):
+            forbidden = sorted(item for item in reached if item.startswith(COORDINATOR_PREFIX))
+            if forbidden:
+                failures.append(
+                    f"{package_name} transitively depends on Coordinator package(s): "
+                    f"{', '.join(forbidden)}"
+                )
+        elif package_name.startswith(COORDINATOR_PREFIX):
+            forbidden = sorted(
+                item
+                for item in reached
+                if item.startswith("registry-casework") and item not in CASEWORK_FOR_COORDINATOR
+            )
+            if forbidden:
+                failures.append(
+                    f"{package_name} transitively depends on Casework package(s) other than "
+                    f"its client and core: {', '.join(forbidden)}"
+                )
     return failures
 
 

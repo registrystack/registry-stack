@@ -22,6 +22,10 @@ def metadata(edges: dict[str, list[str]]) -> dict:
         "adapter": "registry-casework-breg",
         "breg": "registry-breg",
         "breg-client": "registry-breg-client",
+        "runtime": "registry-casework",
+        "ctl": "registry-caseworkctl",
+        "coordinator": "registry-coordinator",
+        "coordinator-client": "registry-coordinator-client",
         "serde": "serde",
     }
     return {
@@ -131,6 +135,91 @@ class DependencyDirectionTests(unittest.TestCase):
         failures = "\n".join(MODULE.violations(graph))
         self.assertIn("registry-review-protocol transitively depends on Casework", failures)
         self.assertIn("registry-review-client transitively depends on Casework", failures)
+
+    def test_a_casework_review_or_breg_crate_reaching_the_coordinator_is_rejected(self):
+        for crate, name in (
+            ("core", "registry-casework-core"),
+            ("client", "registry-casework-client"),
+            ("adapter", "registry-casework-breg"),
+            ("runtime", "registry-casework"),
+            ("ctl", "registry-caseworkctl"),
+            ("review-protocol", "registry-review-protocol"),
+            ("review-client", "registry-review-client"),
+            ("breg", "registry-breg"),
+            ("breg-client", "registry-breg-client"),
+        ):
+            for coordinator in ("coordinator", "coordinator-client"):
+                with self.subTest(crate=crate, coordinator=coordinator):
+                    edges = {
+                        "core": ["serde"],
+                        "client": ["core"],
+                        "review-protocol": ["serde"],
+                        "review-client": ["review-protocol"],
+                        "adapter": ["core", "breg-client"],
+                        "runtime": ["core"],
+                        "ctl": ["core"],
+                        "breg": [],
+                        "breg-client": [],
+                        "coordinator": [],
+                        "coordinator-client": [],
+                        "serde": [],
+                    }
+                    edges[crate] = [*edges[crate], coordinator]
+                    failures = "\n".join(MODULE.violations(metadata(edges)))
+                    self.assertIn(
+                        f"{name} transitively depends on Coordinator package(s): "
+                        f"registry-{coordinator}",
+                        failures,
+                    )
+
+    def test_the_coordinator_may_use_the_casework_client(self):
+        graph = metadata(
+            {
+                "core": ["review-protocol"],
+                "client": ["core", "review-client"],
+                "review-protocol": ["serde"],
+                "review-client": ["review-protocol"],
+                "adapter": ["core", "breg-client"],
+                "runtime": ["core"],
+                "ctl": ["runtime"],
+                "breg": [],
+                "breg-client": [],
+                "coordinator": ["client", "core", "breg-client"],
+                "coordinator-client": ["serde"],
+                "serde": [],
+            }
+        )
+        self.assertEqual(MODULE.violations(graph), [])
+
+    def test_the_coordinator_reaching_the_casework_runtime_tooling_or_adapter_is_rejected(self):
+        for target, reached in (
+            ("runtime", "registry-casework"),
+            ("ctl", "registry-casework, registry-caseworkctl"),
+            ("adapter", "registry-casework-breg"),
+        ):
+            for coordinator, name in (
+                ("coordinator", "registry-coordinator"),
+                ("coordinator-client", "registry-coordinator-client"),
+            ):
+                with self.subTest(coordinator=coordinator, target=target):
+                    graph = metadata(
+                        {
+                            "core": ["serde"],
+                            "client": ["core"],
+                            "adapter": ["breg-client"],
+                            "runtime": [],
+                            "ctl": ["runtime"],
+                            "breg-client": [],
+                            coordinator: ["client", target],
+                            "serde": [],
+                        }
+                    )
+                    failures = "\n".join(MODULE.violations(graph))
+                    self.assertIn(
+                        f"{name} transitively depends on Casework package(s) other than "
+                        f"its client and core: {reached}",
+                        failures,
+                    )
 
     def test_cargo_metadata_resolves_every_feature(self):
         # An edge behind an optional feature is absent from the default graph,
