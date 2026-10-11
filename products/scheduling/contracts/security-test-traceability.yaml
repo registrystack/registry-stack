@@ -25,12 +25,27 @@ entries:
       - {path: crates/registry-scheduling/src/runtime.rs, name: the_offering_pool_anchors_are_collected_without_duplicates}
   - id: SCHEDULING-SEC-03
     tests:
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: configured_task_status_is_fresh_for_a_capacity_commit_and_its_replay}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: inactive_mismatched_and_unavailable_task_status_commit_no_capacity}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: inactive_and_unavailable_task_status_refuse_every_mutation_without_changing_capacity}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: an_unlisted_source_is_refused_and_never_reaches_the_offline_path}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: the_offline_path_accepts_at_most_fifteen_minutes_of_remaining_lifetime}
+      - {path: crates/registry-scheduling/src/service.rs, name: the_offline_path_accepts_only_an_unexpired_grant_with_at_most_fifteen_minutes_left}
+      - {path: crates/registry-scheduling/src/service.rs, name: listed_authorities_refuse_an_unlisted_source_and_an_unbound_grant_without_the_offline_path}
+      - {path: crates/registry-scheduling/src/service.rs, name: a_listed_authority_answer_decides_the_grant}
+      - {path: crates/registry-scheduling/src/config.rs, name: a_missing_task_grant_status_is_refused_naming_both_choices}
+      - {path: crates/registry-scheduling/src/config.rs, name: cfg_check_1_a_missing_task_grant_status_is_located_at_the_file}
+      - {path: crates/registry-scheduling/src/config.rs, name: an_empty_or_unknown_task_grant_status_is_refused_naming_both_choices}
+      - {path: crates/registry-scheduling/src/config.rs, name: the_unchecked_keyword_selects_the_offline_path}
+      - {path: crates/registry-scheduling/src/schema.rs, name: the_schema_states_both_task_grant_status_choices_and_requires_one, features: [schema]}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_commitment_blocked_past_its_access_token_deadline_never_books}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_grant_that_lapses_before_the_commit_never_books}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_foreign_actor_does_not_learn_the_current_revision}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: the_edge_refuses_unauthenticated_callers_and_unauthorized_mutations}
       - {path: crates/registry-platform-oidc/src/authorization_claims.rs, name: expiry_uses_earlier_token_or_grant_deadline_and_refuses_exact_deadline}
   - id: SCHEDULING-SEC-04
     tests:
+      - {path: crates/registry-scheduling/src/auth.rs, name: an_offline_path_grant_need_not_carry_status_binding_members}
       - {path: crates/registry-scheduling/src/auth.rs, name: a_partial_grant_is_refused_as_invalid_claims}
       - {path: crates/registry-scheduling/src/auth.rs, name: a_complete_task_grant_is_extracted_and_bound_to_the_deployment}
       - {path: crates/registry-scheduling/src/auth.rs, name: a_read_without_the_reads_scope_is_a_profile_refusal_but_still_mutates}

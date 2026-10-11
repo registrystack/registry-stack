@@ -251,6 +251,7 @@ impl Deployment {
              database:\n  runtimeUrlRef: secret:env/{runtime}\n\
              \x20 migrationUrlRef: secret:env/{migration}\n\
              \x20 testOnlyPlaintext: true\n\
+             taskGrantStatus: unchecked-final-fifteen-minutes\n\
              audit:\n  path: {audit}\n  hashKeyRef: secret:env/{audit_key}\n\
              retention:\n  attemptReceiptRetentionDays: 2\n",
             package = package.display(),

@@ -22,7 +22,10 @@ use registry_platform_audit::{AuditHashSecret, AuditKeyHasher};
 use registry_platform_config::{SecretProvider, SecretResolver};
 use registry_platform_hooks::delivery::DeliveryOutcome;
 use registry_platform_hooks::{EnvelopeLimits, HookEnvelope, HookHandlerSource};
-use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig, TokenVerifierConfig};
+use registry_platform_oidc::{
+    task_grant::{TaskGrantStatusEndpoint, TaskGrantStatusRegistry},
+    JwksFetcher, JwksFetcherConfig, TokenVerifierConfig,
+};
 use registry_scheduling::audit::{AuditCapture, SchedulingAudit, SCHEDULING_AUDIT_SCHEMA};
 use registry_scheduling::auth::SchedulingAuthenticator;
 use registry_scheduling::config::{
@@ -287,6 +290,15 @@ async fn fixture_publishing_with_hook_url(
     pool_ids: &[String],
     hook_url: &str,
 ) -> Fixture {
+    fixture_publishing_with_hook_and_status(policy, pool_ids, hook_url, None).await
+}
+
+async fn fixture_publishing_with_hook_and_status(
+    policy: SchedulingPolicy,
+    pool_ids: &[String],
+    hook_url: &str,
+    task_grant_status: Option<Arc<TaskGrantStatusRegistry>>,
+) -> Fixture {
     let base = std::env::var("SCHEDULING_TEST_DATABASE_URL")
         .expect("SCHEDULING_TEST_DATABASE_URL names a disposable PostgreSQL test server");
     let schema = format!("scheduling_{}", Uuid::new_v4().simple());
@@ -405,7 +417,8 @@ async fn fixture_publishing_with_hook_url(
             audit.clone(),
             7,
         )
-        .with_hooks(hooks.clone()),
+        .with_hooks(hooks.clone())
+        .with_task_grant_status(task_grant_status),
     );
     let http = router(HttpState {
         service,
@@ -425,6 +438,98 @@ async fn fixture_publishing_with_hook_url(
         audit,
         capture,
     }
+}
+
+fn exact_task_status_grant() -> Value {
+    json!({
+        "grantId": "11111111-1111-4111-8111-111111111111",
+        "sourceIssuer": "https://authority.test",
+        "principal": "principal-agent",
+        "client": CLIENT,
+        "resource": AUDIENCE,
+        "purpose": "registry-update",
+        "bounds": grant_claims()["registry_grant_bounds"].clone(),
+        "subjects": {"subject_reference": "synthetic-subject"},
+        "expiresAt": pinned_now().timestamp() + 600,
+    })
+}
+
+async fn activated_task_status(
+    response: ResponseTemplate,
+) -> (MockServer, Arc<TaskGrantStatusRegistry>) {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "access_token": "synthetic-status-service",
+            "token_type": "Bearer",
+            "expires_in": 300,
+            "scope": "casework:grants:status"
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(
+            "/v1/task-grants/11111111-1111-4111-8111-111111111111/status",
+        ))
+        .respond_with(response)
+        .mount(&server)
+        .await;
+
+    let secret_name = format!("SCHEDULING_STATUS_{}", Uuid::new_v4().simple()).to_ascii_uppercase();
+    let mut key = registry_platform_crypto::generate_private_jwk(
+        registry_platform_crypto::GeneratedKeyAlgorithm::Rs384,
+    )
+    .expect("generate the status client key");
+    key.alg = Some("RS256".into());
+    let mut private = serde_json::to_value(&key).expect("serialize the status client key");
+    for (name, value) in [
+        ("d", &key.d),
+        ("p", &key.p),
+        ("q", &key.q),
+        ("dp", &key.dp),
+        ("dq", &key.dq),
+        ("qi", &key.qi),
+    ] {
+        if let Some(value) = value {
+            private[name] = Value::String(value.clone());
+        }
+    }
+    std::env::set_var(
+        &secret_name,
+        serde_json::to_string(&private).expect("encode the status client key"),
+    );
+    let secrets = SecretResolver::new([SecretProvider::Environment], "/private/tmp")
+        .expect("the status client secret resolver");
+    let base = server.uri();
+    let status: registry_scheduling::config::TaskGrantStatusConfig =
+        serde_json::from_value(json!({
+            "sourceIssuer": "https://authority.test",
+            "baseUrl": base,
+            "tokenEndpoint": format!("{base}/token"),
+            "clientAssertionAudience": base,
+            "clientId": "scheduling-status",
+            "privateKeyRef": format!("secret:env/{secret_name}"),
+            "caseworkResource": "urn:casework:test"
+        }))
+        .expect("the status authority configuration");
+    let registry = TaskGrantStatusRegistry::activate(
+        &[TaskGrantStatusEndpoint::from(&status)],
+        AUDIENCE,
+        &secrets,
+    )
+    .expect("activate the task-grant status registry");
+    (server, Arc::new(registry))
+}
+
+async fn fixture_with_task_status(status: Arc<TaskGrantStatusRegistry>) -> Fixture {
+    fixture_publishing_with_hook_and_status(
+        read_policy(POLICY).expect("the scheduling test policy"),
+        &["north-counter".into(), "two-counter".into()],
+        "http://127.0.0.1:9/scheduling-hooks",
+        Some(status),
+    )
+    .await
 }
 
 fn authenticator() -> SchedulingAuthenticator {
@@ -558,7 +663,9 @@ fn token(mut claims: Value) -> String {
     object.entry("iss").or_insert(json!(ISSUER));
     object.entry("aud").or_insert(json!(AUDIENCE));
     object.entry("iat").or_insert(json!(now));
-    object.entry("exp").or_insert(json!(now + 300));
+    object
+        .entry("exp")
+        .or_insert(json!(pinned_now().timestamp() + 300));
     let mut header = Header::new(Algorithm::HS256);
     header.kid = Some("test".to_owned());
     header.typ = Some("at+jwt".to_owned());
@@ -580,7 +687,7 @@ fn grant_claims() -> Value {
     json!({
         "registry_actor_kind": "agent",
         "registry_purpose": "registry-update",
-        "registry_grant_id": "grant-1",
+        "registry_grant_id": "11111111-1111-4111-8111-111111111111",
         "registry_grant_source_issuer": "https://authority.test",
         "registry_grant_client": CLIENT,
         "registry_grant_resource": AUDIENCE,
@@ -603,12 +710,61 @@ fn grant_claims() -> Value {
                 "actions": ["appointment.create"],
             }],
         },
+        "identity": {"subject_reference": "synthetic-subject"},
         "registry_approver": "approver-1",
     })
 }
 
 fn agent_token() -> String {
     agent_token_for("principal-agent")
+}
+
+fn agent_token_with_grant_exp(grant_exp: i64) -> String {
+    let mut claims = json!({
+        "sub": "principal-agent",
+        "azp": CLIENT,
+        "registry_scopes": "scheduling-read scheduling-explain",
+        "registry_actor_kind": "service",
+    });
+    let mut grant = grant_claims();
+    grant["registry_grant_exp"] = json!(grant_exp);
+    claims
+        .as_object_mut()
+        .expect("claims are an object")
+        .extend(
+            grant
+                .as_object()
+                .expect("grant claims are an object")
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone())),
+        );
+    token(claims)
+}
+
+fn agent_token_without_status_binding() -> String {
+    let mut grant = grant_claims();
+    grant["registry_grant_id"] = json!("grant-1");
+    grant
+        .as_object_mut()
+        .expect("grant claims are an object")
+        .remove("identity");
+    let mut claims = json!({
+        "sub": "principal-agent",
+        "azp": CLIENT,
+        "registry_scopes": "scheduling-read scheduling-explain",
+        "registry_actor_kind": "service",
+    });
+    claims
+        .as_object_mut()
+        .expect("claims are an object")
+        .extend(
+            grant
+                .as_object()
+                .expect("grant claims are an object")
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone())),
+        );
+    token(claims)
 }
 
 /// A second booking agent, identical in scope and grant and different only in
@@ -2718,7 +2874,15 @@ async fn a_hold_that_waited_for_the_supply_lock_keeps_its_whole_ttl() {
     let fx = fixture().await;
     let slot = first_slot(&fx, OFFERING, 90, 200).await;
     let body = admission(&fx, OFFERING, slot);
-    let (http, agent, store) = (fx.http.clone(), fx.agent.clone(), fx.store.clone());
+    // This success case keeps both the access token and grant live after the
+    // five-minute lock wait. The fixture's default token expires at that exact
+    // boundary and belongs to the separate credential-expiry refusal tests.
+    let mut claims = grant_claims();
+    claims["sub"] = json!("principal-agent");
+    claims["azp"] = json!(CLIENT);
+    claims["registry_scopes"] = json!("scheduling-read scheduling-explain");
+    claims["exp"] = json!(pinned_now().timestamp() + 600);
+    let (http, agent, store) = (fx.http.clone(), token(claims), fx.store.clone());
     let mut admin = fx.admin;
 
     // Stand in for a commitment mid-evaluation on the same pool.
@@ -2773,7 +2937,7 @@ async fn a_hold_that_waited_for_the_supply_lock_keeps_its_whole_ttl() {
     }
 
     // Five minutes pass on the store's clock while the create waits: half
-    // the authored TTL, and still inside the test grant's ten minutes.
+    // the authored TTL, and still inside both authority deadlines.
     let decided = DateTime::from_timestamp(entered.timestamp() + 300, 0).expect("an instant");
     store.pin_clock(Arc::new(move || decided));
     holder.commit().await.expect("the stand-in commits");
@@ -4458,6 +4622,7 @@ fn sealed_deployment(
             "audience": AUDIENCE,
             "allowedClients": [CLIENT],
         }},
+        "taskGrantStatus": "unchecked-final-fifteen-minutes",
         "audit": {"path": root.join("audit.ndjson"), "hashKeyRef": "secret:env/UNUSED"},
         "destinations": {},
         "retention": {"attemptReceiptRetentionDays": 7},
@@ -7073,6 +7238,371 @@ async fn a_reschedule_and_a_cancellation_commit_exactly_one_transition() {
     );
 }
 
+#[tokio::test]
+async fn configured_task_status_is_fresh_for_a_capacity_commit_and_its_replay() {
+    let response = ResponseTemplate::new(200)
+        .set_body_json(json!({"active": true, "grant": exact_task_status_grant()}));
+    let (authority, status) = activated_task_status(response).await;
+    let fx = fixture_with_task_status(status).await;
+    let slot = first_slot(&fx, OFFERING, 90, 200).await;
+    let body = json!({"hold": null, "admission": admission(&fx, OFFERING, slot)});
+    let (first_status, first) = fx
+        .post("/v1/appointments", &fx.agent, "status-replay", body.clone())
+        .await;
+    assert_eq!(first_status, StatusCode::CREATED, "{first}");
+    let (replay_status, replay) = fx
+        .post("/v1/appointments", &fx.agent, "status-replay", body)
+        .await;
+    assert_eq!(replay_status, StatusCode::CREATED, "{replay}");
+    assert_eq!(replay["appointmentId"], first["appointmentId"]);
+    let other = first_slot(&fx, OFFERING, 300, 440).await;
+    let (unbound_status, unbound_problem) = fx
+        .post(
+            "/v1/appointments",
+            &agent_token_without_status_binding(),
+            "configured-requires-binding",
+            json!({"hold": null, "admission": admission(&fx, OFFERING, other)}),
+        )
+        .await;
+    assert_eq!(unbound_status, StatusCode::FORBIDDEN, "{unbound_problem}");
+    let status_calls = authority
+        .received_requests()
+        .await
+        .expect("recorded authority calls")
+        .into_iter()
+        .filter(|request| request.url.path().ends_with("/status"))
+        .count();
+    assert_eq!(
+        status_calls, 2,
+        "the replay checks again and a missing binding never reaches the authority"
+    );
+    let bookings: i64 = fx
+        .admin
+        .query_one(
+            "SELECT count(*) FROM scheduling_claims WHERE kind='booking'",
+            &[],
+        )
+        .await
+        .expect("count bookings")
+        .get(0);
+    assert_eq!(bookings, 1, "the replay does not duplicate capacity");
+}
+
+#[tokio::test]
+async fn inactive_mismatched_and_unavailable_task_status_commit_no_capacity() {
+    for (case, response, expected_status) in [
+        (
+            "inactive",
+            ResponseTemplate::new(200).set_body_json(json!({"active": false})),
+            StatusCode::FORBIDDEN,
+        ),
+        (
+            "mismatched",
+            ResponseTemplate::new(200).set_body_json({
+                let mut grant = exact_task_status_grant();
+                grant["bounds"]["permissions"][0]["service"] = json!("another-service");
+                json!({"active": true, "grant": grant})
+            }),
+            StatusCode::FORBIDDEN,
+        ),
+        (
+            "unavailable",
+            ResponseTemplate::new(503),
+            StatusCode::SERVICE_UNAVAILABLE,
+        ),
+        (
+            "status-service-unauthenticated",
+            ResponseTemplate::new(401),
+            StatusCode::SERVICE_UNAVAILABLE,
+        ),
+        (
+            "status-service-unauthorized",
+            ResponseTemplate::new(403),
+            StatusCode::SERVICE_UNAVAILABLE,
+        ),
+        (
+            "grant-concealed-or-missing",
+            ResponseTemplate::new(404),
+            StatusCode::FORBIDDEN,
+        ),
+    ] {
+        let (_authority, status) = activated_task_status(response).await;
+        let fx = fixture_with_task_status(status).await;
+        let slot = first_slot(&fx, OFFERING, 90, 200).await;
+        let (actual, problem) = fx
+            .post(
+                "/v1/appointments",
+                &fx.agent,
+                case,
+                json!({"hold": null, "admission": admission(&fx, OFFERING, slot)}),
+            )
+            .await;
+        assert_eq!(actual, expected_status, "{case}: {problem}");
+        let bookings: i64 = fx
+            .admin
+            .query_one(
+                "SELECT count(*) FROM scheduling_claims WHERE kind='booking'",
+                &[],
+            )
+            .await
+            .expect("count bookings")
+            .get(0);
+        assert_eq!(bookings, 0, "{case} status commits no capacity");
+    }
+}
+
+/// Every transactional business effect of a commitment: the claims, their
+/// history, the outbox, and the successful attempt receipts. A refusal may add
+/// its own refused receipt, which this snapshot leaves out.
+const BUSINESS_STATE: &str = "SELECT jsonb_build_array( \
+    (SELECT jsonb_agg(to_jsonb(c) ORDER BY claim_id) FROM scheduling_claims c), \
+    (SELECT jsonb_agg(to_jsonb(h) ORDER BY event_id) FROM scheduling_history h), \
+    (SELECT jsonb_agg(to_jsonb(o) ORDER BY outbox_id) FROM scheduling_outbox o), \
+    (SELECT count(*) FROM scheduling_attempts WHERE status_code BETWEEN 200 AND 299))";
+
+const TASK_STATUS_PATH: &str = "/v1/task-grants/11111111-1111-4111-8111-111111111111/status";
+
+async fn task_status_calls(authority: &MockServer) -> usize {
+    authority
+        .received_requests()
+        .await
+        .expect("recorded authority calls")
+        .into_iter()
+        .filter(|request| request.url.path().ends_with("/status"))
+        .count()
+}
+
+/// SEC-03. Each capacity mutation asks the listed authority before its
+/// transaction opens: an inactive answer refuses it with
+/// `operation.not-authorized`, an unavailable authority with
+/// `service.unavailable`, and neither changes a claim, its history, the
+/// outbox, or a successful receipt.
+#[tokio::test]
+async fn inactive_and_unavailable_task_status_refuse_every_mutation_without_changing_capacity() {
+    for (answer, response, expected_status, expected_code) in [
+        (
+            "inactive",
+            ResponseTemplate::new(200).set_body_json(json!({"active": false})),
+            StatusCode::FORBIDDEN,
+            "operation.not-authorized",
+        ),
+        (
+            "unavailable",
+            ResponseTemplate::new(503),
+            StatusCode::SERVICE_UNAVAILABLE,
+            "service.unavailable",
+        ),
+    ] {
+        for operation in ["hold", "release", "confirm", "reschedule", "cancel"] {
+            let case = format!("{operation} with {answer} status");
+            let (authority, status) = activated_task_status(response.clone()).await;
+            // The commitment that sets the case up sees an active answer; the
+            // mutation under test sees the case's answer.
+            let setup_calls: usize = if operation == "hold" { 0 } else { 1 };
+            if setup_calls > 0 {
+                Mock::given(method("GET"))
+                    .and(path(TASK_STATUS_PATH))
+                    .respond_with(
+                        ResponseTemplate::new(200).set_body_json(
+                            json!({"active": true, "grant": exact_task_status_grant()}),
+                        ),
+                    )
+                    .up_to_n_times(1)
+                    .with_priority(1)
+                    .mount(&authority)
+                    .await;
+            }
+            let fx = fixture_with_task_status(status).await;
+            let slot = first_slot(&fx, OFFERING, 480, 620).await;
+            let (verb, uri, body) = match operation {
+                "hold" => (
+                    "POST",
+                    "/v1/holds".to_owned(),
+                    Some(admission(&fx, OFFERING, slot)),
+                ),
+                "confirm" | "release" => {
+                    let (created, hold) = fx
+                        .post(
+                            "/v1/holds",
+                            &fx.agent,
+                            "setup",
+                            admission(&fx, OFFERING, slot),
+                        )
+                        .await;
+                    assert_eq!(created, StatusCode::CREATED, "{case}: {hold}");
+                    let id = hold["holdId"].as_str().expect("a hold identifier");
+                    if operation == "confirm" {
+                        (
+                            "POST",
+                            "/v1/appointments".to_owned(),
+                            Some(json!({"hold": id, "admission": null})),
+                        )
+                    } else {
+                        ("DELETE", format!("/v1/holds/{id}"), None)
+                    }
+                }
+                "reschedule" | "cancel" => {
+                    let (id, revision) = booked(&fx, 300, 440, "setup").await;
+                    if operation == "reschedule" {
+                        (
+                            "POST",
+                            format!("/v1/appointments/{id}/reschedule"),
+                            Some(json!({
+                                "observedRevision": revision,
+                                "admission": admission(&fx, OFFERING, slot),
+                            })),
+                        )
+                    } else {
+                        (
+                            "POST",
+                            format!("/v1/appointments/{id}/cancel"),
+                            Some(json!({"observedRevision": revision, "reason": null})),
+                        )
+                    }
+                }
+                _ => unreachable!(),
+            };
+            let before: Value = fx
+                .admin
+                .query_one(BUSINESS_STATE, &[])
+                .await
+                .expect("snapshot before the mutation")
+                .get(0);
+            let (actual, problem) = fx
+                .request(verb, &uri, &fx.agent, Some("status-refused"), body)
+                .await;
+            assert_eq!(actual, expected_status, "{case}: {problem}");
+            assert_eq!(problem["code"], expected_code, "{case}");
+            assert_eq!(
+                task_status_calls(&authority).await,
+                setup_calls + 1,
+                "{case}: the mutation asked the authority once"
+            );
+            let after: Value = fx
+                .admin
+                .query_one(BUSINESS_STATE, &[])
+                .await
+                .expect("snapshot after the refusal")
+                .get(0);
+            assert_eq!(after, before, "{case} changes no capacity");
+        }
+    }
+}
+
+/// A grant signed by a source issuer the listed authorities do not name.
+fn agent_token_from_source(source_issuer: &str) -> String {
+    let mut grant = grant_claims();
+    grant["registry_grant_source_issuer"] = json!(source_issuer);
+    let mut claims = json!({
+        "sub": "principal-agent",
+        "azp": CLIENT,
+        "registry_scopes": "scheduling-read scheduling-explain",
+        "registry_actor_kind": "service",
+    });
+    claims
+        .as_object_mut()
+        .expect("claims are an object")
+        .extend(
+            grant
+                .as_object()
+                .expect("grant claims are an object")
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone())),
+        );
+    token(claims)
+}
+
+/// SEC-03. Listed authorities are authoritative for every source. A grant
+/// from a source none of them names is refused with
+/// `operation.not-authorized` without a status call, although its ten
+/// minutes left would pass the offline path, which books the same grant.
+#[tokio::test]
+async fn an_unlisted_source_is_refused_and_never_reaches_the_offline_path() {
+    let unlisted = agent_token_from_source("https://other-authority.test");
+    let (authority, status) = activated_task_status(
+        ResponseTemplate::new(200)
+            .set_body_json(json!({"active": true, "grant": exact_task_status_grant()})),
+    )
+    .await;
+    let fx = fixture_with_task_status(status).await;
+    let slot = first_slot(&fx, OFFERING, 90, 200).await;
+    let body = json!({"hold": null, "admission": admission(&fx, OFFERING, slot)});
+    let before: Value = fx
+        .admin
+        .query_one(BUSINESS_STATE, &[])
+        .await
+        .expect("snapshot before the commitment")
+        .get(0);
+    let (refused, problem) = fx
+        .post(
+            "/v1/appointments",
+            &unlisted,
+            "unlisted-source",
+            body.clone(),
+        )
+        .await;
+    assert_eq!(refused, StatusCode::FORBIDDEN, "{problem}");
+    assert_eq!(problem["code"], "operation.not-authorized");
+    assert_eq!(
+        task_status_calls(&authority).await,
+        0,
+        "an unlisted source never reaches an authority"
+    );
+    let after: Value = fx
+        .admin
+        .query_one(BUSINESS_STATE, &[])
+        .await
+        .expect("snapshot after the refusal")
+        .get(0);
+    assert_eq!(after, before, "the refusal changes no capacity");
+
+    let offline = fixture().await;
+    let slot = first_slot(&offline, OFFERING, 90, 200).await;
+    let (booked, appointment) = offline
+        .post(
+            "/v1/appointments",
+            &unlisted,
+            "unlisted-source-offline",
+            json!({"hold": null, "admission": admission(&offline, OFFERING, slot)}),
+        )
+        .await;
+    assert_eq!(
+        booked,
+        StatusCode::CREATED,
+        "the same grant books on the offline path: {appointment}"
+    );
+}
+
+/// SEC-03. On the offline path that `unchecked-final-fifteen-minutes`
+/// selects, a grant with one second more than fifteen minutes left is refused
+/// and one with exactly fifteen minutes left books.
+#[tokio::test]
+async fn the_offline_path_accepts_at_most_fifteen_minutes_of_remaining_lifetime() {
+    let fx = fixture().await;
+    let slot = first_slot(&fx, OFFERING, 90, 200).await;
+    let past_the_cap = agent_token_with_grant_exp(pinned_now().timestamp() + 901);
+    let (status, problem) = fx
+        .post(
+            "/v1/appointments",
+            &past_the_cap,
+            "past-the-cap",
+            json!({"hold": null, "admission": admission(&fx, OFFERING, slot)}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{problem}");
+
+    let at_the_cap = agent_token_with_grant_exp(pinned_now().timestamp() + 900);
+    let (status, booked) = fx
+        .post(
+            "/v1/appointments",
+            &at_the_cap,
+            "at-the-cap",
+            json!({"hold": null, "admission": admission(&fx, OFFERING, slot)}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{booked}");
+}
+
 /// SEC-03. The task grant is re-checked against a fresh observation of the
 /// clock immediately before the final write: a grant that still stands at
 /// the door and lapses before the commit books nothing.
@@ -7121,6 +7651,83 @@ async fn a_grant_that_lapses_before_the_commit_never_books() {
     assert!(
         observations.load(Ordering::SeqCst) >= 2,
         "the transaction observed the clock again after the door"
+    );
+}
+
+/// A deferred grant may outlive the exchanged access token that carried it.
+/// The capacity transaction uses the earlier deadline, so a request that
+/// passed fresh status and then waited on supply cannot commit after that
+/// execution credential expires.
+#[tokio::test]
+async fn a_commitment_blocked_past_its_access_token_deadline_never_books() {
+    let fx = fixture().await;
+    let slot = first_slot(&fx, OFFERING, 90, 200).await;
+    let body = json!({"hold": null, "admission": admission(&fx, OFFERING, slot)});
+    let http = fx.http.clone();
+    let agent = fx.agent.clone();
+    let store = fx.store.clone();
+    let mut admin = fx.admin;
+    let holder = admin
+        .transaction()
+        .await
+        .expect("the stand-in capacity transaction opens");
+    holder
+        .execute("SELECT supply_id FROM scheduling_supply FOR UPDATE", &[])
+        .await
+        .expect("the stand-in holds every supply anchor");
+    let holder_pid: i32 = holder
+        .query_one("SELECT pg_backend_pid()", &[])
+        .await
+        .expect("the stand-in backend")
+        .get(0);
+    let commitment = tokio::spawn(send(
+        http,
+        "POST".into(),
+        "/v1/appointments".into(),
+        agent,
+        Some("credential-expired-on-lock".into()),
+        Some(body),
+    ));
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let waiting: i64 = holder
+            .query_one(
+                "SELECT count(DISTINCT pid) FROM pg_locks WHERE $1=ANY(pg_blocking_pids(pid))",
+                &[&holder_pid],
+            )
+            .await
+            .expect("read the waiting commitment")
+            .get(0);
+        if waiting > 0 {
+            break;
+        }
+        assert!(
+            !commitment.is_finished(),
+            "the commitment stopped before the lock"
+        );
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the commitment never waited on the supply lock"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let after_credential_expiry = pinned_now() + TimeDelta::seconds(301);
+    store.pin_clock(Arc::new(move || after_credential_expiry));
+    holder.rollback().await.expect("release the capacity lock");
+    let (status, problem) = commitment.await.expect("the commitment answers");
+    assert_eq!(status, StatusCode::FORBIDDEN, "{problem}");
+    assert_eq!(problem["code"], "operation.not-authorized");
+    let bookings: i64 = admin
+        .query_one(
+            "SELECT count(*) FROM scheduling_claims WHERE kind='booking'",
+            &[],
+        )
+        .await
+        .expect("count bookings")
+        .get(0);
+    assert_eq!(
+        bookings, 0,
+        "the expired execution credential commits nothing"
     );
 }
 
@@ -7197,11 +7804,7 @@ async fn every_mutation_rechecks_expiry_after_its_writes() {
         };
         // Compare all transactional business effects, not just the status.
         // A refusal may add its own refused receipt.
-        let state = "SELECT jsonb_build_array( \
-            (SELECT jsonb_agg(to_jsonb(c) ORDER BY claim_id) FROM scheduling_claims c), \
-            (SELECT jsonb_agg(to_jsonb(h) ORDER BY event_id) FROM scheduling_history h), \
-            (SELECT jsonb_agg(to_jsonb(o) ORDER BY outbox_id) FROM scheduling_outbox o), \
-            (SELECT count(*) FROM scheduling_attempts WHERE status_code BETWEEN 200 AND 299))";
+        let state = BUSINESS_STATE;
         let before: Value = fx
             .admin
             .query_one(state, &[])

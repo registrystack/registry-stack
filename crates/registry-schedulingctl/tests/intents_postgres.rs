@@ -174,6 +174,7 @@ async fn intents_lists_local_and_failed_oldest_due_first_and_respects_limit() {
              database:\n  runtimeUrlRef: secret:env/SCHEDULING_INTENTS_TEST_DATABASE\n\
              \x20 migrationUrlRef: secret:env/SCHEDULING_INTENTS_TEST_DATABASE\n\
              \x20 testOnlyPlaintext: true\n\
+             taskGrantStatus: unchecked-final-fifteen-minutes\n\
              audit:\n  path: {audit}\n  hashKeyRef: secret:env/SCHEDULING_INTENTS_TEST_AUDIT\n\
              retention:\n  attemptReceiptRetentionDays: 2\n",
             project = project.display(),
