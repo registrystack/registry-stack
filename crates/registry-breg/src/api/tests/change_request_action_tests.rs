@@ -282,6 +282,86 @@ fn delegated_token_is_admitted_only_by_an_agent_profile() {
     assert!(authorize_route(&service, get, &delegated, &agent).is_some());
 }
 
+#[test]
+fn task_grant_token_is_refused_by_a_profile_without_a_task_grant() {
+    use super::{authorize_profile_claims, authorize_route, QueryOptions};
+    let registry = delegation_registry();
+    let service = service_for(registry.clone());
+    let get = route(&registry, "records.placement-correction-request.get");
+    let reviewer = QueryOptions::parse(Some("accessProfile=request-reviewer"), false).unwrap();
+    let agent = QueryOptions::parse(Some("accessProfile=standing-agent"), false).unwrap();
+    let profiles = &registry
+        .entities()
+        .get("placement-correction-request")
+        .expect("request entity compiles")
+        .access_profiles;
+    let claims = |grant: Option<registry_platform_oidc::GrantClaims>| {
+        VerifiedRequestClaims::authenticated(
+            "principal",
+            "citizen",
+            BTreeSet::new(),
+            Some("record-review".to_owned()),
+            BTreeMap::new(),
+        )
+        .and_then(|claims| {
+            claims.with_contextual_authority(
+                Some(registry_platform_oidc::ActorKind::Agent),
+                Some("agent-client".to_owned()),
+                None,
+                grant,
+                BTreeMap::new(),
+            )
+        })
+        .expect("verified claims are valid")
+    };
+    let granted = claims(Some(task_grant()));
+    let direct = claims(None);
+
+    // `request-reviewer` declares no actorKind, purpose, or client, so the
+    // task grant is all that separates the token it admits from the one it
+    // refuses.
+    assert!(authorize_route(&service, get, &direct, &reviewer).is_some());
+    assert!(authorize_route(&service, get, &granted, &reviewer).is_none());
+    assert_eq!(
+        authorize_profile_claims(&profiles["request-reviewer"], &granted).err(),
+        Some("task_grant_profile_required")
+    );
+    // A standing agent profile does not take the grant in place of a trusted
+    // actor.
+    assert!(authorize_route(&service, get, &granted, &agent).is_none());
+    assert_eq!(
+        authorize_profile_claims(&profiles["standing-agent"], &granted).err(),
+        Some("task_grant_profile_required")
+    );
+}
+
+/// The task grant a verified task token carries.
+fn task_grant() -> registry_platform_oidc::GrantClaims {
+    let token: registry_platform_oidc::Claims = serde_json::from_value(serde_json::json!({
+        "sub": "citizen",
+        "exp": 2_000,
+        "registry_purpose": "record-review",
+        "registry_approver": "h:synthetic-approver",
+        "registry_grant_id": "00000000-0000-4000-8000-0000000000bb",
+        "registry_grant_source_issuer": "https://casework.example",
+        "registry_grant_client": "agent-client",
+        "registry_grant_resource": "urn:registry:breg",
+        "registry_grant_exp": 1_900,
+        "registry_grant_bounds": {"type": "breg", "permissions": [{
+            "collection": "placement-correction-requests",
+            "operations": ["get"]
+        }]}
+    }))
+    .expect("token claims parse");
+    registry_platform_oidc::grant_claims(
+        &token,
+        &registry_platform_oidc::ClaimNames::default(),
+        1_000,
+    )
+    .expect("grant claims are valid")
+    .expect("the token carries a grant")
+}
+
 /// The fixture below plus a standing agent profile that reads requests.
 fn delegation_registry() -> Arc<CompiledRegistry> {
     let mut project: serde_json::Value = serde_json::from_str(COMPILED_REGISTRY_PROJECT).unwrap();

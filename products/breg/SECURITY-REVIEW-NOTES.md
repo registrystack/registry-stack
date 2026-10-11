@@ -2940,7 +2940,10 @@ changes, because no request path changes.
   profile; `delegated_token_is_admitted_only_by_an_agent_profile` in
   `crates/registry-breg/src/api/tests/change_request_action_tests.rs` pins
   that for a profile without an `actorKind`. A task-grant token is refused on
-  a profile without a task grant, and no test isolates that refusal.
+  a profile without a task grant;
+  `task_grant_token_is_refused_by_a_profile_without_a_task_grant` in the same
+  file pins that for a profile without an `actorKind` and for a standing
+  agent profile.
 - The publication routes gain no check and do not compare actor kinds. The
   rule runs where the compiler runs: when a package is built, and again on
   every load, because `rederive` in `crates/registry-breg/src/package.rs`
