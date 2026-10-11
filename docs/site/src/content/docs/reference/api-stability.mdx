@@ -56,14 +56,19 @@ Evidence Gateway's versioned routes are `POST /v1/evidence`, `POST /v1/evidence/
 
 {/* Evidence: crates/registry-discovery/src/server.rs, SERVICES_ROUTE and EVIDENCE_TYPES_ROUTE;
     crates/registry-breg/src/contract.rs, ACTION_HANDLER_ABI_V1;
-    products/evidence/contracts/bundle.schema.yaml, the response-formats enum. */}
+    products/evidence/contracts/bundle.schema.yaml, the response-formats enum;
+    crates/registry-stack-client-node/breg/client.d.ts, statisticsLive and statisticsPublish;
+    crates/registry-stack-client/src/lib.rs, TaskGrantBounds and SchedulingTaskPermission. */}
 
 The promise also covers the client SDKs: the Node.js package `@registrystack/client`, the Python
 package `registry-stack-client`, and the Rust crate `registry-stack-client` taken from the release
 tag. In each, the `breg`, `evidence`, `casework`, and `discovery` namespaces are promised. The SDKs
 are additive-only across 1.x, because a version range on a published package, such as npm `^1.2.0`
 or pip `~=1.2`, picks up minor releases automatically: a minor release may deprecate an SDK method,
-and its removal waits for `2.0`. See the [client API reference](../client-api/).
+and its removal waits for `2.0`. A member of a promised namespace that reaches an
+[experimental surface](#experimental-surfaces) is experimental with that surface: for example, the
+statistics methods of the `breg` namespace, and the `scheduling` variant of task grant bounds in
+the `casework` namespace. See the [client API reference](../client-api/).
 
 ## Experimental surfaces
 
@@ -84,14 +89,18 @@ string keep it, and each may change or be removed in any minor release without d
 - the `scheduling` variant of a Casework task grant's bounds
 
 Before `v1.0.0`, one breaking release moves the promised products' version strings from
-`v1alpha1` to stable versions, so a `v1alpha1` string in a 1.x deployment marks an experimental
-surface.
+`v1alpha1` to stable versions, so a `v1alpha1` version string that a 1.x release reads or writes
+(in configuration, an API, or a schema) marks an experimental surface. The published
+`registry-discovery-v1alpha1` profile resources stay published as history and are not an
+experimental surface.
 
 {/* Evidence: crates/registry-breg/src/api/statistics.rs; crates/registry-breg/src/api/gis.rs;
     crates/registry-casework-core/src/task_grant.rs, TaskGrantBounds;
     crates/registry-breg/src/contract.rs, ACTION_HANDLER_ABI_V2;
     products/breg/IMPLEMENTATION.md, Capability state within W5;
-    products/breg/contracts/definition-of-done.yaml, BREG-V1-ACTION-EVIDENCE-TRIAL. */}
+    products/breg/contracts/definition-of-done.yaml, BREG-V1-ACTION-EVIDENCE-TRIAL;
+    products/discovery/README.md, the published registry-discovery-v1alpha1 profile resources;
+    crates/registry-discovery-profile/src/lib.rs, PROFILE_ID. */}
 
 ## Outside the promise
 
@@ -236,6 +245,9 @@ Casework package and runs its migrations, and `schedulingctl apply` activates a 
 and runs its migrations. `messagingctl apply` activates a Messaging package and runs its migrations.
 Read each release's notes for the migration steps it needs. The `v0.40.0` exception above applies to
 all four.
+The forward state path holds for an [experimental surface](#experimental-surfaces), such as
+Scheduling or Messaging, while a release ships it, and a release that removes one says in its
+release notes what happens to the state that surface wrote.
 Base Registry Engine's Beta pilot conditions are under
 [Stability](../../operate/breg-requirements/#stability) in its requirements.
 
