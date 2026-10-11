@@ -6,6 +6,10 @@
 //! move the SQL or revision of a project that declares no consent. A
 //! deliberate DDL or artifact change updates these digests in the same commit
 //! that explains it.
+//!
+//! The cursor envelope bound in generated OpenAPI is part of the compiled
+//! artifact revision. Increasing that bound preserves the SQL and action
+//! fingerprints but deliberately moves the fixture revisions pinned below.
 
 use registry_breg::compiler::{compile_project, compile_project_with_assets, CompileProfile};
 use registry_breg::contract::{parse_module_yaml, parse_project_yaml, ModuleAssetSource};
@@ -28,7 +32,7 @@ const FIXTURES: &[Fixture] = &[
         ),
         module: None,
         ddl_sha256: "33dd380479e2c45354d1bd601f9eb6d9a9bca907bc90be8fd25236f675a7699e",
-        revision: "sha256:77ce2e8b1e635b74608ca276480ce079577a722405bce6075a7753c61d4ea44d",
+        revision: "sha256:6d104774d6df76529e2086048dc69026e19dbb5dd29645fca8dca0c91b130fb0",
     },
     Fixture {
         name: "asset-registration-actions",
@@ -39,7 +43,7 @@ const FIXTURES: &[Fixture] = &[
             "../../../products/breg/fixtures/asset-registration-actions/modules/asset-registration-actions-core/module.yaml"
         )),
         ddl_sha256: "4c890f2db3f02fd4d686bd4affd8900cf0374ecfc78f020042b53c12cd748d06",
-        revision: "sha256:b0a8ab3887fad800767155cfe02a99bc5eb6287baf494f3bf8852358fdc33dd1",
+        revision: "sha256:82ff49da19c23625897602ec3cf81143b9e3117b7e5ff8525b25eea018ce2927",
     },
     Fixture {
         name: "facility-registry-actions",
@@ -50,7 +54,7 @@ const FIXTURES: &[Fixture] = &[
             "../../../products/breg/fixtures/facility-registry-actions/modules/facility-registry-actions-core/module.yaml"
         )),
         ddl_sha256: "9bed3098641136e121665725ced8d58dc69b7f60692068e6000e6599e268636f",
-        revision: "sha256:0e28782296d94c2be855dd49c9c2170ac1aa438c358ab0a98c76dcc9a8a291f0",
+        revision: "sha256:8d0335b7e585090fa5accc1932e5d7a1bb4d78c41ceb1d21e4e0b4b66f8162b2",
     },
     Fixture {
         name: "household-contact-actions",
@@ -61,7 +65,7 @@ const FIXTURES: &[Fixture] = &[
             "../../../products/breg/fixtures/household-contact-actions/modules/household-contact-actions-core/module.yaml"
         )),
         ddl_sha256: "106449513ed214ebb719db8bed6a4e992896c861a220a7f7fbdfcf8656b8ee87",
-        revision: "sha256:dabe618531b357e17d39cc943dd1914dc11feab492796826fc92e3a64e2d7f52",
+        revision: "sha256:92f7ee9abd2bfde3576a9a5e19b230d5ac82763887a82974785aae0705e96c70",
     },
 ];
 
