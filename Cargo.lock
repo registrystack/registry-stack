@@ -6306,6 +6306,7 @@ version = "0.41.0"
 dependencies = [
  "chrono",
  "registry-platform-canonical-json",
+ "schemars",
  "serde",
  "serde_json",
  "sha2 0.11.0",

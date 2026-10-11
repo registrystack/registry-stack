@@ -106,9 +106,26 @@ impl<'de> Deserialize<'de> for ContentDigest {
     }
 }
 
+/// The published digest grammar: `sha256:` followed by 64 lowercase
+/// hexadecimal digits, the only form `ContentDigest::parse` accepts.
+#[cfg(feature = "schema")]
+impl schemars::JsonSchema for ContentDigest {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "ContentDigest".into()
+    }
+
+    fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+        })
+    }
+}
+
 pub type SubmissionDigest = ContentDigest;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SubjectBinding {
     pub source: String,
@@ -129,6 +146,7 @@ impl SubjectBinding {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PolicyBinding {
     pub id: String,
@@ -137,6 +155,7 @@ pub struct PolicyBinding {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HumanIdentity {
     pub issuer: String,
@@ -151,6 +170,7 @@ impl HumanIdentity {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SourceContextBinding {
     pub reference: String,
@@ -170,6 +190,7 @@ impl PolicyBinding {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(
     tag = "strategy",
     rename_all = "kebab-case",
@@ -199,6 +220,7 @@ impl ReviewContext {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReviewCreateRequest {
     pub kind: String,
@@ -273,6 +295,7 @@ pub fn submission_digest(
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReviewRequestAccepted {
     pub request_id: Uuid,
@@ -282,6 +305,7 @@ pub struct ReviewRequestAccepted {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "kebab-case")]
 pub enum ReviewRequestLifecycle {
     Reviewing,
@@ -294,6 +318,7 @@ pub enum ReviewRequestLifecycle {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReviewRequestView {
     pub request_id: Uuid,
@@ -309,6 +334,7 @@ pub struct ReviewRequestView {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "kebab-case")]
 pub enum ReviewResultStatus {
     Approved,
@@ -320,6 +346,7 @@ pub enum ReviewResultStatus {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReviewResult {
     pub result_id: Uuid,
@@ -380,6 +407,7 @@ impl ReviewResult {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReviewResultFeedEntry {
     pub event_id: Uuid,
@@ -389,6 +417,7 @@ pub struct ReviewResultFeedEntry {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReviewResultFeedPage {
     pub items: Vec<ReviewResultFeedEntry>,
@@ -417,6 +446,7 @@ impl ReviewResultLookup {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReviewCancelRequest {
     pub subject: SubjectBinding,
@@ -431,6 +461,7 @@ impl ReviewCancelRequest {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(
     tag = "outcome",
     rename_all = "kebab-case",
@@ -443,6 +474,7 @@ pub enum ReviewCancelResponse {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReviewCompletion {
     #[serde(rename = "type")]
@@ -454,6 +486,7 @@ pub struct ReviewCompletion {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ReviewCompletionType {
     #[serde(rename = "review.completed")]
     ReviewCompleted,
@@ -857,5 +890,45 @@ mod tests {
         }
         .check()
         .is_ok());
+    }
+
+    #[cfg(feature = "schema")]
+    #[test]
+    fn schemas_follow_the_wire_shape() {
+        let digest = serde_json::to_value(schemars::schema_for!(ContentDigest)).unwrap();
+        assert_eq!(digest["type"], "string");
+        assert_eq!(digest["pattern"], "^sha256:[0-9a-f]{64}$");
+
+        let create = serde_json::to_value(schemars::schema_for!(ReviewCreateRequest)).unwrap();
+        assert_eq!(create["additionalProperties"], false);
+        let required = create["required"].as_array().unwrap();
+        for field in ["kind", "subject", "requesterReference", "context"] {
+            assert!(required.contains(&json!(field)), "{field} is not required");
+        }
+        assert!(!required.contains(&json!("initiator")));
+        assert!(!required.contains(&json!("resultConstraints")));
+
+        let result = serde_json::to_value(schemars::schema_for!(ReviewResult)).unwrap();
+        let status = &result["$defs"]["ReviewResultStatus"];
+        assert_eq!(
+            status["enum"],
+            json!([
+                "approved",
+                "rejected",
+                "changes-requested",
+                "answered",
+                "cancelled",
+                "superseded"
+            ])
+        );
+
+        let cancel = serde_json::to_value(schemars::schema_for!(ReviewCancelResponse)).unwrap();
+        let outcomes: Vec<_> = cancel["oneOf"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|branch| branch["properties"]["outcome"]["const"].clone())
+            .collect();
+        assert_eq!(outcomes, [json!("cancelled"), json!("already-terminal")]);
     }
 }
