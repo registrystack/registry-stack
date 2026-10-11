@@ -925,3 +925,68 @@ async fn invalid_client_input_never_reaches_the_wire() {
         Err(SchedulingClientError::InvalidRequest { .. })
     ));
 }
+
+#[tokio::test]
+async fn original_appointment_receipt_lookup_is_one_read_with_the_original_body() {
+    let observations: Observations = Arc::default();
+    let fixture = Fixture::json(&observations, StatusCode::OK, APPOINTMENT_DOCUMENT);
+    let app = Router::new()
+        .route("/v1/appointments/receipt", post(capture_call))
+        .with_state(fixture);
+    let (address, server) = spawn(app).await;
+    let token = BearerToken::new("read-token").unwrap();
+    let body = CreateAppointmentRequest {
+        hold: None,
+        admission: Some(admission()),
+    };
+    let answer = client(&address)
+        .appointment_receipt(auth(&token), "original-key", &body)
+        .await
+        .unwrap();
+    assert_eq!(answer.value.appointment_id, "appt-1");
+    let seen = observations.lock().unwrap();
+    assert_eq!(seen.len(), 1);
+    assert_eq!(seen[0].method, "POST");
+    assert_eq!(seen[0].headers["idempotency-key"], "original-key");
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&seen[0].body).unwrap(),
+        serde_json::to_value(body).unwrap()
+    );
+    server.abort();
+}
+
+#[tokio::test]
+async fn unresolved_or_unavailable_appointment_receipt_lookup_never_retries() {
+    for code in [
+        ProblemCode::ReceiptUnresolved,
+        ProblemCode::ServiceUnavailable,
+    ] {
+        let observations: Observations = Arc::default();
+        let body = serde_json::json!({"type":type_uri(code.code()), "title":code.title(),
+            "status":code.http_status(), "detail":code.detail(), "code":code.code(), "traceId":TRACE_ID})
+        .to_string();
+        let fixture = Fixture::json(
+            &observations,
+            StatusCode::from_u16(code.http_status()).unwrap(),
+            &body,
+        )
+        .with_content_type("application/problem+json");
+        let app = Router::new()
+            .route("/v1/appointments/receipt", post(capture_call))
+            .with_state(fixture);
+        let (address, server) = spawn(app).await;
+        let token = BearerToken::new("read-token").unwrap();
+        let original = CreateAppointmentRequest {
+            hold: None,
+            admission: Some(admission()),
+        };
+        let result = client(&address)
+            .appointment_receipt(auth(&token), "original-key", &original)
+            .await;
+        assert!(
+            matches!(result, Err(SchedulingClientError::Problem { code: observed, .. }) if observed == code)
+        );
+        assert_eq!(observations.lock().unwrap().len(), 1);
+        server.abort();
+    }
+}

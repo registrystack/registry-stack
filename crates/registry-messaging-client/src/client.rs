@@ -6,7 +6,7 @@ use registry_messaging_core::{
     type_uri, valid_identifier, valid_template_version, MessageReceipt, MessageView, ProblemCode,
     SubmitMessageRequest, TemplatePreview, TemplatePreviewRequest, HEALTH_PATH,
     IDEMPOTENCY_KEY_HEADER, MAXIMUM_IDEMPOTENCY_KEY_BYTES, MESSAGES_PATH, MESSAGE_CANCEL_PATH,
-    MESSAGE_PATH, READY_PATH, TEMPLATE_PREVIEW_PATH,
+    MESSAGE_PATH, MESSAGE_RECEIPT_PATH, READY_PATH, TEMPLATE_PREVIEW_PATH,
 };
 use registry_platform_httpsec::{response_trace_id, ProblemDocument};
 use registry_platform_httputil::client::{
@@ -122,23 +122,7 @@ impl MessagingClient {
         idempotency_key: &str,
         request: &SubmitMessageRequest,
     ) -> Result<MessagingComplete<MessageReceipt>, MessagingClientError> {
-        if !is_idempotency_key(idempotency_key) {
-            return Err(MessagingClientError::invalid_request(
-                "the idempotency key is not 1 to 128 visible ASCII characters",
-            ));
-        }
-        if let Some(template) = &request.template {
-            if !valid_identifier(&template.id) {
-                return Err(MessagingClientError::invalid_request(
-                    "the template identifier is not a package identifier",
-                ));
-            }
-            if !valid_template_version(&template.version) {
-                return Err(MessagingClientError::invalid_request(
-                    "the template version is not a package version label",
-                ));
-            }
-        }
+        validate_submission(idempotency_key, request)?;
         let body = serde_json::to_vec(request).map_err(|_| {
             MessagingClientError::invalid_request("the submission could not be encoded")
         })?;
@@ -151,6 +135,27 @@ impl MessagingClient {
             .header(IDEMPOTENCY_KEY_HEADER, idempotency_key)
             .body(body);
         self.send_keyed_json(request, StatusCode::ACCEPTED).await
+    }
+
+    /// Observe the original acceptance receipt without submitting a message.
+    /// This single read never retries and never generates a key. Unresolved
+    /// receipts retain uncertainty about the original effect. The key and
+    /// template names are checked exactly as `submit` checks them, before I/O.
+    pub async fn message_receipt(
+        &self,
+        token: &BearerToken,
+        idempotency_key: &str,
+        request: &SubmitMessageRequest,
+    ) -> Result<MessagingComplete<MessageReceipt>, MessagingClientError> {
+        validate_submission(idempotency_key, request)?;
+        let request = self
+            .http
+            .post(self.url_from_constant(MESSAGE_RECEIPT_PATH)?)
+            .header(AUTHORIZATION, token.authorization_header_value())
+            .header(ACCEPT, JSON_MEDIA_TYPE)
+            .header(IDEMPOTENCY_KEY_HEADER, idempotency_key)
+            .json(request);
+        self.json_answer(request, StatusCode::OK).await
     }
 
     /// One message as the caller may see it: its derived status, the
@@ -459,6 +464,31 @@ fn keyed_attempt<T>(
         MessagingClientError::is_outcome_unknown,
         MessagingClientError::resend_may_settle,
     )
+}
+
+/// Validate the original submission for both mutation and receipt observation.
+fn validate_submission(
+    idempotency_key: &str,
+    request: &SubmitMessageRequest,
+) -> Result<(), MessagingClientError> {
+    if !is_idempotency_key(idempotency_key) {
+        return Err(MessagingClientError::invalid_request(
+            "the idempotency key is not 1 to 128 visible ASCII characters",
+        ));
+    }
+    if let Some(template) = &request.template {
+        if !valid_identifier(&template.id) {
+            return Err(MessagingClientError::invalid_request(
+                "the template identifier is not a package identifier",
+            ));
+        }
+        if !valid_template_version(&template.version) {
+            return Err(MessagingClientError::invalid_request(
+                "the template version is not a package version label",
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Whether `value` is an idempotency key the runtime accepts: 1 to

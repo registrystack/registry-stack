@@ -75,8 +75,8 @@ class GeneratedOpenApiTests(unittest.TestCase):
             self.assertEqual(entry["title"], properties["title"]["const"])
             self.assertEqual(entry["description"], properties["detail"]["const"])
             self.assertEqual(entry["httpStatuses"][0], properties["status"]["const"])
-        self.assertEqual(32, len(self.contract["entries"]))
-        self.assertEqual(61, len(self.openapi["components"]["schemas"]))
+        self.assertEqual(33, len(self.contract["entries"]))
+        self.assertEqual(62, len(self.openapi["components"]["schemas"]))
 
     def test_every_operation_answers_exactly_the_problems_it_was_mapped(self) -> None:
         for key, expected in GENERATOR.OPERATION_PROBLEMS.items():
@@ -198,12 +198,14 @@ class GeneratedOpenApiTests(unittest.TestCase):
             ("POST", "/v1/holds"): "task-grant",
             ("DELETE", "/v1/holds/{hold_id}"): "task-grant",
             ("POST", "/v1/appointments"): "task-grant",
+            ("POST", "/v1/appointments/receipt"): "reads-scope",
             ("GET", "/v1/appointments"): "reads-scope",
             ("GET", "/v1/appointments/{appointment_id}"): "reads-scope",
             ("POST", "/v1/appointments/{appointment_id}/reschedule"): "task-grant",
             ("POST", "/v1/appointments/{appointment_id}/cancel"): "task-grant",
             ("GET", "/v1/appointments/{appointment_id}/history"): "reads-scope",
         }
+        self.assertEqual(set(GENERATOR.ROUTE_HANDLERS), set(expected))
         for key, authority in expected.items():
             documented = operation(self.openapi, key)
             self.assertEqual(authority, documented["x-scheduling-authority"], key)
@@ -219,12 +221,13 @@ class GeneratedOpenApiTests(unittest.TestCase):
         self.assertEqual(1, authorities.count("explain-scope"))
         self.assertEqual(2, authorities.count("unauthenticated"))
         self.assertEqual(5, authorities.count("task-grant"))
-        self.assertEqual(9, authorities.count("reads-scope"))
+        self.assertEqual(10, authorities.count("reads-scope"))
 
     def test_an_idempotency_key_is_demanded_exactly_where_the_handler_reads_it(self) -> None:
         expected = {
             ("POST", "/v1/holds"),
             ("POST", "/v1/appointments"),
+            ("POST", "/v1/appointments/receipt"),
             ("POST", "/v1/appointments/{appointment_id}/reschedule"),
             ("POST", "/v1/appointments/{appointment_id}/cancel"),
         }
@@ -238,6 +241,19 @@ class GeneratedOpenApiTests(unittest.TestCase):
                 self.assertEqual(schema, demanded["schema"])
                 self.assertIn("idempotency.expired", demanded["description"])
                 self.assertIn("idempotency.key-reused", demanded["description"])
+
+    def test_only_original_receipt_observation_answers_an_unresolved_receipt(self) -> None:
+        receipt = ("POST", "/v1/appointments/receipt")
+        for key in GENERATOR.ROUTE_HANDLERS:
+            self.assertEqual(key == receipt, "receipt.unresolved" in documented_codes(self.openapi, key), key)
+        observed = operation(self.openapi, receipt)
+        self.assertEqual({"receipt.unresolved"}, codes_of(self.openapi, receipt)[409])
+        self.assertEqual("reads-scope", observed["x-scheduling-authority"])
+        self.assertEqual("#/components/schemas/AppointmentDocument",
+                         observed["responses"]["200"]["content"]["application/json"]["schema"]["$ref"])
+        self.assertIn("verified caller's issuer and subject", observed["description"])
+        self.assertIn("never creates or replays a capacity command", observed["description"])
+        self.assertIn("not evidence that no effect occurred", observed["description"])
 
     def test_a_release_uses_the_hold_itself_as_its_idempotency_key(self) -> None:
         """No caller key means a reused key is unreachable on this route."""
@@ -254,6 +270,7 @@ class GeneratedOpenApiTests(unittest.TestCase):
         expected = {
             ("POST", "/v1/holds"): "AdmissionRequest",
             ("POST", "/v1/appointments"): "CreateAppointmentRequest",
+            ("POST", "/v1/appointments/receipt"): "CreateAppointmentRequest",
             ("POST", "/v1/appointments/{appointment_id}/reschedule"): "RescheduleAppointmentRequest",
             ("POST", "/v1/appointments/{appointment_id}/cancel"): "CancelAppointmentRequest",
         }
@@ -267,6 +284,38 @@ class GeneratedOpenApiTests(unittest.TestCase):
                 self.assertIn("request.invalid", codes, key)
                 self.assertIn("request.unprocessable", codes, key)
                 self.assertIn("request.unsupported-media-type", codes, key)
+
+    def test_post_authentication_json_extraction_still_pins_the_receipt_body_schema(self) -> None:
+        http = GENERATOR.production_source(ROOT, GENERATOR.HTTP_SOURCE)
+        service = GENERATOR.production_source(ROOT, GENERATOR.SERVICE_SOURCE)
+        naming = GENERATOR.production_source(ROOT, GENERATOR.NAMING_SOURCE)
+        inventory = GENERATOR.route_inventory(http, naming)
+        wiring = GENERATOR.handler_wiring(http, service, inventory, self.variants)
+        key = ("POST", "/v1/appointments/receipt")
+        self.assertEqual("CreateAppointmentRequest", wiring[key]["body"])
+        bad = copy.deepcopy(self.openapi)
+        operation(bad, key)["requestBody"]["content"]["application/json"]["schema"]["$ref"] = (
+            "#/components/schemas/AdmissionRequest"
+        )
+        with self.assertRaisesRegex(ValueError, "request body schema drifted"):
+            GENERATOR.verify_handler_wiring(ROOT, bad["paths"], self.variants)
+
+    def test_a_type_mention_or_an_unrelated_decoder_is_not_a_json_body_extractor(self) -> None:
+        http = GENERATOR.production_source(ROOT, GENERATOR.HTTP_SOURCE)
+        service = GENERATOR.production_source(ROOT, GENERATOR.SERVICE_SOURCE)
+        naming = GENERATOR.production_source(ROOT, GENERATOR.NAMING_SOURCE)
+        inventory = GENERATOR.route_inventory(http, naming)
+        extraction = "Json::<CreateAppointmentRequest>::from_request("
+        self.assertIn(extraction, http)
+        for unrelated in (
+            "decode::<CreateAppointmentRequest>(",
+            "Json::<CreateAppointmentRequest>::from_value(",
+            "CreateAppointmentRequest::from_request(",
+        ):
+            with self.subTest(unrelated=unrelated):
+                changed = http.replace(extraction, unrelated)
+                wiring = GENERATOR.handler_wiring(changed, service, inventory, self.variants)
+                self.assertIsNone(wiring[("POST", "/v1/appointments/receipt")]["body"])
 
     def test_success_statuses_come_from_the_handlers(self) -> None:
         expected = {
@@ -638,7 +687,7 @@ class GeneratedOpenApiTests(unittest.TestCase):
                          set(problem["properties"]))
         self.assertEqual(["code", "detail", "status", "title", "traceId", "type"],
                          sorted(problem["required"]))
-        self.assertEqual(32, len(problem["properties"]["code"]["enum"]))
+        self.assertEqual(33, len(problem["properties"]["code"]["enum"]))
         httpsec = GENERATOR.production_source(ROOT, GENERATOR.HTTPSEC_SOURCE)
         http = GENERATOR.production_source(ROOT, GENERATOR.HTTP_SOURCE)
         body = GENERATOR.rust_struct_fields(httpsec, "ProblemBody")

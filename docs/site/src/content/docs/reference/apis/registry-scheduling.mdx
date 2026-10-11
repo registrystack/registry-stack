@@ -157,6 +157,24 @@ and names no member.
 {/* Evidence: crates/registry-scheduling-core/src/admission.rs, detailed_code();
     products/scheduling/generated/registry-scheduling.openapi.json. */}
 
+`POST /v1/appointments/receipt` uses ordinary read authority, the original `Idempotency-Key`,
+and the original `CreateAppointmentRequest` body to observe a retained successful creation
+receipt. Its verified issuer and subject must exactly match the original caller. It returns
+`200` with the original appointment projection and never creates or replays a capacity command.
+A confirmation from a hold is read back with the same `{"hold": "<id>", "admission": null}`
+body, so both the hold and the key that confirmed it must match. Observation can therefore
+continue after the original task grant ends, using a current token with read authority.
+Missing, expired, changed, or refused receipts answer `409 receipt.unresolved`. This refusal
+leaves the original outcome unknown and is not evidence that no appointment was created.
+
+{/* Evidence: crates/registry-scheduling/src/http.rs, appointment_receipt();
+    crates/registry-scheduling/src/service.rs, appointment_receipt();
+    crates/registry-scheduling/src/store.rs, appointment_receipt();
+    crates/registry-scheduling-core/src/problem.rs, ReceiptUnresolved;
+    crates/registry-scheduling/tests/postgres_commitments.rs,
+    original_hold_confirmation_receipt_is_read_by_its_hold_and_key and
+    a_refused_attempt_never_resolves_an_original_appointment_receipt. */}
+
 ## Task grants
 
 A commitment carries no product scope. Its authority is a task grant inside the access token: the six
@@ -322,6 +340,7 @@ checked per route.
 | Availability | `/v1/availability`, `/v1/availability/explain` | Catalogue read; Explain |
 | Holds | `/v1/holds`, `/v1/holds/{holdId}` | Commitment |
 | Appointments | `/v1/appointments`, `/v1/appointments/{appointmentId}`, its `reschedule`, `cancel`, and `history` | Commitment for the mutations; Catalogue read for the reads |
+| Appointment receipt observation | `/v1/appointments/receipt` | Catalogue read, matching the exact original owner, key, and creation request |
 | Liveness and readiness | `/healthz`, `/readyz` | Any caller, without a token |
 
 `/readyz` answers `service.unavailable` while PostgreSQL is unreachable or the audit writer is not
@@ -330,7 +349,7 @@ ready.
 {/* Evidence: crates/registry-scheduling/src/http.rs, router() and readyz();
     crates/registry-scheduling-core/src/naming.rs, SCHEDULING_PATH, SERVICES_PATH, OFFERINGS_PATH,
     RESOURCES_PATH, LOCATIONS_PATH, AVAILABILITY_PATH, AVAILABILITY_EXPLAIN_PATH, HOLDS_PATH, and
-    APPOINTMENTS_PATH. */}
+    APPOINTMENTS_PATH and APPOINTMENT_RECEIPT_PATH. */}
 
 ## Source of truth
 

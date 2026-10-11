@@ -24,6 +24,7 @@
     - ['`precondition.required`', '428', 'The mutation requires the revision the caller loaded, or the duplicate key the offering keys on.']
     - ['`prerequisite.missing`', '422', 'The party is missing a prerequisite the offering requires.']
     - ['`profile.not-authorized`', '403', 'The caller holds no profile that authorizes this request, for example a read scope check on a mutation route.']
+    - ['`receipt.unresolved`', '409', 'No retained success receipt matches the verified caller, original key, and original request. Missing, expired, or changed receipts leave the original outcome unknown; this does not prove that no effect occurred.']
     - ['`request.body-too-large`', '413', 'The request body exceeds the accepted size.']
     - ['`request.invalid`', '400', 'The request could not be read as a Scheduling request.']
     - ['`request.method-not-allowed`', '405', 'The route exists but not for this method.']

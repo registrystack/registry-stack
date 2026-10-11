@@ -43,6 +43,7 @@ pub const OPERATION_NOT_AUTHORIZED_PROBLEM: &str = "operation.not-authorized";
 pub const PROFILE_NOT_AUTHORIZED_PROBLEM: &str = "profile.not-authorized";
 pub const QUOTA_EXCEEDED_PROBLEM: &str = "quota.exceeded";
 pub const RATE_LIMIT_EXCEEDED_PROBLEM: &str = "rate-limit.exceeded";
+pub const RECEIPT_UNRESOLVED_PROBLEM: &str = "receipt.unresolved";
 pub const REQUEST_BODY_TOO_LARGE_PROBLEM: &str = "request.body-too-large";
 pub const REQUEST_INVALID_PROBLEM: &str = "request.invalid";
 pub const REQUEST_METHOD_NOT_ALLOWED_PROBLEM: &str = "request.method-not-allowed";
@@ -73,6 +74,7 @@ pub enum ProblemCode {
     ProfileNotAuthorized,
     QuotaExceeded,
     RateLimitExceeded,
+    ReceiptUnresolved,
     RequestBodyTooLarge,
     RequestInvalid,
     RequestMethodNotAllowed,
@@ -104,6 +106,7 @@ impl ProblemCode {
         Self::ProfileNotAuthorized,
         Self::QuotaExceeded,
         Self::RateLimitExceeded,
+        Self::ReceiptUnresolved,
         Self::RequestBodyTooLarge,
         Self::RequestInvalid,
         Self::RequestMethodNotAllowed,
@@ -135,6 +138,7 @@ impl ProblemCode {
             Self::ProfileNotAuthorized => PROFILE_NOT_AUTHORIZED_PROBLEM,
             Self::QuotaExceeded => QUOTA_EXCEEDED_PROBLEM,
             Self::RateLimitExceeded => RATE_LIMIT_EXCEEDED_PROBLEM,
+            Self::ReceiptUnresolved => RECEIPT_UNRESOLVED_PROBLEM,
             Self::RequestBodyTooLarge => REQUEST_BODY_TOO_LARGE_PROBLEM,
             Self::RequestInvalid => REQUEST_INVALID_PROBLEM,
             Self::RequestMethodNotAllowed => REQUEST_METHOD_NOT_ALLOWED_PROBLEM,
@@ -176,6 +180,7 @@ impl ProblemCode {
                 409
             }
             Self::IdempotencyExpired => 410,
+            Self::ReceiptUnresolved => 409,
             Self::RequestBodyTooLarge => 413,
             Self::RequestUnsupportedMediaType => 415,
             Self::CallbackUnreadable
@@ -211,6 +216,7 @@ impl ProblemCode {
             Self::ProfileNotAuthorized => "Profile not authorized",
             Self::QuotaExceeded => "Daily limit reached",
             Self::RateLimitExceeded => "Request rate exceeded",
+            Self::ReceiptUnresolved => "Original receipt unresolved",
             Self::RequestBodyTooLarge => "Payload too large",
             Self::RequestInvalid => "Request invalid",
             Self::RequestMethodNotAllowed => "Method not allowed",
@@ -274,6 +280,7 @@ impl ProblemCode {
             Self::RateLimitExceeded => {
                 "The request rate accepted from this caller is exceeded. Try again after the time in Retry-After."
             }
+            Self::ReceiptUnresolved => "No retained success receipt matches this caller, key, and original request. The original outcome remains unknown; this is not evidence that no effect occurred.",
             Self::RequestBodyTooLarge => "The request body exceeds the accepted size.",
             Self::RequestInvalid => "The request could not be read as a Messaging request.",
             Self::RequestMethodNotAllowed => "The route exists but not for this method.",
@@ -311,7 +318,7 @@ mod tests {
 
     #[test]
     fn the_vocabulary_is_complete_and_closed() {
-        assert_eq!(ProblemCode::ALL.len(), 26);
+        assert_eq!(ProblemCode::ALL.len(), 27);
         for code in ProblemCode::ALL {
             assert_eq!(ProblemCode::from_code(code.code()), Some(*code));
         }
