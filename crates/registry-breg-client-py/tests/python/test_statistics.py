@@ -137,8 +137,8 @@ class StatisticsTests(unittest.TestCase):
             }],
             "definitionDigest": self.metadata_document["revision"],
             "operations": [
-                "list_releases", "read_latest_release", "read_release_version",
-                "read_released_series",
+                "list-releases", "read-latest-release", "read-release-version",
+                "read-released-series",
             ],
         }]
         self.metadata_document["statisticalDatasets"] = datasets
