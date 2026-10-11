@@ -2,6 +2,42 @@
 
 ## Unreleased
 
+## 0.40.0
+
+- BREAKING: Registry Manifest reads metadata manifests and profile descriptors
+  through the shared configuration reader. Refusals report every finding by
+  diagnostic code, JSON Pointer, line, and column, without repeating configured
+  values. Update automation to match diagnostic codes instead of message text.
+- BREAKING: `validate`, `validate-profiles`, `render`, and `publish` distinguish
+  refused input (exit 1), usage errors (exit 2), and unreadable input (exit 3).
+  Update scripts that treated every failure as exit 1. The two validation
+  commands accept `--format json` and `--deny-warnings`.
+- BREAKING: explicit `null`, `${...}`, unknown profile keys, invalid profile
+  members, and fixture paths that escape the profile directory are refused.
+  Remove null and unknown members, supply required profile fields, write
+  literal values, and keep fixtures inside their profile directory.
+- BREAKING: repeated relationship names and repeated entity `identifiers`
+  items are refused with `config.duplicate-id`. Rename or remove the repeated
+  item. Other duplicate identifiers also use `config.duplicate-id`; update
+  callers that matched `manifest.metadata.duplicate-value` for them.
+- BREAKING: authored multi-word values use kebab-case without aliases. Rewrite
+  the ten multi-word `required_gates` values, `minimized-json`, `non-public`,
+  `as-needed`, `under-development`, and the fulfillment modes using the complete
+  old-to-new table in
+  [the Manifest migration notes](../../../release/notes/config-conventions/manifest.md).
+- BREAKING: the Rust library removes `render_entity_shacl`, whose only
+  maintained consumer was Registry Relay. Use `render_shacl` over the whole
+  manifest instead.
+- Metadata and profile envelopes remain `registry-manifest/v1` and
+  `registry-manifest-profile/v1`. Their file bound grows from 64 KiB to 1 MiB.
+  Generated reader schemas and editor mappings are available, and
+  `validate-profiles` warns about YAML files no descriptor or fixture lists.
+
+The [complete Manifest migration notes](../../../release/notes/config-conventions/manifest.md)
+include every configuration change, exact replacement value, and diagnostic
+code mapping. The [product changelog](../CHANGELOG.md) also records Rust API
+changes.
+
 ## 0.39.0
 
 - `registry-manifest --version` prints the build version. Registry Manifest

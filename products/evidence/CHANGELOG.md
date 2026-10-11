@@ -2,21 +2,28 @@
 
 ## Unreleased
 
-### Local development
-
-- `evidencectl dev start --target` accepts an explicit
-  `--preserve-target-authenticated-context` opt-in for a local target and a
-  borrowed BReg issuer owner. It preserves reviewed human first-party subject
-  bindings only when the target authority otherwise exactly matches the
-  access-policy-generated local profiles and the owner's active client and
-  assertion-issuer admission. The default remains request-origin, and retained
-  sessions refuse a restart that changes the mode.
+## v0.40.0 - 2026-10-11
 
 - BREAKING: `evidence-oid4vci check`, `inspect`, and `serve` take
   `--runtime-config FILE` instead of `--config FILE`, and
   `EVIDENCE_OID4VCI_RUNTIME_CONFIG` instead of `EVIDENCE_OID4VCI_CONFIG`.
   Replace the flag and variable in scripts and deployment configuration.
   Neither old spelling is accepted.
+
+### Local development
+
+- `evidencectl dev start PROJECT --target TARGET --issuer-project OWNER
+  --preserve-target-authenticated-context` explicitly preserves a selected
+  local target's reviewed human `authenticated-context` bindings for a
+  borrowed BReg issuer. The option compiles and validates the local target
+  and accepts it only when its allowed clients and assertion issuers exactly
+  match the borrowed owner's active first-party registrations, its authority
+  otherwise matches the generated local access policies, and each
+  `valueClaims` mapping covers the exact selector-field set. Human selectors
+  use request-origin by default. Institutional-grant exchange is not a human
+  substitute. A retained session refuses a restart in the other mode; run
+  `evidencectl dev stop PROJECT` and `evidencectl dev clean PROJECT`
+  before switching modes.
 
 ### Protocol words
 

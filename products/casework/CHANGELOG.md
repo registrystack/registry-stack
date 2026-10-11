@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+## v0.40.0 - 2026-10-11
+
+- Reviewers can filter active review tasks with
+  `ownership=assigned-to-me` or `ownership=unclaimed`. The filter runs before
+  pagination and grants no authority: current membership, queue service,
+  pinned deciding profile, and source visibility still control each row.
+- A decided single-task read carries `decidedByCaller` and, for the current
+  decision author's exact issuer-qualified principal, a minimal
+  `decisionReceipt`. The receipt retains the pinned policy, decision type,
+  selected outcome and its decision-time label where required, and time. It
+  excludes the private reason and structured producer result.
+- `GET /v1/review-tasks/own-decisions` lets an eligible human reviewer discover
+  their retained decisions after sign-in, optionally filtered by queue.
+  Discovery and own receipts end at terminal result expiry or erasure.
+- `GET /v1/review-tasks/supervision` lets current Supervisors discover active
+  and retained terminal tasks in supervised queues, including exact
+  `requestId` lookup. Its holder-free rows grant no deciding authority and
+  release no submitted context, private reason, or producer result.
+- Review accountability retains the exact configured outcome and its pinned
+  decision-time label through the accountability window, independently of
+  terminal result retention. Reading it keeps the existing audited Supervisor
+  authority boundary.
+- Reviewer, own-decision, and Supervisor continuations bind the caller,
+  profiles, view, filters, and current authority. Expiring opaque checkpoints
+  preserve bounded scan progress past undisclosed candidates. An expired,
+  erased, mismatched, or unauthorized anchor answers
+  `410 review.result-expired`; restart without a cursor.
+
 - Execution attempts reserve and release their leases on the PostgreSQL
   clock used by recovery and settlement. Host clock skew no longer leaves a
   finished attempt's lease temporarily live or changes its reservation length.

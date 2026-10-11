@@ -7,6 +7,8 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.40.0] - 2026-10-11
+
 ### Changed
 
 - BREAKING: the multi-word values a metadata manifest authors are spelled in
