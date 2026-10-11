@@ -1711,6 +1711,47 @@ fn legacy_database_container(state: &State, volume_name: &str, destination: &str
 }
 
 #[test]
+fn retained_database_inspection_accepts_only_verified_image_aliases() {
+    let root = crate::canonical_tempdir();
+    let project = standalone(root.path());
+    let mut state = session(&project);
+    state.container_id = Some("retained-container-id".to_owned());
+    let container = json!({
+        "Id": "retained-container-id",
+        "Name": format!("/{}", state.container_name()),
+        "Config": { "Labels": { (LABEL): state.owner }, "Image": IMAGE },
+    });
+    for image in [CANONICAL_IMAGE, IMAGE] {
+        let mut owned = container.clone();
+        owned["Config"]["Image"] = json!(image);
+        verified_container(&state, &owned).unwrap();
+        for (pointer, replacement) in [
+            ("/Name", "different-container"),
+            ("/Id", "different-container-id"),
+            (
+                "/Config/Labels/org.registrystack.caseworkctl.dev-owner",
+                "different-owner",
+            ),
+        ] {
+            let mut changed = owned.clone();
+            *changed.pointer_mut(pointer).unwrap() = json!(replacement);
+            assert!(verified_container(&state, &changed).is_err());
+        }
+    }
+    for image in [
+        IMAGE.replace("67f41722", "07f41722"),
+        CANONICAL_IMAGE.replace("67f41722", "07f41722"),
+        format!("untrusted.example/{CANONICAL_IMAGE}"),
+        "postgres:17.11".to_owned(),
+        "public.ecr.aws/docker/library/postgres:17.11".to_owned(),
+    ] {
+        let mut changed = container.clone();
+        changed["Config"]["Image"] = json!(image);
+        assert!(verified_container(&state, &changed).is_err());
+    }
+}
+
+#[test]
 fn legacy_unlabeled_volume_requires_the_exact_retained_container_and_mount() {
     let root = crate::canonical_tempdir();
     let project = standalone(root.path());

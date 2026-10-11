@@ -150,7 +150,7 @@ openssl req -new -nodes -newkey rsa:2048 -subj '/CN=localhost' -keyout tutorial-
 printf 'subjectAltName=DNS:localhost\n' > tutorial-work/candidate/postgres/server.ext
 openssl x509 -req -sha256 -days 2 -in tutorial-work/candidate/postgres/server.csr -CA tutorial-work/candidate/postgres/ca.pem -CAkey tutorial-work/candidate/postgres/ca.key -CAcreateserial -extfile tutorial-work/candidate/postgres/server.ext -out tutorial-work/candidate/postgres/server.crt
 printf 'POSTGRES_PASSWORD=%s\n' "$(openssl rand -hex 24)" > tutorial-work/candidate/postgres/postgres.env
-docker run --detach --name breg-candidate-postgres --env-file tutorial-work/candidate/postgres/postgres.env --publish 127.0.0.1:5433:5432 postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675
+docker run --detach --name breg-candidate-postgres --env-file tutorial-work/candidate/postgres/postgres.env --publish 127.0.0.1:5433:5432 public.ecr.aws/docker/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675
 until docker exec breg-candidate-postgres pg_isready -h localhost -U postgres >/dev/null; do sleep 1; done
 docker cp tutorial-work/candidate/postgres/server.crt breg-candidate-postgres:/var/lib/postgresql/data/server.crt
 docker cp tutorial-work/candidate/postgres/server.key breg-candidate-postgres:/var/lib/postgresql/data/server.key

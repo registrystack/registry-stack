@@ -261,7 +261,7 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         # pin names the job it belongs to. A bare digest would be satisfied by
         # the other product's copy and would stop reporting its own removal.
         "Casework PostgreSQL 17 image pin",
-        "image: postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675\n"
+        "image: public.ecr.aws/docker/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675\n"
         "        env:\n"
         "          POSTGRES_DB: casework",
     ),
@@ -387,7 +387,7 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     ),
     (
         "Scheduling PostgreSQL 17 image pin",
-        "image: postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675\n"
+        "image: public.ecr.aws/docker/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675\n"
         "        env:\n"
         "          POSTGRES_DB: scheduling",
     ),
@@ -453,7 +453,7 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     ),
     (
         "Messaging PostgreSQL 17 image pin",
-        "image: postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675\n"
+        "image: public.ecr.aws/docker/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675\n"
         "        env:\n"
         "          POSTGRES_DB: messaging",
     ),
