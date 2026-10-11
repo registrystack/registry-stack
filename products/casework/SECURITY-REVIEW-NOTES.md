@@ -581,6 +581,15 @@ material proposal change, principal change, expiry, revocation, drafts,
 completion, responsibility transitions, and database timezone boundaries. The simulation ages only synthetic
 fixture timestamps; it does not assert a real sixteen-minute wall-clock wait.
 
+Scheduling uses the shared platform exact-status transport before capacity
+work and caps in-flight execution at the earlier token/grant deadline. The
+resource servers still own their own mutations and atomic duplicate/business
+limits. There is no distributed transaction between status observation and
+resource commit. Temporary status/source failure refuses the current attempt;
+review membership eligibility is checked when observed. Explicit revocation is
+required when a withdrawal must remain effective after eligibility is restored
+between observations.
+
 
 ## Exact supervisory request selection
 

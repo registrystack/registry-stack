@@ -143,8 +143,16 @@ identity.
 
 Offline reads may continue until the earlier access-token or grant deadline.
 BReg checks fresh status before new writes, later approval, and application.
+Scheduling deployments using deferred work configure `taskGrantStatus` and
+check fresh exact status before every capacity command and receipt replay.
+With no status registry, Scheduling permits only authorization with at most
+900 seconds remaining; the final fifteen minutes of a deferred grant can also
+use this offline path, with that bounded stale-authority window.
+A configured registry never falls back when status is unavailable or inactive.
 There is no distributed transaction between a status observation and a resource
-commit.
+commit. Scheduling also rechecks the earlier execution-token and grant expiry
+under its capacity locks, so waiting for a lock cannot carry an expired execution
+credential into a later commit.
 Evidence wallet-delivery deferred offers carrying a task grant remain refused.
 
 ## Resume deferred work
