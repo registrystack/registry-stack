@@ -11,9 +11,7 @@
 //! guest.
 
 use registry_breg::compiler::{compile_project_with_assets, CompileProfile};
-use registry_breg::contract::{
-    parse_project_json, ModuleAssetSource, ACTION_HANDLER_ABI_V1, ACTION_HANDLER_ABI_V2,
-};
+use registry_breg::contract::{parse_project_json, ModuleAssetSource, ACTION_HANDLER_ABI_V1};
 use registry_breg::model::CompiledActionHandlerKind;
 use registry_breg::wasm_handler::{MAXIMUM_WASM_MODULE_BYTES, MAX_PACKAGE_WASM_MODULES};
 use serde_json::{json, Value};
@@ -393,14 +391,86 @@ fn wasm_handler_field_discipline_is_reported_per_backend() {
 }
 
 #[test]
-fn the_v2_abi_stays_refused_for_wasm_handlers_under_the_feature() {
+fn an_evidence_declaration_stays_refused_for_wasm_handlers_under_the_feature() {
+    // A complete Evidence declaration: a declared provider, its reviewed
+    // contract in the project assets, and one capability the contract defines.
     let mut project = wasm_project();
-    project["actions"][0]["handler"]["abi"] = json!(ACTION_HANDLER_ABI_V2);
-    let failure = compile_with_module(project, "wasm/handler.wasm", binary(MINIMAL_ABI_WAT))
-        .map(|_| ())
-        .expect_err("the Evidence-enabled v2 ABI stays out of scope for WASM");
-    let diagnostic = first_code(&failure, "breg.action.handler-wasm-abi-unsupported");
-    assert_eq!(diagnostic.path, "actions[register-person].handler.type");
+    project["evidenceProviders"] = json!([{
+        "id": "farmer-registry",
+        "contracts": "evidence/farmer-contracts.json",
+        "subjectResolution": "trusted-provider-exact-selector"
+    }]);
+    project["actions"][0]["evidence"] = json!([{
+        "id": "farmer-status",
+        "provider": "farmer-registry",
+        "requirement": "urn:example:farmer:status-v1",
+        "subjects": {"farmer": {"profile": "farmer-number-v1"}},
+        "outputs": ["active"],
+        "maximumObservationAgeSeconds": 60
+    }]);
+    let contract = ModuleAssetSource {
+        module: None,
+        path: "evidence/farmer-contracts.json".to_owned(),
+        bytes: include_bytes!(
+            "../../../products/breg/acceptance/farmer-landholding-evidence/evidence/farmer-contracts.json"
+        )
+        .to_vec(),
+    };
+    let compile = |project: &Value, handler: ModuleAssetSource| {
+        let project = parse_project_json(&serde_json::to_vec(project).unwrap()).unwrap();
+        compile_project_with_assets(
+            &project,
+            &[],
+            &[handler, contract.clone()],
+            CompileProfile::Authoring,
+        )
+    };
+
+    // The WASM module is valid and the declaration is complete, so the handler
+    // backend is the only reason left to refuse, and the refusal is the only
+    // diagnostic.
+    let failure = compile(
+        &project,
+        ModuleAssetSource {
+            module: None,
+            path: "wasm/handler.wasm".to_owned(),
+            bytes: binary(MINIMAL_ABI_WAT),
+        },
+    )
+    .map(|_| ())
+    .expect_err("Evidence stays out of scope for WASM handlers");
+    let diagnostic = first_code(&failure, "breg.action.evidence-ceiling-invalid");
+    assert_eq!(diagnostic.path, "actions[register-person].evidence");
+    assert!(diagnostic.message.contains("Rhai"));
+    assert_eq!(
+        failure.diagnostics().len(),
+        1,
+        "{:?}",
+        failure.diagnostics()
+    );
+
+    // The same declaration compiles once a Rhai handler carries it.
+    let writes = project["actions"][0]["handler"]["writes"].clone();
+    project["actions"][0]["handler"] = json!({
+        "type": "rhai", "script": "handlers/register.rhai",
+        "abi": ACTION_HANDLER_ABI_V1, "writes": writes
+    });
+    let registry = compile(
+        &project,
+        ModuleAssetSource {
+            module: None,
+            path: "handlers/register.rhai".to_owned(),
+            bytes: b"fn handle(ctx) { #{effects: []} }".to_vec(),
+        },
+    )
+    .expect("a Rhai handler carries the same Evidence declaration");
+    let action = registry
+        .actions()
+        .actions
+        .iter()
+        .find(|action| action.id == "register-person")
+        .expect("the action compiled");
+    assert_eq!(action.evidence.len(), 1);
 }
 
 #[test]

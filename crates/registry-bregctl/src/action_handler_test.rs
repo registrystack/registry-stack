@@ -53,7 +53,7 @@ pub(super) fn run(
         next: 0,
         mismatch: None,
     }));
-    let evaluation = if handler.abi == "registry.action-handler/v2" {
+    let evaluation = if !action.evidence.is_empty() {
         let state = transcript.clone();
         evaluate_action_with_evidence(
             action,

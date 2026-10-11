@@ -36,7 +36,6 @@ fn contracts() -> Value {
 fn configured() -> Value {
     let mut source = project();
     source["evidenceProviders"] = json!([{"id":"provider","contracts":"evidence/contracts.json","subjectResolution":"trusted-provider-exact-selector"}]);
-    source["actions"][0]["handler"]["abi"] = json!("registry.action-handler/v2");
     source["actions"][0]["evidence"] = json!([{"id":"status","provider":"provider","requirement":"urn:example:client:requirement:status:v1","subjects":{"subject":{"profile":"record-lookup-v1"}},"outputs":["status-holds"],"maximumObservationAgeSeconds":60}]);
     source
 }
@@ -129,7 +128,7 @@ fn refuses_origin_profile_output_ambiguity_and_budget_widening() {
                 let cap = source["actions"][0]["evidence"][0].clone();
                 source["actions"][0]["evidence"] = json!([cap, cap, cap]);
             }
-            "abi" => source["actions"][0]["handler"]["abi"] = json!("registry.action-handler/v1"),
+            "abi" => source["actions"][0]["handler"]["abi"] = json!("registry.action-handler/v2"),
             "schema" => contract["schema"] = json!("unknown"),
             "bounds" => {
                 contract["definitions"][0]["subjects"][0]["selector"]["fields"][0]["minimumBytes"] =
@@ -141,12 +140,36 @@ fn refuses_origin_profile_output_ambiguity_and_budget_widening() {
     }
 }
 #[test]
-fn v2_allows_no_capability_and_contract_paths_are_confined() {
-    let mut source = project();
-    source["actions"][0]["handler"]["abi"] = json!("registry.action-handler/v2");
-    assert!(compile(source, None).unwrap().actions().actions[0]
+fn the_evidence_declaration_selects_the_capability_under_the_one_handler_abi() {
+    let declared = compile(configured(), Some(contracts())).unwrap();
+    let action = &declared.actions().actions[0];
+    assert_eq!(
+        action.handler.as_ref().unwrap().abi,
+        "registry.action-handler/v1"
+    );
+    assert_eq!(action.evidence.len(), 1);
+    assert!(compile(project(), None).unwrap().actions().actions[0]
         .evidence
         .is_empty());
+}
+#[test]
+fn the_retired_evidence_abi_is_refused_where_it_is_declared() {
+    for (source, contract) in [(configured(), Some(contracts())), (project(), None)] {
+        let mut source = source;
+        source["actions"][0]["handler"]["abi"] = json!("registry.action-handler/v2");
+        let failure = compile(source, contract).expect_err("one handler ABI is accepted");
+        let diagnostic = failure
+            .diagnostics()
+            .iter()
+            .find(|diagnostic| diagnostic.code == "breg.action.handler-abi-invalid")
+            .unwrap_or_else(|| panic!("expected the ABI refusal: {:?}", failure.diagnostics()));
+        assert_eq!(diagnostic.path, "actions[register-person].handler.abi");
+        assert!(diagnostic.message.contains("registry.action-handler/v1"));
+        assert!(!diagnostic.message.contains("v2"));
+    }
+}
+#[test]
+fn contract_paths_are_confined() {
     for path in [
         "/contracts.json",
         "../contracts.json",
@@ -271,7 +294,7 @@ fn evidence_identifiers_use_the_governed_action_grammar() {
 }
 
 #[test]
-fn evidence_calls_require_v2_in_statements_expressions_and_nested_blocks() {
+fn evidence_calls_require_a_declared_capability_in_statements_expressions_and_nested_blocks() {
     for body in [
         r#"evidence::resolve("status", #{});"#,
         r#"let result = evidence::resolve("status", #{});"#,
@@ -279,15 +302,20 @@ fn evidence_calls_require_v2_in_statements_expressions_and_nested_blocks() {
         r#"try { evidence::resolve("status", #{}); } catch (error) { }"#,
     ] {
         let script = format!("fn handle(ctx) {{ {body} #{{effects: []}} }}");
-        for abi in ["registry.action-handler/v1", "registry.action-handler/v2"] {
+        for declared in [false, true] {
+            // Both projects declare the one handler ABI and the same provider;
+            // only the action's own Evidence declaration differs.
             let mut source = configured();
-            source["actions"][0]["handler"]["abi"] = json!(abi);
-            if abi.ends_with("/v1") {
+            if !declared {
                 source["actions"][0]
                     .as_object_mut()
                     .unwrap()
                     .remove("evidence");
             }
+            assert_eq!(
+                source["actions"][0]["handler"]["abi"],
+                "registry.action-handler/v1"
+            );
             let source = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
             let assets = vec![
                 ModuleAssetSource {
@@ -303,17 +331,21 @@ fn evidence_calls_require_v2_in_statements_expressions_and_nested_blocks() {
             ];
             let result =
                 compile_project_with_assets(&source, &[], &assets, CompileProfile::Authoring);
-            if abi.ends_with("/v1") {
-                let failure = result.expect_err("v1 must not admit an unavailable Evidence helper");
+            if declared {
                 assert!(
-                    failure
-                        .diagnostics()
-                        .iter()
-                        .any(|diagnostic| diagnostic.code == "breg.action.handler-helper-contract"),
-                    "{body}"
+                    result.is_ok(),
+                    "a declared capability admits {body}: {result:?}"
                 );
             } else {
-                assert!(result.is_ok(), "v2 admits {body}: {result:?}");
+                let failure =
+                    result.expect_err("an action declaring no Evidence must not admit the helper");
+                let diagnostic = failure
+                    .diagnostics()
+                    .iter()
+                    .find(|diagnostic| diagnostic.code == "breg.action.handler-helper-contract")
+                    .unwrap_or_else(|| panic!("{body}: {:?}", failure.diagnostics()));
+                assert_eq!(diagnostic.path, "actions[register-person].handler.script");
+                assert!(!diagnostic.message.contains("v2"), "{body}");
             }
         }
     }
@@ -321,7 +353,7 @@ fn evidence_calls_require_v2_in_statements_expressions_and_nested_blocks() {
 
 #[cfg(feature = "schema")]
 #[test]
-fn published_authoring_schema_accepts_farmer_v2_and_rejects_unknown_abi() {
+fn published_authoring_schema_accepts_farmer_and_rejects_every_other_abi() {
     let documents = registry_breg::schema::documents().unwrap();
     let schema: Value =
         serde_json::from_str(&documents[registry_breg::schema::REGISTRY_PROJECT_SCHEMA_FILE])
@@ -342,13 +374,18 @@ fn published_authoring_schema_accepts_farmer_v2_and_rejects_unknown_abi() {
         errors.is_none(),
         "actual farmer authoring must validate: {errors:?}"
     );
-    let handler = farmer["actions"]
-        .as_array_mut()
+    let action = farmer["actions"]
+        .as_array()
         .unwrap()
-        .iter_mut()
-        .find_map(|action| action.get_mut("handler"))
+        .iter()
+        .position(|action| action.get("handler").is_some())
         .unwrap();
-    assert_eq!(handler["abi"], "registry.action-handler/v2");
-    handler["abi"] = json!("registry.action-handler/v3");
-    assert!(!validator.is_valid(&farmer));
+    assert_eq!(
+        farmer["actions"][action]["handler"]["abi"],
+        "registry.action-handler/v1"
+    );
+    for other in ["registry.action-handler/v2", "registry.action-handler/v3"] {
+        farmer["actions"][action]["handler"]["abi"] = json!(other);
+        assert!(!validator.is_valid(&farmer), "{other}");
+    }
 }

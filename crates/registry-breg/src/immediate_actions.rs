@@ -244,27 +244,14 @@ fn compile_handler(
     // A declared backend always carries its ABI: the declaration refuses a
     // handler that leaves it out.
     let abi = source.abi().unwrap_or_default();
-    if abi != crate::contract::ACTION_HANDLER_ABI_V1
-        && abi != crate::contract::ACTION_HANDLER_ABI_V2
-    {
+    if abi != crate::contract::ACTION_HANDLER_ABI_V1 {
         errors.push(Diagnostic::error(
             "breg.action.handler-abi-invalid",
             format!("{path}.abi"),
-            "the action handler ABI is not supported",
+            "the action handler ABI is not supported; declare registry.action-handler/v1",
         ));
     }
     let is_wasm = kind == crate::contract::ActionHandlerKindSource::Wasm;
-    if is_wasm && abi == crate::contract::ACTION_HANDLER_ABI_V2 {
-        // The Evidence-enabled v2 ABI is out of scope for WASM in this
-        // release, in any build. Refuse it before any other WASM-shaped
-        // validation could misreport the module.
-        errors.push(Diagnostic::error(
-            "breg.action.handler-wasm-abi-unsupported",
-            format!("{path}.type"),
-            "WASM action handlers do not support the Evidence-enabled v2 ABI in this release",
-        ));
-        return None;
-    }
     #[cfg(not(feature = "wasm"))]
     if is_wasm {
         // Refuse the declared backend explicitly, before any Rhai-shaped
@@ -653,11 +640,20 @@ fn compile_handler(
             errors.push(Diagnostic::error(code, format!("{path}.script"), &message));
             return None;
         }
-        if crate::action_handler::compile_source_for_abi(script, abi).is_err() {
+        // The action's own Evidence declaration is what exposes the helper.
+        // Its capabilities are checked against the reviewed contracts after
+        // every handler has compiled, and an invalid declaration fails the
+        // compile there.
+        if crate::action_handler::compile_source_for_action(
+            script,
+            !collected.source.evidence.is_empty(),
+        )
+        .is_err()
+        {
             errors.push(Diagnostic::error(
                 "breg.action.handler-helper-contract",
                 format!("{path}.script"),
-                "Evidence helpers require registry.action-handler/v2 and evidence::resolve with exactly two arguments",
+                "Evidence helpers require an evidence declaration on the action and evidence::resolve with exactly two arguments",
             ));
             return None;
         }

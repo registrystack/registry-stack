@@ -2,7 +2,7 @@
 //! Input-only immediate action evaluation inside the shared bounded Rhai kernel.
 
 use crate::{
-    contract::{FieldTypeSource, ACTION_HANDLER_ABI_V1, ACTION_HANDLER_ABI_V2},
+    contract::{FieldTypeSource, ACTION_HANDLER_ABI_V1},
     data::{validate_field_value, FieldValue},
     model::*,
     rhai_planner::{self, ChangeRequestPlannerError},
@@ -135,16 +135,24 @@ pub struct ActionHandlerRefusal {
     pub field: Option<String>,
 }
 
+/// Compile handler source as an action that declares Evidence would: a
+/// well-formed `evidence::resolve` call is admitted.
 pub fn compile_source(source: &str) -> Result<AST, ActionHandlerError> {
-    compile_source_for_abi(source, ACTION_HANDLER_ABI_V2)
+    compile_source_for_action(source, true)
 }
 
-pub(crate) fn compile_source_for_abi(source: &str, abi: &str) -> Result<AST, ActionHandlerError> {
+/// Compile handler source for an action. `evidence_declared` states whether
+/// the action declares Evidence capabilities, which is what exposes the
+/// `evidence` module to its handler.
+pub(crate) fn compile_source_for_action(
+    source: &str,
+    evidence_declared: bool,
+) -> Result<AST, ActionHandlerError> {
     let ast =
         rhai_planner::compile_entrypoint(source, "handle").map_err(ActionHandlerError::from)?;
     // An invalid helper arity would otherwise be a catchable language dispatch
     // error before the host can poison the evaluation. Reject it at compilation,
-    // along with every Evidence call in an ABI that does not expose the module.
+    // along with every Evidence call in an action that declares no Evidence.
     let mut valid = true;
     ast.walk(&mut |nodes| {
         let call = match nodes.last() {
@@ -157,7 +165,7 @@ pub(crate) fn compile_source_for_abi(source: &str, abi: &str) -> Result<AST, Act
                 .path
                 .first()
                 .is_some_and(|part| part.as_str() == "evidence")
-                && (abi != ACTION_HANDLER_ABI_V2
+                && (!evidence_declared
                     || call.namespace.path.len() != 1
                     || call.name != "resolve"
                     || call.args.len() != 2)
@@ -346,7 +354,7 @@ pub(crate) fn evaluate_with_engine(
     }
     let source =
         std::str::from_utf8(&handler.script_bytes).map_err(|_| ActionHandlerError::Source)?;
-    let ast = compile_source_for_abi(source, &handler.abi)?;
+    let ast = compile_source_for_action(source, !action.evidence.is_empty())?;
     execute_compiled_handler(
         action,
         handler,
@@ -359,7 +367,7 @@ pub(crate) fn evaluate_with_engine(
 }
 
 /// Admission shared by every evaluation entry: the call deadline, the input
-/// snapshot ceiling, and the handler ABI/resolver rule.
+/// snapshot ceiling, the handler ABI, and the Evidence resolver rule.
 fn admit_handler<'a>(
     action: &'a CompiledAction,
     inputs: &JsonMap<String, Value>,
@@ -384,16 +392,17 @@ fn admit_handler<'a>(
     };
     match handler.kind {
         crate::model::CompiledActionHandlerKind::Rhai => {
+            // An action that declares Evidence is evaluated only with a
+            // resolver, so its handler never runs on the input-only path.
             if handler.abi != ACTION_HANDLER_ABI_V1
-                && !(handler.abi == ACTION_HANDLER_ABI_V2 && resolver.is_some())
+                || (!action.evidence.is_empty() && resolver.is_none())
             {
                 return Err(ActionHandlerError::Source.into());
             }
         }
-        // A build with the `wasm` feature executes the input-only
-        // v1 ABI for WASM handlers. The Evidence-enabled v2 ABI stays
-        // Rhai-only in this release, and a resolver never reaches a WASM
-        // handler.
+        // A build with the `wasm` feature executes input-only WASM
+        // handlers. Evidence stays Rhai-only in this release, and a
+        // resolver never reaches a WASM handler.
         #[cfg(feature = "wasm")]
         crate::model::CompiledActionHandlerKind::Wasm
             if handler.abi == ACTION_HANDLER_ABI_V1 && resolver.is_none() => {}
@@ -590,14 +599,16 @@ fn execute_compiled_handler(
 /// evaluation path compiles the handler source on every call, and AST reuse
 /// is not public API. The type does not exist outside test builds. A program
 /// is constructed only from a compiled action's own validated `script_bytes`
-/// through `compile_source_for_abi`, and every evaluation re-checks the
-/// handler's ABI and source bytes before the AST is used, so a program cannot
-/// drift from the action it was compiled for and no unvalidated AST can be
-/// supplied from outside. The Rhai profile and limits applied at compilation
-/// are crate constants shared by both paths.
+/// through `compile_source_for_action`, and every evaluation re-checks the
+/// handler's ABI, the action's Evidence declaration, and the source bytes
+/// before the AST is used, so a program cannot drift from the action it was
+/// compiled for and no unvalidated AST can be supplied from outside. The Rhai
+/// profile and limits applied at compilation are crate constants shared by
+/// both paths.
 #[cfg(test)]
 pub(crate) struct CachedActionHandlerProgram {
     abi: String,
+    evidence_declared: bool,
     script_bytes: Vec<u8>,
     ast: AST,
 }
@@ -609,23 +620,33 @@ impl CachedActionHandlerProgram {
         let Some(handler) = &action.handler else {
             return Err(ActionHandlerError::Source);
         };
-        if handler.abi != ACTION_HANDLER_ABI_V1 && handler.abi != ACTION_HANDLER_ABI_V2 {
+        if handler.abi != ACTION_HANDLER_ABI_V1 {
             return Err(ActionHandlerError::Source);
         }
+        let evidence_declared = !action.evidence.is_empty();
         let source =
             std::str::from_utf8(&handler.script_bytes).map_err(|_| ActionHandlerError::Source)?;
-        let ast = compile_source_for_abi(source, &handler.abi)?;
+        let ast = compile_source_for_action(source, evidence_declared)?;
         Ok(Self {
             abi: handler.abi.clone(),
+            evidence_declared,
             script_bytes: handler.script_bytes.clone(),
             ast,
         })
     }
 
     /// The compiled program for `handler`, or a source error when the
-    /// handler's ABI or source bytes no longer match the compiled program.
-    fn bound_ast(&self, handler: &CompiledActionHandler) -> Result<&AST, ActionHandlerError> {
-        if self.abi != handler.abi || self.script_bytes != handler.script_bytes {
+    /// handler's ABI, the action's Evidence declaration, or the source bytes
+    /// no longer match the compiled program.
+    fn bound_ast(
+        &self,
+        action: &CompiledAction,
+        handler: &CompiledActionHandler,
+    ) -> Result<&AST, ActionHandlerError> {
+        if self.abi != handler.abi
+            || self.evidence_declared == action.evidence.is_empty()
+            || self.script_bytes != handler.script_bytes
+        {
             return Err(ActionHandlerError::Source);
         }
         Ok(&self.ast)
@@ -647,7 +668,7 @@ pub(crate) fn evaluate_with_cached_program(
     cancellation: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 ) -> Result<ActionHandlerOutcome, ActionHandlerDiagnostic> {
     let handler = admit_handler(action, inputs, deadline, resolver.as_ref())?;
-    let ast = program.bound_ast(handler)?;
+    let ast = program.bound_ast(action, handler)?;
     execute_compiled_handler(
         action,
         handler,

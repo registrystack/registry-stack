@@ -10030,7 +10030,7 @@ fn explain_actions(compiled: &CompiledRegistry) -> serde_json::Result<Value> {
                 }
                 summary["handler"] = handler_summary;
             }
-            if action.handler.as_ref().is_some_and(|handler| handler.abi == registry_breg::contract::ACTION_HANDLER_ABI_V2) {
+            if !action.evidence.is_empty() {
                 summary["evidence"] = json!({
                     "capabilities": action.evidence,
                     "maximumCalls": action.evidence.len(),
@@ -14523,23 +14523,23 @@ mod tests {
     }
 
     #[test]
-    fn v2_without_capabilities_explains_external_lifecycle_and_zero_call_ceiling() {
+    fn an_action_declaring_no_evidence_explains_no_evidence_lifecycle() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../products/breg/acceptance/person-registration-rhai");
-        let mut project = registry_breg::contract::parse_project_yaml(
+        let project = registry_breg::contract::parse_project_yaml(
             &fs::read(root.join("registry.yaml")).unwrap(),
         )
         .unwrap();
         let assets = project
             .actions
-            .iter_mut()
+            .iter()
             .map(|action| {
-                let handler = action.handler.as_mut().unwrap();
-                let script = handler.script().expect("a rhai handler").to_owned();
-                handler.handler = registry_breg::contract::HookHandlerSource::Rhai {
-                    script: script.clone(),
-                    abi: Some(registry_breg::contract::ACTION_HANDLER_ABI_V2.to_owned()),
-                };
+                let script = action
+                    .handler
+                    .as_ref()
+                    .and_then(|handler| handler.script())
+                    .expect("a rhai handler")
+                    .to_owned();
                 registry_breg::contract::ModuleAssetSource {
                     module: None,
                     bytes: fs::read(root.join(&script)).unwrap(),
@@ -14555,8 +14555,36 @@ mod tests {
         )
         .unwrap();
         let explanation = explain_actions(&compiled).unwrap();
-        for action in explanation["actions"].as_array().unwrap() {
-            assert_eq!(action["evidence"]["maximumCalls"], 0);
+        let actions = explanation["actions"].as_array().unwrap();
+        assert!(!actions.is_empty());
+        for action in actions {
+            assert!(action.get("evidence").is_none());
+            assert_eq!(
+                action["handler"]["evaluation"],
+                "after-locked-receipt-recovery-before-target-locks"
+            );
+        }
+    }
+
+    #[test]
+    fn an_action_declaring_evidence_explains_the_external_lifecycle_and_call_ceiling() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/breg/acceptance/farmer-landholding-evidence")
+            .canonicalize()
+            .expect("Evidence fixture canonicalizes");
+        let compiled = match compile(&root, ProfileArg::Authoring, "explain") {
+            Ok(compiled) => compiled,
+            Err(failure) => panic!(
+                "Evidence fixture did not compile for explanation: {}",
+                failure.diagnostics[0].code
+            ),
+        };
+        let explanation = explain_actions(&compiled).unwrap();
+        let actions = explanation["actions"].as_array().unwrap();
+        assert!(!actions.is_empty());
+        for action in actions {
+            assert_eq!(action["handler"]["abi"], "registry.action-handler/v1");
+            assert_eq!(action["evidence"]["maximumCalls"], 2);
             assert_eq!(action["evidence"]["maximumConcurrentEvaluations"], 8);
             assert_eq!(
                 action["handler"]["evaluation"],
