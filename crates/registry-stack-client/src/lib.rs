@@ -62,9 +62,9 @@ pub mod casework {
         SubjectClockAnchor, SubjectClockCompletion, SubjectClockPause, SubjectRef,
         SubmissionDigest, SupervisoryReviewTask, SupervisoryReviewTaskPage,
         SupervisoryReviewTaskQuery, SupervisoryReviewTaskState, TaskApprovalRequest,
-        TaskAssertionResponse, TaskGrantBounds, TaskGrantList, TaskGrantRevocation,
-        TaskGrantStatus, TaskGrantStatusDetails, TaskGrantView, TaskPermission,
-        TaskTemplatePreview, TaskTemplatePreviews, TeamRecord, Uuid, WorkItem,
+        TaskAssertionResponse, TaskAuthorizationMode, TaskGrantBounds, TaskGrantList,
+        TaskGrantRevocation, TaskGrantStatus, TaskGrantStatusDetails, TaskGrantView,
+        TaskPermission, TaskTemplatePreview, TaskTemplatePreviews, TeamRecord, Uuid, WorkItem,
         WorkItemHistoryQuery, WorkItemPage, WorkItemRouting, WorkingDaysAfter, WorkingDaysBefore,
         WorkingWeekday,
     };

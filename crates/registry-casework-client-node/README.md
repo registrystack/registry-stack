@@ -45,6 +45,14 @@ status calls take only a bearer token and grant ID, without human or source
 profile headers. Neither binding retains credentials or resends a mutation
 beyond the bounded same-key retry below.
 
+Previews and grant views include `authorizationMode: "deferred"` for a deferred
+template; omission means the existing immediate mode. Approval still selects
+only the governed template ID and version. Keep the grant ID, original deadline,
+and business operation's idempotency key across a delay or restart. Acquire a
+fresh assertion when executing; its short credential lifetime does not extend
+the approved deadline. See the [task-grant lifecycle](../../products/casework/TASK_GRANTS.md)
+for expiry, revocation, and changes that require another approval.
+
 A keyed mutation whose outcome is unknown (a timeout or broken exchange after
 it was sent, an unusable answer, or a 5xx) is resent identically under the same
 key up to `maxMutationRetries` times: 0 to 2, default 2, and 0 sends it once.

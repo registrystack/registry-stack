@@ -431,14 +431,14 @@ impl PostgresStore {
         task_id: Uuid,
         template: &TaskTemplate,
         expected_revision: Option<i64>,
-    ) -> Result<Option<(Uuid, i64, registry_casework_core::SubjectBinding)>, StoreError> {
+    ) -> Result<Option<(Uuid, i64, registry_casework_core::SubjectBinding, i64)>, StoreError> {
         let Some(kind) = membership_kind(actor.role) else {
             return Ok(None);
         };
         let row = transaction
             .query_opt(
                 "SELECT t.request_id,t.revision,r.subject_source,r.subject_type,r.subject_id,
-                        r.subject_version,r.subject_digest
+                        r.subject_version,r.subject_digest,t.assignment_generation
                  FROM casework_review_tasks t
                  JOIN casework_review_requests r ON r.request_id=t.request_id
                  JOIN casework_queue_service q ON q.queue_id=t.queue_id
@@ -479,6 +479,7 @@ impl PostgresStore {
                     digest: ContentDigest::parse(&row.get::<_, String>(6))
                         .map_err(|_| StoreError::Corrupt)?,
                 },
+                row.get(7),
             ))
         })
         .transpose()
@@ -489,7 +490,7 @@ impl PostgresStore {
         actor: &ActorContext,
         task_id: Uuid,
         template: &TaskTemplate,
-    ) -> Result<Option<(Uuid, i64, registry_casework_core::SubjectBinding)>, StoreError> {
+    ) -> Result<Option<(Uuid, i64, registry_casework_core::SubjectBinding, i64)>, StoreError> {
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
         transaction
@@ -544,18 +545,19 @@ impl PostgresStore {
         }
         // The revision-agnostic eligibility call confirms the caller's current
         // authority without binding it to the retry's original revision.
-        let Some((request_id, revision, subject)) = Self::review_task_grant_eligible(
-            &transaction,
-            actor,
-            grant.task_id,
-            &grant.template,
-            None,
-        )
-        .await?
+        let Some((request_id, revision, subject, assignment_generation)) =
+            Self::review_task_grant_eligible(
+                &transaction,
+                actor,
+                grant.task_id,
+                &grant.template,
+                None,
+            )
+            .await?
         else {
             return Err(StoreError::Forbidden);
         };
-        let request = json!({
+        let mut request = json!({
             "taskId": grant.task_id,
             "requestId": grant.request_id,
             "taskRevision": grant.task_revision,
@@ -566,6 +568,9 @@ impl PostgresStore {
             "subjects": grant.subjects,
             "sourceIssuer": grant.source_issuer,
         });
+        if let Some(generation) = grant.assignment_generation {
+            request["assignmentGeneration"] = json!(generation);
+        }
         let hash = Sha256::digest(serde_json::to_vec(&request)?)
             .iter()
             .map(|byte| format!("{byte:02x}"))
@@ -603,6 +608,8 @@ impl PostgresStore {
         }
         if request_id != grant.request_id
             || revision != grant.task_revision
+            || (!grant.template.authorization_mode.is_immediate()
+                && grant.assignment_generation != Some(assignment_generation))
             || subject != grant.subject
             || grant.holder != actor.principal
             || template_digest(&grant.template)? != grant.template_digest
@@ -761,10 +768,18 @@ impl PostgresStore {
                 &actor,
                 grant.task_id,
                 template,
-                Some(grant.task_revision),
+                if template.authorization_mode.is_immediate() {
+                    Some(grant.task_revision)
+                } else {
+                    None
+                },
             )
             .await?
-            .is_some()
+            .is_some_and(|(_, _, subject, generation)| {
+                subject == grant.subject
+                    && (template.authorization_mode.is_immediate()
+                        || grant.assignment_generation == Some(generation))
+            })
             && template_digest(template)? == grant.template_digest;
         if !eligible {
             // The first eligibility invalidation is a loss of authority like
@@ -1093,6 +1108,16 @@ impl TaskAuthority {
         if now >= grant_expires_at {
             return Err(StoreError::Forbidden);
         }
+        // Evidence checks only the grant deadline and no grant status, so an
+        // Evidence grant is never signed under the deferred window.
+        if !template.authorization_mode.is_immediate()
+            && matches!(
+                template.bounds,
+                registry_casework_core::TaskGrantBounds::Evidence { .. }
+            )
+        {
+            return Err(StoreError::Forbidden);
+        }
         let expires = grant_expires_at.min(
             now.checked_add(registry_casework_core::TASK_ASSERTION_LIFETIME_SECONDS)
                 .ok_or(StoreError::Invalid)?,
@@ -1207,6 +1232,7 @@ impl crate::CaseworkService {
                 bounds: template.bounds.clone(),
                 evidence_context: template.evidence_context.clone(),
                 subjects,
+                authorization_mode: template.authorization_mode,
                 lifetime_seconds: template.lifetime_seconds,
             });
         }
@@ -1366,7 +1392,7 @@ impl crate::CaseworkService {
             .iter()
             .filter(|template| !template.review_kinds.is_empty())
         {
-            let Some((request_id, revision, subject)) = self
+            let Some((request_id, revision, subject, assignment_generation)) = self
                 .store
                 .eligible_review_task_template(actor, task_id, template)
                 .await?
@@ -1404,15 +1430,24 @@ impl crate::CaseworkService {
             let Ok(subjects) = template.disclosed_subjects(&context.values) else {
                 continue;
             };
-            let Some((current_request_id, current_revision, current_subject)) = self
+            let Some((
+                current_request_id,
+                current_revision,
+                current_subject,
+                current_assignment_generation,
+            )) = self
                 .store
                 .eligible_review_task_template(actor, task_id, template)
                 .await?
             else {
                 continue;
             };
-            if (current_request_id, current_revision, &current_subject)
-                != (request_id, revision, &subject)
+            if (
+                current_request_id,
+                current_revision,
+                &current_subject,
+                current_assignment_generation,
+            ) != (request_id, revision, &subject, assignment_generation)
             {
                 continue;
             }
@@ -1429,6 +1464,7 @@ impl crate::CaseworkService {
                 bounds: template.bounds.clone(),
                 evidence_context: template.evidence_context.clone(),
                 subjects,
+                authorization_mode: template.authorization_mode,
                 lifetime_seconds: template.lifetime_seconds,
             });
         }
@@ -1463,7 +1499,7 @@ impl crate::CaseworkService {
                     && template.version == request.template_version
             })
             .ok_or(crate::ServiceError::Forbidden)?;
-        let Some((request_id, current_revision, subject)) = self
+        let Some((request_id, current_revision, subject, assignment_generation)) = self
             .store
             .eligible_review_task_template(actor, task_id, template)
             .await?
@@ -1502,6 +1538,8 @@ impl crate::CaseworkService {
             task_id,
             request_id,
             task_revision: revision,
+            assignment_generation: (!template.authorization_mode.is_immediate())
+                .then_some(assignment_generation),
             holder: actor.principal.clone(),
             template: template.clone(),
             template_digest: template_digest(template)?,
@@ -1548,7 +1586,7 @@ impl crate::CaseworkService {
                 .store
                 .eligible_review_task_template(actor, task_id, template)
                 .await?
-                .is_some_and(|(_, revision, _)| revision == previews.item_revision)
+                .is_some_and(|(_, revision, _, _)| revision == previews.item_revision)
             {
                 eligible = true;
                 break;
@@ -1857,6 +1895,7 @@ fn grant_view(stored: &StoredTaskGrant) -> TaskGrantView {
         purpose: stored.grant.template.purpose.clone(),
         bounds: stored.grant.template.bounds.clone(),
         evidence_context: stored.grant.template.evidence_context.clone(),
+        authorization_mode: stored.grant.template.authorization_mode,
         expires_at: stored.grant.expires_at,
         invalidated: stored.invalidated,
     }
@@ -1874,6 +1913,7 @@ fn review_grant_view(stored: &StoredReviewTaskGrant) -> TaskGrantView {
         purpose: stored.grant.template.purpose.clone(),
         bounds: stored.grant.template.bounds.clone(),
         evidence_context: stored.grant.template.evidence_context.clone(),
+        authorization_mode: stored.grant.template.authorization_mode,
         expires_at: stored.grant.expires_at,
         invalidated: stored.invalidated,
     }
@@ -1894,15 +1934,14 @@ mod evidence_assertion_tests {
     use registry_casework_core::{IssuerPrincipal, SubjectRef, TaskGrantBounds};
     use std::collections::BTreeMap;
 
-    #[test]
-    fn task_assertion_pseudonymizes_approver_and_keeps_evidence_context_explicit() {
+    fn test_authority() -> TaskAuthority {
         let mut key = registry_platform_crypto::generate_private_jwk(
             registry_platform_crypto::GeneratedKeyAlgorithm::Rs384,
         )
         .unwrap();
         key.alg = Some("RS256".into());
         key.kid = Some("task-authority-key".into());
-        let authority = TaskAuthority {
+        TaskAuthority {
             config: crate::TaskAuthorityConfig {
                 issuer: "https://casework.test".into(),
                 exchange_audience: "https://issuer.test".into(),
@@ -1911,23 +1950,14 @@ mod evidence_assertion_tests {
             },
             key,
             identifiers: registry_platform_audit::AuditKeyHasher::unkeyed_dev_only(),
-        };
-        let template: TaskTemplate = serde_json::from_value(json!({
-            "id":"evidence-check", "version":"1", "label":"Check evidence",
-            "eligibleTeams":["team"], "eligibleProfiles":["staff"], "source":"source",
-            "itemKinds":["request"], "itemStates":["claimed"],
-            "agent":{"issuer":"https://issuer.test", "subject":"agent"},
-            "client":"evidence-task-agent", "resource":"urn:test:evidence",
-            "scopes":["evidence:invoke"], "purpose":"fixture-eligibility",
-            "bounds":{"type":"evidence", "requirement":"urn:test:requirement:adult"},
-            "evidenceContext":{"requesterTags":["fixture-agency", "benefits"], "audience":"https://relying.test/procedure"},
-            "subjects":{"given_name":"given-name"}, "lifetimeSeconds":900
-        }))
-        .unwrap();
-        let grant = TaskGrant {
+        }
+    }
+
+    fn evidence_grant(template: serde_json::Value) -> TaskGrant {
+        TaskGrant {
             id: Uuid::new_v4(),
             item_id: Uuid::new_v4(),
-            template,
+            template: serde_json::from_value(template).unwrap(),
             source_issuer: "https://casework.test".into(),
             approver: IssuerPrincipal {
                 issuer: "https://approver-issuer.test".into(),
@@ -1947,7 +1977,44 @@ mod evidence_assertion_tests {
             subjects: BTreeMap::from([("given_name".into(), json!("Amina"))]),
             approved_at: 100,
             expires_at: 1_000,
-        };
+        }
+    }
+
+    fn evidence_template() -> serde_json::Value {
+        json!({
+            "id":"evidence-check", "version":"1", "label":"Check evidence",
+            "eligibleTeams":["team"], "eligibleProfiles":["staff"], "source":"source",
+            "itemKinds":["request"], "itemStates":["claimed"],
+            "agent":{"issuer":"https://issuer.test", "subject":"agent"},
+            "client":"evidence-task-agent", "resource":"urn:test:evidence",
+            "scopes":["evidence:invoke"], "purpose":"fixture-eligibility",
+            "bounds":{"type":"evidence", "requirement":"urn:test:requirement:adult"},
+            "evidenceContext":{"requesterTags":["fixture-agency", "benefits"], "audience":"https://relying.test/procedure"},
+            "subjects":{"given_name":"given-name"}, "lifetimeSeconds":900
+        })
+    }
+
+    #[test]
+    fn task_assertion_refuses_a_deferred_evidence_grant() {
+        // Evidence checks only the grant deadline and no grant status, so the
+        // signer refuses a deferred Evidence grant even if one was stored.
+        let authority = test_authority();
+        let mut template = evidence_template();
+        template["authorizationMode"] = json!("deferred");
+        let grant = evidence_grant(template);
+        assert!(matches!(
+            authority.assertion(&grant, 200),
+            Err(StoreError::Forbidden)
+        ));
+        assert!(authority
+            .assertion(&evidence_grant(evidence_template()), 200)
+            .is_ok());
+    }
+
+    #[test]
+    fn task_assertion_pseudonymizes_approver_and_keeps_evidence_context_explicit() {
+        let authority = test_authority();
+        let grant = evidence_grant(evidence_template());
         let response = authority.assertion(&grant, 200).unwrap();
         let encoded = response
             .assertion

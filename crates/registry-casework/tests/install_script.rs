@@ -258,6 +258,36 @@ fn glibc_at_the_floor_installs_both_commands() {
 }
 
 #[test]
+fn macos_assets_follow_the_raw_binary_to_bundled_runtime_release_boundary() {
+    for version in ["v0.32.9", "v0.33.0"] {
+        let fixture = InstallerFixture::macos(version);
+        let output = fixture.run(false);
+        assert!(
+            output.status.success(),
+            "stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        fixture.assert_release_toolset_active();
+        for binary in BINARIES {
+            let stem = format!("{binary}-{version}-macos-arm64");
+            if version == "v0.32.9" {
+                assert!(fixture.release_dir.join(&stem).is_file());
+                assert!(!fixture.release_dir.join(format!("{stem}.tar.gz")).exists());
+            } else {
+                assert!(fixture.release_dir.join(format!("{stem}.tar.gz")).is_file());
+                let bundle = fixture
+                    .install_dir
+                    .join(".casework-current")
+                    .join(format!("{binary}.bundle"));
+                assert!(bundle.join(&stem).is_file());
+                assert!(bundle.join("libaws_lc_fips_0_14_2_crypto.dylib").is_file());
+                assert!(bundle.join("THIRD_PARTY_NOTICES").is_file());
+            }
+        }
+    }
+}
+
+#[test]
 fn installer_carries_the_shared_glibc_floor() {
     let (major, minor) = glibc_floor();
     let source = fs::read_to_string(installer_path()).unwrap();
@@ -278,6 +308,8 @@ struct InstallerFixture {
     fake_bin: PathBuf,
     asset_suffix: String,
     forced_uname: Option<(String, String)>,
+    version: &'static str,
+    macos_bundle: bool,
 }
 
 impl InstallerFixture {
@@ -292,6 +324,14 @@ impl InstallerFixture {
     }
 
     fn build(forced_uname: Option<(String, String)>) -> Self {
+        Self::build_version(forced_uname, TEST_VERSION)
+    }
+
+    fn macos(version: &'static str) -> Self {
+        Self::build_version(Some(("Darwin".to_owned(), "arm64".to_owned())), version)
+    }
+
+    fn build_version(forced_uname: Option<(String, String)>, version: &'static str) -> Self {
         let unique = FIXTURE_COUNTER.fetch_add(1, Ordering::Relaxed);
         let root = std::env::temp_dir().join(format!(
             "registry-casework-installer-test-{}-{unique}",
@@ -337,30 +377,34 @@ printf 'ldd (GNU libc) %s\n' "${FAKE_GLIBC:-2.41}"
 "#,
         );
         let asset_suffix = match &forced_uname {
-            Some(_) => "linux-amd64".to_owned(),
+            Some((system, machine)) => match (system.as_str(), machine.as_str()) {
+                ("Linux", "x86_64") => "linux-amd64".to_owned(),
+                ("Darwin", "arm64") => "macos-arm64".to_owned(),
+                _ => panic!("unsupported fixture platform"),
+            },
             None => platform_suffix().to_owned(),
         };
+        let mut components = version.trim_start_matches('v').split('.');
+        let major: u32 = components.next().unwrap().parse().unwrap();
+        let minor: u32 = components.next().unwrap().parse().unwrap();
+        let macos_bundle = asset_suffix == "macos-arm64" && (major > 0 || minor >= 33);
         if forced_uname.is_some() {
-            // A forced Linux run reaches the installer's GNU pointer switch,
-            // which asks for mv -T. A macOS workstation spells that same
-            // guarantee mv -h, so translate it there and pass it through
-            // untouched on a Linux runner.
+            // Keep atomic pointer replacement equivalent when the synthetic
+            // platform differs from the host running this fixture.
             write_executable(
                 &fake_bin.join("mv"),
                 r#"#!/usr/bin/env bash
 set -euo pipefail
-if [[ "$(/usr/bin/uname -s)" != Darwin ]]; then
-  exec /bin/mv "$@"
+real_system="$(/usr/bin/uname -s)"
+forced_system="${FAKE_UNAME_S:-$real_system}"
+if [[ "$real_system" == Darwin && "$forced_system" == Linux && "${1:-}" == -Tf ]]; then
+  shift
+  set -- -f -h "$@"
+elif [[ "$real_system" == Linux && "$forced_system" == Darwin && "${1:-}" == -fh ]]; then
+  shift
+  set -- -Tf "$@"
 fi
-arguments=()
-for argument in "$@"; do
-  case "$argument" in
-    -Tf | -fT) arguments+=(-f -h) ;;
-    -T) arguments+=(-h) ;;
-    *) arguments+=("$argument") ;;
-  esac
-done
-exec /bin/mv "${arguments[@]}"
+exec /bin/mv "$@"
 "#,
             );
         }
@@ -371,6 +415,8 @@ exec /bin/mv "${arguments[@]}"
             fake_bin,
             asset_suffix,
             forced_uname,
+            version,
+            macos_bundle,
         };
         fixture.write_release_assets();
         fixture
@@ -380,12 +426,56 @@ exec /bin/mv "${arguments[@]}"
         let suffix = &self.asset_suffix;
         let mut sums = String::new();
         for binary in BINARIES {
-            let asset = format!("{binary}-{TEST_VERSION}-{suffix}");
+            let stem = format!("{binary}-{}-{suffix}", self.version);
+            let asset = if self.macos_bundle {
+                format!("{stem}.tar.gz")
+            } else {
+                stem.clone()
+            };
             let path = self.release_dir.join(&asset);
-            fs::write(&path, format!("{binary} release binary\n")).unwrap();
+            if self.macos_bundle {
+                let source = self.root.join("bundle-sources").join(binary);
+                fs::create_dir_all(&source).unwrap();
+                self.write_fixture_binary(&source.join(&stem), binary);
+                let library = "libaws_lc_fips_0_14_2_crypto.dylib";
+                write_executable(&source.join(library), "synthetic library\n");
+                fs::write(source.join("THIRD_PARTY_NOTICES"), "synthetic notices\n").unwrap();
+                let output = Command::new("tar")
+                    .arg("-czf")
+                    .arg(&path)
+                    .arg("-C")
+                    .arg(&source)
+                    .args([stem.as_str(), library, "THIRD_PARTY_NOTICES"])
+                    .output()
+                    .unwrap();
+                assert!(
+                    output.status.success(),
+                    "tar stderr: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            } else {
+                self.write_fixture_binary(&path, binary);
+            }
             sums.push_str(&format!("{}  {asset}\n", sha256(&path)));
         }
         fs::write(self.release_dir.join("SHA256SUMS"), sums).unwrap();
+    }
+
+    fn write_fixture_binary(&self, path: &Path, binary: &str) {
+        write_executable(
+            path,
+            &format!(
+                r#"#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${{1:-}}" == --version ]]; then
+  printf '%s\n' '{binary} {version}'
+else
+  printf '%s\n' '{binary} release binary'
+fi
+"#,
+                version = self.version.trim_start_matches('v')
+            ),
+        );
     }
 
     fn preinstall_previous_toolset(&self) {
@@ -471,7 +561,7 @@ exec /bin/mv "${arguments[@]}"
         command
             .arg(installer_path())
             .env("PATH", path)
-            .env("CASEWORK_VERSION", TEST_VERSION)
+            .env("CASEWORK_VERSION", self.version)
             .env("CASEWORK_ASSET_DIR", &self.release_dir)
             .env("CASEWORK_INSTALL_DIR", &self.install_dir);
         if let Some((system, machine)) = &self.forced_uname {
@@ -569,8 +659,16 @@ exec "$REAL_MV" "$@"
 
     fn assert_release_toolset_active(&self) {
         for binary in BINARIES {
+            let output = Command::new(self.install_dir.join(binary))
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{binary} stderr: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
             assert_eq!(
-                fs::read_to_string(self.install_dir.join(binary)).unwrap(),
+                String::from_utf8(output.stdout).unwrap(),
                 format!("{binary} release binary\n")
             );
         }

@@ -83,7 +83,7 @@ two-person rule enforce it on who can read the migration credential.
   the same version, which verifies the package bytes and rederives the
   registry revision; Casework takes no crate dependency on the Base Registry
   Engine. A stale pin is `casework.source-revision.stale`, and a project with
-  no, several, or an unknown BReg source is refused rather than guessed
+  no, several, or an unknown Base Registry Engine (BReg) source is refused rather than guessed
   (`casework.source.none`, `casework.source.ambiguous`,
   `casework.source.unknown`).
 - Startup repeats the stranded pinned work comparison read-only, because a
@@ -525,6 +525,61 @@ its activation ledger, and its own audit guards are unchanged.
   and the removed-key refusals stay as they are. Removing them needs a
   decision on a schema floor, because without one an unsupported upgrade
   from before the audit writer would drop unpublished audit rows silently.
+
+## Deferred bounded task authorization
+
+The stored grant now distinguishes an immediate window from explicit
+`authorizationMode: deferred`, with a selected duration no longer than seven
+days. Immediate defaults and serialized template bytes remain unchanged.
+Short assertions and execution tokens do not extend the original grant.
+
+The threat is delayed/restarted work needing repeated approval, or renewal
+reviving, widening, or extending authority. Core template validation and the
+PostgreSQL authorization-window constraints hold immediate grants to 900
+seconds and deferred grants to 604800 elapsed seconds, independent of database
+timezone and daylight saving changes. Casework checks the exact registered
+agent, active immutable template, approver eligibility, proposal identity and
+subject facts before assertion release, and checks again after source I/O.
+
+Retained work-item grants reuse the existing item and directory invalidation
+triggers. A release withdraws authority permanently in its task transaction,
+before any later reclaim, while a benign revision alone does not. Assignment
+owner and absence metadata alone are not legacy grant eligibility inputs; the
+existing contract continues to govern the current holder and template eligibility.
+
+Deferred review grants bind a monotonic assignment generation maintained by a
+task-row trigger. Responsibility changes increment it; draft revision changes
+do not. The trigger owns the generation value even on an update attempting to
+reset it. Approval captures the counter and rechecks it under the existing task
+lock. Release/reclaim or reassignment back cannot revive a grant without a new
+approval. A missing deferred counter fails closed. The first observed mismatch
+uses the existing transactional invalidation history and audit path.
+
+Review grant eligibility compares the request's current subject binding with
+the approved one for every grant, immediate grants included. The task revision
+an immediate grant pins covers the task row and not the request row, so a
+subject that differs from the approved one invalidates the grant with reason
+`eligibility` even when the task revision is unchanged
+(`immediate_review_task_grants_refuse_a_changed_request_subject`).
+
+Deferred grants cannot carry Evidence bounds (CASEWORK-SEC-27). Evidence checks
+the earlier token and grant deadline and no grant status, and its contract that
+an assertion stays usable after authority revocation only until the immutable
+grant deadline assumes the 900-second immediate window. Core template
+validation refuses `authorizationMode: deferred` with `bounds.type: evidence`
+as `casework.task-template.deferred-evidence`; `caseworkctl check`, package
+activation, and runtime project load all run it, and the generated project
+schema carries the same condition. The assertion signer also refuses a stored
+deferred Evidence grant, so no Evidence assertion is signed under the deferred
+window. `deferred_authorization_cannot_carry_evidence_bounds` and
+`task_assertion_refuses_a_deferred_evidence_grant` are the negative tests.
+
+The core mode/window boundary test and deferred HTTP regressions exercise
+restart with simulated elapsed authorization time, unrelated source revision
+changes,
+material proposal change, principal change, expiry, revocation, drafts,
+completion, responsibility transitions, and database timezone boundaries. The simulation ages only synthetic
+fixture timestamps; it does not assert a real sixteen-minute wall-clock wait.
 
 
 ## Exact supervisory request selection

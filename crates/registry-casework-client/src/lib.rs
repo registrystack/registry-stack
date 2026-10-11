@@ -56,10 +56,10 @@ pub use registry_casework_core::{
     SourceContextBinding, SourcePolicy, SourceReceipt, SourceRequestPolicy, StaffingDiagnostic,
     SubjectClockAnchor, SubjectClockCompletion, SubjectClockPause, SubjectRef, SubmissionDigest,
     SupervisoryReviewTask, SupervisoryReviewTaskPage, SupervisoryReviewTaskState,
-    TaskApprovalRequest, TaskAssertionResponse, TaskGrantBounds, TaskGrantList,
-    TaskGrantRevocation, TaskGrantStatus, TaskGrantStatusDetails, TaskGrantView, TaskPermission,
-    TaskTemplatePreview, TaskTemplatePreviews, TeamRecord, WorkItem, WorkItemPage, WorkItemRouting,
-    WorkingDaysAfter, WorkingDaysBefore, WorkingWeekday,
+    TaskApprovalRequest, TaskAssertionResponse, TaskAuthorizationMode, TaskGrantBounds,
+    TaskGrantList, TaskGrantRevocation, TaskGrantStatus, TaskGrantStatusDetails, TaskGrantView,
+    TaskPermission, TaskTemplatePreview, TaskTemplatePreviews, TeamRecord, WorkItem, WorkItemPage,
+    WorkItemRouting, WorkingDaysAfter, WorkingDaysBefore, WorkingWeekday,
 };
 pub use registry_platform_httputil::client::BearerToken;
 pub use registry_review_client::ReviewMutationErrorClass;

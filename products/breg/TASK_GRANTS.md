@@ -161,7 +161,9 @@ active. Read cursors and representation ETags do not incorporate grant IDs.
 The bounded status check uses the shared platform exact-status transport and
 runs while the proposal is locked. Its total ten-second bound includes obtaining
 the status service credential; positive status is never cached. BReg keeps its
-own persisted binding and BReg-only bounds validation. Casework revocation
+own persisted binding and BReg-only bounds validation. Deferred Casework grants
+use the same status contract and original deadline, without changing BReg's
+write or human approval permissions. Casework revocation
 can still occur between that check and the local commit. BReg and Casework do
 not share a distributed transaction. Proposal-detail erasure also removes its
 retained task subjects, under the existing operator retention boundary.

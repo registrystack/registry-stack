@@ -49,7 +49,7 @@ const SOURCE_RECONCILIATION_HEALTH_MIGRATION: &str =
     include_str!("../migrations/0018_source_reconciliation_health.sql");
 const ACTIVATIONS_MIGRATION: &str = include_str!("../migrations/0019_activations.sql");
 /// Every schema version in ledger order.
-pub(crate) const MIGRATIONS: [(i64, &str); 21] = [
+pub(crate) const MIGRATIONS: [(i64, &str); 22] = [
     (1, MIGRATION),
     (2, HOSTED_MIGRATION),
     (3, ASSIGNMENT_MIGRATION),
@@ -76,6 +76,10 @@ pub(crate) const MIGRATIONS: [(i64, &str); 21] = [
     (
         21,
         include_str!("../migrations/0021_own_review_decisions.sql"),
+    ),
+    (
+        22,
+        include_str!("../migrations/0022_review_assignment_generation.sql"),
     ),
 ];
 

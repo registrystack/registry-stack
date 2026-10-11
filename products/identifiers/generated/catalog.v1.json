@@ -3579,7 +3579,7 @@
       },
       "artifact": {
         "path": "products/casework/generated/project/project.schema.json",
-        "sha256": "80f46c0a724cc9c5fe23ff079dea7b1627e44367237d1e8d3362ce124bafe2ab",
+        "sha256": "35075a1ccd1b0cda4846749bd48d154a2db5159d67da7cf77838122db1592412",
         "mediaType": "application/schema+json"
       }
     },
