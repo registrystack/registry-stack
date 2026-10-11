@@ -2,6 +2,53 @@
 
 ## Unreleased
 
+- BREAKING: the task-grant status check before a governed write, a later
+  approval, or an application reports a 401 or 403 from the Casework status
+  endpoint as an outage, so the request answers `service.unavailable` (503)
+  where it answered `precondition.failed` (412): such an answer refuses the
+  engine's own status credential, not the grant. A 404 still refuses the
+  grant with `precondition.failed`. The check runs through the shared
+  platform transport, which identifies itself with the user agent
+  `registry-task-status` (was `registry-breg-task-status`) and bounds the
+  whole attempt at ten seconds; the engine's own five-second bound on the
+  check still ends it first. Migration: alert on `service.unavailable` for a
+  misconfigured or revoked status client, and match the new user agent in
+  Casework access logs.
+- BREAKING: the runtime checks each `taskGrantStatus` entry when it reads
+  the file, and refuses an invalid one as
+  `breg.runtime.invalid-task-grant-status` at `/taskGrantStatus`, where only
+  activation refused it, as `breg.runtime.invalid-binding`. The members are
+  typed: `tokenEndpoint` is a URL; `clientId`, `clientAssertionAudience`,
+  and `caseworkResource` are external identifiers (1 to 512 characters, no
+  control characters), and `caseworkResource` is an absolute resource URI.
+  `sourceIssuer` accepts an absolute URN issuer as well as a URL, since it
+  is compared and never fetched. Migration: none for an entry the runtime
+  already activated; a script that matched `breg.runtime.invalid-binding`
+  for a malformed entry matches the new code.
+- A `taskGrantStatus` entry takes the optional members `statusScope` and
+  `statusPath`. Omitted, the engine requests the `casework:grants:status`
+  scope and calls `/v1/task-grants/{grantId}/status` under `baseUrl`, as
+  before. Set them only for a task authority that answers under another
+  scope or route: `statusScope` is one scope token, and `statusPath` starts
+  with `/` and holds exactly one whole `{grantId}` segment.
+- BREAKING: `bregctl dev` derives the generated runtime's principal claim
+  from the compiled access profiles, where it always mapped
+  `registry_principal`, and refuses a project whose authenticated profiles
+  use different claims. A `sub` project uses the issuer's subject. A native
+  fixture journey under a `sub` profile writes
+  `claims: {principal: "$localClientSubject"}`, which resolves to the
+  selected local client's registered subject in the private captured
+  project only. Migration: give every authenticated profile the same
+  principal claim.
+- `bregctl dev` binds the Casework task-grant status services a
+  `dev-clients.yaml` declares under `taskGrantStatus`, at most eight, each
+  with its own status-only client on a numeric loopback endpoint, into the
+  generated runtime. A machine client may declare `grants`, at most seven
+  audiences each with 1 to 32 scopes that resource declares, to request
+  ordinary tokens at other issuer resources; the grants change neither its
+  primary scopes, its exported resource, nor its BReg admission. See
+  `products/breg/DEV.md`.
+
 ## v0.40.0 - 2026-10-11
 
 - The reviewed migration descriptor schema lists only the three change classes

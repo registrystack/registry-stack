@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- `POST /v1/messages/receipt` returns the retained original success receipt
+  for the caller's verified issuer and configured principal, the original
+  `Idempotency-Key`, and the original request body, under current ordinary
+  read authority. It never renders, submits, or sends. A missing, expired,
+  or changed receipt answers `receipt.unresolved` (409), which is not
+  evidence that no effect occurred. The Rust (`message_receipt`), Node.js
+  (`messageReceipt`), and Python (`message_receipt`) clients carry the
+  route.
+
 ## v0.40.0 - 2026-10-11
 
 v0.40.0 does not upgrade v0.39.0 state in place; apply to a new database.

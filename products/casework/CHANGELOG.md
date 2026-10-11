@@ -2,6 +2,68 @@
 
 ## Unreleased
 
+- Task templates may opt into `authorizationMode: deferred` for delayed
+  work, with a `lifetimeSeconds` of at most 604800 (seven days). An omitted
+  mode stays `immediate`, with its 900-second ceiling. The preview, the
+  grant view, the Rust client (`TaskAuthorizationMode`), and the Node.js and
+  Python clients (`authorizationMode`) carry the mode, which they omit for an
+  immediate grant; approval still names only the template id and version. A
+  deferred review grant pins the task's assignment generation, so a release,
+  reassignment, queue move, absence-cover change, decision, or completion
+  ends it and a later reclaim does not revive it; a draft revision does not.
+  Deferred grants cannot carry Evidence bounds: `caseworkctl check` reports a
+  deferred template with bounds of type `evidence` as
+  `casework.task-template.deferred-evidence`, the project schema refuses it,
+  and the task authority signs no assertion for such a grant. A deferred
+  grant reaches the Base Registry Engine, which checks fresh grant status
+  before it writes, or a Scheduling deployment that configures
+  `taskGrantStatus`. See `products/casework/TASK_GRANTS.md`.
+- Migration 0022 replaces the check constraints `casework_task_grants_check`
+  and `casework_review_task_grants_check` with
+  `casework_task_grants_authorization_window` and
+  `casework_review_task_grants_authorization_window`, which bound a grant's
+  expiry by its template's mode: 900 seconds immediate, 604800 seconds
+  deferred. It adds `casework_review_tasks.assignment_generation` and the
+  `BEFORE UPDATE` trigger `casework_review_assignment_generation`, which
+  increments it when the state, queue, holder, assignment owner, assignment
+  kind, or absence ids of a review task change. The migration scans the
+  three tables under an exclusive lock to validate the constraints and
+  rewrites none of them. The trigger then runs on every update of a review
+  task, draft revisions included: it writes no extra row version and adds
+  eight bytes to each row.
+- BREAKING: `caseworkctl dev` reports five configuration refusals by their
+  own codes and exits with status 1, where it reported each as
+  `caseworkctl.operational-failure` and exited with status 3:
+  `caseworkctl.dev.integrations-invalid` at
+  `dev-clients.yaml:/integrations`, `caseworkctl.dev.shared-client-mismatch`
+  at `dev-clients.yaml:/clients`,
+  `caseworkctl.dev.shared-task-authority-mismatch` at
+  `dev-clients.yaml:/integrations/taskAuthority`,
+  `caseworkctl.dev.source-binding-invalid` at
+  `dev-clients.yaml:/integrations/sources`, and
+  `caseworkctl.dev.borrowed-principal-invalid` at
+  `casework.yaml:/accessProfiles/principalClaim`. Each suggests the
+  correction and keeps the underlying cause out of the report. Migration: a
+  script that read exit status 3 for these refusals reads status 1 and the
+  code.
+- BREAKING: `caseworkctl dev` refuses a session that borrows another
+  project's issuer when a Casework access profile uses `principalClaim: sub`,
+  as `caseworkctl.dev.borrowed-principal-invalid`: in a borrowed session
+  `sub` names the issuer owner's subject, not the Casework principal.
+  Migration: use a stable claim such as `registry_principal` in every access
+  profile and register it for each client in both projects'
+  `dev-clients.yaml`.
+- BREAKING: `CaseworkTaskAssertionSource` in the Rust client, which
+  `registry-stack-client` re-exports, reports a Casework 4xx answer to an
+  assertion request other than 408 and 429 as an invalid credential
+  (`TokenError::Invalid`, kind `invalid-credential`) with fixed text, where
+  it reported every failure as `unavailable`. An expired, revoked, or absent
+  grant is such a refusal, even when its problem body is malformed. A 408,
+  429, or 5xx answer stays `unavailable`, a transport failure keeps its
+  transport kind, and the source still sends the assertion request once.
+  Migration: treat `invalid-credential` as a refusal that needs a new
+  approval, and stop retrying it.
+
 ## v0.40.0 - 2026-10-11
 
 - Reviewers can filter active review tasks with

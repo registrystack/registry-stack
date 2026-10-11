@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+- `registry-platform-oidc` gains a `task_grant` module holding the exact
+  task-grant status transport the Base Registry Engine and Scheduling share:
+  `TaskGrantStatusEndpoint`, `TaskGrantStatusRegistry` (with an offline
+  `validate_configuration`, `activate`, and `check`),
+  `TaskGrantStatusClient`, `TaskGrantStatusBinding`, and `TaskGrantError`.
+  A check obtains a private-key JWT credential for one status scope, calls
+  the authority's status route, and accepts only a 200 strict JSON answer of
+  at most 64 KiB that says the grant is active and repeats its exact
+  binding. A 404 refuses the grant; any other status, a wrong content type,
+  or an outage is `Unavailable`. The whole attempt is bounded at ten seconds
+  (five per request, three to connect) and identifies itself with the user
+  agent `registry-task-status`. `registry-platform-config` gains the shared
+  `TaskGrantStatusConfig` block, one `taskGrantStatus` entry with the keys
+  the Base Registry Engine and Scheduling read, defaulting to Casework's
+  status route and scope; it maps onto `TaskGrantStatusEndpoint` with `From`.
+- `registry-platform-httputil` exposes `validate_requested_scopes`, the
+  scope-list check `PrivateKeyJwt` applies, and
+  `PrivateKeyJwtConfig::check_identity`, its client identity, assertion
+  audience, and token endpoint check, so a configuration can be validated
+  without a key, a certificate, or network access.
+
 ## v0.40.0 - 2026-10-11
 
 - BREAKING: `registry-platform-httputil` writes four error words in

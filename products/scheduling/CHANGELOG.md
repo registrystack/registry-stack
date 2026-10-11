@@ -2,6 +2,37 @@
 
 ## Unreleased
 
+- The runtime file takes an optional top-level `taskGrantStatus` list of at
+  most 32 Casework task authorities, each named by the exact `sourceIssuer`
+  its grants carry. Once the list holds an entry, every capacity commitment
+  and idempotent replay first obtains a fresh exact status answer from the
+  grant's authority, with no fallback: an inactive, mismatched, unlisted, or
+  incompletely bound grant answers `operation.not-authorized`, and an
+  authority or credential outage answers `service.unavailable`. The whole
+  check is bounded at ten seconds and ends before the capacity transaction
+  opens. `statusScope` and `statusPath` are optional and default to
+  Casework's `casework:grants:status` scope and
+  `/v1/task-grants/{grantId}/status` route. See
+  `products/scheduling/RUNTIME-CONFIG.md`.
+- BREAKING: a deployment with no `taskGrantStatus` entry accepts a task
+  grant only while it has at most 900 seconds left at request entry; a grant
+  with more answers `operation.not-authorized` (403) and is audited as
+  refused, where every unexpired grant was accepted. A Casework immediate
+  grant never lasts longer, so the refusal meets only a deferred grant or a
+  longer grant from another authority. After it acquires its locks, the
+  capacity transaction now rechecks the execution token's expiry as well as
+  the grant's. Migration: configure `taskGrantStatus` for every task
+  authority whose grants outlive fifteen minutes.
+- `POST /v1/appointments/receipt` returns the retained original success
+  receipt for the caller's verified issuer and subject, the original
+  `Idempotency-Key`, and the original request body, under ordinary read
+  authentication. It never creates, replays, or claims capacity, and it can
+  observe work after the task grant has ended. A missing, expired, changed,
+  or refused receipt answers `receipt.unresolved` (409), which is not
+  evidence that no effect occurred. The Rust (`appointment_receipt`),
+  Node.js (`appointmentReceipt`), and Python (`appointment_receipt`) clients
+  carry the route.
+
 ## v0.40.0 - 2026-10-11
 
 v0.40.0 does not upgrade v0.39.0 state in place; apply to a new database.
