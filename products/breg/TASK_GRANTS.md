@@ -79,10 +79,13 @@ authorized through the publisher's profile on the dataset's unit entity, so
 that profile meets the ceiling too, including one a module contributes under
 the publisher's id. A standing agent keeps `read-live` and `read-releases`.
 Give `publish` to a profile a person or a service uses directly. A task grant
-authorizes no publication either: a publisher's access to the dataset's
-entities admits no `requiredPurposes`
-(`breg.statistical-dataset.publisher-caller-dependent`), and a task-grant
-profile always declares them.
+authorizes no publication either. A task-grant profile always declares
+`requiredPurposes`, and a publisher's access to the dataset's entities admits
+none, so the compiler refuses one that grants any of those entities, with
+`breg.statistical-dataset.publisher-caller-dependent`. One that grants none
+leaves a module to contribute the entity profiles under its id; a module
+profile carries no task grant, and the runtime refuses a task-grant token on
+a profile without one.
 
 ## Configure current status
 

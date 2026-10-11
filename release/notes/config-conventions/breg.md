@@ -2118,8 +2118,13 @@ declares `actorKind: human`, `actorKind: service`, or no `actorKind` compiles
 as before.
 
 Migrate by moving `publish` to a profile a person or a service uses
-directly. No alias is provided, and no runtime check is added: a package
-that compiles serves publication as it did.
+directly, then rebuild the package. No alias is provided. The publication
+routes gain no check, but the runtime compiles a package's sources again when
+it loads the package, so a package built before this rule with a standing
+agent publisher is refused at load. `breg` stops at startup, logging
+`Base Registry Engine stopped` with the error
+`the Registry package was refused`, and `bregctl doctor` reports
+`startup.package.refused`. Neither names the code above.
 
 ### BREAKING: an action permission takes no `rowBoundaries`
 

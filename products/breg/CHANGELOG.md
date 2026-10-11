@@ -35,8 +35,9 @@ or discard of earlier rows.
   confirm. The unit entity profile of the publisher's id, which both
   operations are authorized through, meets the same rule when a module
   contributes it. Move `publish` to a profile a person or a service uses
-  directly; `read-live` and `read-releases` stay available to a standing
-  agent. No alias is provided.
+  directly and rebuild the package: the runtime refuses to load one built
+  with a standing agent publisher. `read-live` and `read-releases` stay
+  available to a standing agent. No alias is provided.
 
 - Runtime file flags use the help text "Runtime configuration file" and
   show `ABSOLUTE_FILE` wherever an absolute input path is required.
