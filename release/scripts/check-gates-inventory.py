@@ -22,6 +22,9 @@ SCHEDULING_CHECKPOINT_RUNNER = (
 MESSAGING_CHECKPOINT_RUNNER = (
     ROOT / "products" / "messaging" / "scripts" / "check-checkpoint.sh"
 )
+COORDINATOR_CHECKPOINT_RUNNER = (
+    ROOT / "products" / "coordinator" / "scripts" / "check-checkpoint.sh"
+)
 
 REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     (
@@ -490,12 +493,22 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         "cargo test --locked -p registry-messaging --features postgres-test --test postgres_migrate",
     ),
     (
+        "Coordinator product checkpoint wrapper",
+        "run: products/coordinator/scripts/check-checkpoint.sh",
+    ),
+    (
         "Coordinator dependency-direction guard",
-        "run: python3 products/coordinator/scripts/check_dependency_direction.py",
+        "python3 products/coordinator/scripts/check_dependency_direction.py",
     ),
     (
         "Coordinator product script tests",
-        "run: python3 -m unittest discover -s products/coordinator/scripts -p 'test_*.py'",
+        "python3 -m unittest discover -s products/coordinator/scripts -p 'test_*.py'",
+    ),
+    (
+        # The checkpoint is the one place the drift check runs, so the entry
+        # is the checkpoint's own command line and not a workflow step.
+        "Coordinator generated schema drift check",
+        "\nproducts/coordinator/scripts/check-schemas.sh\n",
     ),
     (
         "Release Linux Node client path filter",
@@ -1370,6 +1383,7 @@ def missing_gates(
     casework_checkpoint_runner_text: str | None = None,
     scheduling_checkpoint_runner_text: str | None = None,
     messaging_checkpoint_runner_text: str | None = None,
+    coordinator_checkpoint_runner_text: str | None = None,
 ) -> list[str]:
     if classifier_text is None:
         classifier_text = CI_CLASSIFIER.read_text(encoding="utf-8")
@@ -1397,10 +1411,16 @@ def missing_gates(
             if MESSAGING_CHECKPOINT_RUNNER.is_file()
             else ""
         )
+    if coordinator_checkpoint_runner_text is None:
+        coordinator_checkpoint_runner_text = (
+            COORDINATOR_CHECKPOINT_RUNNER.read_text(encoding="utf-8")
+            if COORDINATOR_CHECKPOINT_RUNNER.is_file()
+            else ""
+        )
     inventory_text = (
         f"{workflow_text}\n{classifier_text}\n{platform_fuzz_runner_text}\n"
         f"{casework_checkpoint_runner_text}\n{scheduling_checkpoint_runner_text}\n"
-        f"{messaging_checkpoint_runner_text}"
+        f"{messaging_checkpoint_runner_text}\n{coordinator_checkpoint_runner_text}"
     )
     return [name for name, snippet in REQUIRED_GATES if snippet not in inventory_text]
 

@@ -541,19 +541,20 @@ later slice that owes one.
 Registry Coordinator product and gates:
 
 ```bash
-products/coordinator/scripts/check-schemas.sh
+products/coordinator/scripts/check-checkpoint.sh
 cargo test --locked -p registry-coordinator --features schema
 COORDINATOR_TEST_DATABASE_URL=<disposable database> \
   COORDINATOR_MESSAGING_TEST_DATABASE_URL=<second disposable database> \
   products/coordinator/scripts/test-postgres.sh
-python3 products/coordinator/scripts/check_dependency_direction.py
-python3 -m unittest discover -s products/coordinator/scripts -p 'test_*.py'
 python3 products/messaging/scripts/check_dependency_direction.py
 python3 products/scheduling/scripts/check_dependency_direction.py
 ```
 
-The schema check fails when a committed project, runtime, or scenario schema,
-or the committed OpenAPI document, drifts from its generator. The Coordinator
+The checkpoint runs the database-free checks: the Coordinator
+dependency-direction gate, the product script tests, and
+`products/coordinator/scripts/check-schemas.sh`, which fails when a committed
+project, runtime, or scenario schema, or the committed OpenAPI document, drifts
+from its generator. The Coordinator
 dependency-direction gate reads Cargo's resolved graph with every feature
 enabled and fails when a Coordinator crate reaches a `registry-*` crate
 outside its boundary, names a carried crate directly, or is reached by a crate

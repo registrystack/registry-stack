@@ -1124,6 +1124,7 @@ class CiChangesTest(unittest.TestCase):
             "crates/registry-coordinator/src/worker.rs",
             "products/coordinator/examples/delayed-follow-up/workflow.yaml",
             "products/coordinator/scripts/test-postgres.sh",
+            "products/coordinator/scripts/check-checkpoint.sh",
         ):
             with self.subTest(path=path):
                 outputs = classify(self.workspace, (path,))
@@ -1147,18 +1148,38 @@ class CiChangesTest(unittest.TestCase):
                 outputs = classify(self.workspace, (f"crates/{dependency}/src/lib.rs",))
                 self.assertTrue(outputs["coordinator"])
 
-    def test_coordinator_configuration_formats_run_the_existing_conformance_job(self) -> None:
+    def test_coordinator_configuration_formats_run_the_conformance_job_and_the_checkpoint(self) -> None:
         for path in (
             "products/coordinator/generated/project/project.schema.json",
             "products/coordinator/generated/runtime/runtime.schema.json",
             "products/coordinator/generated/scenarios/scenarios.schema.json",
+            "products/coordinator/generated/openapi/coordinator.openapi.json",
             "products/coordinator/scripts/check-schemas.sh",
         ):
             with self.subTest(path=path):
-                self.assertTrue(classify(self.workspace, (path,))["config_conformance"])
-        steps = self.workflow_jobs["config-conformance"]["steps"]
-        self.assertTrue(any(step.get("run") == "products/coordinator/scripts/check-schemas.sh" for step in steps))
+                outputs = classify(self.workspace, (path,))
+                self.assertTrue(outputs["config_conformance"])
+                self.assertTrue(outputs["coordinator"])
         self.assertIn("registry-coordinator", CONFIG_CHECK_PACKAGES)
+        # The checkpoint is the one place the schema drift check runs, in the
+        # job every Coordinator change selects.
+        script = Path("products/coordinator/scripts/check-checkpoint.sh").read_text()
+        self.assertIn("\nproducts/coordinator/scripts/check-schemas.sh\n", script)
+        checkpoints = [
+            (name, step)
+            for name, job in self.workflow_jobs.items()
+            for step in job.get("steps", ())
+            if step.get("run") == "products/coordinator/scripts/check-checkpoint.sh"
+        ]
+        self.assertEqual([name for name, _ in checkpoints], ["messaging-postgres"])
+        self.assertEqual(checkpoints[0][1]["if"], "needs.changes.outputs.coordinator == 'true'")
+        self.assertFalse(
+            any(
+                "products/coordinator/scripts/check-schemas.sh" in str(step.get("run", ""))
+                for job in self.workflow_jobs.values()
+                for step in job.get("steps", ())
+            )
+        )
 
     def test_coordinator_postgres_proof_reuses_the_existing_database_job(self) -> None:
         job = self.workflow_jobs["messaging-postgres"]

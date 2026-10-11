@@ -253,13 +253,15 @@ cargo test --locked -p registry-coordinator --features schema \
   --test breg_action_adapter --test external_http --test external_runtime \
   --test decision_protocol --test decision_runtime \
   --test catalog_scenarios --test operation_compatibility
-products/coordinator/scripts/check-schemas.sh
+products/coordinator/scripts/check-checkpoint.sh
 cargo run --locked -p registry-coordinator --bin coordinatorctl -- openapi \
   > products/coordinator/generated/openapi/coordinator.openapi.json
-python3 products/coordinator/scripts/check_dependency_direction.py
-python3 -m unittest discover -s products/coordinator/scripts -p 'test_*.py'
 ```
 
+`scripts/check-checkpoint.sh` runs the database-free gates in one command:
+`check_dependency_direction.py`, the product script tests, and
+`check-schemas.sh`, which fails when a committed schema or the committed
+OpenAPI document drifts from its generator.
 `check_dependency_direction.py` reads Cargo's resolved dependency graph and
 fails when `registry-coordinator` reaches a `registry-*` crate other than a
 product client it is allowed, a crate such a client carries, or a

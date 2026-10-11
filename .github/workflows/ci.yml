@@ -1146,12 +1146,9 @@ jobs:
         env:
           MESSAGINGCTL_BIN: ${{ github.workspace }}/target/debug/messagingctl
         run: products/messaging/scripts/test-dev.sh
-      - name: Enforce Coordinator dependency direction
+      - name: Verify Coordinator dependency boundary, product scripts, and generated documents
         if: needs.changes.outputs.coordinator == 'true'
-        run: python3 products/coordinator/scripts/check_dependency_direction.py
-      - name: Test Coordinator product scripts
-        if: needs.changes.outputs.coordinator == 'true'
-        run: python3 -m unittest discover -s products/coordinator/scripts -p 'test_*.py'
+        run: products/coordinator/scripts/check-checkpoint.sh
       - name: Prepare isolated Coordinator test databases
         if: needs.changes.outputs.coordinator == 'true'
         env:
@@ -1481,9 +1478,6 @@ jobs:
 
       - name: Check runtime configuration conformance
         run: products/platform/scripts/check-config-conformance.py --check-generated
-
-      - name: Check Coordinator configuration schemas
-        run: products/coordinator/scripts/check-schemas.sh
 
       - name: Check BReg citizen service runtime schemas
         run: cargo test --locked -p registry-breg-mcp -p registry-breg-review --features registry-breg-mcp/schema,registry-breg-review/schema --lib schema::tests
