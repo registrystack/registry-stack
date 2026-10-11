@@ -3,7 +3,8 @@
 //! A standing agent profile (`actorKind: agent` without a `taskGrant`) may
 //! read and author change-request drafts. It carries no human approval, so it
 //! can neither move a request through its lifecycle, write target records
-//! directly, import records, nor invoke an immediate action: a human submits.
+//! directly, import records, invoke an immediate action, nor publish or
+//! withdraw a statistical release: a human submits.
 
 use std::collections::BTreeSet;
 
@@ -15,6 +16,8 @@ const OPERATION_FORBIDDEN: &str = "breg.access-profile.standing-agent-operation-
 const DIRECT_MUTATION_FORBIDDEN: &str =
     "breg.access-profile.standing-agent-direct-mutation-forbidden";
 const ACTION_FORBIDDEN: &str = "breg.access-profile.standing-agent-action-forbidden";
+const PUBLISH_FORBIDDEN: &str = "breg.access-profile.standing-agent-publish-forbidden";
+const PUBLISHER_CALLER_DEPENDENT: &str = "breg.statistical-dataset.publisher-caller-dependent";
 const MODULE_TASK_GRANT_FORBIDDEN: &str = "breg.access-profile.task-grant-module-forbidden";
 
 fn project() -> Value {
@@ -282,6 +285,200 @@ fn human_profiles_keep_immediate_actions() {
         .map(|grant| grant.profile_id.as_str())
         .collect();
     assert_eq!(profiles, BTreeSet::from(["assistant", "clerk"]));
+}
+
+/// The base project with a statistical dataset counting notes, and the
+/// operations the human profile and the standing agent hold on it. Publishing
+/// and withdrawing a release commit at once, with no draft for a human to
+/// confirm.
+fn with_dataset(clerk: &[&str], assistant: &[&str]) -> Value {
+    let mut value = project();
+    value["entities"][1]["fields"]
+        .as_array_mut()
+        .expect("fields array")
+        .extend([
+            json!({"id": "open", "type": "boolean", "required": true, "classification": "internal"}),
+            json!({"id": "filed", "type": "date", "required": true, "classification": "internal"}),
+        ]);
+    value["statisticalDatasets"] = json!([{
+        "id": "notes-by-status", "unit": "note", "population": "open eq true",
+        "period": {"type": "flow", "field": "filed", "granularity": "month", "firstPeriod": "2025-01"},
+        "dimensions": ["open"],
+        "disclosure": {"minimumCount": 5, "roundingBase": 5}
+    }]);
+    for (profile, operations) in [(0, clerk), (1, assistant)] {
+        let permissions = &mut value["accessProfiles"][profile]["permissions"];
+        let note = &mut permissions["entities"][2];
+        note["readableFields"] = json!(["label", "open", "filed"]);
+        note["filterableFields"] = json!(["open", "filed"]);
+        note["allowCount"] = json!(true);
+        if !operations.is_empty() {
+            permissions["datasets"] =
+                json!([{"dataset": "notes-by-status", "operations": operations}]);
+        }
+    }
+    value
+}
+
+fn publisher(registry: &registry_breg::CompiledRegistry) -> &str {
+    registry.statistical_datasets()["notes-by-status"]
+        .releases
+        .as_ref()
+        .expect("the dataset has a publisher")
+        .publisher
+        .as_str()
+}
+
+#[test]
+fn standing_agent_cannot_publish_a_statistical_release() {
+    for clerk in [&[][..], &["read-live", "read-releases"]] {
+        let failure = refused(
+            compile(&with_dataset(clerk, &["publish", "read-releases"])),
+            "a standing agent cannot publish or withdraw a statistical release",
+        );
+        let codes = codes(&failure);
+        assert!(
+            codes.contains(&PUBLISH_FORBIDDEN),
+            "publish was not refused: {codes:?}"
+        );
+        assert!(
+            failure.diagnostics().iter().any(|diagnostic| {
+                diagnostic.code == PUBLISH_FORBIDDEN
+                    && diagnostic.path
+                        == "project.accessProfiles[id=assistant].permissions.datasets[dataset=notes-by-status].operations"
+            }),
+            "the refusal does not name the permission: {:?}",
+            failure.diagnostics()
+        );
+        assert!(
+            !codes.contains(&OPERATION_FORBIDDEN)
+                && !codes.contains(&DIRECT_MUTATION_FORBIDDEN)
+                && !codes.contains(&ACTION_FORBIDDEN),
+            "publish is neither a lifecycle operation, a record write, nor an action: {codes:?}"
+        );
+    }
+}
+
+#[test]
+fn standing_agent_may_read_statistical_counts_and_releases() {
+    let registry = compile(&with_dataset(
+        &["publish", "read-releases"],
+        &["read-live", "read-releases"],
+    ))
+    .expect("a standing agent keeps live counts and releases");
+    let dataset = &registry.statistical_datasets()["notes-by-status"];
+    assert!(dataset.live_profiles.contains("assistant"));
+    assert_eq!(publisher(&registry), "clerk");
+
+    let registry = compile(&with_dataset(
+        &["publish", "read-releases"],
+        &["read-releases"],
+    ))
+    .expect("a standing agent keeps releases alone");
+    let releases = registry.statistical_datasets()["notes-by-status"]
+        .releases
+        .as_ref()
+        .expect("the dataset has a publisher");
+    assert!(releases.readers.contains("assistant"));
+}
+
+#[test]
+fn human_and_unspecified_profiles_keep_publish() {
+    // The same profile publishes once it is no longer an agent: bound to the
+    // agent's client as a human, and with no actor kind at all.
+    let mut human = with_dataset(&[], &["publish", "read-releases"]);
+    human["accessProfiles"][1]["actorKind"] = json!("human");
+    let registry = compile(&human).expect("a human profile keeps publish");
+    assert_eq!(publisher(&registry), "assistant");
+
+    let mut unspecified = with_dataset(&[], &["publish", "read-releases"]);
+    let profile = unspecified["accessProfiles"][1]
+        .as_object_mut()
+        .expect("profile object");
+    profile.remove("actorKind");
+    profile.remove("requesterClients");
+    let registry = compile(&unspecified).expect("a profile with no actor kind keeps publish");
+    assert_eq!(publisher(&registry), "assistant");
+}
+
+#[test]
+fn task_grant_profile_cannot_be_a_dataset_publisher() {
+    // A task-grant profile declares requiredPurposes, and a publisher's
+    // authority admits none, so the publisher rules refuse it.
+    let mut delegated = with_dataset(&[], &["publish", "read-releases"]);
+    delegated["accessProfiles"][1]["requiredPurposes"] = json!(["correction-review"]);
+    delegated["accessProfiles"][1]["taskGrant"] =
+        json!({"sourceIssuer": "https://casework.example"});
+    let failure = refused(
+        compile(&delegated),
+        "a task-grant profile cannot publish a statistical release",
+    );
+    let codes = codes(&failure);
+    assert!(
+        codes.contains(&PUBLISHER_CALLER_DEPENDENT),
+        "a task-grant publisher was not refused: {codes:?}"
+    );
+    assert!(!codes.contains(&PUBLISH_FORBIDDEN));
+}
+
+#[test]
+fn module_contributed_standing_agent_cannot_authorize_a_publication() {
+    // Publishing and withdrawing authorize through the publisher's profile on
+    // the unit entity. A project profile that grants nothing on that entity
+    // leaves a module to contribute the profile of the same id.
+    let mut value = with_dataset(&[], &[]);
+    value["modules"] = json!([{"id": "assistant-extension", "version": "1"}]);
+    value["accessProfiles"]
+        .as_array_mut()
+        .expect("profiles array")
+        .push(json!({
+            "id": "statistician", "principalClaim": "registry_principal", "requiredScopes": "unrestricted",
+            "permissions": {"datasets": [{"dataset": "notes-by-status", "operations": ["publish", "read-releases"]}]}
+        }));
+    let project = parse_project_json(&serde_json::to_vec(&value).expect("project serializes"))
+        .expect("project parses");
+    let compile_with_unit_profile = |actor_kind: &str| {
+        let module = parse_module_json(
+            &serde_json::to_vec(&json!({
+                "apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule",
+                "id": "assistant-extension", "version": "1",
+                "extendEntities": [{
+                    "entity": "note",
+                    "accessProfiles": [{
+                        "id": "statistician", "principalClaim": "registry_principal",
+                        "actorKind": actor_kind, "requesterClients": ["assistant-client"],
+                        "operations": ["list"], "allowCount": true,
+                        "readableFields": ["label", "open", "filed"], "filterableFields": ["open", "filed"],
+                        "requiredScopes": "unrestricted", "rowBoundaries": "unrestricted"
+                    }]
+                }]
+            }))
+            .expect("module serializes"),
+        )
+        .expect("module parses");
+        compile_project(
+            &project,
+            std::slice::from_ref(&module),
+            CompileProfile::Authoring,
+        )
+    };
+
+    let failure = refused(
+        compile_with_unit_profile("agent"),
+        "a module cannot contribute a standing agent that publishes",
+    );
+    let refusal = failure
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.code == PUBLISH_FORBIDDEN)
+        .unwrap_or_else(|| panic!("module publisher was not refused: {:?}", codes(&failure)));
+    assert_eq!(
+        refusal.path,
+        "entities[id=note].accessProfiles[id=statistician]"
+    );
+
+    let registry = compile_with_unit_profile("human").expect("a human unit profile publishes");
+    assert_eq!(publisher(&registry), "statistician");
 }
 
 #[test]

@@ -7,9 +7,9 @@ use serde::Serialize;
 use serde_json::json;
 
 use crate::contract::{
-    AccessProfileSource, DatasetOperation, FieldTypeSource, Operation, RegistryProject,
-    StatisticalPeriodGranularitySource, StatisticalPeriodSource, StatisticalValiditySource,
-    MAX_EXACT_JSON_INTEGER,
+    AccessProfileSource, ActorKindSource, DatasetOperation, FieldTypeSource, Operation,
+    RegistryProject, StatisticalPeriodGranularitySource, StatisticalPeriodSource,
+    StatisticalValiditySource, MAX_EXACT_JSON_INTEGER,
 };
 use crate::diagnostics::Diagnostic;
 use crate::model::{
@@ -82,6 +82,41 @@ pub(super) fn compile(
                     "name the dataset in one permission of access profile `{profile}` and list every operation there"
                 ),
             ));
+        }
+        // Publishing or withdrawing a release commits at once, with no draft
+        // for a human to confirm, so a standing agent holds neither. The
+        // runtime authorizes both through the unit entity's profile of the
+        // same id, which a module contributes when the project profile grants
+        // nothing on that entity, so that profile meets the ceiling too.
+        for profile in &grants.publish {
+            let standing_agent = |actor_kind, task_grant: bool| {
+                actor_kind == Some(ActorKindSource::Agent) && !task_grant
+            };
+            let path = if project.access_profiles.iter().any(|declared| {
+                &declared.id == profile
+                    && standing_agent(declared.actor_kind, declared.task_grant.is_some())
+            }) {
+                Some(format!(
+                    "project.accessProfiles[id={profile}].permissions.datasets[dataset={}].operations",
+                    source.id
+                ))
+            } else if unit.access_profiles.get(profile).is_some_and(|access| {
+                standing_agent(access.actor_kind, access.task_grant.is_some())
+            }) {
+                Some(format!(
+                    "entities[id={}].accessProfiles[id={profile}]",
+                    unit.id
+                ))
+            } else {
+                None
+            };
+            if let Some(path) = path {
+                errors.push(Diagnostic::error(
+                    "breg.access-profile.standing-agent-publish-forbidden",
+                    path,
+                    "a standing agent profile without a taskGrant cannot publish or withdraw a statistical release; give publish to a profile a person or a service uses directly",
+                ));
+            }
         }
         let live_profiles = grants.read_live.clone();
         let mut publishers = grants.publish.iter();
