@@ -416,10 +416,15 @@ Previously admitted versions remain available for their existing runs.
 newest first, from the flows its policy lists; an operator policy lists every
 owner's runs in those flows. `limit` takes 1 to 100 and defaults to 20. The list
 has no paging cursor and no state filter, so keep the run ID a start returns to
-read an older run with `GET /v1/runs/{run}`. `@registrystack/client` has no
-Coordinator export.
-Institutional applications compose through its authenticated HTTP API and the
-owning Casework, BReg and optional Messaging APIs.
+read an older run with `GET /v1/runs/{run}`. Institutional applications compose
+through its authenticated HTTP API and the owning Casework, BReg and optional
+Messaging APIs. The maintained Coordinator client covers the caller routes
+`start`, `list`, `status`, `inspect`, `reconcile`, `retry_same` and `cancel` as
+`registry_stack_client::coordinator` in Rust and the
+`coordinator` namespace of the unified Node.js and Python clients; published
+client packages carry it from the release that admits the Coordinator. It
+resends only an admission whose outcome is unknown, under the same key, and
+grants no access to the product records a flow touches.
 
 After a lost Messaging or Scheduling response, reconcile against the receiving
 product's original-key receipt before retrying. BReg action reconciliation remains

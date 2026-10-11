@@ -423,7 +423,7 @@ Plan and apply change one flow's package without touching another flow's package
 A flow leaves the deployment only through `--remove-flow`, which is refused while that flow has runs that are not terminal.
 `GET /v1/runs` returns at most 100 of the caller's most recently admitted runs, newest first, from the flows its policy lists; an operator policy lists every owner's runs in those flows.
 `limit` takes 1 to 100 and defaults to 20, and the list has no paging cursor and no state filter.
-`@registrystack/client` has no Coordinator export.
+The maintained Coordinator client reaches these routes as `registry_stack_client::coordinator` in Rust and the `coordinator` namespace of the unified Node.js and Python clients; published client packages carry it from the release that admits the Coordinator.
 Applications compose through the authenticated HTTP API and the owning Casework, BReg and optional Messaging APIs.
 
 {/* Evidence: crates/registry-coordinator/src/http.rs, HttpState, List;
@@ -432,6 +432,7 @@ Applications compose through the authenticated HTTP API and the owning Casework,
     crates/registry-coordinator/src/service.rs;
     crates/registry-coordinator/tests/deployment_postgres.rs;
     crates/registry-coordinator/tests/postgres_state.rs;
+    crates/registry-coordinator-client/src/client.rs;
     crates/CLIENTS.md. */}
 
 ## Check commands

@@ -172,7 +172,9 @@ added later, and require `operator: true` instead of a flow list.
 newest first, from the flows its policy lists; an operator policy lists every
 owner's runs in those flows. `limit` takes 1 to 100 and defaults to 20. The list
 has no paging cursor and no state filter. Applications use
-the authenticated HTTP API; `@registrystack/client` has no Coordinator export.
+the authenticated HTTP API, through the maintained Coordinator client where one
+fits: `registry_stack_client::coordinator` in Rust or the `coordinator`
+namespace of the unified Node.js and Python clients.
 
 ## Recovery and limits
 

@@ -741,8 +741,12 @@ flows its policy lists; an operator policy lists every owner's runs in those
 flows. `limit` takes 1 to 100 and defaults to 20. The list has no paging cursor
 and no state filter, so keep the run ID a start returns to read an older run
 with `GET /v1/runs/{run}`. Use the
-authenticated HTTP API for application integration; `@registrystack/client`
-has no Coordinator client.
+authenticated HTTP API for application integration, through the maintained
+Coordinator client where one fits: `registry_stack_client::coordinator` in
+Rust, or the `coordinator` namespace of the unified Node.js and Python
+clients, which published packages carry from the release that admits the
+Coordinator. The client resends an admission whose outcome is unknown only
+under its original key; retain that key through recovery, as with the key file.
 
 Settled terminal history remains inspectable with its recorded binding identity
 after an old connection is retired. This requires no runnable/uncertain job or
