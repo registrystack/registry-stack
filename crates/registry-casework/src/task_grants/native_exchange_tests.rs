@@ -603,6 +603,7 @@ fn start_issuer(
         .token_exchange = Some(TokenExchangeClient {
         assertion_resource_server_id: authority_server.clone(),
         assertion_scope: "casework:grants:assert".into(),
+        ordinary_resource_permissions: Vec::new(),
     });
     let evidence_client = description
         .machine_clients
@@ -612,6 +613,7 @@ fn start_issuer(
     evidence_client.token_exchange = Some(TokenExchangeClient {
         assertion_resource_server_id: authority_server,
         assertion_scope: "casework:grants:assert".into(),
+        ordinary_resource_permissions: Vec::new(),
     });
     // These static sentinels make the test prove that the exchange copied the
     // authority-signed values. A token built from registered client attributes

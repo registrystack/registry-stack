@@ -54,8 +54,17 @@ resources.
 
 A machine client's `token_exchange: Some(TokenExchangeClient { ... })` enables
 `client_credentials` and RFC 8693 token exchange on the same registered key.
-Every role assigned to that client must contain only its configured authority
-assertion lookup permission. Client credentials uses `clientConfig`; exchange
+By default, every role assigned to an institutional exchange client must contain
+only its configured authority assertion lookup permission. A tooling owner may
+explicitly set `ordinary_resource_permissions` to grant exact registered scopes
+on up to seven other resources, with at most 32 distinct scopes per resource.
+Every assigned permission must match the bootstrap permission or that explicit
+allowlist. Unknown resources/scopes, wildcards, missing bootstrap permissions
+and bootstrap-resource expansion are refused. The empty allowlist preserves
+bootstrap-only validation. BReg dev derives this opt-in only from authored
+machine-client `grants`; it changes no default token request or exported scope.
+Ordinary tokens carry no task grant and cannot authorize a guarded mutation.
+Client credentials uses `clientConfig`; exchange
 uses `userConfig`, whose closed allowlist carries the signed task fields,
 including JSON identity selectors, product-specific bounds and numeric expiry.
 Static schemas and client attributes cannot contain `registry_grant_*`,

@@ -56,6 +56,7 @@ pub(super) fn run(args: ExportClientArgs) -> Result<Value> {
     let key_stage = key_output.stage(&key)?;
     id_stage.publish()?;
     key_stage.publish()?;
+    let resource = config::client_resource(&state, &clients, &client.id);
     Ok(
         json!({"ok":true,"command":"dev export-client","project":project,
         "client":client.id,"accessProfiles":client.access_profiles,
@@ -65,9 +66,9 @@ pub(super) fn run(args: ExportClientArgs) -> Result<Value> {
         "issuer":state.issuer_origin(),
         "tokenEndpoint":format!("{}/oauth2/token",state.issuer_origin()),
         "clientAssertionAudience":state.issuer_origin(),
-        "resource":state.audience(),
+        "resource":resource,
         "scopes":client.scopes,
-        "audience":state.audience()}),
+        "audience":resource}),
     )
 }
 
