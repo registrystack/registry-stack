@@ -1438,7 +1438,7 @@
         },
         "sourceIssuer": {
           "$ref": "#/$defs/ExternalId",
-          "description": "The exact authority identifier, including an absolute URN issuer.\nIt is compared rather than fetched and must be an absolute resource URI."
+          "description": "The exact authority identifier: an absolute resource URI, compared as\nwritten and never fetched. A product that reads this block may accept a\nnarrower form."
         },
         "tokenEndpoint": {
           "$ref": "#/$defs/Url"

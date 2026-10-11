@@ -9,8 +9,9 @@ use registry_platform_yaml::{ExternalId, Url};
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TaskGrantStatusConfig {
-    /// The exact authority identifier, including an absolute URN issuer.
-    /// It is compared rather than fetched and must be an absolute resource URI.
+    /// The exact authority identifier: an absolute resource URI, compared as
+    /// written and never fetched. A product that reads this block may accept a
+    /// narrower form.
     pub source_issuer: ExternalId,
     /// HTTPS service base; plaintext HTTP is allowed only on loopback.
     pub base_url: Url,
