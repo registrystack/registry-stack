@@ -2762,8 +2762,9 @@ rule could make live without anyone having reviewed it.
   which entry holds the issuer.
 - **The published schema types the member as `ExternalId`.** The narrower
   rule is stated in the description of `taskGrantStatus` in the runtime
-  schema; the entry's own description is the shared block's and still
-  mentions a URN issuer.
+  schema; the entry's own description is the shared block's, which says
+  only that the member is an absolute resource URI and that a product may
+  accept a narrower form.
 - **The rule is written twice.** The compiler checks the profile side and
   this function checks the status side; nothing but their tests holds the
   two to the same spelling.
