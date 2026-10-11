@@ -1256,8 +1256,8 @@ class Lint:
     def check_target(self, fid: str, entry: dict, kinds: dict[str, list[str]]) -> None:
         target = entry["target"]
         if target == "none":
-            if not entry.get("exceptionClass"):
-                self.error(f"{fid}: target none needs an exceptionClass")
+            if not entry.get("exceptionClass") and entry.get("buildArtifact") is not True:
+                self.error(f"{fid}: target none needs an exceptionClass or generated buildArtifact")
             return
         if not isinstance(target, dict) or not {"apiVersion", "kind"} <= set(target):
             self.error(f"{fid}: target needs apiVersion and kind")

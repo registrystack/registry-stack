@@ -76,12 +76,14 @@ class Exemption:
 
 @dataclass(frozen=True)
 class RustBlock:
-    """A runtime struct field that must hold a shared block type."""
+    """A runtime struct field that must hold a shared block type, or a `Vec` of
+    it when `repeated` is set."""
 
     path: str
     struct: str
     field: str
     block: str
+    repeated: bool = False
 
 
 @dataclass(frozen=True)
@@ -797,12 +799,16 @@ def check_rust_blocks(root: Path, row: Row, canonical: dict[str, object]) -> lis
             problems.append(f"{row.product}: {entry.path} has no struct {entry.struct}")
             continue
         written = fields.get(entry.field)
+        expected = f"Vec<{entry.block}>" if entry.repeated else entry.block
+        if entry.repeated:
+            item = re.fullmatch(r"Vec<(.+)>", written or "")
+            written = item.group(1) if item else None
         if written == f"{PLATFORM_CRATE}::{entry.block}":
             continue
         if written != entry.block:
             problems.append(
                 f"{row.product}: {entry.path} {entry.struct}.{entry.field} is not "
-                f"typed {entry.block}"
+                f"typed {expected}"
             )
             continue
         if re.search(rf"\b(?:struct|enum|type|union)\s+{entry.block}\b", code):

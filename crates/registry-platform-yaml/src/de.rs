@@ -28,8 +28,9 @@ pub(crate) const TAGGED_PREFIX: &str = "\0registry-platform-yaml/tagged/";
 /// The newtype name a node-kind union asks for, followed by the shapes it
 /// accepts. [`crate::shape_union!`] writes the same text as a literal.
 pub(crate) const SHAPE_PREFIX: &str = "\0registry-platform-yaml/shape/";
-/// The newtype name [`crate::DataLiteral`] asks for: the one position where
-/// null is a value.
+/// The newtype name an explicitly foreign JSON subtree asks for.
+pub(crate) const FOREIGN_VALUE: &str = "\0registry-platform-yaml/foreign-value";
+/// The scalar comparison literal marker.
 pub(crate) const DATA_LITERAL: &str = "\0registry-platform-yaml/data-literal";
 /// The newtype name the bounded integers ask for. Their visitor's
 /// `expecting` text carries the bounds.
@@ -458,6 +459,7 @@ pub(crate) struct NodeDe<'a> {
     view: Option<Rc<Blocks>>,
     bounds: Option<(i128, i128)>,
     allow_null: bool,
+    foreign_value: bool,
 }
 
 impl<'a> NodeDe<'a> {
@@ -482,29 +484,34 @@ impl<'a> NodeDe<'a> {
             view: None,
             bounds: None,
             allow_null: false,
+            foreign_value: false,
         }
     }
 
     fn child(&self, entry: &'a Entry) -> NodeDe<'a> {
-        NodeDe::new(
+        let mut child = NodeDe::new(
             &entry.value,
             self.site.child_path(&entry.key),
             Some(entry.key_span),
             Some(&entry.key),
             Place::Member,
             self.ctx,
-        )
+        );
+        child.foreign_value = self.foreign_value;
+        child
     }
 
     fn item(&self, index: usize, node: &'a Node) -> NodeDe<'a> {
-        NodeDe::new(
+        let mut item = NodeDe::new(
             node,
             format!("{}/{}", self.site.path, index),
             None,
             self.site.member,
             Place::Item,
             self.ctx,
-        )
+        );
+        item.foreign_value = self.foreign_value;
+        item
     }
 
     /// Run one deserializer method, placing any error that has no position
@@ -956,7 +963,7 @@ impl<'de, 'a> de::Deserializer<'de> for NodeDe<'a> {
         let taken = || buffered.set(buffered.get() + 1);
         self.run(false, |de| {
             let value = match &de.site.node.value {
-                NodeValue::Null if de.allow_null => visitor.visit_unit(),
+                NodeValue::Null if de.allow_null || de.foreign_value => visitor.visit_unit(),
                 NodeValue::Null => Err(de.null_error(false)),
                 NodeValue::Bool(value) => visitor.visit_bool(*value),
                 NodeValue::Integer(value) => match u64::try_from(*value) {
@@ -1113,7 +1120,7 @@ impl<'de, 'a> de::Deserializer<'de> for NodeDe<'a> {
     fn deserialize_option<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Error> {
         // Absence is the only way to leave an optional member unset. A
         // present null goes to the inner type, which refuses it in its own
-        // words (CFG-EMPTY-1), unless it is a `DataLiteral`.
+        // words (CFG-EMPTY-1), unless it is a `DataLiteral` or `ForeignValue`.
         self.run(false, |de| visitor.visit_some(de.clone()))
     }
 
@@ -1174,6 +1181,13 @@ impl<'de, 'a> de::Deserializer<'de> for NodeDe<'a> {
                     de: de.clone(),
                     shape,
                 })
+            });
+        }
+        if name == FOREIGN_VALUE {
+            return self.run(false, |de| {
+                let mut foreign = de.clone();
+                foreign.foreign_value = true;
+                visitor.visit_newtype_struct(foreign)
             });
         }
         if name == DATA_LITERAL {
