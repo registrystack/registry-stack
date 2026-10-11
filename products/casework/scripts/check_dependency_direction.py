@@ -91,7 +91,7 @@ def load_metadata(repository_root: Path, fixture: Path | None) -> dict:
     if fixture:
         return json.loads(fixture.read_text(encoding="utf-8"))
     completed = subprocess.run(
-        ["cargo", "metadata", "--locked", "--format-version", "1"],
+        ["cargo", "metadata", "--locked", "--all-features", "--format-version", "1"],
         cwd=repository_root,
         check=True,
         capture_output=True,

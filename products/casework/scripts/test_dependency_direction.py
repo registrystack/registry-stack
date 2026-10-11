@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 import importlib.util
+import subprocess
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 SCRIPT = Path(__file__).with_name("check_dependency_direction.py")
@@ -129,6 +131,22 @@ class DependencyDirectionTests(unittest.TestCase):
         failures = "\n".join(MODULE.violations(graph))
         self.assertIn("registry-review-protocol transitively depends on Casework", failures)
         self.assertIn("registry-review-client transitively depends on Casework", failures)
+
+    def test_cargo_metadata_resolves_every_feature(self):
+        # An edge behind an optional feature is absent from the default graph,
+        # so the gate must resolve the graph with every feature enabled.
+        empty = '{"packages": [], "resolve": {"nodes": []}}'
+        with mock.patch.object(
+            MODULE.subprocess,
+            "run",
+            return_value=subprocess.CompletedProcess([], 0, stdout=empty, stderr=""),
+        ) as run:
+            MODULE.load_metadata(Path("/repository"), None)
+
+        command = run.call_args.args[0]
+        self.assertEqual(["cargo", "metadata"], command[:2])
+        self.assertIn("--locked", command)
+        self.assertIn("--all-features", command)
 
 
 if __name__ == "__main__":
