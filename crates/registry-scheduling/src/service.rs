@@ -21,7 +21,10 @@ use registry_platform_audit::{
 };
 use registry_platform_calendar::CalendarInterval;
 use registry_platform_canonical_json::canonicalize_json;
-use registry_platform_oidc::GrantClaims;
+use registry_platform_oidc::{
+    task_grant::{TaskGrantError, TaskGrantStatusBinding, TaskGrantStatusRegistry},
+    GrantClaims,
+};
 use registry_scheduling_core::{
     admission_request_hash, evaluate_exact_time_admission, evaluate_window_admission,
     location_closure_intervals, location_open_intervals, type_uri, AdmissionRequest,
@@ -36,6 +39,7 @@ use registry_scheduling_core::{
 use serde_json::{json, Value};
 use sha2::{Digest as _, Sha256};
 use std::borrow::Cow;
+use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::audit::{request_record, unfinished_record, with_event_id, SchedulingAudit};
@@ -65,6 +69,12 @@ pub const MAXIMUM_PAGE_LIMIT: usize = 200;
 /// a wider ask is served from the first 62 days and continues by cursor.
 const MAXIMUM_AVAILABILITY_SPAN_DAYS: i64 = 62;
 
+/// The most remaining lifetime the offline path accepts, where no status
+/// authority is asked. Only `taskGrantStatus: unchecked-final-fifteen-minutes`
+/// selects that path; a deployment that lists status authorities never takes
+/// it, for any source, including an unlisted one.
+const OFFLINE_TASK_GRANT_REMAINING_SECONDS: u64 = 900;
+
 /// The audit reference class for a booking caller, hashed over the verified
 /// issuer and subject pair. History and audit carry this pseudonym, never the
 /// raw identity; ownership of a claim is decided on the verified pair instead,
@@ -89,8 +99,16 @@ pub struct Caller {
     /// is retained. History and audit carry the pseudonym instead.
     pub issuer: String,
     pub subject: String,
+    /// The verified access token's own deadline. Capacity transactions use
+    /// the earlier of this and the grant deadline, bounding the interval
+    /// between fresh status and commit even for a long-lived grant.
+    pub credential_exp_unix: u64,
     /// The verified task grant, when the token carried one.
     pub grant: Option<GrantClaims>,
+    /// Subject claims copied only from the verified credential. A task token
+    /// may omit them; a configured status registry then refuses the
+    /// missing exact binding before a capacity transaction opens.
+    pub task_grant_subjects: Option<std::collections::BTreeMap<String, Value>>,
 }
 
 impl Caller {
@@ -167,6 +185,7 @@ pub struct SchedulingService {
     audit: SchedulingAudit,
     attempt_receipt_days: i64,
     hooks: Option<ActivatedHooks>,
+    task_grant_status: Option<Arc<TaskGrantStatusRegistry>>,
 }
 
 impl SchedulingService {
@@ -191,12 +210,19 @@ impl SchedulingService {
             audit,
             attempt_receipt_days: i64::from(attempt_receipt_days),
             hooks: None,
+            task_grant_status: None,
         }
     }
 
     #[must_use]
     pub fn with_hooks(mut self, hooks: ActivatedHooks) -> Self {
         self.hooks = Some(hooks);
+        self
+    }
+
+    #[must_use]
+    pub fn with_task_grant_status(mut self, status: Option<Arc<TaskGrantStatusRegistry>>) -> Self {
+        self.task_grant_status = status;
         self
     }
 
@@ -612,7 +638,7 @@ impl SchedulingService {
             facts_revision,
         )?;
         let (correlation, _request) = self
-            .audit_request(caller, &grant, HOLD_CREATE_ACTION)
+            .audit_request(caller, &grant, HOLD_CREATE_ACTION, now)
             .await?;
         let outcome = self
             .store
@@ -672,7 +698,7 @@ impl SchedulingService {
         let commitment =
             self.commitment(caller, &actor, &grant, &release_key, &request_hash, now, 0)?;
         let (correlation, _request) = self
-            .audit_request(caller, &grant, HOLD_RELEASE_ACTION)
+            .audit_request(caller, &grant, HOLD_RELEASE_ACTION, now)
             .await?;
         let outcome = self.store.release_hold(hold_id, commitment).await;
         self.commitment_outcome(
@@ -753,7 +779,7 @@ impl SchedulingService {
             facts_revision,
         )?;
         let (correlation, _request) = self
-            .audit_request(caller, &grant, APPOINTMENT_CREATE_ACTION)
+            .audit_request(caller, &grant, APPOINTMENT_CREATE_ACTION, now)
             .await?;
         let outcome = self
             .store
@@ -799,7 +825,7 @@ impl SchedulingService {
             facts_revision,
         )?;
         let (correlation, _request) = self
-            .audit_request(caller, &grant, APPOINTMENT_CREATE_ACTION)
+            .audit_request(caller, &grant, APPOINTMENT_CREATE_ACTION, now)
             .await?;
         let outcome = self
             .store
@@ -939,7 +965,7 @@ impl SchedulingService {
             facts_revision,
         )?;
         let (correlation, _request) = self
-            .audit_request(caller, &grant, APPOINTMENT_RESCHEDULE_ACTION)
+            .audit_request(caller, &grant, APPOINTMENT_RESCHEDULE_ACTION, now)
             .await?;
         let outcome = self
             .store
@@ -1005,7 +1031,7 @@ impl SchedulingService {
             0,
         )?;
         let (correlation, _request) = self
-            .audit_request(caller, &grant, APPOINTMENT_CANCEL_ACTION)
+            .audit_request(caller, &grant, APPOINTMENT_CANCEL_ACTION, now)
             .await?;
         let outcome = self
             .store
@@ -1293,6 +1319,57 @@ impl SchedulingService {
             })
     }
 
+    /// Establish that this exact grant is current immediately before the
+    /// request audit and capacity transaction. No database lock is held while
+    /// the remote authority is called. A configured registry is authoritative
+    /// for every source, so an unknown source is a refusal and never reaches
+    /// the bounded offline path.
+    async fn require_current_task_grant(
+        &self,
+        caller: &Caller,
+        grant: &GrantClaims,
+        operation: &str,
+        now: DateTime<Utc>,
+    ) -> Result<(), ServiceError> {
+        let now = u64::try_from(now.timestamp()).map_err(|_| {
+            ServiceError::internal("the task-grant clock observation is not representable")
+        })?;
+        let verdict = task_grant_verdict(
+            self.task_grant_status.as_deref(),
+            caller.task_grant_subjects.clone(),
+            grant,
+            now,
+        )
+        .await;
+        match verdict {
+            Ok(()) => Ok(()),
+            Err(TaskGrantError::Refused) => {
+                self.record_refusal(
+                    Uuid::new_v4(),
+                    audit_record(
+                        &self.hasher,
+                        &self.scheduling_id,
+                        caller,
+                        grant,
+                        operation,
+                        AuthorizationOutcome::Denied,
+                        "authorization.refused",
+                    ),
+                )
+                .await?;
+                Err(ServiceError::Problem(ProblemCode::OperationNotAuthorized))
+            }
+            Err(TaskGrantError::Unavailable) => {
+                tracing::warn!("the task-grant authority could not establish current status");
+                Err(ServiceError::Problem(ProblemCode::ServiceUnavailable))
+            }
+            Err(TaskGrantError::Configuration) => {
+                tracing::error!("the activated task-grant status registry became unusable");
+                Err(ServiceError::Problem(ProblemCode::ServiceUnavailable))
+            }
+        }
+    }
+
     /// Append the `request` entry of one commitment and return the
     /// correlation its `response` entry will carry, with the handle that owes
     /// it. It names the caller, the grant, and the operation the capacity
@@ -1306,7 +1383,10 @@ impl SchedulingService {
         caller: &Caller,
         grant: &GrantClaims,
         operation: &str,
+        now: DateTime<Utc>,
     ) -> Result<(Uuid, AuditRequest), ServiceError> {
+        self.require_current_task_grant(caller, grant, operation, now)
+            .await?;
         let record = audit_record(
             &self.hasher,
             &self.scheduling_id,
@@ -1474,7 +1554,7 @@ impl SchedulingService {
             idempotency_key,
             request_hash,
             attempt_expires_at,
-            grant_exp_unix: Some(grant.exp()),
+            grant_exp_unix: Some(grant.exp().min(caller.credential_exp_unix)),
             hooks: self.hooks.as_ref(),
         })
     }
@@ -1710,6 +1790,32 @@ impl SchedulingService {
             .insert_cursor(cursor_id, context, position.to_json(), cursor_expiry(now))
             .await?;
         Ok(encode_cursor(cursor_id))
+    }
+}
+
+/// Decide whether one verified task grant is current at `now`, in Unix
+/// seconds. Listed status authorities are authoritative for every source: a
+/// grant without the signed subjects its status binding needs, or from a
+/// source no authority is listed for, is refused and never reaches the
+/// offline path. Without them, the offline path accepts a grant only while it
+/// is unexpired with at most fifteen minutes left, and asks no authority.
+async fn task_grant_verdict(
+    status: Option<&TaskGrantStatusRegistry>,
+    subjects: Option<std::collections::BTreeMap<String, Value>>,
+    grant: &GrantClaims,
+    now: u64,
+) -> Result<(), TaskGrantError> {
+    match status {
+        Some(status) => match subjects
+            .and_then(|subjects| TaskGrantStatusBinding::from_verified(grant, subjects).ok())
+        {
+            Some(binding) => status.check(&binding).await,
+            None => Err(TaskGrantError::Refused),
+        },
+        None if grant.exp() > now && grant.exp() - now <= OFFLINE_TASK_GRANT_REMAINING_SECONDS => {
+            Ok(())
+        }
+        None => Err(TaskGrantError::Refused),
     }
 }
 
@@ -2963,5 +3069,259 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    const STATUS_GRANT_ID: &str = "11111111-1111-4111-8111-111111111111";
+    const STATUS_SOURCE: &str = "https://authority.test";
+    const STATUS_RESOURCE: &str = "urn:registry-scheduling:test";
+
+    fn unix_now() -> u64 {
+        u64::try_from(Utc::now().timestamp()).expect("a representable clock")
+    }
+
+    fn status_bounds() -> Value {
+        json!({"type": "scheduling", "permissions": [{
+            "service": "registry-update",
+            "location": "north-counter",
+            "actions": ["appointment.create"],
+        }]})
+    }
+
+    /// One task grant as authentication hands it to the service, read at
+    /// `read_at` so a test can decide it at a later instant.
+    fn verified_grant(source_issuer: &str, expires_at: u64, read_at: u64) -> GrantClaims {
+        let claims: registry_platform_oidc::Claims = serde_json::from_value(json!({
+            "sub": "principal-agent",
+            "exp": expires_at,
+            "registry_actor_kind": "agent",
+            "registry_purpose": "registry-update",
+            "registry_grant_id": STATUS_GRANT_ID,
+            "registry_grant_source_issuer": source_issuer,
+            "registry_grant_client": "task-agent",
+            "registry_grant_resource": STATUS_RESOURCE,
+            "registry_grant_exp": expires_at,
+            "registry_grant_bounds": status_bounds(),
+            "registry_approver": "approver-1",
+        }))
+        .expect("the grant claims");
+        registry_platform_oidc::grant_claims(
+            &claims,
+            &registry_platform_oidc::ClaimNames::default(),
+            read_at,
+        )
+        .expect("a complete grant")
+        .expect("a grant is present")
+    }
+
+    fn status_subjects() -> std::collections::BTreeMap<String, Value> {
+        std::collections::BTreeMap::from([(
+            "subject_reference".to_owned(),
+            json!("synthetic-subject"),
+        )])
+    }
+
+    fn active_answer(grant: &GrantClaims) -> Value {
+        json!({"active": true, "grant": {
+            "grantId": STATUS_GRANT_ID,
+            "sourceIssuer": STATUS_SOURCE,
+            "principal": "principal-agent",
+            "client": "task-agent",
+            "resource": STATUS_RESOURCE,
+            "purpose": "registry-update",
+            "bounds": status_bounds(),
+            "subjects": {"subject_reference": "synthetic-subject"},
+            "expiresAt": grant.exp(),
+        }})
+    }
+
+    /// A status registry that lists only `STATUS_SOURCE`, backed by a mock
+    /// authority that issues a service credential and answers every status
+    /// call with `response`.
+    async fn listed_authority(
+        response: wiremock::ResponseTemplate,
+    ) -> (wiremock::MockServer, TaskGrantStatusRegistry) {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "access_token": "synthetic-status-service",
+                "token_type": "Bearer",
+                "expires_in": 300,
+                "scope": "casework:grants:status"
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(format!("/v1/task-grants/{STATUS_GRANT_ID}/status")))
+            .respond_with(response)
+            .mount(&server)
+            .await;
+
+        let secret_name =
+            format!("SCHEDULING_VERDICT_{}", Uuid::new_v4().simple()).to_ascii_uppercase();
+        let mut key = registry_platform_crypto::generate_private_jwk(
+            registry_platform_crypto::GeneratedKeyAlgorithm::Rs384,
+        )
+        .expect("generate the status client key");
+        key.alg = Some("RS256".into());
+        let mut private = serde_json::to_value(&key).expect("serialize the status client key");
+        for (name, value) in [
+            ("d", &key.d),
+            ("p", &key.p),
+            ("q", &key.q),
+            ("dp", &key.dp),
+            ("dq", &key.dq),
+            ("qi", &key.qi),
+        ] {
+            if let Some(value) = value {
+                private[name] = Value::String(value.clone());
+            }
+        }
+        std::env::set_var(
+            &secret_name,
+            serde_json::to_string(&private).expect("encode the status client key"),
+        );
+        let secrets = registry_platform_config::SecretResolver::new(
+            [registry_platform_config::SecretProvider::Environment],
+            "",
+        )
+        .expect("the status client secret resolver");
+        let base = server.uri();
+        let status: crate::config::TaskGrantStatusConfig = serde_json::from_value(json!({
+            "sourceIssuer": STATUS_SOURCE,
+            "baseUrl": base,
+            "tokenEndpoint": format!("{base}/token"),
+            "clientAssertionAudience": base,
+            "clientId": "scheduling-status",
+            "privateKeyRef": format!("secret:env/{secret_name}"),
+            "caseworkResource": "urn:casework:test"
+        }))
+        .expect("the status authority configuration");
+        let registry = TaskGrantStatusRegistry::activate(
+            &crate::config::task_grant_status_endpoints(&[status]),
+            STATUS_RESOURCE,
+            &secrets,
+        )
+        .expect("activate the task-grant status registry");
+        (server, registry)
+    }
+
+    async fn status_calls(server: &wiremock::MockServer) -> usize {
+        server
+            .received_requests()
+            .await
+            .expect("recorded authority calls")
+            .into_iter()
+            .filter(|request| request.url.path().ends_with("/status"))
+            .count()
+    }
+
+    #[tokio::test]
+    async fn the_offline_path_accepts_only_an_unexpired_grant_with_at_most_fifteen_minutes_left() {
+        let now = u64::try_from(at(9, 0).timestamp()).expect("a representable instant");
+        for (case, expires_at, expected) in [
+            ("one second left", now + 1, Ok(())),
+            ("exactly fifteen minutes left", now + 900, Ok(())),
+            (
+                "one second more than fifteen minutes left",
+                now + 901,
+                Err(TaskGrantError::Refused),
+            ),
+            ("an hour left", now + 3_600, Err(TaskGrantError::Refused)),
+            (
+                "expiring at request entry",
+                now,
+                Err(TaskGrantError::Refused),
+            ),
+            ("expired", now - 60, Err(TaskGrantError::Refused)),
+        ] {
+            let grant = verified_grant(STATUS_SOURCE, expires_at, now - 600);
+            for subjects in [None, Some(status_subjects())] {
+                assert_eq!(
+                    task_grant_verdict(None, subjects, &grant, now).await,
+                    expected,
+                    "{case}"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn listed_authorities_refuse_an_unlisted_source_and_an_unbound_grant_without_the_offline_path(
+    ) {
+        let now = unix_now();
+        let (server, registry) = listed_authority(
+            wiremock::ResponseTemplate::new(200).set_body_json(json!({"active": false})),
+        )
+        .await;
+        // Ten minutes left would pass the offline path; a listed registry
+        // never offers it.
+        let unlisted = verified_grant("https://other-authority.test", now + 600, now);
+        assert_eq!(
+            task_grant_verdict(Some(&registry), Some(status_subjects()), &unlisted, now).await,
+            Err(TaskGrantError::Refused),
+            "an unlisted source is refused"
+        );
+        let unbound = verified_grant(STATUS_SOURCE, now + 600, now);
+        assert_eq!(
+            task_grant_verdict(Some(&registry), None, &unbound, now).await,
+            Err(TaskGrantError::Refused),
+            "a grant without signed subjects is refused"
+        );
+        assert_eq!(
+            task_grant_verdict(
+                Some(&registry),
+                Some(std::collections::BTreeMap::new()),
+                &unbound,
+                now
+            )
+            .await,
+            Err(TaskGrantError::Refused),
+            "a grant with an empty subject set is refused"
+        );
+        assert_eq!(
+            status_calls(&server).await,
+            0,
+            "no refusal above reaches the authority"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_listed_authority_answer_decides_the_grant() {
+        let now = unix_now();
+        // An hour left: the listed path is not bounded to fifteen minutes.
+        let grant = verified_grant(STATUS_SOURCE, now + 3_600, now);
+        for (case, response, expected) in [
+            (
+                "active",
+                wiremock::ResponseTemplate::new(200).set_body_json(active_answer(&grant)),
+                Ok(()),
+            ),
+            (
+                "inactive",
+                wiremock::ResponseTemplate::new(200).set_body_json(json!({"active": false})),
+                Err(TaskGrantError::Refused),
+            ),
+            (
+                "unavailable",
+                wiremock::ResponseTemplate::new(503),
+                Err(TaskGrantError::Unavailable),
+            ),
+        ] {
+            let (server, registry) = listed_authority(response).await;
+            assert_eq!(
+                task_grant_verdict(Some(&registry), Some(status_subjects()), &grant, now).await,
+                expected,
+                "{case}"
+            );
+            assert_eq!(
+                status_calls(&server).await,
+                1,
+                "{case}: one fresh status call"
+            );
+        }
     }
 }

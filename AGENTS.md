@@ -209,7 +209,11 @@ assertion as an ordinary relying party through `registry-evidence-client` and
 already does. Adding such a crate relaxes this sentence here and in the gate,
 in the same change; until then the sentence stands as written and no local
 exception may be taken to it. The runtime, the source-neutral core, the client,
-and adopter tooling stay on the strict side of it in every case.
+and adopter tooling stay on the strict side of it in every case. Checking a
+task grant's current status at the operator-configured task authority is not
+such a reach: the runtime calls that endpoint over HTTP through the
+authority-neutral status client in `registry-platform-oidc`, a protocol call
+and not a crate dependency, so the gate is unchanged by it.
 
 Registry Messaging is implemented by `registry-messaging`,
 `registry-messaging-core`, `registry-messagingctl`, and its Rust client crate.

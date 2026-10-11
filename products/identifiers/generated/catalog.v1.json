@@ -4421,11 +4421,11 @@
       "description": "Registry Scheduling runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-scheduling/src/schema.rs",
-        "sha256": "a6c31be400401f6f7878e9a4156bbad5a28e5d5c5a4ecfdf00002391ce1fb65f"
+        "sha256": "cfddc0600ff8303c2f3d89815c888ac9ddac3124de47d8c232e51c0caa7ba92d"
       },
       "artifact": {
         "path": "products/scheduling/generated/runtime/runtime.schema.json",
-        "sha256": "115e58ff8bc7cc92f029a1d814760246933d54bc58f660553b246fa190bcea5a",
+        "sha256": "4925c4eb0cc9e80b946306aeace68105caf73c619a7b371d6740cbe2ea1bdb57",
         "mediaType": "application/schema+json"
       }
     },

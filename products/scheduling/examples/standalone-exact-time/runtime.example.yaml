@@ -101,6 +101,21 @@ authentication:
     #   documentRef: secret:file/jwks.json
     # `type: uri` with `uri: https://...` fetches the key set from a fixed
     # address instead of the one discovery names.
+# Required: how a task grant is checked before any hold or appointment
+# changes. List the task authorities whose fresh grant status Scheduling
+# checks for every commitment and replay, or write
+# `unchecked-final-fifteen-minutes` to accept only a grant with at most
+# fifteen minutes left at request entry, without a revocation check. An
+# omitted member and an empty list are refused.
+taskGrantStatus: unchecked-final-fifteen-minutes
+# taskGrantStatus:
+#   - sourceIssuer: https://casework.example.test/task-authority
+#     baseUrl: https://casework.example.test
+#     tokenEndpoint: https://identity.example.test/realms/registry/protocol/openid-connect/token
+#     clientAssertionAudience: https://identity.example.test/realms/registry
+#     clientId: scheduling-task-status
+#     privateKeyRef: secret:file/scheduling-task-status-private-jwk
+#     caseworkResource: urn:example:casework
 audit:
   # One single-writer destination. `file`, the default, appends to the
   # absolute path, rotates at rotateBytes (default 100 MiB), and deletes

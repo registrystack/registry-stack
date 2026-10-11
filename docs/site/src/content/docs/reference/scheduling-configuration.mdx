@@ -30,7 +30,8 @@ Descriptions appear where the Rust definition supplies them.
 `scheduling.yaml` is the authored policy: services, locations, offerings, and hooks.
 `records.yaml` holds the runtime records the policy names by identifier, such as resource pools and
 published windows. Files under `fixtures/` drive local checks. `runtime.yaml` is the operator's
-deployment file: listener, database, package, identity, audit, retention, and hook destinations.
+deployment file: listener, database, package, identity, task-grant status, audit, retention, and hook
+destinations.
 
 A schema-valid document still needs the checks `schedulingctl` runs, because cross-field rules and
 references between files cannot all be expressed by these tables.
@@ -78,8 +79,13 @@ schedulingctl test ./scheduling
 passing `check` ends with `0 errors, 0 warnings in 5 files`, and a passing `test` reports
 `Offline synthetic fixtures passed.` with `productionClosure: false`: the replay proves the policy
 against its fixtures, not source reachability or deployment readiness. Copy `scheduling/runtime.example.yaml`
-to `scheduling/runtime.yaml` and set its absolute paths and secret references before you check it
-with `schedulingctl check ./scheduling --runtime-config ./scheduling/runtime.yaml`.
+to `scheduling/runtime.yaml`, set its absolute paths and secret references, and keep or replace its
+`taskGrantStatus` before you check it with
+`schedulingctl check ./scheduling --runtime-config ./scheduling/runtime.yaml`. The example writes
+`taskGrantStatus: unchecked-final-fifteen-minutes`, which accepts only a task grant with at most 900
+seconds left and checks no revocation; a deployment that accepts deferred grants lists its task
+authorities instead, as the [Scheduling API reference](../apis/registry-scheduling/#task-grants)
+describes. A runtime file without `taskGrantStatus` is refused.
 
 ## Check commands
 

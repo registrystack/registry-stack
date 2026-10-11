@@ -2269,7 +2269,9 @@ formats:
         whenOmitted: open
       - pointer: /package/expectedDigest
         whenOmitted: open
-    restrictingMembers: [/authentication/oidc/allowedClients, /authentication/oidc/assertionIssuers]
+      - pointer: /taskGrantStatus
+        whenOmitted: refused
+    restrictingMembers: [/authentication/oidc/allowedClients, /authentication/oidc/assertionIssuers, /taskGrantStatus]
   - id: scheduling/ctl-report
     product: scheduling
     title: schedulingctl --format json report

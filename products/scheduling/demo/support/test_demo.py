@@ -93,7 +93,11 @@ class CallerClaimsTest(unittest.TestCase):
         claims = demo.caller_claims("demo-booker-a", "booker-subject", grant=True, now=1_000_000)
         self.assertEqual(claims["registry_grant_client"], "demo-booker-a")
         self.assertEqual(claims["registry_grant_resource"], demo.DEMO_AUDIENCE)
-        self.assertEqual(claims["registry_grant_exp"], 1_000_000 + 3600)
+        # The demo runtime selects the offline task-grant path, which
+        # accepts only a grant with at most fifteen minutes left.
+        self.assertEqual(claims["registry_grant_exp"], 1_000_000 + demo.GRANT_LIFETIME_SECONDS)
+        self.assertLessEqual(demo.GRANT_LIFETIME_SECONDS, 900)
+        self.assertLessEqual(claims["registry_grant_exp"], claims["exp"])
         self.assertEqual(claims["registry_purpose"], "registry-update")
         self.assertEqual(claims["registry_approver"], "demo-approver")
         bounds = claims["registry_grant_bounds"]
@@ -154,6 +158,7 @@ class RuntimeConfigTest(unittest.TestCase):
             f"audience: {demo.DEMO_AUDIENCE}",
             "type: static",
             "documentRef: secret:file/jwks",
+            "taskGrantStatus: unchecked-final-fifteen-minutes",
             "path: /run/audit",
             "hashKeyRef: secret:file/audit-key",
         ):

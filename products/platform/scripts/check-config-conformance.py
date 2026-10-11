@@ -364,6 +364,7 @@ ROWS: tuple[Row, ...] = (
             "PrivateListenerConfig",
             "SecretProvidersConfig",
             "SecretReference",
+            "TaskGrantStatusConfig",
             "TlsTermination",
         ),
         reference_refusal=TestRef(

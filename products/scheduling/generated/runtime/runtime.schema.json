@@ -483,6 +483,60 @@
       "pattern": "^(?:secret:env/[A-Z][A-Z0-9_]{0,127}|secret:file/[a-z][a-z0-9._-]{0,127})$",
       "type": "string"
     },
+    "TaskGrantStatusConfig": {
+      "additionalProperties": false,
+      "description": "One task authority whose grants a runtime checks for fresh status, and the\nruntime's own credentials for that check, written as one entry of\n`taskGrantStatus`. The status route and scope default to Casework's.",
+      "properties": {
+        "baseUrl": {
+          "$ref": "#/$defs/Url",
+          "description": "The authority's base URL the status check calls. It is `https`;\n`http` is accepted only for a loopback host, for local development."
+        },
+        "caBundleRef": {
+          "$ref": "#/$defs/SecretReference",
+          "description": "PEM CA bundle for the authority and its token endpoint. Omitted, the\nplatform's trusted roots verify them."
+        },
+        "caseworkResource": {
+          "$ref": "#/$defs/ExternalId",
+          "description": "The audience the runtime requests its status credential for, an\nabsolute resource URI."
+        },
+        "clientAssertionAudience": {
+          "$ref": "#/$defs/ExternalId"
+        },
+        "clientId": {
+          "$ref": "#/$defs/ExternalId"
+        },
+        "privateKeyRef": {
+          "$ref": "#/$defs/SecretReference"
+        },
+        "sourceIssuer": {
+          "$ref": "#/$defs/ExternalId",
+          "description": "The task authority's issuer, exactly as the authority states it,\nincluding an absolute URN issuer. It is compared rather than fetched\nand must be an absolute resource URI."
+        },
+        "statusPath": {
+          "default": "/v1/task-grants/{grantId}/status",
+          "description": "The status route appended to `baseUrl`'s path. It starts with `/` and\nhas exactly one whole `{grantId}` segment; every other segment uses\nonly letters, digits, `-`, `.`, `_`, and `~`. Omitted,\n`/v1/task-grants/{grantId}/status`.",
+          "type": "string"
+        },
+        "statusScope": {
+          "$ref": "#/$defs/ExternalId",
+          "default": "casework:grants:status",
+          "description": "The one scope the runtime requests its status credential with.\nOmitted, `casework:grants:status`."
+        },
+        "tokenEndpoint": {
+          "$ref": "#/$defs/Url"
+        }
+      },
+      "required": [
+        "sourceIssuer",
+        "baseUrl",
+        "tokenEndpoint",
+        "clientAssertionAudience",
+        "clientId",
+        "privateKeyRef",
+        "caseworkResource"
+      ],
+      "type": "object"
+    },
     "TlsTermination": {
       "description": "Declares the trusted transport boundary for a runtime's plaintext HTTP\nlistener. Production listeners require operator-controlled upstream TLS\ntermination; direct plaintext is limited to the explicit loopback-only\ndevelopment mode.",
       "enum": [
@@ -648,6 +702,24 @@
     },
     "secretProviders": {
       "$ref": "#/$defs/SecretProvidersConfig"
+    },
+    "taskGrantStatus": {
+      "anyOf": [
+        {
+          "const": "unchecked-final-fifteen-minutes",
+          "description": "Accept only a grant with at most fifteen minutes left at request\nentry, with no revocation check.",
+          "type": "string"
+        },
+        {
+          "description": "Check fresh grant status with these task authorities for every\ncommitment and replay.",
+          "items": {
+            "$ref": "#/$defs/TaskGrantStatusConfig"
+          },
+          "minItems": 1,
+          "type": "array"
+        }
+      ],
+      "description": "How a task grant is checked before capacity work: a list of the task\nauthorities whose fresh grant status every commitment and replay\nchecks, or `unchecked-final-fifteen-minutes` to accept only a grant\nwith at most fifteen minutes left, without a revocation check."
     }
   },
   "required": [
@@ -659,6 +731,7 @@
     "secretProviders",
     "database",
     "authentication",
+    "taskGrantStatus",
     "audit",
     "retention"
   ],

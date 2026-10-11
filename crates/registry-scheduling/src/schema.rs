@@ -213,6 +213,36 @@ mod tests {
     }
 
     #[test]
+    fn the_schema_states_both_task_grant_status_choices_and_requires_one() {
+        let documents = runtime_documents().unwrap();
+        let document: Value = serde_json::from_str(&documents[RUNTIME_SCHEMA_FILE]).unwrap();
+        // A missing member is refused at load (CFG-EMPTY-3), so the document
+        // requires it and declares no default.
+        assert!(document["required"]
+            .as_array()
+            .unwrap()
+            .contains(&Value::from("taskGrantStatus")));
+        let member = &document["properties"]["taskGrantStatus"];
+        assert!(member.get("default").is_none(), "{member}");
+        let forms = member["anyOf"].as_array().expect("two forms by node kind");
+        assert_eq!(forms.len(), 2, "{member}");
+        let keyword = forms
+            .iter()
+            .find(|form| form["type"] == "string")
+            .expect("a keyword form");
+        assert_eq!(keyword["const"], "unchecked-final-fifteen-minutes");
+        let list = forms
+            .iter()
+            .find(|form| form["type"] == "array")
+            .expect("a list form");
+        assert_eq!(
+            list["minItems"], 1,
+            "an empty list is refused (CFG-EMPTY-2)"
+        );
+        assert_eq!(list["items"]["$ref"], "#/$defs/TaskGrantStatusConfig");
+    }
+
+    #[test]
     fn the_schema_states_the_bounds_the_runtime_enforces() {
         let documents = runtime_documents().unwrap();
         let document: Value = serde_json::from_str(&documents[RUNTIME_SCHEMA_FILE]).unwrap();

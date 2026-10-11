@@ -84,24 +84,45 @@ or location never covers a narrower one, and no rule maps one location onto
 another. A grant that does not cover the request answers
 `operation.not-authorized` and nothing is written.
 
-The bounds are matched once, at the service, before the capacity transaction
-opens. Inside the transaction, immediately before the claim commits, exactly
-one fact is read again: the grant's own expiry, against the clock that
-commitment is decided under. A grant that expired between the door and the
-commit cannot take capacity, and the attempt answers
-`operation.not-authorized` like any other authority refusal.
+The bounds are matched at the service before the capacity transaction opens.
+Every runtime file states `taskGrantStatus`, either as a list of task
+authorities or as the keyword `unchecked-final-fifteen-minutes`; a file that
+omits it is refused at startup with
+`scheduling.runtime.missing-task-grant-status`. When `taskGrantStatus` lists
+authorities, Scheduling first obtains a fresh answer from the authority
+selected by the signed grant's source issuer. The answer
+must say the grant is active and must reproduce the exact grant id, source
+issuer, principal, client, resource, purpose, bounds, signed subject values,
+and deadline. Scheduling does not cache a positive answer. It checks again for
+an idempotent receipt replay, so revocation also closes that path.
 
-The bounds themselves are not read again at that point, and Scheduling does
-not ask the issuer whether the grant is still active, so a grant revoked or
-narrowed at the issuer after its token was minted keeps the authority its
-token carries until the token or the grant deadline passes. Casework holds
-every grant it mints to at most 900 seconds; Scheduling verifies a grant's
-deadline but does not cap it, so hold grants from any other authority to
-deadlines as short. Casework answers a grant's current status at
-`GET /v1/task-grants/{grantId}/status`, but asking it would put Casework's
-availability inside every capacity transaction. Checking grant status there
-is a recorded deferral, revisited when an adopter needs a revocation to take
-effect faster than a grant expires.
+The complete status attempt, including acquisition of Scheduling's service
+credential, is limited to ten seconds. An inactive, unlisted, mismatched, or
+incompletely bound grant answers `operation.not-authorized`. An authority or
+service credential outage, including an unusable authority response, answers
+`service.unavailable`. HTTP 401 or 403 from the status endpoint indicates
+Scheduling's service credential was rejected, so the observation is unavailable;
+it does not establish inactive task authority. HTTP 404 remains a grant refusal.
+The status call happens
+before the capacity transaction opens, so no capacity lock is held while
+Scheduling waits on another product. The answer is a fresh observation, not a
+distributed transaction with the authority: a withdrawal after a positive
+answer can race the in-flight local commit.
+
+Inside the transaction, after every lock wait and immediately before commit,
+Scheduling checks the earlier of the verified access token deadline and the
+grant deadline against the transaction clock. A credential that expires after
+the status answer cannot take capacity through a delayed transaction.
+
+`taskGrantStatus: unchecked-final-fifteen-minutes` selects the offline path:
+no authority is asked, no revocation is observed, and Scheduling accepts a
+grant only while it is unexpired with no more than 900 seconds remaining at
+request entry. A list of authorities disables that path for every source,
+including an unlisted one, which is refused even with less than 15 minutes
+left. Because the token does not name its authorization mode, the final 15
+minutes of an originally deferred grant can use the offline path on a
+deployment that writes the keyword. List the task authorities for every
+deployment that accepts deferred grants.
 
 ## What the audit records
 
@@ -144,7 +165,7 @@ taskTemplates:
       subject: scheduling-agent-service-account
     client: scheduling-agent
     resource: urn:example:scheduling
-    scopes: [scheduling-read, scheduling:commit]
+    scopes: [scheduling:read, scheduling:commit]
     purpose: schedule-registry-update
     bounds:
       type: scheduling
@@ -154,13 +175,18 @@ taskTemplates:
           actions: [appointment.create]
     subjects:
       subject_reference: subject-reference
-    lifetimeSeconds: 900
+    authorizationMode: deferred
+    # Deferred grants choose an explicit lifetime, up to seven days.
+    # Immediate grants retain their 900-second maximum.
+    lifetimeSeconds: 86400
 ```
 
 `scheduling:commit` is an explicit scope registered at the exchange issuer. The
 Scheduling runtime derives mutation authority from the grant bounds rather than
-that scope. `scheduling-read` is the starter runtime's default read scope and
-lets the same short-lived token select a currently published free start.
+that scope. The native exchange uses the issuer-compatible `scheduling:read`
+handle, so this runtime sets `readsScope: scheduling:read`; `scheduling-read`
+remains the compatibility default. The read scope lets the same short-lived
+token select a currently published free start.
 
 Register `scheduling-agent` as a Casework `taskExchange` service client, and
 register `urn:example:scheduling` plus those scopes at the shared issuer. In the
@@ -173,10 +199,27 @@ authentication:
     issuer: https://identity.example.test/realms/registry
     audience: urn:example:scheduling
     scopeClaim: scope
+    readsScope: scheduling:read
     allowedClients: [scheduling-agent]
     assertionIssuers:
       scheduling-agent: [https://casework.example.test/task-authority]
+
+taskGrantStatus:
+  - sourceIssuer: https://casework.example.test/task-authority
+    baseUrl: https://casework.example.test
+    tokenEndpoint: https://identity.example.test/realms/registry/protocol/openid-connect/token
+    clientAssertionAudience: https://identity.example.test/realms/registry
+    clientId: scheduling-task-status
+    privateKeyRef: secret:file/scheduling-task-status-private-jwk
+    caseworkResource: urn:example:casework
 ```
+
+Register `scheduling-task-status` with the identity provider for private-key
+JWT client authentication and as a Casework client allowed to read grant
+status, with the `casework:grants:status` scope. `privateKeyRef` resolves its private JWK. Add `caBundleRef` when the
+token endpoint or Casework uses a private CA. Each configured source issuer is
+pinned to its own endpoint and service credential; duplicate sources are a
+startup refusal.
 
 After a current holder previews and approves the template, put the approved
 grant UUID into the existing Casework development exchange path. Its connection
@@ -190,7 +233,7 @@ clients:
   scheduling-agent:
     assertionKeyRef: secret:file/assertion-key.jwk
     resource: urn:example:scheduling
-    scopes: [scheduling-read, scheduling:commit]
+    scopes: [scheduling:read, scheduling:commit]
 ```
 
 ```sh

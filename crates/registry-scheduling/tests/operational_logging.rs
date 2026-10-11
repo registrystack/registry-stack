@@ -49,6 +49,7 @@ fn serve_with_stdout_audit(rust_log: Option<&str>) -> std::process::Output {
             "audience": "urn:example:scheduling",
             "allowedClients": ["scheduling-test-client"]
         }},
+        "taskGrantStatus": "unchecked-final-fifteen-minutes",
         "audit": {"destination": "stdout", "hashKeyRef": "secret:env/SCHEDULING_TEST_AUDIT_KEY"},
         "destinations": {},
         "retention": {"attemptReceiptRetentionDays": 7}
