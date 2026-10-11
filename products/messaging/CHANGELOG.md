@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.40.0 - 2026-10-11
+
 v0.40.0 does not upgrade v0.39.0 state in place; apply to a new database.
 Fresh installation creates the current schema directly, without conversion
 or discard of earlier rows.

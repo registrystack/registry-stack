@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.40.0 - 2026-10-11
+
 - BREAKING: `registry-platform-httputil` writes four error words in
   kebab-case (CFG-NAME-2): `TransportKind::kind()` returns
   `response-too-large` (was `response_too_large`), `TokenError::kind()`

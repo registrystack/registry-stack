@@ -1,0 +1,42 @@
+stack:
+  release: beta-52
+  version: 0.40.0
+  source_repo: registrystack/registry-stack
+  source_tag: v0.40.0
+
+artifacts:
+  registry-manifest: 0.40.0
+  evidence: 0.40.0
+  evidencectl: 0.40.0
+  evidence-oid4vci: 0.40.0
+  evidencectl-installer: 0.40.0
+  registry-docs: 0.40.0
+  discovery: 0.40.0
+  discoveryctl: 0.40.0
+  breg: 0.40.0
+  bregctl: 0.40.0
+  breg-mcp: 0.40.0
+  breg-review: 0.40.0
+  breg-installer: 0.40.0
+  casework: 0.40.0
+  caseworkctl: 0.40.0
+  casework-installer: 0.40.0
+  scheduling: 0.40.0
+  schedulingctl: 0.40.0
+  messaging: 0.40.0
+  messagingctl: 0.40.0
+  registry-render: 0.40.0
+  registry-client-node: 0.40.0
+  registry-client-python: 0.40.0
+
+identifier_catalog:
+  path: products/identifiers/generated/catalog.v1.json
+  sha256: 88c13e10cb9989ae240b62883fee16b95e02229f2fe5b2d17495c986f241960f
+  entry_count: 239
+
+external: {}
+
+warnings:
+  - code: fresh-state-required
+    classification: breaking-change
+    detail: v0.40.0 does not upgrade v0.39.0 configuration, packages, or databases in place. Rewrite configuration, rebuild packages, and apply to new databases as release/notes/v0.40.0.md and release/notes/config-conventions/ describe.

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.40.0 - 2026-10-11
+
 - The reviewed migration descriptor schema lists only the three change classes
   its semantic checker accepts. It refuses `compatible-additive` and
   `unsupported`, matching the existing `breg.migration.change-class` refusal;
@@ -10,6 +12,28 @@
 v0.40.0 does not upgrade v0.39.0 state in place; apply to a new database.
 Fresh installation creates the current schema directly, without conversion
 or discard of earlier rows.
+
+- The Rust, Node.js, and Python clients decode the caller-filtered
+  `statisticalDatasets` metadata the runtime already publishes. Rust exposes
+  `BRegMetadata::statistical_datasets()`, Node.js exposes
+  `BRegMetadata.statisticalDatasets`, and Python exposes
+  `BRegMetadata.statistical_datasets`. The decoder requires the closed
+  dataset, dimension, calendar-period, digest, and operation shapes and
+  retains accepted descriptions as inert metadata. It accepts `read-live`,
+  `list-releases`, `read-released-series`, `read-latest-release`,
+  `read-release-version`, `publish-release`, and `withdraw-release`. A
+  release-only reader may receive the metadata with no entity or
+  entity-operation authority. Upgrade a client that reads this metadata;
+  no configuration or database migration is required.
+- Record and GeoJSON continuation requests, responses, clients, and generated
+  OpenAPI use the authenticated cursor codec's exact 10,978-byte ceiling. The
+  previously shared 4,096-byte opaque-value bound could reject a valid
+  server-issued cursor, including the observed 4,720-byte regression.
+  Snapshot tokens retain their separate 4,096-byte limit, and a cursor of
+  10,979 bytes is refused. Authenticated encryption, expiry, query binding,
+  caller binding, and cursor encoding are unchanged. Rebuild and repin
+  v0.40.0 packages because the generated OpenAPI change moves their revisions;
+  DDL hashes and action and change-request fingerprints do not move.
 
 - BREAKING: `bregctl` report `artifact`, `suggestedAction`, and baseline
   assurance words use kebab-case, such as `registry-project`,

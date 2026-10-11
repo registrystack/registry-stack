@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.40.0 - 2026-10-11
+
 - Runtime file flags use the help text "Runtime configuration file" and
   show `ABSOLUTE_FILE` wherever an absolute input path is required.
 
