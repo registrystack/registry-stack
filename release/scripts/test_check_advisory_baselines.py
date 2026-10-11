@@ -31,18 +31,18 @@ LIVE_BASELINES = (
     ROOT / "release/security/registry-render-advisory-baseline.json",
 )
 LIVE_REFERENCE_IMAGE_DIGESTS = {
-    "breg": "sha256:37ebc6ed7f2996f576163bf4a1007183f15bc2cc12e6020393f053e7b8028f79",
-    "casework": "sha256:061f5aed8fc97a70e764ccad7f5267af9f901092972ce1f2a1c33193f3f60e14",
-    "discovery": "sha256:3813e6eb4b26921243062088305e51ffe1146af36d0149b43a95712bb51f7087",
-    "evidence": "sha256:202ebd0f4fdbf15adc79e2e6a70942f415128826fb1dee7454286fc2800eb038",
-    "scheduling": "sha256:6417ed6d026c8eeb1feff67cecf0adc5e2526889a9d782abc31e2ee7808495fb",
-    "breg-mcp": "sha256:40599f4e6029c7b3a8b8153f1f22947a973e287517f99098c9c843e59b0c12e9",
-    "breg-review": "sha256:9401952839072dfbb054995fbb7a4d363bcbecb34d3cfcbb2a0b59c30daa38ba",
-    "evidence-oid4vci": "sha256:203ce11caae8b8782e290fedf97d602ad8e7f7e5c0b960f260afcb96ebb1d438",
-    "messaging": "sha256:e76c2b5ee97b8724470904ce8b8c122076fc9da78d45c56be10f1ed6f38620b9",
-    "registry-render": "sha256:89ac6e875bf333d06155c62aeaef2441d633fd17e6ad9ad7fb357270dbe08a86",
+    "breg": "sha256:d0719e66889ac76af3549699288bcb1ef46ed5d8c618ceb656055be7500332b7",
+    "casework": "sha256:e54e0915eb614d75afa24f439f9662406e2dee12ef7d87dd34fa9d97b98981b2",
+    "discovery": "sha256:ab959f9ac9f49fd09a4831936e730f07d4367834cfe2b0564eff6b863246bed6",
+    "evidence": "sha256:f094e650c793d44faf92325280807204a6209e6c34d0c5f3423c319feb2e6f6b",
+    "scheduling": "sha256:0aaf59be46374042161994bc8a811ab23005cf4e7a462f708060fdf5c672273a",
+    "breg-mcp": "sha256:f8c82164d71575ad2308078c412397c498c4cea1887317f64571fed6404d7d61",
+    "breg-review": "sha256:c1beb24953f0b5e92c79bf9961b5fbf6e6c8acfa24ddc24986202f2a31ef1af1",
+    "evidence-oid4vci": "sha256:f622725f79f9b0100117c716b41bbf54115d56b99e78d239236ffe0d4a1ebada",
+    "messaging": "sha256:9b4205104273e984c7998a43ec86cc30b225ea8bc8c81a4de4670226c6f7a54b",
+    "registry-render": "sha256:7a8970fc99648458f57b0096f16c027d701698d247a01e1b69571475644eed6b",
 }
-LIVE_REFERENCE_SOURCE_REVISION = "904776f64ed02c9f714d94245aea136ca0b6a2ad"
+LIVE_REFERENCE_SOURCE_REVISION = "10e0e22997a2e59396cdadf7894be53eca261f67"
 # The date the live exceptions below were reviewed against, stated here rather
 # than derived from the baselines: deriving it from their own reviewed_at values
 # would make the checker's future-dated guard unreachable for the newest
