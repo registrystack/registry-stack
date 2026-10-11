@@ -72,7 +72,7 @@
     {"path": "profile/context/registry-discovery-v1alpha1.jsonld", "version": "v1alpha1", "sha256": "d42c559086ab0f63fed783e7965d852ae6df58aef8dd47d97e2abc6d6844028f"},
     {"path": "profile/schema/registry-discovery-v1alpha1.schema.json", "version": "v1alpha1", "sha256": "e79c2118febed50237a25121e2378507a8c1e281d534fa5086485a4121204063"},
     {"path": "profile/shapes/registry-discovery-v1alpha1.shacl.ttl", "version": "v1alpha1", "sha256": "19890b75f14c5292c38317f12b10272c508c49936dba9918f9970f75242bcec1"},
-    {"path": "schemas/origins.schema.json", "version": "v1alpha1", "sha256": "5b122cf20d608a86aab74a8f965432220107265ee8e41bdc0b211f531b8dca8b"},
+    {"path": "schemas/origins.schema.json", "version": "v1alpha1", "sha256": "19f90f5a2f87b250dcd54d16fe1810fbea6bdd58e6ec46891e20b3c5110605d5"},
     {"path": "schemas/evidence-mapping.schema.json", "version": "v1alpha1", "sha256": "47cbeecaaa07a52b0af259faff736b4e32e6a0c1ed674634b4cc6815cb369fd4"},
     {"path": "schemas/runtime.schema.json", "version": "v1alpha1", "sha256": "d4c5894f466ce1683e7d0b3db2b86413fa71cb7cea81843d12dc1ccbafd5cff8"},
     {"path": "schemas/index.schema.json", "version": "v1alpha1", "sha256": "97014247dcc83bc148d355a5e56ffaf8ab0a522cd0f462c93a97fda19bcb6ffc"},
