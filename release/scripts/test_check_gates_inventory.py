@@ -1132,6 +1132,45 @@ class GateInventoryTest(unittest.TestCase):
                     ),
                 )
 
+    def test_missing_coordinator_workflow_gates_are_reported(self) -> None:
+        for snippet, gate in (
+            (
+                "run: python3 products/coordinator/scripts/check_dependency_direction.py",
+                "Coordinator dependency-direction guard",
+            ),
+            (
+                "run: python3 -m unittest discover -s products/coordinator/scripts -p 'test_*.py'",
+                "Coordinator product script tests",
+            ),
+        ):
+            with self.subTest(gate=gate):
+                self.assertEqual(self.workflow.count(snippet), 1)
+                text = self.workflow.replace(snippet, "run: true # disabled", 1)
+                self.assertIn(gate, self.module.missing_gates(text))
+
+    def test_coordinator_script_gates_run_whenever_the_coordinator_is_affected(
+        self,
+    ) -> None:
+        steps = yaml.safe_load(self.workflow)["jobs"]["messaging-postgres"]["steps"]
+        commands = [step.get("run") for step in steps]
+        for command in (
+            "python3 products/coordinator/scripts/check_dependency_direction.py",
+            "python3 -m unittest discover -s products/coordinator/scripts -p 'test_*.py'",
+        ):
+            with self.subTest(command=command):
+                self.assertIn(command, commands)
+                step = steps[commands.index(command)]
+                self.assertEqual(
+                    step.get("if"), "needs.changes.outputs.coordinator == 'true'"
+                )
+                self.assertNotIn("continue-on-error", step)
+                # The database-free gates answer before the PostgreSQL suite
+                # spends its build.
+                self.assertLess(
+                    commands.index(command),
+                    commands.index("products/coordinator/scripts/test-postgres.sh"),
+                )
+
     def test_linux_node_release_proof_is_two_runner_read_only_and_aggregated(
         self,
     ) -> None:

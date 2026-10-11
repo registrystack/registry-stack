@@ -490,6 +490,14 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         "cargo test --locked -p registry-messaging --features postgres-test --test postgres_migrate",
     ),
     (
+        "Coordinator dependency-direction guard",
+        "run: python3 products/coordinator/scripts/check_dependency_direction.py",
+    ),
+    (
+        "Coordinator product script tests",
+        "run: python3 -m unittest discover -s products/coordinator/scripts -p 'test_*.py'",
+    ),
+    (
         "Release Linux Node client path filter",
         "release_linux_node_clients: ${{ steps.filter.outputs.release_linux_node_clients }}",
     ),

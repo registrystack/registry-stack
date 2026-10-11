@@ -1146,6 +1146,12 @@ jobs:
         env:
           MESSAGINGCTL_BIN: ${{ github.workspace }}/target/debug/messagingctl
         run: products/messaging/scripts/test-dev.sh
+      - name: Enforce Coordinator dependency direction
+        if: needs.changes.outputs.coordinator == 'true'
+        run: python3 products/coordinator/scripts/check_dependency_direction.py
+      - name: Test Coordinator product scripts
+        if: needs.changes.outputs.coordinator == 'true'
+        run: python3 -m unittest discover -s products/coordinator/scripts -p 'test_*.py'
       - name: Prepare isolated Coordinator test databases
         if: needs.changes.outputs.coordinator == 'true'
         env:

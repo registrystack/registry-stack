@@ -243,10 +243,16 @@ Its product dependencies are client and core crates only
 `registry-messaging-client`, `registry-messaging-core`,
 `registry-scheduling-client`, and `registry-scheduling-core`), never a product
 runtime or adopter tooling crate, and its integration suites run Messaging as
-separately built executables. The Messaging and Scheduling
-dependency-direction gates enforce that for those two products on the
-Coordinator's whole forward closure, and refuse a Messaging or Scheduling
-crate that reaches the Coordinator.
+separately built executables. Beside those six it reaches the crates they
+carry (`registry-casework-core`, `registry-record`, `registry-review-client`,
+and `registry-review-protocol`), which it never names itself, and
+`registry-platform-*`; it reaches no other `registry-*` crate. No `registry-*`
+crate depends on the Coordinator except `registry-cli-docs`, which prints its
+command reference. The Coordinator dependency-direction gate,
+`products/coordinator/scripts/check_dependency_direction.py`, holds that whole
+boundary in one place on the Coordinator's whole forward closure. The
+Messaging and Scheduling dependency-direction gates hold their own part of it
+too, and refuse a Messaging or Scheduling crate that reaches the Coordinator.
 
 Registry Discovery is a curated index over public provider descriptions, not
 a trust broker, authorization service, protocol adapter, or data proxy.
@@ -540,16 +546,23 @@ cargo test --locked -p registry-coordinator --features schema
 COORDINATOR_TEST_DATABASE_URL=<disposable database> \
   COORDINATOR_MESSAGING_TEST_DATABASE_URL=<second disposable database> \
   products/coordinator/scripts/test-postgres.sh
+python3 products/coordinator/scripts/check_dependency_direction.py
+python3 -m unittest discover -s products/coordinator/scripts -p 'test_*.py'
 python3 products/messaging/scripts/check_dependency_direction.py
 python3 products/scheduling/scripts/check_dependency_direction.py
 ```
 
 The schema check fails when a committed project, runtime, or scenario schema,
-or the committed OpenAPI document, drifts from its generator. The PostgreSQL
-script needs two distinct disposable PostgreSQL 17 or newer databases, builds
-the Messaging service and `messagingctl` as separate executables, and runs
-the `postgres-test` suites, which the plain test command does not select. The
-generated files are regenerated, never hand-edited:
+or the committed OpenAPI document, drifts from its generator. The Coordinator
+dependency-direction gate reads Cargo's resolved graph with every feature
+enabled and fails when a Coordinator crate reaches a `registry-*` crate
+outside its boundary, names a carried crate directly, or is reached by a crate
+other than `registry-cli-docs`; a new product client is added to the list in
+that script and to the boundary paragraph above in the same change. The
+PostgreSQL script needs two distinct disposable PostgreSQL 17 or newer
+databases, builds the Messaging service and `messagingctl` as separate
+executables, and runs the `postgres-test` suites, which the plain test command
+does not select. The generated files are regenerated, never hand-edited:
 
 ```bash
 cargo run --locked -p registry-coordinator --features schema \

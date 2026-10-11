@@ -256,7 +256,15 @@ cargo test --locked -p registry-coordinator --features schema \
 products/coordinator/scripts/check-schemas.sh
 cargo run --locked -p registry-coordinator --bin coordinatorctl -- openapi \
   > products/coordinator/generated/openapi/coordinator.openapi.json
+python3 products/coordinator/scripts/check_dependency_direction.py
+python3 -m unittest discover -s products/coordinator/scripts -p 'test_*.py'
 ```
+
+`check_dependency_direction.py` reads Cargo's resolved dependency graph and
+fails when `registry-coordinator` reaches a `registry-*` crate other than a
+product client it is allowed, a crate such a client carries, or a
+`registry-platform-*` crate, and when a crate other than `registry-cli-docs`
+depends on the Coordinator.
 
 With dedicated disposable PostgreSQL 17+ databases configured, use
 `scripts/test-postgres.sh` for the maintained durable-state, encrypted-custody,
