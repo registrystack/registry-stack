@@ -2870,9 +2870,11 @@ test suite owns this check.
 
 A standing agent profile, one that declares `actorKind: agent` and no
 `taskGrant`, can no longer hold `publish` on a statistical dataset. The
-change is an authorization ceiling enforced at compile time. It adds no
-runtime check and changes no route, audit record, or release decision. Its
-invariant row is BREG-SEC-168.
+change is an authorization ceiling enforced by the compiler. It adds no check
+to the publication routes and changes no route, audit record, or release
+decision. The runtime compiles a package's sources again when it loads the
+package, so the rule holds at load as well as at build. Its invariant row is
+BREG-SEC-168.
 
 ### Threat
 
@@ -2932,5 +2934,23 @@ changes, because no request path changes.
   contributes the unit entity profile that authorizes it. That profile is
   neither a task-grant profile nor, under this check, a standing agent, so no
   agent token publishes through it; the project profile's grant is nominal.
-- The check is compile-time only. The runtime trusts the compiled package
-  and does not compare actor kinds again on the publication routes.
+  That conclusion rests on two refusals in `authorize_profile_claims`
+  (`crates/registry-breg/src/api/mod.rs`), which this change leaves as they
+  are. A delegated token is refused on a profile that is not an agent
+  profile; `delegated_token_is_admitted_only_by_an_agent_profile` in
+  `crates/registry-breg/src/api/tests/change_request_action_tests.rs` pins
+  that for a profile without an `actorKind`. A task-grant token is refused on
+  a profile without a task grant, and no test isolates that refusal.
+- The publication routes gain no check and do not compare actor kinds. The
+  rule runs where the compiler runs: when a package is built, and again on
+  every load, because `rederive` in `crates/registry-breg/src/package.rs`
+  compiles the packaged sources and refuses the package when they no longer
+  compile. A package built before this rule whose publisher is a standing
+  agent is therefore refused at load. That refusal is the general package
+  refusal and does not carry this diagnostic code: `breg` stops with
+  `the Registry package was refused`, and `bregctl doctor` reports
+  `startup.package.refused`. No test loads a package this rule refuses;
+  `a_package_sealed_with_the_retired_project_header_is_refused` in
+  `crates/registry-breg/tests/frozen_rhai_package.rs` shows the same load
+  path refusing a sealed package whose project source the current reader
+  refuses.
