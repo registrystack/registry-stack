@@ -13,6 +13,11 @@ OIDC discovery, JWKS caching, and JWT verification for registry services.
 - Scope mapping for translating provider scopes into platform permissions.
 - Strict extraction and client/resource binding for the shared contextual
   authorization claims.
+- Typed exact task-grant status bindings and operator-pinned status clients
+  for any task authority; the consuming product supplies each authority's
+  status route, scope, and resource. `TaskGrantStatusRegistry::validate_configuration`
+  checks the same nonsecret structure before activation without resolving
+  credentials or contacting status/token endpoints.
 
 ## Typical Use
 
@@ -95,10 +100,10 @@ The four elements of the change:
   oversized permission content that a verifier would accept and later fail to
   enforce. The closed union answers the first: an unknown tag is a malformed
   claim for every verifier, old or new. The per-value bounds answer the
-  second, and they mirror the BREG bounds exactly (64 permissions, 32 actions
+  second, and they mirror the BReg bounds exactly (64 permissions, 32 actions
   each, 512-byte service and location values, unique `(service, location)`
   pairs), so the worst case a signed claim can carry is the same
-  compositional bound BREG already allows.
+  compositional bound BReg already allows.
 - **Wire format.** The claim serializes as `"scheduling": {"permissions":
   [{"service": ..., "location": ..., "actions": [...]}]}` with
   `deny_unknown_fields` at every level; unknown members are refused, not
@@ -119,8 +124,38 @@ The four elements of the change:
   128/129-byte action boundary values, the 64-permission and 32-action
   limits, unique `(service, location)` enforcement, wildcard refusal,
   redacted `Debug` output, round-trip serialization of the tag spelling, and
-  a downstream case that BREG's binding refuses a scheduling grant because it
-  carries no BREG permissions.
+  a downstream case that BReg's binding refuses a scheduling grant because it
+  carries no BReg permissions.
+
+## Fresh task authorization status
+
+`task_grant::TaskGrantStatusBinding::from_verified` captures the original
+verified grant principal, client, resource, purpose, bounds, disclosed identity
+subjects, and deadline. Products first enforce their own supported bounds and
+claim profile. A product may retain its own persisted binding and refuse bounds
+it does not support before delegating to the shared transport.
+
+`TaskGrantStatusEndpoint` names one authority: its issuer, the base URL and the
+status path appended to it, which holds exactly one whole `{grantId}` segment,
+the token endpoint and client credentials, and the one resource and one scope
+the service credential is requested for. A runtime's `taskGrantStatus` entries
+carry these values in the shared `TaskGrantStatusConfig` block of
+`registry-platform-config`, which owns their grammar and defaults (Casework's
+status route and scope) and maps onto `TaskGrantStatusEndpoint` with `From`.
+
+`TaskGrantStatusRegistry` pins each authority to its endpoint and the resource
+server's own private-key-JWT service credential. Each `check` obtains a fresh
+strict status document and compares every immutable member. Only the service
+credential is cached; a positive authorization observation never is. Unknown
+sources, inactive/mismatched contexts, and expired grants are refused. Outages
+are unavailable. A status endpoint rejecting the resource server's service
+credential with HTTP 401 or 403 also makes the observation unavailable; it does
+not establish that the task grant is inactive. Concealed or missing grants
+(HTTP 404) remain refused. The complete observation, including service token
+acquisition, is bounded to ten seconds, with a five-second status HTTP timeout and a 64 KiB
+response ceiling. Products decide when the check precedes their effects and
+how failures map to their own API; the primitive owns no mutation or durable
+lifecycle state.
 
 ## Testing
 

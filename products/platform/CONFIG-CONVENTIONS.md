@@ -782,8 +782,9 @@ The reader refuses unknown keys in the same positions (CFG-SCHEMA-8).
 **CFG-SCHEMA-5 (MUST). Shared blocks have one definition.** The platform
 defines `ListenerConfig`, `PrivateListenerConfig`, `DatabaseConfig`,
 `OidcIssuerConfig`, `OidcClientsConfig`, `JwksSource`, `AuditKeyConfig`,
-`SecretProvidersConfig`, `SecretReference`, `IdentityConfig`,
-`ProjectIdentity`, `Url`, `LocalId`, `ExternalId`, and `Digest`. A product
+`SecretProvidersConfig`, `SecretReference`, `TaskGrantStatusConfig`,
+`IdentityConfig`, `ProjectIdentity`, `Url`, `LocalId`, `ExternalId`, and
+`Digest`. A product
 embeds a shared definition unchanged under its shared name, or flattens a
 shared block from the platform crate, and never declares its own type for a
 concept a shared block covers, whatever its shape. Embedded definitions are

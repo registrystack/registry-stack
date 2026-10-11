@@ -1664,6 +1664,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "registry-platform-config"
+version = "0.41.0"
+dependencies = [
+ "registry-platform-canonical-json",
+ "registry-platform-yaml",
+ "rustix",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "thiserror",
+ "url",
+ "zeroize",
+]
+
+[[package]]
 name = "registry-platform-crypto"
 version = "0.41.0"
 dependencies = [
@@ -1738,13 +1753,18 @@ name = "registry-platform-oidc"
 version = "0.41.0"
 dependencies = [
  "base64 0.23.1",
+ "chrono",
  "jsonwebtoken",
+ "registry-platform-config",
+ "registry-platform-crypto",
  "registry-platform-httputil",
+ "registry-platform-yaml",
  "reqwest",
  "serde",
  "serde_json",
  "thiserror",
  "tokio",
+ "uuid",
 ]
 
 [[package]]
@@ -2517,6 +2537,7 @@ checksum = "2ef6dac1e96601b4fb3acccccff2139741fcb757cb9a36089bf5be91cfb285ce"
 dependencies = [
  "getrandom 0.4.3",
  "js-sys",
+ "serde_core",
  "wasm-bindgen",
 ]
 

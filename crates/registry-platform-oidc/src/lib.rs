@@ -6,6 +6,7 @@
 //! authorization endpoints, PKCE, token minting, or refresh flows.
 
 mod authorization_claims;
+pub mod task_grant;
 
 pub use authorization_claims::{
     actor_kind, grant_claims, ActorKind, BregPermission, ClaimError, ClaimMember, ClaimNames,
