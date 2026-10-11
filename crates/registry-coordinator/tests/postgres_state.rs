@@ -143,6 +143,16 @@ impl Harness {
             .await
             .expect("synthetic test transition");
     }
+    /// A retention cutoff after every completion the database has recorded.
+    async fn retention_cutoff(&self) -> chrono::DateTime<Utc> {
+        let (client, connection) = tokio_postgres::connect(&self.url, tokio_postgres::NoTls)
+            .await
+            .expect("test connection");
+        tokio::spawn(async move {
+            connection.await.expect("test connection finishes");
+        });
+        database_clock::retention_cutoff(&client).await
+    }
 }
 impl Harness {
     async fn replace_protected<T: serde::Serialize>(&self, run: Uuid, purpose: &str, value: &T) {
@@ -1794,7 +1804,7 @@ async fn terminal_retention_keeps_spent_idempotency_keys_across_payload_rotation
     assert!(before_retention.oldest_terminal_payload_at.is_some());
     assert_eq!(
         rotated
-            .retain_terminal(Utc::now(), 100, &operator)
+            .retain_terminal(h.retention_cutoff().await, 100, &operator)
             .await
             .unwrap(),
         1
@@ -2423,11 +2433,12 @@ async fn terminal_retention_and_cancellation_share_the_job_then_run_lock_order()
     )
     .await
     .unwrap();
+    let cutoff = h.retention_cutoff().await;
     let retention = {
         let store = h.store.clone();
         tokio::spawn(async move {
             store
-                .retain_terminal(Utc::now(), 100, &actor("operator", true))
+                .retain_terminal(cutoff, 100, &actor("operator", true))
                 .await
         })
     };
@@ -2563,7 +2574,7 @@ async fn expired_settled_payloads_are_erased_but_live_uncertain_and_restored_wor
         assert_eq!(h.store.doctor().await.unwrap().terminal_payloads, expected);
         assert_eq!(
             h.store
-                .retain_terminal(Utc::now(), 100, &actor("operator", true))
+                .retain_terminal(h.retention_cutoff().await, 100, &actor("operator", true))
                 .await
                 .unwrap(),
             expected as u64
@@ -2876,7 +2887,7 @@ async fn known_step_success_commits_when_following_wait_mapping_is_invalid() {
                 .unwrap();
             assert_eq!(
                 h.store
-                    .retain_terminal(Utc::now(), 100, &operator)
+                    .retain_terminal(h.retention_cutoff().await, 100, &operator)
                     .await
                     .unwrap(),
                 1
@@ -2959,7 +2970,7 @@ async fn original_receipt_commits_known_effect_despite_invalid_following_wait() 
         .unwrap();
     assert_eq!(
         h.store
-            .retain_terminal(Utc::now(), 100, &operator)
+            .retain_terminal(h.retention_cutoff().await, 100, &operator)
             .await
             .unwrap(),
         1
@@ -2992,7 +3003,7 @@ async fn failed_dead_letter_remains_recoverable_and_ineligible_for_retention() {
     assert_eq!(h.store.doctor().await.unwrap().terminal_payloads, 0);
     assert_eq!(
         h.store
-            .retain_terminal(Utc::now(), 100, &operator)
+            .retain_terminal(h.retention_cutoff().await, 100, &operator)
             .await
             .unwrap(),
         0
@@ -3011,7 +3022,7 @@ async fn failed_dead_letter_remains_recoverable_and_ineligible_for_retention() {
         .unwrap();
     assert_eq!(
         h.store
-            .retain_terminal(Utc::now(), 100, &operator)
+            .retain_terminal(h.retention_cutoff().await, 100, &operator)
             .await
             .unwrap(),
         0
@@ -3530,7 +3541,7 @@ async fn attested_unprepared_mutations_remain_held_until_explicit_retry_or_cance
                         .unwrap();
                     assert_eq!(
                         h.store
-                            .retain_terminal(Utc::now(), 100, &operator)
+                            .retain_terminal(h.retention_cutoff().await, 100, &operator)
                             .await
                             .unwrap(),
                         1
@@ -3649,7 +3660,7 @@ async fn restored_prepared_pending_mutations_require_explicit_retry_or_cancel() 
                 assert!(fake.requests.lock().unwrap().is_empty());
                 assert_eq!(
                     h.store
-                        .retain_terminal(Utc::now(), 100, &operator)
+                        .retain_terminal(h.retention_cutoff().await, 100, &operator)
                         .await
                         .unwrap(),
                     1
@@ -3693,6 +3704,9 @@ impl AdapterSet for RetryableRead {
 
 #[path = "support/restore_pending.rs"]
 mod restore_pending;
+
+#[path = "support/database_clock.rs"]
+mod database_clock;
 
 #[tokio::test]
 async fn restored_prepared_pending_keeps_deadline_and_cancelled_retention() {
@@ -3740,7 +3754,7 @@ async fn restored_prepared_pending_keeps_deadline_and_cancelled_retention() {
                 .unwrap();
             assert_eq!(
                 h.store
-                    .retain_terminal(Utc::now(), 100, &operator)
+                    .retain_terminal(h.retention_cutoff().await, 100, &operator)
                     .await
                     .unwrap(),
                 1
@@ -4030,7 +4044,7 @@ async fn expired_read_after_deadline_is_cancellable_and_retirable_without_replay
             assert_eq!(status.state, "cancelled");
             assert_eq!(
                 h.store
-                    .retain_terminal(Utc::now(), 100, &operator)
+                    .retain_terminal(h.retention_cutoff().await, 100, &operator)
                     .await
                     .unwrap(),
                 1

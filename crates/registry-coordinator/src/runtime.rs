@@ -29,6 +29,7 @@ const REMOVED_KEYS: &[RemovedKey] = &[RemovedKey {
 #[serde(rename_all = "kebab-case")]
 pub enum Product {
     Breg,
+    Casework,
     Messaging,
     Scheduling,
 }
@@ -195,6 +196,75 @@ pub struct ConnectionConfig {
         schemars(with = "Option<registry_platform_yaml::ExternalId>")
     )]
     pub profile: Option<String>,
+    /// Required for Casework connections and refused for every other product:
+    /// the review producer id the Casework project lists under
+    /// reviewProducers. Casework binds every submission to it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "optional_local")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<registry_platform_yaml::LocalId>")
+    )]
+    pub producer: Option<String>,
+    /// Casework connections only. Omitted means Casework sends this
+    /// Coordinator no completion events, and a review wait learns the result
+    /// only from its result checks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completion: Option<ReviewCompletionConfig>,
+    /// Casework connections only: the seconds between two result checks while
+    /// a review wait is open, whether or not a completion event arrives.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(extend("default" = DEFAULT_RESULT_CHECK_SECONDS)))]
+    pub result_check_seconds: Option<registry_platform_yaml::BoundedU32<60, 86_400>>,
+}
+
+/// The seconds between two result checks of an open review wait when
+/// resultCheckSeconds is omitted.
+pub const DEFAULT_RESULT_CHECK_SECONDS: u32 = 900;
+
+impl ConnectionConfig {
+    /// The seconds between two result checks of an open review wait.
+    pub fn result_check_seconds(&self) -> u32 {
+        self.result_check_seconds.map_or(
+            DEFAULT_RESULT_CHECK_SECONDS,
+            registry_platform_yaml::BoundedU32::get,
+        )
+    }
+}
+
+/// How Casework's completion event for this connection's review requests is
+/// authenticated. The event only wakes a waiting run: the run reads the result
+/// itself with its own producer authorization.
+#[derive(Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReviewCompletionConfig {
+    /// The recipientBinding the Casework project names for this producer's
+    /// completion destination: 1 to 256 printable ASCII characters without
+    /// spaces. Casework sends it in the registry-recipient-binding header.
+    #[cfg_attr(
+        feature = "schema",
+        schemars(extend("pattern" = "^[!-~]{1,256}$", "minLength" = 1, "maxLength" = 256))
+    )]
+    pub recipient_binding: String,
+    /// The bearer token Casework's completion destination sends.
+    pub bearer_token_ref: SecretReference,
+}
+
+/// A completion recipient binding as Casework accepts one.
+pub(crate) fn valid_recipient_binding(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 256
+        && value.bytes().all(|byte| (0x21..=0x7e).contains(&byte))
+}
+
+/// A Casework access profile as the Casework client sends one.
+fn valid_casework_profile(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':'))
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -346,6 +416,7 @@ impl RuntimeConfig {
         if let Some(deployment) = &self.deployment {
             errors.extend(deployment.findings(&self.secret_providers));
         }
+        let mut recipients = std::collections::BTreeSet::new();
         for (name, binding) in &self.connections {
             if name.parse::<registry_platform_yaml::LocalId>().is_err() {
                 errors.push(config_error(
@@ -473,6 +544,49 @@ impl RuntimeConfig {
                         "declare a bounded BReg access profile accepted by the BReg client",
                     ));
                 }
+                Product::Casework => {
+                    if binding
+                        .profile
+                        .as_deref()
+                        .is_none_or(|profile| !valid_casework_profile(profile))
+                    {
+                        errors.push(config_error(
+                            &format!("{field}.profile"),
+                            "declare the bounded Casework access profile the review producer authenticates with",
+                        ));
+                    }
+                    if binding.producer.is_none() {
+                        errors.push(config_error(
+                            &format!("{field}.producer"),
+                            "declare the review producer id the Casework project lists under reviewProducers",
+                        ));
+                    }
+                    if let Some(completion) = &binding.completion {
+                        let member = format!("{field}.completion.recipientBinding");
+                        if !valid_recipient_binding(&completion.recipient_binding) {
+                            errors.push(config_error(
+                                &member,
+                                "write the recipientBinding the Casework producer's completion names: 1 to 256 printable ASCII characters without spaces",
+                            ));
+                        } else if !recipients.insert(completion.recipient_binding.as_str()) {
+                            errors.push(config_error(
+                                &member,
+                                "use a recipientBinding no other Casework connection declares, so every completion event names one connection",
+                            ));
+                        }
+                        let member = format!("{field}.completion.bearerTokenRef");
+                        if self
+                            .secret_providers
+                            .check_reference(&member, completion.bearer_token_ref.as_str())
+                            .is_err()
+                        {
+                            errors.push(config_error(
+                                &member,
+                                "enable the secretProviders entry named by the completion token reference",
+                            ));
+                        }
+                    }
+                }
                 Product::Messaging | Product::Scheduling if binding.profile.is_some() => {
                     errors.push(config_error(
                         &format!("{field}.profile"),
@@ -480,6 +594,20 @@ impl RuntimeConfig {
                     ));
                 }
                 _ => {}
+            }
+            if binding.product != Product::Casework {
+                for (member, present) in [
+                    ("producer", binding.producer.is_some()),
+                    ("completion", binding.completion.is_some()),
+                    ("resultCheckSeconds", binding.result_check_seconds.is_some()),
+                ] {
+                    if present {
+                        errors.push(config_error(
+                            &format!("{field}.{member}"),
+                            &format!("remove {member}; only Casework connections submit and wait for review requests"),
+                        ));
+                    }
+                }
             }
         }
         for (name, binding) in &self.external_http_connections {
@@ -559,6 +687,7 @@ impl RuntimeConfig {
             }
             let expected = match product.as_str() {
                 "breg" => Product::Breg,
+                "casework" => Product::Casework,
                 "messaging" => Product::Messaging,
                 "scheduling" => Product::Scheduling,
                 _ => {
@@ -693,10 +822,17 @@ impl RuntimeConfig {
             let auth = &binding.authorization;
             let mut scopes = auth.scopes.clone();
             scopes.sort();
-            identities.insert(name, json!({"product":binding.product,"baseUrl":binding.base_url,
+            let mut identity = json!({"product":binding.product,"baseUrl":binding.base_url,
                 "clientId":auth.client_id,"tokenEndpoint":auth.token_endpoint,
                 "clientAssertionAudience":auth.client_assertion_audience.as_deref().unwrap_or(auth.token_endpoint.as_str()),
-                "resource":auth.resource,"scopes":scopes,"profile":binding.profile,"taskAuthority":auth.task_authority,"observationAuthorization":binding.observation_authorization.as_ref().map(|auth| json!({"tokenEndpoint":auth.token_endpoint,"clientId":auth.client_id,"resource":auth.resource,"clientAssertionAudience":auth.client_assertion_audience.as_deref().unwrap_or(auth.token_endpoint.as_str()),"scopes":({let mut s=auth.scopes.clone();s.sort();s})})),"abi":"coordinator-adapters/v1"}));
+                "resource":auth.resource,"scopes":scopes,"profile":binding.profile,"taskAuthority":auth.task_authority,"observationAuthorization":binding.observation_authorization.as_ref().map(|auth| json!({"tokenEndpoint":auth.token_endpoint,"clientId":auth.client_id,"resource":auth.resource,"clientAssertionAudience":auth.client_assertion_audience.as_deref().unwrap_or(auth.token_endpoint.as_str()),"scopes":({let mut s=auth.scopes.clone();s.sort();s})})),"abi":"coordinator-adapters/v1"});
+            // Casework binds every submission to its producer. The completion
+            // settings only decide how a waiting run is woken, so changing them
+            // never strands an admitted run.
+            if binding.product == Product::Casework {
+                identity["producer"] = json!(binding.producer);
+            }
+            identities.insert(name, identity);
         }
         let value = serde_json::to_value(identities)
             .map_err(|_| config_error("connections", "correct the binding model"))?;
@@ -863,6 +999,17 @@ pub fn runtime_schema() -> Result<String> {
             "properties": {"observationAuthorization": {"type": "object"}}
         },
         "else": {"not": {"required": ["observationAuthorization"]}}
+    }, {
+        "if": {
+            "required": ["product"],
+            "properties": {"product": {"const": "casework"}}
+        },
+        "then": {"required": ["producer", "profile"]},
+        "else": {"not": {"anyOf": [
+            {"required": ["producer"]},
+            {"required": ["completion"]},
+            {"required": ["resultCheckSeconds"]}
+        ]}}
     }]);
     let mut text = serde_json::to_string_pretty(&schema)
         .map_err(|_| config_error("/", "restore the runtime schema generator"))?;
@@ -959,6 +1106,11 @@ fn optional_external<'de, D: Deserializer<'de>>(
     d: D,
 ) -> std::result::Result<Option<String>, D::Error> {
     external(d).map(Some)
+}
+fn optional_local<'de, D: Deserializer<'de>>(
+    d: D,
+) -> std::result::Result<Option<String>, D::Error> {
+    registry_platform_yaml::LocalId::deserialize(d).map(|id| Some(id.into_string()))
 }
 
 #[cfg(feature = "schema")]

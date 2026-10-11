@@ -123,6 +123,8 @@ static CATALOG: &[OperationDescriptor] = &[
         recovery: RecoverySemantics::HoldAfterDispatch,
         read_receipt: false,
     },
+    mutation("submit-review-request", "casework", false, false),
+    mutation("cancel-review-request", "casework", false, false),
 ];
 
 pub fn descriptors() -> &'static [OperationDescriptor] {
@@ -176,6 +178,8 @@ mod tests {
             (Operation::InvokeBregAction, "invoke-breg-action"),
             (Operation::ExternalGet, "external-get"),
             (Operation::EvaluateDecision, "evaluate-decision"),
+            (Operation::SubmitReviewRequest, "submit-review-request"),
+            (Operation::CancelReviewRequest, "cancel-review-request"),
         ] {
             let encoded = serde_json::to_value(operation).unwrap();
             assert_eq!(encoded, name);
@@ -233,6 +237,17 @@ mod tests {
         assert!(!Operation::EvaluateDecision.requires_key());
         assert!(Operation::EvaluateDecision.requires_preparation());
         assert!(!Operation::EvaluateDecision.supports_read_receipt());
+        for review in [
+            Operation::SubmitReviewRequest,
+            Operation::CancelReviewRequest,
+        ] {
+            assert_eq!(review.product(), "casework");
+            assert!(review.is_mutating());
+            assert!(review.requires_key());
+            assert!(!review.requires_preparation());
+            assert!(!review.supports_read_receipt());
+            assert_eq!(review.recovery(), RecoverySemantics::SameCommand);
+        }
     }
 
     #[test]

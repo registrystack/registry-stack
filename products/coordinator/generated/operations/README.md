@@ -13,6 +13,8 @@ Each catalog operation has an input contract, the type its adapter decodes, and 
 | [`invoke-breg-action`](#invoke-breg-action) | 1 | `breg` | mutation | required | required | same-command | none |
 | [`external-get`](#external-get) | 1 | `external-http` | read | none | none | read-again | none |
 | [`evaluate-decision`](#evaluate-decision) | 1 | `decision` | evaluation | none | required | hold-after-dispatch | none |
+| [`submit-review-request`](#submit-review-request) | 1 | `casework` | mutation | required | none | same-command | none |
+| [`cancel-review-request`](#cancel-review-request) | 1 | `casework` | mutation | required | none | same-command | none |
 
 ## read-record
 
@@ -201,3 +203,67 @@ Output ([`evaluate-decision.output.schema.json`](evaluate-decision.output.schema
 | `usage` | any | yes |
 
 Other members are tolerated.
+
+## submit-review-request
+
+Input ([`submit-review-request.input.schema.json`](submit-review-request.input.schema.json)):
+
+| Member | Type | Required |
+|---|---|---|
+| `context` | `ReviewContext` | yes |
+| `initiator` | `HumanIdentity` or null | no |
+| `kind` | string | yes |
+| `requesterReference` | string | yes |
+| `resultConstraints` | any | no |
+| `subject` | `SubjectBinding` | yes |
+
+No other members are accepted.
+
+Output ([`submit-review-request.output.schema.json`](submit-review-request.output.schema.json)):
+
+| Member | Type | Required |
+|---|---|---|
+| `policy` | `PolicyBinding` | yes |
+| `requestId` | string (uuid) | yes |
+| `subject` | `SubjectBinding` | yes |
+| `submissionDigest` | `ContentDigest` | yes |
+
+No other members are accepted.
+
+## cancel-review-request
+
+Input ([`cancel-review-request.input.schema.json`](cancel-review-request.input.schema.json)):
+
+| Member | Type | Required |
+|---|---|---|
+| `reason` | string | yes |
+| `request` | `ReviewRequestAccepted` | yes |
+
+No other members are accepted.
+
+Output ([`cancel-review-request.output.schema.json`](cancel-review-request.output.schema.json)):
+
+One of 2 shapes; see the schema.
+
+## Wait events
+
+A wait-for step waits for one event. When the event arrives, the step continues with `next` and holds the event as its output, so a reference into a wait-for step's output must name a path the event contract declares. A step reached by `onTimeout` reads no event.
+
+### review-result
+
+The result of a review request a `submit-review-request` step submitted, once the reviewing product reports it complete ([`review-result.event.schema.json`](review-result.event.schema.json)):
+
+| Member | Type | Required |
+|---|---|---|
+| `availableUntil` | string (date-time) | yes |
+| `completedAt` | string (date-time) | yes |
+| `outcome` | string or null | no |
+| `policy` | `PolicyBinding` | yes |
+| `requestId` | string (uuid) | yes |
+| `result` | any | no |
+| `resultId` | string (uuid) | yes |
+| `status` | `ReviewResultStatus` | yes |
+| `subject` | `SubjectBinding` | yes |
+| `submissionDigest` | `ContentDigest` | yes |
+
+No other members are accepted.

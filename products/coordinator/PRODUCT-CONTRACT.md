@@ -8,8 +8,9 @@ their effects.
 
 ## Execution and authority
 
-A workflow can read current records, wait durably, choose a branch, call an
-approved product operation and finish with a declared outcome. The authored
+A workflow can read current records, wait durably until an instant or for a
+review result, choose a branch, call an approved product operation and finish
+with a declared outcome. The authored
 package contains the graph, functions and schemas; deployment configuration
 binds its logical connections to endpoints and identities.
 
@@ -21,13 +22,51 @@ runtime steps.
 They read no clock: `add_seconds` and `seconds_between` compute only over the
 RFC 3339 instants they are given.
 
-The eight supported operations are `read-record`, `submit-message`,
+The ten supported operations are `read-record`, `submit-message`,
 `read-scheduling`, `read-availability`, `create-appointment`, `invoke-breg-action`,
-`external-get`, and `evaluate-decision`.
+`external-get`, `evaluate-decision`, `submit-review-request` and
+`cancel-review-request`.
 Messaging submission and Scheduling appointment creation support same-command
 recovery and read-only original-key receipts. Base Registry Engine (BReg) action
-invocation supports same-command recovery without a read-only action receipt. The four read
-operations can be read again.
+invocation and the two Casework review operations support same-command recovery
+without a read-only receipt. The four read operations can be read again.
+
+`submit-review-request` and `cancel-review-request` act as one Casework review
+producer, named by the connection, under that producer's own service identity
+and with no task authority. A submission names the review kind, the subject
+record with its version and digest, the context a reviewer sees and the requester's
+reference; its output is Casework's acceptance. Casework decides who reviews,
+what outcomes a kind allows and whether a request supersedes another; the
+Coordinator adds no review semantics. A cancellation reports `cancelled`, or
+`already-terminal` with the result that ended the review first; a workflow
+routes on the cancel step's `/outcome`, since only `cancelled` means the
+cancellation ended the review.
+
+A `wait-for` step waits for the result of a review request an earlier
+`submit-review-request` step submitted on every route to it. `timeoutSeconds`
+is required and shorter than the run deadline. The step reads the result with
+the producer identity when it starts, every `resultCheckSeconds` of the
+connection while the review is open, and once more at the timeout. A read
+that cannot get an answer before the timeout leaves the wait open and spends
+no attempt; its next read follows Casework's `Retry-After`, from 30 seconds up
+to `resultCheckSeconds`, and without one comes five minutes later, or after
+`resultCheckSeconds` when that is shorter. A settled
+result continues the run at `next` as the step's output after it matches the
+accepted request, subject, policy and submission digest. The timeout continues
+the run at `onTimeout`, or fails it with `wait-timed-out`. An unknown request
+fails with `review-request-unknown` and an expired result with
+`review-result-expired`; the run deadline still ends the run as it ends any
+step. Casework may supersede a request still under review when the same
+producer submits another for the same subject record and kind; the waiting
+run then reads the result `superseded`.
+
+Casework's completion event for a request reaches `POST /v1/review-completions`
+on the service listener with a configured bearer token and recipient binding.
+The event is a wake-up only: it brings forward the next result read of a run
+waiting on that request, never sooner than 30 seconds after the previous read,
+and carries no result the Coordinator acts on. Every authentic event is
+acknowledged alike, whether or not a run waits on its request. No event starts
+a run.
 
 `invoke-breg-action` uses a standing BReg service identity and an explicitly
 permitted profile for an immediate governed action. Its input contains `action`
@@ -193,7 +232,11 @@ resolve secret values. An explicitly supplied runtime is checked once.
 Scenario files use `kind: CoordinatorScenarios` and the API version
 `id.registrystack.org/formats/coordinator/scenarios/v1alpha1`. Each case has a unique local `id`. Replies name their `type`: `success` carries a
 foreign JSON `value`; `retryable`, `refused` and `uncertain` carry a `code`;
-`receipt-expired` has no additional members. Inputs, successful replies and
+`receipt-expired` has no additional members. `waits` states what each
+`wait-for` step the run reaches receives: `{type: event, value}` delivers the
+event when the wait starts, and `{type: timeout}` moves the virtual clock by
+the step's `timeoutSeconds`. A run without `onTimeout` stops as `timed-out`,
+and one whose deadline passes first as `deadline-exceeded`. Inputs, successful replies and
 expected outputs are foreign JSON values, including explicit nulls, while
 ordinary scenario configuration follows the shared reader rules. An omitted
 expected outcome is not checked; `{type: none}` checks its absence and
@@ -227,7 +270,9 @@ reconstruction is distinct from OS-process restart, which retains separate
 `process_restart` coverage. PostgreSQL worker checks separately exercise
 preparation and crash durability. The separate `scripts/test-real-services.py`
 journey composes BReg, Casework, Scheduling and Messaging with a persisted wait
-and an actual worker restart.
+and an actual worker restart. It also runs the reviewed-notice flow against a
+real Casework review producer whose completion events wake the waiting runs;
+its timeout route is proven by scenarios only.
 See [the contributor checks](README.md#verify-a-change)
 for the explicit helper and its two distinct disposable loopback databases.
 Successful runs clean up UUID-owned fixture resources; assertion failures may

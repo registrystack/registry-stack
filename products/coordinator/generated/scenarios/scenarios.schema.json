@@ -182,6 +182,17 @@
             "$ref": "#/$defs/LocalId"
           },
           "type": "object"
+        },
+        "waits": {
+          "additionalProperties": {
+            "$ref": "#/$defs/AuthoredWait"
+          },
+          "description": "What each wait-for step the run reaches receives, by step: the event\nit waits for, or its timeout.",
+          "maxProperties": 64,
+          "propertyNames": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "type": "object"
         }
       },
       "required": [
@@ -192,6 +203,43 @@
         "expect"
       ],
       "type": "object"
+    },
+    "AuthoredWait": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "The event arrives when the wait starts; the run continues at the\nstep's `next` with `value` as the step's output.",
+          "properties": {
+            "type": {
+              "const": "event",
+              "type": "string"
+            },
+            "value": {
+              "description": "The event, which must satisfy the step's event contract. A review\nresult must also be one the review protocol accepts, for the\nrequest identifier, subject, policy and submission digest the\nrequest step accepted.",
+              "x-registry-foreign": "json"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "No event arrives: the clock moves by the step's `timeoutSeconds`, and\nthe run continues at its `onTimeout`, or stops as `timed-out` when the\nstep has none. A deadline that passes first stops the run as\n`deadline-exceeded`.",
+          "properties": {
+            "type": {
+              "const": "timeout",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        }
+      ]
     },
     "ExpectedOutcome": {
       "oneOf": [
@@ -231,12 +279,13 @@
       ]
     },
     "ExpectedState": {
-      "description": "A state a scenario run stops in: `completed` (a finish step ran),\n`refused`, `retryable`, `uncertain`, or `deadline-exceeded` (the workflow\ndeadline passed first).",
+      "description": "A state a scenario run stops in: `completed` (a finish step ran),\n`refused`, `retryable`, `uncertain`, `timed-out` (a wait's timeout passed\nand the wait has no `onTimeout`), or `deadline-exceeded` (the workflow\ndeadline passed first).",
       "enum": [
         "completed",
         "refused",
         "retryable",
         "uncertain",
+        "timed-out",
         "deadline-exceeded"
       ],
       "type": "string"

@@ -292,6 +292,7 @@ impl Store {
                 tx.execute(&format!("UPDATE {}.runs SET cancel_requested=true,state=$2,completed_at=CASE WHEN $2='cancelled' THEN transaction_timestamp() ELSE completed_at END WHERE run_id=$1",self.namespace),&[&run,&next]).await.map_err(unavailable)?;
                 cancelled=next=="cancelled";
             }
+            self.end_waits(&tx,run,&step,false).await.map_err(unavailable)?;
             tx.commit().await.map_err(unavailable)?;
             // A pending step is cancelled by Dispatch below, which counts it.
             if cancelled { self.metrics.record_run_finished(RunOutcome::Cancelled); }
@@ -339,7 +340,7 @@ impl Store {
                 let input_row=tx.query_one(&format!("SELECT input FROM {}.runs WHERE run_id=$1",self.namespace),&[&run]).await.map_err(unavailable)?;
                 let input:Value=self.open_value(run,"input","",&input_row.get::<_,Value>(0))?;
                 let payload=Payload{snapshot,input,outputs,command:Some(command)};
-                let detail=Detail{next:Some(next.clone()),output:Some(value),outcome:None,failure_code:None,failure_path:None,uncertain:false,receipt_expired:false};
+                let detail=Detail{next:Some(next.clone()),output:Some(value),outcome:None,failure_code:None,failure_path:None,uncertain:false,receipt_expired:false,recheck_seconds:None};
                 let written=self.apply_success(&tx,run,&step,payload,&detail,current.get(4)).await.map_err(unavailable)?;
                 let mapping_failed=written=="failed";
                 tx.execute(&format!("UPDATE {}.jobs SET state='delivered',attempt=GREATEST(attempt,1),uncertain=false,next_attempt_at=NULL,attempt_started_at=NULL,lease_expires_at=NULL,lease_token=NULL,delivered_at=transaction_timestamp(),dead_lettered_at=NULL,expired_at=NULL,failure_code=NULL,failure_path=NULL WHERE run_id=$1 AND step=$2",self.namespace),&[&run,&step]).await.map_err(unavailable)?;
@@ -716,9 +717,10 @@ impl Store {
                             call.operation.is_read() || command.is_none()
                         }
                     }
-                    Some(Step::WaitUntil { .. }) => {
+                    Some(Step::WaitUntil { .. } | Step::WaitFor { .. }) => {
                         // Waits have no remote effect, but their original
                         // deadline still applies, so Dispatch marks them non-pure.
+                        // A wait-for reads a result and freezes no command.
                         if pure || command.is_some() {
                             return Err(invalid());
                         }
@@ -755,6 +757,9 @@ impl Store {
                     RunOutcome::Failed
                 };
                 tx.execute(&format!("UPDATE {}.runs SET state=$2,failure_code=$3,failure_path=NULL,completed_at=clock_timestamp() WHERE run_id=$1",self.namespace),&[&run,&state.as_str(),&failure_code]).await.map_err(unavailable)?;
+                self.end_waits(tx, run, &step, false)
+                    .await
+                    .map_err(unavailable)?;
                 held.push(state);
             }
         }
@@ -769,7 +774,8 @@ impl Store {
                 continue;
             }
             match definition.workflow.steps.get(step) {
-                Some(Step::Call { .. }) | None => return false,
+                // A wait-for reads its result from the product that owns it.
+                Some(Step::Call { .. } | Step::WaitFor { .. }) | None => return false,
                 Some(Step::Choose { cases, .. }) => {
                     pending.extend(cases.values().map(String::as_str))
                 }
@@ -827,6 +833,7 @@ impl Store {
                 if eligible.is_none(){continue;}
                 tx.execute(&format!("UPDATE {}.runs SET snapshot=NULL,input=NULL,outputs=NULL,terminal_output=NULL,payload_erased_at=transaction_timestamp() WHERE run_id=$1",self.namespace),&[&run]).await.map_err(unavailable)?;
                 tx.execute(&format!("UPDATE {}.jobs SET command=NULL WHERE run_id=$1",self.namespace),&[&run]).await.map_err(unavailable)?;
+                tx.execute(&format!("DELETE FROM {}.review_waits WHERE run_id=$1",self.namespace),&[&run]).await.map_err(unavailable)?;
                 erased+=1;
             }
             tx.commit().await.map_err(unavailable)?;Ok(erased)

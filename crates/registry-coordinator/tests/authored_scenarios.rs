@@ -196,12 +196,22 @@ fn scenario_schema_keeps_foreign_payloads_and_closed_tagged_forms() {
         schema["$defs"]["AuthoredScenario"]["properties"]["replies"]["maxProperties"],
         64
     );
-    assert!(schema["$defs"]["AuthoredReply"]["oneOf"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .all(|variant| variant["additionalProperties"] == false
-            && variant["properties"]["type"]["const"].is_string()));
+    assert_eq!(
+        schema["$defs"]["AuthoredScenario"]["properties"]["waits"]["maxProperties"],
+        64
+    );
+    assert_eq!(
+        schema["$defs"]["AuthoredWait"]["oneOf"][0]["properties"]["value"]["x-registry-foreign"],
+        "json"
+    );
+    for tagged in ["AuthoredReply", "AuthoredWait"] {
+        assert!(schema["$defs"][tagged]["oneOf"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|variant| variant["additionalProperties"] == false
+                && variant["properties"]["type"]["const"].is_string()));
+    }
 }
 
 #[test]

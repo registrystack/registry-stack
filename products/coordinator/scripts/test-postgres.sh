@@ -23,4 +23,4 @@ export COORDINATOR_MESSAGING_BIN="$coordinator_test_target/debug/messaging"
 export COORDINATOR_MESSAGINGCTL_BIN="$coordinator_test_target/debug/messagingctl"
 cargo test --locked -p registry-coordinator --features postgres-test --lib \
   --test postgres_state --test recovery_audit --test messaging_integration --test process_restart \
-  --test deployment_postgres
+  --test deployment_postgres --test review_wait_postgres

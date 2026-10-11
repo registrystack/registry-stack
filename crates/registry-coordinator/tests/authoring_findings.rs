@@ -774,37 +774,19 @@ fn check_reports_every_independent_error_in_one_run() {
     );
 }
 
-/// The section of the guide that shows a bounded wait-and-read loop.
-const POLLING: &str = "products/coordinator/README.md#waits-and-polling";
-
 #[test]
-fn a_casework_connection_points_at_a_timed_wait_and_polling() {
+fn a_casework_connection_offers_the_review_producer_operations() {
     let findings = checked_workflow(&[("applications: breg", "applications: casework")]);
-    assert_eq!(findings.len(), 1, "{findings:#?}");
-    let found = finding(
-        &findings,
-        "/connections/applications",
-        "config.unknown-variant",
-        &["casework", "`external-http`"],
-    );
-    let action = found["suggestedAction"].as_str().unwrap();
-    for expected in ["wait-until", POLLING] {
-        assert!(action.contains(expected), "{expected}: {action}");
+    assert!(!findings.is_empty(), "{findings:#?}");
+    let found = findings
+        .iter()
+        .find(|finding| finding["path"] == "/steps/read-application/operation")
+        .unwrap_or_else(|| panic!("{findings:#?}"));
+    let message = found["message"].as_str().unwrap();
+    for expected in ["casework", "submit-review-request", "cancel-review-request"] {
+        assert!(message.contains(expected), "{expected}: {message}");
     }
-}
-
-#[test]
-fn a_wait_for_step_points_at_a_timed_wait_and_polling() {
-    let findings = checked_workflow(&[("type: wait-until", "type: wait-for")]);
-    assert_eq!(findings.len(), 1, "{findings:#?}");
-    let found = finding(
-        &findings,
-        "/steps/due/type",
-        "config.unknown-variant",
-        &["wait-for", "`wait-until`"],
-    );
-    let action = found["suggestedAction"].as_str().unwrap();
-    for expected in ["wait-until", POLLING] {
-        assert!(action.contains(expected), "{expected}: {action}");
-    }
+    assert!(findings
+        .iter()
+        .all(|finding| finding["code"] != "config.unknown-variant"));
 }

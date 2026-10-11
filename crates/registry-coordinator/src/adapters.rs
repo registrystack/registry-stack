@@ -25,7 +25,9 @@ use url::Url;
 use uuid::Uuid;
 
 use crate::{
-    protocol::{AdapterSet, CallOutcome, CallRequest, Operation, ReconciliationOutcome},
+    protocol::{
+        AdapterSet, CallOutcome, CallRequest, Operation, ReconciliationOutcome, ReviewRead,
+    },
     CoordinatorError, Result,
 };
 
@@ -48,6 +50,7 @@ enum Connection {
         client: MessagingClient,
         tokens: Arc<PrivateKeyJwt>,
     },
+    Casework(Box<crate::review::CaseworkConnection>),
     External(Box<crate::external_http::ExternalHttpConnection>),
     Decision(Box<crate::decision::DecisionConnection>),
 }
@@ -236,6 +239,47 @@ impl HttpAdapters {
                     .map_err(|_| config_error())?;
                     Connection::Messaging { client, tokens }
                 }
+                Product::Casework => {
+                    let result_check_seconds = binding.result_check_seconds.map_or(
+                        crate::runtime::DEFAULT_RESULT_CHECK_SECONDS,
+                        registry_platform_yaml::BoundedU32::get,
+                    );
+                    let completion = match &binding.completion {
+                        Some(completion) => {
+                            let bytes = secrets
+                                .resolve_reference(&completion.bearer_token_ref)
+                                .map_err(|_| config_error())?;
+                            let token = std::str::from_utf8(bytes.expose_secret())
+                                .map_err(|_| config_error())?;
+                            if !valid_completion_token(token) {
+                                return Err(config_error());
+                            }
+                            Some(crate::review::CompletionSender {
+                                token: zeroize::Zeroizing::new(token.to_owned()),
+                                recipient: completion.recipient_binding.clone(),
+                            })
+                        }
+                        None => None,
+                    };
+                    let tokens = tokens(&auth, key, &auth.resource, &auth.scopes)
+                        .map_err(|_| config_error())?;
+                    let client = CaseworkClient::new(
+                        CaseworkClientConfig::new(binding.base_url)
+                            .with_max_mutation_retries(0)
+                            .with_request_timeout(REQUEST_TIMEOUT)
+                            .with_connect_timeout(Duration::from_secs(1))
+                            .with_max_response_bytes(FILE_BOUND),
+                    )
+                    .map_err(|_| config_error())?;
+                    Connection::Casework(Box::new(crate::review::CaseworkConnection::new(
+                        client,
+                        tokens,
+                        binding.profile.ok_or_else(config_error)?,
+                        binding.producer.ok_or_else(config_error)?,
+                        completion,
+                        result_check_seconds,
+                    )))
+                }
             };
             connections.insert(name, connection);
         }
@@ -271,6 +315,14 @@ impl HttpAdapters {
             config: config.clone(),
         })
     }
+}
+
+/// A completion token is a bearer token Casework can send unchanged: the
+/// header grammar holds it and it is at most 4096 bytes.
+fn valid_completion_token(token: &str) -> bool {
+    token.len() <= 4096
+        && registry_platform_authcommon::parse_bearer_token(&format!("Bearer {token}"))
+            .is_ok_and(|parsed| parsed == token)
 }
 
 pub(crate) fn refused(code: &str) -> CallOutcome {
@@ -548,6 +600,11 @@ impl AdapterSet for HttpAdapters {
                 )
                 .await
             }
+            (Some(Connection::Casework(connection)), operation)
+                if operation.product() == "casework" =>
+            {
+                connection.call(request).await
+            }
             (Some(Connection::Messaging { client, tokens }), Operation::SubmitMessage) => {
                 let Some(key) = &request.idempotency_key else {
                     return refused("invalid-command");
@@ -605,6 +662,44 @@ impl AdapterSet for HttpAdapters {
                 }
             }
             _ => refused("operation-unbound"),
+        }
+    }
+
+    async fn read_review_result(
+        &self,
+        connection: &str,
+        accepted: &serde_json::Value,
+    ) -> ReviewRead {
+        match self.connections.get(connection) {
+            Some(Connection::Casework(connection)) => connection.read_result(accepted).await,
+            _ => ReviewRead::Failed(refused("operation-unbound")),
+        }
+    }
+
+    fn result_check_seconds(&self, connection: &str) -> u32 {
+        match self.connections.get(connection) {
+            Some(Connection::Casework(connection)) => connection.result_check_seconds(),
+            _ => crate::runtime::DEFAULT_RESULT_CHECK_SECONDS,
+        }
+    }
+
+    fn review_completion(&self, token: &str, recipient: &str) -> Option<String> {
+        // Every connection is compared, so the time taken does not depend on
+        // which one matched.
+        let mut matched = None;
+        let mut ambiguous = false;
+        for (name, connection) in &self.connections {
+            if let Connection::Casework(connection) = connection {
+                if connection.completion_matches(token, recipient) {
+                    ambiguous |= matched.is_some();
+                    matched = Some(name.clone());
+                }
+            }
+        }
+        if ambiguous {
+            None
+        } else {
+            matched
         }
     }
 
@@ -889,7 +984,7 @@ async fn scheduling_call(
     }
 }
 
-fn valid_key(key: &str) -> bool {
+pub(crate) fn valid_key(key: &str) -> bool {
     !key.is_empty() && key.len() <= 128 && key.bytes().all(|byte| (0x21..=0x7e).contains(&byte))
 }
 

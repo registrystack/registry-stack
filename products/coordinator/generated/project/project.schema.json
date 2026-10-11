@@ -1,5 +1,29 @@
 {
   "$defs": {
+    "AuthoredEvent": {
+      "description": "The event a wait-for step waits for, named by its `type`.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "The result of a review request: Casework's completion event wakes the\nrun, and the run reads the result with the producer's own credential.",
+          "properties": {
+            "request": {
+              "$ref": "#/$defs/LocalId",
+              "description": "The call step whose `submit-review-request` the wait correlates\nwith; it must precede the wait on every route."
+            },
+            "type": {
+              "const": "review-result",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "request"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "AuthoredInput": {
       "description": "A call input or finish output: a pure function over references, or an\nobject built member by member from references.",
       "oneOf": [
@@ -103,7 +127,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "Reads the output of a call step that completed earlier on every route\nto this one.",
+          "description": "Reads the output of a call step, or of a wait-for step that continued\nwith `next`, that completed earlier on every route to this one.",
           "properties": {
             "path": {
               "$ref": "#/$defs/JsonPointer",
@@ -111,7 +135,7 @@
             },
             "step": {
               "$ref": "#/$defs/LocalId",
-              "description": "The call step whose output this reads."
+              "description": "The call or wait-for step whose output this reads."
             },
             "type": {
               "const": "step",
@@ -168,6 +192,42 @@
           "required": [
             "type",
             "waitUntil",
+            "next"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Waits for an event another product delivers, then continues with the\nevent's value as its output, or takes `onTimeout` when the event does\nnot arrive in time.",
+          "properties": {
+            "event": {
+              "$ref": "#/$defs/AuthoredEvent",
+              "description": "The event to wait for."
+            },
+            "next": {
+              "$ref": "#/$defs/LocalId",
+              "description": "The step that follows the event, with the event's value as this\nstep's output."
+            },
+            "onTimeout": {
+              "$ref": "#/$defs/LocalId",
+              "description": "The step that follows a timeout; this step has no output on that\nroute. Omit it to fail the run with `wait-timed-out`."
+            },
+            "timeoutSeconds": {
+              "description": "How long to wait, in seconds from the start of the wait, at most one\nyear; it must be shorter than `deadlineSeconds`.",
+              "format": "uint32",
+              "maximum": 31536000,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "type": {
+              "const": "wait-for",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "event",
+            "timeoutSeconds",
             "next"
           ],
           "type": "object"
@@ -429,6 +489,74 @@
                   }
                 }
               }
+            },
+            {
+              "if": {
+                "properties": {
+                  "operation": {
+                    "const": "submit-review-request"
+                  }
+                },
+                "required": [
+                  "operation"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "input": {
+                    "properties": {
+                      "fields": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "context": true,
+                          "initiator": true,
+                          "kind": true,
+                          "requesterReference": true,
+                          "resultConstraints": true,
+                          "subject": true
+                        },
+                        "required": [
+                          "kind",
+                          "subject",
+                          "requesterReference",
+                          "context"
+                        ]
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "operation": {
+                    "const": "cancel-review-request"
+                  }
+                },
+                "required": [
+                  "operation"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "input": {
+                    "properties": {
+                      "fields": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "reason": true,
+                          "request": true
+                        },
+                        "required": [
+                          "request",
+                          "reason"
+                        ]
+                      }
+                    }
+                  }
+                }
+              }
             }
           ],
           "description": "Calls one operation through a connection, then continues with its\noutput available to later steps.",
@@ -570,14 +698,17 @@
         "create-appointment",
         "invoke-breg-action",
         "external-get",
-        "evaluate-decision"
+        "evaluate-decision",
+        "submit-review-request",
+        "cancel-review-request"
       ],
       "type": "string"
     },
     "Product": {
-      "description": "The product a connection reaches: `breg` (Base Registry Engine),\n`messaging`, `scheduling`, `external-http` (a configured external HTTP\nservice) or `decision` (a configured typed decision service).",
+      "description": "The product a connection reaches: `breg` (Base Registry Engine),\n`casework` (Registry Casework, as a review producer), `messaging`,\n`scheduling`, `external-http` (a configured external HTTP service) or\n`decision` (a configured typed decision service).",
       "enum": [
         "breg",
+        "casework",
         "messaging",
         "scheduling",
         "external-http",
@@ -605,7 +736,7 @@
       "type": "object"
     },
     "Reference": {
-      "description": "A value a mapping reads: the workflow input, a preceding call's output,\nor an authored literal. A path selects a member inside the value.",
+      "description": "A value a mapping reads: the workflow input, a preceding call's or wait's\noutput, or an authored literal. A path selects a member inside the value.",
       "oneOf": [
         {
           "additionalProperties": false,
@@ -627,7 +758,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "Reads the output of a call step that completed earlier on every route\nto this one.",
+          "description": "Reads the output of a call step, or of a wait-for step that continued\nwith `next`, that completed earlier on every route to this one.",
           "properties": {
             "path": {
               "$ref": "#/$defs/JsonPointer",
@@ -635,7 +766,7 @@
             },
             "step": {
               "$ref": "#/$defs/LocalId",
-              "description": "The call step whose output this reads."
+              "description": "The call or wait-for step whose output this reads."
             },
             "type": {
               "const": "step",

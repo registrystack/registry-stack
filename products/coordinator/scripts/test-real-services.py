@@ -11,6 +11,8 @@ import ipaddress
 import json
 import os
 from pathlib import Path
+import re
+import secrets
 import shlex
 import signal
 import shutil
@@ -24,12 +26,36 @@ import urllib.parse
 import urllib.request
 import uuid
 
-from real_service_fixtures import (write_breg, write_casework, write_messaging, write_scheduling,
-                                   SCHEDULING_RESOURCE, COORDINATOR_RESOURCE)
+from real_service_fixtures import (write_breg, write_casework, write_messaging, write_review_casework,
+                                   write_scheduling, CASEWORK_PRINCIPALS, SCHEDULING_RESOURCE,
+                                   COORDINATOR_RESOURCE)
 
 REPO = Path(__file__).resolve().parents[3]
 AUTHORITY = "https://casework.local.example"
 SOURCE = "coordinator-source"
+# The PostgreSQL image caseworkctl's dev sessions pin, for the one database
+# this journey owns directly.
+POSTGRES_IMAGE = ("public.ecr.aws/docker/library/postgres:17.11"
+                  "@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675")
+# Synthetic server and root certificate extensions for that database. Casework
+# verifies the server by its IP address against the pinned root.
+DATABASE_TLS = """[req]
+distinguished_name = name
+prompt = no
+[name]
+CN = Coordinator journey database
+[root]
+basicConstraints = critical, CA:TRUE
+keyUsage = critical, keyCertSign, cRLSign
+subjectKeyIdentifier = hash
+[server]
+basicConstraints = critical, CA:FALSE
+keyUsage = critical, digitalSignature
+extendedKeyUsage = serverAuth
+subjectAltName = IP:127.0.0.1, DNS:localhost
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid
+"""
 
 
 def private(path, value):
@@ -39,6 +65,16 @@ def private(path, value):
     else:
         path.write_text(value if isinstance(value, str) else json.dumps(value, indent=2) + "\n")
     path.chmod(0o600)
+
+
+def free_ports(count):
+    listeners = [socket.socket() for _ in range(count)]
+    for listener in listeners:
+        listener.bind(("127.0.0.1", 0))
+    ports = [listener.getsockname()[1] for listener in listeners]
+    for listener in listeners:
+        listener.close()
+    return ports
 
 
 def stamp(seconds=0):
@@ -265,6 +301,7 @@ class Journey:
         self.log_index = 0
         self.children = []
         self.sessions = []
+        self.containers = []
         self.env = os.environ.copy()
         self.bin = root / "bin"
         self.bin.mkdir(mode=0o700)
@@ -366,8 +403,8 @@ class Journey:
     def producer_request(self, owner, method, url, body=None, headers=None):
         return http(method, url, producer_token(self.producer_identity, self.root / "producer-secrets"), body, headers)
 
-    def start(self, owner, url, label, data):
-        body = {"flow": "deferred-appointment", "input": data}
+    def start(self, owner, url, label, data, flow="deferred-appointment"):
+        body = {"flow": flow, "input": data}
         first = self.producer_request(owner, "POST", url + "/v1/runs", body, {"Idempotency-Key": label})
         repeat = self.producer_request(owner, "POST", url + "/v1/runs", body, {"Idempotency-Key": label})
         assert repeat["runId"] == first["runId"]
@@ -415,6 +452,13 @@ class Journey:
             code = self.ctl(binary, *args, success=False)
             if code != 0:
                 failures.append(binary)
+        # The journey's own database holds nothing a diagnosis needs, so it is
+        # removed whether or not the journey passed.
+        for container in reversed(self.containers):
+            result = subprocess.run(["docker", "rm", "--force", "--volumes", container],
+                                    env=self.env, capture_output=True, timeout=60)
+            if result.returncode != 0:
+                failures.append("docker container " + container)
         assert not failures, f"owned cleanup failed for {', '.join(failures)}; inspect private logs in {self.root}"
 
     def run(self):
@@ -474,7 +518,8 @@ class Journey:
                         {"templateId":template,"templateVersion":"1"},
                         {**human_headers,"If-Match":f'"{current["revision"]}"',"Idempotency-Key":str(uuid.uuid4())})
         print("Casework source visibility and human task approval ready.", flush=True)
-        self.deferred_appointment(owner, resource, application, casework, agent, approve)
+        messaging_url, messaging_runtime = self.deferred_appointment(owner, resource, application, casework, agent, approve)
+        self.reviewed_notice(owner, resource, messaging_url, messaging_runtime)
 
     def authorization(self, exported, resource, scopes, **extra):
         return {"tokenEndpoint":exported["tokenEndpoint"], "clientAssertionAudience":exported["clientAssertionAudience"],
@@ -546,8 +591,24 @@ class Journey:
         catalogue = self.export(owner, "scheduling-reader", keys)
         booking = self.export(owner, "task-agent", keys)
         sender = self.export(owner, "case-system", keys)
-        project = REPO / "products/coordinator/examples/deferred-appointment"
-        package = self.root / "coordinator-package"
+        task = {"baseUrl": self.urls["casework"], "issuer": AUTHORITY, "subject": agent,
+            "exchangeAudience": self.urls["issuer"], "bootstrapResource": resource}
+        return self.coordinator_service("deferred-appointment", keys, {
+            "applications": {"product": "breg", "baseUrl": self.urls["breg"], "profile": "follow-up-reader",
+                "authorization": self.authorization(reader, resource, ["records:get"])},
+            "catalogue": {"product": "scheduling", "baseUrl": scheduling_url,
+                "authorization": self.authorization(catalogue, SCHEDULING_RESOURCE, ["scheduling:read"])},
+            "bookings": {"product": "scheduling", "baseUrl": scheduling_url,
+                "authorization": self.authorization(booking, SCHEDULING_RESOURCE, ["scheduling:read", "scheduling:commit"], taskAuthority=task),
+                "observationAuthorization": self.authorization(booking, SCHEDULING_RESOURCE, ["scheduling:read"])},
+            "notices": {"product": "messaging", "baseUrl": messaging_url,
+                "authorization": self.authorization(sender, sender["resource"], ["messaging:send"])},
+        }, free_ports(1)[0], "coordinator-before-wait")
+
+    def coordinator_service(self, flow, keys, connections, port, label):
+        """Package one maintained example flow, apply it with a split role, and serve it."""
+        project = REPO / "products/coordinator/examples" / flow
+        package = self.root / f"coordinator-{flow}-package"
         packaged = self.ctl("coordinatorctl", "package", "--project", project, "--output", package)
         database = os.environ["COORDINATOR_TEST_DATABASE_URL"]
         role = "coordinator_native_" + uuid.uuid4().hex[:16]
@@ -569,23 +630,7 @@ class Journey:
         for key_name in ["state-key", "admission-key", "audit-key"]:
             value = b"\0" + os.urandom(31) if key_name == "state-key" else os.urandom(32)
             private(keys / key_name, value)
-        listener = socket.socket()
-        listener.bind(("127.0.0.1", 0))
-        port = listener.getsockname()[1]
-        listener.close()
-        task = {"baseUrl": self.urls["casework"], "issuer": AUTHORITY, "subject": agent,
-            "exchangeAudience": self.urls["issuer"], "bootstrapResource": resource}
-        config = self.runtime(keys, {
-            "applications": {"product": "breg", "baseUrl": self.urls["breg"], "profile": "follow-up-reader",
-                "authorization": self.authorization(reader, resource, ["records:get"])},
-            "catalogue": {"product": "scheduling", "baseUrl": scheduling_url,
-                "authorization": self.authorization(catalogue, SCHEDULING_RESOURCE, ["scheduling:read"])},
-            "bookings": {"product": "scheduling", "baseUrl": scheduling_url,
-                "authorization": self.authorization(booking, SCHEDULING_RESOURCE, ["scheduling:read", "scheduling:commit"], taskAuthority=task),
-                "observationAuthorization": self.authorization(booking, SCHEDULING_RESOURCE, ["scheduling:read"])},
-            "notices": {"product": "messaging", "baseUrl": messaging_url,
-                "authorization": self.authorization(sender, sender["resource"], ["messaging:send"])},
-        })
+        config = self.runtime(keys, connections)
         config["database"] = {"runtimeUrlRef": "secret:file/runtime-database", "migrationUrlRef": "secret:file/migration-database"}
         config["deployment"] = {
             "databaseId": "coordinator-native-" + uuid.uuid4().hex,
@@ -595,19 +640,19 @@ class Journey:
             "authentication": {"issuer": self.urls["issuer"], "audience": COORDINATOR_RESOURCE,
                 "scopeClaim": "scope", "jwksSource": {"type": "static", "documentRef": "secret:file/jwks"},
                 "allowedClients": ["coordinator-producer"], "policies": [{"clientId": "coordinator-producer",
-                    "requiredScopes": ["coordinator:start", "coordinator:operate"], "flows": ["deferred-appointment"],
+                    "requiredScopes": ["coordinator:start", "coordinator:operate"], "flows": [flow],
                     "actions": ["start", "status", "inspect", "reconcile", "retry-same", "cancel", "doctor"], "operator": True}]},
-            "auditFile": str(self.root / "audit/coordinator.ndjson"), "auditKeyRef": "secret:file/audit-key",
+            "auditFile": str(self.root / f"audit/coordinator-{flow}.ndjson"), "auditKeyRef": "secret:file/audit-key",
             "activeStateKey": 1, "stateKeys": {"1": {"keyRef": "secret:file/state-key"}}, "admissionKeyRef": "secret:file/admission-key",
         }
-        runtime = self.root / "coordinator-runtime.yaml"
+        runtime = self.root / f"coordinator-{flow}-runtime.yaml"
         private(runtime, config)
         self.ctl("coordinatorctl", "--runtime-config", runtime, "plan")
         applied = self.ctl("coordinatorctl", "--runtime-config", runtime, "apply")
         assert applied["activation"]["roleMode"] == "split", "serving role must not migrate or activate"
-        assert [(flow["flow"], flow["change"]) for flow in applied["flows"]] == [("deferred-appointment", "install")]
+        assert [(item["flow"], item["change"]) for item in applied["flows"]] == [(flow, "install")]
         url = f"http://127.0.0.1:{port}"
-        child = self.spawn("coordinator", runtime, "coordinator-before-wait")
+        child = self.spawn("coordinator", runtime, label)
         self.ready(child, url)
         return runtime, url, child
 
@@ -719,6 +764,7 @@ class Journey:
             "reviewRequiredAfterSourceChanges": True}
         private(self.root / "native-deferred-proof.json", proof)
         print("Deferred appointment and accepted notice recovered original receipts after response loss.", flush=True)
+        return messaging_url, messaging_runtime
 
     def approval_refusals(self, owner, url, positive_input, grant, expired_grant,
                          booking_proxy, message_proxy):
@@ -751,6 +797,218 @@ class Journey:
         private(self.root / "native-approval-refusals.json", results)
         print("Expired, unknown, and mismatched approvals refused without product effects.", flush=True)
         return results
+
+    def docker(self, *args, stdin=None, redact=None):
+        """Run one Docker command, keeping its output with any credential redacted."""
+        self.log_index += 1
+        result = subprocess.run(["docker", *map(str, args)], input=stdin, env=self.env,
+                                capture_output=True, timeout=120)
+        output = result.stdout.decode(errors="replace") + result.stderr.decode(errors="replace")
+        if redact:
+            output = output.replace(redact, "<redacted>")
+        log = self.root / "logs" / f"command-{self.log_index:03d}.txt"
+        private(log, output)
+        assert result.returncode == 0, f"docker {args[0]} failed; inspect private {log}"
+        return result.stdout
+
+    def tls_database(self, name):
+        """Own one TLS PostgreSQL database for a runtime that refuses plaintext.
+
+        Returns its URL and the root certificate that signed its server
+        certificate. The container is named after the work directory.
+        """
+        container = f"{self.root.name}-{name}"
+        assert re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", container), \
+            "the work directory name must also form a Docker container name"
+        tls = self.root / f"{name}-tls"
+        tls.mkdir(mode=0o700)
+        private(tls / "openssl.cnf", DATABASE_TLS)
+        def openssl(*args):
+            result = subprocess.run(["openssl", *map(str, args)], env=self.env, capture_output=True, timeout=30)
+            assert result.returncode == 0, f"openssl {args[0]} failed for the journey database certificate"
+        for key in ("root.key", "server.key"):
+            openssl("genpkey", "-algorithm", "EC", "-pkeyopt", "ec_paramgen_curve:P-256", "-out", tls / key)
+        openssl("req", "-new", "-x509", "-key", tls / "root.key", "-out", tls / "root.pem", "-days", "2",
+                "-config", tls / "openssl.cnf", "-extensions", "root", "-subj", "/CN=Coordinator journey database root")
+        openssl("req", "-new", "-key", tls / "server.key", "-out", tls / "server.csr",
+                "-config", tls / "openssl.cnf", "-subj", "/CN=localhost")
+        openssl("x509", "-req", "-in", tls / "server.csr", "-CA", tls / "root.pem", "-CAkey", tls / "root.key",
+                "-set_serial", "0x" + secrets.token_hex(16), "-days", "2",
+                "-extfile", tls / "openssl.cnf", "-extensions", "server", "-out", tls / "server.pem")
+        port, = free_ports(1)
+        private(tls / "postgres.env", "POSTGRES_USER=postgres\nPOSTGRES_PASSWORD="
+                + secrets.token_hex(32) + "\nPOSTGRES_DB=postgres\n")
+        self.docker("create", "--name", container, "--label", "org.registrystack.journey=coordinator-real-services",
+                    "--publish", f"127.0.0.1:{port}:5432", "--env-file", tls / "postgres.env", POSTGRES_IMAGE)
+        # Only a container this journey created is removed at cleanup.
+        self.containers.append(container)
+        for source in ("server.pem", "server.key"):
+            self.docker("cp", tls / source, f"{container}:/tmp/journey-{source}")
+        self.docker("start", container)
+        deadline = time.monotonic() + 60
+        while subprocess.run(["docker", "exec", container, "pg_isready", "-h", "127.0.0.1", "-U", "postgres"],
+                             env=self.env, capture_output=True, timeout=30).returncode != 0:
+            assert time.monotonic() < deadline, "the journey database did not become ready"
+            time.sleep(0.5)
+        self.docker("exec", "--user", "root", container, "chown", "postgres:postgres",
+                    "/tmp/journey-server.pem", "/tmp/journey-server.key")
+        self.docker("exec", "--user", "root", container, "chmod", "600", "/tmp/journey-server.key")
+        role = "casework_review"
+        password = secrets.token_hex(32)
+        # The superuser works over the container's local socket. The role's
+        # password reaches psql through stdin only and is redacted from its log.
+        statements = ("ALTER SYSTEM SET ssl = 'on';\n"
+                      "ALTER SYSTEM SET ssl_cert_file = '/tmp/journey-server.pem';\n"
+                      "ALTER SYSTEM SET ssl_key_file = '/tmp/journey-server.key';\n"
+                      "SELECT pg_reload_conf();\n"
+                      f"CREATE ROLE {role} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS PASSWORD '{password}';\n"
+                      f"CREATE DATABASE casework OWNER {role};\n")
+        self.docker("exec", "-i", container, "psql", "-X", "-q", "-v", "ON_ERROR_STOP=1", "-U", "postgres",
+                    "-d", "postgres", stdin=statements.encode(), redact=password)
+        deadline = time.monotonic() + 30
+        while self.docker("exec", container, "psql", "-X", "-A", "-t", "-U", "postgres", "-c", "SHOW ssl").strip() != b"on":
+            assert time.monotonic() < deadline, "the journey database did not enable TLS"
+            time.sleep(0.2)
+        return f"postgresql://{role}:{password}@127.0.0.1:{port}/casework", (tls / "root.pem").read_text()
+
+    def review_casework(self, owner, resource, port, completion_url, completion_token):
+        """Serve a Casework whose review producer's completions reach the Coordinator."""
+        project = write_review_casework(self.root / "review-casework", self.urls)
+        self.ctl("caseworkctl", "check", project)
+        package = self.root / "review-casework-package"
+        self.ctl("caseworkctl", "package", project, "--output", package)
+        database, root_certificate = self.tls_database("review-casework-database")
+        keys = self.root / "review-casework-secrets"
+        private(keys / "database", database)
+        private(keys / "database-root.pem", root_certificate)
+        private(keys / "audit-key", secrets.token_hex(32))
+        private(keys / "jwks", http("GET", self.urls["issuer"] + "/oauth2/jwks"))
+        private(keys / "completion-token", completion_token)
+        url = f"http://127.0.0.1:{port}"
+        runtime = self.root / "review-casework-runtime.yaml"
+        private(runtime, {
+            "apiVersion": "id.registrystack.org/formats/casework/runtime/v1alpha1", "kind": "CaseworkRuntimeConfig",
+            "identity": {"databaseId": "coordinator-review-casework"}, "package": {"root": str(package)},
+            "listener": {"bind": f"127.0.0.1:{port}", "tlsTermination": "development-loopback",
+                         "networkExposure": "private-address"},
+            "secretProviders": {"file": {"root": str(keys)}},
+            "database": {"runtimeUrlRef": "secret:file/database", "migrationUrlRef": "secret:file/database",
+                         "trustedRootCertificateRef": "secret:file/database-root.pem"},
+            "authentication": {"oidc": {"issuer": self.urls["issuer"], "audience": resource,
+                "allowedClients": ["review-producer", "staff", "administrator"], "scopeClaim": "scope",
+                "jwksSource": {"type": "static", "documentRef": "secret:file/jwks"},
+                "humanIdentity": {"claim": "registry_actor_kind", "value": "human"}}},
+            "audit": {"path": str(self.root / "audit/review-casework.ndjson"), "hashKeyRef": "secret:file/audit-key"},
+            "sources": {},
+            "reviewCompletionDestinations": {"coordinator": {
+                "url": completion_url, "bearerTokenRef": "secret:file/completion-token",
+                "attemptTimeoutMilliseconds": 5000, "maximumAttempts": 10, "retryDelaySeconds": 1}},
+        })
+        self.ctl("caseworkctl", "apply", "--runtime-config", runtime)
+        child = self.spawn("casework", runtime, "review-casework")
+        self.ready(child, url)
+        administrator = self.token("bregctl", owner, "administrator")
+        headers = {"Registry-Casework-Profile": "administrator"}
+        directory = http("GET", url + "/v1/directory", administrator, headers=headers)
+        http("POST", url + "/v1/directory/bootstrap", administrator,
+             {"teamId": "reviewers", "queueId": "applications", "supervisors": [],
+              "staff": [{"issuer": self.urls["issuer"], "subject": CASEWORK_PRINCIPALS["staff"]}]},
+             {**headers, "If-Match": f'"{directory["revision"]}"', "Idempotency-Key": str(uuid.uuid4())})
+        return url
+
+    def reviewed_notice(self, owner, resource, messaging_url, messaging_runtime):
+        """Hand two applications to real Casework review; only the approval sends its notice.
+
+        The fallback result read is 900 seconds away, so a run that settles
+        within the fixture deadline was woken by Casework's completion event.
+        """
+        coordinator_port, casework_port = free_ports(2)
+        completion_token = secrets.token_urlsafe(32)
+        receiver = f"http://127.0.0.1:{coordinator_port}/v1/review-completions"
+        casework_url = self.review_casework(owner, resource, casework_port, receiver, completion_token)
+        keys = self.root / "coordinator-review-secrets"
+        reviewer = self.export(owner, "review-producer", keys)
+        assert reviewer["resource"] == resource, "the review producer must request the Casework audience"
+        sender = self.export(owner, "case-system", keys)
+        private(keys / "review-completion-token", completion_token)
+        _, url, _ = self.coordinator_service("reviewed-notice", keys, {
+            "review": {"product": "casework", "baseUrl": casework_url, "profile": "coordinator-producer",
+                "producer": "coordinator", "authorization": self.authorization(reviewer, resource, ["casework:review"]),
+                "completion": {"recipientBinding": "coordinator-v1", "bearerTokenRef": "secret:file/review-completion-token"},
+                "resultCheckSeconds": 900},
+            "notices": {"product": "messaging", "baseUrl": messaging_url,
+                "authorization": self.authorization(sender, sender["resource"], ["messaging:send"])},
+        }, coordinator_port, "coordinator-reviewed-notice")
+        sent_before = {item["id"] for item in self.ctl("messagingctl", "messages", "list", "--runtime-config", messaging_runtime)["messages"]}
+        runs = {}
+        for decision in ("approve", "reject"):
+            application = str(uuid.uuid4())
+            data = {"applicationId": application, "applicationVersion": "1",
+                    "applicationDigest": "sha256:" + secrets.token_hex(32), "email": "synthetic@example.invalid"}
+            runs[decision] = (application, self.start(owner, url, "native-reviewed-notice-" + decision, data, "reviewed-notice"))
+        deadline = time.monotonic() + 60
+        for _, run in runs.values():
+            while (status := self.inspect(owner, url, run)["run"])["step"] != "await-review":
+                assert status["state"] == "running", f"a reviewed-notice run stopped before its wait ({status['failureCode']})"
+                assert time.monotonic() < deadline, "a reviewed-notice run never reached its wait"
+                time.sleep(0.2)
+            assert status["state"] == "running"
+        print("Both reviewed-notice runs submitted their review and wait for its result.", flush=True)
+        staff = self.token("bregctl", owner, "staff")
+        headers = {"Registry-Casework-Profile": "staff"}
+        page = http("GET", casework_url + "/v1/review-tasks?queue=applications&limit=25", staff, headers=headers)
+        tasks = [item for item in page["items"] if item["state"] == "open"]
+        assert len(tasks) == len(runs), "Casework must hold one open review task per run"
+        decided_at = time.monotonic()
+        for item in tasks:
+            task_url = casework_url + "/v1/review-tasks/" + item["taskId"]
+            http("POST", task_url + "/claim", staff, headers={**headers, "If-Match": f'"{item["revision"]}"',
+                 "Idempotency-Key": str(uuid.uuid4())})
+            context = http("GET", task_url + "/context", staff, headers=headers)
+            decision = next(name for name, (application, _) in runs.items()
+                            if application == context["requesterReference"])
+            body = ({"decision": {"type": "approve"}} if decision == "approve"
+                    else {"decision": {"type": "reject", "outcome": "missing-evidence"}})
+            current = http("GET", task_url, staff, headers=headers)
+            http("POST", task_url + "/decisions", staff, body, {**headers, "If-Match": f'"{current["revision"]}"',
+                 "Idempotency-Key": str(uuid.uuid4())}, (204,))
+        settled = {}
+        deadline = time.monotonic() + 120
+        while len(settled) < len(runs):
+            assert time.monotonic() < deadline, "a completion event did not wake its run before the fallback read"
+            for decision, (_, run) in runs.items():
+                status = self.inspect(owner, url, run)["run"]
+                if decision not in settled and status["state"] != "running":
+                    settled[decision] = status
+            time.sleep(0.25)
+        elapsed = int(time.monotonic() - decided_at)
+        approved, rejected = settled["approve"], settled["reject"]
+        assert (approved["state"], approved["outcome"]) == ("finished", "notice-sent"), "the approval must send its notice"
+        assert (rejected["state"], rejected["outcome"]) == ("finished", "rejected"), "the rejection must finish without a notice"
+        sent = [item["id"] for item in self.ctl("messagingctl", "messages", "list", "--runtime-config", messaging_runtime)["messages"]
+                if item["id"] not in sent_before]
+        assert sent == [approved["output"]["messageId"]], "only the approved review may send a notice"
+        # The live receiver refuses an inauthentic event and acknowledges an
+        # authentic one for a request it does not know, so the answer reveals
+        # nothing about which requests exist.
+        event = {"type": "review.completed", "eventId": str(uuid.uuid4()), "requestId": str(uuid.uuid4()),
+                 "resultId": str(uuid.uuid4()), "completedAt": stamp()}
+        refusals = {}
+        for label, token, binding, expected in (
+                ("wrongToken", "synthetic-wrong-completion-token", "coordinator-v1", 401),
+                ("wrongRecipientBinding", completion_token, "synthetic-other-recipient", 401),
+                ("unknownRequest", completion_token, "coordinator-v1", 204)):
+            http("POST", receiver, token, event, {"registry-recipient-binding": binding,
+                 "idempotency-key": event["eventId"]}, (expected,))
+            refusals[label] = expected
+        private(self.root / "native-reviewed-notice-proof.json", {
+            "proofBoundary": "native_casework_completion_and_messaging",
+            "runs": {decision: {key: status[key] for key in ("state", "step", "outcome", "failureCode")}
+                     for decision, status in settled.items()},
+            "decisionToSettledSeconds": elapsed, "resultCheckSeconds": 900,
+            "receiver": refusals, "acceptedNotices": len(sent), "deliveryProven": False,
+        })
+        print(f"Casework completion events woke both runs within {elapsed}s; only the approval sent its notice.", flush=True)
 
     def messaging_service(self, owner):
         project = write_messaging(self.root / "messaging")

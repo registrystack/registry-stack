@@ -153,6 +153,7 @@ macro_rules! embedded {
 }
 
 static EMBEDDED: &[(&str, &str, &str)] = embedded!(
+    "cancel-review-request",
     "create-appointment",
     "evaluate-decision",
     "external-get",
@@ -161,7 +162,49 @@ static EMBEDDED: &[(&str, &str, &str)] = embedded!(
     "read-record",
     "read-scheduling",
     "submit-message",
+    "submit-review-request",
 );
+
+/// The committed contract of a wait event: the value a wait-for step that
+/// continues with `next` holds as its output.
+pub struct EventContract {
+    pub output: Value,
+    validator: JSONSchema,
+}
+
+impl EventContract {
+    /// Checks a value offered as the event a wait receives.
+    pub fn check(&self, value: &Value) -> Result<(), Violation> {
+        first_violation(&self.validator, value)
+    }
+}
+
+static EVENTS: &[(&str, &str)] = &[(
+    "review-result",
+    include_str!(
+        "../../../products/coordinator/generated/operations/review-result.event.schema.json"
+    ),
+)];
+
+/// The committed contract of the event a wait-for step waits for.
+pub fn event_contract(event: &crate::definition::WaitEvent) -> &'static EventContract {
+    static CONTRACTS: OnceLock<BTreeMap<&'static str, EventContract>> = OnceLock::new();
+    let contracts = CONTRACTS.get_or_init(|| {
+        EVENTS
+            .iter()
+            .map(|(id, text)| {
+                let output: Value =
+                    serde_json::from_str(text).expect("committed event contract is JSON");
+                let validator = crate::definition::compile_schema(&output)
+                    .expect("committed event contract compiles");
+                (*id, EventContract { output, validator })
+            })
+            .collect()
+    });
+    contracts
+        .get(event.id())
+        .expect("every wait event has a committed contract")
+}
 
 /// The committed contract of a catalog operation.
 pub fn contract(operation: Operation) -> &'static OperationContract {
@@ -204,8 +247,12 @@ pub fn generate() -> Result<BTreeMap<String, String>, serde_json::Error> {
         breg_action::ActionInput,
         decision::{DecisionResult, Evaluation},
         external_http::{ExternalResponse, GetRequest},
+        review::CancelReviewInput,
     };
     use registry_breg_client::{BRegActionReceipt, RegistryRecordSingleResponse};
+    use registry_casework_client::{
+        ReviewCancelResponse, ReviewCreateRequest, ReviewRequestAccepted,
+    };
     use registry_messaging_core::{MessageReceipt, SubmitMessageRequest};
     use registry_scheduling_core::{
         AppointmentDocument, AvailabilityEntry, PageDocument, SchedulingServiceDocument,
@@ -255,6 +302,16 @@ pub fn generate() -> Result<BTreeMap<String, String>, serde_json::Error> {
         derived::input::<Evaluation>(),
         derived::output::<DecisionResult>(),
     );
+    add(
+        Operation::SubmitReviewRequest,
+        derived::input::<ReviewCreateRequest>(),
+        derived::output::<ReviewRequestAccepted>(),
+    );
+    add(
+        Operation::CancelReviewRequest,
+        derived::input::<CancelReviewInput>(),
+        derived::output::<ReviewCancelResponse>(),
+    );
     let mut files = BTreeMap::new();
     for descriptor in crate::operations::descriptors() {
         let (mut input, mut output) = contracts
@@ -280,6 +337,11 @@ pub fn generate() -> Result<BTreeMap<String, String>, serde_json::Error> {
         contracts.is_empty(),
         "every contract names a catalog operation"
     );
+    let mut event = derived::output::<registry_casework_client::ReviewResult>();
+    derived::finish(&mut event, "review-result event");
+    let mut text = serde_json::to_string_pretty(&event)?;
+    text.push('\n');
+    files.insert("review-result.event.schema.json".into(), text);
     files.insert("README.md".into(), derived::reference(&files)?);
     Ok(files)
 }
@@ -386,6 +448,21 @@ mod derived {
                 text.push_str(&members(&schema));
             }
         }
+        text.push_str(
+            "\n## Wait events\n\n\
+             A wait-for step waits for one event. When the event arrives, the step continues \
+             with `next` and holds the event as its output, so a reference into a wait-for \
+             step's output must name a path the event contract declares. A step reached by \
+             `onTimeout` reads no event.\n",
+        );
+        let file = "review-result.event.schema.json";
+        let schema: Value = serde_json::from_str(&files[file])?;
+        text.push_str(&format!(
+            "\n### review-result\n\nThe result of a review request a `submit-review-request` \
+             step submitted, once the reviewing product reports it complete \
+             ([`{file}`]({file})):\n\n"
+        ));
+        text.push_str(&members(&schema));
         Ok(text)
     }
 
@@ -585,6 +662,9 @@ mod tests {
         for (id, input, output) in EMBEDDED {
             assert_eq!(generated[&format!("{id}.input.schema.json")], *input);
             assert_eq!(generated[&format!("{id}.output.schema.json")], *output);
+        }
+        for (id, event) in EVENTS {
+            assert_eq!(generated[&format!("{id}.event.schema.json")], *event);
         }
     }
 }

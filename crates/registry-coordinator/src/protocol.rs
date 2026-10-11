@@ -34,6 +34,8 @@ impl Operation {
     pub const InvokeBregAction: Self = Self("invoke-breg-action");
     pub const ExternalGet: Self = Self("external-get");
     pub const EvaluateDecision: Self = Self("evaluate-decision");
+    pub const SubmitReviewRequest: Self = Self("submit-review-request");
+    pub const CancelReviewRequest: Self = Self("cancel-review-request");
 
     pub fn parse(identifier: &str) -> Option<Self> {
         crate::operations::descriptor(identifier).map(|descriptor| Self(descriptor.id))
@@ -161,6 +163,22 @@ pub enum CallOutcome {
     ReceiptExpired,
 }
 
+/// One read of a review result for a waiting step. A read never changes the
+/// review, so no answer is uncertain: a failure either repeats or ends the
+/// wait under its bounded code.
+pub enum ReviewRead {
+    /// The producer's terminal result, already matched to the accepted
+    /// request's subject, policy and submission digest.
+    Settled(Value),
+    /// The review is still open.
+    Pending,
+    /// The producer cannot see a request with this identifier.
+    Unknown,
+    /// The result existed and its availability window has passed.
+    Expired,
+    Failed(CallOutcome),
+}
+
 #[async_trait]
 pub trait AdapterSet: Send + Sync {
     /// Covers semantic principal, destination, scopes and request interpretation.
@@ -211,6 +229,28 @@ pub trait AdapterSet: Send + Sync {
         ReconciliationOutcome::Unresolved {
             code: "reconciliation-unavailable".into(),
         }
+    }
+
+    /// Read the result of the review request a call step accepted, with the
+    /// producer authorization of the named connection. `accepted` is that
+    /// step's protected output, never operator text.
+    async fn read_review_result(&self, _connection: &str, _accepted: &Value) -> ReviewRead {
+        ReviewRead::Failed(CallOutcome::Refused {
+            code: "operation-unbound".into(),
+        })
+    }
+
+    /// The seconds between two result checks of a review wait on the named
+    /// connection.
+    fn result_check_seconds(&self, _connection: &str) -> u32 {
+        crate::runtime::DEFAULT_RESULT_CHECK_SECONDS
+    }
+
+    /// The connection whose configured completion credential and recipient
+    /// binding both match, compared in constant time. Without exactly one
+    /// match the sender is not authenticated.
+    fn review_completion(&self, _token: &str, _recipient: &str) -> Option<String> {
+        None
     }
 }
 

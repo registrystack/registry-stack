@@ -4083,16 +4083,18 @@ formats:
       boolean: /deployment/authentication/policies/1/operator
       set: /connections/applications/authorization/scopes
     securityMembers:
+      - pointer: /connections/*/completion
+        whenOmitted: closed
       - pointer: /decisionConnections
         whenOmitted: refused
       - pointer: /deployment/listener/bind
         whenOmitted: refused
       - pointer: /deployment/metricsListener/bind
-        whenOmitted: open
+        whenOmitted: closed
       - pointer: /deployment/authentication/allowedClients
         whenOmitted: refused
       - pointer: /deployment/authentication/assertionIssuers
-        whenOmitted: open
+        whenOmitted: closed
       - pointer: /deployment/authentication/policies
         whenOmitted: refused
       - pointer: /deployment/packages/*/expectedDigest

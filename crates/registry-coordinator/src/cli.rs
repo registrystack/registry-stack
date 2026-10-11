@@ -988,6 +988,17 @@ fn render_explain(value: &Value) -> String {
         let next = listed(&step["next"]);
         let line = match step["kind"].as_str().unwrap_or_default() {
             "wait-until" => format!("wait until {}, then {next}", mapping(&step["mapping"])),
+            "wait-for" => format!(
+                "wait for the {} of {}, at most {} seconds, then {}; on timeout {}",
+                text(&step["event"]),
+                text(&step["request"]),
+                step["timeoutSeconds"],
+                text(&step["next"][0]),
+                match step["onTimeout"].as_str() {
+                    Some(target) => target.to_owned(),
+                    None => "the run fails with wait-timed-out".to_owned(),
+                }
+            ),
             "call" => format!(
                 "call {} {} ({} {}, recovery {}) with {}, then {next}",
                 text(&step["connection"]),

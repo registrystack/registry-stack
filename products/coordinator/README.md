@@ -38,14 +38,16 @@ execution bounds without credentials, network access or database writes. Add
 `workflow.yaml` is a `CoordinatorProject` document. Its `project` block names the
 workflow and version, `deadlineSeconds` states a bounded integer duration, and
 `functionsFile` names `functions.rhai`. Each step declares its `type`: `wait-until`,
-`call`, `choose`, or `finish`.
+`wait-for`, `call`, `choose`, or `finish`.
 
 Mappings carry values between steps, and a reference names one value.
 `{type: input}` reads the workflow input, `{type: step, step: read-application}`
 reads that earlier call's output and `{type: literal, value: applications}`
 supplies an authored JSON value. An input or step reference may add an RFC 6901
 `path`, such as `/data/recordIdentifier`, to select one member. The checker
-proves the referenced call completed on every incoming route. Every mapping names
+proves the referenced call completed on every incoming route. A step reference
+may also read a `wait-for` step that every incoming route left through its
+`next`, which holds the result the wait received. Every mapping names
 its form with `type`. A call `input` or a finish `output` is either
 `type: fields`, an object built member by member from up to 64 references, or
 `type: function`, a pure function with up to 16 reference `arguments`.
@@ -148,6 +150,14 @@ default; `--format json` supplies structured reports.
 - [Governed action follow-up](examples/governed-action-follow-up/README.md)
   reads an application, invokes a governed BReg action through a permitted service
   profile, and submits a separate notice through Messaging.
+- [Decision follow-up](examples/decision-follow-up/README.md) asks a configured
+  model for a typed decision over an application summary, applies an explicit
+  confidence threshold, and invokes a governed BReg action only when both allow
+  it; otherwise it finishes with `no-action` or `needs-review`.
+- [Reviewed notice](examples/reviewed-notice/README.md) submits an application
+  to Casework review as a review producer, waits for the result, sends a
+  Messaging notice when the review approves it and withdraws the request when
+  no decision arrives within fourteen days.
 - [External directory](examples/external-directory/README.md) reads a configured
   directory over HTTP GET and chooses an outcome from the validated response.
 - [Bounded poll](examples/bounded-poll/README.md) reads a BReg application at
@@ -186,6 +196,8 @@ The supported operation inventory is fixed:
 | `invoke-breg-action` | BReg | Mutation | Same prepared command; no read-only receipt |
 | `external-get` | Configured external HTTP service | Read | Read again |
 | `evaluate-decision` | Configured typed decision service | Evaluation | Hold after uncertain dispatch |
+| `submit-review-request` | Casework, as a review producer | Mutation | Same command; no read-only receipt |
+| `cancel-review-request` | Casework, as a review producer | Mutation | Same command; no read-only receipt |
 
 `invoke-breg-action` takes an action identifier and an object of action inputs.
 It requires a standing BReg service identity and a profile that permits that
@@ -224,6 +236,28 @@ potentially billable evaluation is appropriate. The
 branching and distinguishes model refusal from transport uncertainty. General
 structured generation, model tools and asynchronous jobs are not supported.
 
+`submit-review-request` and `cancel-review-request` hand work to Casework human
+review as a review producer. Bind their logical connection under
+`runtime.connections` with `product: casework`, the Casework access `profile`,
+the `producer` id the Casework project lists under `reviewProducers`, and an
+ordinary service `authorization`; `taskAuthority` is refused there. Every
+submission carries the connection's producer, so a connection is one producer.
+A submission names the review `kind`, the `subject` record under review with
+its version and digest, the `context` a reviewer sees and a `requesterReference`; its
+output is the accepted request, with Casework's `requestId`, `subject`,
+`policy` and `submissionDigest`. A resend with the original key returns the
+original acceptance while Casework keeps it, so `retry-same` can repeat an
+uncertain submission, while
+`reconcile` cannot resolve one: Casework has no read-only lookup by key.
+`cancel-review-request` takes that accepted request and a `reason`, and reports
+`cancelled`, or `already-terminal` with the result a reviewer already recorded.
+Route on the cancel step's `/outcome`: only `cancelled` means the cancellation
+ended the review, and `already-terminal` carries a decision the workflow
+should report rather than treat as a withdrawal.
+Reviewer authority, review policy and the decision stay with Casework. A
+`wait-for` step waits for the result, as [Waits and
+polling](#waits-and-polling) describes.
+
 ## Waits and polling
 
 A `wait-until` step waits until one instant: an input value, a value from an
@@ -242,10 +276,66 @@ reads that outcome and, if it still needs the answer, starts a new run later.
 first check time and one and two days later, then finishes `decided` or
 `still-pending`.
 
+A `wait-for` step waits for an event that belongs to the run. Its `event`
+names the event `type` and what the event belongs to. `review-result`, the
+result of a review request an earlier `submit-review-request` call submitted,
+is the one event type:
+
+```yaml
+await-review:
+  type: wait-for
+  event: {type: review-result, request: submit-review}
+  timeoutSeconds: 1209600
+  next: decide
+  onTimeout: withdraw
+```
+
+`request` names a `submit-review-request` call that every route to the wait
+passes through. `timeoutSeconds` is required, from 1 second to one year, and
+check refuses one that is not shorter than `deadlineSeconds`: even a wait that
+starts at admission would reach the run deadline first and expire instead of
+taking its timeout route. At run time the deadline still wins, so a wait that
+starts late in the run expires it with `deadline-reached` when the deadline
+comes before the timeout.
+
+The step reads the result with the connection's producer authorization as soon
+as the wait starts, then every `resultCheckSeconds` of that connection (900 by
+default) while the review is open, and once more at the timeout. A read that
+Casework answers as busy, or that cannot reach Casework, leaves the wait open:
+the next read follows Casework's `Retry-After`, no sooner than 30 seconds and
+no later than `resultCheckSeconds`, and without one comes five minutes later,
+or after `resultCheckSeconds` when that is shorter. An outage shorter than the
+timeout does not fail the run, and waiting runs do not all read again the
+moment Casework recovers. Casework's
+completion event for the request brings the next read forward, to no sooner
+than 30 seconds after the previous one, however many events arrive. The event
+carries no result and never settles the wait by itself; when it does not
+arrive, the result checks still find the result. A completed result continues
+the run at `next` with the result as the step's output, so a `choose` reads its
+`/status`: `approved`, `rejected`, `changes-requested`, `answered`, `cancelled`
+or `superseded`. The result must belong to the accepted request, with the same
+request, subject, policy and submission digest; any other result fails the run
+with `invalid-response`. A request Casework does not know fails the run with
+`review-request-unknown`, and a result Casework no longer holds with
+`review-result-expired`. When the timeout passes without a result, the run
+continues at `onTimeout`, or fails with `wait-timed-out` when the step has
+none. A step reached through `onTimeout` cannot read the wait's output, and a
+result found by the read at the timeout wins over the timeout.
+
+Casework supersedes a review request still under review when the same producer
+submits another one for the same subject record, of any version, and the same
+review kind. A run waiting on the superseded request reads the result
+`superseded` and continues at `next`; the run that submitted the replacement
+waits for that one. Choose on `superseded` wherever two runs of a flow can
+submit for the same record. [Reviewed notice](examples/reviewed-notice/README.md)
+submits a review, waits up to fourteen days, sends a notice on approval and
+withdraws the request on timeout, finishing `decided-late` when a reviewer
+decided first.
+
 Runs start only from an explicit caller request, through `POST /v1/runs` or
-`coordinatorctl start`. There are no event-started runs, no wait-for-signal
-steps and no completion callbacks: a waiting run continues only when its instant
-passes, and a caller learns the outcome by reading the run's status.
+`coordinatorctl start`. There are no event-started runs: a completion event only
+brings forward the next read of a run already waiting on that request, and a
+caller learns the outcome by reading the run's status.
 
 ## Add a maintained operation
 
@@ -353,8 +443,8 @@ complete-history attestations and the limits of older backups.
 ## Verify a change
 
 The owning Cargo tests cover authoring, deterministic scenarios, runtime config,
-package integrity, OIDC policy, product adapter boundaries and Scheduling command
-recovery. The PostgreSQL feature gates protect database-dependent suites from
+package integrity, OIDC policy, product adapter boundaries, Scheduling command
+recovery and the authoring of review waits. The PostgreSQL feature gates protect database-dependent suites from
 ordinary workspace test runs.
 
 ```sh
@@ -364,6 +454,7 @@ cargo test --locked -p registry-coordinator --features schema \
   --test deployment_surface --test http_boundary --test scheduling_adapter \
   --test breg_action_adapter --test external_http --test external_runtime \
   --test decision_protocol --test decision_runtime \
+  --test casework_adapter --test wait_for_authoring \
   --test catalog_scenarios
 products/coordinator/scripts/check-schemas.sh
 cargo run --locked -p registry-coordinator --bin coordinatorctl -- openapi \
@@ -372,7 +463,7 @@ cargo run --locked -p registry-coordinator --bin coordinatorctl -- openapi \
 
 With dedicated disposable PostgreSQL 17+ databases configured, use
 `scripts/test-postgres.sh` for the maintained durable-state, encrypted-custody,
-restart, deployment/router and Messaging integration checks. That script first
+restart, deployment/router, review-wait and Messaging integration checks. That script first
 builds the independent Messaging service and operator executable, then supplies
 `COORDINATOR_MESSAGING_BIN` and `COORDINATOR_MESSAGINGCTL_BIN` to the tests.
 The integration fixtures compose through Messaging's public HTTP contract and
@@ -381,7 +472,9 @@ dependency. The native-service
 fixture script runs the controlled BReg, Casework, Scheduling and Messaging
 journey. It requires Python 3, OpenSSL and PostgreSQL client tools, Docker,
 distinct disposable PostgreSQL databases, and all ten native service/operator
-binaries described by the script's `--help`. Those contributor checks do not replace the deployment runbook or imply
+binaries described by the script's `--help`. Build `messaging` and `scheduling`
+with their own `postgres-test` features: the journey gives them plaintext
+loopback databases, which only those builds accept. Those contributor checks do not replace the deployment runbook or imply
 production credentials are needed to author a project.
 
 The governed-action and external-directory examples have deterministic scenarios;
@@ -424,4 +517,11 @@ fresh credentials bounded by the original deferred approval, original-receipt
 recovery after lost booking and notice replies, and refusal of expired, unknown
 or mismatched approvals without additional effects. Waits shorter than 901
 seconds are smoke checks and do not establish the long-wait boundary.
+The journey also runs the reviewed-notice flow against a real Casework review
+producer: two runs submit their review, a reviewer approves one and rejects the
+other, and Casework delivers each completion to the Coordinator's
+`/v1/review-completions` route. Both runs settle well before their 900-second
+fallback read, only the approval sends its notice, and the live receiver
+refuses a wrong token or recipient binding while acknowledging an authentic
+event for an unknown request. The timeout route is proven by scenarios only.
 The helper is an explicit contributor check, not a CI gate.

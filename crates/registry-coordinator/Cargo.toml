@@ -28,7 +28,7 @@ workspace = true
 default = []
 # Database suites opt in locally; downstream services are separate executables.
 postgres-test = []
-schema = ["dep:schemars", "registry-platform-config/schema", "registry-platform-yaml/schema", "registry-platform-audit/schema", "registry-breg-client/schema", "registry-messaging-core/schema", "registry-scheduling-core/schema"]
+schema = ["dep:schemars", "registry-platform-config/schema", "registry-platform-yaml/schema", "registry-platform-audit/schema", "registry-breg-client/schema", "registry-messaging-core/schema", "registry-scheduling-core/schema", "registry-review-protocol/schema"]
 
 [[example]]
 name = "runtime-schema"
@@ -71,6 +71,11 @@ name = "deployment_postgres"
 path = "tests/deployment_postgres.rs"
 required-features = ["postgres-test"]
 
+[[test]]
+name = "review_wait_postgres"
+path = "tests/review_wait_postgres.rs"
+required-features = ["postgres-test"]
+
 [dependencies]
 async-trait.workspace = true
 axum.workspace = true
@@ -97,6 +102,7 @@ registry-platform-crypto.workspace = true
 registry-platform-dispatch = { workspace = true, features = ["postgres"] }
 registry-platform-httputil.workspace = true
 registry-platform-script.workspace = true
+registry-review-protocol.workspace = true
 registry-scheduling-client.workspace = true
 registry-scheduling-core.workspace = true
 reqwest.workspace = true

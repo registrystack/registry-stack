@@ -21,6 +21,7 @@ CASEWORK_PRINCIPALS = {
     "supervisor": "synthetic-casework-supervisor",
     "administrator": "synthetic-casework-administrator",
     "producer": "synthetic-casework-producer",
+    "review-producer": "synthetic-coordinator-review-producer",
 }
 REQUEST_FIELDS = ["tenant", "record", "proposed-email", "reason"]
 APPLICATION_FIELDS = ["tenant", "email", "notice-allowed", "appointment-allowed"]
@@ -174,6 +175,8 @@ def write_breg(root, urls):
                       claims={"registry_actor_kind": "service"}),
         _owner_client("producer", ["casework:reviews:request"],
                       claims={"casework_principal": CASEWORK_PRINCIPALS["producer"]}),
+        _owner_client("review-producer", ["casework:review"],
+                      claims={"casework_principal": CASEWORK_PRINCIPALS["review-producer"]}),
         _owner_client("staff", ["casework:staff", "records:get"], ["reviewer"],
                       {"registry_actor_kind": "human", **TENANT_CLAIMS,
                        "casework_principal": CASEWORK_PRINCIPALS["staff"]}, human=True),
@@ -354,11 +357,13 @@ def write_messaging(root):
         "senderProfiles": [{"id": "transactional", "channel": "email", "provider": "mail-relay",
                             "sender": "notices@example.invalid"}],
         "templates": [{"id": "application-follow-up", "version": "1"},
-                      {"id": "appointment-confirmed", "version": "1"}],
+                      {"id": "appointment-confirmed", "version": "1"},
+                      {"id": "application-approved", "version": "1"}],
         "accessProfiles": [{
             "id": "case-notices", "principalClaim": "sub", "requiredScopes": ["messaging:send"],
             "requesterClients": ["case-system"], "actorKind": "service", "role": "sender",
-            "senderProfiles": ["transactional"], "templates": ["application-follow-up", "appointment-confirmed"],
+            "senderProfiles": ["transactional"],
+            "templates": ["application-follow-up", "appointment-confirmed", "application-approved"],
             "requestsPerMinute": 600, "burst": 100,
         }],
     })
@@ -388,6 +393,60 @@ def write_messaging(root):
     (confirmation / "en").mkdir()
     (confirmation / "en/subject.j2").write_text("Appointment confirmed\n")
     (confirmation / "en/text.j2").write_text("Appointment {{ appointmentReference }} at {{ appointmentStart }}\n")
+    # The approval notice cites the review result by id and repeats none of
+    # the review's content.
+    approved = root / "templates/application-approved/1"
+    _write(approved / "template.yaml", {"apiVersion": "id.registrystack.org/formats/messaging/template/v1alpha1", "kind": "MessagingTemplate",
+        "channel": "email", "locales": ["en"], "parts": ["subject", "text"]})
+    fields = ["applicationReference", "reviewResult"]
+    _write(approved / "schema.json", {"type": "object", "additionalProperties": False,
+        "required": fields, "properties": {field: {"type": "string"} for field in fields}})
+    _write(approved / "sample.json", {"applicationReference": "00000000-0000-4000-8000-000000000001",
+        "reviewResult": "00000000-0000-4000-8000-000000000002"})
+    (approved / "en").mkdir()
+    (approved / "en/subject.j2").write_text("Application approved\n")
+    (approved / "en/text.j2").write_text("Application {{ applicationReference }} was approved in review {{ reviewResult }}\n")
+    return root
+
+
+def write_review_casework(root, urls):
+    """Write a Casework policy where the Coordinator is a review producer.
+
+    The review kind takes submitted context, so this Casework needs no source
+    adapter, and its producer names the completion destination the runtime
+    configuration points at the Coordinator's receiver.
+    """
+    root = Path(root)
+    _write(root / "casework.yaml", {
+        "apiVersion": "id.registrystack.org/formats/casework/project/v1alpha1",
+        "kind": "CaseworkProject", "project": {"id": "coordinator-review", "version": "1"},
+        "accessProfiles": [
+            {"id": "staff", "principalClaim": "casework_principal", "requiredScopes": ["casework:staff"], "role": "staff"},
+            {"id": "supervisor", "principalClaim": "casework_principal", "requiredScopes": ["casework:supervisor"], "role": "supervisor"},
+            {"id": "administrator", "principalClaim": "casework_principal", "requiredScopes": ["casework:admin"], "role": "administrator"},
+            {"id": "coordinator-producer", "principalClaim": "casework_principal", "requiredScopes": ["casework:review"], "role": "requester"},
+        ],
+        "queues": [{"id": "applications", "label": "Synthetic applications awaiting review"}],
+        "reviewKinds": [{
+            "id": "application-review", "version": "1", "purpose": "approval",
+            "contextStrategy": "submitted", "stages": [{
+                "id": "review", "queue": "applications", "decidingProfiles": ["staff"], "requiredApprovals": 1,
+            }],
+            "outcomes": [{"id": "missing-evidence", "label": "Missing evidence",
+                          "settlement": "rejected", "reasonRequired": False}],
+            "retention": {"terminalDays": 30, "accountabilityDays": 90},
+            "displaySchema": {"type": "object", "additionalProperties": False,
+                              "required": ["applicationId", "applicationVersion"],
+                              "properties": {"applicationId": {"type": "string", "maxLength": 64},
+                                             "applicationVersion": {"type": "string", "maxLength": 64}}},
+        }],
+        "reviewProducers": [{
+            "id": "coordinator", "profile": "coordinator-producer", "issuer": urls["issuer"],
+            "subject": CASEWORK_PRINCIPALS["review-producer"], "sourceNamespaces": ["applications"],
+            "kinds": ["application-review"], "recoveryDays": 7,
+            "completion": {"destinationId": "coordinator", "recipientBinding": "coordinator-v1"},
+        }],
+    })
     return root
 
 

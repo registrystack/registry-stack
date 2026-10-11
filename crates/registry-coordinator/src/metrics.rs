@@ -110,7 +110,8 @@ impl RunOutcome {
 
 /// What one step attempt came to, the closed label of
 /// `coordinator_step_attempts_total`: the send outcome the worker handed
-/// Dispatch, or `unavailable` when the attempt could not reach the store.
+/// Dispatch, or `unavailable` when the attempt could not reach the store. A
+/// review read that failed and left its wait open is `transient`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum StepAttempt {
     Accepted,

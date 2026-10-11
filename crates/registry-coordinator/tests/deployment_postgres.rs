@@ -1983,10 +1983,13 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
         .await
         .unwrap();
     assert_eq!(cancelled.status(), 200);
+    // The cancellation's completion time comes from the database clock, so
+    // the cutoff does too.
+    let cutoff = database_clock::retention_cutoff(&admin).await;
     let erased = http
         .post(format!("{origin}/v1/retention"))
         .bearer_auth(&op)
-        .json(&json!({"before":Utc::now().to_rfc3339(),"limit":100}))
+        .json(&json!({"before":cutoff.to_rfc3339(),"limit":100}))
         .send()
         .await
         .unwrap()
@@ -4011,6 +4014,9 @@ async fn the_metrics_listener_counts_closed_series_and_leaves_the_gauge_stale_in
 
 #[path = "support/postgres_tool.rs"]
 mod postgres_tool;
+
+#[path = "support/database_clock.rs"]
+mod database_clock;
 
 /// This also tests PostgreSQL's backup tooling, so it is run explicitly with a
 /// client matching the disposable server, using scripts/test-restore.sh.

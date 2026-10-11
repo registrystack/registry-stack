@@ -38,7 +38,7 @@ An offline check validates the configuration without resolving secret material,
 connecting to PostgreSQL, or contacting products.
 
 `scenarios.yaml` carries `CoordinatorScenarios`. Each case names its `id`, workflow input, typed
-fake replies, and expected execution result. `coordinatorctl test` replays these cases with a
+fake replies, what each `wait-for` step receives, and expected execution result. `coordinatorctl test` replays these cases with a
 virtual clock; passing scenarios do not prove a live deployment or provider delivery.
 
 JSON Schema fragments and scenario payloads are foreign JSON trees: they can contain null values.
@@ -60,6 +60,7 @@ A mapping carries values into a step.
 A reference names one value: `{type: input}` reads the workflow input, `{type: step, step: read-application}` reads that earlier call's output, and `{type: literal, value: applications}` supplies an authored JSON value.
 An input or step reference may add an RFC 6901 `path`, such as `/data/recordIdentifier`, to select one member.
 A step reference must name a call that completed on every route into the reading step.
+It may also name a `wait-for` step that every route into the reading step left through its `next`, to read the result the wait received.
 Every mapping names its form with `type`: `fields`, `function`, or one of the reference types.
 
 | Member | Accepts |
@@ -94,6 +95,10 @@ A `wait-until` step holds the run in PostgreSQL until its instant; an instant th
 A wait that wakes at or after the run deadline ends the run `expired` with failure code `deadline-reached`.
 The graph has no cycles, so a run that checks a source repeatedly declares a fixed number of wait, read and choose rounds.
 The maintained [bounded poll project](https://github.com/registrystack/registry-stack/tree/main/products/coordinator/examples/bounded-poll) reads a record at three fixed times and then returns control to the caller.
+
+A `wait-for` step holds the run until an event it names, or its timeout.
+`review-result` is the one event type: the result of a review request that an earlier `submit-review-request` call submitted on every route to the wait.
+[Review requests and waits](#review-requests-and-waits) describes it.
 
 `coordinatorctl check` fits every mapping to the schemas it reads and feeds before any run:
 
@@ -138,8 +143,10 @@ The run and step status report the RFC 6901 path into the input as `failurePath`
 | `invoke-breg-action` | `breg` | Mutation | Same prepared command; no read-only receipt |
 | `external-get` | `external-http` | Read | Read again |
 | `evaluate-decision` | `decision` | Evaluation | Hold after uncertain dispatch |
+| `submit-review-request` | `casework` | Mutation | Same command; no read-only receipt |
+| `cancel-review-request` | `casework` | Mutation | Same command; no read-only receipt |
 
-These eight identifiers are the complete inventory.
+These ten identifiers are the complete inventory.
 There is no arbitrary HTTP method, SQL step or dynamic call destination.
 
 `invoke-breg-action` accepts `action` and an object-valued `input`.
@@ -157,6 +164,7 @@ Execution snapshots pin the capabilities of each used operation.
 A changed digest needs a new workflow version when the same ID and version exists in retained history.
 
 {/* Evidence: crates/registry-coordinator/src/operations.rs, CATALOG;
+    crates/registry-coordinator/src/review.rs;
     crates/registry-coordinator/src/breg_action.rs, prepare, execute;
     crates/registry-coordinator/src/runtime.rs, RuntimeConfig;
     crates/registry-coordinator/src/definition.rs, Definition;
@@ -308,6 +316,89 @@ Offline scenarios test policy, refusal, and uncertainty; they do not establish l
     crates/registry-coordinator/tests/decision_protocol.rs;
     crates/registry-coordinator/tests/process_restart.rs;
     products/coordinator/examples/decision-follow-up/functions.rhai. */}
+
+## Review requests and waits
+
+`submit-review-request` and `cancel-review-request` hand work to Registry Casework human review as one of its review producers.
+Declare `casework` as the project's logical connection type, then bind it under `runtime.connections`:
+
+```yaml
+connections:
+  review:
+    product: casework
+    baseUrl: https://casework.example.org
+    profile: coordinator-producer
+    producer: coordinator
+    authorization:
+      tokenEndpoint: https://issuer.example.org/oauth/token
+      clientId: coordinator-review-producer
+      signingKeyRef: secret:file/review-jwk
+      resource: urn:example:casework
+      scopes: [casework:review]
+    completion:
+      recipientBinding: coordinator-v1
+      bearerTokenRef: secret:file/review-completion-token
+    resultCheckSeconds: 900
+```
+
+| Runtime member | Contract |
+| --- | --- |
+| `profile` | Required Casework access profile the producer's client is admitted to |
+| `producer` | Required review producer `id` from the Casework project's `reviewProducers` |
+| `authorization` | Required ordinary service identity whose issuer and subject the producer declares; `taskAuthority` is refused |
+| `completion` | Optional `recipientBinding`, 1 to 256 visible ASCII characters and unique across Casework connections, and `bearerTokenRef`, the secret Casework presents as a bearer token |
+| `resultCheckSeconds` | 60 to 86,400, default 900; the spacing of result reads while a review is open |
+
+`completion` and `resultCheckSeconds` are accepted only on a Casework connection, and changing them does not change a run's binding.
+
+The `submit-review-request` input names the review `kind`, the `subject` record with its source, type, id, version and digest, the `context` a reviewer sees, and a `requesterReference`.
+Its output is Casework's acceptance: `requestId`, `subject`, `policy` and `submissionDigest`.
+The `cancel-review-request` input passes that acceptance as `request` with a `reason`; its output is `outcome`, `cancelled` or `already-terminal`, with the review's terminal `result`.
+Route on `/outcome`: only `cancelled` means the cancellation ended the review, and `already-terminal` carries the decision a reviewer recorded first.
+Both are mutations without a read-only receipt: `retry-same` resends the saved request with its original key, and `reconcile` reports `reconciliation-unavailable`.
+
+A `wait-for` step waits for the result of a submitted request:
+
+```yaml
+await-review:
+  type: wait-for
+  event: {type: review-result, request: submit-review}
+  timeoutSeconds: 1209600
+  next: decide
+  onTimeout: withdraw
+```
+
+`timeoutSeconds` accepts 1 to 31,536,000 and must be shorter than `deadlineSeconds`.
+The step reads the result with the producer identity when it starts, every `resultCheckSeconds` while the review is open, and once more at the timeout.
+A read that Casework answers as busy, or that cannot reach Casework, leaves the wait open: the next read follows Casework's `Retry-After`, no sooner than 30 seconds and no later than `resultCheckSeconds`, and without one comes five minutes later, or after `resultCheckSeconds` when that is shorter, so an outage shorter than the timeout does not fail the run.
+A settled result continues at `next` as the step's output; a `choose` reads its `/status`: `approved`, `rejected`, `changes-requested`, `answered`, `cancelled` or `superseded`.
+A result for another request, subject, policy or submission digest fails the run with `invalid-response`.
+An unknown request fails it with `review-request-unknown` and an expired result with `review-result-expired`.
+The timeout continues at `onTimeout`, or fails the run with `wait-timed-out`; a result found by the read at the timeout wins.
+A deadline that comes first ends the run `expired` with `deadline-reached`.
+
+Casework supersedes a request still under review when the same producer submits another for the same subject record, of any version, and the same kind.
+The waiting run then reads `superseded`, so choose on it wherever two runs can submit for one record.
+
+With `completion` configured, Casework posts each completion event to `POST /v1/review-completions` on the service listener.
+The receiver refuses any sender without the configured bearer token and recipient binding, and answers every authentic event with 204 whether or not a run waits on its request.
+The event is a wake-up only: it brings the next read forward to no sooner than 30 seconds after the previous one, and the read decides the result.
+No event starts a run.
+
+The maintained [reviewed notice project](https://github.com/registrystack/registry-stack/tree/main/products/coordinator/examples/reviewed-notice) submits a review, waits up to fourteen days, sends a notice on approval and withdraws the request on timeout.
+Its scenarios state each wait's result or timeout with `waits`; they do not prove Casework review policy or completion delivery.
+
+{/* Evidence: crates/registry-coordinator/src/review.rs;
+    crates/registry-coordinator/src/completion.rs, receive_review_completion, authenticate;
+    crates/registry-coordinator/src/runtime.rs, ConnectionConfig, ReviewCompletionConfig;
+    crates/registry-coordinator/src/worker.rs, wait_result;
+    crates/registry-coordinator/src/store.rs, wake;
+    crates/registry-coordinator/src/scenarios.rs, AuthoredWait;
+    crates/registry-coordinator/tests/casework_adapter.rs;
+    crates/registry-coordinator/tests/wait_for_authoring.rs;
+    crates/registry-coordinator/tests/review_wait_postgres.rs;
+    products/coordinator/examples/reviewed-notice/workflow.yaml;
+    products/coordinator/generated/operations/review-result.event.schema.json. */}
 
 ## Caller authentication
 

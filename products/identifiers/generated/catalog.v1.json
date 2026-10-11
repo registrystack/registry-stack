@@ -3775,11 +3775,11 @@
       "description": "Registry Coordinator portable project authoring JSON Schema.",
       "source": {
         "path": "crates/registry-coordinator/src/authoring.rs",
-        "sha256": "796f3fb9588f9ae24d4b3c4af8f04760f177dc01f3e9599e231ab29d11ed2416"
+        "sha256": "0f680b3ae4b51b370159bc3012cd3a254e1d505a776bcea96ef515b368f185f5"
       },
       "artifact": {
         "path": "products/coordinator/generated/project/project.schema.json",
-        "sha256": "ee08241cc14692b2af07c8c292f8400478bf041910296e47a70d18a415c8ad92",
+        "sha256": "8abc6fa2fc98ebdc2c05f49b7673d22392c3548f5933c57c5f9f603a5f616f9e",
         "mediaType": "application/schema+json"
       }
     },
@@ -3793,11 +3793,11 @@
       "description": "Registry Coordinator runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-coordinator/src/runtime.rs",
-        "sha256": "0d6220f42f3e5f808a0a06cd797ce1fcda9371c9156b682bbea497b3a7acb4f7"
+        "sha256": "559846403e9c0571199b8aebfc9294e6e5af6f4421314c99e4a94770ea6a7683"
       },
       "artifact": {
         "path": "products/coordinator/generated/runtime/runtime.schema.json",
-        "sha256": "bcdbaa84be789f3cab09c2168353ceaccb4ae20db71b51bd3f645d41cb444f29",
+        "sha256": "3716aa55a900f1afd9facf6aebd9d9fd4b575a421b8fbbb12ca176b5da5a4952",
         "mediaType": "application/schema+json"
       }
     },
@@ -3811,11 +3811,11 @@
       "description": "Registry Coordinator deterministic scenario authoring JSON Schema.",
       "source": {
         "path": "crates/registry-coordinator/src/scenarios.rs",
-        "sha256": "d2a7c84bb1a052115fb5ea45111c02c665cd95146a4d8875c2e65309ca7ae28a"
+        "sha256": "2342ff6e96066cc756499be68e248c11b96259ee5f7895282214ce61f2ab2bf8"
       },
       "artifact": {
         "path": "products/coordinator/generated/scenarios/scenarios.schema.json",
-        "sha256": "3d8eede1f1593fb2a4159f5d59ad2a9dab375e0b4d6fbd5ca743316c351e573d",
+        "sha256": "d2e984c891d880d273de7709df373fa9abc191a20e064bb7a7db2749f2e967a9",
         "mediaType": "application/schema+json"
       }
     },

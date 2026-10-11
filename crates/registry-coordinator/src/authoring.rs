@@ -63,13 +63,15 @@ pub struct CoordinatorProject {
 }
 
 /// The product a connection reaches: `breg` (Base Registry Engine),
-/// `messaging`, `scheduling`, `external-http` (a configured external HTTP
-/// service) or `decision` (a configured typed decision service).
+/// `casework` (Registry Casework, as a review producer), `messaging`,
+/// `scheduling`, `external-http` (a configured external HTTP service) or
+/// `decision` (a configured typed decision service).
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 enum Product {
     Breg,
+    Casework,
     Messaging,
     Scheduling,
     ExternalHttp,
@@ -80,6 +82,7 @@ impl Product {
     fn name(self) -> &'static str {
         match self {
             Self::Breg => "breg",
+            Self::Casework => "casework",
             Self::Messaging => "messaging",
             Self::Scheduling => "scheduling",
             Self::ExternalHttp => "external-http",
@@ -88,8 +91,8 @@ impl Product {
     }
 }
 
-/// A value a mapping reads: the workflow input, a preceding call's output,
-/// or an authored literal. A path selects a member inside the value.
+/// A value a mapping reads: the workflow input, a preceding call's or wait's
+/// output, or an authored literal. A path selects a member inside the value.
 #[derive(Debug, Deserialize)]
 #[serde(
     remote = "Self",
@@ -106,10 +109,10 @@ enum Reference {
         #[serde(default)]
         path: Option<JsonPointer>,
     },
-    /// Reads the output of a call step that completed earlier on every route
-    /// to this one.
+    /// Reads the output of a call step, or of a wait-for step that continued
+    /// with `next`, that completed earlier on every route to this one.
     Step {
-        /// The call step whose output this reads.
+        /// The call or wait-for step whose output this reads.
         step: LocalId,
         /// The member of the output to read; omit it to read the whole output.
         #[serde(default)]
@@ -175,10 +178,10 @@ enum AuthoredSelector {
         #[serde(default)]
         path: Option<JsonPointer>,
     },
-    /// Reads the output of a call step that completed earlier on every route
-    /// to this one.
+    /// Reads the output of a call step, or of a wait-for step that continued
+    /// with `next`, that completed earlier on every route to this one.
     Step {
-        /// The call step whose output this reads.
+        /// The call or wait-for step whose output this reads.
         step: LocalId,
         /// The member of the output to read; omit it to read the whole output.
         #[serde(default)]
@@ -326,6 +329,27 @@ impl schemars::JsonSchema for JsonPointer {
     }
 }
 
+/// The event a wait-for step waits for, named by its `type`.
+#[derive(Debug, Deserialize)]
+#[serde(
+    remote = "Self",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", schemars(!remote, tag = "type"))]
+enum AuthoredEvent {
+    /// The result of a review request: Casework's completion event wakes the
+    /// run, and the run reads the result with the producer's own credential.
+    ReviewResult {
+        /// The call step whose `submit-review-request` the wait correlates
+        /// with; it must precede the wait on every route.
+        request: LocalId,
+    },
+}
+registry_platform_yaml::tagged_union!(AuthoredEvent);
+
 /// One step of the workflow graph, named by its `type`.
 #[derive(Debug, Deserialize)]
 #[serde(
@@ -343,6 +367,23 @@ enum AuthoredStep {
         wait_until: AuthoredSelector,
         /// The step that follows the wait.
         next: LocalId,
+    },
+    /// Waits for an event another product delivers, then continues with the
+    /// event's value as its output, or takes `onTimeout` when the event does
+    /// not arrive in time.
+    WaitFor {
+        /// The event to wait for.
+        event: AuthoredEvent,
+        /// How long to wait, in seconds from the start of the wait, at most one
+        /// year; it must be shorter than `deadlineSeconds`.
+        timeout_seconds: BoundedU32<1, 31_536_000>,
+        /// The step that follows the event, with the event's value as this
+        /// step's output.
+        next: LocalId,
+        /// The step that follows a timeout; this step has no output on that
+        /// route. Omit it to fail the run with `wait-timed-out`.
+        #[serde(default)]
+        on_timeout: Option<LocalId>,
     },
     /// Calls one operation through a connection, then continues with its
     /// output available to later steps.
@@ -443,6 +484,23 @@ impl TryFrom<AuthoredStep> for Step {
                 wait_until: wait_until.into(),
                 next: next.into_string(),
             },
+            AuthoredStep::WaitFor {
+                event,
+                timeout_seconds,
+                next,
+                on_timeout,
+            } => Self::WaitFor {
+                wait_for: match event {
+                    AuthoredEvent::ReviewResult { request } => {
+                        definition::WaitEvent::ReviewResult {
+                            request: request.into_string(),
+                        }
+                    }
+                },
+                timeout_seconds: timeout_seconds.get(),
+                next: next.into_string(),
+                on_timeout: on_timeout.map(LocalId::into_string),
+            },
             AuthoredStep::Call {
                 connection,
                 operation,
@@ -479,9 +537,7 @@ pub fn parse_project(path: &Path, bytes: impl AsRef<[u8]>) -> Result<(Workflow, 
         .with_hook(&mut expressions)
         .read(bytes.as_ref(), &Expect::one(&FORMAT))
         .map_err(CoordinatorError::from_report)?;
-    let project: CoordinatorProject = document
-        .decode()
-        .map_err(|report| CoordinatorError::from_report(redirected(&document, report)))?;
+    let project: CoordinatorProject = document.decode().map_err(CoordinatorError::from_report)?;
     let connections = project
         .connections
         .into_iter()
@@ -548,56 +604,6 @@ pub fn parse_project(path: &Path, bytes: impl AsRef<[u8]>) -> Result<(Workflow, 
     Ok((workflow, document))
 }
 
-/// What a refused step type or connection product an author may reach for
-/// from another product says instead: why Coordinator does not offer it, and
-/// what to write. The refusal stays where the reader placed it.
-fn redirect(path: &str, authored: &str) -> Option<(&'static str, &'static str)> {
-    let segments = path.split('/').skip(1).collect::<Vec<_>>();
-    match (segments.as_slice(), authored) {
-        (["steps", _, "type"], "wait-for") => Some((
-            "; Coordinator has no wait-for step: a run waits only for an instant",
-            "Use a timed `wait-until` step, then read the current state with a call and `choose` on it, repeated a bounded number of times to poll (see products/coordinator/README.md#waits-and-polling).",
-        )),
-        (["connections", _], "casework") => Some((
-            "; Coordinator has no casework connection: it does not read Casework work items or wait for their decisions",
-            "Poll the record the decision changes in its source product: a timed `wait-until`, then a call that reads the record and a `choose` on it (see products/coordinator/README.md#waits-and-polling).",
-        )),
-        _ => None,
-    }
-}
-
-fn redirected(
-    document: &Document,
-    report: registry_platform_yaml::Report,
-) -> registry_platform_yaml::Report {
-    let files = report.files_checked();
-    let diagnostics = report
-        .into_diagnostics()
-        .into_iter()
-        .map(|mut diagnostic| {
-            let authored = document
-                .root()
-                .pointer(&diagnostic.path)
-                .map(registry_platform_yaml::Node::to_json_value);
-            let redirect = authored
-                .as_ref()
-                .and_then(serde_json::Value::as_str)
-                .filter(|_| diagnostic.code == "config.unknown-variant")
-                .and_then(|authored| redirect(&diagnostic.path, authored));
-            if let Some((reason, action)) = redirect {
-                diagnostic.message.push_str(reason);
-                diagnostic.suggested_action = action.to_owned();
-            }
-            diagnostic
-        })
-        .collect();
-    let mut report = registry_platform_yaml::Report::new(diagnostics);
-    if let Some(files) = files {
-        report.set_files_checked(files);
-    }
-    report
-}
-
 /// One refusal that carries every finding, each placed in the authored
 /// project.
 pub(crate) fn placed(document: &Document, findings: Vec<CoordinatorError>) -> CoordinatorError {
@@ -649,6 +655,8 @@ pub(crate) fn positioned(document: &Document, error: CoordinatorError) -> Coordi
                     parts.remove(3);
                 } else if parts[3] == "finish" {
                     parts[3] = "outcome".into();
+                } else if parts[3] == "waitFor" {
+                    parts[3] = "event".into();
                 }
             }
             parts.join("/")

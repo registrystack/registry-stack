@@ -97,6 +97,10 @@ pub fn router(state: HttpState) -> Router {
         .route("/v1/release-admission-hold", post(release_admission))
         .route("/v1/complete-execution-recovery", post(complete_execution))
         .route("/v1/retention", post(retain))
+        .route(
+            registry_review_protocol::REVIEW_COMPLETIONS_PATH,
+            post(review_completion),
+        )
         .layer(DefaultBodyLimit::max(65_536))
         .layer(registry_platform_httpsec::request_body_limit(65_536))
         .layer(registry_platform_httpsec::security_headers(
@@ -104,7 +108,7 @@ pub fn router(state: HttpState) -> Router {
         ))
         .with_state(state)
 }
-fn problem(error: CoordinatorError) -> Response {
+pub(crate) fn problem(error: CoordinatorError) -> Response {
     let status = match error.code.as_str() {
         "access.unauthenticated" => StatusCode::UNAUTHORIZED,
         "access.unavailable" => StatusCode::SERVICE_UNAVAILABLE,
@@ -708,6 +712,21 @@ async fn retain(State(s): State<HttpState>, headers: HeaderMap, body: BoundedBod
         .await,
     )
 }
+/// Casework's completion destination authenticates with the connection's
+/// completion credential and recipient binding, never a caller access token.
+async fn review_completion(
+    State(s): State<HttpState>,
+    headers: HeaderMap,
+    body: BoundedBody,
+) -> Response {
+    crate::completion::receive_review_completion(
+        &s.store,
+        s.adapters.as_ref(),
+        &headers,
+        body.as_deref().ok(),
+    )
+    .await
+}
 pub fn openapi() -> Value {
     let run_param = json!({"name":"run","in":"path","required":true,"schema":{"type":"string","format":"uuid"}});
     let mut paths = serde_json::Map::new();
@@ -817,6 +836,29 @@ pub fn openapi() -> Value {
         }
         paths.entry(path.to_owned()).or_insert_with(|| json!({}))[method] = op;
     }
+    paths.insert(
+        registry_review_protocol::REVIEW_COMPLETIONS_PATH.into(),
+        json!({"post":{
+            "operationId":"receiveReviewCompletion",
+            "description":"Casework's completion destination for a review producer connection reports that a review result exists. The event only wakes the step waiting on that request, which then reads the result with the connection's producer credential. Every authentic, well-formed event answers 204 whether or not a step waits on its request.",
+            "security":[{"reviewCompletion":[]}],
+            "parameters":[
+                {"name":"Registry-Recipient-Binding","in":"header","required":true,"description":"The recipient binding configured for the connection's completion destination.","schema":{"type":"string","minLength":1}},
+                {"name":"Idempotency-Key","in":"header","required":true,"description":"The event identifier.","schema":{"type":"string","format":"uuid"}}
+            ],
+            "requestBody":{"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/ReviewCompletion"}}}},
+            "responses":{
+                "204":{"description":"Authentic completion accepted"},
+                "400":{"description":"Invalid bounded completion event"},
+                "401":{"description":"Configured completion credential and recipient binding required","headers":{"WWW-Authenticate":{
+                    "description":"Bearer authentication challenge for missing or refused credentials.",
+                    "schema":{"type":"string","const":"Bearer"}
+                }}},
+                "415":{"description":"JSON media type required after sender authentication"},
+                "503":{"description":"Database unavailable"}
+            }
+        }}),
+    );
     for (path, key) in [("/health", "live"), ("/ready", "ready")] {
         paths.insert(path.into(),json!({"get":{"operationId":key,"responses":{"200":{"description":"Health result","content":{"application/json":{"schema":{"type":"object","required":[key],"properties":{key:{"type":"boolean"}}}}}},"503":{"description":"Deployment unavailable or in recovery hold"}}}}));
     }
@@ -842,7 +884,8 @@ pub fn openapi() -> Value {
       "Doctor":{"type":"object","required":["activationReady","state"],"properties":{"activationReady":{"type":"boolean"},"state":{"type":"object","required":["databaseId","schemaVersion","restoreHold","auditReady","admissionsHold","restoreReviewRequired","states","uncertain","terminalPayloads","oldestTerminalPayloadAt"],"properties":{"databaseId":{"type":"string"},"schemaVersion":{"type":"integer"},"restoreHold":{"type":"boolean"},"auditReady":{"type":"boolean"},"admissionsHold":{"type":"boolean"},"restoreReviewRequired":{"type":"integer","minimum":0},"states":{"type":"object","additionalProperties":{"type":"integer"}},"uncertain":{"type":"integer"},"oldestDueAt":{"type":["string","null"],"format":"date-time"},"terminalPayloads":{"type":"integer","minimum":0},"oldestTerminalPayloadAt":{"type":["string","null"],"format":"date-time"}}}}},
       "RetryScheduled":{"type":"object","required":["runId","status"],"properties":{"runId":{"type":"string","format":"uuid"},"status":{"const":"retry-scheduled"}}},
       "Hold":{"type":"object","required":["restoreHold"],"properties":{"restoreHold":{"type":"boolean"}}},"Erased":{"type":"object","required":["erased"],"properties":{"erased":{"type":"integer","minimum":0}}},
+      "ReviewCompletion":{"type":"object","additionalProperties":false,"required":["type","eventId","requestId","resultId","completedAt"],"properties":{"type":{"const":"review.completed"},"eventId":{"type":"string","format":"uuid"},"requestId":{"type":"string","format":"uuid"},"resultId":{"type":"string","format":"uuid"},"completedAt":date}},
       "Problem":{"type":"object","required":["code","message"],"properties":{"code":{"type":"string"},"message":{"type":"string"},"suggestedAction":{"type":["string","null"]}}}
     });
-    json!({"openapi":"3.1.0","info":{"title":"Registry Coordinator","version":env!("CARGO_PKG_VERSION")},"components":{"securitySchemes":{"bearer":{"type":"http","scheme":"bearer","bearerFormat":"JWT"}},"schemas":schemas},"paths":paths})
+    json!({"openapi":"3.1.0","info":{"title":"Registry Coordinator","version":env!("CARGO_PKG_VERSION")},"components":{"securitySchemes":{"bearer":{"type":"http","scheme":"bearer","bearerFormat":"JWT"},"reviewCompletion":{"type":"http","scheme":"bearer","description":"The completion credential configured for a Casework review connection, presented with its recipient binding."}},"schemas":schemas},"paths":paths})
 }

@@ -580,7 +580,7 @@ fn layout() -> Result<Layout> {
     .map_err(|_| fail("restore the activation layout"))
 }
 fn extras(namespace: &str) -> Vec<String> {
-    ["runs", "jobs", "admission_lock"]
+    ["runs", "jobs", "admission_lock", "review_waits"]
         .into_iter()
         .map(|s| format!("{namespace}.{s}"))
         .collect()

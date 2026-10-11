@@ -165,6 +165,71 @@ fn bounded_poll_example_rereads_a_fixed_number_of_times_and_returns_control() {
 }
 
 #[test]
+fn reviewed_notice_example_settles_each_review_route_and_withdraws_at_timeout() {
+    let (definition, document) = fixture("reviewed-notice");
+    let reports = scenarios::check(&definition, &document).unwrap();
+    let report = |name: &str| {
+        reports
+            .iter()
+            .find(|report| report.name == name)
+            .unwrap_or_else(|| panic!("no case {name}"))
+    };
+    let approved = report("approved-and-notice-sent");
+    assert_eq!(
+        approved.path,
+        [
+            "submit-review",
+            "await-review",
+            "decide",
+            "notify",
+            "notice-sent"
+        ]
+    );
+    assert_eq!(approved.state, "completed");
+    assert_eq!(approved.call_attempts["notify"], 1);
+    let rejected = report("rejected-without-notice");
+    assert_eq!(
+        rejected.path,
+        ["submit-review", "await-review", "decide", "rejected"]
+    );
+    assert_eq!(rejected.outcome.as_deref(), Some("rejected"));
+    assert!(!rejected.call_attempts.contains_key("notify"));
+    let changes = report("changes-requested-is-not-a-decision");
+    assert_eq!(changes.outcome.as_deref(), Some("not-decided"));
+    assert_eq!(changes.output, Some(json!({"status": "changes-requested"})));
+    // A wait that times out withdraws the request instead of failing the run.
+    let withdrawn = report("no-decision-within-fourteen-days");
+    assert_eq!(
+        withdrawn.path,
+        [
+            "submit-review",
+            "await-review",
+            "withdraw",
+            "confirm-withdrawal",
+            "withdrawn"
+        ]
+    );
+    assert_eq!(
+        withdrawn.output,
+        Some(json!({"resultId": "00000000-0000-4000-8000-000000000011"}))
+    );
+    assert_eq!(withdrawn.elapsed_seconds, 14 * 86_400);
+    // A decision that lands between the last result check and the withdrawal
+    // stays decided: Casework answers already-terminal and keeps the result,
+    // and the run reports that decision without acting on it.
+    let raced = report("decided-just-before-withdrawal");
+    assert_eq!(raced.outcome.as_deref(), Some("decided-late"));
+    assert_eq!(
+        raced.output,
+        Some(json!({"status": "approved", "resultId": "00000000-0000-4000-8000-000000000011"}))
+    );
+    assert!(!raced.call_attempts.contains_key("notify"));
+    let refused = report("notice-refused-after-approval");
+    assert_eq!(refused.state, "refused");
+    assert_eq!(refused.outcome, None);
+}
+
+#[test]
 fn action_scenarios_cannot_invent_a_read_only_receipt() {
     let (definition, mut document) = fixture("governed-action-follow-up");
     let case = document

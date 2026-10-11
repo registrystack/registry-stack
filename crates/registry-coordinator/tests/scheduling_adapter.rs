@@ -307,6 +307,9 @@ async fn fixture(
             authorization: auth,
             profile: None,
             observation_authorization,
+            producer: None,
+            completion: None,
+            result_check_seconds: None,
         },
     );
     Mock::given(method("POST")).and(path("/token"))

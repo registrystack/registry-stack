@@ -12,6 +12,8 @@ const RUNTIME: &str =
 const CANARY: &str = "secret-config-value-never-print";
 const SCHEDULING_RUNTIME: &str =
     include_str!("../../../products/coordinator/examples/deferred-appointment/runtime.yaml");
+const REVIEW_RUNTIME: &str =
+    include_str!("../../../products/coordinator/examples/reviewed-notice/runtime.yaml");
 
 fn yaml_value(text: &str) -> std::result::Result<Value, registry_platform_yaml::Report> {
     document_value(text, API_VERSION, KIND)
@@ -736,6 +738,7 @@ fn generated_runtime_schema_matches_examples_and_shared_blocks() {
     ))
     .unwrap();
     assert!(validator.is_valid(&single_flow));
+    assert!(validator.is_valid(&yaml_value(REVIEW_RUNTIME).unwrap()));
     let mut scheduling: Value = yaml_value(SCHEDULING_RUNTIME).unwrap();
     assert!(validator.is_valid(&scheduling));
     scheduling["connections"]["bookings"]
@@ -1405,4 +1408,293 @@ fn two_flow_example_serves_two_example_projects() {
         }),
         "a deployment operator takes every deployment-wide action without a flow list"
     );
+}
+
+fn with_review_connection() -> Value {
+    let mut document: Value = yaml_value(RUNTIME).unwrap();
+    document["connections"]["review"] = json!({
+        "product": "casework",
+        "baseUrl": "http://127.0.0.1:8102",
+        "profile": "coordinator-producer",
+        "producer": "coordinator",
+        "authorization": {
+            "tokenEndpoint": "http://127.0.0.1:8090/token",
+            "clientId": "coordinator-producer",
+            "signingKeyRef": "secret:file/client-key",
+            "resource": "urn:example:casework",
+            "scopes": ["casework:review"]
+        },
+        "completion": {
+            "recipientBinding": "coordinator-v1",
+            "bearerTokenRef": "secret:file/review-completion-token"
+        },
+        "resultCheckSeconds": 900
+    });
+    document
+}
+
+fn finding_at(error: &registry_coordinator::CoordinatorError, pointer: &str) -> String {
+    let found = error
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.path == pointer)
+        .unwrap_or_else(|| {
+            panic!(
+                "expected a finding at {pointer}, got {:?}",
+                error
+                    .diagnostics
+                    .iter()
+                    .map(|diagnostic| diagnostic.path.clone())
+                    .collect::<Vec<_>>()
+            )
+        });
+    format!(
+        "{} {} {}",
+        found.code, found.message, found.suggested_action
+    )
+}
+
+#[test]
+fn reviewed_notice_runtime_receives_completions_for_its_review_connection_on_the_main_listener() {
+    let config = load(REVIEW_RUNTIME).unwrap();
+    let definition = Definition::load(
+        &std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/coordinator/examples/reviewed-notice"),
+    )
+    .unwrap();
+    config.validate_workflow(&definition.workflow).unwrap();
+    let review = &config.connections["review"];
+    assert!(matches!(
+        review.product,
+        registry_coordinator::runtime::Product::Casework
+    ));
+    assert_eq!(review.profile.as_deref(), Some("coordinator-producer"));
+    assert_eq!(review.producer.as_deref(), Some("coordinator"));
+    assert_eq!(review.result_check_seconds(), 900);
+    let completion = review.completion.as_ref().unwrap();
+    assert_eq!(completion.recipient_binding, "coordinator-v1");
+    assert_eq!(
+        completion.bearer_token_ref.as_str(),
+        "secret:file/review-completion-token"
+    );
+    assert!(config.connections["notices"].completion.is_none());
+    let document = yaml_value(REVIEW_RUNTIME).unwrap();
+    assert!(document["deployment"]["listener"]["bind"].is_string());
+    let policies = document["deployment"]["authentication"]["policies"]
+        .as_array()
+        .unwrap();
+    assert!(policies
+        .iter()
+        .all(|policy| policy["flows"] == json!(["reviewed-notice"])));
+    assert!(policies.iter().any(|policy| policy["operator"] == true));
+}
+
+#[test]
+fn casework_connections_name_a_producer_profile_and_bounded_result_checks_offline() {
+    let original = with_review_connection();
+    let config = load(&original.to_string()).unwrap();
+    let review = &config.connections["review"];
+    assert!(matches!(
+        review.product,
+        registry_coordinator::runtime::Product::Casework
+    ));
+    assert_eq!(review.producer.as_deref(), Some("coordinator"));
+    assert_eq!(review.result_check_seconds(), 900);
+    let mut defaulted = original.clone();
+    defaulted["connections"]["review"]
+        .as_object_mut()
+        .unwrap()
+        .remove("resultCheckSeconds");
+    assert_eq!(
+        load(&defaulted.to_string()).unwrap().connections["review"].result_check_seconds(),
+        900
+    );
+    let mut polling_only = original.clone();
+    polling_only["connections"]["review"]
+        .as_object_mut()
+        .unwrap()
+        .remove("completion");
+    load(&polling_only.to_string()).unwrap();
+
+    for member in ["producer", "profile"] {
+        let mut document = original.clone();
+        document["connections"]["review"]
+            .as_object_mut()
+            .unwrap()
+            .remove(member);
+        let error = refused(&document.to_string());
+        finding_at(&error, &format!("/connections/review/{member}"));
+    }
+    for (member, value) in [
+        ("producer", json!(format!("Not {CANARY}"))),
+        ("profile", json!(format!("{CANARY}/control"))),
+    ] {
+        let mut document = original.clone();
+        document["connections"]["review"][member] = value;
+        let error = refused(&document.to_string());
+        finding_at(&error, &format!("/connections/review/{member}"));
+        assert!(!error.to_string().contains(CANARY));
+        assert!(!format!("{:?}", error.diagnostics).contains(CANARY));
+    }
+    for seconds in [59, 86_401] {
+        let mut document = original.clone();
+        document["connections"]["review"]["resultCheckSeconds"] = json!(seconds);
+        let error = refused(&document.to_string());
+        assert!(finding_at(&error, "/connections/review/resultCheckSeconds")
+            .starts_with("config.out-of-range"));
+    }
+    for binding in [
+        json!(""),
+        json!(format!("{CANARY} with space")),
+        json!("x".repeat(257)),
+    ] {
+        let mut document = original.clone();
+        document["connections"]["review"]["completion"]["recipientBinding"] = binding;
+        let error = refused(&document.to_string());
+        finding_at(&error, "/connections/review/completion/recipientBinding");
+        assert!(!format!("{:?}", error.diagnostics).contains(CANARY));
+    }
+    let mut unknown = original.clone();
+    unknown["connections"]["review"]["completion"]["header"] = json!("x-completion");
+    refused(&unknown.to_string());
+
+    let mut disabled = original.clone();
+    disabled["secretProviders"]
+        .as_object_mut()
+        .unwrap()
+        .remove("file");
+    let error = refused(&disabled.to_string());
+    assert!(
+        finding_at(&error, "/connections/review/completion/bearerTokenRef")
+            .contains("secretProviders")
+    );
+
+    let mut task = original.clone();
+    task["connections"]["review"]["authorization"]["taskAuthority"] =
+        yaml_value(SCHEDULING_RUNTIME).unwrap()["connections"]["bookings"]["authorization"]
+            ["taskAuthority"]
+            .clone();
+    let error = refused(&task.to_string());
+    finding_at(&error, "/connections/review/authorization/taskAuthority");
+
+    for (connection, member, value) in [
+        ("notices", "producer", json!("coordinator")),
+        ("applications", "producer", json!("coordinator")),
+        (
+            "notices",
+            "completion",
+            original["connections"]["review"]["completion"].clone(),
+        ),
+        ("applications", "resultCheckSeconds", json!(900)),
+    ] {
+        let mut document = original.clone();
+        document["connections"][connection][member] = value;
+        let error = refused(&document.to_string());
+        assert!(
+            finding_at(&error, &format!("/connections/{connection}/{member}"))
+                .contains(&format!("remove {member}")),
+            "{connection}.{member}"
+        );
+    }
+
+    let mut twice = original.clone();
+    twice["connections"]["second-review"] = original["connections"]["review"].clone();
+    twice["connections"]["second-review"]["producer"] = json!("second-producer");
+    let error = refused(&twice.to_string());
+    finding_at(
+        &error,
+        "/connections/second-review/completion/recipientBinding",
+    );
+    twice["connections"]["second-review"]["completion"]["recipientBinding"] =
+        json!("coordinator-v2");
+    load(&twice.to_string()).unwrap();
+}
+
+#[test]
+fn casework_binding_identity_pins_the_producer_but_not_delivery_settings() {
+    let plain = load(RUNTIME).unwrap();
+    let mut without_review = with_review_connection();
+    without_review["connections"]
+        .as_object_mut()
+        .unwrap()
+        .remove("review");
+    assert_eq!(
+        plain.binding_digest().unwrap(),
+        load(&without_review.to_string())
+            .unwrap()
+            .binding_digest()
+            .unwrap(),
+        "adding Casework support leaves existing binding identities unchanged"
+    );
+    let original = with_review_connection();
+    let digest = load(&original.to_string())
+        .unwrap()
+        .binding_digest()
+        .unwrap();
+    let mut producer = original.clone();
+    producer["connections"]["review"]["producer"] = json!("another-producer");
+    assert_ne!(
+        digest,
+        load(&producer.to_string())
+            .unwrap()
+            .binding_digest()
+            .unwrap(),
+        "the producer is part of every submission digest"
+    );
+    // How a waiting run is woken is not command identity: an operator can
+    // rotate the token, rename the recipient or tune result checks without
+    // stranding runs admitted under the earlier settings.
+    let mut delivery = original.clone();
+    delivery["connections"]["review"]["completion"]["bearerTokenRef"] =
+        json!("secret:file/another-completion-token");
+    delivery["connections"]["review"]["completion"]["recipientBinding"] = json!("coordinator-v2");
+    delivery["connections"]["review"]["resultCheckSeconds"] = json!(60);
+    assert_eq!(
+        digest,
+        load(&delivery.to_string())
+            .unwrap()
+            .binding_digest()
+            .unwrap()
+    );
+}
+
+#[cfg(feature = "schema")]
+#[test]
+fn generated_runtime_schema_describes_casework_connections() {
+    let schema: Value =
+        serde_json::from_str(&registry_coordinator::runtime::runtime_schema().unwrap()).unwrap();
+    let validator = jsonschema::JSONSchema::options()
+        .with_draft(jsonschema::Draft::Draft202012)
+        .compile(&schema)
+        .unwrap();
+    let original = with_review_connection();
+    assert!(validator.is_valid(&original));
+    let connection = &schema["$defs"]["ConnectionConfig"]["properties"];
+    assert_eq!(connection["resultCheckSeconds"]["default"], json!(900));
+    assert_eq!(connection["resultCheckSeconds"]["minimum"], json!(60));
+    assert_eq!(connection["resultCheckSeconds"]["maximum"], json!(86_400));
+    for member in ["producer", "profile"] {
+        let mut missing = original.clone();
+        missing["connections"]["review"]
+            .as_object_mut()
+            .unwrap()
+            .remove(member);
+        assert!(!validator.is_valid(&missing), "{member}");
+    }
+    for (connection, member, value) in [
+        ("notices", "producer", json!("coordinator")),
+        (
+            "applications",
+            "completion",
+            original["connections"]["review"]["completion"].clone(),
+        ),
+        ("notices", "resultCheckSeconds", json!(900)),
+    ] {
+        let mut document = original.clone();
+        document["connections"][connection][member] = value;
+        assert!(!validator.is_valid(&document), "{connection}.{member}");
+    }
+    let mut spaced = original;
+    spaced["connections"]["review"]["completion"]["recipientBinding"] = json!("two words");
+    assert!(!validator.is_valid(&spaced));
 }

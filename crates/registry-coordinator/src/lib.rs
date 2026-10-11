@@ -4,6 +4,7 @@
 pub mod adapters;
 pub mod authoring;
 pub mod breg_action;
+pub mod completion;
 pub mod contracts;
 pub mod decision;
 pub mod definition;
@@ -15,6 +16,7 @@ pub mod operations;
 pub mod project;
 mod project_check;
 pub mod protocol;
+mod review;
 pub mod runtime;
 #[cfg(feature = "schema")]
 pub(crate) mod schema;

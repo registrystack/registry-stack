@@ -225,6 +225,45 @@
               "observationAuthorization"
             ]
           }
+        },
+        {
+          "else": {
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "producer"
+                  ]
+                },
+                {
+                  "required": [
+                    "completion"
+                  ]
+                },
+                {
+                  "required": [
+                    "resultCheckSeconds"
+                  ]
+                }
+              ]
+            }
+          },
+          "if": {
+            "properties": {
+              "product": {
+                "const": "casework"
+              }
+            },
+            "required": [
+              "product"
+            ]
+          },
+          "then": {
+            "required": [
+              "producer",
+              "profile"
+            ]
+          }
         }
       ],
       "properties": {
@@ -234,15 +273,31 @@
         "baseUrl": {
           "$ref": "#/$defs/Url"
         },
+        "completion": {
+          "$ref": "#/$defs/ReviewCompletionConfig",
+          "description": "Casework connections only. Omitted means Casework sends this\nCoordinator no completion events, and a review wait learns the result\nonly from its result checks."
+        },
         "observationAuthorization": {
           "$ref": "#/$defs/AuthorizationConfig",
           "description": "Required for Scheduling connections with taskAuthority. Uses ordinary\nread scopes under the original receipt owner, without taskAuthority."
+        },
+        "producer": {
+          "$ref": "#/$defs/LocalId",
+          "description": "Required for Casework connections and refused for every other product:\nthe review producer id the Casework project lists under\nreviewProducers. Casework binds every submission to it."
         },
         "product": {
           "$ref": "#/$defs/Product"
         },
         "profile": {
           "$ref": "#/$defs/ExternalId"
+        },
+        "resultCheckSeconds": {
+          "default": 900,
+          "description": "Casework connections only: the seconds between two result checks while\na review wait is open, whether or not a completion event arrives.",
+          "format": "uint32",
+          "maximum": 86400,
+          "minimum": 60,
+          "type": "integer"
         }
       },
       "required": [
@@ -713,10 +768,33 @@
     "Product": {
       "enum": [
         "breg",
+        "casework",
         "messaging",
         "scheduling"
       ],
       "type": "string"
+    },
+    "ReviewCompletionConfig": {
+      "additionalProperties": false,
+      "description": "How Casework's completion event for this connection's review requests is\nauthenticated. The event only wakes a waiting run: the run reads the result\nitself with its own producer authorization.",
+      "properties": {
+        "bearerTokenRef": {
+          "$ref": "#/$defs/SecretReference",
+          "description": "The bearer token Casework's completion destination sends."
+        },
+        "recipientBinding": {
+          "description": "The recipientBinding the Casework project names for this producer's\ncompletion destination: 1 to 256 printable ASCII characters without\nspaces. Casework sends it in the registry-recipient-binding header.",
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^[!-~]{1,256}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "recipientBinding",
+        "bearerTokenRef"
+      ],
+      "type": "object"
     },
     "SecretProvidersConfig": {
       "additionalProperties": false,

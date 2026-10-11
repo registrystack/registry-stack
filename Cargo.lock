@@ -5357,6 +5357,7 @@ dependencies = [
  "registry-platform-script",
  "registry-platform-testing",
  "registry-platform-yaml",
+ "registry-review-protocol",
  "registry-scheduling-client",
  "registry-scheduling-core",
  "reqwest 0.12.28",

@@ -3,8 +3,8 @@
 
 use crate::{
     authoring,
-    contracts::{contract, Violation},
-    definition::{class, parse_timestamp, Definition, Step},
+    contracts::{contract, event_contract, Violation},
+    definition::{class, parse_timestamp, Definition, Step, WaitEvent},
     protocol::CallRequest,
     CoordinatorError, Result,
 };
@@ -14,6 +14,7 @@ use registry_platform_yaml::{
     ApiVersion, BoundedU32, Diagnostic, Document, EnvelopeRule, Expect, ForeignValue, FormatSpec,
     Identified, LocalId, Reader, Severity, UniqueIdList, UniqueList,
 };
+use registry_review_protocol::{ReviewRequestAccepted, ReviewResult};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
@@ -73,6 +74,11 @@ struct AuthoredScenario {
     #[serde(default)]
     #[cfg_attr(feature = "schema", schemars(schema_with = "recovery_schema"))]
     recovery: BTreeMap<LocalId, Recovery>,
+    /// What each wait-for step the run reaches receives, by step: the event
+    /// it waits for, or its timeout.
+    #[serde(default)]
+    #[cfg_attr(feature = "schema", schemars(schema_with = "waits_schema"))]
+    waits: BTreeMap<LocalId, AuthoredWait>,
     /// Where the run must stop.
     expect: AuthoredExpectation,
 }
@@ -125,6 +131,33 @@ enum AuthoredReply {
 }
 registry_platform_yaml::tagged_union!(AuthoredReply);
 
+#[derive(Deserialize)]
+#[serde(
+    remote = "Self",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", schemars(!remote, tag = "type"))]
+enum AuthoredWait {
+    /// The event arrives when the wait starts; the run continues at the
+    /// step's `next` with `value` as the step's output.
+    Event {
+        /// The event, which must satisfy the step's event contract. A review
+        /// result must also be one the review protocol accepts, for the
+        /// request identifier, subject, policy and submission digest the
+        /// request step accepted.
+        value: ForeignValue,
+    },
+    /// No event arrives: the clock moves by the step's `timeoutSeconds`, and
+    /// the run continues at its `onTimeout`, or stops as `timed-out` when the
+    /// step has none. A deadline that passes first stops the run as
+    /// `deadline-exceeded`.
+    Timeout {},
+}
+registry_platform_yaml::tagged_union!(AuthoredWait);
+
 /// Where the run must stop. Omitted members are not checked.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -150,7 +183,8 @@ struct AuthoredExpectation {
 }
 
 /// A state a scenario run stops in: `completed` (a finish step ran),
-/// `refused`, `retryable`, `uncertain`, or `deadline-exceeded` (the workflow
+/// `refused`, `retryable`, `uncertain`, `timed-out` (a wait's timeout passed
+/// and the wait has no `onTimeout`), or `deadline-exceeded` (the workflow
 /// deadline passed first).
 #[derive(Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -160,6 +194,7 @@ enum ExpectedState {
     Refused,
     Retryable,
     Uncertain,
+    TimedOut,
     DeadlineExceeded,
 }
 
@@ -170,6 +205,7 @@ impl ExpectedState {
             Self::Refused => "refused",
             Self::Retryable => "retryable",
             Self::Uncertain => "uncertain",
+            Self::TimedOut => "timed-out",
             Self::DeadlineExceeded => "deadline-exceeded",
         }
     }
@@ -212,6 +248,8 @@ pub struct Scenario {
     pub replies: BTreeMap<String, Vec<Reply>>,
     #[serde(default)]
     pub recovery: BTreeMap<String, Recovery>,
+    #[serde(default)]
+    pub waits: BTreeMap<String, Wait>,
     pub expect: Expectation,
 }
 
@@ -246,6 +284,14 @@ pub enum Reply {
         #[serde(rename = "receiptExpired")]
         receipt_expired: bool,
     },
+}
+
+/// What a wait-for step receives: the event it waits for, or its timeout.
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum Wait {
+    Event { value: Value },
+    Timeout,
 }
 
 #[derive(Deserialize)]
@@ -370,6 +416,11 @@ impl CoordinatorScenarios {
                 "expected at most 64 recovery steps",
             );
             bound(
+                &format!("{path}/waits"),
+                case.waits.len() <= 64,
+                "expected at most 64 wait steps",
+            );
+            bound(
                 &format!("{path}/expect/path"),
                 (1..=64).contains(&case.expect.path.len()),
                 "expected from 1 to 64 visited steps",
@@ -436,6 +487,21 @@ impl CoordinatorScenarios {
                     .into_iter()
                     .map(|(step, recovery)| (step.into_string(), recovery))
                     .collect(),
+                waits: case
+                    .waits
+                    .into_iter()
+                    .map(|(step, wait)| {
+                        (
+                            step.into_string(),
+                            match wait {
+                                AuthoredWait::Event { value } => Wait::Event {
+                                    value: value.into_value(),
+                                },
+                                AuthoredWait::Timeout {} => Wait::Timeout,
+                            },
+                        )
+                    })
+                    .collect(),
                 expect: Expectation {
                     path: case
                         .expect
@@ -488,6 +554,16 @@ fn recovery_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schem
 }
 
 #[cfg(feature = "schema")]
+fn waits_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({
+        "type": "object",
+        "propertyNames": generator.subschema_for::<LocalId>(),
+        "maxProperties": 64,
+        "additionalProperties": generator.subschema_for::<AuthoredWait>(),
+    })
+}
+
+#[cfg(feature = "schema")]
 pub fn scenario_schema() -> std::result::Result<String, serde_json::Error> {
     let mut schema = serde_json::to_value(schemars::schema_for!(CoordinatorScenarios))?;
     crate::schema::finish(&mut schema, API_VERSION, KIND, SCHEMA_ID);
@@ -496,8 +572,8 @@ pub fn scenario_schema() -> std::result::Result<String, serde_json::Error> {
 
 /// This runner never resolves runtime configuration or opens network/database I/O.
 /// Responses, outages and recovery are synthetic scenario replies, not Dispatch
-/// or downstream product proofs. Time advances to authored wait instants,
-/// bounded by the workflow deadline.
+/// or downstream product proofs. Time advances to authored wait instants and
+/// stated timeouts, bounded by the workflow deadline.
 pub fn run(definition: &Definition, scenario: &Scenario) -> Result<ScenarioReport> {
     let report = execute(definition, scenario)?;
     match mismatches(scenario, &report).into_iter().next() {
@@ -578,6 +654,21 @@ fn execute(definition: &Definition, scenario: &Scenario) -> Result<ScenarioRepor
             ));
         }
     }
+    for (step, wait) in &scenario.waits {
+        let Some(Step::WaitFor { wait_for, .. }) = definition.workflow.steps.get(step) else {
+            return Err(error(
+                "scenario.wait-step",
+                format!("/waits/{step}"),
+                format!("waits name step {step}, which is not a wait-for step"),
+                wait_steps_action(definition, "State waits only for wait-for steps"),
+            ));
+        };
+        // Every stated event is held to its contract, whether or not this
+        // run reaches the wait.
+        if let Wait::Event { value } = wait {
+            check_event(step, wait_for, value)?;
+        }
+    }
     let deadline = definition.deadline_at(scenario.admitted_at)?;
     let mut now = scenario.admitted_at;
     let mut step = definition.workflow.start.clone();
@@ -615,6 +706,50 @@ fn execute(definition: &Definition, scenario: &Scenario) -> Result<ScenarioRepor
                     )?)?)
                     .min(deadline);
                 step = next.clone();
+            }
+            Step::WaitFor {
+                wait_for,
+                timeout_seconds,
+                next,
+                on_timeout,
+            } => {
+                // A case without waits is refused at the case itself.
+                let at = if scenario.waits.is_empty() {
+                    ""
+                } else {
+                    "/waits"
+                };
+                let wait = scenario.waits.get(&step).ok_or_else(|| {
+                    error(
+                        "scenario.wait",
+                        at,
+                        format!("the run reached wait step {step}, which this case states no event or timeout for"),
+                        format!("Add waits.{step} with the event this wait receives ({{type: event, value: ...}}) or {{type: timeout}}."),
+                    )
+                })?;
+                match wait {
+                    Wait::Event { value } => {
+                        correlate(&step, wait_for, value, &outputs)?;
+                        outputs.insert(step.clone(), value.clone());
+                        step = next.clone();
+                    }
+                    Wait::Timeout => {
+                        now = (now + chrono::Duration::seconds(i64::from(*timeout_seconds)))
+                            .min(deadline);
+                        match on_timeout {
+                            Some(route) => step = route.clone(),
+                            None => {
+                                report.state = if now >= deadline {
+                                    "deadline-exceeded"
+                                } else {
+                                    "timed-out"
+                                }
+                                .into();
+                                break;
+                            }
+                        }
+                    }
+                }
             }
             Step::Choose { cases, .. } => {
                 let choice = definition.evaluate_synthetic(&step, &scenario.input, &outputs)?;
@@ -838,6 +973,103 @@ fn execute(definition: &Definition, scenario: &Scenario) -> Result<ScenarioRepor
         ));
     }
     Ok(report)
+}
+
+/// The action that names the wait-for steps a case may state waits for.
+fn wait_steps_action(definition: &Definition, lead: &str) -> String {
+    let steps = definition
+        .workflow
+        .steps
+        .iter()
+        .filter(|(_, step)| matches!(step, Step::WaitFor { .. }))
+        .map(|(name, _)| name.as_str())
+        .collect::<Vec<_>>();
+    if steps.is_empty() {
+        "Remove waits; this workflow declares no wait-for step.".into()
+    } else {
+        format!("{lead}: {}.", steps.join(", "))
+    }
+}
+
+/// An event a case states for step `step`, held to the step's event contract
+/// and, for a review result, to the review protocol's rules for a result a
+/// producer may return. Refusals name pointers and expectations, never the
+/// stated value.
+fn check_event(step: &str, event: &WaitEvent, value: &Value) -> Result<()> {
+    let pointer = format!("/waits/{step}/value");
+    let kind = event.id();
+    event_contract(event).check(value).map_err(|violation| {
+        contract_error(
+            "scenario.wait-event",
+            format!("{pointer}{}", violation.path),
+            &violation,
+            &format!("in the event stated for step {step}, as the {kind} event declares; the stated value does not match"),
+            &format!("Correct the stated value so it satisfies the {kind} event."),
+        )
+    })?;
+    match event {
+        WaitEvent::ReviewResult { .. } => {
+            let broken = |rule: String| {
+                error(
+                    "scenario.wait-event",
+                    pointer.clone(),
+                    format!("the review result stated for step {step} breaks a review protocol rule: {rule}"),
+                    "Correct the stated result so the review protocol accepts it; a producer returns no other result.",
+                )
+            };
+            let result = serde_json::from_value::<ReviewResult>(value.clone())
+                .map_err(|_| broken("its members do not form a review result".into()))?;
+            result.check().map_err(|rule| broken(rule.to_string()))
+        }
+    }
+}
+
+/// A stated event belongs to the request its wait names. A review result
+/// carries the request identifier, subject, policy and submission digest
+/// the request step accepted, as the producer client requires of every
+/// result it reads. A refusal names the member that differs, never a value.
+fn correlate(
+    step: &str,
+    event: &WaitEvent,
+    value: &Value,
+    outputs: &BTreeMap<String, Value>,
+) -> Result<()> {
+    match event {
+        WaitEvent::ReviewResult { request } => {
+            let accepted = outputs.get(request).and_then(|output| {
+                serde_json::from_value::<ReviewRequestAccepted>(output.clone()).ok()
+            });
+            let result = serde_json::from_value::<ReviewResult>(value.clone()).ok();
+            let (Some(accepted), Some(result)) = (accepted, result) else {
+                return Err(error(
+                    "scenario.wait-event",
+                    format!("/waits/{step}/value"),
+                    format!("the review result stated for step {step} cannot be matched to the request step {request} accepted"),
+                    format!("Give step {request} a success reply that satisfies the submit-review-request output."),
+                ));
+            };
+            let differs = [
+                ("requestId", result.request_id != accepted.request_id),
+                ("subject", result.subject != accepted.subject),
+                ("policy", result.policy != accepted.policy),
+                (
+                    "submissionDigest",
+                    result.submission_digest != accepted.submission_digest,
+                ),
+            ]
+            .into_iter()
+            .find_map(|(member, differs)| differs.then_some(member));
+            match differs {
+                Some(member) => Err(error(
+                    "scenario.wait-event",
+                    format!("/waits/{step}/value/{member}"),
+                    format!("the review result stated for step {step} carries a {member} other than the one step {request} accepted; the producer client refuses a result for another request"),
+                    format!("Copy requestId, subject, policy and submissionDigest from the success reply to step {request}."),
+                )),
+                None => Ok(()),
+            }
+        }
+    }
 }
 
 /// The differences one case lists before it counts the rest.
@@ -1156,6 +1388,15 @@ fn unknown_references(
                 format!("/{member}/{step}"),
                 format!("{member} names step {step}, which this workflow does not declare"),
                 format!("Name one of the call steps: {}.", calls()),
+            );
+        }
+    }
+    for step in scenario.waits.keys() {
+        if !workflow.steps.contains_key(step) {
+            unknown(
+                format!("/waits/{step}"),
+                format!("waits name step {step}, which this workflow does not declare"),
+                wait_steps_action(definition, "Name one of the wait-for steps"),
             );
         }
     }

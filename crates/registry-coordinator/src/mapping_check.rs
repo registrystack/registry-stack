@@ -13,7 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde_json::{Map, Value};
 
 use crate::{
-    contracts::{contract, first_violation, Violation},
+    contracts::{contract, event_contract, first_violation, Violation},
     definition::{authored, compile_schema, parse_timestamp, Mapping, Reference, Step, Workflow},
     CoordinatorError, Result,
 };
@@ -92,16 +92,19 @@ fn source<'a>(
             "the workflow input schema".to_owned(),
             path,
         ),
-        Reference::Step { step, path } => {
-            let Some(Step::Call { call, .. }) = workflow.steps.get(step) else {
-                return Ok(None);
-            };
-            (
+        Reference::Step { step, path } => match workflow.steps.get(step) {
+            Some(Step::Call { call, .. }) => (
                 &contract(call.operation).output,
                 format!("the {} output of step {step}", call.operation.as_str()),
                 path,
-            )
-        }
+            ),
+            Some(Step::WaitFor { wait_for, .. }) => (
+                &event_contract(wait_for).output,
+                format!("the {} event of step {step}", wait_for.id()),
+                path,
+            ),
+            _ => return Ok(None),
+        },
         Reference::Literal { .. } => return Ok(None),
     };
     let mut schema = root.clone();

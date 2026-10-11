@@ -73,7 +73,7 @@ pub enum Mapping {
 }
 
 /// A value a mapping reads. A path is an RFC 6901 JSON Pointer into the
-/// workflow input or the referenced call's output.
+/// workflow input or the referenced step's output.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum Reference {
@@ -140,6 +140,34 @@ pub struct Call {
     pub operation: Operation,
 }
 
+/// The event a wait-for step waits for.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum WaitEvent {
+    /// The result of the review request the named call step submitted.
+    ReviewResult { request: String },
+}
+
+impl WaitEvent {
+    /// The event type an author writes.
+    pub fn id(&self) -> &'static str {
+        match self {
+            Self::ReviewResult { .. } => "review-result",
+        }
+    }
+
+    /// The call step whose accepted request the event correlates with.
+    pub fn request(&self) -> &str {
+        match self {
+            Self::ReviewResult { request } => request,
+        }
+    }
+}
+
+/// The longest wait a wait-for step declares, in seconds: one year, the
+/// longest run deadline.
+pub(crate) const MAXIMUM_WAIT_SECONDS: u32 = 31_536_000;
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(untagged, deny_unknown_fields)]
 pub enum Step {
@@ -147,6 +175,15 @@ pub enum Step {
         #[serde(rename = "waitUntil")]
         wait_until: Mapping,
         next: String,
+    },
+    WaitFor {
+        #[serde(rename = "waitFor")]
+        wait_for: WaitEvent,
+        #[serde(rename = "timeoutSeconds")]
+        timeout_seconds: u32,
+        next: String,
+        #[serde(rename = "onTimeout", default, skip_serializing_if = "Option::is_none")]
+        on_timeout: Option<String>,
     },
     Call {
         call: Call,
@@ -165,17 +202,30 @@ pub enum Step {
 }
 
 impl Step {
-    fn targets(&self) -> Vec<&str> {
+    /// Each transition with the authored member that holds it.
+    pub(crate) fn edges(&self) -> Vec<(&'static str, &str)> {
         match self {
-            Self::WaitUntil { next, .. } | Self::Call { next, .. } => vec![next],
-            Self::Choose { cases, .. } => cases.values().map(String::as_str).collect(),
+            Self::WaitUntil { next, .. } | Self::Call { next, .. } => vec![("next", next)],
+            Self::WaitFor {
+                next, on_timeout, ..
+            } => std::iter::once(("next", next.as_str()))
+                .chain(on_timeout.iter().map(|step| ("onTimeout", step.as_str())))
+                .collect(),
+            Self::Choose { cases, .. } => cases
+                .values()
+                .map(|step| ("cases", step.as_str()))
+                .collect(),
             Self::Finish { .. } => vec![],
         }
+    }
+    fn targets(&self) -> Vec<&str> {
+        self.edges().into_iter().map(|(_, target)| target).collect()
     }
     /// The authored member that holds this step's mapping.
     pub(crate) fn role(&self) -> &'static str {
         match self {
             Self::WaitUntil { .. } => "waitUntil",
+            Self::WaitFor { .. } => "waitFor",
             Self::Call { .. } => "input",
             Self::Choose { .. } => "choose",
             Self::Finish { .. } => "output",
@@ -184,6 +234,7 @@ impl Step {
     pub(crate) fn mapping(&self) -> Option<&Mapping> {
         match self {
             Self::WaitUntil { wait_until, .. } => Some(wait_until),
+            Self::WaitFor { .. } => None,
             Self::Call { input, .. } => Some(input),
             Self::Choose { choose, .. } => Some(choose),
             Self::Finish { output, .. } => output.as_ref(),
@@ -438,6 +489,7 @@ impl Definition {
                 let step = &self.workflow.steps[id];
                 let kind = match step {
                     Step::WaitUntil { .. } => "wait-until",
+                    Step::WaitFor { .. } => "wait-for",
                     Step::Call { .. } => "call",
                     Step::Choose { .. } => "choose",
                     Step::Finish { .. } => "finish",
@@ -457,6 +509,17 @@ impl Definition {
                         item["mutating"] = serde_json::json!(call.operation.is_mutating());
                         item["effect"] = serde_json::json!(call.operation.descriptor().effect);
                         item["recovery"] = serde_json::json!(call.operation.recovery());
+                    }
+                    Step::WaitFor {
+                        wait_for,
+                        timeout_seconds,
+                        on_timeout,
+                        ..
+                    } => {
+                        item["event"] = serde_json::json!(wait_for.id());
+                        item["request"] = serde_json::json!(wait_for.request());
+                        item["timeoutSeconds"] = serde_json::json!(timeout_seconds);
+                        item["onTimeout"] = serde_json::json!(on_timeout);
                     }
                     Step::Choose { cases, .. } => item["cases"] = serde_json::json!(cases),
                     Step::Finish { finish, .. } => item["outcome"] = serde_json::json!(finish),
@@ -849,8 +912,7 @@ fn workflow_findings(flow: &Workflow) -> Vec<CoordinatorError> {
     }
     let connections = listed(flow.connections.keys().map(String::as_str));
     let declared_outcomes = listed(flow.outcomes.keys().map(String::as_str));
-    let mut incoming: BTreeMap<&str, Vec<&str>> =
-        flow.steps.keys().map(|k| (k.as_str(), vec![])).collect();
+    let mut incoming: Incoming = flow.steps.keys().map(|k| (k.as_str(), vec![])).collect();
     let mut outcomes = BTreeSet::new();
     for (name, step) in &flow.steps {
         if !valid_name(name) || name == "input" {
@@ -858,14 +920,14 @@ fn workflow_findings(flow: &Workflow) -> Vec<CoordinatorError> {
             findings.push(fail("definition.step"));
             continue;
         }
-        for target in step.targets() {
+        for (member, target) in step.edges() {
             match incoming.get_mut(target) {
-                Some(sources) => sources.push(name),
+                Some(sources) => sources.push((name, member)),
                 None => {
                     broken = true;
                     findings.push(authored(
                         "definition.target",
-                        &format!("steps.{name}.{}", transition(step)),
+                        &format!("steps.{name}.{member}"),
                         &format!("the transition names step {target}, which is not declared"),
                         &format!("Point the transition at one of the declared steps: {steps}."),
                     ));
@@ -873,6 +935,11 @@ fn workflow_findings(flow: &Workflow) -> Vec<CoordinatorError> {
             }
         }
         match step {
+            Step::WaitFor {
+                wait_for,
+                timeout_seconds,
+                ..
+            } => findings.extend(wait_findings(flow, name, wait_for, *timeout_seconds)),
             Step::Call { call, .. } => match flow.connections.get(&call.connection) {
                 None => findings.push(authored(
                     "definition.connection",
@@ -947,13 +1014,89 @@ fn workflow_findings(flow: &Workflow) -> Vec<CoordinatorError> {
     findings
 }
 
-/// The authored member that holds a step's transitions.
-fn transition(step: &Step) -> &'static str {
-    if matches!(step, Step::Choose { .. }) {
-        "cases"
-    } else {
-        "next"
+/// Each step's incoming transitions: the step they leave and the authored
+/// member that holds them.
+type Incoming<'a> = BTreeMap<&'a str, Vec<(&'a str, &'static str)>>;
+
+/// The steps that submit a review request a wait-for step may wait on.
+fn review_requests(flow: &Workflow) -> String {
+    listed(flow.steps.iter().filter_map(|(name, step)| match step {
+        Step::Call { call, .. } if call.operation == Operation::SubmitReviewRequest => {
+            Some(name.as_str())
+        }
+        _ => None,
+    }))
+}
+
+/// Whether `request` is a step whose output a wait for `event` correlates
+/// with.
+fn correlates(flow: &Workflow, event: &WaitEvent) -> bool {
+    match event {
+        WaitEvent::ReviewResult { request } => matches!(
+            flow.steps.get(request),
+            Some(Step::Call { call, .. }) if call.operation == Operation::SubmitReviewRequest
+        ),
     }
+}
+
+/// A wait-for step names the call whose accepted request it correlates with,
+/// and a timeout a run can reach before its deadline. Whether the request
+/// precedes the wait on every route is a graph finding.
+fn wait_findings(
+    flow: &Workflow,
+    name: &str,
+    event: &WaitEvent,
+    timeout: u32,
+) -> Vec<CoordinatorError> {
+    let mut findings = Vec::new();
+    let request = event.request();
+    let field = format!("steps.{name}.waitFor.request");
+    let requests = review_requests(flow);
+    let action = format!(
+        "Name the call step that submits the review request this step waits for; the steps that call submit-review-request are {requests}."
+    );
+    match flow.steps.get(request) {
+        None => findings.push(authored(
+            "definition.wait",
+            &field,
+            &format!(
+                "request names step {request}, which is not declared; the steps that call submit-review-request are {requests}"
+            ),
+            &action,
+        )),
+        Some(_) if !correlates(flow, event) => findings.push(authored(
+            "definition.wait",
+            &field,
+            &format!(
+                "request names step {request}, which does not call submit-review-request; the steps that call submit-review-request are {requests}"
+            ),
+            &action,
+        )),
+        Some(_) => {}
+    }
+    let deadline = parse_duration(&flow.deadline)
+        .ok()
+        .map(|deadline| deadline.num_seconds());
+    if !(1..=MAXIMUM_WAIT_SECONDS).contains(&timeout) {
+        findings.push(authored(
+            "definition.wait",
+            &format!("steps.{name}.timeoutSeconds"),
+            "expected 1 to 31536000 seconds",
+            "Set timeoutSeconds to a bounded wait, at most one year.",
+        ));
+    } else if let Some(deadline) = deadline.filter(|deadline| i64::from(timeout) >= *deadline) {
+        // A wait that starts at admission still reaches the deadline first, so
+        // its run would expire rather than take the timeout route.
+        findings.push(authored(
+            "definition.wait",
+            &format!("steps.{name}.timeoutSeconds"),
+            &format!(
+                "the wait times out after {timeout} seconds, which is not shorter than the {deadline}-second run deadline"
+            ),
+            "Set timeoutSeconds below deadlineSeconds so a run can reach its timeout, or raise deadlineSeconds.",
+        ));
+    }
+    findings
 }
 
 /// Reachability, finiteness and reference dominance over a graph whose
@@ -994,10 +1137,7 @@ fn graph_order(flow: &Workflow) -> Vec<&str> {
     order
 }
 
-fn graph_findings<'a>(
-    flow: &'a Workflow,
-    incoming: &BTreeMap<&'a str, Vec<&'a str>>,
-) -> Vec<CoordinatorError> {
+fn graph_findings<'a>(flow: &'a Workflow, incoming: &Incoming<'a>) -> Vec<CoordinatorError> {
     let mut findings = Vec::new();
     let mut reachable = BTreeSet::from([flow.start.as_str()]);
     let mut frontier = vec![flow.start.as_str()];
@@ -1021,14 +1161,17 @@ fn graph_findings<'a>(
             ));
         }
     }
-    // Topological traversal proves finiteness. Dominators are the intersection
-    // of predecessors' dominators, so a reference exists on every route.
-    // Only reachable predecessors take part: no route arrives from the others.
+    // Topological traversal proves finiteness. The outputs available at a
+    // step are those every incoming transition carries: what was available at
+    // its source, plus the source's own output unless the transition is a
+    // wait's timeout, which leaves the wait without one. A reference therefore
+    // exists on every route. Only reachable predecessors take part: no route
+    // arrives from the others.
     let predecessors = |name: &str| {
         incoming[name]
             .iter()
             .copied()
-            .filter(|source| reachable.contains(source))
+            .filter(|(source, _)| reachable.contains(source))
             .collect::<Vec<_>>()
     };
     let mut pending = reachable
@@ -1040,20 +1183,38 @@ fn graph_findings<'a>(
     } else {
         vec![]
     };
-    let mut dominators: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
+    let mut available: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
     while let Some(name) = ready.pop() {
-        let mut dominates = predecessors(name)
+        let outputs = predecessors(name)
             .into_iter()
-            .map(|predecessor| dominators[predecessor].clone())
+            .map(|(source, member)| {
+                let mut carried = available[source].clone();
+                if member != "onTimeout" {
+                    carried.insert(source);
+                }
+                carried
+            })
             .reduce(|left, right| left.intersection(&right).copied().collect())
             .unwrap_or_default();
         if let Some(mapping) = flow.steps[name].mapping() {
-            if let Err(error) = validate_mapping(flow, name, mapping, &dominates) {
+            if let Err(error) = validate_mapping(flow, name, mapping, &outputs) {
                 findings.push(error);
             }
         }
-        dominates.insert(name);
-        dominators.insert(name, dominates);
+        if let Step::WaitFor { wait_for, .. } = &flow.steps[name] {
+            if correlates(flow, wait_for) && !outputs.contains(wait_for.request()) {
+                findings.push(authored(
+                    "definition.wait",
+                    &format!("steps.{name}.waitFor.request"),
+                    &format!(
+                        "the review request of step {} is not submitted on every route to this step",
+                        wait_for.request()
+                    ),
+                    "Move the submitting call before the branch, so every route to the wait submits the request it waits for.",
+                ));
+            }
+        }
+        available.insert(name, outputs);
         for next in flow.steps[name].targets() {
             if let Some(count) = pending.get_mut(next) {
                 *count -= 1;
@@ -1063,7 +1224,7 @@ fn graph_findings<'a>(
             }
         }
     }
-    if dominators.len() != reachable.len() {
+    if available.len() != reachable.len() {
         findings.push(cycle(flow));
     }
     findings
@@ -1074,9 +1235,9 @@ fn graph_findings<'a>(
 fn cycle(flow: &Workflow) -> CoordinatorError {
     let mut route = vec![flow.start.as_str()];
     let mut finished = BTreeSet::new();
-    let mut branches = vec![flow.steps[&flow.start].targets().into_iter()];
-    while let Some(targets) = branches.last_mut() {
-        let Some(next) = targets.next() else {
+    let mut branches = vec![flow.steps[&flow.start].edges().into_iter()];
+    while let Some(edges) = branches.last_mut() {
+        let Some((member, next)) = edges.next() else {
             if let Some(done) = route.pop() {
                 finished.insert(done);
             }
@@ -1089,26 +1250,27 @@ fn cycle(flow: &Workflow) -> CoordinatorError {
             members.push(next);
             return authored(
                 "definition.cycle",
-                &format!("steps.{closing}.{}", transition(&flow.steps[closing])),
+                &format!("steps.{closing}.{member}"),
                 &format!("the steps form a cycle: {}", members.join(" -> ")),
                 "Point one transition in the cycle at a step outside it: a workflow is a finite graph that runs each step at most once.",
             );
         }
         if !finished.contains(next) {
             route.push(next);
-            branches.push(flow.steps[next].targets().into_iter());
+            branches.push(flow.steps[next].edges().into_iter());
         }
     }
     fail("definition.cycle").at("workflow.yaml", "steps")
 }
 
 /// Check one mapping's form for its step, its bounds, and that each step
-/// reference names a call that precedes this step on every route.
+/// reference names a call or wait whose output every route to this step
+/// carries.
 fn validate_mapping(
     flow: &Workflow,
     name: &str,
     mapping: &Mapping,
-    dominates: &BTreeSet<&str>,
+    available: &BTreeSet<&str>,
 ) -> Result<()> {
     let step = &flow.steps[name];
     let base = format!("steps.{name}.{}", step.role());
@@ -1170,10 +1332,13 @@ fn validate_mapping(
             ));
         }
         if let Some(prior) = step {
-            if !dominates.contains(prior.as_str())
-                || !matches!(flow.steps.get(prior), Some(Step::Call { .. }))
+            if !available.contains(prior.as_str())
+                || !matches!(
+                    flow.steps.get(prior),
+                    Some(Step::Call { .. } | Step::WaitFor { .. })
+                )
             {
-                return Err(authored("mapping.dominance", &field, "the referenced call output is not available on every incoming path", "Move the call before the branch or pass a value available on every route to this step."));
+                return Err(authored("mapping.dominance", &field, "the referenced step output is not available on every incoming path", "Move the call or wait before the branch, read a wait's output only after it continues with next, or pass a value available on every route to this step."));
             }
         }
     }

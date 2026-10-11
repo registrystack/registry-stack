@@ -250,6 +250,15 @@ Write each connection credential the runtime file names the same way, such as
 the signing key an `authorization.signingKeyRef` names. Secret values never
 appear in a diagnostic or a log.
 
+A Casework connection that receives completion events names a bearer token
+that Casework presents to the Coordinator. Generate it as visible ASCII, for
+example 32 random bytes in hexadecimal, and give Casework the same value under
+its own secret reference:
+
+```sh
+(umask 077 && openssl rand -hex 32 > /run/registry-coordinator/secrets/review-completion-token)
+```
+
 ## Create the database and roles
 
 Use PostgreSQL 17 or newer; apply and startup refuse an older server. As a
@@ -272,8 +281,8 @@ database because `apply` creates the schema the runtime file's `namespace`
 names, and the migration role owns that schema and its tables. A namespace
 starts with `coordinator_` and is at most 60 characters. The runtime role
 needs only `CONNECT`: `apply` grants it, in that schema, `USAGE` on the
-schema, `SELECT`, `INSERT`, `UPDATE` and `DELETE` on `runs`, `jobs` and
-`admission_lock`, `SELECT` on `control`, `coordinator_activations` and
+schema, `SELECT`, `INSERT`, `UPDATE` and `DELETE` on `runs`, `jobs`,
+`admission_lock` and `review_waits`, `SELECT` on `control`, `coordinator_activations` and
 `coordinator_migrations`, and `UPDATE` on the four recovery-hold columns of
 `control`.
 
@@ -356,6 +365,95 @@ same conservative hold applies to HTTP 429, including temporary rate limits with
 [decision example](examples/decision-follow-up/README.md) includes refusal and
 unknown-result cases; terminal `needs-review` returns control to the caller and
 does not create a resumable approval task.
+
+For `submit-review-request` and `cancel-review-request`, configure a Casework
+connection as one of Casework's review producers. `profile` names the Casework
+access profile the producer's client is admitted to, `producer` names the
+producer's `id` in the Casework project's `reviewProducers`, and the ordinary
+service `authorization` obtains a token whose issuer and subject are the ones
+that producer declares. Do not configure `authorization.taskAuthority`: a
+review producer acts under its own identity, and check refuses a task
+authority on a Casework connection. Configure one connection for each producer.
+A `wait-for` step reads the result through the same connection, with the same
+producer authorization.
+
+Add a `completion` block when Casework should wake a waiting run as soon as a
+review completes:
+
+```yaml
+connections:
+  review:
+    product: casework
+    baseUrl: https://casework.example.org
+    profile: coordinator-producer
+    producer: coordinator
+    authorization:
+      tokenEndpoint: https://issuer.example.org/oauth/token
+      clientId: coordinator-review-producer
+      signingKeyRef: secret:file/review-jwk
+      resource: urn:example:casework
+      scopes: [casework:review]
+    completion:
+      recipientBinding: coordinator-v1
+      bearerTokenRef: secret:file/review-completion-token
+    resultCheckSeconds: 900
+```
+
+The Coordinator then accepts Casework's completion events at
+`POST /v1/review-completions` on the service listener. It finds the connection
+by the `Authorization: Bearer` token and the `registry-recipient-binding`
+header together, comparing the token in constant time, and refuses any other
+sender with HTTP 401 before reading the body. `recipientBinding` is 1 to 256
+visible ASCII characters and differs between Casework connections. An
+authenticated event must be `application/json`, at most 2048 bytes, name
+non-nil identifiers, repeat its `eventId` as the `idempotency-key` header and
+carry a `completedAt` no older than 365 days and no more than 5 minutes ahead
+of the Coordinator's clock; anything else answers HTTP 400 or 415. Every
+authentic event answers HTTP 204, whether or not a run waits on its request,
+and an event only brings forward the next result read of a run that does.
+HTTP 503 `store-unavailable` asks Casework to deliver it again. Without a
+`completion` block the route refuses every event, and waits rely on result
+checks alone.
+
+`resultCheckSeconds`, from 60 to 86,400 and 900 by default, spaces the reads
+of a waiting run when no event arrives. Lower it when completion events cannot
+reach the Coordinator; each read is one request to Casework per waiting run.
+A live run's binding includes `producer` but neither `completion` nor
+`resultCheckSeconds`, so you can change either, or rotate the completion
+token, while runs wait.
+
+Configure the same producer on the Casework side. In the Casework project, the
+producer's `completion` block names a destination and the same recipient
+binding:
+
+```yaml
+reviewProducers:
+  - id: coordinator
+    profile: coordinator-producer
+    issuer: https://issuer.example.org
+    subject: coordinator-review-producer
+    sourceNamespaces: [applications]
+    kinds: [application-review]
+    recoveryDays: 7
+    completion: {destinationId: coordinator, recipientBinding: coordinator-v1}
+```
+
+In the Casework runtime file, bind that destination to the Coordinator's route
+and to Casework's own reference to the same token. Present it as a bearer
+token with `bearerTokenRef` or `auth: {secretRef}`; the Coordinator accepts no
+custom header. `attemptTimeoutMilliseconds`, `maximumAttempts` and
+`retryDelaySeconds` bound Casework's delivery, as the Casework runtime
+configuration describes:
+
+```yaml
+reviewCompletionDestinations:
+  coordinator:
+    url: https://coordinator.example.org/v1/review-completions
+    bearerTokenRef: secret:file/coordinator-completion-token
+```
+
+The [reviewed notice example](examples/reviewed-notice/README.md) lists the
+full set of Casework prerequisites for one review producer.
 
 `databaseId` is the deployment's durable logical identity. Keep it constant
 through restarts, credential rotation and compatible package updates. An existing
@@ -569,10 +667,12 @@ A run that recovery, for example `reconcile`, moves from one terminal state to
 another therefore counts under both states, and the `state` series can add up
 to more than the number of runs that finished. Every step attempt the worker makes counts, local steps
 included: `maybe-sent` is an attempt whose effect is uncertain and that waits
-for an operator, and `unavailable` an attempt that ended in an internal error,
+for an operator, `transient` also counts a `wait-for` read that failed and left
+its wait open, and `unavailable` an attempt that ended in an internal error,
 such as an unreadable store, before the step answered. An authentication
 refusal is a bearer credential refused before a caller is resolved: `refused`
-for a missing, malformed or unverified token, `policy` for a verified token no
+for a missing, malformed or unverified token, or a completion event without a
+configured completion token and recipient binding, `policy` for a verified token no
 caller policy admits, and `unavailable` when the token verifier cannot answer.
 A resolved caller refused an action is not counted here.
 
@@ -711,6 +811,30 @@ dispatch. A changed contract, denied authority or stale condition safely stops
 the call rather than refreshing its command. Preparation does not mutate BReg;
 cancellation, restore holds and the original workflow deadline still fence
 dispatch. Task-bound operations retain their original approval deadline too.
+
+Casework review requests have no read-only receipt either. `reconcile` reports
+`reconciliation-unavailable` for an uncertain `submit-review-request` or
+`cancel-review-request`, and `retry-same` resends the saved request with its
+original key. Casework answers a repeated key with its stored response while
+it keeps one; after that the step reports an expired receipt and the effect
+stays unresolved.
+
+A `wait-for` step's result reads change nothing in Casework, so a read is never
+uncertain. A definite retryable answer, or a read that cannot reach Casework,
+leaves the wait open like a review that is still open and spends no attempt:
+the next read follows Casework's `Retry-After`, no sooner than 30 seconds and
+no later than `resultCheckSeconds`. Without one it comes after the five-minute
+longest retry delay, or after `resultCheckSeconds` when that is shorter, so
+waiting runs do not all read again the moment Casework recovers. A completion
+event still brings the read forward. An outage shorter than the timeout therefore never fails a waiting
+run; `coordinator_step_attempts_total` counts each such read as `transient`. A
+read Casework refuses fails the run with its code. A run that failed this way
+before its deadline keeps its wait, and `retry-same` resumes the reads under
+the original timeout. `wait-timed-out`, `review-request-unknown` and `review-result-expired`
+end the wait, as do the run deadline, cancellation and retention, and
+`retry-same` cannot resume an ended wait. Cancelling a waiting run leaves its
+review request open in Casework: withdraw it through a `cancel-review-request`
+step, or in Casework, when no one should act on it.
 
 If a product call succeeds but the following wait mapping is invalid, the run
 reports `failed` with `mapping-invalid` while retaining that call's successful

@@ -282,6 +282,9 @@ pub struct Detail {
     pub failure_path: Option<String>,
     pub uncertain: bool,
     pub receipt_expired: bool,
+    /// Seconds until a waiting step reads its result again; set only while
+    /// the wait goes on.
+    pub recheck_seconds: Option<u32>,
 }
 impl Detail {
     pub(crate) fn failure(code: &'static str, uncertain: bool) -> Self {
@@ -293,6 +296,7 @@ impl Detail {
             failure_path: None,
             uncertain,
             receipt_expired: false,
+            recheck_seconds: None,
         }
     }
 }
@@ -661,6 +665,22 @@ impl Store {
         ))
         .await
         .map_err(unavailable)?;
+        // One row per waiting step while its wait lasts. The key is a keyed
+        // hash of the producer's request identifier, so a completion event
+        // finds its wait without the identifier being stored in clear. Rows
+        // name a job but carry no foreign key: deployment cleanup deletes
+        // jobs and runs in its own order.
+        tx.batch_execute(&format!(
+            "CREATE TABLE {0}.review_waits (
+                run_id uuid NOT NULL, step text NOT NULL, wait_key text NOT NULL,
+                timeout_at timestamptz NOT NULL, read_at timestamptz,
+                woken_at timestamptz, recheck_at timestamptz,
+                PRIMARY KEY (run_id, step));
+            CREATE INDEX review_waits_key_idx ON {0}.review_waits (wait_key)",
+            self.namespace
+        ))
+        .await
+        .map_err(unavailable)?;
         Ok(())
     }
 
@@ -741,6 +761,37 @@ impl Store {
                 step.as_bytes(),
             ],
         )
+    }
+
+    /// The correlation key of a review wait: a keyed hash of the connection
+    /// and the producer's request identifier. A completion authenticated for
+    /// one connection can only find waits on that connection.
+    fn wait_key(&self, connection: &str, request: Uuid) -> String {
+        self.security.keys.commitment(
+            "review-wait",
+            &[
+                self.security.database_id.as_bytes(),
+                connection.as_bytes(),
+                request.as_bytes(),
+            ],
+        )
+    }
+
+    /// The correlation key of the wait for the review request that the named
+    /// call step accepted, from that step's protected output.
+    fn review_wait_key(
+        &self,
+        definition: &Definition,
+        request: &str,
+        outputs: &BTreeMap<String, Value>,
+    ) -> Option<String> {
+        let Some(Step::Call { call, .. }) = definition.workflow.steps.get(request) else {
+            return None;
+        };
+        let accepted: registry_review_protocol::ReviewRequestAccepted =
+            serde_json::from_value(outputs.get(request)?.clone()).ok()?;
+        (!accepted.request_id.is_nil())
+            .then(|| self.wait_key(&call.connection, accepted.request_id))
     }
 
     pub async fn admit(
@@ -1024,7 +1075,7 @@ impl Store {
                 failure_path: row.get(10),
             })
             .collect::<Vec<_>>();
-        let row = tx.query_one(&format!("SELECT r.snapshot,j.state,j.receipt_expired,j.pure OR r.deadline_at>transaction_timestamp(),r.cancel_requested,r.payload_erased_at, (SELECT restore_hold FROM {0}.control WHERE id), ({1}) AND NOT r.restore_review_required FROM {0}.runs r JOIN {0}.jobs j ON j.run_id=r.run_id AND j.step=r.step WHERE r.run_id=$1", self.namespace,self.terminal_retention_predicate()), &[&run]).await.map_err(unavailable)?;
+        let row = tx.query_one(&format!("SELECT r.snapshot,j.state,j.receipt_expired,j.pure OR r.deadline_at>transaction_timestamp(),r.cancel_requested,r.payload_erased_at, (SELECT restore_hold FROM {0}.control WHERE id), ({1}) AND NOT r.restore_review_required, EXISTS(SELECT 1 FROM {0}.review_waits w WHERE w.run_id=r.run_id AND w.step=r.step) FROM {0}.runs r JOIN {0}.jobs j ON j.run_id=r.run_id AND j.step=r.step WHERE r.run_id=$1", self.namespace,self.terminal_retention_predicate()), &[&run]).await.map_err(unavailable)?;
         // Only genuinely settled terminal history may use its recorded binding.
         // Decide inside this same repeatable-read inspection, never from a stale
         // HTTP status label. Recovery targets must still resolve current bindings.
@@ -1083,6 +1134,16 @@ impl Store {
             })
         {
             Some(RetryBlockReason::EvaluationUncertain)
+        } else if !row.get::<_, bool>(8)
+            && definition.as_ref().is_some_and(|definition| {
+                matches!(
+                    definition.workflow.steps.get(&status.step),
+                    Some(Step::WaitFor { .. })
+                )
+            })
+        {
+            // A review wait that ended cannot read again.
+            Some(RetryBlockReason::NotRecoverable)
         } else if !matches!(
             row.get::<_, String>(1).as_str(),
             "unknown" | "dead-lettered"
@@ -1242,7 +1303,10 @@ impl Store {
         // the claim's captured deadline, before enqueueing even pure successors.
         // Actual accepted calls retain their receipt finalization semantics.
         if !cancelled
-            && matches!(definition.workflow.steps.get(step), Some(Step::WaitUntil { .. }))
+            && matches!(
+                definition.workflow.steps.get(step),
+                Some(Step::WaitUntil { .. } | Step::WaitFor { .. })
+            )
             && tx
                 .execute(
                     &format!(
@@ -1262,9 +1326,11 @@ impl Store {
             outputs.insert(step.to_owned(), value.clone());
         }
         // A known successful step must commit even when the authored mapping
-        // for its following wait is invalid. Keep the delivered step current;
-        // no runnable wait job or replayable mutation is created on failure.
-        let mut mapping_failed = false;
+        // for its following wait is invalid, or its review request cannot be
+        // correlated. Keep the delivered step current; no runnable wait job or
+        // replayable mutation is created on failure.
+        let mut failure = None;
+        let mut wait = None;
         let due = if !cancelled {
             match detail
                 .next
@@ -1283,10 +1349,21 @@ impl Store {
                     match mapped {
                         Some(value) => Some(SystemTime::from(value.with_timezone(&Utc))),
                         None => {
-                            mapping_failed = true;
+                            failure = Some("mapping-invalid");
                             None
                         }
                     }
+                }
+                Some(Some(Step::WaitFor {
+                    wait_for,
+                    timeout_seconds,
+                    ..
+                })) => {
+                    match self.review_wait_key(&definition, wait_for.request(), &outputs) {
+                        Some(key) => wait = Some((key, *timeout_seconds)),
+                        None => failure = Some("protected-state-invalid"),
+                    }
+                    None
                 }
                 Some(None) => return Err(DispatchError::Unavailable),
                 _ => None,
@@ -1294,7 +1371,7 @@ impl Store {
         } else {
             None
         };
-        let next = if cancelled || mapping_failed {
+        let next = if cancelled || failure.is_some() {
             step
         } else {
             detail.next.as_deref().unwrap_or(step)
@@ -1303,14 +1380,14 @@ impl Store {
             "cancelled-after-effect"
         } else if cancelled {
             "cancelled"
-        } else if mapping_failed {
+        } else if failure.is_some() {
             "failed"
         } else if detail.outcome.is_some() {
             "finished"
         } else {
             "running"
         };
-        let failure_code = mapping_failed.then_some("mapping-invalid");
+        let failure_code = failure;
         let terminal = if !cancelled && detail.outcome.is_some() {
             detail
                 .output
@@ -1322,7 +1399,7 @@ impl Store {
             None
         };
         tx.execute(&format!("UPDATE {}.runs SET outputs=$2,step=$3,state=$4,outcome=$5,terminal_output=$6,failure_code=$7,failure_path=NULL,completed_at=CASE WHEN $4<>'running' THEN transaction_timestamp() ELSE NULL END WHERE run_id=$1",self.namespace),&[&id,&self.seal(id,"outputs","",&outputs).map_err(|_|DispatchError::Unavailable)?,&next,&state,&if cancelled{None}else{detail.outcome.as_deref()},&terminal,&failure_code]).await?;
-        if !cancelled && !mapping_failed {
+        if !cancelled && failure.is_none() {
             if let Some(next) = &detail.next {
                 enqueue(
                     tx,
@@ -1331,6 +1408,18 @@ impl Store {
                     due,
                 )
                 .await?;
+                if let Some((key, timeout_seconds)) = &wait {
+                    let timeout_seconds =
+                        i32::try_from(*timeout_seconds).map_err(|_| DispatchError::Unavailable)?;
+                    tx.execute(
+                        &format!(
+                            "INSERT INTO {}.review_waits(run_id,step,wait_key,timeout_at) VALUES($1,$2,$3,transaction_timestamp()+$4::integer*interval '1 second')",
+                            self.namespace
+                        ),
+                        &[&id, next, key, &timeout_seconds],
+                    )
+                    .await?;
+                }
                 let pure = matches!(
                     definition.workflow.steps.get(next),
                     Some(Step::Choose { .. } | Step::Finish { .. })
@@ -1346,6 +1435,28 @@ impl Store {
             }
         }
         Ok(state)
+    }
+
+    /// End the review waits a run no longer has: the named step's when
+    /// `step_ended`, and every wait of a run that is settled or past its
+    /// deadline. A failed run before its deadline keeps a wait an operator
+    /// may still retry.
+    pub(crate) async fn end_waits(
+        &self,
+        tx: &Transaction<'_>,
+        run: Uuid,
+        step: &str,
+        step_ended: bool,
+    ) -> std::result::Result<(), DispatchError> {
+        tx.execute(
+            &format!(
+                "DELETE FROM {0}.review_waits w USING {0}.runs r WHERE w.run_id=$1 AND r.run_id=w.run_id AND ((w.step=$2 AND $3) OR r.state IN ('finished','cancelled','cancelled-after-effect','expired') OR (r.state<>'running' AND r.deadline_at<=clock_timestamp()))",
+                self.namespace
+            ),
+            &[&run, &step, &step_ended],
+        )
+        .await?;
+        Ok(())
     }
 
     pub(crate) async fn before_io(
@@ -1386,6 +1497,70 @@ impl Store {
         }
         tx.commit().await.map_err(unavailable)?;
         Ok(true)
+    }
+
+    /// Whether the timeout of the leased waiting step has passed, or `None`
+    /// when this attempt no longer holds its lease or its wait has no row.
+    pub(crate) async fn wait_timed_out(&self, job: &LeasedJob<Job>) -> Result<Option<bool>> {
+        let client = self.client().await.map_err(unavailable)?;
+        let fence = job.fence();
+        let row = client
+            .query_opt(
+                &format!(
+                    "SELECT w.timeout_at<=clock_timestamp() FROM {0}.review_waits w JOIN {0}.jobs j ON j.run_id=w.run_id AND j.step=w.step WHERE j.run_id=$1 AND j.step=$2 AND j.generation=$3 AND j.attempt=$4 AND j.lease_token=$5 AND j.state='leased' AND j.lease_expires_at>clock_timestamp()",
+                    self.namespace
+                ),
+                &[
+                    &fence.id,
+                    &fence.part,
+                    &fence.generation,
+                    &fence.attempt,
+                    &fence.lease_token,
+                ],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(row.map(|row| row.get(0)))
+    }
+
+    /// Bring forward the next read of every wait for this request on this
+    /// connection, to no sooner than thirty seconds after its last read. A
+    /// wait whose read is in flight records the wake, and that read
+    /// schedules one more. A request no wait names changes nothing.
+    pub async fn wake(&self, connection: &str, request: Uuid) -> Result<()> {
+        let key = self.wait_key(connection, request);
+        let mut client = self.client().await.map_err(unavailable)?;
+        let tx = client.transaction().await.map_err(unavailable)?;
+        self.verify_transaction(&tx).await.map_err(unavailable)?;
+        // Dispatch's lock order: a job row before anything that names it.
+        tx.query(
+            &format!(
+                "SELECT j.run_id FROM {0}.review_waits w JOIN {0}.jobs j ON j.run_id=w.run_id AND j.step=w.step WHERE w.wait_key=$1 ORDER BY j.run_id,j.step FOR UPDATE OF j",
+                self.namespace
+            ),
+            &[&key],
+        )
+        .await
+        .map_err(unavailable)?;
+        tx.execute(
+            &format!(
+                "UPDATE {}.review_waits SET woken_at=clock_timestamp() WHERE wait_key=$1",
+                self.namespace
+            ),
+            &[&key],
+        )
+        .await
+        .map_err(unavailable)?;
+        tx.execute(
+            &format!(
+                "UPDATE {0}.jobs j SET next_attempt_at=LEAST(j.next_attempt_at,GREATEST(transaction_timestamp(),COALESCE(w.read_at,'-infinity'::timestamptz)+interval '{1} seconds')) FROM {0}.review_waits w WHERE w.wait_key=$1 AND j.run_id=w.run_id AND j.step=w.step AND j.state='pending'",
+                self.namespace, WAIT_READ_SPACING_SECONDS
+            ),
+            &[&key],
+        )
+        .await
+        .map_err(unavailable)?;
+        tx.commit().await.map_err(unavailable)
     }
 }
 
@@ -1437,6 +1612,15 @@ fn decode(row: &Row, first: usize) -> std::result::Result<Job, DispatchError> {
         restore_review_required: row.try_get(first + 14)?,
     })
 }
+/// The least time between two reads of one review wait, whatever wakes it.
+pub(crate) const WAIT_READ_SPACING_SECONDS: u32 = 30;
+/// Failures of a waiting step that end its wait for good: reading again
+/// cannot change them, so no retry may resume the wait.
+const WAIT_ENDING_FAILURES: &[&str] = &[
+    "wait-timed-out",
+    "review-request-unknown",
+    "review-result-expired",
+];
 /// How long one attempt may run; its lease lasts this long plus Dispatch's
 /// finalization allowance.
 pub(crate) const ATTEMPT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -1445,7 +1629,7 @@ const MAXIMUM_ATTEMPTS: i16 = 10;
 /// Delay before the second attempt; each later delay doubles it.
 const RETRY_INITIAL_DELAY: Duration = Duration::from_secs(1);
 /// Longest automatic retry delay, and the ceiling on a product's `Retry-After`.
-const RETRY_MAXIMUM_DELAY: Duration = Duration::from_secs(300);
+pub(crate) const RETRY_MAXIMUM_DELAY: Duration = Duration::from_secs(300);
 
 /// A definite retryable answer waits 1, 2, 4, 8, 16, 32, 64, 128 and then 256
 /// seconds, each with equal jitter (between half and all of that delay), before
@@ -1623,11 +1807,28 @@ impl DispatchStore for Store {
         let definition = self
             .definition(&snapshot)
             .map_err(|_| DispatchError::Unavailable)?;
-        if !matches!(
-            definition.workflow.steps.get(audit.key.part()),
-            Some(Step::WaitUntil { .. })
-        ) {
-            return Ok(());
+        match definition.workflow.steps.get(audit.key.part()) {
+            Some(Step::WaitUntil { .. }) => {}
+            // A retried review wait resumes only while its wait lasts: a wait
+            // that ended has no row, and its replay is refused here, under
+            // the same locks, before anything is runnable.
+            Some(Step::WaitFor { .. }) => {
+                let changed = tx
+                    .execute(
+                        &format!(
+                            "UPDATE {}.review_waits SET recheck_at=NULL WHERE run_id=$1 AND step=$2",
+                            self.namespace
+                        ),
+                        &[&audit.key.id(), &audit.key.part()],
+                    )
+                    .await?;
+                return if changed == 1 {
+                    Ok(())
+                } else {
+                    Err(DispatchError::Unavailable)
+                };
+            }
+            _ => return Ok(()),
         }
         let payload = self
             .payload(audit.key.id(), audit.key.part(), &audit.record)
@@ -1680,6 +1881,33 @@ impl DispatchStore for Store {
             )
             .await?
             .get(0);
+        // A read that leaves the wait open schedules the next one: no sooner
+        // than thirty seconds, and thirty seconds out when a completion event
+        // arrived while this read was in flight, but never later than the
+        // timeout, so the last read happens at the timeout.
+        let recheck = match (disposition, detail.recheck_seconds) {
+            (Disposition::Delivered, Some(seconds)) => {
+                Some(i32::try_from(seconds).map_err(|_| DispatchError::Unavailable)?)
+            }
+            _ => None,
+        };
+        let changed = tx
+            .execute(
+                &format!(
+                    "UPDATE {0}.review_waits w SET read_at=transaction_timestamp(),
+                        recheck_at=CASE WHEN $3::integer IS NULL THEN NULL ELSE LEAST(w.timeout_at, GREATEST(
+                            transaction_timestamp()+interval '{1} seconds',
+                            transaction_timestamp()+CASE WHEN w.woken_at>=j.attempt_started_at
+                                THEN interval '{1} seconds' ELSE $3::integer*interval '1 second' END)) END
+                     FROM {0}.jobs j WHERE w.run_id=$1 AND w.step=$2 AND j.run_id=w.run_id AND j.step=w.step",
+                    self.namespace, WAIT_READ_SPACING_SECONDS
+                ),
+                &[&id, &step, &recheck],
+            )
+            .await?;
+        if recheck.is_some() && !cancelled && changed != 1 {
+            return Err(DispatchError::Unavailable);
+        }
         let written = if disposition == Disposition::Delivered {
             let payload = self
                 .payload(id, step, &job.job)
@@ -1702,7 +1930,53 @@ impl DispatchStore for Store {
             .await?;
             state
         };
+        let step_ended = (disposition == Disposition::Delivered
+            && detail.recheck_seconds.is_none())
+            || detail
+                .failure_code
+                .is_some_and(|code| WAIT_ENDING_FAILURES.contains(&code));
+        self.end_waits(tx, id, step, step_ended).await?;
         self.settle_later(id, step, RunOutcome::from_state(written));
+        Ok(())
+    }
+    /// A read that left a review wait open schedules the step again, as a
+    /// fresh generation due at the wait's recheck time. Only a wait that
+    /// still has its row is scheduled, so a cancelled, expired or ended wait
+    /// stays delivered.
+    async fn after_finished(
+        &self,
+        tx: &Transaction<'_>,
+        job: &LeasedJob<Job>,
+        disposition: Disposition,
+    ) -> std::result::Result<(), DispatchError> {
+        if disposition != Disposition::Delivered {
+            return Ok(());
+        }
+        let (run, step) = (job.key.id(), job.key.part());
+        let rearmed = tx
+            .execute(
+                &format!(
+                    "UPDATE {0}.jobs j SET generation=j.generation+1,state='pending',attempt=0,next_attempt_at=w.recheck_at,
+                        attempt_started_at=NULL,lease_expires_at=NULL,lease_token=NULL,delivered_at=NULL,dead_lettered_at=NULL,
+                        expired_at=NULL,failure_code=NULL,failure_path=NULL,updated_at=transaction_timestamp()
+                     FROM {0}.review_waits w
+                     WHERE j.run_id=$1 AND j.step=$2 AND w.run_id=j.run_id AND w.step=j.step
+                       AND j.state='delivered' AND w.recheck_at IS NOT NULL",
+                    self.namespace
+                ),
+                &[&run, &step],
+            )
+            .await?;
+        if rearmed > 0 {
+            tx.execute(
+                &format!(
+                    "UPDATE {}.review_waits SET recheck_at=NULL WHERE run_id=$1 AND step=$2",
+                    self.namespace
+                ),
+                &[&run, &step],
+            )
+            .await?;
+        }
         Ok(())
     }
     async fn write_transition(
@@ -1742,6 +2016,8 @@ impl DispatchStore for Store {
             &[&audit.key.id(), &state, &code],
         )
         .await?;
+        self.end_waits(tx, audit.key.id(), audit.key.part(), false)
+            .await?;
         self.settle_later(
             audit.key.id(),
             audit.key.part(),
