@@ -1335,21 +1335,25 @@ def task_schemas() -> dict:
     scheduling_permission = obj({"service":grant_identifier, "location":grant_identifier, "actions":{"type":"array", "minItems":1, "maxItems":32, "uniqueItems":True, "items":{"type":"string", "minLength":1, "maxLength":128, "pattern":r"^[a-z][a-z0-9._:-]*$"}}}, ["service","location","actions"])
     common = {"agent":ref("IssuerPrincipal"), "client":text, "resource":text, "scopes":{"type":"array","minItems":1,"maxItems":32,"uniqueItems":True,"items":{"type":"string","minLength":1,"maxLength":128,"pattern":r"^[\x21\x23-\x29\x2b-\x5b\x5d-\x7e]+$"}}, "purpose":text, "bounds":ref("TaskGrantBounds")}
     evidence_context = obj({"requesterTags":{"type":"array","minItems":1,"maxItems":32,"uniqueItems":True,"items":{"type":"string","minLength":1,"maxLength":128,"pattern":r"^[a-z][a-z0-9._-]*$"}}, "audience":{"type":"string","format":"uri","minLength":1,"maxLength":4096}}, ["requesterTags","audience"])
-    preview = {"id":text, "version":text, "label":text, **common, "evidenceContext":ref("EvidenceRequesterContext"), "subjects":subjects, "lifetimeSeconds":{"type":"integer","minimum":1,"maximum":900}}
+    preview = {"id":text, "version":text, "label":text, **common, "evidenceContext":ref("EvidenceRequesterContext"), "subjects":subjects, "lifetimeSeconds":{"type":"integer","minimum":1,"maximum":604800}}
+    preview["authorizationMode"] = {"type":"string", "enum":["immediate","deferred"], "default":"immediate", "description":"Immediate keeps the 900-second ceiling. Deferred is an explicit bounded authorization window of at most seven days; credentials remain short-lived."}
     template = {**preview, "eligibleTeams":array(text), "eligibleProfiles":array(text), "source":text, "reviewKinds":array(text), "itemKinds":array(text), "itemStates":{"type":"array","items":{"enum":["claimed","waiting-applicant","waiting-application"]}}}
     template["subjects"] = {"type":"object", "minProperties":1, "maxProperties":32, "additionalProperties":text}
+    template_schema = obj(template,[name for name in template if name not in ("evidenceContext", "authorizationMode")])
+    template_schema["allOf"] = [{"if":{"properties":{"authorizationMode":{"const":"deferred"}},"required":["authorizationMode"]},"then":{"properties":{"lifetimeSeconds":{"maximum":604800}}},"else":{"properties":{"lifetimeSeconds":{"maximum":900}}}}]
     view = {"id":uuid, "templateId":text, "templateVersion":text, **common, "evidenceContext":ref("EvidenceRequesterContext"), "expiresAt":number, "invalidated":{"type":"boolean"}}
+    view["authorizationMode"] = preview["authorizationMode"]
     details = {"grantId":uuid, "sourceIssuer":text, "principal":text, "client":text, "resource":text, "purpose":text, "bounds":ref("TaskGrantBounds"), "subjects":subjects, "expiresAt":number}
     return {
         "EvidenceRequesterContext":evidence_context,
-        "TaskTemplate":obj(template,[name for name in template if name != "evidenceContext"]),
-        "TaskTemplatePreview":obj(preview,[name for name in preview if name != "evidenceContext"]),
+        "TaskTemplate":template_schema,
+        "TaskTemplatePreview":obj(preview,[name for name in preview if name not in ("evidenceContext", "authorizationMode")]),
         "TaskTemplatePreviews":obj({"itemRevision":number,"templates":array(ref("TaskTemplatePreview"))},["itemRevision","templates"]),
         "TaskPermission":permission,
         "SchedulingTaskPermission":scheduling_permission,
         "TaskGrantBounds":{"oneOf":[obj({"type":{"const":"evidence"},"requirement":text},["type","requirement"]), obj({"type":{"const":"breg"},"permissions":{"type":"array","minItems":1,"maxItems":64,"items":ref("TaskPermission")}},["type","permissions"]), obj({"type":{"const":"scheduling"},"permissions":{"type":"array","minItems":1,"maxItems":64,"items":ref("SchedulingTaskPermission")}},["type","permissions"])]},
         "TaskApprovalRequest":obj({"templateId":text,"templateVersion":text},["templateId","templateVersion"]),
-        "TaskGrantView":obj(view,[name for name in view if name != "evidenceContext"]),
+        "TaskGrantView":obj(view,[name for name in view if name not in ("evidenceContext", "authorizationMode")]),
         "TaskGrantList":obj({"grants":{"type":"array","maxItems":128,"items":ref("TaskGrantView")}},["grants"]),
         "TaskGrantRevocation":obj({"id":uuid,"invalidated":{"type":"boolean"}},["id","invalidated"]),
         "TaskAssertionResponse":obj({"assertion":{"type":"string","description":"Sensitive short-lived credential. Do not log or persist."},"expiresAt":number,"grantExpiresAt":number},["assertion","expiresAt","grantExpiresAt"]),

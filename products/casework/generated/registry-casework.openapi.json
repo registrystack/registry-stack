@@ -5866,6 +5866,15 @@
           "agent": {
             "$ref": "#/components/schemas/IssuerPrincipal"
           },
+          "authorizationMode": {
+            "default": "immediate",
+            "description": "Immediate keeps the 900-second ceiling. Deferred is an explicit bounded authorization window of at most seven days; credentials remain short-lived.",
+            "enum": [
+              "immediate",
+              "deferred"
+            ],
+            "type": "string"
+          },
           "bounds": {
             "$ref": "#/components/schemas/TaskGrantBounds"
           },
@@ -5964,9 +5973,46 @@
       },
       "TaskTemplate": {
         "additionalProperties": false,
+        "allOf": [
+          {
+            "else": {
+              "properties": {
+                "lifetimeSeconds": {
+                  "maximum": 900
+                }
+              }
+            },
+            "if": {
+              "properties": {
+                "authorizationMode": {
+                  "const": "deferred"
+                }
+              },
+              "required": [
+                "authorizationMode"
+              ]
+            },
+            "then": {
+              "properties": {
+                "lifetimeSeconds": {
+                  "maximum": 604800
+                }
+              }
+            }
+          }
+        ],
         "properties": {
           "agent": {
             "$ref": "#/components/schemas/IssuerPrincipal"
+          },
+          "authorizationMode": {
+            "default": "immediate",
+            "description": "Immediate keeps the 900-second ceiling. Deferred is an explicit bounded authorization window of at most seven days; credentials remain short-lived.",
+            "enum": [
+              "immediate",
+              "deferred"
+            ],
+            "type": "string"
           },
           "bounds": {
             "$ref": "#/components/schemas/TaskGrantBounds"
@@ -6024,7 +6070,7 @@
             "type": "string"
           },
           "lifetimeSeconds": {
-            "maximum": 900,
+            "maximum": 604800,
             "minimum": 1,
             "type": "integer"
           },
@@ -6106,6 +6152,15 @@
           "agent": {
             "$ref": "#/components/schemas/IssuerPrincipal"
           },
+          "authorizationMode": {
+            "default": "immediate",
+            "description": "Immediate keeps the 900-second ceiling. Deferred is an explicit bounded authorization window of at most seven days; credentials remain short-lived.",
+            "enum": [
+              "immediate",
+              "deferred"
+            ],
+            "type": "string"
+          },
           "bounds": {
             "$ref": "#/components/schemas/TaskGrantBounds"
           },
@@ -6128,7 +6183,7 @@
             "type": "string"
           },
           "lifetimeSeconds": {
-            "maximum": 900,
+            "maximum": 604800,
             "minimum": 1,
             "type": "integer"
           },

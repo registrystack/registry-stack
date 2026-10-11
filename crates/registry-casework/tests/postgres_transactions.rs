@@ -976,6 +976,27 @@ async fn occurrence_index(client: &tokio_postgres::Client, schema: &str) -> (u32
     (row.get(0), row.get(1))
 }
 
+async fn review_discovery_indexes(
+    client: &tokio_postgres::Client,
+    schema: &str,
+) -> Vec<(String, u32)> {
+    client
+        .query(
+            "SELECT c.relname,c.oid,i.indisvalid,i.indisready FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace JOIN pg_index i ON i.indexrelid=c.oid WHERE n.nspname=$1 AND c.relname IN ('casework_review_task_queue_position_idx','casework_review_task_assigned_position_idx','casework_review_accountability_task_idx') ORDER BY c.relname",
+            &[&schema],
+        )
+        .await
+        .expect("read review discovery indexes")
+        .into_iter()
+        .map(|row| {
+            let name: String = row.get(0);
+            assert!(row.get::<_, bool>(2), "{name} is valid");
+            assert!(row.get::<_, bool>(3), "{name} is ready");
+            (name, row.get(1))
+        })
+        .collect()
+}
+
 async fn applied_versions(client: &tokio_postgres::Client) -> Vec<i64> {
     client
         .query(
@@ -994,7 +1015,7 @@ async fn repeated_migration_is_a_ledger_no_op_and_never_drops_the_occurrence_ind
     let (store, client, schema) = isolated_schema("migrate").await;
     store.migrate().await.expect("first migration");
     let applied = applied_versions(&client).await;
-    assert_eq!(applied, (1..=21).collect::<Vec<i64>>());
+    assert_eq!(applied, (1..=22).collect::<Vec<i64>>());
     let index = occurrence_index(&client, &schema).await;
     assert!(index.1, "the occurrence identity index is unique");
 
@@ -1234,7 +1255,7 @@ const SOURCE_ITEM_MIGRATIONS: [&str; 14] = [
     include_str!("../migrations/0014_task_grants.sql"),
 ];
 
-async fn establish_source_schema_with_earlier_tables(client: &tokio_postgres::Client) {
+async fn establish_source_schema(client: &tokio_postgres::Client) {
     client
         .batch_execute(
             "CREATE TABLE casework_schema_migrations (\
@@ -1246,6 +1267,10 @@ async fn establish_source_schema_with_earlier_tables(client: &tokio_postgres::Cl
     for (version, migration) in (1_i64..).zip(SOURCE_ITEM_MIGRATIONS) {
         apply_fixture_migration(client, version, migration).await;
     }
+}
+
+async fn establish_source_schema_with_earlier_tables(client: &tokio_postgres::Client) {
+    establish_source_schema(client).await;
     client.batch_execute(
         "CREATE TABLE casework_hosted_items(item_id uuid PRIMARY KEY,kind_id text,kind_version text,kind_policy_digest text,kind_policy jsonb,queue_id text,state text,holder_issuer text,holder_subject text,revision bigint,created_at timestamptz,updated_at timestamptz);
          CREATE TABLE casework_hosted_actor_references(actor_ref text,issuer text,subject text);
@@ -1391,7 +1416,7 @@ async fn migration_refuses_unpublished_audit_and_preserves_a_drained_outbox() {
         .expect("a drained outbox is preserved");
     assert_eq!(
         applied_versions(&client).await,
-        (1..=21).collect::<Vec<_>>()
+        (1..=22).collect::<Vec<_>>()
     );
     let dropped: bool = client
         .query_one("SELECT to_regclass('casework_audit_outbox') IS NULL", &[])
@@ -1454,8 +1479,110 @@ async fn migration_locks_hosted_work_before_counting_it_for_the_drop() {
         .expect("migration completes once the blocker releases the table");
     assert_eq!(
         applied_versions(&client).await,
+        (1..=22).collect::<Vec<_>>()
+    );
+}
+
+#[tokio::test]
+async fn migration_22_preserves_review_discovery_and_adds_deferred_assignment_authority() {
+    let (store, client, schema) = isolated_schema("deferred_assignment_upgrade").await;
+    establish_review_discovery_predecessor(&client, 21).await;
+    assert_eq!(
+        applied_versions(&client).await,
         (1..=21).collect::<Vec<_>>()
     );
+    assert!(
+        matches!(
+            store.ready().await,
+            Err(StoreError::SchemaNotCurrent {
+                applied: Some(21),
+                required: 22
+            })
+        ),
+        "the preceding Casework schema still needs deferred authorization migration 22"
+    );
+    let original_indexes = review_discovery_indexes(&client, &schema).await;
+    assert_eq!(original_indexes.len(), 3);
+    let before:bool=client.query_one("SELECT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='casework_review_tasks' AND column_name='assignment_generation')",&[]).await.unwrap().get(0);
+    assert!(!before);
+    store
+        .migrate()
+        .await
+        .expect("upgrade published discovery schema with deferred authority");
+    assert_eq!(
+        applied_versions(&client).await,
+        (1..=22).collect::<Vec<_>>()
+    );
+    assert_eq!(
+        review_discovery_indexes(&client, &schema).await,
+        original_indexes
+    );
+    let generation:bool=client.query_one("SELECT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='casework_review_tasks' AND column_name='assignment_generation' AND is_nullable='NO' AND column_default='1') AND EXISTS(SELECT 1 FROM pg_trigger WHERE tgrelid='casework_review_tasks'::regclass AND tgname='casework_review_assignment_generation' AND NOT tgisinternal)",&[]).await.unwrap().get(0);
+    assert!(generation);
+    // Copy the actual migrated CHECKs into bounded fixture tables, without
+    // foreign keys or runtime triggers, and prove both grant windows directly.
+    for (source,columns,values) in [
+        ("casework_task_grants", "grant_id,item_id,approver_issuer,approver_subject,approver_profile,approver_role,idempotency_key,request_hash,record,approved_at,expires_at", "gen_random_uuid(),gen_random_uuid(),'https://synthetic.invalid','owner','staff','staff',gen_random_uuid()::text,repeat('a',64),$1,clock_timestamp(),clock_timestamp()+$2::text::interval"),
+        ("casework_review_task_grants", "grant_id,task_id,request_id,task_revision,holder_issuer,holder_subject,approver_profile,approver_role,idempotency_key,request_hash,record,approved_at,expires_at", "gen_random_uuid(),gen_random_uuid(),gen_random_uuid(),1,'https://synthetic.invalid','owner','staff','staff',gen_random_uuid()::text,repeat('a',64),$1,clock_timestamp(),clock_timestamp()+$2::text::interval"),
+    ] {
+        client.batch_execute(&format!("CREATE TEMP TABLE grant_window_fixture (LIKE {source} INCLUDING CONSTRAINTS INCLUDING DEFAULTS)")).await.unwrap();
+        let insert=format!("INSERT INTO grant_window_fixture({columns}) VALUES({values})");
+        let immediate=serde_json::json!({"template":{"authorizationMode":"immediate"}});
+        let deferred=serde_json::json!({"template":{"authorizationMode":"deferred"}});
+        assert!(client.execute(&insert,&[&immediate,&"16 minutes"]).await.is_err(),"immediate credential authority stays bounded");
+        client.execute(&insert,&[&deferred,&"16 minutes"]).await.expect("governed deferred authority permits original longer deadline");
+        assert!(client.execute(&insert,&[&deferred,&"8 days"]).await.is_err(),"deferred authority stays capped at seven days");
+        client.batch_execute("DROP TABLE grant_window_fixture").await.unwrap();
+    }
+    store
+        .ready()
+        .await
+        .expect("combined migration history is current");
+    store
+        .migrate()
+        .await
+        .expect("combined history repeats without schema changes");
+    assert_eq!(
+        applied_versions(&client).await,
+        (1..=22).collect::<Vec<_>>()
+    );
+    assert_eq!(
+        review_discovery_indexes(&client, &schema).await,
+        original_indexes
+    );
+}
+
+// Establish the migration history through `through` rather than removing
+// fields from a newer schema. This keeps each upgrade's starting authority
+// contract exact.
+async fn establish_review_discovery_predecessor(client: &tokio_postgres::Client, through: i64) {
+    assert!((19..=21).contains(&through));
+    establish_source_schema(client).await;
+    for (version, migration) in [
+        (15, include_str!("../migrations/0015_unified_reviews.sql")),
+        (
+            16,
+            include_str!("../migrations/0016_occurrence_identity_excludes_superseded.sql"),
+        ),
+        (17, include_str!("../migrations/0017_audit_writer.sql")),
+        (
+            18,
+            include_str!("../migrations/0018_source_reconciliation_health.sql"),
+        ),
+        (19, include_str!("../migrations/0019_activations.sql")),
+        (
+            20,
+            include_str!("../migrations/0020_review_task_discovery_indexes.sql"),
+        ),
+        (
+            21,
+            include_str!("../migrations/0021_own_review_decisions.sql"),
+        ),
+    ] {
+        if version <= through {
+            apply_fixture_migration(client, version, migration).await;
+        }
+    }
 }
 
 #[tokio::test]
@@ -1481,14 +1608,14 @@ async fn readiness_rejects_an_unmigrated_schema() {
             store.ready().await,
             Err(StoreError::SchemaNotCurrent {
                 applied: None,
-                required: 21
+                required: 22
             })
         ),
         "a schema without the migration ledger must fail readiness"
     );
     assert_eq!(
         store.ready().await.unwrap_err().to_string(),
-        "the Casework database schema is not current: no migration has been applied, and this binary requires version 21; run `caseworkctl plan --runtime-config FILE` then `caseworkctl apply --runtime-config FILE`"
+        "the Casework database schema is not current: no migration has been applied, and this binary requires version 22; run `caseworkctl plan --runtime-config FILE` then `caseworkctl apply --runtime-config FILE`"
     );
 }
 
@@ -1511,8 +1638,8 @@ async fn readiness_rejects_a_partial_schema_missing_review_tables() {
         matches!(
             store.ready().await,
             Err(StoreError::SchemaNotCurrent {
-                applied: Some(21),
-                required: 21
+                applied: Some(22),
+                required: 22
             })
         ),
         "a partial migration ledger must fail readiness"
@@ -1543,15 +1670,15 @@ async fn readiness_rejects_an_unsupported_migration_version() {
         matches!(
             refusal,
             StoreError::SchemaNewer {
-                found: 22,
-                supported: 21
+                found: 23,
+                supported: 22
             }
         ),
         "a newer schema is not reported as corrupt data: {refusal:?}"
     );
     assert_eq!(
         refusal.to_string(),
-        "the Casework database schema version 22 is newer than this binary supports (21); run a casework release that supports it"
+        "the Casework database schema version 23 is newer than this binary supports (22); run a casework release that supports it"
     );
 }
 
@@ -1580,8 +1707,8 @@ async fn migration_refuses_a_schema_newer_than_this_binary_and_writes_nothing() 
         matches!(
             refusal,
             StoreError::SchemaNewer {
-                found: 22,
-                supported: 21
+                found: 23,
+                supported: 22
             }
         ),
         "{refusal:?}"
@@ -2671,8 +2798,10 @@ async fn abort_during_commit<T: std::fmt::Debug>(
         let committing: i64 = fixture
             .client
             .query_one(
-                "SELECT count(*) FROM pg_stat_activity
-                 WHERE state='active' AND query='COMMIT' AND wait_event='PgSleep'",
+                "SELECT count(*) FROM pg_stat_activity a
+                 WHERE state='active' AND query='COMMIT' AND wait_event='PgSleep'
+                   AND EXISTS(SELECT 1 FROM pg_locks l WHERE l.pid=a.pid
+                     AND l.relation='casework_items'::regclass)",
                 &[],
             )
             .await

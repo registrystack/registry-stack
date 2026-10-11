@@ -49,9 +49,12 @@ class EvidenceRequesterContext(TypedDict):
 class TaskApprovalRequest(TypedDict):
     templateId: str
     templateVersion: str
-class _OptionalEvidenceContext(TypedDict, total=False):
+TaskAuthorizationMode: TypeAlias = Literal["immediate", "deferred"]
+class _TaskGrantOptional(TypedDict, total=False):
     evidenceContext: EvidenceRequesterContext
-class TaskTemplatePreview(_OptionalEvidenceContext):
+    # Omitted for the existing immediate mode; does not change credential TTLs.
+    authorizationMode: TaskAuthorizationMode
+class TaskTemplatePreview(_TaskGrantOptional):
     id: str
     version: str
     label: str
@@ -66,7 +69,7 @@ class TaskTemplatePreview(_OptionalEvidenceContext):
 class TaskTemplatePreviews(TypedDict):
     itemRevision: int
     templates: list[TaskTemplatePreview]
-class TaskGrantView(_OptionalEvidenceContext):
+class TaskGrantView(_TaskGrantOptional):
     id: str
     templateId: str
     templateVersion: str
