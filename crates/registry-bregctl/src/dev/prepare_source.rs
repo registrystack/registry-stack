@@ -615,6 +615,7 @@ pub(super) fn run(args: PrepareSourceArgs) -> Result<Value> {
         allow_human_fixture: false,
         scopes: vec![scope],
         claims,
+        grants: Vec::new(),
         test_bindings: Vec::new(),
         assertion_key_ref: None,
     };

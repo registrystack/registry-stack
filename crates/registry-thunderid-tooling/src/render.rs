@@ -780,95 +780,133 @@ mod tests {
 
     #[test]
     fn exchange_uses_native_user_config_and_unconditional_verified_issuer_mapping() {
-        use crate::description::{ExchangeIssuer, TokenExchangeClient, GRANT_ATTRIBUTES};
-        let mut description = crate::testing::synthetic_description();
-        description.compatibility_clients.clear();
-        description.state_root = std::env::temp_dir().join(format!(
-            "registry-exchange-render-{}",
-            crate::container::random_urlsafe(16).unwrap()
-        ));
-        fs::create_dir(&description.state_root).unwrap();
-        fs::set_permissions(&description.state_root, fs::Permissions::from_mode(0o700)).unwrap();
-        description.exchange_issuers.push(ExchangeIssuer {
-            id: "0197aaaa-0000-7000-8000-0000000000d1".into(),
-            name: "Authority".into(),
-            issuer: "https://authority.example".into(),
-            jwks_endpoint: "https://authority.example/jwks".into(),
-            mapping: ExchangeMapping::InstitutionalGrant,
-            clients: vec![],
-            token_attributes: Default::default(),
-        });
-        description.machine_clients[0].token_exchange = Some(TokenExchangeClient {
-            assertion_resource_server_id: description.resource_servers[0].id.clone(),
-            assertion_scope: "evidence:invoke".into(),
-        });
-        let rendered = render(&description).unwrap();
-        let agent = serde_yaml_parse(
-            &fs::read_to_string(
-                rendered
-                    .bootstrap_dir
-                    .join("agents/0197aaaa-0000-7000-8000-0000000000a1.yaml"),
+        for ordinary in [false, true] {
+            use crate::description::{ExchangeIssuer, TokenExchangeClient, GRANT_ATTRIBUTES};
+            let mut description = crate::testing::synthetic_description();
+            description.compatibility_clients.clear();
+            description.state_root = std::env::temp_dir().join(format!(
+                "registry-exchange-render-{}",
+                crate::container::random_urlsafe(16).unwrap()
+            ));
+            fs::create_dir(&description.state_root).unwrap();
+            fs::set_permissions(&description.state_root, fs::Permissions::from_mode(0o700))
+                .unwrap();
+            description.exchange_issuers.push(ExchangeIssuer {
+                id: "0197aaaa-0000-7000-8000-0000000000d1".into(),
+                name: "Authority".into(),
+                issuer: "https://authority.example".into(),
+                jwks_endpoint: "https://authority.example/jwks".into(),
+                mapping: ExchangeMapping::InstitutionalGrant,
+                clients: vec![],
+                token_attributes: Default::default(),
+            });
+            description.machine_clients[0].token_exchange = Some(TokenExchangeClient {
+                assertion_resource_server_id: description.resource_servers[0].id.clone(),
+                assertion_scope: "evidence:invoke".into(),
+                ordinary_resource_permissions: Vec::new(),
+            });
+            if ordinary {
+                crate::local::declare_resource(
+                    &mut description,
+                    "urn:synthetic:ordinary",
+                    &["records:read".into()],
+                )
+                .unwrap();
+                let server = description.resource_servers.last().unwrap().id.clone();
+                description.roles[0]
+                    .permissions
+                    .push((server.clone(), vec!["records:read".into()]));
+                description.machine_clients[0]
+                    .token_exchange
+                    .as_mut()
+                    .unwrap()
+                    .ordinary_resource_permissions = vec![(server, vec!["records:read".into()])];
+            }
+            let rendered = render(&description).unwrap();
+            let role: Value = serde_yaml_parse(
+                &fs::read_to_string(
+                    rendered
+                        .resources_dir
+                        .join(format!("roles/{}.yaml", description.roles[0].id)),
+                )
+                .unwrap(),
             )
-            .unwrap(),
-        )
-        .unwrap();
-        let config = &agent["inboundAuthConfig"][0]["config"];
-        assert_eq!(
-            config["grantTypes"],
-            json!([
-                "client_credentials",
-                "urn:ietf:params:oauth:grant-type:token-exchange"
-            ])
-        );
-        // An exchange client admits the provenance claim beside the grant and
-        // requester attributes, so a resource server reading its token can tell
-        // which assertion authority signed the subject token it came from.
-        assert_eq!(
-            config["token"]["accessToken"]["userConfig"]["attributes"],
-            json!(GRANT_ATTRIBUTES
+            .unwrap();
+            let expected: Vec<Value> = description.roles[0]
+                .permissions
                 .iter()
-                .copied()
-                .chain(INSTITUTIONAL_REQUESTER_ATTRIBUTES)
-                .chain(["synthetic_tag", ASSERTION_ISSUER_CLAIM])
-                .collect::<Vec<_>>())
-        );
-        assert_eq!(
-            config["token"]["accessToken"]["clientConfig"]["attributes"],
-            json!(["synthetic_tag"])
-        );
-        let connection = serde_yaml_parse(
-            &fs::read_to_string(
-                rendered
-                    .resources_dir
-                    .join("connections/0197aaaa-0000-7000-8000-0000000000d1.yaml"),
+                .map(|(server, scopes)| json!({"resourceServerId":server,"permissions":scopes}))
+                .collect();
+            assert_eq!(role["permissions"], json!(expected));
+
+            let agent = serde_yaml_parse(
+                &fs::read_to_string(
+                    rendered
+                        .bootstrap_dir
+                        .join("agents/0197aaaa-0000-7000-8000-0000000000a1.yaml"),
+                )
+                .unwrap(),
             )
-            .unwrap(),
-        )
-        .unwrap();
-        assert_eq!(connection["resource_type"], "connection");
-        assert_eq!(connection["tokenExchangeEnabled"], true);
-        assert_eq!(
-            connection["attributeConfiguration"]["user_type_resolution"],
-            json!({"default":"registry-exchange"})
-        );
-        assert_eq!(
-            connection["attributeConfiguration"]["user_type_attribute_mappings"][0]["attributes"],
-            json!([
-                {"external_attribute":"iss","local_attribute":ASSERTION_ISSUER_CLAIM},
-                {"external_attribute":"iss","local_attribute":"registry_grant_source_issuer"},
-                {"external_attribute":"evidence_audience","local_attribute":"evidence_audience"},
-                {"external_attribute":"evidence_tags","local_attribute":"evidence_tags"},
-            ])
-        );
-        let schema: Value = serde_yaml_parse(&rendered.agent_type_document).unwrap();
-        assert_eq!(schema["schema"]["evidence_audience"]["type"], "string");
-        assert_eq!(schema["schema"]["evidence_tags"]["type"], "array");
-        assert_eq!(schema["schema"]["evidence_tags"]["items"]["type"], "string");
-        assert!(
-            render(&description).is_err(),
-            "a second render must not overwrite session resources"
-        );
-        fs::remove_dir_all(&description.state_root).unwrap();
+            .unwrap();
+            let config = &agent["inboundAuthConfig"][0]["config"];
+            assert_eq!(
+                config["grantTypes"],
+                json!([
+                    "client_credentials",
+                    "urn:ietf:params:oauth:grant-type:token-exchange"
+                ])
+            );
+            // An exchange client admits the provenance claim beside the grant and
+            // requester attributes, so a resource server reading its token can tell
+            // which assertion authority signed the subject token it came from.
+            assert_eq!(
+                config["token"]["accessToken"]["userConfig"]["attributes"],
+                json!(GRANT_ATTRIBUTES
+                    .iter()
+                    .copied()
+                    .chain(INSTITUTIONAL_REQUESTER_ATTRIBUTES)
+                    .chain(["synthetic_tag", ASSERTION_ISSUER_CLAIM])
+                    .collect::<Vec<_>>())
+            );
+            assert_eq!(
+                config["token"]["accessToken"]["clientConfig"]["attributes"],
+                json!(["synthetic_tag"])
+            );
+            let connection = serde_yaml_parse(
+                &fs::read_to_string(
+                    rendered
+                        .resources_dir
+                        .join("connections/0197aaaa-0000-7000-8000-0000000000d1.yaml"),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(connection["resource_type"], "connection");
+            assert_eq!(connection["tokenExchangeEnabled"], true);
+            assert_eq!(
+                connection["attributeConfiguration"]["user_type_resolution"],
+                json!({"default":"registry-exchange"})
+            );
+            assert_eq!(
+                connection["attributeConfiguration"]["user_type_attribute_mappings"][0]
+                    ["attributes"],
+                json!([
+                    {"external_attribute":"iss","local_attribute":ASSERTION_ISSUER_CLAIM},
+                    {"external_attribute":"iss","local_attribute":"registry_grant_source_issuer"},
+                    {"external_attribute":"evidence_audience","local_attribute":"evidence_audience"},
+                    {"external_attribute":"evidence_tags","local_attribute":"evidence_tags"},
+                ])
+            );
+            let schema: Value = serde_yaml_parse(&rendered.agent_type_document).unwrap();
+            assert_eq!(schema["schema"]["evidence_audience"]["type"], "string");
+            assert_eq!(schema["schema"]["evidence_tags"]["type"], "array");
+            assert_eq!(schema["schema"]["evidence_tags"]["items"]["type"], "string");
+            assert!(
+                render(&description).is_err(),
+                "a second render must not overwrite session resources"
+            );
+            fs::remove_dir_all(&description.state_root).unwrap();
+        }
     }
 
     #[test]
@@ -899,6 +937,7 @@ mod tests {
         description.machine_clients[0].token_exchange = Some(TokenExchangeClient {
             assertion_resource_server_id: description.resource_servers[0].id.clone(),
             assertion_scope: "evidence:invoke".into(),
+            ordinary_resource_permissions: Vec::new(),
         });
         let rendered = render(&description).unwrap();
         let connection: Value = serde_yaml_parse(
