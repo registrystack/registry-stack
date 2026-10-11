@@ -7401,6 +7401,9 @@ mod tests {
     #[test]
     fn bundle_urls_are_read_through_the_shared_url_type_the_schema_names() {
         let validator = bundle_contract_validator();
+        let baseline = acceptance_fixture();
+        EvidenceConfig::parse_yaml(baseline.as_bytes()).expect("the baseline bundle is valid");
+        assert!(validator.is_valid(&bundle_contract_instance(baseline.as_bytes())));
         for (from, to) in [
             (
                 "publicOrigin: https://evidence.invalid,",
@@ -7426,8 +7429,32 @@ mod tests {
                 "the schema accepted {to}"
             );
         }
-        // The shared OIDC block reads these two as text; validation holds
-        // them to the rule the schema's `Url` states.
+        for url in [
+            r"https://source.invalid\other",
+            r"https://source.invalid/a\b",
+            r"https://source.invalid?x=\y",
+            r"https://source.invalid#\fragment",
+        ] {
+            let replacement = format!("    baseUrl: '{url}'\n");
+            let document = edited(
+                baseline,
+                "    baseUrl: https://source.invalid\n",
+                &replacement,
+            );
+            assert_eq!(decode_cause(&document), "config.invalid-value", "{url}");
+            assert!(
+                !validator.is_valid(&bundle_contract_instance(document.as_bytes())),
+                "the schema accepted a backslash: {url}"
+            );
+        }
+        let encoded = edited(
+            baseline,
+            "      uri: https://identity.invalid/.well-known/jwks.json\n",
+            "      uri: https://identity.invalid/a%5Cb\n",
+        );
+        EvidenceConfig::parse_yaml(encoded.as_bytes()).expect("an encoded path backslash is valid");
+        assert!(validator.is_valid(&bundle_contract_instance(encoded.as_bytes())));
+        // Both shared OIDC fields use the same checked URL type as their schema.
         for (from, to) in [
             (
                 "    issuer: https://identity.invalid\n",
