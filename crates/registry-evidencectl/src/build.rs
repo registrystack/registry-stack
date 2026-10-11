@@ -374,6 +374,43 @@ pub(crate) fn compile_target_fixture_project(
 
 pub(crate) fn local_dev_target_inputs(target: &Path) -> Result<(Value, Value)> {
     let target = read_target_documents(target)?;
+    local_dev_inputs_from_documents(&target)
+}
+
+pub(crate) struct CompiledLocalDevTarget {
+    pub(crate) source_connections: Value,
+    pub(crate) outbound_tls: Value,
+    pub(crate) bundle: Value,
+}
+
+/// Compile and validate the selected local target before its reviewed human
+/// authenticated-context authority is considered for a local rehearsal.
+pub(crate) fn compile_local_dev_target(
+    project: &Path,
+    target: &Path,
+    evidence_bin: &Path,
+) -> Result<CompiledLocalDevTarget> {
+    let target = read_target_documents(target)?;
+    let (source_connections, outbound_tls) = local_dev_inputs_from_documents(&target)?;
+    let staging = tempfile::Builder::new()
+        .prefix("evidencectl-dev-target-")
+        .tempdir()
+        .context("creating private local target validation staging")?;
+    fs::set_permissions(staging.path(), fs::Permissions::from_mode(0o700))
+        .context("sealing private local target validation staging")?;
+    let staging_path = fs::canonicalize(staging.path())
+        .context("resolving private local target validation staging")?;
+    let compiled = compile_with_target(project, &target, &staging_path, evidence_bin, None)?;
+    let bundle = compiled.bundle;
+    make_tree_removable(staging.path())?;
+    Ok(CompiledLocalDevTarget {
+        source_connections,
+        outbound_tls,
+        bundle,
+    })
+}
+
+fn local_dev_inputs_from_documents(target: &TargetDocuments) -> Result<(Value, Value)> {
     if target
         .governed_bundle
         .get("assuranceProfile")

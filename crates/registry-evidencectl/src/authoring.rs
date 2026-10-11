@@ -346,6 +346,56 @@ pub(crate) fn compile_local_project_with_target_inputs_and_resource(
     audience: &str,
     admission: &LocalAdmission,
 ) -> Result<CompiledProject> {
+    compile_local_project_with_target_inputs_resource_and_authority(
+        project_root,
+        staging_root,
+        evidence_bin,
+        ports,
+        source_connections,
+        outbound_tls,
+        audience,
+        admission,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn compile_local_project_with_target_authenticated_context(
+    project_root: &Path,
+    staging_root: &Path,
+    evidence_bin: &Path,
+    ports: LocalServicePorts,
+    source_connections: Value,
+    outbound_tls: Value,
+    audience: &str,
+    admission: &LocalAdmission,
+    compiled_target_bundle: &Value,
+) -> Result<CompiledProject> {
+    compile_local_project_with_target_inputs_resource_and_authority(
+        project_root,
+        staging_root,
+        evidence_bin,
+        ports,
+        source_connections,
+        outbound_tls,
+        audience,
+        admission,
+        Some(compiled_target_bundle),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn compile_local_project_with_target_inputs_resource_and_authority(
+    project_root: &Path,
+    staging_root: &Path,
+    evidence_bin: &Path,
+    ports: LocalServicePorts,
+    source_connections: Value,
+    outbound_tls: Value,
+    audience: &str,
+    admission: &LocalAdmission,
+    compiled_target_bundle: Option<&Value>,
+) -> Result<CompiledProject> {
     LocalServicePorts::new(ports.evidence, ports.issuer)?;
     if !valid_local_audience(audience) {
         bail!("local Evidence resource must be one exact bounded absolute URI");
@@ -359,7 +409,7 @@ pub(crate) fn compile_local_project_with_target_inputs_and_resource(
     let inputs = read_inputs(&project_root, true)?;
     validate_local_dev_sources(&inputs.sources)?;
     let (active_public_jwk_file, active_public_jwk) = local_signing_public_jwk(&project_root)?;
-    let plan = compile_plan_with_connections(
+    let mut plan = compile_plan_with_connections(
         inputs,
         CompileProfile::Local {
             ports,
@@ -370,6 +420,9 @@ pub(crate) fn compile_local_project_with_target_inputs_and_resource(
         },
         source_connections,
     )?;
+    if let Some(target_bundle) = compiled_target_bundle {
+        preserve_target_authenticated_context(&mut plan.bundle, target_bundle)?;
+    }
     let compilation = write_plan(
         &project_root,
         staging_root,
@@ -4017,6 +4070,123 @@ fn render_local_bundle(
         bundle["authentication"]["oidc"]["assertionIssuers"] = json!(admission.assertion_issuers);
     }
     Ok(bundle)
+}
+
+/// Keep one reviewed local target's human subject binding while every other
+/// local authority member remains the compiler's own explicit-request result.
+/// The target has already passed the normal target compiler and Evidence
+/// bundle check before reaching this comparison.
+fn preserve_target_authenticated_context(local: &mut Value, target: &Value) -> Result<()> {
+    if target.get("assuranceProfile").and_then(Value::as_str) != Some("local") {
+        bail!("preserving target authenticated context requires local assurance");
+    }
+    for member in ["allowedClients", "assertionIssuers"] {
+        if target.pointer(&format!("/authentication/oidc/{member}"))
+            != local.pointer(&format!("/authentication/oidc/{member}"))
+        {
+            bail!("the target {member} must exactly match the borrowed issuer admission");
+        }
+    }
+    let selector_profiles = local
+        .get("selectorProfiles")
+        .and_then(Value::as_object)
+        .context("compiled local bundle has no selector profiles")?;
+    let local_profiles = local
+        .get("authorityProfiles")
+        .and_then(Value::as_object)
+        .context("compiled local bundle has no authority profiles")?;
+    let target_profiles = target
+        .get("authorityProfiles")
+        .and_then(Value::as_object)
+        .context("compiled target bundle has no authority profiles")?;
+    if local_profiles.len() != target_profiles.len() {
+        bail!("the target authority profile count differs from the authored local access policies");
+    }
+
+    let mut normalized = Value::Object(target_profiles.clone());
+    for profile in normalized
+        .as_object_mut()
+        .expect("target authority profiles remain a mapping")
+        .values_mut()
+    {
+        if profile.get("kind").and_then(Value::as_str) != Some("explicit-request") {
+            bail!("preserved target authority profiles must be explicit-request profiles");
+        }
+        let grants = profile
+            .get_mut("grants")
+            .and_then(Value::as_array_mut)
+            .context("preserved target authority profile has no grants")?;
+        for grant in grants {
+            let subjects = grant
+                .get_mut("subjects")
+                .and_then(Value::as_array_mut)
+                .context("preserved target authority grant has no subjects")?;
+            for subject in subjects {
+                if subject.get("valueOrigin").and_then(Value::as_str)
+                    != Some("authenticated-context")
+                {
+                    bail!("preserved target authority must use authenticated-context for every subject");
+                }
+                let profile_name = subject
+                    .get("selectorProfile")
+                    .and_then(Value::as_str)
+                    .context("preserved target authority subject has no selector profile")?;
+                let expected_fields = selector_profiles
+                    .get(profile_name)
+                    .and_then(|profile| profile.get("fields"))
+                    .and_then(Value::as_object)
+                    .context("preserved target authority names an unknown selector profile")?
+                    .keys()
+                    .collect::<BTreeSet<_>>();
+                let claims = subject
+                    .get("valueClaims")
+                    .and_then(Value::as_object)
+                    .context("authenticated-context subject needs exact valueClaims")?;
+                if claims.keys().collect::<BTreeSet<_>>() != expected_fields
+                    || claims
+                        .values()
+                        .any(|claim| claim.as_str().is_none_or(str::is_empty))
+                {
+                    bail!(
+                        "authenticated-context valueClaims must cover the exact selector field set"
+                    );
+                }
+                subject["valueOrigin"] = json!("request");
+                subject
+                    .as_object_mut()
+                    .expect("authority subject remains a mapping")
+                    .remove("valueClaims");
+            }
+        }
+    }
+    let normalized = normalized
+        .as_object()
+        .expect("normalized target authority profiles remain a mapping");
+    let mut matched = BTreeSet::new();
+    for target_profile in normalized.values() {
+        let requester_tags = target_profile
+            .get("requesterTags")
+            .and_then(Value::as_array)
+            .filter(|tags| tags.len() == 1)
+            .context("preserved target authority profile needs one exact requester tag")?;
+        let requester_tag = requester_tags[0]
+            .as_str()
+            .context("preserved target authority requester tag is not a string")?;
+        let candidates = local_profiles
+            .iter()
+            .filter(|(_, local_profile)| {
+                local_profile.get("requesterTags") == Some(&json!([requester_tag]))
+            })
+            .collect::<Vec<_>>();
+        if candidates.len() != 1 || target_profile != candidates[0].1 {
+            bail!("the target authority differs from the compiled local access policy beyond its reviewed profile name and authenticated-context value claims");
+        }
+        if !matched.insert(candidates[0].0) {
+            bail!("two target authority profiles carry one compiled local requester tag");
+        }
+    }
+    local["authorityProfiles"] = Value::Object(target_profiles.clone());
+    Ok(())
 }
 
 fn local_resource_identity(audience: &str, role: &str) -> String {
@@ -7722,6 +7892,177 @@ factSchema: schemas/source-facts.schema.yaml
             compile_local_project(&live.project, &live.staging, Path::new(&evidence_bin))
                 .expect("real Evidence binary accepts the task-grant bundle");
         }
+    }
+
+    #[test]
+    fn preserved_target_authenticated_context_is_the_only_local_authority_delta() {
+        fn generated() -> Value {
+            json!({
+                "assuranceProfile": "local",
+                "authentication": {"oidc": {
+                    "allowedClients": ["citizen-download"],
+                    "assertionIssuers": {"citizen-download": ["https://app.invalid"]},
+                }},
+                "selectorProfiles": {
+                    "person-reference": {"fields": {"person-reference": {"type": "string"}}},
+                    "registration-number": {"fields": {"registration-number": {"type": "string"}}},
+                },
+                "authorityProfiles": {"citizen-record-holder": {
+                    "kind": "explicit-request",
+                    "requesterTags": ["policy-v1-example"],
+                    "grants": [{
+                        "requirement": "urn:example:requirement",
+                        "purpose": "download",
+                        "audienceFrom": "authenticated-requester",
+                        "responseFormats": ["signed-jws"],
+                        "subjects": [
+                            {"role": "person", "selectorProfile": "person-reference", "valueOrigin": "request"},
+                            {"role": "record", "selectorProfile": "registration-number", "valueOrigin": "request"},
+                        ],
+                    }],
+                }},
+            })
+        }
+        fn target() -> Value {
+            let mut target = generated();
+            let subjects = target["authorityProfiles"]["citizen-record-holder"]["grants"][0]
+                ["subjects"]
+                .as_array_mut()
+                .unwrap();
+            subjects[0]["valueOrigin"] = json!("authenticated-context");
+            subjects[0]["valueClaims"] = json!({"person-reference": "identity.person_reference"});
+            subjects[1]["valueOrigin"] = json!("authenticated-context");
+            subjects[1]["valueClaims"] =
+                json!({"registration-number": "identity.record_reference"});
+            target
+        }
+
+        let mut local = generated();
+        let reviewed = target();
+        preserve_target_authenticated_context(&mut local, &reviewed)
+            .expect("the exact reviewed human binding is preserved");
+        assert_eq!(local["authorityProfiles"], reviewed["authorityProfiles"]);
+
+        let mut local = generated();
+        let mut reviewed_name = target();
+        let profile = reviewed_name["authorityProfiles"]
+            .as_object_mut()
+            .unwrap()
+            .remove("citizen-record-holder")
+            .unwrap();
+        reviewed_name["authorityProfiles"]["reviewed-citizen-name"] = profile;
+        preserve_target_authenticated_context(&mut local, &reviewed_name)
+            .expect("the reviewed profile name is retained through its exact requester tag");
+        assert!(local["authorityProfiles"]
+            .get("reviewed-citizen-name")
+            .is_some());
+
+        type RefusedMutation = (&'static str, Box<dyn Fn(&mut Value)>);
+        let cases: Vec<RefusedMutation> = vec![
+            (
+                "allowed client",
+                Box::new(|value| {
+                    value["authentication"]["oidc"]["allowedClients"] = json!(["other"])
+                }),
+            ),
+            (
+                "assertion issuer",
+                Box::new(|value| {
+                    value["authentication"]["oidc"]["assertionIssuers"] =
+                        json!({"citizen-download": ["https://other.invalid"]})
+                }),
+            ),
+            (
+                "extra profile",
+                Box::new(|value| {
+                    value["authorityProfiles"]["other"] =
+                        value["authorityProfiles"]["citizen-record-holder"].clone();
+                }),
+            ),
+            (
+                "requester tag",
+                Box::new(|value| {
+                    value["authorityProfiles"]["citizen-record-holder"]["requesterTags"] =
+                        json!(["other"])
+                }),
+            ),
+            (
+                "claim keys",
+                Box::new(|value| {
+                    value["authorityProfiles"]["citizen-record-holder"]["grants"][0]["subjects"]
+                        [0]["valueClaims"] = json!({"other": "identity.person_reference"})
+                }),
+            ),
+            (
+                "extra grant",
+                Box::new(|value| {
+                    let extra =
+                        value["authorityProfiles"]["citizen-record-holder"]["grants"][0].clone();
+                    value["authorityProfiles"]["citizen-record-holder"]["grants"]
+                        .as_array_mut()
+                        .unwrap()
+                        .push(extra);
+                }),
+            ),
+            (
+                "mixed origin",
+                Box::new(|value| {
+                    value["authorityProfiles"]["citizen-record-holder"]["grants"][0]["subjects"]
+                        [1]["valueOrigin"] = json!("request")
+                }),
+            ),
+        ];
+        for (name, mutate) in cases {
+            let mut local = generated();
+            let mut reviewed = target();
+            mutate(&mut reviewed);
+            assert!(
+                preserve_target_authenticated_context(&mut local, &reviewed).is_err(),
+                "{name} drift was preserved"
+            );
+            assert_eq!(local, generated(), "{name} refusal changed local authority");
+        }
+    }
+
+    #[test]
+    fn local_compile_seals_the_preserved_authenticated_context_binding() {
+        let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
+        compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
+            .expect("compile generated request-origin baseline");
+        let mut target: Value = serde_norway::from_slice(
+            &fs::read(fixture.staging.join("bundle/evidence.yaml")).unwrap(),
+        )
+        .unwrap();
+        let subject =
+            &mut target["authorityProfiles"][AUTHORITY_PROFILE_ID]["grants"][0]["subjects"][0];
+        subject["valueOrigin"] = json!("authenticated-context");
+        subject["valueClaims"] = json!({"person_id": "identity.person_reference"});
+
+        let preserved_staging = fixture.project.parent().unwrap().join("preserved-staging");
+        fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&preserved_staging)
+            .unwrap();
+        compile_local_project_with_target_authenticated_context(
+            &fixture.project,
+            &preserved_staging,
+            &fixture.evidence,
+            LocalServicePorts::default(),
+            json!({}),
+            json!({"systemRoots": true, "trustProfiles": {}}),
+            LOCAL_AUDIENCE,
+            &LocalAdmission::default(),
+            &target,
+        )
+        .expect("compile and seal reviewed authenticated context");
+        let compiled: Value = serde_norway::from_slice(
+            &fs::read(preserved_staging.join("bundle/evidence.yaml")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            compiled["authorityProfiles"][AUTHORITY_PROFILE_ID]["grants"][0]["subjects"][0],
+            target["authorityProfiles"][AUTHORITY_PROFILE_ID]["grants"][0]["subjects"][0]
+        );
     }
 
     #[test]

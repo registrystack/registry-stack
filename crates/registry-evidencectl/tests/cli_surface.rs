@@ -91,6 +91,45 @@ fn progressive_request_preparation_accepts_no_caller_supplied_selector() {
         .expect("the published contract decides whether request-origin selectors are required");
 }
 
+#[test]
+fn preserved_target_context_requires_the_target_and_borrowed_issuer() {
+    for incomplete in [
+        vec!["--preserve-target-authenticated-context"],
+        vec![
+            "--preserve-target-authenticated-context",
+            "--target",
+            "target",
+        ],
+        vec![
+            "--preserve-target-authenticated-context",
+            "--issuer-project",
+            "issuer",
+        ],
+    ] {
+        let mut arguments = vec!["evidencectl", "dev", "start", "project"];
+        arguments.extend(incomplete);
+        assert!(
+            registry_evidencectl::command()
+                .try_get_matches_from(arguments)
+                .is_err(),
+            "incomplete preserved-context selection was accepted"
+        );
+    }
+    registry_evidencectl::command()
+        .try_get_matches_from([
+            "evidencectl",
+            "dev",
+            "start",
+            "project",
+            "--preserve-target-authenticated-context",
+            "--target",
+            "target",
+            "--issuer-project",
+            "issuer",
+        ])
+        .expect("the complete explicit selection is accepted");
+}
+
 fn evidencectl(arguments: &[&str]) -> String {
     let output = Command::new(env!("CARGO_BIN_EXE_evidencectl"))
         .args(arguments)
