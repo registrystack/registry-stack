@@ -777,7 +777,7 @@ jobs:
       # Native client packages are self-contained. aws-lc-fips-sys otherwise
       # defaults to a build-directory dylib on macOS.
       AWS_LC_FIPS_SYS_STATIC: "1"
-      NODE_GLIBC_BASELINE_IMAGE: node:22.12.0-bullseye-slim@sha256:52e4282a01d63eb4cfce7a395364d366cee488c278079110d3aa49dd21b2bf18
+      NODE_RUNTIME_SMOKE_IMAGE: registry.access.redhat.com/ubi8/nodejs-22-minimal:1-1791478428@sha256:d8eb7fb50c650455750f30a7250a8b5498cd2881bfa8eaf170490ad66504511c
     permissions:
       contents: read
     strategy:
@@ -817,11 +817,25 @@ jobs:
           go-version: 1.24.4
           cache: false
 
+      - name: Setup minimum Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22.12.0
+          package-manager-cache: false
+
+      - name: Retain minimum Node runtime for package smokes
+        shell: bash
+        run: |
+          minimum_node_bin="$(command -v node)"
+          [[ "${minimum_node_bin}" == /* ]]
+          test "$("${minimum_node_bin}" --version)" = v22.12.0
+          printf 'MINIMUM_NODE_BIN=%s\n' "${minimum_node_bin}" >> "${GITHUB_ENV}"
+
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          # napi-rs CLI 3.8.2 requires Node 22.13 or later. Runtime compatibility
-          # remains independently proven on the pinned Node 22.12 image below.
+          # napi-rs CLI 3.8.2 requires Node 22.13 or later. Package smokes
+          # independently exercise the retained minimum Node 22.12 runtime.
           node-version: 22.20.0
           cache: npm
           cache-dependency-path: |
@@ -1222,17 +1236,19 @@ jobs:
               cp "${GITHUB_WORKSPACE}/release/scripts/smoke-registry-client-package.js" \
                 "${GITHUB_WORKSPACE}/release/scripts/smoke-registry-client-package.mjs" .
               node smoke-registry-client-package.js
+              "${MINIMUM_NODE_BIN}" smoke-registry-client-package.js
               node smoke-registry-client-package.mjs
+              "${MINIMUM_NODE_BIN}" smoke-registry-client-package.mjs
               if [[ "${RUNNER_OS}" == Linux ]]; then
                 docker run --rm --network none \
                   --volume "${smoke}:${smoke}:ro" \
                   --workdir "${smoke}" \
-                  "${NODE_GLIBC_BASELINE_IMAGE}" \
+                  "${NODE_RUNTIME_SMOKE_IMAGE}" \
                 node smoke-registry-client-package.js
                 docker run --rm --network none \
                   --volume "${smoke}:${smoke}:ro" \
                   --workdir "${smoke}" \
-                  "${NODE_GLIBC_BASELINE_IMAGE}" \
+                  "${NODE_RUNTIME_SMOKE_IMAGE}" \
                 node smoke-registry-client-package.mjs
               fi
             )
@@ -1290,13 +1306,14 @@ jobs:
               fi
               cp "${GITHUB_WORKSPACE}/release/scripts/smoke-${client}-client-package.js" .
               node "smoke-${client}-client-package.js"
+              "${MINIMUM_NODE_BIN}" "smoke-${client}-client-package.js"
               if [[ "${RUNNER_OS}" == Linux ]]; then
-                # Prove the root package loader and native addon on Debian 11
-                # (glibc 2.31), not only on the Ubuntu 24.04 build host.
+                # Prove package loading on supported UBI 8 (glibc 2.28).
+                # The builder's ELF check separately holds GLIBC_2.17.
                 docker run --rm --network none \
                   --volume "${smoke}:${smoke}:ro" \
                   --workdir "${smoke}" \
-                  "${NODE_GLIBC_BASELINE_IMAGE}" \
+                  "${NODE_RUNTIME_SMOKE_IMAGE}" \
                   node "smoke-${client}-client-package.js"
               fi
             )

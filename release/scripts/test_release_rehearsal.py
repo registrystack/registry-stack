@@ -341,6 +341,34 @@ class ReleaseRehearsalTest(unittest.TestCase):
             clients["strategy"]["matrix"]["include"],
         )
         self.assertEqual("Checkout prepared branch", clients["steps"][0]["name"])
+        minimum_node = next(
+            step for step in clients["steps"]
+            if step.get("name") == "Setup minimum Node runtime"
+        )
+        build_node = next(
+            step for step in clients["steps"] if step.get("name") == "Setup Node"
+        )
+        self.assertEqual(minimum_node["with"]["node-version"], "22.12.0")
+        self.assertFalse(minimum_node["with"]["package-manager-cache"])
+        self.assertEqual(build_node["with"]["node-version"], "22.20.0")
+        retain_minimum = next(
+            step["run"] for step in clients["steps"]
+            if step.get("name") == "Retain minimum Node runtime for package smokes"
+        )
+        self.assertIn('minimum_node_bin="$(command -v node)"', retain_minimum)
+        self.assertIn('[[ "${minimum_node_bin}" == /* ]]', retain_minimum)
+        self.assertIn('test "$("${minimum_node_bin}" --version)" = v22.12.0', retain_minimum)
+        self.assertIn("MINIMUM_NODE_BIN=%s\\n", retain_minimum)
+        self.assertIn('"${GITHUB_ENV}"', retain_minimum)
+        step_names = [step.get("name") for step in clients["steps"]]
+        ordered_steps = (
+            "Setup minimum Node runtime",
+            "Retain minimum Node runtime for package smokes",
+            "Setup Node",
+            "Build, package, and smoke Linux Node clients",
+        )
+        for earlier, later in zip(ordered_steps, ordered_steps[1:]):
+            self.assertLess(step_names.index(earlier), step_names.index(later))
         setup_go = next(
             step
             for step in clients["steps"]
@@ -402,10 +430,32 @@ class ReleaseRehearsalTest(unittest.TestCase):
         self.assertLess(build.index(host_smoke), build.index(docker_smoke))
         self.assertIn("node smoke-registry-client-package.js", build)
         self.assertIn("node smoke-registry-client-package.mjs", build)
-        self.assertIn('"${NODE_GLIBC_BASELINE_IMAGE}"', build)
+        for script in (
+            "smoke-registry-client-package.js",
+            "smoke-registry-client-package.mjs",
+            '"smoke-${client}-client-package.js"',
+        ):
+            minimum_smoke = f'"${{MINIMUM_NODE_BIN}}" {script}'
+            self.assertIn(minimum_smoke, build)
+            container_smoke = re.search(
+                r'"\$\{NODE_RUNTIME_SMOKE_IMAGE\}" \\\n\s+node ' + re.escape(script),
+                build,
+            )
+            self.assertIsNotNone(container_smoke)
+            self.assertLess(build.index(minimum_smoke), container_smoke.start())
+        self.assertIn('"${NODE_RUNTIME_SMOKE_IMAGE}"', build)
         self.assertRegex(
-            clients["env"]["NODE_GLIBC_BASELINE_IMAGE"],
-            r"^node:22\.12\.0-bullseye-slim@sha256:[0-9a-f]{64}$",
+            clients["env"]["NODE_RUNTIME_SMOKE_IMAGE"],
+            r"^registry\.access\.redhat\.com/ubi8/nodejs-22-minimal:1-[0-9]+@sha256:[0-9a-f]{64}$",
+        )
+        candidate = yaml.safe_load(
+            (ROOT / ".github/workflows/release-candidate.yml").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(
+            clients["env"]["NODE_RUNTIME_SMOKE_IMAGE"],
+            candidate["jobs"]["clients"]["env"]["NODE_RUNTIME_SMOKE_IMAGE"],
         )
         for forbidden in (
             "--use-napi-cross",

@@ -962,6 +962,29 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
             step for step in clients["steps"] if step.get("name") == "Setup Node"
         )
         self.assertEqual(setup_node["with"]["node-version"], "22.20.0")
+        minimum_node = next(
+            step for step in clients["steps"]
+            if step.get("name") == "Setup minimum Node runtime"
+        )
+        self.assertEqual(minimum_node["with"]["node-version"], "22.12.0")
+        self.assertFalse(minimum_node["with"]["package-manager-cache"])
+        retain_minimum = step_run(
+            document, "clients", "Retain minimum Node runtime for package smokes"
+        )
+        self.assertIn('minimum_node_bin="$(command -v node)"', retain_minimum)
+        self.assertIn('[[ "${minimum_node_bin}" == /* ]]', retain_minimum)
+        self.assertIn('test "$("${minimum_node_bin}" --version)" = v22.12.0', retain_minimum)
+        self.assertIn("MINIMUM_NODE_BIN=%s\\n", retain_minimum)
+        self.assertIn('"${GITHUB_ENV}"', retain_minimum)
+        step_names = [step.get("name") for step in clients["steps"]]
+        ordered_steps = (
+            "Setup minimum Node runtime",
+            "Retain minimum Node runtime for package smokes",
+            "Setup Node",
+            "Smoke Node client packages",
+        )
+        for earlier, later in zip(ordered_steps, ordered_steps[1:]):
+            self.assertLess(step_names.index(earlier), step_names.index(later))
         cargo_cache = next(
             step
             for step in clients["steps"]
@@ -1199,14 +1222,30 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         self.assertIn("platform_package", node_smoke)
         self.assertIn('packages=("${root_package}" "${platform_package}")', node_smoke)
         self.assertIn("docker run --rm --network none", node_smoke)
-        self.assertIn('"${NODE_GLIBC_BASELINE_IMAGE}"', node_smoke)
+        for script in (
+            "smoke-registry-client-package.js",
+            "smoke-registry-client-package.mjs",
+            '"smoke-${client}-client-package.js"',
+        ):
+            minimum_smoke = f'"${{MINIMUM_NODE_BIN}}" {script}'
+            self.assertIn(minimum_smoke, node_smoke)
+            container_smoke = re.search(
+                r'"\$\{NODE_RUNTIME_SMOKE_IMAGE\}" \\\n\s+node ' + re.escape(script),
+                node_smoke,
+            )
+            self.assertIsNotNone(container_smoke)
+            self.assertLess(
+                node_smoke.index(minimum_smoke),
+                container_smoke.start(),
+            )
+        self.assertIn('"${NODE_RUNTIME_SMOKE_IMAGE}"', node_smoke)
         self.assertIn(
-            '"${NODE_GLIBC_BASELINE_IMAGE}" \\\n'
+            '"${NODE_RUNTIME_SMOKE_IMAGE}" \\\n'
             "      node smoke-registry-client-package.js",
             node_smoke,
         )
         self.assertIn(
-            '"${NODE_GLIBC_BASELINE_IMAGE}" \\\n'
+            '"${NODE_RUNTIME_SMOKE_IMAGE}" \\\n'
             "      node smoke-registry-client-package.mjs",
             node_smoke,
         )
@@ -1214,9 +1253,9 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
             node_smoke.index("node smoke-registry-client-package.mjs"),
             node_smoke.index(unified_root_copy),
         )
-        baseline = clients["env"]["NODE_GLIBC_BASELINE_IMAGE"]
+        baseline = clients["env"]["NODE_RUNTIME_SMOKE_IMAGE"]
         self.assertRegex(
-            baseline, r"^node:22\.12\.0-bullseye-slim@sha256:[0-9a-f]{64}$"
+            baseline, r"^registry\.access\.redhat\.com/ubi8/nodejs-22-minimal:1-[0-9]+@sha256:[0-9a-f]{64}$"
         )
         self.assertIn("-maxdepth 1 -name '*.node'", node_smoke)
         self.assertIn("node_modules/@registrystack/${client}-client-", node_smoke)
