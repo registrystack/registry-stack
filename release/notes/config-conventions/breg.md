@@ -2098,6 +2098,29 @@ To migrate a registry project, for each entry under `statisticalDatasets`:
 5. Run `bregctl check`, then `bregctl explain access` and compare
    `statisticalDatasets` with the grants you removed.
 
+### BREAKING: a standing agent profile cannot hold `publish`
+
+A standing agent profile, one that declares `actorKind: agent` and no
+`taskGrant`, is refused when it holds `publish` on a statistical dataset.
+Publishing a release and withdrawing one commit at once, with no draft for a
+person to confirm, so they join the lifecycle operations, direct writes, and
+immediate actions such a profile already cannot hold.
+
+| Code | Path | When |
+|---|---|---|
+| `breg.access-profile.standing-agent-publish-forbidden` | `project.accessProfiles[id=<profile>].permissions.datasets[dataset=<dataset>].operations` | The project profile holding `publish` is a standing agent |
+| `breg.access-profile.standing-agent-publish-forbidden` | `entities[id=<unit>].accessProfiles[id=<profile>]` | A module contributes the unit entity profile of the publisher's id, and that profile is a standing agent |
+
+Publication and withdrawal are authorized through the publisher's profile on
+the dataset's unit entity, which is why the second row exists. `read-live`
+and `read-releases` stay available to a standing agent, and a publisher that
+declares `actorKind: human`, `actorKind: service`, or no `actorKind` compiles
+as before.
+
+Migrate by moving `publish` to a profile a person or a service uses
+directly. No alias is provided, and no runtime check is added: a package
+that compiles serves publication as it did.
+
 ### BREAKING: an action permission takes no `rowBoundaries`
 
 An access-profile permission that names an `action` is refused when it also

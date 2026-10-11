@@ -102,9 +102,9 @@ Neither the model's instructions nor a tool argument can widen that decision.
   grant is admitted only to a standing agent profile, an agent profile with no task grant. The
   BReg compiler refuses such a profile when it holds `submit-request`, `revise-request`,
   `cancel-request`, or `apply-request`, when it holds `create` or `patch` on an entity without a
-  change request, when it holds `import`, `tombstone`, or `batch` on any entity, and when it holds
-  any action permission. The gateway's own lint configuration also disallows the client methods
-  that would reach further.
+  change request, when it holds `import`, `tombstone`, or `batch` on any entity, when it holds
+  any action permission, and when it holds `publish` on a statistical dataset. The gateway's own
+  lint configuration also disallows the client methods that would reach further.
 - The agent's drafts point at the citizen's own record. The gateway writes a draft's target from
   the single record BReg lists for the delegated token, the citizen's own linked record in the
   reference project, and its owner from the subject of the chat host's verified token. It refuses
@@ -152,7 +152,9 @@ property with its enforcement point.
     crates/registry-breg/tests/standing_agent_ceiling.rs,
     standing_agent_cannot_hold_a_request_lifecycle_operation,
     standing_agent_cannot_hold_a_direct_target_mutation,
-    standing_agent_cannot_hold_an_immediate_action;
+    standing_agent_cannot_hold_an_immediate_action,
+    standing_agent_cannot_publish_a_statistical_release;
+    crates/registry-breg/src/compiler/statistics.rs, compile();
     crates/registry-breg-mcp/clippy.toml; products/breg/scripts/check-mcp-gateway-boundary.sh;
     crates/registry-breg-review/src/pages.rs, submit(), execute_lifecycle_action;
     crates/registry-breg-review/src/registry.rs, load(), get_record;

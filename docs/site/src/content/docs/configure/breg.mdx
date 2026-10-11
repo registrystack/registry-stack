@@ -134,14 +134,16 @@ actor kinds. A token that acts for someone else, carrying a trusted `act` claim,
 only a profile that declares `actorKind: agent` admits it. Such a profile without a `taskGrant` is a
 standing agent: it may read and author change-request drafts, and `check` refuses it any lifecycle
 operation with `breg.access-profile.standing-agent-operation-forbidden`, any direct write with
-`breg.access-profile.standing-agent-direct-mutation-forbidden`, and any immediate action with
-`breg.access-profile.standing-agent-action-forbidden`. The person submits each draft through a profile
+`breg.access-profile.standing-agent-direct-mutation-forbidden`, any immediate action with
+`breg.access-profile.standing-agent-action-forbidden`, and `publish` on a statistical dataset with
+`breg.access-profile.standing-agent-publish-forbidden`. The person submits each draft through a profile
 they use directly.<DocsetProduct product="registry-breg-services"> The
 [citizen chat assistant](../../configure/breg-mcp/) is built on such a profile.</DocsetProduct>
 
 {/* Evidence: crates/registry-breg/src/auth.rs, RegistryAuthenticator::authenticate();
     crates/registry-breg/src/api/mod.rs, authorize_profile_claims();
-    crates/registry-breg/src/compiler.rs. */}
+    crates/registry-breg/src/compiler.rs;
+    crates/registry-breg/src/compiler/statistics.rs, compile(). */}
 
 Identifiers follow a closed grammar: a lowercase ASCII letter first, then lowercase letters, digits, hyphens, or underscores, at most 64 bytes.
 `check` refuses anything else where it reads the file, as `config.invalid-value` at the line of the `id`, so an event id such as `record.status.changed` fails where `record-status-changed-v1` passes.

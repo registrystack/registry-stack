@@ -56,7 +56,7 @@ accessProfiles:
           operations: [read-releases]
 ```
 
-A dataset permission holds `dataset` and `operations` only. `read-live` reads exact live counts, `publish` publishes and withdraws releases, and `read-releases` reads released documents. Exactly one profile may hold `publish` on a dataset. When a dataset has a publisher, the publisher and every `read-live` profile also write `read-releases`, because the release routes serve them; `bregctl check` refuses the project otherwise and names the profile. `read-releases` on a dataset nobody publishes is refused the same way.
+A dataset permission holds `dataset` and `operations` only. `read-live` reads exact live counts, `publish` publishes and withdraws releases, and `read-releases` reads released documents. Exactly one profile may hold `publish` on a dataset, and a standing agent profile, one with `actorKind: agent` and no `taskGrant`, cannot hold it: `bregctl check` refuses the project with `breg.access-profile.standing-agent-publish-forbidden`. Give `publish` to a profile a person or a service uses directly. When a dataset has a publisher, the publisher and every `read-live` profile also write `read-releases`, because the release routes serve them; `bregctl check` refuses the project otherwise and names the profile. `read-releases` on a dataset nobody publishes is refused the same way.
 
 The publisher and every `read-live` profile also need an ordinary `list` permission with `allowCount: true`, readable and filterable dataset fields, and, for the publisher, caller-independent visibility on every source dependency. A profile that only holds `read-releases` needs no record permission: its dataset grant authorizes released statistics without granting record access. Run `bregctl explain access` to see, per dataset, which profiles hold each operation. Review [disclosure risks](../../explanation/breg-statistical-datasets/) before choosing dimensions and release cadence.
 
@@ -69,7 +69,10 @@ bregctl check ./facility
 Resolve a refused declaration before packaging. In particular, remove claim-bound source policies from a publisher, or grant only `read-live` when the population must depend on the caller. Package and apply the project using [deploy a registry](../../operate/breg/).
 
 {/* Evidence: products/breg/acceptance/facility/registry.yaml;
-    crates/registry-breg/src/compiler/statistics.rs. */}
+    crates/registry-breg/src/compiler/statistics.rs;
+    crates/registry-breg/tests/standing_agent_ceiling.rs,
+    standing_agent_cannot_publish_a_statistical_release,
+    standing_agent_may_read_statistical_counts_and_releases. */}
 
 ## Publish an ended period
 
