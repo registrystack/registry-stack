@@ -157,7 +157,7 @@ A deprecation lasts at least one minor release. There is no time floor; a later 
 policy may lengthen the window and never shortens it. During the window:
 
 - the product's `check` command, or `registry-manifest validate` for Registry Manifest, reports
-  deprecated keys
+  the deprecated version as a warning
 - HTTP responses carry `Deprecation` and `Sunset` headers (RFC 9745 and RFC 8594), and the OpenAPI
   document marks the route or field `deprecated: true`
 - the release note carries a `Deprecated` entry naming the surface, its replacement, the earliest
