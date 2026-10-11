@@ -1415,33 +1415,45 @@
     },
     "TaskGrantStatusConfig": {
       "additionalProperties": false,
+      "description": "One task authority whose grants a runtime checks for fresh status, and the\nruntime's own credentials for that check, written as one entry of\n`taskGrantStatus`. The status route and scope default to Casework's.",
       "properties": {
         "baseUrl": {
           "$ref": "#/$defs/Url",
-          "description": "The Casework base URL the status check calls. It is `https`; `http`\nis accepted only for a loopback host, for local development."
+          "description": "The authority's base URL the status check calls. It is `https`;\n`http` is accepted only for a loopback host, for local development."
         },
         "caBundleRef": {
           "$ref": "#/$defs/SecretReference",
-          "description": "PEM CA bundle for Casework and its token endpoint. Omitted, the\nplatform's trusted roots verify them."
+          "description": "PEM CA bundle for the authority and its token endpoint. Omitted, the\nplatform's trusted roots verify them."
         },
         "caseworkResource": {
-          "type": "string"
+          "$ref": "#/$defs/ExternalId",
+          "description": "The audience the runtime requests its status credential for, an\nabsolute resource URI."
         },
         "clientAssertionAudience": {
-          "type": "string"
+          "$ref": "#/$defs/ExternalId"
         },
         "clientId": {
-          "type": "string"
+          "$ref": "#/$defs/ExternalId"
         },
         "privateKeyRef": {
           "$ref": "#/$defs/SecretReference"
         },
         "sourceIssuer": {
-          "$ref": "#/$defs/Url",
-          "description": "The Casework task authority's issuer, exactly as Casework states it.\n`http` and `https` are both accepted, since the value is compared, not\nfetched."
+          "$ref": "#/$defs/ExternalId",
+          "description": "The task authority's issuer, exactly as the authority states it,\nincluding an absolute URN issuer. It is compared rather than fetched\nand must be an absolute resource URI."
+        },
+        "statusPath": {
+          "default": "/v1/task-grants/{grantId}/status",
+          "description": "The status route appended to `baseUrl`'s path. It starts with `/` and\nhas exactly one whole `{grantId}` segment; every other segment uses\nonly letters, digits, `-`, `.`, `_`, and `~`. Omitted,\n`/v1/task-grants/{grantId}/status`.",
+          "type": "string"
+        },
+        "statusScope": {
+          "$ref": "#/$defs/ExternalId",
+          "default": "casework:grants:status",
+          "description": "The one scope the runtime requests its status credential with.\nOmitted, `casework:grants:status`."
         },
         "tokenEndpoint": {
-          "type": "string"
+          "$ref": "#/$defs/Url"
         }
       },
       "required": [

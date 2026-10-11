@@ -804,3 +804,80 @@ fn a_secret_failure_names_the_member_and_never_the_reference() {
         assert!(!sentence.contains("reference-canary"), "{sentence}");
     }
 }
+
+const TASK_GRANT_STATUS: &str = "sourceIssuer: urn:authority:source\n\
+baseUrl: https://authority.example.test\n\
+tokenEndpoint: https://identity.example.test/oauth2/token\n\
+clientAssertionAudience: https://identity.example.test\n\
+clientId: status-client\n\
+privateKeyRef: secret:file/status-key\n\
+caseworkResource: urn:authority:status\n";
+
+#[test]
+fn task_grant_status_defaults_to_the_casework_route_and_scope_and_accepts_operator_values() {
+    let defaults: TaskGrantStatusConfig = read_block(TASK_GRANT_STATUS).unwrap();
+    assert_eq!(defaults.source_issuer.as_str(), "urn:authority:source");
+    assert_eq!(defaults.casework_resource.as_str(), "urn:authority:status");
+    assert_eq!(defaults.status_scope.as_str(), "casework:grants:status");
+    assert_eq!(defaults.status_path, "/v1/task-grants/{grantId}/status");
+    assert_eq!(defaults.ca_bundle_ref, None);
+
+    let configured: TaskGrantStatusConfig = read_block(&format!(
+        "{TASK_GRANT_STATUS}statusScope: grants:status\n\
+         statusPath: /api/grants/{{grantId}}\n\
+         caBundleRef: secret:file/status-ca\n"
+    ))
+    .unwrap();
+    assert_eq!(configured.status_scope.as_str(), "grants:status");
+    assert_eq!(configured.status_path, "/api/grants/{grantId}");
+    assert_eq!(
+        configured
+            .ca_bundle_ref
+            .as_ref()
+            .map(SecretReference::as_str),
+        Some("secret:file/status-ca")
+    );
+    assert_eq!(
+        serde_json::from_value::<TaskGrantStatusConfig>(serde_json::to_value(&configured).unwrap())
+            .unwrap(),
+        configured
+    );
+    assert!(serde_json::to_value(&defaults)
+        .unwrap()
+        .get("caBundleRef")
+        .is_none());
+    assert_eq!(
+        format!("{configured:?}"),
+        "TaskGrantStatusConfig(<configured>)"
+    );
+}
+
+#[test]
+fn task_grant_status_refuses_an_unknown_key_with_its_position_and_never_its_value() {
+    let yaml = format!("{TASK_GRANT_STATUS}statusScopes: canary-a\nscopes: canary-b\n");
+    let report = read_block::<TaskGrantStatusConfig>(&yaml).unwrap_err();
+    let reported: Vec<_> = report
+        .diagnostics()
+        .iter()
+        .map(|diagnostic| {
+            let source = diagnostic
+                .source
+                .as_ref()
+                .expect("a reader diagnostic has a source");
+            (
+                diagnostic.code.as_str(),
+                diagnostic.path.as_str(),
+                source.line,
+                source.column,
+            )
+        })
+        .collect();
+    assert_eq!(
+        reported,
+        [
+            ("config.unknown-key", "/statusScopes", Some(8), Some(1)),
+            ("config.unknown-key", "/scopes", Some(9), Some(1)),
+        ]
+    );
+    assert!(!report.to_string().contains("canary-"), "{report}");
+}

@@ -253,6 +253,7 @@ ROWS: tuple[Row, ...] = (
             "ListenerBind",
             "SecretProvidersConfig",
             "SecretReference",
+            "TaskGrantStatusConfig",
         ),
         reference_refusal=TestRef(
             "crates/registry-breg/tests/runtime_config.rs",

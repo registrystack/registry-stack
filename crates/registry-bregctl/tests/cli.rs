@@ -2167,6 +2167,7 @@ taskGrantStatus:
     clientId: registry
     privateKeyRef: secret:file/casework-key
     caseworkResource: ${BREG_CHECK_TEST_CASEWORK_RESOURCE}
+    statusPath: ${BREG_CHECK_TEST_STATUS_PATH}
 ";
     edited_runtime_config(scratch, |source| {
         let source = source
