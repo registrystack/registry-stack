@@ -264,7 +264,7 @@ pub enum RuntimeConfigError {
     Reader(ReaderRefusal),
     #[error("runtime configuration contains an invalid deployment binding")]
     InvalidBinding,
-    #[error("runtime configuration taskGrantStatus must contain at most 32 unique absolute source issuers; configure safe service/token URLs, non-empty client and assertion audience, and absolute resource identifiers")]
+    #[error("runtime configuration taskGrantStatus must contain at most 32 unique source issuers, each an `https://` URL; configure safe service/token URLs, non-empty client and assertion audience, and absolute resource identifiers")]
     InvalidTaskGrantStatus,
     #[error(
         "runtime configuration identity.instanceId must start with a lowercase letter and hold at most 64 lowercase letters, digits, `-`, or `_`; set identity.instanceId to such a value"
@@ -391,7 +391,7 @@ impl RuntimeConfigError {
     fn suggested_action(&self) -> &'static str {
         match self {
             Self::Reader(_) => "",
-            Self::InvalidTaskGrantStatus => "Configure at most 32 distinct taskGrantStatus source issuers, safe service/token URLs, a client and assertion audience, and absolute resource identifiers.",
+            Self::InvalidTaskGrantStatus => "Configure at most 32 distinct taskGrantStatus source issuers, each written as the `https://` URL an access profile names in taskGrant.sourceIssuer, safe service/token URLs, a client and assertion audience, and absolute resource identifiers.",
             Self::InvalidBinding => {
                 "Give every identity value as trimmed text without control characters, and declare in the runtime file, with a valid endpoint and credential, every task grant status source, Evidence provider, review authority, and review executor the package relies on."
             }
@@ -2879,6 +2879,11 @@ struct RawRuntimeConfig {
     field_encryption: crate::field_encryption::RawFieldEncryptionConfig,
     package: RawPackageConfig,
     authentication: RawAuthenticationConfig,
+    /// The task grant status services, at most 32, one for each source
+    /// issuer. A `sourceIssuer` here must be an `https://` URL, which is
+    /// narrower than the entry's own description: it is compared as written
+    /// with an access profile's `taskGrant.sourceIssuer`, and a project
+    /// writes that member only as an `https://` URL.
     #[serde(default)]
     task_grant_status: Vec<crate::task_grant::TaskGrantStatusConfig>,
     audit: RawAuditConfig,

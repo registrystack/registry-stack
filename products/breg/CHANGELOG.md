@@ -10,18 +10,21 @@
   `/taskGrantStatus/<index>/tokenEndpoint`. `clientId`,
   `clientAssertionAudience`, and `caseworkResource` are `ExternalId`: a value
   of more than 512 characters or with a control character is refused the
-  same way at its member. `sourceIssuer` is an `ExternalId` that must be an
-  absolute URI, so an issuer written as a `urn:` is accepted. The checks
-  `breg` made of the block at startup also run when the file is read, as
+  same way at its member. `sourceIssuer` is an `ExternalId` that `breg`
+  accepts only as an `https://` URL, the form an access profile's
+  `taskGrant.sourceIssuer` takes: an issuer written as a `urn:` or as an
+  `http` URL was accepted and is refused. The checks `breg` made of the
+  block at startup also run when the file is read, as
   `breg.runtime.invalid-task-grant-status` at `/taskGrantStatus`: more than
-  32 entries, a repeated `sourceIssuer`, a `sourceIssuer`,
-  `caseworkResource`, or `authentication.oidc.audience` that is not an
-  absolute URI, a `baseUrl` or `tokenEndpoint` that is not `https` (`http`
-  only for a loopback host), and an empty `clientId` or
+  32 entries, a repeated `sourceIssuer`, a `sourceIssuer` that is not an
+  `https://` URL, a `caseworkResource` or `authentication.oidc.audience`
+  that is not an absolute URI, a `baseUrl` or `tokenEndpoint` that is not
+  `https` (`http` only for a loopback host), and an empty `clientId` or
   `clientAssertionAudience`. No secret is resolved and no endpoint is called
   by the read; startup repeats the checks. Migration: write the token
-  endpoint as a plain absolute URL, and keep each identifier within 512
-  characters. A script that matched the startup refusal of this block
+  endpoint as a plain absolute URL, write each `sourceIssuer` as the
+  `https://` URL its access profile names, and keep each identifier within
+  512 characters. A script that matched the startup refusal of this block
   matches the new code. See `release/notes/config-conventions/breg.md`.
 - The task-grant status check uses the transport Scheduling shares
   (`registry_platform_oidc::task_grant`). An HTTP 401 or 403 from the
@@ -33,8 +36,9 @@
   answer is cached, as before.
 - `bregctl dev` binds local task-grant status services. `dev-clients.yaml`
   accepts `taskGrantStatus`, a mapping of up to eight bindings keyed by a
-  local id, each with a `sourceIssuer`, a numeric loopback HTTP `baseUrl`,
-  and a declared machine `client` scoped only to `casework:grants:status`;
+  local id, each with an `https://` `sourceIssuer`, a numeric loopback HTTP
+  `baseUrl`, and a declared machine `client` scoped only to
+  `casework:grants:status`;
   the generated runtime file carries one `taskGrantStatus` entry for each.
   A machine client accepts `grants`, explicit scopes on a declared audience:
   up to seven distinct audiences of 1 to 32 scopes each, declared on the
@@ -315,7 +319,9 @@
   reader. A `*Ref` member that is not `secret:file/NAME` or `secret:env/NAME`,
   and a `publicOrigin`, Evidence provider `baseUrl`, or task-grant status
   `baseUrl` or `tokenEndpoint` that is not an absolute `http` or `https` URL,
-  is refused as `config.invalid-value` at the member, and
+  is refused as `config.invalid-value` at the member. A task-grant status
+  `sourceIssuer` written as a `urn:` was accepted and is refused, as
+  `breg.runtime.invalid-task-grant-status` at `/taskGrantStatus`, and
   `authentication.oidc.assertionIssuers: {}` is refused: delete the member to
   apply no assertion-issuer rule. Migration steps are in
   `release/notes/config-conventions/breg.md`.

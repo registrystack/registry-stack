@@ -1589,6 +1589,7 @@
     },
     "taskGrantStatus": {
       "default": [],
+      "description": "The task grant status services, at most 32, one for each source\nissuer. A `sourceIssuer` here must be an `https://` URL, which is\nnarrower than the entry's own description: it is compared as written\nwith an access profile's `taskGrant.sourceIssuer`, and a project\nwrites that member only as an `https://` URL.",
       "items": {
         "$ref": "#/$defs/TaskGrantStatusConfig"
       },

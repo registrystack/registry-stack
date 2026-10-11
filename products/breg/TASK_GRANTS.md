@@ -89,8 +89,9 @@ taskGrantStatus:
 ```
 
 Runtime configuration parsing checks the status registry's nonsecret structure:
-at most 32 entries, distinct absolute source issuers, safe service and token URLs,
-non-empty client and assertion audience, and absolute resource identifiers.
+at most 32 entries, distinct source issuers each written as an `https://` URL,
+safe service and token URLs, non-empty client and assertion audience, and
+absolute resource identifiers.
 Parsing does not resolve status signer or CA material or contact its endpoints;
 startup repeats these checks and verifies the credential material.
 

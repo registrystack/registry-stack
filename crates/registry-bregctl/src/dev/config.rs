@@ -304,6 +304,8 @@ pub(super) struct LocalReviewExecutor {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct LocalTaskGrantStatus {
+    /// The `https://` URL an access profile names in `taskGrant.sourceIssuer`.
+    /// It is compared as written and never fetched.
     pub source_issuer: ExternalId,
     #[serde(deserialize_with = "url")]
     #[cfg_attr(feature = "schema", schemars(with = "Url"))]
@@ -942,6 +944,12 @@ fn validate(clients: Clients, secrets: Secrets) -> Result<Clients> {
             .find(|client| client.id == status.client);
         if !governed_identifier(id)
             || !registry_platform_httputil::valid_resource_uri(&status.source_issuer)
+            // The runtime file this binding becomes is refused by the
+            // registry unless the issuer is the `https://` URL an access
+            // profile can name.
+            || !registry_breg::task_grant::TaskGrantStatusRegistry::accepts_source_issuer(
+                &status.source_issuer,
+            )
             || !task_sources.insert(&status.source_issuer)
             || endpoint.scheme() != "http"
             || endpoint.host_str() != Some("127.0.0.1")
@@ -959,7 +967,7 @@ fn validate(clients: Clients, secrets: Secrets) -> Result<Clients> {
                         != Some(&json!("service"))
             })
         {
-            bail!("local task-grant status services need unique source issuers, exact loopback endpoints, and declared service clients scoped only to casework:grants:status without BReg access");
+            bail!("local task-grant status services need unique `https://` source issuers, exact loopback endpoints, and declared service clients scoped only to casework:grants:status without BReg access");
         }
     }
     for (id, authority) in &clients.review_authorities {

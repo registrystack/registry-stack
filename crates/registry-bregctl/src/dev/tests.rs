@@ -4793,6 +4793,8 @@ fn local_task_grant_status_refuses_wider_authority_duplicate_sources_and_unsafe_
     for (field, value) in [
         ("client", json!("missing")),
         ("sourceIssuer", json!("invalid issuer")),
+        ("sourceIssuer", json!("urn:casework:local")),
+        ("sourceIssuer", json!("http://casework.local.example")),
         ("scopes", json!(["casework:grants:status"])),
     ] {
         let mut invalid = valid.clone();

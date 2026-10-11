@@ -492,7 +492,8 @@
           "$ref": "#/$defs/LocalId"
         },
         "sourceIssuer": {
-          "$ref": "#/$defs/ExternalId"
+          "$ref": "#/$defs/ExternalId",
+          "description": "The `https://` URL an access profile names in `taskGrant.sourceIssuer`.\nIt is compared as written and never fetched."
         }
       },
       "required": [

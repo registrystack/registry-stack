@@ -4513,7 +4513,7 @@ fn task_status_structural_bindings_are_refused_before_runtime_activation() {
     let fixture = RuntimeFixture::new();
     let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
     let status = json!({
-        "sourceIssuer":"urn:casework:source",
+        "sourceIssuer":"https://casework-source.example",
         "baseUrl":"https://unreachable-status.invalid",
         "tokenEndpoint":"http://127.0.0.1:1/token",
         "clientAssertionAudience":"urn:identity:test",
@@ -4553,7 +4553,8 @@ fn task_status_structural_bindings_are_refused_before_runtime_activation() {
             .map(|index| {
                 let mut entry = status.clone();
                 if count == 33 {
-                    entry["sourceIssuer"] = json!(format!("urn:casework:source:{index}"));
+                    entry["sourceIssuer"] =
+                        json!(format!("https://casework-source-{index}.example"));
                 }
                 entry
             })
@@ -4574,4 +4575,51 @@ fn task_status_structural_bindings_are_refused_before_runtime_activation() {
     assert!(error.to_string().contains("at most 32"));
     assert!(!fixture.secret_root.join("missing-task-status-key").exists());
     assert!(!fixture.secret_root.join("missing-task-status-ca").exists());
+}
+
+#[test]
+fn a_task_status_source_issuer_that_is_not_an_https_url_is_refused_at_load() {
+    let fixture = RuntimeFixture::new();
+    let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
+    let status = |issuer: &str| {
+        json!([{
+            "sourceIssuer":issuer,
+            "baseUrl":"https://unreachable-status.invalid",
+            "tokenEndpoint":"http://127.0.0.1:1/token",
+            "clientAssertionAudience":"urn:identity:test",
+            "clientId":"breg-task-status",
+            "privateKeyRef":"secret:file/missing-task-status-key",
+            "caseworkResource":"urn:casework:test"
+        }])
+    };
+    parse_runtime_config(&format!(
+        "{base}\ntaskGrantStatus: {}\n",
+        status("https://casework.example")
+    ))
+    .expect("an https source issuer is the form an access profile can name");
+    // An access profile names its task grant source as an `https://` URL and
+    // the two are compared as written, so no other spelling can match one.
+    for issuer in [
+        "urn:casework:source",
+        "http://casework.example",
+        "HTTPS://casework.example",
+        "https://user@casework.example",
+    ] {
+        let error = parse_runtime_config(&format!("{base}\ntaskGrantStatus: {}\n", status(issuer)))
+            .expect_err(issuer);
+        assert_eq!(
+            error,
+            RuntimeConfigError::InvalidTaskGrantStatus,
+            "{issuer}"
+        );
+        let diagnostics = error.diagnostics(None);
+        assert_eq!(diagnostics.len(), 1, "{issuer}");
+        assert_eq!(
+            diagnostics[0].code, "breg.runtime.invalid-task-grant-status",
+            "{issuer}"
+        );
+        assert_eq!(diagnostics[0].path, "/taskGrantStatus", "{issuer}");
+        assert!(error.to_string().contains("`https://`"), "{error}");
+        assert!(!error.to_string().contains(issuer), "{error}");
+    }
 }

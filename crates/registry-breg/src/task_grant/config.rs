@@ -9,11 +9,32 @@ impl TaskGrantStatusRegistry {
     pub fn contains(&self, source_issuer: &str) -> bool {
         self.0.contains(source_issuer)
     }
+    /// Whether `source_issuer` is a form an access profile can name. The
+    /// compiler accepts a profile's `taskGrant.sourceIssuer` only as an
+    /// `https://` URL and the two are compared as written, so a status source
+    /// in any other spelling, a URN or an `http` URL among them, could never
+    /// serve a profile. The shared status block alone accepts any absolute
+    /// resource URI.
+    pub fn accepts_source_issuer(source_issuer: &str) -> bool {
+        source_issuer.starts_with("https://")
+            && registry_platform_yaml::Url::new(source_issuer).is_ok()
+    }
+    fn check_source_issuers(configs: &[TaskGrantStatusConfig]) -> Result<(), TaskGrantError> {
+        if configs
+            .iter()
+            .all(|config| Self::accepts_source_issuer(&config.source_issuer))
+        {
+            Ok(())
+        } else {
+            Err(TaskGrantError::Configuration)
+        }
+    }
     /// Check nonsecret client structure without resolving credential material.
     pub fn validate_configuration(
         configs: &[TaskGrantStatusConfig],
         resource: &str,
     ) -> Result<(), TaskGrantError> {
+        Self::check_source_issuers(configs)?;
         registry_platform_oidc::task_grant::TaskGrantStatusRegistry::validate_configuration(
             configs, resource,
         )
@@ -23,6 +44,7 @@ impl TaskGrantStatusRegistry {
         resource: &str,
         secrets: &SecretResolver,
     ) -> Result<Self, TaskGrantError> {
+        Self::check_source_issuers(configs)?;
         registry_platform_oidc::task_grant::TaskGrantStatusRegistry::activate(
             configs, resource, secrets,
         )
@@ -104,6 +126,26 @@ mod tests {
             assert!(
                 TaskGrantStatusRegistry::activate(&[invalid], "urn:breg:test", &secrets).is_err(),
                 "{url}"
+            );
+        }
+        for issuer in [
+            "urn:casework:test",
+            "http://casework.test",
+            "HTTPS://casework.test",
+        ] {
+            let mut invalid = config.clone();
+            invalid.source_issuer = ExternalId::new(issuer).unwrap();
+            assert!(
+                TaskGrantStatusRegistry::validate_configuration(
+                    std::slice::from_ref(&invalid),
+                    "urn:breg:test"
+                )
+                .is_err(),
+                "{issuer}"
+            );
+            assert!(
+                TaskGrantStatusRegistry::activate(&[invalid], "urn:breg:test", &secrets).is_err(),
+                "{issuer}"
             );
         }
         let mut invalid = config.clone();

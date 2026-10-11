@@ -516,12 +516,13 @@ taskGrantStatus:
 ```
 
 Merge these entries into the existing versioned clients file. Up to eight
-bindings are supported, with unique source issuers and exact numeric loopback
-HTTP endpoints. The generated runtime uses the session issuer for token
-acquisition and client assertion audience, copies the client's assertion key
-into an owner-only secret file, and selects that client's declared
-`issuer.clientResources` audience or the session's default resource. Register
-the same client and resource in Casework's `taskAuthority.statusClients`.
+bindings are supported, with unique `https://` source issuers and exact
+numeric loopback HTTP endpoints. The generated runtime uses the session
+issuer for token acquisition and client assertion audience, copies the
+client's assertion key into an owner-only secret file, and selects that
+client's declared `issuer.clientResources` audience or the session's default
+resource. Register the same client and resource in Casework's
+`taskAuthority.statusClients`.
 This binds the existing [task-grant status contract](TASK_GRANTS.md); it grants
 no access to source records and does not replace the governed task profile.
 

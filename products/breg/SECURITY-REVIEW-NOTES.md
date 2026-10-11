@@ -2409,13 +2409,16 @@ tell which value to fix.
   an Evidence `baseUrl`, and a task-grant `baseUrl` and `tokenEndpoint` are
   `https`, with `http` only for a loopback host. The task-grant status
   `sourceIssuer` is compared with the Casework issuer and never fetched. It
-  is the shared `ExternalId` and must be an absolute URI, so an `http` URL
-  and an absolute URN are both accepted there.
+  is the shared `ExternalId`, and `breg` accepts it only as an `https://`
+  URL: a non-URL issuer such as a `urn:` is refused, and so is an `http`
+  URL. "A task-grant status source issuer is an `https://` URL" below
+  records that refusal.
 - The task-grant status block is the one Scheduling reads
   (`registry_platform_oidc::task_grant`). `clientId`,
   `clientAssertionAudience`, and `caseworkResource` are `ExternalId`. The
-  structural checks (at most 32 entries, no repeated `sourceIssuer`,
-  absolute resource identifiers, a safe `baseUrl` and `tokenEndpoint`, a
+  structural checks (at most 32 entries, no repeated `sourceIssuer`, an
+  `https://` `sourceIssuer`, absolute resource identifiers, a safe `baseUrl`
+  and `tokenEndpoint`, a
   non-empty client and assertion audience) run when the file is read, as
   `breg.runtime.invalid-task-grant-status` at `/taskGrantStatus`, without
   resolving a secret or calling an endpoint, and again at startup with the
@@ -2694,3 +2697,73 @@ project compiles to different access than before.
 - **A package is rebuilt.** A package holds the project as written, so its
   digest changes while its registry revision does not. This release already
   refuses every package an earlier release built.
+
+## A task-grant status source issuer is an `https://` URL
+
+`taskGrantStatus[].sourceIssuer` in `runtime.yaml` names the task authority
+whose current status `breg` asks before it honours a task grant. The member is
+the shared status block's `ExternalId`
+(`registry_platform_oidc::task_grant::TaskGrantStatusConfig`), which accepts
+any absolute resource URI. `breg` narrows it on top of that type and accepts
+only an `https://` URL. This is authorization configuration: the entry
+decides which status service answers for which issuer. No authorization
+decision changes, because the narrowed set is exactly the set a profile can
+name.
+
+### Threat
+
+An access profile's `taskGrant.sourceIssuer` is accepted by the compiler only
+as an `https://` URL, and a token's source issuer is compared with it as
+written. A status entry written any other way, a `urn:` or an `http` URL
+among them, can therefore serve no profile. Accepting it leaves an operator
+with a file that reads as though a task authority were bound when it is not,
+and with a second spelling of the issuer that a later change to the profile
+rule could make live without anyone having reviewed it.
+
+### Enforcement and defaults
+
+- `TaskGrantStatusRegistry::accepts_source_issuer`
+  (`crates/registry-breg/src/task_grant/config.rs`) accepts a value that
+  starts with `https://` and is a shared `Url` (a host, no user information,
+  no whitespace or control character, at most 2048 characters). Both
+  `validate_configuration`, which runs when the file is read, and
+  `activate`, which runs at startup, apply it before the shared block's own
+  checks.
+- The refusal is `breg.runtime.invalid-task-grant-status` at
+  `/taskGrantStatus`, the code and pointer of the block's other structural
+  refusals. The message names the rule and never repeats the value.
+- The shared type is unchanged, so Registry Scheduling, which reads the same
+  block, still accepts an absolute URN issuer.
+- `bregctl dev` applies the same function to `taskGrantStatus` in
+  `dev-clients.yaml`, so a local binding is refused where it is written and
+  not when the generated runtime file is read.
+- Startup still refuses a task profile whose issuer has no status entry.
+
+### Tests
+
+- `crates/registry-breg/tests/runtime_config.rs`:
+  `a_task_status_source_issuer_that_is_not_an_https_url_is_refused_at_load`
+  (negative: a `urn:` issuer, an `http` URL, an `HTTPS://` spelling, and a
+  URL with user information are each refused with the code at
+  `/taskGrantStatus`, value-free, and an `https://` issuer is accepted).
+- `crates/registry-breg/src/task_grant/config.rs`:
+  `configured_status_clients_pin_source_issuer_and_refuse_unsafe_or_duplicate_bindings`
+  (negative: the same spellings are refused by both the read-time check and
+  activation).
+- `crates/registry-bregctl/src/dev/tests.rs`:
+  `local_task_grant_status_refuses_wider_authority_duplicate_sources_and_unsafe_endpoints`
+  (negative: a `urn:` and an `http` source issuer are refused in
+  `dev-clients.yaml`).
+
+### Accepted residuals
+
+- **The refusal points at the block, not the entry.** Like the block's other
+  structural refusals, it is reported at `/taskGrantStatus` and does not say
+  which entry holds the issuer.
+- **The published schema types the member as `ExternalId`.** The narrower
+  rule is stated in the description of `taskGrantStatus` in the runtime
+  schema; the entry's own description is the shared block's and still
+  mentions a URN issuer.
+- **The rule is written twice.** The compiler checks the profile side and
+  this function checks the status side; nothing but their tests holds the
+  two to the same spelling.
