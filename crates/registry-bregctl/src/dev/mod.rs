@@ -789,6 +789,69 @@ fn receiver_port(state: &State) -> Result<u16> {
     }
 }
 
+const LOCAL_SUBJECT_MARKER: &str = "$localClientSubject";
+
+fn has_local_subject_marker(value: &Value) -> bool {
+    match value {
+        Value::String(value) => value == LOCAL_SUBJECT_MARKER,
+        Value::Array(values) => values.iter().any(has_local_subject_marker),
+        Value::Object(values) => values.values().any(has_local_subject_marker),
+        _ => false,
+    }
+}
+
+/// Resolve an explicit local fixture identity, never an arbitrary expectation.
+/// The caller writes only its private captured project, not authored inputs.
+fn resolve_local_subject_markers(
+    journeys: &mut Value,
+    clients: &Clients,
+    compiled: &registry_breg::CompiledRegistry,
+    issuer_instance: &str,
+) -> Result<()> {
+    for journey in journeys["journeys"]
+        .as_array_mut()
+        .context("journeys must contain an array")?
+    {
+        let journey_id = journey["id"]
+            .as_str()
+            .context("journey requires an id")?
+            .to_owned();
+        for step in journey["steps"]
+            .as_array_mut()
+            .context("journey steps must be an array")?
+        {
+            if step["claims"]["principal"] != LOCAL_SUBJECT_MARKER {
+                continue;
+            }
+            let profile = step["accessProfile"]
+                .as_str()
+                .context("journey step requires an access profile")?;
+            let step_id = step["id"].as_str().context("journey step requires an id")?;
+            let profiles = compiled
+                .entities()
+                .values()
+                .filter_map(|entity| entity.access_profiles.get(profile))
+                .collect::<Vec<_>>();
+            if profiles.is_empty()
+                || profiles
+                    .iter()
+                    .any(|profile| profile.principal_claim != "sub")
+            {
+                bail!("$localClientSubject is supported only as claims.principal for an authenticated sub access profile");
+            }
+            let client = journey_client(clients, &journey_id, step_id, profile)?;
+            step["claims"]["principal"] = json!(registry_thunderid_tooling::local::agent_id(
+                issuer_instance,
+                &client.id
+            ));
+        }
+    }
+    if has_local_subject_marker(journeys) {
+        bail!("$localClientSubject must appear only as a sub profile's journey claims.principal");
+    }
+    Ok(())
+}
+
 /// Name the first journey step whose access profile no local client binds.
 ///
 /// The schema-test stage makes the same lookup, but by then the database has

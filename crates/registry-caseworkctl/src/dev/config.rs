@@ -218,7 +218,11 @@ pub(super) fn borrow_client(
     let registered = clients["clients"]
         .as_array()
         .and_then(|entries| entries.iter().find(|entry| entry["id"] == id))
-        .with_context(|| format!("shared issuer owner has no registration for {id}"))?;
+        .ok_or_else(|| {
+            super::DevFailure::registration(anyhow::anyhow!(
+                "shared issuer owner has no registration for {id}"
+            ))
+        })?;
     let owner_resource = clients["issuer"]["clientResources"][id]
         .as_str()
         .map(str::to_owned)
@@ -232,7 +236,10 @@ pub(super) fn borrow_client(
         || registered["claims"] != *claims
         || owner_resource != resource
     {
-        bail!("shared issuer registration differs from Casework client {id}");
+        return Err(super::DevFailure::registration(anyhow::anyhow!(
+            "shared issuer registration differs from Casework client {id}"
+        ))
+        .into());
     }
     // An exchange client may present any assertion authority the shared issuer
     // trusts, and this session states a pairing only for the task exchange
@@ -245,7 +252,10 @@ pub(super) fn borrow_client(
         .is_some_and(|ids| ids.iter().any(|entry| entry == id))
         != task_exchange
     {
-        bail!("shared issuer owner and Casework disagree on exchange client {id}");
+        return Err(super::DevFailure::registration(anyhow::anyhow!(
+            "shared issuer owner and Casework disagree on exchange client {id}"
+        ))
+        .into());
     }
     let source = owner_root.join("credentials").join(id);
     let client_id = Zeroizing::new(private::read(&source.join("client-id"), super::MAX_BYTES)?);
@@ -255,7 +265,10 @@ pub(super) fn borrow_client(
     )?);
     let public = private::read(&source.join("public.jwk"), 4096)?;
     if client_id.as_slice() != id.as_bytes() {
-        bail!("shared issuer client ID differs from {id}");
+        return Err(super::DevFailure::registration(anyhow::anyhow!(
+            "shared issuer client ID differs from {id}"
+        ))
+        .into());
     }
     let jwk: Value = serde_json::from_slice(&key)?;
     let public_jwk: Value = serde_json::from_slice(&public)?;
@@ -765,7 +778,13 @@ pub(super) fn require_stable_borrowed_principals(policy: &CaseworkProject) -> Re
         .iter()
         .any(|profile| profile.principal_claim == "sub")
     {
-        bail!("the shared BREG issuer requires explicit stable principal claims; principalClaim sub resolves to the owner's subject, not the Casework local subject");
+        return Err(super::DevFailure::BorrowedPrincipalConfiguration {
+            source: anyhow::anyhow!(
+                "principalClaim sub resolves to the owner's subject, not the Casework local subject"
+            )
+            .into(),
+        }
+        .into());
     }
     Ok(())
 }

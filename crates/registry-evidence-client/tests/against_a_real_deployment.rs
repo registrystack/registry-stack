@@ -2317,6 +2317,7 @@ fn start_stock_token_issuer_with_authorities(authority_issuers: &[&str]) -> Stoc
             token_exchange: Some(TokenExchangeClient {
                 assertion_resource_server_id: TASK_AUTHORITY_RESOURCE_ID.to_owned(),
                 assertion_scope: TASK_BOOTSTRAP_SCOPE.to_owned(),
+                ordinary_resource_permissions: Vec::new(),
             }),
         });
         for (authority_issuer, (id, name)) in authority_issuers.iter().zip(AUTHORITY_CONNECTIONS) {
