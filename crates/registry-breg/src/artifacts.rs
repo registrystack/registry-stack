@@ -1730,7 +1730,7 @@ fn action_problem_responses(
     ]);
     if kind == ActionRouteKind::Invoke {
         if let Some(handler) = &action.handler {
-            if handler.abi == crate::contract::ACTION_HANDLER_ABI_V2 {
+            if !action.evidence.is_empty() {
                 responses.entry("503").or_default().push(ProblemExample {
                     code: "action.evidence_failed",
                     detail: "The declared Evidence dependency could not be accepted.",

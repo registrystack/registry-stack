@@ -150,11 +150,9 @@ fn handler_response_schema_accepts_omitted_slots_across_overlapping_grant_result
 }
 
 #[test]
-fn wasm_v2_handlers_are_refused_and_v1_needs_a_wasm_capable_build() {
+fn the_retired_v2_abi_is_refused_and_wasm_needs_a_wasm_capable_build() {
     use registry_breg::compiler::compile_project_with_assets;
-    use registry_breg::contract::{
-        parse_project_json, ModuleAssetSource, ACTION_HANDLER_ABI_V1, ACTION_HANDLER_ABI_V2,
-    };
+    use registry_breg::contract::{parse_project_json, ModuleAssetSource, ACTION_HANDLER_ABI_V1};
     use serde_json::{json, Value};
 
     let mut source: Value = serde_json::from_str(&household_contact_project("")).unwrap();
@@ -234,18 +232,27 @@ fn wasm_v2_handlers_are_refused_and_v1_needs_a_wasm_capable_build() {
         );
     }
 
-    let v2 = compile_with_handler_kind("wasm", ACTION_HANDLER_ABI_V2)
-        .expect_err("a WASM v2 handler kind is refused by this compiler")
-        .diagnostics()
-        .to_vec();
-    let unsupported_abi = v2
-        .iter()
-        .find(|diagnostic| diagnostic.code == "breg.action.handler-wasm-abi-unsupported")
-        .expect("Evidence-enabled WASM handlers are refused with their own diagnostic");
-    assert_eq!(
-        unsupported_abi.path,
-        "actions[register-household-contact].handler.type"
-    );
+    // One handler ABI is accepted. The identifier that used to select the
+    // Evidence helper is an unsupported value for either backend, refused at
+    // the member that declares it with the accepted identifier named.
+    for kind in ["rhai", "wasm"] {
+        let refused = compile_with_handler_kind(kind, "registry.action-handler/v2")
+            .expect_err("an ABI identifier other than v1 is refused")
+            .diagnostics()
+            .to_vec();
+        let unsupported_abi = refused
+            .iter()
+            .find(|diagnostic| diagnostic.code == "breg.action.handler-abi-invalid")
+            .unwrap_or_else(|| panic!("{kind}: expected the ABI refusal, got {refused:?}"));
+        assert_eq!(
+            unsupported_abi.path,
+            "actions[register-household-contact].handler.abi"
+        );
+        assert!(unsupported_abi.message.contains(ACTION_HANDLER_ABI_V1));
+        assert!(refused
+            .iter()
+            .all(|diagnostic| diagnostic.code != "breg.action.handler-wasm-abi-unsupported"));
+    }
 
     compile_with_handler_kind("rhai", ACTION_HANDLER_ABI_V1)
         .expect("a Rhai handler with the same shape still compiles");

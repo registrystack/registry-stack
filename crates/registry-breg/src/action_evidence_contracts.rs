@@ -404,13 +404,13 @@ pub(crate) fn compile_evidence(
         if source.evidence.len() > MAX_EVIDENCE_CAPABILITIES
             || (!source.evidence.is_empty()
                 && source.handler.as_ref().is_none_or(|handler| {
-                    handler.abi() != Some(crate::contract::ACTION_HANDLER_ABI_V2)
+                    handler.kind() != Some(crate::contract::ActionHandlerKindSource::Rhai)
                 }))
         {
             errors.push(Diagnostic::error(
                 "breg.action.evidence-ceiling-invalid",
                 &path,
-                "Evidence requires handler ABI v2 and permits at most two optional capabilities",
+                "Evidence requires a Rhai action handler and permits at most two optional capabilities",
             ));
             continue;
         }

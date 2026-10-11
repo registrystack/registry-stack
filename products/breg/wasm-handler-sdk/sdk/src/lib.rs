@@ -72,8 +72,8 @@
 //!
 //! # What is out of scope
 //!
-//! Handler ABI v2 (Evidence resolvers) and change-request planners are not
-//! authorable as WASM in this release; the SDK targets input-only v1 action
+//! Actions that declare Evidence and change-request planners are not
+//! authorable as WASM in this release; the SDK targets input-only action
 //! handlers only.
 
 // The ABI module is public for the export macros (`$crate::abi::...`

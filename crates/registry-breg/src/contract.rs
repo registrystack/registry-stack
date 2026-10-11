@@ -1293,8 +1293,6 @@ pub struct ActionSource {
     pub consent_issuer: Option<ConsentIssuerSource>,
 }
 
-pub const ACTION_HANDLER_ABI_V2: &str = "registry.action-handler/v2";
-
 pub const ACTION_HANDLER_ABI_V1: &str = "registry.action-handler/v1";
 
 /// The authored action handler: the shared hook handler declaration, with the
@@ -1484,7 +1482,7 @@ fn action_handler_half_schema(generator: &mut schemars::SchemaGenerator) -> sche
                 "description": "The WASM handler module path, project-local. Declared for wasm\nhandlers only; the compiler enforces the pairing with the declared\nbackend.",
                 "type": ["string", "null"],
             },
-            "abi": {"type": "string", "enum": [ACTION_HANDLER_ABI_V1, ACTION_HANDLER_ABI_V2]},
+            "abi": {"type": "string", "enum": [ACTION_HANDLER_ABI_V1]},
         },
         "required": ["type", "abi"],
     })

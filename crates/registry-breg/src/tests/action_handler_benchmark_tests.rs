@@ -7,7 +7,7 @@
 //! stays identical to `evaluate_with_engine`: fresh engine per call, the same
 //! admission checks, the same context construction, limits, resolver
 //! registration path shape, and result decoding. The database-free tests here
-//! drive the v1-style path without a resolver, matching what the
+//! drive the input-only path without a resolver, matching what the
 //! characterization suite covers. The timing test at the bottom is a benchmark
 //! variant only: it is ignored by default and must be run explicitly with a
 //! release-equivalent profile and `--nocapture`.
@@ -15,7 +15,7 @@
 use std::time::{Duration, Instant};
 
 use super::{
-    compile_source_for_abi, evaluate_admitted_action_detailed, evaluate_with_cached_program,
+    compile_source_for_action, evaluate_admitted_action_detailed, evaluate_with_cached_program,
     ActionHandlerError, ActionHandlerOutcome, CachedActionHandlerProgram,
 };
 use crate::{
@@ -243,6 +243,55 @@ fn cached_program_outcomes_match_fresh_evaluation_on_characterization_handler_sh
     }
 }
 
+/// The program is bound to the Evidence declaration it was compiled under:
+/// a program that admitted the Evidence helper is a source error for an action
+/// declaring no Evidence, exactly as a fresh compile of that action is.
+#[test]
+fn cached_program_refuses_evaluation_for_a_different_evidence_declaration() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../products/breg/acceptance/farmer-landholding-evidence");
+    let project = parse_project_yaml(&std::fs::read(root.join("registry.yaml")).unwrap()).unwrap();
+    let mut assets = project
+        .actions
+        .iter()
+        .filter_map(|action| {
+            action
+                .handler
+                .as_ref()
+                .and_then(|handler| handler.script().map(str::to_owned))
+        })
+        .map(|script| ModuleAssetSource {
+            module: None,
+            bytes: std::fs::read(root.join(&script)).unwrap(),
+            path: script,
+        })
+        .collect::<Vec<_>>();
+    assets.push(ModuleAssetSource {
+        module: None,
+        path: "evidence/farmer-contracts.json".into(),
+        bytes: std::fs::read(root.join("evidence/farmer-contracts.json")).unwrap(),
+    });
+    let declared = compile_project_with_assets(&project, &[], &assets, CompileProfile::Authoring)
+        .unwrap()
+        .actions()
+        .actions
+        .iter()
+        .find(|action| action.id == "register-landholding")
+        .cloned()
+        .expect("register-landholding action");
+    assert!(!declared.evidence.is_empty());
+    let program = CachedActionHandlerProgram::compile(&declared).unwrap();
+    let mut undeclared = declared.clone();
+    undeclared.evidence.clear();
+    let inputs = Map::new();
+    let fresh = evaluate_admitted_action_detailed(&undeclared, &inputs, deadline()).unwrap_err();
+    let cached =
+        evaluate_with_cached_program(&undeclared, &program, &inputs, deadline(), None, None)
+            .unwrap_err();
+    assert_eq!(cached, fresh);
+    assert_eq!(cached.kind, ActionHandlerError::Source);
+}
+
 /// The program is bound to the handler it was compiled from: offering a
 /// program compiled for one source against a different handler source is a
 /// source error, never a silent evaluation of the wrong program.
@@ -345,7 +394,7 @@ fn phase_statistics_use_nearest_rank_percentiles() {
 /// ```
 ///
 /// Times, for the unchanged acceptance handler and the `full-name` inputs:
-/// engine construction alone, `compile_source_for_abi` alone (the per-call
+/// engine construction alone, `compile_source_for_action` alone (the per-call
 /// work the cached variant replaces with its bound-program check plus a
 /// one-time preparation), and the admitted evaluation call for both variants.
 /// Every evaluation goes through the same admission checks as a real call:
@@ -422,14 +471,14 @@ fn benchmark_variant_times_engine_construction_compilation_and_evaluation() {
         "compilation",
         "current",
         &measure(REPETITIONS, COMPILATION_CALLS, || {
-            drop(compile_source_for_abi(source, &handler.abi).unwrap());
+            drop(compile_source_for_action(source, !action.evidence.is_empty()).unwrap());
         }),
     );
     report(
         "compilation",
         "cached",
         &measure(REPETITIONS, BINDING_CALLS, || {
-            let _ = program.bound_ast(handler).unwrap();
+            let _ = program.bound_ast(&action, handler).unwrap();
         }),
     );
     report(

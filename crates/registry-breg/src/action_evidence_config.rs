@@ -70,17 +70,10 @@ pub fn activate(
 ) -> Result<Option<Arc<ActionEvidenceEvaluator>>, crate::runtime_config::RuntimeConfigError> {
     use crate::runtime_config::RuntimeConfigError as Error;
     let required = required_provider_ids(registry);
-    let has_required_evidence = !required.is_empty();
     if required != bindings.keys().cloned().collect() {
         return Err(Error::InvalidBinding);
     }
-    let immediate_v2 = registry.actions().actions.iter().any(|action| {
-        action
-            .handler
-            .as_ref()
-            .is_some_and(|handler| handler.abi == "registry.action-handler/v2")
-    });
-    if !immediate_v2 && !has_required_evidence {
+    if required.is_empty() {
         return Ok(None);
     }
     let mut activated = BTreeMap::new();
@@ -220,25 +213,19 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
 
     #[test]
-    fn zero_capability_v2_activates_without_secrets_and_extra_bindings_fail_closed() {
+    fn an_action_declaring_no_evidence_activates_no_evaluator_and_extra_bindings_fail_closed() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../products/breg/acceptance/farmer-landholding-evidence");
-        let mut project =
+            .join("../../products/breg/acceptance/person-registration-rhai");
+        let project =
             parse_project_yaml(&std::fs::read(root.join("registry.yaml")).unwrap()).unwrap();
-        project
+        assert!(project
             .actions
-            .retain(|action| action.id == "check-procedure");
-        assert_eq!(project.actions.len(), 1);
-        project.actions[0].evidence.clear();
-        project.evidence_providers.clear();
-        for profile in &mut project.access_profiles {
-            profile.permissions.actions.retain(|grant| {
-                project
-                    .actions
-                    .iter()
-                    .any(|action| action.id == grant.action)
-            });
-        }
+            .iter()
+            .any(|action| action.handler.is_some()));
+        assert!(project
+            .actions
+            .iter()
+            .all(|action| action.evidence.is_empty()));
         let assets: Vec<_> = project
             .actions
             .iter()
@@ -263,7 +250,7 @@ mod tests {
         .unwrap();
         assert!(activate(&compiled, &BTreeMap::new(), &secrets)
             .unwrap()
-            .is_some());
+            .is_none());
         let binding = EvidenceProviderConfig {
             base_url: Url::new("https://invalid.example").unwrap(),
             trust_binding_id: "unused".into(),

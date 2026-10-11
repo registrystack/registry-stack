@@ -181,7 +181,7 @@ impl PostgresRecordMutationService {
         self
     }
 
-    /// Bind operator-approved Evidence clients for v2 immediate action handlers.
+    /// Bind operator-approved Evidence clients for immediate actions that declare Evidence.
     #[must_use]
     pub fn with_evidence_evaluator(
         mut self,
@@ -230,8 +230,7 @@ impl PostgresRecordMutationService {
             .actions
             .iter()
             .find(|action| action.id == input.action_id)
-            .and_then(|action| action.handler.as_ref())
-            .is_some_and(|handler| handler.abi == "registry.action-handler/v2");
+            .is_some_and(|action| !action.evidence.is_empty());
         let deadline = started
             + if is_evidence {
                 self.evidence_timeout.min(self.action_timeout)

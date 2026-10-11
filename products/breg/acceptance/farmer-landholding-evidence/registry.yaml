@@ -120,7 +120,7 @@ actions:
   handler:
     type: rhai
     script: scripts/register-landholding.rhai
-    abi: registry.action-handler/v2
+    abi: registry.action-handler/v1
     refusals:
     - code: invalid-farmer-number
       label: A complete farmer identifier is required.
@@ -182,7 +182,7 @@ actions:
   handler:
     type: rhai
     script: scripts/check-procedure.rhai
-    abi: registry.action-handler/v2
+    abi: registry.action-handler/v1
     refusals:
     - code: invalid-farmer-number
       label: A complete farmer identifier is required.
