@@ -44,8 +44,8 @@ the reference wins.
 
 | Product | Configuration | HTTP API |
 | --- | --- | --- |
-| Base Registry Engine | [`registry.yaml`, `module.yaml`, and `runtime.yaml`](../breg-configuration/), including the Rhai action handler ABI | [Base Registry Engine API](../breg-api/) |
-| Evidence Gateway | [Bundle and runtime files](../evidence-configuration/) | [Evidence Gateway API](../apis/registry-evidence/) and [problem types](../evidence-problems/), including the signed JWS and SD-JWT VC response formats |
+| Base Registry Engine | [`registry.yaml`, `module.yaml`, and `runtime.yaml`](../breg-configuration/), including the Rhai action handler ABI `registry.action-handler/v1` | [Base Registry Engine API](../breg-api/) |
+| Evidence Gateway | [Bundle and runtime files](../evidence-configuration/) | [Evidence Gateway API](../apis/registry-evidence/) and [problem types](../evidence-problems/), including the signed JWS, unsigned JSON envelope, SD-JWT VC, and holder-bound issuance envelope response formats |
 | Registry Casework | [Casework policy](../../configure/casework/) and [runtime file](../../operate/casework/#write-the-runtime-file) | [Casework API](../apis/registry-casework/) |
 | Registry Discovery | [Origins, evidence-type mappings, and runtime file](../../configure/discovery/) | [`GET /v1/services` and `POST /v1/evidence-types/resolve`](../../configure/discovery/#verify-resolution-and-exact-search) |
 | Registry Manifest | [`registry-manifest/v1` metadata documents](../../spec/rs-dm-manifest/) | None |
@@ -54,7 +54,9 @@ Evidence Gateway's versioned routes are `POST /v1/evidence`, `POST /v1/evidence/
 `GET /v1/evidence-definitions`. Its operational routes are `/health`, `/ready`, `/openapi.json`,
 `/.well-known/evidence/jwks.json`, and `/.well-known/jwt-vc-issuer`.
 
-{/* Evidence: crates/registry-discovery/src/server.rs, SERVICES_ROUTE and EVIDENCE_TYPES_ROUTE. */}
+{/* Evidence: crates/registry-discovery/src/server.rs, SERVICES_ROUTE and EVIDENCE_TYPES_ROUTE;
+    crates/registry-breg/src/contract.rs, ACTION_HANDLER_ABI_V1;
+    products/evidence/contracts/bundle.schema.yaml, the response-formats enum. */}
 
 The promise also covers the client SDKs: the Node.js package `@registrystack/client`, the Python
 package `registry-stack-client`, and the Rust crate `registry-stack-client` taken from the release
@@ -65,8 +67,8 @@ and its removal waits for `2.0`. See the [client API reference](../client-api/).
 
 ## Experimental surfaces
 
-These surfaces ship in releases but stay outside the promise. They keep their `v1alpha1` version
-strings and may change or be removed in any minor release without deprecation:
+These surfaces ship in releases but stay outside the promise. Those with a `v1alpha1` version
+string keep it, and each may change or be removed in any minor release without deprecation:
 
 - Registry Scheduling, and the `scheduling` namespace of the client packages
 - Registry Messaging, and the `messaging` namespace the client packages carry from `v0.38.0`
@@ -77,6 +79,8 @@ strings and may change or be removed in any minor release without deprecation:
 - the Base Registry Engine statistics routes under `/v1/statistics/`, and the
   `statisticalDatasets` declarations behind them
 - the Base Registry Engine spatial adapter routes under `/v1/gis`
+- calling Evidence from a Base Registry Engine governed action handler: `evidence::resolve` inside
+  the handler, and handler ABI `registry.action-handler/v2`, which carries it today
 - the `scheduling` variant of a Casework task grant's bounds
 
 Before `v1.0.0`, one breaking release moves the promised products' version strings from
@@ -84,7 +88,10 @@ Before `v1.0.0`, one breaking release moves the promised products' version strin
 surface.
 
 {/* Evidence: crates/registry-breg/src/api/statistics.rs; crates/registry-breg/src/api/gis.rs;
-    crates/registry-casework-core/src/task_grant.rs, TaskGrantBounds. */}
+    crates/registry-casework-core/src/task_grant.rs, TaskGrantBounds;
+    crates/registry-breg/src/contract.rs, ACTION_HANDLER_ABI_V2;
+    products/breg/IMPLEMENTATION.md, Capability state within W5;
+    products/breg/contracts/definition-of-done.yaml, BREG-V1-ACTION-EVIDENCE-TRIAL. */}
 
 ## Outside the promise
 
