@@ -2967,7 +2967,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/tools/dev-clients.v1alpha1.schema.json",
-        "sha256": "7297f9422103c181860246c27f2405cb84eca1233bef0db51880f0c5aab07f6d",
+        "sha256": "84801024e444b8c47daaef3c39bdd0afe2e95cc11e11665b107001e18cafd70d",
         "mediaType": "application/schema+json"
       }
     },
@@ -3057,7 +3057,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/mcp-runtime/mcp-runtime.schema.json",
-        "sha256": "f2ec06a94ee7f1d766d7127b12d4c95023db58d2aade8b7f4b7a4499e26041f2",
+        "sha256": "b23a07f4b60c15ecd085e5fa10f924aef31cbfca07dc5f8cbc3097dceb183a52",
         "mediaType": "application/schema+json"
       }
     },
@@ -3129,7 +3129,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/authoring/registry-module.schema.json",
-        "sha256": "56d707cf16e35bfcc1b043af69547ea6abe7a52868a3d0cf8d08c41548bca212",
+        "sha256": "6c55c83a2fb67e3ff522fabd9d7dc18608a5adb39b2714023f6476a89e83198f",
         "mediaType": "application/schema+json"
       }
     },
@@ -3147,7 +3147,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/authoring/registry-project.schema.json",
-        "sha256": "dee6ce2744cc5c05b7652e4bc991e80d9fd3e4e67dfa1c6078e1f4be1ad33811",
+        "sha256": "082e5779d3c400df94824090000d0d8e5d401930748eb949ad4272284a3a6738",
         "mediaType": "application/schema+json"
       }
     },
@@ -3183,7 +3183,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/review-runtime/review-runtime.schema.json",
-        "sha256": "d120f125320210869315ba14658bd905d9eca9b7a803083933ec2a2ecd210550",
+        "sha256": "ea6cb8f8967c6e495a449d56287796ca4acb65bda9dfdde66e3aaa3e4aea9368",
         "mediaType": "application/schema+json"
       }
     },
@@ -3219,7 +3219,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/runtime/runtime.schema.json",
-        "sha256": "b36da90e5baa9d092fc9c103fb02a2546eb44c82106928abd6903bda5918cf00",
+        "sha256": "8fa2aebe5d11d696c103d8f1cc249ffaa734971b7221099828c34e7d2bae991f",
         "mediaType": "application/schema+json"
       }
     },
@@ -3251,7 +3251,7 @@
       "description": "Registry Casework caseworkctl JSON report schemas, generated and held to caseworkctl's output by its contract test.",
       "source": {
         "path": "products/casework/scripts/generate_cli_schemas.py",
-        "sha256": "2b191386f3ce0fdd538ddf0d28d1eb06bcdb9db1310fc185cc5fe89b45385f50"
+        "sha256": "eaab554b7a7059e8acec3f9cca2aa662f069ceac98099f2e52afb0bf2ad00921"
       },
       "artifact": {
         "path": "products/casework/contracts/cli/ApplyReport.schema.json",
@@ -3269,7 +3269,7 @@
       "description": "Registry Casework caseworkctl JSON report schemas, generated and held to caseworkctl's output by its contract test.",
       "source": {
         "path": "products/casework/scripts/generate_cli_schemas.py",
-        "sha256": "2b191386f3ce0fdd538ddf0d28d1eb06bcdb9db1310fc185cc5fe89b45385f50"
+        "sha256": "eaab554b7a7059e8acec3f9cca2aa662f069ceac98099f2e52afb0bf2ad00921"
       },
       "artifact": {
         "path": "products/casework/contracts/cli/AttemptSettlementReport.schema.json",
@@ -3287,11 +3287,11 @@
       "description": "Registry Casework caseworkctl JSON report schemas, generated and held to caseworkctl's output by its contract test.",
       "source": {
         "path": "products/casework/scripts/generate_cli_schemas.py",
-        "sha256": "2b191386f3ce0fdd538ddf0d28d1eb06bcdb9db1310fc185cc5fe89b45385f50"
+        "sha256": "eaab554b7a7059e8acec3f9cca2aa662f069ceac98099f2e52afb0bf2ad00921"
       },
       "artifact": {
         "path": "products/casework/contracts/cli/AttemptUncertainMarkingReport.schema.json",
-        "sha256": "d2f65bd1945b8783671bdf550431024da1c07fe4e88bbf9dc0ada979723b7206",
+        "sha256": "ce8e8f18981bcce5dd48607b98424f32a27aab9ca1cc6e586adc545603b7554a",
         "mediaType": "application/schema+json"
       }
     },
@@ -3305,7 +3305,7 @@
       "description": "Registry Casework caseworkctl JSON report schemas, generated and held to caseworkctl's output by its contract test.",
       "source": {
         "path": "products/casework/scripts/generate_cli_schemas.py",
-        "sha256": "2b191386f3ce0fdd538ddf0d28d1eb06bcdb9db1310fc185cc5fe89b45385f50"
+        "sha256": "eaab554b7a7059e8acec3f9cca2aa662f069ceac98099f2e52afb0bf2ad00921"
       },
       "artifact": {
         "path": "products/casework/contracts/cli/CheckReport.schema.json",
@@ -3327,7 +3327,7 @@
       },
       "artifact": {
         "path": "products/casework/generated/dev-clients/dev-clients.schema.json",
-        "sha256": "afda8ec7445cd69816fc59d193639ad6426295fe5f2526af3e1c74da0237782c",
+        "sha256": "2648c8627f9671e3f8413dcf2fb6c20be90e96ad46c42e645c05230794f4764b",
         "mediaType": "application/schema+json"
       }
     },
@@ -3341,7 +3341,7 @@
       "description": "Registry Casework caseworkctl JSON report schemas, generated and held to caseworkctl's output by its contract test.",
       "source": {
         "path": "products/casework/scripts/generate_cli_schemas.py",
-        "sha256": "2b191386f3ce0fdd538ddf0d28d1eb06bcdb9db1310fc185cc5fe89b45385f50"
+        "sha256": "eaab554b7a7059e8acec3f9cca2aa662f069ceac98099f2e52afb0bf2ad00921"
       },
       "artifact": {
         "path": "products/casework/contracts/cli/DevEventsReport.schema.json",
@@ -3359,7 +3359,7 @@
       "description": "Registry Casework caseworkctl JSON report schemas, generated and held to caseworkctl's output by its contract test.",
       "source": {
         "path": "products/casework/scripts/generate_cli_schemas.py",
-        "sha256": "2b191386f3ce0fdd538ddf0d28d1eb06bcdb9db1310fc185cc5fe89b45385f50"
+        "sha256": "eaab554b7a7059e8acec3f9cca2aa662f069ceac98099f2e52afb0bf2ad00921"
       },
       "artifact": {
         "path": "products/casework/contracts/cli/DevGrantReport.schema.json",
@@ -3377,7 +3377,7 @@
       "description": "Registry Casework caseworkctl JSON report schemas, generated and held to caseworkctl's output by its contract test.",
       "source": {
         "path": "products/casework/scripts/generate_cli_schemas.py",
-        "sha256": "2b191386f3ce0fdd538ddf0d28d1eb06bcdb9db1310fc185cc5fe89b45385f50"
+        "sha256": "eaab554b7a7059e8acec3f9cca2aa662f069ceac98099f2e52afb0bf2ad00921"
       },
       "artifact": {
         "path": "products/casework/contracts/cli/DevIdentityReport.schema.json",
@@ -3395,11 +3395,11 @@
       "description": "Registry Casework caseworkctl JSON report schemas, generated and held to caseworkctl's output by its contract test.",
       "source": {
         "path": "products/casework/scripts/generate_cli_schemas.py",
-        "sha256": "2b191386f3ce0fdd538ddf0d28d1eb06bcdb9db1310fc185cc5fe89b45385f50"
+        "sha256": "eaab554b7a7059e8acec3f9cca2aa662f069ceac98099f2e52afb0bf2ad00921"
       },
       "artifact": {
         "path": "products/casework/contracts/cli/DevReport.schema.json",
-        "sha256": "7d9edd32b150c41e6754826487a84eca0d825bfc918116e8328df488a3d46d17",
+        "sha256": "c3e88b1a46da7f8643c0af6b35a3b33eafa75ad74277dc7dccde135746b0f110",
         "mediaType": "application/schema+json"
       }
     },
@@ -3413,7 +3413,7 @@
       "description": "Registry Casework caseworkctl JSON report schemas, generated and held to caseworkctl's output by its contract test.",
       "source": {
         "path": "products/casework/scripts/generate_cli_schemas.py",
-        "sha256": "2b191386f3ce0fdd538ddf0d28d1eb06bcdb9db1310fc185cc5fe89b45385f50"
+        "sha256": "eaab554b7a7059e8acec3f9cca2aa662f069ceac98099f2e52afb0bf2ad00921"
       },
       "artifact": {
         "path": "products/casework/contracts/cli/DevTokenReport.schema.json",
@@ -3431,7 +3431,7 @@
       "description": "Registry Casework caseworkctl JSON report schemas, generated and held to caseworkctl's output by its contract test.",
       "source": {
         "path": "products/casework/scripts/generate_cli_schemas.py",
-        "sha256": "2b191386f3ce0fdd538ddf0d28d1eb06bcdb9db1310fc185cc5fe89b45385f50"
+        "sha256": "eaab554b7a7059e8acec3f9cca2aa662f069ceac98099f2e52afb0bf2ad00921"
       },
       "artifact": {
         "path": "products/casework/contracts/cli/DoctorReport.schema.json",
@@ -3449,7 +3449,7 @@
       "description": "Registry Casework caseworkctl JSON report schemas, generated and held to caseworkctl's output by its contract test.",
       "source": {
         "path": "products/casework/scripts/generate_cli_schemas.py",
-        "sha256": "2b191386f3ce0fdd538ddf0d28d1eb06bcdb9db1310fc185cc5fe89b45385f50"
+        "sha256": "eaab554b7a7059e8acec3f9cca2aa662f069ceac98099f2e52afb0bf2ad00921"
       },
       "artifact": {
         "path": "products/casework/contracts/cli/ExplainReport.schema.json",
@@ -3503,7 +3503,7 @@
       "description": "Registry Casework caseworkctl JSON report schemas, generated and held to caseworkctl's output by its contract test.",
       "source": {
         "path": "products/casework/scripts/generate_cli_schemas.py",
-        "sha256": "2b191386f3ce0fdd538ddf0d28d1eb06bcdb9db1310fc185cc5fe89b45385f50"
+        "sha256": "eaab554b7a7059e8acec3f9cca2aa662f069ceac98099f2e52afb0bf2ad00921"
       },
       "artifact": {
         "path": "products/casework/contracts/cli/InitReport.schema.json",
@@ -3521,7 +3521,7 @@
       "description": "Registry Casework caseworkctl JSON report schemas, generated and held to caseworkctl's output by its contract test.",
       "source": {
         "path": "products/casework/scripts/generate_cli_schemas.py",
-        "sha256": "2b191386f3ce0fdd538ddf0d28d1eb06bcdb9db1310fc185cc5fe89b45385f50"
+        "sha256": "eaab554b7a7059e8acec3f9cca2aa662f069ceac98099f2e52afb0bf2ad00921"
       },
       "artifact": {
         "path": "products/casework/contracts/cli/LifecycleReport.schema.json",
@@ -3539,7 +3539,7 @@
       "description": "Registry Casework caseworkctl JSON report schemas, generated and held to caseworkctl's output by its contract test.",
       "source": {
         "path": "products/casework/scripts/generate_cli_schemas.py",
-        "sha256": "2b191386f3ce0fdd538ddf0d28d1eb06bcdb9db1310fc185cc5fe89b45385f50"
+        "sha256": "eaab554b7a7059e8acec3f9cca2aa662f069ceac98099f2e52afb0bf2ad00921"
       },
       "artifact": {
         "path": "products/casework/contracts/cli/PackageReport.schema.json",
@@ -3557,7 +3557,7 @@
       "description": "Registry Casework caseworkctl JSON report schemas, generated and held to caseworkctl's output by its contract test.",
       "source": {
         "path": "products/casework/scripts/generate_cli_schemas.py",
-        "sha256": "2b191386f3ce0fdd538ddf0d28d1eb06bcdb9db1310fc185cc5fe89b45385f50"
+        "sha256": "eaab554b7a7059e8acec3f9cca2aa662f069ceac98099f2e52afb0bf2ad00921"
       },
       "artifact": {
         "path": "products/casework/contracts/cli/PlanReport.schema.json",
@@ -3579,7 +3579,7 @@
       },
       "artifact": {
         "path": "products/casework/generated/project/project.schema.json",
-        "sha256": "9b2d01d49afcb08a0115dcaabd44b908b3cc00b7bd725b3acd840b23e8486491",
+        "sha256": "80f46c0a724cc9c5fe23ff079dea7b1627e44367237d1e8d3362ce124bafe2ab",
         "mediaType": "application/schema+json"
       }
     },
@@ -3593,7 +3593,7 @@
       "description": "Registry Casework caseworkctl JSON report schemas, generated and held to caseworkctl's output by its contract test.",
       "source": {
         "path": "products/casework/scripts/generate_cli_schemas.py",
-        "sha256": "2b191386f3ce0fdd538ddf0d28d1eb06bcdb9db1310fc185cc5fe89b45385f50"
+        "sha256": "eaab554b7a7059e8acec3f9cca2aa662f069ceac98099f2e52afb0bf2ad00921"
       },
       "artifact": {
         "path": "products/casework/contracts/cli/RetentionEraseReport.schema.json",
@@ -3615,7 +3615,7 @@
       },
       "artifact": {
         "path": "products/casework/generated/runtime/runtime.schema.json",
-        "sha256": "0578d57b0de8e7a5346b479ad968acdc37027491caa580641d4def35fa509179",
+        "sha256": "1b40bb165afc02ebcc102168e9d38ebcbcbd8956889f79dc3329e61dd2e30236",
         "mediaType": "application/schema+json"
       }
     },
@@ -3629,7 +3629,7 @@
       "description": "Registry Casework caseworkctl JSON report schemas, generated and held to caseworkctl's output by its contract test.",
       "source": {
         "path": "products/casework/scripts/generate_cli_schemas.py",
-        "sha256": "2b191386f3ce0fdd538ddf0d28d1eb06bcdb9db1310fc185cc5fe89b45385f50"
+        "sha256": "eaab554b7a7059e8acec3f9cca2aa662f069ceac98099f2e52afb0bf2ad00921"
       },
       "artifact": {
         "path": "products/casework/contracts/cli/SimulationReport.schema.json",
@@ -3665,7 +3665,7 @@
       "description": "Registry Casework caseworkctl JSON report schemas, generated and held to caseworkctl's output by its contract test.",
       "source": {
         "path": "products/casework/scripts/generate_cli_schemas.py",
-        "sha256": "2b191386f3ce0fdd538ddf0d28d1eb06bcdb9db1310fc185cc5fe89b45385f50"
+        "sha256": "eaab554b7a7059e8acec3f9cca2aa662f069ceac98099f2e52afb0bf2ad00921"
       },
       "artifact": {
         "path": "products/casework/contracts/cli/SourceAddReport.schema.json",
@@ -3683,7 +3683,7 @@
       "description": "Registry Casework caseworkctl JSON report schemas, generated and held to caseworkctl's output by its contract test.",
       "source": {
         "path": "products/casework/scripts/generate_cli_schemas.py",
-        "sha256": "2b191386f3ce0fdd538ddf0d28d1eb06bcdb9db1310fc185cc5fe89b45385f50"
+        "sha256": "eaab554b7a7059e8acec3f9cca2aa662f069ceac98099f2e52afb0bf2ad00921"
       },
       "artifact": {
         "path": "products/casework/contracts/cli/StatusReport.schema.json",
@@ -3701,7 +3701,7 @@
       "description": "Registry Casework caseworkctl JSON report schemas, generated and held to caseworkctl's output by its contract test.",
       "source": {
         "path": "products/casework/scripts/generate_cli_schemas.py",
-        "sha256": "2b191386f3ce0fdd538ddf0d28d1eb06bcdb9db1310fc185cc5fe89b45385f50"
+        "sha256": "eaab554b7a7059e8acec3f9cca2aa662f069ceac98099f2e52afb0bf2ad00921"
       },
       "artifact": {
         "path": "products/casework/contracts/cli/TestReport.schema.json",
@@ -3719,7 +3719,7 @@
       "description": "Registry Casework caseworkctl JSON report schemas, generated and held to caseworkctl's output by its contract test.",
       "source": {
         "path": "products/casework/scripts/generate_cli_schemas.py",
-        "sha256": "2b191386f3ce0fdd538ddf0d28d1eb06bcdb9db1310fc185cc5fe89b45385f50"
+        "sha256": "eaab554b7a7059e8acec3f9cca2aa662f069ceac98099f2e52afb0bf2ad00921"
       },
       "artifact": {
         "path": "products/casework/contracts/cli/UsageReport.schema.json",
@@ -3773,11 +3773,11 @@
       "description": "Registry Discovery authoring, runtime configuration, and index JSON Schema.",
       "source": {
         "path": "products/discovery/schemas/origins.schema.json",
-        "sha256": "5b122cf20d608a86aab74a8f965432220107265ee8e41bdc0b211f531b8dca8b"
+        "sha256": "19f90f5a2f87b250dcd54d16fe1810fbea6bdd58e6ec46891e20b3c5110605d5"
       },
       "artifact": {
         "path": "products/discovery/schemas/origins.schema.json",
-        "sha256": "5b122cf20d608a86aab74a8f965432220107265ee8e41bdc0b211f531b8dca8b",
+        "sha256": "19f90f5a2f87b250dcd54d16fe1810fbea6bdd58e6ec46891e20b3c5110605d5",
         "mediaType": "application/schema+json"
       }
     },
@@ -3813,7 +3813,7 @@
       },
       "artifact": {
         "path": "crates/registry-evidencectl/schemas/authoring/access-client.schema.json",
-        "sha256": "3dd57c5c97a12d1abe9e8bcb20750367007b63b6f171c9ed7f4ffbe40b2de6da",
+        "sha256": "d1f039cb33f28d2ba2336a9da11ca9b157f55dd58146959d4b973af9e0299b96",
         "mediaType": "application/schema+json"
       }
     },
@@ -3831,7 +3831,7 @@
       },
       "artifact": {
         "path": "crates/registry-evidencectl/schemas/authoring/access-policy.schema.json",
-        "sha256": "04ea0b57d959376f5ed277e920223b2be711c8594ed032f7c83cb649200f5919",
+        "sha256": "7cb7788aa97db48696aa1653f352de505298d0bcd9cd9b584d69809206c34dea",
         "mediaType": "application/schema+json"
       }
     },
@@ -3863,11 +3863,11 @@
       "description": "Evidence frozen Version 1 contract and configuration schemas, written as YAML.",
       "source": {
         "path": "products/evidence/contracts/bundle.schema.yaml",
-        "sha256": "6f6dceaf89a840dc51388c9a153077dbaba0dbd2fb36a1c9381e9b3c5f33bfa2"
+        "sha256": "d258ddc77ff80875d92c35bd153d4bfc24d354cd77335a196a9964b5a89c61cd"
       },
       "artifact": {
         "path": "products/evidence/contracts/bundle.schema.yaml",
-        "sha256": "6f6dceaf89a840dc51388c9a153077dbaba0dbd2fb36a1c9381e9b3c5f33bfa2",
+        "sha256": "d258ddc77ff80875d92c35bd153d4bfc24d354cd77335a196a9964b5a89c61cd",
         "mediaType": "application/yaml"
       }
     },
@@ -3903,7 +3903,7 @@
       },
       "artifact": {
         "path": "products/evidence/generated/client-profile/client-profile.schema.json",
-        "sha256": "06d69b6196f804d1a97c17a470dc52668cce601078eb14d8a1c064330e4f93ec",
+        "sha256": "67cddb577791407b017c46465860c1a1674b45d3b7ed4005a2ea12cea3bb61d5",
         "mediaType": "application/schema+json"
       }
     },
@@ -3993,7 +3993,7 @@
       },
       "artifact": {
         "path": "products/evidence/generated/oid4vci-runtime/oid4vci-runtime.schema.json",
-        "sha256": "c94385f7688f486dd65a539791521ab7482e2f94f8abeae5b535dbc8611fa01d",
+        "sha256": "b12dc4d6979d728fe30df5d3a254490d404819a9730fdcd2c4d0376e4571248c",
         "mediaType": "application/schema+json"
       }
     },
@@ -4191,7 +4191,7 @@
       },
       "artifact": {
         "path": "products/manifest/schemas/profile.schema.json",
-        "sha256": "30201e79f5905762ece3cde37143e512079bfd2774f6f9e400041e93be629670",
+        "sha256": "a94130c4276456fcb5a50d7b73c225762d86c471faed372c08b1343f44644987",
         "mediaType": "application/schema+json"
       }
     },
@@ -4245,7 +4245,7 @@
       },
       "artifact": {
         "path": "products/messaging/generated/runtime/runtime.schema.json",
-        "sha256": "40406efc23cb940b7d38e1e04efd23754b7544c57945f3f29410f0b50cff3506",
+        "sha256": "313efc6342fcb1fdbbabdd8fd279c58032e418476825fe823c67cdcf14029396",
         "mediaType": "application/schema+json"
       }
     },
@@ -4281,7 +4281,7 @@
       },
       "artifact": {
         "path": "products/platform/schemas/task-connection.schema.json",
-        "sha256": "50c93b587a88ade24d7ecfc9555e5650a5059ce9ec32105152947d4160d401fd",
+        "sha256": "706e5506bf8bb44d7717ff00e841af2f862502437f3502c3eeadde91a0465030",
         "mediaType": "application/schema+json"
       }
     },
@@ -4425,7 +4425,7 @@
       },
       "artifact": {
         "path": "products/scheduling/generated/runtime/runtime.schema.json",
-        "sha256": "edc71f314f89757b83815bf7133130d988b17dd64ac1643f2ade89b417a1fde9",
+        "sha256": "115e58ff8bc7cc92f029a1d814760246933d54bc58f660553b246fa190bcea5a",
         "mediaType": "application/schema+json"
       }
     },
