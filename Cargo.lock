@@ -4917,6 +4917,7 @@ dependencies = [
  "registry-platform-httputil",
  "registry-record",
  "reqwest 0.12.28",
+ "schemars",
  "serde",
  "serde_json",
  "sha2 0.11.0",
@@ -6946,6 +6947,7 @@ dependencies = [
  "schemars_derive",
  "serde",
  "serde_json",
+ "uuid",
 ]
 
 [[package]]
