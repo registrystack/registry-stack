@@ -643,9 +643,9 @@ Every entry marked `review_required` needs a reviewer's judgement, such as a
 wrapper that forwards a runtime name.
 
 From v0.36.0 the BReg, Casework, and Scheduling images also carry their
-operator tool at `/usr/local/bin/<name>ctl`, and
-`exposure/<name>.<name>ctl.json` records the same facts for it. The tool is not
-the Entrypoint, so an exception's whole-image fingerprint `files` do not name
+operator tool at `/usr/local/bin/<name>ctl`; Messaging joins from v0.38.0. The
+`exposure/<name>.<name>ctl.json` report records the same facts for it. The tool
+is not the Entrypoint, so an exception's whole-image fingerprint `files` do not name
 it, and renewal moves the application layer that holds it without reading
 any exposure report. Review both reports before renewing: an exception whose rationale
 describes only the runtime executable must be rewritten to cover the tool, and
