@@ -1105,3 +1105,27 @@ suggested action is the one for a damaged database. The release notes of
 the release that made each break, v0.36.0 and v0.40.0, carry the
 instruction. The unpublished-audit guard (SCHEDULING-SEC-14) and the
 removed-key refusals remain.
+
+## Original receipt observation
+
+Threat: recovery submits a second effect after cancellation, expiry, or restore,
+or accepts a different caller's receipt as evidence of its original command.
+The receipt lookup uses current ordinary read authority, the original verified
+issuer and subject, the exact operation key, and the existing canonical request
+hash. It reads only retained successful receipts and never renders, writes business state,
+replays, or creates an attempt. Task lineage already stored with the original
+operation is preserved. A different standing identity gains no ownership.
+
+Missing, changed, erased, expired, and non-success receipts all answer the
+value-free `409 receipt.unresolved`. That response establishes no absence of
+effect. A durable audit request precedes the database lookup and its response
+precedes disclosure of the receipt. Payloads, keys, and raw identities never
+enter these audit records. The focused PostgreSQL receipt tests exercise
+ownership, exact-request refusal, retention, and unchanged product state.
+
+Residual risk: receipt observation is not throttled, like every other
+Scheduling route; Scheduling keeps no request budget of its own. An
+authenticated caller that repeats it costs one bounded indexed lookup and its
+audit records per request. This is accepted rather than given a read budget:
+an operator bounds an authenticated flood at the deployment's ingress, as for
+every other route.

@@ -8886,6 +8886,308 @@ async fn a_permission_refusal_the_destination_refuses_answers_service_unavailabl
     assert_eq!(problem["code"], "service.unavailable");
 }
 
+#[tokio::test]
+async fn original_appointment_receipt_is_readable_without_a_grant_and_never_creates_capacity() {
+    let fx = fixture().await;
+    let slot = first_slot(&fx, OFFERING, 300, 440).await;
+    let body = json!({"hold": null, "admission": admission(&fx, OFFERING, slot)});
+    let key = "original-booking-receipt";
+    let (status, original) = fx
+        .post("/v1/appointments", &fx.agent, key, body.clone())
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{original}");
+    let same_owner = token(json!({"sub":"principal-agent", "azp": CLIENT,
+        "registry_scopes":"scheduling-read", "registry_actor_kind":"service"}));
+    let before: i64 = fx
+        .admin
+        .query_one("SELECT count(*) FROM scheduling_claims", &[])
+        .await
+        .unwrap()
+        .get(0);
+    let (status, observed) = fx
+        .post("/v1/appointments/receipt", &same_owner, key, body.clone())
+        .await;
+    assert_eq!(status, StatusCode::OK, "{observed}");
+    assert_eq!(observed, original);
+    let mut changed = body.clone();
+    changed["admission"]["duplicateKey"] = json!("different-party");
+    for (bearer, command_key, request) in [
+        (&fx.reader, key, body.clone()),
+        (&same_owner, "missing-key", body.clone()),
+        (&same_owner, key, changed),
+    ] {
+        let (status, unresolved) = fx
+            .post("/v1/appointments/receipt", bearer, command_key, request)
+            .await;
+        assert_eq!(status, StatusCode::CONFLICT, "{unresolved}");
+        assert_eq!(unresolved["code"], "receipt.unresolved");
+    }
+    fx.admin
+        .execute(
+            "UPDATE scheduling_attempts SET expires_at=$1",
+            &[&(pinned_now() - TimeDelta::seconds(1))],
+        )
+        .await
+        .unwrap();
+    let (status, unresolved) = fx
+        .post("/v1/appointments/receipt", &same_owner, key, body)
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{unresolved}");
+    assert_eq!(unresolved["code"], "receipt.unresolved");
+    let after: i64 = fx
+        .admin
+        .query_one("SELECT count(*) FROM scheduling_claims", &[])
+        .await
+        .unwrap()
+        .get(0);
+    let attempts: i64 = fx
+        .admin
+        .query_one("SELECT count(*) FROM scheduling_attempts", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(before, after);
+    assert_eq!(attempts, 1);
+}
+
+/// A confirmation from a hold is stored under that hold's own confirm scope,
+/// so its receipt is read back by naming the hold, and only the hold and the
+/// key that confirmed it resolve it.
+#[tokio::test]
+async fn original_hold_confirmation_receipt_is_read_by_its_hold_and_key() {
+    let fx = fixture().await;
+    let slot = first_slot(&fx, OFFERING, 300, 440).await;
+    let (status, hold) = fx
+        .post(
+            "/v1/holds",
+            &fx.agent,
+            "receipt-hold",
+            admission(&fx, OFFERING, slot),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{hold}");
+    let hold_id = hold["holdId"].as_str().expect("a hold identifier");
+    let body = json!({"hold": hold_id, "admission": null});
+    let key = "original-hold-confirmation";
+    let (status, original) = fx
+        .post("/v1/appointments", &fx.agent, key, body.clone())
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{original}");
+    let same_owner = token(json!({"sub":"principal-agent", "azp": CLIENT,
+        "registry_scopes":"scheduling-read", "registry_actor_kind":"service"}));
+    let before = claims_and_receipts(&fx).await;
+
+    let (status, observed) = fx
+        .post("/v1/appointments/receipt", &same_owner, key, body.clone())
+        .await;
+    assert_eq!(status, StatusCode::OK, "{observed}");
+    assert_eq!(observed, original);
+
+    let other_hold = json!({"hold": Uuid::new_v4().to_string(), "admission": null});
+    for (command_key, request) in [(key, other_hold), ("receipt-hold", body)] {
+        let (status, unresolved) = fx
+            .post(
+                "/v1/appointments/receipt",
+                &same_owner,
+                command_key,
+                request,
+            )
+            .await;
+        assert_eq!(status, StatusCode::CONFLICT, "{unresolved}");
+        assert_eq!(unresolved["code"], "receipt.unresolved");
+    }
+    assert_eq!(claims_and_receipts(&fx).await, before);
+}
+
+/// A refusal stores its receipt so a replay of the key answers the same, but
+/// that receipt is never an original appointment: the receipt read resolves
+/// only a completed attempt that answered 200 or 201.
+#[tokio::test]
+async fn a_refused_attempt_never_resolves_an_original_appointment_receipt() {
+    let fx = fixture().await;
+    let slot = first_slot(&fx, OFFERING, 300, 440).await;
+    let body = json!({"hold": null, "admission": admission(&fx, OFFERING, slot)});
+    let booked_key = "receipt-booked";
+    let (status, booked) = fx
+        .post("/v1/appointments", &fx.agent, booked_key, body.clone())
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{booked}");
+    let refused_key = "receipt-refused";
+    let (status, refused) = fx
+        .post("/v1/appointments", &fx.agent, refused_key, body.clone())
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refused}");
+    assert_eq!(refused["code"], "capacity.exhausted");
+    let stored: (String, i32) = fx
+        .admin
+        .query_one(
+            "SELECT state, status_code FROM scheduling_attempts WHERE idempotency_key=$1",
+            &[&refused_key],
+        )
+        .await
+        .map(|row| (row.get(0), row.get(1)))
+        .expect("the refusal stored its receipt");
+    assert_eq!(stored, ("refused".to_owned(), 409));
+    let same_owner = token(json!({"sub":"principal-agent", "azp": CLIENT,
+        "registry_scopes":"scheduling-read", "registry_actor_kind":"service"}));
+
+    let (status, unresolved) = fx
+        .post(
+            "/v1/appointments/receipt",
+            &same_owner,
+            refused_key,
+            body.clone(),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{unresolved}");
+    assert_eq!(unresolved["code"], "receipt.unresolved");
+
+    // No path completes an attempt with a refusal status, so the status
+    // filter is observed by giving the booked attempt one: its stored
+    // appointment would otherwise still be disclosed.
+    fx.admin
+        .execute(
+            "UPDATE scheduling_attempts SET status_code=409 WHERE idempotency_key=$1",
+            &[&booked_key],
+        )
+        .await
+        .expect("rewrite the booked attempt's status");
+    let (status, unresolved) = fx
+        .post("/v1/appointments/receipt", &same_owner, booked_key, body)
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{unresolved}");
+    assert_eq!(unresolved["code"], "receipt.unresolved");
+    assert_eq!(claims_and_receipts(&fx).await, (1, 2));
+}
+
+#[tokio::test]
+async fn original_appointment_receipt_disclosure_requires_both_audit_entries() {
+    for accepted_writes in [0, 1] {
+        let fx = fixture().await;
+        let slot = first_slot(&fx, OFFERING, 300, 440).await;
+        let body = json!({"hold": null, "admission": admission(&fx, OFFERING, slot)});
+        let key = "audit-gated-original-booking";
+        assert_eq!(
+            fx.post("/v1/appointments", &fx.agent, key, body.clone())
+                .await
+                .0,
+            StatusCode::CREATED
+        );
+        fx.capture
+            .refuse_after(fx.capture.entries().len() + accepted_writes);
+        let (status, problem) = fx
+            .post("/v1/appointments/receipt", &fx.agent, key, body)
+            .await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{problem}");
+        assert_eq!(problem["code"], "service.unavailable");
+        assert_eq!(claims_and_receipts(&fx).await, (1, 1));
+    }
+}
+
+#[tokio::test]
+async fn original_appointment_receipt_authenticates_before_parsing_its_bounded_body() {
+    async fn raw_receipt(
+        fx: &Fixture,
+        bearer: Option<&str>,
+        media_type: &str,
+        body: &str,
+        declared_length: bool,
+    ) -> (StatusCode, Value) {
+        let mut request = Request::builder()
+            .method("POST")
+            .uri("/v1/appointments/receipt")
+            .header("content-type", media_type)
+            .header("idempotency-key", "authenticated-original-receipt");
+        if let Some(bearer) = bearer {
+            request = request.header("authorization", format!("Bearer {bearer}"));
+        }
+        if declared_length {
+            request = request.header("content-length", body.len());
+        }
+        let response = fx
+            .http
+            .clone()
+            .oneshot(request.body(Body::from(body.to_owned())).unwrap())
+            .await
+            .unwrap();
+        let status = response.status();
+        assert_eq!(
+            response.headers()["content-type"],
+            "application/problem+json"
+        );
+        let bytes = to_bytes(response.into_body(), 1 << 20).await.unwrap();
+        let value: Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(!String::from_utf8_lossy(&bytes).contains("private-body-canary"));
+        assert!(!String::from_utf8_lossy(&bytes).contains("private-credential-canary"));
+        (status, value)
+    }
+
+    let fx = fixture().await;
+    let slot = first_slot(&fx, OFFERING, 300, 440).await;
+    let body = json!({"hold": null, "admission": admission(&fx, OFFERING, slot)});
+    let key = "authenticated-original-receipt";
+    let (status, original) = fx
+        .post("/v1/appointments", &fx.agent, key, body.clone())
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{original}");
+    let same_owner = token(json!({"sub":"principal-agent", "azp": CLIENT,
+        "registry_scopes":"scheduling-read", "registry_actor_kind":"service"}));
+    let oversized = "x".repeat(registry_platform_httpsec::DEFAULT_REQUEST_BODY_LIMIT_BYTES + 1);
+    for (media_type, text) in [
+        ("application/json", "{private-body-canary"),
+        ("application/json", r#"{"hold":42}"#),
+        ("text/plain", "private-body-canary"),
+        ("application/json", oversized.as_str()),
+    ] {
+        for bearer in [None, Some("invalid-token-private-credential-canary")] {
+            let (status, problem) = raw_receipt(&fx, bearer, media_type, text, false).await;
+            assert_eq!(status, StatusCode::UNAUTHORIZED, "{problem}");
+            assert_eq!(problem["code"], "authentication.refused");
+        }
+    }
+    // The router's existing declared-size ceiling precedes the handler even
+    // for unauthenticated traffic. Do not weaken it to change parse ordering.
+    let (status, problem) = raw_receipt(&fx, None, "application/json", &oversized, true).await;
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE, "{problem}");
+    assert_eq!(problem["code"], "request.body-too-large");
+    for (media_type, text, expected_status, expected_code) in [
+        (
+            "application/json",
+            "{private-body-canary",
+            StatusCode::BAD_REQUEST,
+            "request.invalid",
+        ),
+        (
+            "application/json",
+            r#"{"hold":42}"#,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "request.unprocessable",
+        ),
+        (
+            "text/plain",
+            "private-body-canary",
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "request.unsupported-media-type",
+        ),
+        (
+            "application/json",
+            oversized.as_str(),
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "request.body-too-large",
+        ),
+    ] {
+        let (status, problem) = raw_receipt(&fx, Some(&same_owner), media_type, text, false).await;
+        assert_eq!(status, expected_status, "{problem}");
+        assert_eq!(problem["code"], expected_code);
+    }
+    let (status, observed) = fx
+        .post("/v1/appointments/receipt", &same_owner, key, body)
+        .await;
+    assert_eq!(status, StatusCode::OK, "{observed}");
+    assert_eq!(observed, original);
+    assert_eq!(claims_and_receipts(&fx).await, (1, 1));
+}
+
 /// Rewrite the retained current policy document so its identity sits under a
 /// top-level `scheduling` member, which the policy model does not define,
 /// leaving the required `project` block absent.

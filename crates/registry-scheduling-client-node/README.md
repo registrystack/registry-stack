@@ -29,3 +29,9 @@ never established, and every 4xx refusal. It is false for
 answered and may have committed: read an appointment by its external reference
 or identifier before choosing a new key. A hold cannot be read and expires on
 its own, so start a new request.
+
+`appointmentReceipt` observes a retained original success using the original request and
+caller-chosen key with a current token. It makes one receipt request, never
+replays the mutation and never retries. `receipt.unresolved` leaves the
+original effect unknown; a missing or expired receipt does not prove absence.
+The error's `outcomeUnknown` describes this read, not the original effect.

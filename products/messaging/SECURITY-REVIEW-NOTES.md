@@ -1019,3 +1019,40 @@ field. This regression is excluded from `postgres-test` builds so a permissive
 test binary cannot satisfy the shipped-feature proof. The runtime guard and
 release build feature selection are unchanged; the existing default-feature
 test suite owns this check.
+
+## Original receipt observation
+
+Threat: recovery submits a second effect after cancellation, expiry, or restore,
+or accepts a different caller's receipt as evidence of its original command.
+The receipt lookup uses current ordinary read authority, the original verified
+issuer and configured principal, the exact operation key, and the existing canonical request
+hash. It reads only retained successful receipts and never renders, writes business state,
+replays, or creates an attempt. Task lineage already stored with the original
+operation is preserved. A different standing identity gains no ownership.
+
+Missing, changed, erased, expired, and non-success receipts all answer the
+value-free `409 receipt.unresolved`. That response establishes no absence of
+effect. A durable audit request precedes the database lookup and its response
+precedes disclosure of the receipt. Payloads, keys, and raw identities never
+enter these audit records. The focused PostgreSQL receipt tests exercise
+ownership, exact-request refusal, retention, and unchanged product state.
+
+Receipt observation uses no submission rate budget because it neither renders
+nor sends. Exhausting that budget must not prevent recovery of an already
+accepted command. Authentication, bounded bodies, exact caller/request matching,
+retention, and audit gates still apply. The PostgreSQL test
+`original_receipt_reads_neither_spend_nor_require_submission_budget` reads the
+same stored receipt before and after the budget is exhausted and proves that
+the next submission is still rate limited. The operation's published contract
+lists no `429`, which `the_receipt_read_publishes_no_rate_limit_answer` in
+`schema.rs` holds.
+
+Residual risk: receipt observation is not throttled. An authenticated caller
+that repeats it makes the runtime authenticate each request, perform one
+bounded indexed lookup, and write its audit records, the same kind of journal
+growth a refused submission flood already causes (see Limits). This is
+accepted rather than given a separate read budget: an operator relies on the
+deployment's edge proxy to bound an authenticated flood on this route as on
+every other.
+
+When a caller must be bound to its issuer and subject, configure the Messaging caller profile with `principalClaim: sub`. Other profiles retain the product’s existing configured principal ownership rule, and cannot substitute a different principal to observe an original receipt.

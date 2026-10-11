@@ -19,6 +19,7 @@ export declare class SchedulingClient {
   createHold(token: string, idempotencyKey: string, request: any): Promise<SchedulingOutcome>
   releaseHold(token: string, holdId: string): Promise<SchedulingOutcome>
   createAppointment(token: string, idempotencyKey: string, request: any): Promise<SchedulingOutcome>
+  appointmentReceipt(token: string, idempotencyKey: string, request: any): Promise<SchedulingOutcome>
   getAppointment(token: string, appointmentId: string): Promise<SchedulingOutcome>
   listAppointments(token: string, reference: any, page?: any | undefined | null): Promise<SchedulingOutcome>
   rescheduleAppointment(token: string, appointmentId: string, idempotencyKey: string, request: any): Promise<SchedulingOutcome>

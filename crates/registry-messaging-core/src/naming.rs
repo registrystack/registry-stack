@@ -101,6 +101,9 @@ pub const METRICS_PATH: &str = "/metrics";
 /// Route accepting message submissions.
 pub const MESSAGES_PATH: &str = "/v1/messages";
 
+/// Read-only lookup of an original submission receipt.
+pub const MESSAGE_RECEIPT_PATH: &str = "/v1/messages/receipt";
+
 /// Route template reading one message.
 pub const MESSAGE_PATH: &str = "/v1/messages/{message_id}";
 

@@ -491,6 +491,27 @@ impl SchedulingClient {
         )
     }
 
+    fn appointment_receipt<'py>(
+        &self,
+        py: Python<'py>,
+        token: &str,
+        idempotency_key: &str,
+        request: &Bound<'_, PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let token = bearer(py, token)?;
+        let request: CreateAppointmentRequest = input(py, request)?;
+        complete(
+            py,
+            py.detach(|| {
+                self.runtime.block_on(self.inner.appointment_receipt(
+                    SchedulingAuth::new(&token),
+                    idempotency_key,
+                    &request,
+                ))
+            }),
+        )
+    }
+
     fn get_appointment<'py>(
         &self,
         py: Python<'py>,

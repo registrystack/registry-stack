@@ -43,6 +43,7 @@ entries:
       - {path: crates/registry-messaging/src/smtp/tests.rs, name: development_plaintext_refuses_an_answer_that_is_not_loopback}
   - id: MESSAGING-SEC-04
     tests:
+      - {path: crates/registry-messaging/tests/postgres_messages.rs, name: original_receipt_reads_preserve_ownership_request_expiry_and_product_state}
       - {path: crates/registry-messaging-core/src/visibility.rs, name: another_caller_is_told_the_message_is_not_visible}
       - {path: crates/registry-messaging-core/src/visibility.rs, name: a_missing_message_answers_exactly_like_an_invisible_one}
       - {path: crates/registry-messaging/src/http.rs, name: an_authenticated_caller_is_told_an_unknown_message_is_not_visible}
@@ -125,6 +126,7 @@ entries:
       - {path: crates/registry-messaging-core/src/receipt.rs, name: a_terminal_state_is_never_displaced_by_the_other_terminal_state}
   - id: MESSAGING-SEC-08
     tests:
+      - {path: crates/registry-messaging/tests/postgres_messages.rs, name: original_receipt_disclosure_requires_both_audit_entries}
       - {path: crates/registry-platform-activation/tests/postgres_activation.rs, name: postgres_version_floor_precedes_missing_ledger_observation}
       - {path: crates/registry-messaging/tests/postgres_package.rs, name: apply_refuses_a_newer_schema_before_activation_and_audits_the_refusal}
       - {path: crates/registry-messaging/tests/postgres_package.rs, name: split_role_activation_binds_identity_and_withholds_both_ledgers}

@@ -170,6 +170,7 @@ export type SchedulingProblemCode =
   | 'precondition.required'
   | 'prerequisite.missing'
   | 'profile.not-authorized'
+  | 'receipt.unresolved'
   | 'request.body-too-large'
   | 'request.invalid'
   | 'request.method-not-allowed'
@@ -216,6 +217,8 @@ export class SchedulingClient {
   createHold(token: string, idempotencyKey: string, request: AdmissionRequest): Promise<SchedulingOutcome<HoldDocument>>
   releaseHold(token: string, holdId: string): Promise<SchedulingOutcome<null>>
   createAppointment(token: string, idempotencyKey: string, request: CreateAppointmentRequest): Promise<SchedulingOutcome<AppointmentDocument>>
+  /** Observe the original success using the same body/key and current token; never resend or mutate. */
+  appointmentReceipt(token: string, idempotencyKey: string, request: CreateAppointmentRequest): Promise<SchedulingOutcome<AppointmentDocument>>
   getAppointment(token: string, appointmentId: string): Promise<SchedulingOutcome<AppointmentDocument>>
   listAppointments(token: string, reference: ExternalReference, page?: PageQuery | null): Promise<SchedulingOutcome<PageDocument<AppointmentDocument>>>
   rescheduleAppointment(token: string, appointmentId: string, idempotencyKey: string, request: RescheduleAppointmentRequest): Promise<SchedulingOutcome<AppointmentDocument>>

@@ -694,6 +694,11 @@ invariants:
       per-caller hold ceiling stops counting holds the caller already has; or
       the owner leaks into a receipt, outbox payload, or observer projection.
     enforcementPoint: >-
+      Original receipt observation matches the verified issuer and subject,
+      original operation key and canonical request hash, reads only retained
+      successful receipts, and never replays a capacity command.
+      The receipt route authenticates before media-type checks and JSON
+      decoding, under the router's existing request-body ceiling.
       A claim stores the verified issuer and subject that booked it under a
       check constraint holding both present and non-empty or both absent.
       ClaimRow::is_owned_by, owned_booking, the external reference listing,

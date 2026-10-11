@@ -22,7 +22,7 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use axum::extract::{Path, Query, State};
+use axum::extract::{FromRequest, Path, Query, Request, State};
 use axum::http::header::{
     AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE, RETRY_AFTER, WWW_AUTHENTICATE,
 };
@@ -39,8 +39,8 @@ use registry_platform_httpsec::{
 use registry_scheduling_core::{
     type_uri, valid_identifier, valid_reference, AdmissionRequest, CancelAppointmentRequest,
     CreateAppointmentRequest, ExternalReference, ProblemCode, RescheduleAppointmentRequest,
-    APPOINTMENTS_PATH, AVAILABILITY_EXPLAIN_PATH, AVAILABILITY_PATH, HOLDS_PATH,
-    IDEMPOTENCY_KEY_HEADER, LOCATIONS_PATH, MAXIMUM_COLLECTION_ENTRIES,
+    APPOINTMENTS_PATH, APPOINTMENT_RECEIPT_PATH, AVAILABILITY_EXPLAIN_PATH, AVAILABILITY_PATH,
+    HOLDS_PATH, IDEMPOTENCY_KEY_HEADER, LOCATIONS_PATH, MAXIMUM_COLLECTION_ENTRIES,
     MAXIMUM_IDEMPOTENCY_KEY_BYTES, OFFERINGS_PATH, RESOURCES_PATH, SCHEDULING_PATH, SERVICES_PATH,
 };
 use serde::Deserialize;
@@ -84,6 +84,7 @@ pub fn router(state: HttpState) -> Router {
             .route(HOLD_ROUTE, delete(release_hold))
             .route(APPOINTMENTS_PATH, get(list_appointments))
             .route(APPOINTMENTS_PATH, post(create_appointment))
+            .route(APPOINTMENT_RECEIPT_PATH, post(appointment_receipt))
             .route(APPOINTMENT_ROUTE, get(get_appointment))
             .route(APPOINTMENT_RESCHEDULE_ROUTE, post(reschedule_appointment))
             .route(APPOINTMENT_CANCEL_ROUTE, post(cancel_appointment))
@@ -363,6 +364,32 @@ async fn create_appointment(
             receipt,
         } => replay_response(status_code, receipt),
     })
+}
+
+async fn appointment_receipt(
+    State(state): State<HttpState>,
+    request: Request,
+) -> Result<Response, HttpError> {
+    let caller = authenticate_read(&state, request.headers()).await?;
+    let headers = request.headers().clone();
+    // Keep Axum's media-type, request-shape and bounded-body semantics, but
+    // authenticate the receipt observer before any JSON extraction.
+    let Json(request) = match Json::<CreateAppointmentRequest>::from_request(request, &state).await
+    {
+        Ok(request) => request,
+        Err(rejection) => return Ok(rejection.into_response()),
+    };
+    let key = idempotency_key(&headers)?;
+    if let Some(admission) = &request.admission {
+        bounded_admission(admission)?;
+    }
+    Ok(Json(
+        state
+            .service
+            .appointment_receipt(&caller, key, &request, state.store.observed_now())
+            .await?,
+    )
+    .into_response())
 }
 
 async fn get_appointment(

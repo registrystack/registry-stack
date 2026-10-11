@@ -225,6 +225,22 @@ impl SchedulingClient {
     }
 
     #[napi]
+    pub async fn appointment_receipt(
+        &self,
+        token: String,
+        idempotency_key: String,
+        request: Value,
+    ) -> Result<SchedulingOutcome> {
+        let token = bearer(token)?;
+        let request: CreateAppointmentRequest = input(request)?;
+        outcome(
+            self.inner
+                .appointment_receipt(SchedulingAuth::new(&token), &idempotency_key, &request)
+                .await,
+        )
+    }
+
+    #[napi]
     pub async fn get_appointment(
         &self,
         token: String,
