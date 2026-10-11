@@ -3,10 +3,13 @@
 //! through the platform audit writer. These tests are the DoD's serve-mode
 //! acceptance coverage.
 
-use std::io::{BufRead, BufReader, Read, Write};
+use std::collections::BTreeSet;
+use std::fs::File;
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdout, Command, Stdio};
+use std::process::{Child, ChildStdout, Command, ExitStatus, Stdio};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 const API_KEY: &str = "test-key-0123456789abcdef0123456789abcdef";
@@ -52,11 +55,18 @@ fn physical_tempdir() -> (tempfile::TempDir, PathBuf) {
 }
 
 fn free_port() -> u16 {
-    TcpListener::bind("127.0.0.1:0")
-        .expect("bind for port discovery")
-        .local_addr()
-        .expect("local addr")
-        .port()
+    // Port discovery releases the socket before the child binds it. Keep every
+    // issued port distinct so parallel fixtures cannot reach each other's server.
+    static ISSUED_PORTS: Mutex<BTreeSet<u16>> = Mutex::new(BTreeSet::new());
+    let mut issued = ISSUED_PORTS.lock().expect("issued test ports");
+    for _ in 0..1024 {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind for port discovery");
+        let port = listener.local_addr().expect("local addr").port();
+        if issued.insert(port) {
+            return port;
+        }
+    }
+    panic!("could not allocate a distinct fixture port");
 }
 
 fn copy_dir(from: &Path, to: &Path) {
@@ -113,25 +123,72 @@ fn start_server(runtime_path: &Path) -> Server {
 }
 
 fn start_server_at(runtime_path: &Path, current_dir: Option<&Path>) -> Server {
-    spawn_server(runtime_path, current_dir, Stdio::null())
+    spawn_server(runtime_path, current_dir, Stdio::null)
 }
 
 /// Start a server whose standard output the test reads: the audit stream
 /// of a `stdout` destination.
 fn start_server_with_stdout(runtime_path: &Path) -> (Server, ChildStdout) {
-    let mut server = spawn_server(runtime_path, None, Stdio::piped());
+    let mut server = spawn_server(runtime_path, None, Stdio::piped);
     let stdout = server.child.stdout.take().expect("piped stdout");
     (server, stdout)
 }
 
-fn spawn_server(runtime_path: &Path, current_dir: Option<&Path>, stdout: Stdio) -> Server {
+fn spawn_server(runtime_path: &Path, current_dir: Option<&Path>, stdout: fn() -> Stdio) -> Server {
+    // Another socket can take the port before the child binds it, so retry on a fresh one.
+    let mut retries = 0;
+    loop {
+        if let Some(server) = try_spawn_server(runtime_path, current_dir, stdout()) {
+            return server;
+        }
+        retries += 1;
+        assert!(retries <= 3, "server port was taken on every attempt");
+        move_to_fresh_port(runtime_path);
+    }
+}
+
+/// Point a runtime's listener at a fresh port.
+fn move_to_fresh_port(runtime_path: &Path) {
+    let text = std::fs::read_to_string(runtime_path).unwrap();
+    let bind = text
+        .lines()
+        .find(|l| l.contains("bind:"))
+        .expect("listener bind");
+    let (address, _) = bind.rsplit_once(':').expect("bind port");
+    let moved = text.replacen(bind, &format!("{address}:{}", free_port()), 1);
+    std::fs::write(runtime_path, moved).unwrap();
+}
+
+/// Fail with the server's output unless it exited because its port was taken.
+fn fail_unless_port_taken(status: ExitStatus, stderr: &mut File, context: &str) {
+    let mut output = String::new();
+    stderr
+        .seek(SeekFrom::Start(0))
+        .expect("rewind server stderr");
+    stderr
+        .read_to_string(&mut output)
+        .expect("read server stderr");
+    let runtime_invalid = registry_render::ProblemKind::RuntimeInvalid.exit_code();
+    if status.code() != Some(runtime_invalid) || !output.contains("Address already in use") {
+        panic!("{context} with {status}:\n{output}");
+    }
+}
+
+/// Spawn a server and wait for its health answer; `None` when its port was
+/// taken before it could bind.
+fn try_spawn_server(
+    runtime_path: &Path,
+    current_dir: Option<&Path>,
+    stdout: Stdio,
+) -> Option<Server> {
+    let mut stderr = tempfile::tempfile().expect("server stderr file");
     let mut command = Command::new(env!("CARGO_BIN_EXE_registry-render"));
     command
         .arg("serve")
         .arg("--runtime-config")
         .arg(runtime_path)
         .stdout(stdout)
-        .stderr(Stdio::null());
+        .stderr(stderr.try_clone().expect("server stderr handle"));
     if let Some(dir) = current_dir {
         command.current_dir(dir);
     }
@@ -145,24 +202,33 @@ fn spawn_server(runtime_path: &Path, current_dir: Option<&Path>, stdout: Stdio) 
         .expect("port from runtime");
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
+        if let Some(status) = child.try_wait().expect("server status") {
+            fail_unless_port_taken(status, &mut stderr, "server exited early");
+            return None;
+        }
         if let Ok(mut stream) = TcpStream::connect(("127.0.0.1", port)) {
             let _ = stream
                 .write_all(b"GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
             let mut buf = [0u8; 256];
             if stream.read(&mut buf).is_ok_and(|n| n > 0) {
-                return Server {
+                if let Some(status) = child.try_wait().expect("server status") {
+                    fail_unless_port_taken(
+                        status,
+                        &mut stderr,
+                        "server exited before becoming healthy",
+                    );
+                    return None;
+                }
+                return Some(Server {
                     child,
                     port,
                     home: PathBuf::from("/tmp"),
-                };
+                });
             }
         }
         if Instant::now() > deadline {
             let _ = child.kill();
             panic!("server did not become healthy in 30s");
-        }
-        if let Ok(Some(status)) = child.try_wait() {
-            panic!("server exited early with {status}");
         }
         std::thread::sleep(Duration::from_millis(100));
     }
@@ -306,6 +372,24 @@ fn serve_health_and_ready() {
     assert_eq!(ready.status, 200);
     drop(server);
     let _ = home;
+}
+
+#[test]
+fn a_fixture_port_taken_before_the_bind_moves_to_a_fresh_port() {
+    let (_home, runtime, port) = deployment(
+        DEFAULT_LIMITS,
+        &repo_root().join("products/render/bundles/receipt"),
+    );
+    // A listener that answers nothing holds the port, the way a parallel port
+    // discovery can hold it while the child binds.
+    let holder = TcpListener::bind(("127.0.0.1", port)).expect("hold the fixture port");
+    std::thread::spawn(move || holder.incoming().for_each(drop));
+    let server = start_server(&runtime);
+    assert_ne!(server.port, port);
+    assert_eq!(
+        request(server.port, "GET", "/health", &[], None).status,
+        200
+    );
 }
 
 #[test]
