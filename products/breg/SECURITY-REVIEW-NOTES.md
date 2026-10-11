@@ -2865,3 +2865,70 @@ field. This regression is excluded from `postgres-test` builds so a permissive
 test binary cannot satisfy the shipped-feature proof. The runtime guard and
 release build feature selection are unchanged; the existing default-feature
 test suite owns this check.
+
+## Standing agent profiles and statistical publication
+
+A standing agent profile, one that declares `actorKind: agent` and no
+`taskGrant`, can no longer hold `publish` on a statistical dataset. The
+change is an authorization ceiling enforced at compile time. It adds no
+runtime check and changes no route, audit record, or release decision. Its
+invariant row is BREG-SEC-168.
+
+### Threat
+
+A standing agent carries no human approval. Publishing a statistical release
+and withdrawing one both commit at once: publication fixes released counts,
+and withdrawal erases released content, with no draft for a person to
+confirm. The three existing standing agent refusals read entity and action
+permissions only, so a standing agent profile holding the dataset operation
+`publish` compiled and was served.
+
+### Enforcement and defaults
+
+- `compile` in `crates/registry-breg/src/compiler/statistics.rs` checks every
+  profile that holds `publish` on a dataset and refuses the package with
+  `breg.access-profile.standing-agent-publish-forbidden` when the project
+  access profile is a standing agent.
+- The runtime authorizes publication and withdrawal through the unit
+  entity's profile of the publisher's id. A project profile that grants
+  nothing on that entity leaves the id free for a module to contribute, so
+  the same check reads that unit entity profile and refuses a standing agent
+  there, at `entities[id=<unit>].accessProfiles[id=<profile>]`. A module
+  entity profile carries no dataset permission of its own: dataset
+  permissions exist only on project access profiles.
+- `read-live` and `read-releases` stay available to a standing agent. A
+  publisher declaring `actorKind: human`, `actorKind: service`, or no
+  `actorKind` is unchanged.
+- No new refusal covers task-grant profiles. A task-grant profile declares
+  `requiredPurposes`, and the existing publisher rules refuse those on the
+  publisher's access to a dataset entity with
+  `breg.statistical-dataset.publisher-caller-dependent`. A module cannot
+  declare a `taskGrant`, so the unit entity profile a publication is
+  authorized through is never a task-grant profile contributed by a module.
+
+### Tests
+
+`crates/registry-breg/tests/standing_agent_ceiling.rs`:
+`standing_agent_cannot_publish_a_statistical_release` is the named negative
+for the invariant row and also checks that the three sibling refusals stay
+silent. `module_contributed_standing_agent_cannot_authorize_a_publication`
+covers the unit entity profile a module contributes.
+`standing_agent_may_read_statistical_counts_and_releases` and
+`human_and_unspecified_profiles_keep_publish` hold the accepted cases, and
+`task_grant_profile_cannot_be_a_dataset_publisher` pins the existing
+task-grant refusal. These are compiler tests; no PostgreSQL suite changes,
+because no runtime path changes.
+
+### Accepted residuals
+
+- The ceiling binds profiles that declare `actorKind: agent`. A publisher
+  profile without an `actorKind` accepts every declared actor kind by its own
+  declaration, as it does for every other operation.
+- A project profile and a module-contributed entity profile may share an id
+  on an entity the project profile does not grant. A task-grant project
+  profile can therefore hold the dataset permission `publish` while a module
+  contributes the unit entity profile that authorizes it. That profile is
+  neither a task-grant profile nor, under this check, a standing agent, so no
+  agent token publishes through it; the project profile's grant is nominal.
+- The check is compile-time only. The runtime trusts the compiled package
+  and does not compare actor kinds again on the publication routes.

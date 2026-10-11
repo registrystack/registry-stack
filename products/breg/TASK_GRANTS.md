@@ -71,6 +71,19 @@ authored only on project access profiles; a module contributes entity
 profiles, which cannot grant `invoke` at all. Give the lifecycle operations
 and immediate actions to a separate profile the citizen uses directly.
 
+Publishing or withdrawing a statistical release commits at once in the same
+way, so the compiler refuses a standing agent profile that holds `publish` on
+a statistical dataset, with
+`breg.access-profile.standing-agent-publish-forbidden`. Both operations are
+authorized through the publisher's profile on the dataset's unit entity, so
+that profile meets the ceiling too, including one a module contributes under
+the publisher's id. A standing agent keeps `read-live` and `read-releases`.
+Give `publish` to a profile a person or a service uses directly. A task grant
+authorizes no publication either: a publisher's access to the dataset's
+entities admits no `requiredPurposes`
+(`breg.statistical-dataset.publisher-caller-dependent`), and a task-grant
+profile always declares them.
+
 ## Configure current status
 
 Configure BREG's runtime with one entry for each original source issuer used by

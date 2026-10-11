@@ -28,6 +28,15 @@ or discard of earlier rows.
   OpenAPI, registry metadata, `/v1/registry`, and audit `operationId` values.
   For example, `read_live` becomes `read-live` and `publish_release` becomes
   `publish-release`. Rebuild packages and update metadata and audit consumers.
+- BREAKING: a standing agent profile, one with `actorKind: agent` and no
+  `taskGrant`, is refused when it holds `publish` on a statistical dataset,
+  with `breg.access-profile.standing-agent-publish-forbidden`. Publishing and
+  withdrawing a release commit at once, with no draft for a person to
+  confirm. The unit entity profile of the publisher's id, which both
+  operations are authorized through, meets the same rule when a module
+  contributes it. Move `publish` to a profile a person or a service uses
+  directly; `read-live` and `read-releases` stay available to a standing
+  agent. No alias is provided.
 
 - Runtime file flags use the help text "Runtime configuration file" and
   show `ABSOLUTE_FILE` wherever an absolute input path is required.

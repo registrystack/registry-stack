@@ -114,6 +114,14 @@ request visibility. Mandatory entity boundaries also make publication
 ineligible. This prevents different publishers from producing different
 populations under one dataset identity.
 
+A standing agent profile, one with `actorKind: agent` and no `taskGrant`,
+cannot hold `publish`: publishing or withdrawing a release commits at once,
+with no draft for a person to confirm. The compiler refuses such a profile
+with `breg.access-profile.standing-agent-publish-forbidden`, and holds the
+unit entity profile of the publisher's id, which both operations are
+authorized through, to the same rule. A standing agent may hold `read-live`
+and `read-releases`.
+
 Choose one profile with `accessProfile`. Profiles are never combined into a
 larger grant. `/v1/registry` and `/openapi.json` filter dataset operations using
 the same authorization checks; a release-only reader receives no entity grant.
