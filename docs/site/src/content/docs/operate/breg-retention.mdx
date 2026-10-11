@@ -294,8 +294,8 @@ detail erasure.
 
 ## Erase expired Evidence uses
 
-A governed action that calls a verified Evidence capability retains what it accepted. Under handler
-ABI `registry.action-handler/v2`, each accepted assertion is stored beside the applied action: the
+A governed action that calls a verified Evidence capability retains what it accepted. For an action
+that declares `evidence`, each accepted assertion is stored beside the applied action: the
 signed response bytes, the verification context, the capability, the contract fingerprint, the trust
 binding, the assertion identifier, its issue, observation, and validity times, the moment the
 registry accepted it, and the declared maximum observation age. Subject and selector values are

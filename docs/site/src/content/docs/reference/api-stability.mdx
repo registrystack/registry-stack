@@ -84,8 +84,8 @@ string keep it, and each may change or be removed in any minor release without d
 - the Base Registry Engine statistics routes under `/v1/statistics/`, and the
   `statisticalDatasets` declarations behind them
 - the Base Registry Engine spatial adapter routes under `/v1/gis`
-- calling Evidence from a Base Registry Engine governed action handler: `evidence::resolve` inside
-  the handler, and handler ABI `registry.action-handler/v2`, which carries it today
+- calling Evidence from a Base Registry Engine governed action handler: the action's `evidence`
+  declaration, and `evidence::resolve` inside the handler
 - the `scheduling` variant of a Casework task grant's bounds
 
 Before `v1.0.0`, one breaking release moves the promised products' version strings from
@@ -96,7 +96,7 @@ experimental surface.
 
 {/* Evidence: crates/registry-breg/src/api/statistics.rs; crates/registry-breg/src/api/gis.rs;
     crates/registry-casework-core/src/task_grant.rs, TaskGrantBounds;
-    crates/registry-breg/src/contract.rs, ACTION_HANDLER_ABI_V2;
+    crates/registry-breg/src/action_handler.rs, compile_source_for_action;
     products/breg/IMPLEMENTATION.md, Capability state within W5;
     products/breg/contracts/definition-of-done.yaml, BREG-V1-ACTION-EVIDENCE-TRIAL;
     products/discovery/README.md, the published registry-discovery-v1alpha1 profile resources;

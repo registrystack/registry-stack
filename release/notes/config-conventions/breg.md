@@ -606,7 +606,6 @@ become `breg.package.*`, and `check.package.package_refused` becomes
 | `action.handler.source_invalid` | `breg.action.handler-source-invalid` |
 | `action.handler.source_missing` | `breg.action.handler-source-missing` |
 | `action.handler.target_required` | `breg.action.handler-target-required` |
-| `action.handler.wasm_abi_unsupported` | `breg.action.handler-wasm-abi-unsupported` |
 | `action.handler.wasm_build_unsupported` | `breg.action.handler-wasm-build-unsupported` |
 | `action.handler.writes_empty` | `breg.action.handler-writes-empty` |
 | `action.id.duplicate` | `breg.action.id-duplicate` |
@@ -3708,8 +3707,7 @@ A handler written with `kind` is refused when the file is read, with
 `config.removed-key` at the member and a message that names `type`. The
 compiler refusals that pointed at the member point at `handler.type`:
 `breg.hook.handler-kind-unsupported`, `breg.hook.handler-wasm-build-unsupported`,
-`breg.action.handler-kind-unsupported`,
-`breg.action.handler-wasm-abi-unsupported`, and
+`breg.action.handler-kind-unsupported`, and
 `breg.action.handler-wasm-build-unsupported` keep their codes.
 `registry-project.schema.json` and `registry-module.schema.json` describe the
 handler with `type`, and the comment `bregctl init` writes above the event
@@ -3729,6 +3727,59 @@ member and is refused, as a current package and as a predecessor. A project
 paired with Registry Casework carries the lifecycle hook `caseworkctl source
 add` wrote: rename its `kind` too, or repeat `caseworkctl source add --apply`
 with the same release.
+
+### BREAKING: an action handler declares one ABI, `registry.action-handler/v1`
+
+A Rhai action handler declared one of two ABI identifiers, and the second,
+`registry.action-handler/v2`, was what let it call `evidence::resolve`. The
+action's own `evidence` declaration already states that the action consumes
+Evidence, so the declaration is now the only statement and every action
+handler declares `registry.action-handler/v1` (CFG-CHANGE-1). What an action
+that declares `evidence` does is unchanged: its Rhai handler may call
+`evidence::resolve`, it is evaluated outside PostgreSQL after admission under
+the same call ceilings and deadline, its providers are bound in
+`runtime.yaml`, and its generated OpenAPI operation answers
+`503 action.evidence_failed`. Consuming Evidence from an action remains a
+trial.
+
+| In `actions[].handler` | Was | Is |
+|---|---|---|
+| the Rhai handler of an action that declares `evidence` | `abi: registry.action-handler/v2` | `abi: registry.action-handler/v1` |
+| a handler of an action that declares no `evidence` | `abi: registry.action-handler/v1` | unchanged |
+| a handler of an action that declares no `evidence` | `abi: registry.action-handler/v2` | `abi: registry.action-handler/v1` |
+
+`registry.action-handler/v2` has no alias. It is refused like any other value
+outside the closed set, with `breg.action.handler-abi-invalid` at
+`actions[<id>].handler.abi` and a message that names
+`registry.action-handler/v1`. `registry-project.schema.json` and
+`registry-module.schema.json` list the one value.
+
+Three compile diagnostics keep their codes with a trigger that follows the
+declaration, and one is removed:
+
+| Code | Reported before for | Reported now for |
+|---|---|---|
+| `breg.action.handler-abi-invalid` | an `abi` other than the two identifiers | an `abi` other than `registry.action-handler/v1` |
+| `breg.action.handler-helper-contract` | an `evidence::` call in a `registry.action-handler/v1` handler, or a call that is not `evidence::resolve` with two arguments | an `evidence::` call in a handler whose action declares no `evidence`, or a call that is not `evidence::resolve` with two arguments |
+| `breg.action.evidence-ceiling-invalid` | `evidence` on an action whose handler is absent or not `registry.action-handler/v2`, or more than two capabilities | `evidence` on an action whose handler is absent or not Rhai, or more than two capabilities |
+| `breg.action.handler-wasm-abi-unsupported` (`action.handler.wasm_abi_unsupported` before the renaming above) | a WASM handler that declared `registry.action-handler/v2` | removed; that file is refused with `breg.action.handler-abi-invalid` |
+
+One state no longer exists. A `registry.action-handler/v2` handler on an
+action with no `evidence` was treated as an Evidence action that could make
+no call: it was evaluated outside PostgreSQL, `bregctl explain actions`
+reported an `evidence` block with `maximumCalls: 0`, and its OpenAPI
+operation listed `503 action.evidence_failed`. Written with
+`registry.action-handler/v1`, it is an ordinary input-only action, with
+neither the `evidence` block nor the `503`.
+
+To migrate, replace `abi: registry.action-handler/v2` with
+`abi: registry.action-handler/v1` in each `handler` block of `registry.yaml`
+and of each module file, keep each action's `evidence` block as written, run
+`bregctl project lock` for a module you changed because its digest covers the
+words, and build the package again: the package holds the authored project,
+so its digest changes. A tool that matched
+`breg.action.handler-wasm-abi-unsupported` matches
+`breg.action.handler-abi-invalid` instead.
 
 ### BREAKING: an unset value is stated with `isNull`, and `null` is not a comparison value
 

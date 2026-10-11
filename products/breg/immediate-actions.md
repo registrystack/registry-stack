@@ -691,11 +691,14 @@ the same operation; otherwise it answers `503 source.unavailable`.
 
 ## Trial: conditional Evidence in Rhai
 
-The `registry.action-handler/v2` trial lets a project-level action call
+A project-level action that declares `evidence` may call
 `evidence::resolve(capability_id, subjects)` within `handle(ctx)`. The
 [farmer landholding acceptance project](acceptance/farmer-landholding-evidence/README.md)
 is the complete offline example, including exact synthetic call expectations.
-This ABI remains a trial. Version 1 input-only actions keep their current path.
+The handler declares the one ABI, `registry.action-handler/v1`; the action's
+`evidence` declaration is what exposes the helper, and a handler that calls it
+without one fails to compile. Consuming Evidence from an action remains a
+trial. An action that declares no `evidence` keeps the input-only path.
 
 Declare `evidenceProviders` in the project with an `id`, a reviewed client
 `contracts` JSON file and `subjectResolution: trusted-provider-exact-selector`.

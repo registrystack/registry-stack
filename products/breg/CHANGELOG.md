@@ -38,6 +38,26 @@ or discard of earlier rows.
   directly and rebuild the package: the runtime refuses to load one built
   with a standing agent publisher. `read-live` and `read-releases` stay
   available to a standing agent. No alias is provided.
+- BREAKING: a governed action handler declares one ABI,
+  `registry.action-handler/v1`. `registry.action-handler/v2` is no longer an
+  accepted value. The action's own `evidence` declaration, and no longer the
+  ABI identifier, is what lets a Rhai handler call `evidence::resolve` and
+  what selects Evidence evaluation outside PostgreSQL, provider activation,
+  the Evidence deadline, and the `503 action.evidence_failed` response in
+  generated OpenAPI. To migrate, replace `abi: registry.action-handler/v2`
+  with `abi: registry.action-handler/v1` in each action `handler`, keep the
+  action's `evidence` block as written, and rebuild the package. A file that
+  still declares `registry.action-handler/v2` is refused with
+  `breg.action.handler-abi-invalid` at `actions[<id>].handler.abi`, and the
+  message names the accepted identifier.
+  `breg.action.handler-wasm-abi-unsupported` is removed, because a WASM
+  handler has no second ABI to declare. `breg.action.handler-helper-contract`
+  now reports an `evidence::` call in a handler whose action declares no
+  `evidence`, and `breg.action.evidence-ceiling-invalid` now reports
+  `evidence` on an action whose handler is not Rhai. A
+  `registry.action-handler/v2` handler on an action with no `evidence` ran as
+  an Evidence action with a zero-call ceiling; it is now an ordinary
+  input-only action. Consuming Evidence from an action remains a trial.
 
 - Runtime file flags use the help text "Runtime configuration file" and
   show `ABSOLUTE_FILE` wherever an absolute input path is required.

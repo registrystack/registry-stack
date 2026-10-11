@@ -36,19 +36,21 @@ Version 1.
 | Native persisted field patterns compiled to one validated PostgreSQL CHECK per field | Enforced | `native_patterns.rs`, `postgres_migration.rs`, and `schema_fingerprint_rehearsal.rs` |
 | Current membership read boundaries on read permissions, enforced by generated `SECURITY INVOKER` functions and forced row-level security | Enforced | `membership_access.rs` and `postgres_membership_access.rs`, over `fixtures/organization-membership-access` |
 | Change-request `submitterTargets`, rechecking current same-profile target authority under a transaction-scoped lock at create, draft patch, submit, revise, and replay | Enforced | `compiler_submitter_targets.rs` and `support/submitter_targets.rs`, over `starters/professional-licences/core` |
-| Conditional Evidence in Rhai under `registry.action-handler/v2`, calling `evidence::resolve` inside a governed action | Trial | `action_evidence_compiler.rs` and `postgres_action_evidence.rs`, over `acceptance/farmer-landholding-evidence` |
+| Conditional Evidence in Rhai: an action's `evidence` declaration and its handler calling `evidence::resolve` inside the governed action | Trial | `action_evidence_compiler.rs` and `postgres_action_evidence.rs`, over `acceptance/farmer-landholding-evidence` |
 | Protected evidence-use retention and the operator command `bregctl evidence-retention erase-expired` | Trial | `postgres_action_evidence_retention.rs` and `crates/registry-bregctl/tests/evidence_retention.rs` |
 | WASM action and hook handlers (`type: wasm`) under `registry.action-handler/v1` and `registry.hook-handler/v1`, admitted by builds with the `wasm` feature, which default builds carry | Trial | `wasm_handler_admission.rs`, `postgres_wasm_action_handlers.rs`, `hook_declaration.rs`, and `postgres_hook_proposals.rs` |
 | `bregctl init --from publicschema`, deriving a project from the pinned offline snapshot by `--starter`, `--selection`, or terminal selection | Enforced | `crates/registry-bregctl/src/init_from_model/` unit tests and `crates/registry-bregctl/tests/cli.rs` |
 | Four published starters under `starters/*/core`, with `bregctl init --template <ID>` creating a project from one and `bregctl examples list` and `bregctl examples run` describing and running its scenarios | Enforced | `starter_projects.rs`, `support/starter_policy.rs`, `crates/registry-bregctl/src/starters.rs`, and `crates/registry-bregctl/src/dev/examples.rs` |
 | `bregctl dev [project]`, reading the project's `dev-clients.yaml` without a flag | Enforced | `crates/registry-bregctl/src/dev/tests.rs` and `crates/registry-bregctl/tests/dev_lifecycle.rs` |
 
-The two Evidence trial rows are the ABI and helper that `immediate-actions.md` and
-`EVIDENCE.md` describe as a trial. `registry.action-handler/v1` input-only
-actions keep their own path, and the retained evidence-use scope the operator
-command erases exists only for the trial ABI. The contract grammar has no trial
-state, so `contracts/definition-of-done.yaml` records each of them as `partial`
-and names the trial in its `gap`.
+The two Evidence trial rows are the action `evidence` declaration and helper
+that `immediate-actions.md` and `EVIDENCE.md` describe as a trial. Both run
+under the one handler ABI, `registry.action-handler/v1`, which stays Enforced:
+an action that declares no `evidence` keeps the input-only path, and the
+retained evidence-use scope the operator command erases exists only for
+actions that declare it. The contract grammar has no trial state, so
+`contracts/definition-of-done.yaml` records each of them as `partial` and names
+the trial in its `gap`.
 
 The WASM handler row is Trial in the same sense: the handler kind, its closed
 byte ABI in `wasm-action-handlers.md`, and the handler SDK are implemented and

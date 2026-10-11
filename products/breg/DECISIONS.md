@@ -114,8 +114,8 @@
   compounds such as `group-membership` remain forbidden. Changing this
   blocklist is a boundary decision, recorded here and in
   `products/breg/AGENTS.md`.
-- `evidence::resolve(capability_id, subjects)` is available to
-  `registry.action-handler/v2` handlers as a trial: a governed action may
+- `evidence::resolve(capability_id, subjects)` is available, as a trial, to
+  the Rhai handler of an action that declares `evidence`: a governed action may
   consume a signed Evidence assertion as an ordinary relying party, with the
   trusted provider, its endpoint, token, and trusted JWKS all declared by the
   operator in runtime configuration. BReg depends unconditionally on

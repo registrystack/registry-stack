@@ -35,8 +35,8 @@ released only inside the Scheduling runtime's own capacity transaction, and no
 other product may write to that ledger, directly or through a shared database.
 
 A Base Registry Engine governed action may also consume an Evidence assertion
-as an ordinary relying party: a Rhai handler declaring handler ABI
-`registry.action-handler/v2` may call `evidence::resolve`, backed by
+as an ordinary relying party: the Rhai handler of an action that declares
+`evidence` may call `evidence::resolve`, backed by
 `registry-evidence-client` and `registry-evidence-verifier`. The trusted
 Evidence provider is declared by the operator in the registry project's
 configuration, and Base Registry Engine inherits no Evidence authorization.
