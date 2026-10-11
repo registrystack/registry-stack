@@ -119,6 +119,10 @@ NODE_CLIENT_RELEASE_SURFACES = (
         "crates/registry-scheduling-client-node",
         "@registrystack/scheduling-client-native",
     ),
+    (
+        "crates/registry-coordinator-client-node",
+        "@registrystack/coordinator-client-native",
+    ),
 )
 PYTHON_CLIENT_RELEASE_SURFACES = (
     (
@@ -150,6 +154,11 @@ PYTHON_CLIENT_RELEASE_SURFACES = (
         "crates/registry-scheduling-client-py",
         "registry-scheduling-client-native",
         "scheduling-client-sdk",
+    ),
+    (
+        "crates/registry-coordinator-client-py",
+        "registry-coordinator-client-native",
+        "coordinator-client-sdk",
     ),
 )
 FUZZ_LOCK_RELEASE_SURFACE_PATHS = (

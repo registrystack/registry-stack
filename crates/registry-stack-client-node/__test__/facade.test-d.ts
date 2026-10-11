@@ -1,4 +1,4 @@
-import { breg, casework, discovery, evidence, messaging, scheduling } from '..'
+import { breg, casework, coordinator, discovery, evidence, messaging, scheduling } from '..'
 
 const bregClient = new breg.BaseRegistryClient({ baseUrl: 'https://registry.example.invalid/' })
 const discoveryClient = new discovery.DiscoveryClient({ baseUrl: 'https://discovery.example.invalid/' })
@@ -11,6 +11,7 @@ const evidenceClient = new evidence.EvidenceClient({
 const caseworkClient = new casework.CaseworkClient({ baseUrl: 'https://casework.example.invalid/' })
 const messagingClient = new messaging.MessagingClient({ baseUrl: 'https://messaging.example.invalid/' })
 const schedulingClient = new scheduling.SchedulingClient({ baseUrl: 'https://scheduling.example.invalid/' })
+const coordinatorClient = new coordinator.CoordinatorClient({ baseUrl: 'https://coordinator.example.invalid/' })
 
 bregClient.listRecords('people', { top: 25 })
 void bregClient.registryContract('reader').then((metadata) => {
@@ -94,6 +95,13 @@ type BregHasNoLoaderTarget = Assert<HasNoLoaderTarget<typeof breg>>
 type CaseworkHasNoLoaderTarget = Assert<HasNoLoaderTarget<typeof casework>>
 type MessagingHasNoLoaderTarget = Assert<HasNoLoaderTarget<typeof messaging>>
 type SchedulingHasNoLoaderTarget = Assert<HasNoLoaderTarget<typeof scheduling>>
+type CoordinatorHasNoLoaderTarget = Assert<HasNoLoaderTarget<typeof coordinator>>
+
+void coordinatorClient.start('header.payload.signature', 'run-1', { flow: 'onboarding', input: {} })
+void coordinatorClient.status('header.payload.signature', 'run-1')
+void coordinatorClient.list('header.payload.signature', 20)
+void coordinatorClient.retrySame('header.payload.signature', 'run-1', 'operator reviewed the inspection')
+void coordinatorClient.cancel('header.payload.signature', 'run-1', 'caller withdrew the request')
 
 // @ts-expect-error Product query vocabularies remain distinct.
 bregClient.listRecords('people', { pageSize: 25 })

@@ -139,6 +139,14 @@ def includes_scheduling(version: str, *, include_scheduling: bool = False) -> bo
     )
 
 
+def includes_coordinator(version: str, *, include_coordinator: bool = False) -> bool:
+    """Select Coordinator at release, or explicitly for local integration checks."""
+
+    return include_coordinator or release_roster.coordinator_client_in_release(
+        release_version(version)
+    )
+
+
 def includes_relay(version: str) -> bool:
     """Keep Relay only when validating an immutable historical client release."""
 
@@ -159,6 +167,7 @@ def native_binary_stems(
     include_casework: bool = False,
     include_messaging: bool = False,
     include_scheduling: bool = False,
+    include_coordinator: bool = False,
 ) -> tuple[str, ...]:
     definition = client_definition(client)
     stems = definition.native_binary_stems
@@ -176,6 +185,10 @@ def native_binary_stems(
         version, include_scheduling=include_scheduling
     ):
         stems += ("scheduling-client",)
+    if client == "stack" and includes_coordinator(
+        version, include_coordinator=include_coordinator
+    ):
+        stems += ("coordinator-client",)
     return stems
 
 
@@ -185,6 +198,7 @@ def stack_python_namespaces(
     include_casework: bool = False,
     include_messaging: bool = False,
     include_scheduling: bool = False,
+    include_coordinator: bool = False,
 ) -> tuple[str, ...]:
     namespaces = STACK_PYTHON_NAMESPACES
     if includes_relay(version):
@@ -195,6 +209,8 @@ def stack_python_namespaces(
         namespaces += ("messaging",)
     if includes_scheduling(version, include_scheduling=include_scheduling):
         namespaces += ("scheduling",)
+    if includes_coordinator(version, include_coordinator=include_coordinator):
+        namespaces += ("coordinator",)
     return tuple(sorted(namespaces))
 
 
@@ -205,6 +221,7 @@ def npm_platforms(
     include_casework: bool = False,
     include_messaging: bool = False,
     include_scheduling: bool = False,
+    include_coordinator: bool = False,
 ) -> tuple[tuple[str, tuple[str, ...]], ...]:
     return tuple(
         (
@@ -217,6 +234,7 @@ def npm_platforms(
                     include_casework=include_casework,
                     include_messaging=include_messaging,
                     include_scheduling=include_scheduling,
+                    include_coordinator=include_coordinator,
                 )
             ),
         )
@@ -352,6 +370,7 @@ def validate_npm_packages(
     include_casework: bool = False,
     include_messaging: bool = False,
     include_scheduling: bool = False,
+    include_coordinator: bool = False,
 ) -> list[Path]:
     require_supported_client(client, version)
     definition = client_definition(client)
@@ -367,6 +386,7 @@ def validate_npm_packages(
             include_casework=include_casework,
             include_messaging=include_messaging,
             include_scheduling=include_scheduling,
+            include_coordinator=include_coordinator,
         ):
             if path.name == f"{definition.npm_tarball_stem}-{platform}-{version}.tgz":
                 expected_name = f"{definition.npm_root_package}-{platform}"
@@ -451,6 +471,28 @@ def validate_npm_packages(
                     raise ClientRegistryError(
                         f"root npm package {path.name} unexpectedly exposes the scheduling facade"
                     )
+                coordinator_members = {
+                    "package/coordinator/client.js",
+                    "package/coordinator/client.d.ts",
+                    "package/coordinator/index.js",
+                    "package/coordinator/index.d.ts",
+                }
+                exposed_coordinator = any(
+                    name.startswith("package/coordinator/") for name in names
+                )
+                coordinator_expected = includes_coordinator(
+                    version, include_coordinator=include_coordinator
+                )
+                missing_coordinator = coordinator_members - names
+                if coordinator_expected and missing_coordinator:
+                    raise ClientRegistryError(
+                        f"root npm package {path.name} has an incomplete coordinator facade: "
+                        f"{sorted(missing_coordinator)!r}"
+                    )
+                if not coordinator_expected and exposed_coordinator:
+                    raise ClientRegistryError(
+                        f"root npm package {path.name} unexpectedly exposes the coordinator facade"
+                    )
             if metadata.get("optionalDependencies") != expected_optional:
                 raise ClientRegistryError(
                     "root npm package does not bind the exact platform versions"
@@ -472,6 +514,7 @@ def validate_wheels(
     include_casework: bool = False,
     include_messaging: bool = False,
     include_scheduling: bool = False,
+    include_coordinator: bool = False,
 ) -> list[Path]:
     require_supported_client(client, version)
     definition = client_definition(client)
@@ -506,6 +549,7 @@ def validate_wheels(
                 include_casework=include_casework,
                 include_messaging=include_messaging,
                 include_scheduling=include_scheduling,
+                include_coordinator=include_coordinator,
             )
             for namespace in expected_namespaces:
                 prefix = f"registry_client/{namespace}/"
@@ -530,6 +574,12 @@ def validate_wheels(
             ):
                 raise ClientRegistryError(
                     f"Python wheel {path.name} unexpectedly contains the scheduling namespace"
+                )
+            if "coordinator" not in expected_namespaces and any(
+                name.startswith("registry_client/coordinator/") for name in names
+            ):
+                raise ClientRegistryError(
+                    f"Python wheel {path.name} unexpectedly contains the coordinator namespace"
                 )
         metadata_names = [
             name for name in names if name.endswith(".dist-info/METADATA")
@@ -566,6 +616,7 @@ def validate_distribution(
     include_casework: bool = False,
     include_messaging: bool = False,
     include_scheduling: bool = False,
+    include_coordinator: bool = False,
 ) -> None:
     require_supported_client(client, version)
     validate_npm_packages(
@@ -575,6 +626,7 @@ def validate_distribution(
         include_casework=include_casework,
         include_messaging=include_messaging,
         include_scheduling=include_scheduling,
+        include_coordinator=include_coordinator,
     )
     validate_wheels(
         directory,
@@ -583,6 +635,7 @@ def validate_distribution(
         include_casework=include_casework,
         include_messaging=include_messaging,
         include_scheduling=include_scheduling,
+        include_coordinator=include_coordinator,
     )
 
 
@@ -706,6 +759,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     validate.add_argument("--include-casework", action="store_true")
     validate.add_argument("--include-messaging", action="store_true")
     validate.add_argument("--include-scheduling", action="store_true")
+    validate.add_argument("--include-coordinator", action="store_true")
     bind = subparsers.add_parser("bind-optional-deps")
     bind.add_argument("--package-json", type=Path, required=True)
     bind.add_argument("--version", required=True)
@@ -719,6 +773,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     pypi.add_argument("--include-casework", action="store_true")
     pypi.add_argument("--include-messaging", action="store_true")
     pypi.add_argument("--include-scheduling", action="store_true")
+    pypi.add_argument("--include-coordinator", action="store_true")
     return parser.parse_args(argv)
 
 
@@ -733,6 +788,7 @@ def main(argv: list[str] | None = None) -> int:
                 include_casework=args.include_casework,
                 include_messaging=args.include_messaging,
                 include_scheduling=args.include_scheduling,
+                include_coordinator=args.include_coordinator,
             )
             print("validated")
         elif args.command == "bind-optional-deps":
@@ -748,6 +804,7 @@ def main(argv: list[str] | None = None) -> int:
                 include_casework=args.include_casework,
                 include_messaging=args.include_messaging,
                 include_scheduling=args.include_scheduling,
+                include_coordinator=args.include_coordinator,
             )
             print(
                 pypi_registry_state(

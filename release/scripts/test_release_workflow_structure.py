@@ -1200,6 +1200,13 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
             "    fi",
             node_smoke,
         )
+        self.assertIn('coordinator-client-in-release "${CLIENT_VERSION}"', node_smoke)
+        self.assertIn(
+            'if [[ "${coordinator_in_release}" == true ]]; then\n'
+            '      expected_addons=$((expected_addons + 1))\n'
+            "    fi",
+            node_smoke,
+        )
         self.assertIn(
             "node_modules/@registrystack/client-${{ matrix.napi_platform }}",
             node_smoke,
@@ -1350,13 +1357,16 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         _, document = workflow("release-candidate.yml")
         node = step_run(document, "clients", "Smoke Node client packages")
         count = node.split("expected_addons=3", 1)[1].split('test "$(find', 1)[0]
-        for messaging, scheduling, expected in (
-            ("false", "false", "4"),
-            ("true", "false", "5"),
-            ("true", "true", "6"),
+        for messaging, scheduling, coordinator, expected in (
+            ("false", "false", "false", "4"),
+            ("true", "false", "false", "5"),
+            ("true", "true", "false", "6"),
+            ("true", "true", "true", "7"),
         ):
             with self.subTest(
-                messaging_in_release=messaging, scheduling_in_release=scheduling
+                messaging_in_release=messaging,
+                scheduling_in_release=scheduling,
+                coordinator_in_release=coordinator,
             ):
                 result = subprocess.run(
                     [
@@ -1364,6 +1374,7 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
                         "-c",
                         f"include_casework=1\nmessaging_in_release={messaging}\n"
                         f"scheduling_in_release={scheduling}\n"
+                        f"coordinator_in_release={coordinator}\n"
                         f"expected_addons=3{count}\nprintf '%s' \"${{expected_addons}}\"",
                     ],
                     capture_output=True,
@@ -1380,6 +1391,7 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
             "casework",
             "messaging",
             "scheduling",
+            "coordinator",
             "discovery",
             "evidence",
         ):
@@ -1398,7 +1410,8 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
                 )
                 suffix = (
                     "_native"
-                    if product in {"breg", "casework", "messaging", "scheduling"}
+                    if product
+                    in {"breg", "casework", "messaging", "scheduling", "coordinator"}
                     else ""
                 )
                 self.assertEqual(f"registry_{product}_client{suffix}", result.stdout)
@@ -1612,6 +1625,25 @@ class MessagingClientWorkflowStructureTest(unittest.TestCase):
         self.assertIn('"${messaging_wheel_args[@]}"', python)
         node = step_run(candidate, "clients", "Build Node client packages")
         self.assertIn('platform_clients+=(messaging)', node)
+
+    def test_release_client_jobs_select_coordinator_from_the_shared_roster_alone(self) -> None:
+        for name, job, steps in (
+            ("release-candidate.yml", "clients", ("Build Python client wheels", "Build Node client packages")),
+            ("release-rehearsal.yml", "node-clients", ("Build, package, and smoke Linux Node clients",)),
+        ):
+            for step in steps:
+                with self.subTest(workflow=name, step=step):
+                    _, document = workflow(name)
+                    build = step_run(document, job, step)
+                    self.assertIn('coordinator-client-in-release "${CLIENT_VERSION}"', build)
+        _, candidate = workflow("release-candidate.yml")
+        python = step_run(candidate, "clients", "Build Python client wheels")
+        self.assertIn("clients+=(coordinator)", python)
+        self.assertIn("--coordinator-wheel", python)
+        self.assertIn('"${coordinator_wheel_args[@]}"', python)
+        self.assertNotIn("--include-coordinator", python)
+        node = step_run(candidate, "clients", "Build Node client packages")
+        self.assertIn("platform_clients+=(coordinator)", node)
 
 
 class MacOSFipsWorkflowStructureTest(unittest.TestCase):

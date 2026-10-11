@@ -189,7 +189,7 @@ class AssembleClientPackagesTest(unittest.TestCase):
             for index, line in enumerate(self.rendered)
             if "maturin build --release --locked" in line
         ]
-        self.assertEqual(6, len(builds))
+        self.assertEqual(7, len(builds))
         assemble = next(
             index
             for index, line in enumerate(self.rendered)
@@ -229,9 +229,14 @@ class AssembleClientPackagesTest(unittest.TestCase):
             "registry_scheduling_client_native-9.9.9-cp310-abi3-macosx_11_0_arm64.whl",
             assemble,
         )
+        self.assertIn(
+            "--coordinator-wheel /work/product-wheels/"
+            "registry_coordinator_client_native-9.9.9-cp310-abi3-macosx_11_0_arm64.whl",
+            assemble,
+        )
         self.assertIn(f"--macos-library-root {ROOT / 'target'}", assemble)
 
-    def test_ci_profile_only_changes_all_six_binding_build_profiles(self) -> None:
+    def test_ci_profile_only_changes_all_seven_binding_build_profiles(self) -> None:
         for napi_platform in self.module.PLATFORMS:
             with self.subTest(platform=napi_platform):
                 args = (
@@ -275,24 +280,35 @@ class AssembleClientPackagesTest(unittest.TestCase):
             ROOT, "0.36.0", "linux-x64-gnu", "python", "maturin",
             Path("/work"), Path("/out"), zig_python="/maturin/python",
             python_profile="ci", include_messaging=True, include_scheduling=True,
+            include_coordinator=True,
         )
-        self.assertEqual(6, sum(step.argv[0].endswith("build-linux-python-client") for step in steps))
+        self.assertEqual(7, sum(step.argv[0].endswith("build-linux-python-client") for step in steps))
         self.assertIn("--include-messaging", steps[-1].argv)
 
     def test_source_integration_can_explicitly_include_unreleased_scheduling(self) -> None:
         steps = self.module.plan(
             ROOT, "0.39.0", "linux-x64-gnu", "python", "maturin",
             Path("/work"), Path("/out"), zig_python="/maturin/python",
-            python_profile="ci", include_scheduling=True,
+            python_profile="ci", include_scheduling=True, include_coordinator=True,
         )
-        self.assertEqual(6, sum(step.argv[0].endswith("build-linux-python-client") for step in steps))
+        self.assertEqual(7, sum(step.argv[0].endswith("build-linux-python-client") for step in steps))
         self.assertIn("--include-scheduling", steps[-1].argv)
         self.assertNotIn("--include-messaging", steps[-1].argv)
+
+    def test_source_integration_can_explicitly_include_unreleased_coordinator(self) -> None:
+        steps = self.module.plan(
+            ROOT, "0.40.0", "linux-x64-gnu", "python", "maturin",
+            Path("/work"), Path("/out"), zig_python="/maturin/python",
+            python_profile="ci", include_coordinator=True,
+        )
+        self.assertEqual(7, sum(step.argv[0].endswith("build-linux-python-client") for step in steps))
+        self.assertIn("--include-coordinator", steps[-1].argv)
+        self.assertNotIn("--include-scheduling", steps[-1].argv)
 
     def test_cli_ci_profile_is_explicit_and_rejects_unknown_profiles(self) -> None:
         command = [
             sys.executable, str(SCRIPT), "--output-dir", "/out",
-            "--version", "0.40.0",
+            "--version", "0.41.0",
             "--napi-platform", "linux-x64-gnu", "--artifacts", "python", "--dry-run",
             "--include-casework", "--zig-python", "/maturin/python",
             "--maturin", "/maturin/maturin",
@@ -300,8 +316,8 @@ class AssembleClientPackagesTest(unittest.TestCase):
         result = subprocess.run(
             [*command, "--python-profile", "ci"], capture_output=True, text=True, check=True
         )
-        self.assertEqual(result.stdout.count("build-linux-python-client"), 6)
-        self.assertEqual(result.stdout.count("--profile ci"), 6)
+        self.assertEqual(result.stdout.count("build-linux-python-client"), 7)
+        self.assertEqual(result.stdout.count("--profile ci"), 7)
         self.assertNotIn("--profile release", result.stdout)
         invalid = subprocess.run(
             [*command, "--python-profile", "dev"], capture_output=True, text=True
@@ -332,7 +348,7 @@ class AssembleClientPackagesTest(unittest.TestCase):
             for step in steps
             if step.argv[0].endswith("build-linux-python-client")
         ]
-        self.assertEqual(len(builds), 6)
+        self.assertEqual(len(builds), 7)
         for product, step in zip(self.module.PRODUCTS, builds):
             self.assertEqual(step.cwd, ROOT)
             self.assertIn(("--client", product), tuple(zip(step.argv, step.argv[1:])))
@@ -384,7 +400,7 @@ class AssembleClientPackagesTest(unittest.TestCase):
                 "--output-dir",
                 "/out",
                 "--version",
-                "0.40.0",
+                "0.41.0",
                 "--napi-platform",
                 "darwin-arm64",
                 "--include-casework",
@@ -433,6 +449,21 @@ class AssembleClientPackagesTest(unittest.TestCase):
         for version in ("0.38.0", "0.39.99"):
             with self.subTest(version=version), self.assertRaisesRegex(
                 ValueError, "Scheduling client"
+            ):
+                self.module.plan(
+                    ROOT,
+                    version,
+                    "darwin-arm64",
+                    "all",
+                    "maturin",
+                    Path("/work"),
+                    Path("/out"),
+                )
+
+    def test_pre_0_41_versions_require_explicit_coordinator_selection(self) -> None:
+        for version in ("0.40.0", "0.40.99"):
+            with self.subTest(version=version), self.assertRaisesRegex(
+                ValueError, "Coordinator client"
             ):
                 self.module.plan(
                     ROOT,

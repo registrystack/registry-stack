@@ -30,6 +30,10 @@ Messaging's shared package activation contract.
 release first adds the Registry Scheduling namespace and native bindings to the
 unified Node and Python client packages. The Scheduling runtime, image, and
 operator CLI already ship; only the client facades join, in v0.40.0.
+
+``COORDINATOR_CLIENT_FIRST_RELEASE`` is the single place that decides which
+release first adds the Registry Coordinator namespace and native bindings to the
+unified Node and Python client packages; the client facades join in v0.41.0.
 """
 
 from __future__ import annotations
@@ -48,6 +52,8 @@ DISCOVERYCTL_FIRST_RELEASE: tuple[int, int, int] | None = (0, 38, 0)
 SCHEDULING_BINARY_FIRST_RELEASE: tuple[int, int, int] | None = (0, 38, 0)
 
 SCHEDULING_CLIENT_FIRST_RELEASE: tuple[int, int, int] | None = (0, 40, 0)
+
+COORDINATOR_CLIENT_FIRST_RELEASE: tuple[int, int, int] | None = (0, 41, 0)
 
 RENDER_FIRST_RELEASE: tuple[int, int, int] | None = (0, 38, 0)
 
@@ -103,6 +109,15 @@ def scheduling_client_in_release(version: tuple[int, int, int]) -> bool:
     The constant is read at call time so tests can patch it.
     """
     first_release = SCHEDULING_CLIENT_FIRST_RELEASE
+    return first_release is not None and tuple(version) >= first_release
+
+
+def coordinator_client_in_release(version: tuple[int, int, int]) -> bool:
+    """Return whether the unified client packages carry Registry Coordinator.
+
+    The constant is read at call time so tests can patch it.
+    """
+    first_release = COORDINATOR_CLIENT_FIRST_RELEASE
     return first_release is not None and tuple(version) >= first_release
 
 
@@ -168,6 +183,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     scheduling_client.add_argument("version", type=version_argument, help="release version as X.Y.Z")
     scheduling_client.set_defaults(in_release=scheduling_client_in_release)
+    coordinator_client = commands.add_parser(
+        "coordinator-client-in-release",
+        help="print true when the unified client packages carry Registry Coordinator, else false",
+    )
+    coordinator_client.add_argument("version", type=version_argument, help="release version as X.Y.Z")
+    coordinator_client.set_defaults(in_release=coordinator_client_in_release)
     render = commands.add_parser(
         "render-in-release",
         help="print true when the release version ships Registry Render, else false",

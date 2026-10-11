@@ -402,6 +402,8 @@ class ReleaseRehearsalTest(unittest.TestCase):
         self.assertIn("clients+=(messaging)", build)
         self.assertIn('scheduling-client-in-release "${CLIENT_VERSION}"', build)
         self.assertIn("clients+=(scheduling)", build)
+        self.assertIn('coordinator-client-in-release "${CLIENT_VERSION}"', build)
+        self.assertIn("clients+=(coordinator)", build)
         helper_call = "release/scripts/build-linux-node-client"
         self.assertIn(helper_call, build)
         for argument in (
