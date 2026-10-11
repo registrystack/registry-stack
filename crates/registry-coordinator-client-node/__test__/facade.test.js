@@ -57,8 +57,27 @@ const INSPECTION = {
 };
 
 const RETRY_SCHEDULED = { runId: RUN_ID, status: 'retry-scheduled' };
-const UNAVAILABLE = { status: 503, document: { code: 'store-unavailable', message: 'withheld' } };
-const CONFLICT = { status: 409, document: { code: 'start-conflict', message: 'withheld' } };
+const TRACE_ID = '4bf92f3577b34da6a3ce929d0e0e4736';
+const TRACEPARENT = `00-${TRACE_ID}-00f067aa0ba902b7-01`;
+
+// A refusal as the runtime answers it: an RFC 9457 document whose trace
+// matches the answer's traceparent.
+function problem(status, code, { title = 'withheld', detail = 'withheld' } = {}) {
+  return {
+    status,
+    document: {
+      type: `https://id.registrystack.org/problems/registry-coordinator/${code.replace('.', '/')}`,
+      title,
+      status,
+      detail,
+      code,
+      traceId: TRACE_ID,
+    },
+  };
+}
+
+const UNAVAILABLE = problem(503, 'service.unavailable');
+const CONFLICT = problem(409, 'idempotency.key-reused');
 
 function scripted(answers) {
   let next = 0;
@@ -72,8 +91,8 @@ async function serve(context, answer) {
     request.on('data', (chunk) => { body += chunk; });
     request.on('end', () => {
       requests.push({ method: request.method, path: request.url, headers: request.headers, body });
-      const { status, document, contentType = 'application/json' } = answer(request);
-      response.writeHead(status, { 'content-type': contentType });
+      const { status, document, contentType = status === 200 ? 'application/json' : 'application/problem+json' } = answer(request);
+      response.writeHead(status, { 'content-type': contentType, traceparent: TRACEPARENT });
       response.end(JSON.stringify(document));
     });
   });
@@ -226,17 +245,17 @@ test('an invalid retry or cancellation reason fails before I/O', async (context)
 
 test('a refused list, retry, or cancellation keeps its status and code', async (context) => {
   const { baseUrl, requests } = await serve(context, (request) => {
-    if (request.method === 'GET') return { status: 400, document: { code: 'request.invalid', message: 'canary' } };
-    if (request.url.endsWith('/retry-same')) return { status: 409, document: { code: 'retry-refused', message: 'canary' } };
-    return { status: 409, document: { code: 'restore-hold', message: 'canary' } };
+    if (request.method === 'GET') return problem(400, 'request.invalid', { detail: 'canary' });
+    if (request.url.endsWith('/retry-same')) return problem(409, 'retry.refused', { detail: 'canary' });
+    return problem(409, 'execution.held', { title: 'canary' });
   });
   const { CoordinatorClient, CoordinatorClientError } = require('../client');
   const client = new CoordinatorClient({ baseUrl });
 
   for (const [call, status, code] of [
     [() => client.list('secret', 20), 400, 'request.invalid'],
-    [() => client.retrySame('secret', RUN_ID, 'operator reviewed the inspection'), 409, 'retry-refused'],
-    [() => client.cancel('secret', RUN_ID, 'caller withdrew the request'), 409, 'restore-hold'],
+    [() => client.retrySame('secret', RUN_ID, 'operator reviewed the inspection'), 409, 'retry.refused'],
+    [() => client.cancel('secret', RUN_ID, 'caller withdrew the request'), 409, 'execution.held'],
   ]) {
     await assert.rejects(call(), (error) => {
       assert.ok(error instanceof CoordinatorClientError);
@@ -299,9 +318,9 @@ test('invalid request documents and run identifiers fail before I/O', async (con
 
 test('a service problem on a read is safe and is never resent', async (context) => {
   const problemMessage = 'internal operator detail secret-should-not-escape';
-  const { baseUrl, requests } = await serve(context, () => ({
-    status: 503,
-    document: { code: 'store-unavailable', message: problemMessage, suggestedAction: 'private runbook' },
+  const { baseUrl, requests } = await serve(context, () => problem(503, 'service.unavailable', {
+    title: 'private runbook',
+    detail: problemMessage,
   }));
   const { CoordinatorClient, CoordinatorClientError } = require('../client');
   const client = new CoordinatorClient({ baseUrl });
@@ -311,7 +330,7 @@ test('a service problem on a read is safe and is never resent', async (context) 
     (error) => {
       assert.ok(error instanceof CoordinatorClientError);
       assert.equal(error.kind, 'problem');
-      assert.equal(error.code, 'store-unavailable');
+      assert.equal(error.code, 'service.unavailable');
       assert.equal(error.status, 503);
       assert.equal(error.outcomeUnknown, true);
       const displayed = inspectValue(error);
@@ -347,7 +366,7 @@ test('a retry ceiling of zero sends an admission once and reports the outcome un
     assert.ok(error instanceof CoordinatorClientError);
     assert.equal(error.kind, 'problem');
     assert.equal(error.status, 503);
-    assert.equal(error.code, 'store-unavailable');
+    assert.equal(error.code, 'service.unavailable');
     assert.equal(error.outcomeUnknown, true);
     return true;
   });
@@ -362,7 +381,7 @@ test('a 4xx refusal of an admission is never resent and reports the outcome know
   await assert.rejects(client.start('one-call-secret', 'key-1', { flow: 'decision-follow-up', input: {} }), (error) => {
     assert.equal(error.kind, 'problem');
     assert.equal(error.status, 409);
-    assert.equal(error.code, 'start-conflict');
+    assert.equal(error.code, 'idempotency.key-reused');
     assert.equal(error.outcomeUnknown, false);
     return true;
   });
@@ -371,7 +390,7 @@ test('a 4xx refusal of an admission is never resent and reports the outcome know
 
 test('a flow the deployment does not serve is refused once with a known outcome', async (context) => {
   const { baseUrl, requests } = await serve(context, scripted([
-    { status: 404, document: { code: 'flow-absent', message: 'canary', suggestedAction: 'private runbook' } },
+    problem(404, 'flow.not-served', { title: 'private runbook', detail: 'canary' }),
     { status: 200, document: STATUS },
   ]));
   const { CoordinatorClient, CoordinatorClientError } = require('../client');
@@ -381,7 +400,7 @@ test('a flow the deployment does not serve is refused once with a known outcome'
     assert.ok(error instanceof CoordinatorClientError);
     assert.equal(error.kind, 'problem');
     assert.equal(error.status, 404);
-    assert.equal(error.code, 'flow-absent');
+    assert.equal(error.code, 'flow.not-served');
     assert.equal(error.outcomeUnknown, false);
     assert.doesNotMatch(inspectValue(error), /canary|private runbook|one-call-secret/);
     return true;
@@ -390,10 +409,7 @@ test('a flow the deployment does not serve is refused once with a known outcome'
 });
 
 test('a run of a flow outside the caller policy reads as absent on every run action', async (context) => {
-  const { baseUrl, requests } = await serve(context, () => ({
-    status: 404,
-    document: { code: 'run-absent', message: 'run was not found', suggestedAction: null },
-  }));
+  const { baseUrl, requests } = await serve(context, () => problem(404, 'run.not-visible'));
   const { CoordinatorClient, CoordinatorClientError } = require('../client');
   const client = new CoordinatorClient({ baseUrl, maxMutationRetries: 2 });
 
@@ -408,12 +424,37 @@ test('a run of a flow outside the caller policy reads as absent on every run act
       assert.ok(error instanceof CoordinatorClientError);
       assert.equal(error.kind, 'problem');
       assert.equal(error.status, 404);
-      assert.equal(error.code, 'run-absent');
+      assert.equal(error.code, 'run.not-visible');
       assert.equal(error.outcomeUnknown, false);
       return true;
     });
   }
   assert.equal(requests.length, 5);
+});
+
+test('a refusal that is not the exact problem document is a protocol failure', async (context) => {
+  const wrongTrace = problem(404, 'run.not-visible');
+  wrongTrace.document = { ...wrongTrace.document, traceId: '0af7651916cd43dd8448eb211c80319c' };
+  const answers = [
+    [{ ...problem(404, 'run.not-visible'), contentType: 'application/json' }, 'media-type'],
+    [{ status: 404, document: { code: 'run.not-visible', message: 'canary', suggestedAction: null } }, 'problem'],
+    [wrongTrace, 'problem'],
+  ];
+  const { baseUrl, requests } = await serve(context, scripted(answers.map(([answer]) => answer)));
+  const { CoordinatorClient, CoordinatorClientError } = require('../client');
+  const client = new CoordinatorClient({ baseUrl });
+
+  for (const [, failure] of answers) {
+    await assert.rejects(client.status('secret', RUN_ID), (error) => {
+      assert.ok(error instanceof CoordinatorClientError);
+      assert.equal(error.kind, 'protocol');
+      assert.equal(error.protocolFailure, failure);
+      assert.equal(error.code, undefined);
+      assert.doesNotMatch(inspectValue(error), /canary|secret/);
+      return true;
+    });
+  }
+  assert.equal(requests.length, 3);
 });
 
 test('a retry ceiling outside zero to two is a configuration error', () => {

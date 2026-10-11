@@ -75,7 +75,7 @@ async fn remote_admission_reports_outages_separately_without_repeating_the_reque
         receiver(
             &server,
             ResponseTemplate::new(status).set_body_json(json!({
-                "message":"the requested operation could not complete",
+                "detail":"the requested operation could not complete",
                 "suggestedAction":guidance
             })),
         )
@@ -121,74 +121,81 @@ async fn a_known_refusal_code_gets_its_own_advice_and_never_the_service_text() {
     for (status, code, reported, wanted) in [
         (
             409,
-            Some("workflow-version-conflict"),
+            Some("flow.version-conflict"),
             "service-refused",
             "new project.version",
         ),
         (
             403,
-            Some("access.denied"),
+            Some("operation.not-authorized"),
             "service-refused",
             "operator: true",
         ),
         (
             401,
-            Some("access.unauthenticated"),
+            Some("authentication.refused"),
             "service-refused",
             "--token-file",
         ),
         (
             404,
-            Some("flow-absent"),
+            Some("flow.not-served"),
             "service-refused",
             "deployment-status",
         ),
         (
             409,
-            Some("restore-admissions-held"),
+            Some("admission.held"),
             "service-refused",
             "release-admission-hold",
         ),
         (
             409,
-            Some("restore-hold"),
+            Some("execution.held"),
             "service-refused",
             "release-restore-hold",
         ),
         (
             409,
-            Some("restore-lease-incompatible"),
+            Some("restore.lease-incompatible"),
             "service-refused",
             "complete-execution-recovery",
         ),
         (
             409,
-            Some("definition-incompatible"),
+            Some("run.definition-incompatible"),
             "service-refused",
             "pinned definition",
         ),
         (
             409,
-            Some("start-conflict"),
+            Some("idempotency.key-reused"),
             "service-refused",
             "original input",
         ),
         (
             409,
-            Some("state-key-custody"),
+            Some("deployment.refused"),
             "service-refused",
             "deployment-status",
         ),
         (
             503,
-            Some("store-unavailable"),
+            Some("service.unavailable"),
             "service-unavailable",
             "database connectivity",
         ),
-        // An unknown or absent code keeps the generic advice.
+        // An unknown or absent code keeps the generic advice, and so does
+        // an internal spelling the service never answers.
         (
             409,
             Some("unknown-refusal"),
+            "service-refused",
+            "caller policy",
+        ),
+        (
+            409,
+            Some("workflow-version-conflict"),
             "service-refused",
             "caller policy",
         ),
@@ -199,9 +206,15 @@ async fn a_known_refusal_code_gets_its_own_advice_and_never_the_service_text() {
             "service-unavailable",
             "same-command",
         ),
+        (
+            503,
+            Some("store-unavailable"),
+            "service-unavailable",
+            "same-command",
+        ),
     ] {
         let mut body = json!({
-            "message":"the requested operation could not complete",
+            "detail":"the requested operation could not complete",
             "suggestedAction":marker
         });
         if let Some(code) = code {
@@ -212,13 +225,57 @@ async fn a_known_refusal_code_gets_its_own_advice_and_never_the_service_text() {
         let report: Value = serde_json::from_slice(&output.stdout).unwrap();
         let finding = &report["diagnostics"][0];
         assert_eq!(finding["code"], format!("coordinator.command.{reported}"));
-        assert_eq!(
-            finding["message"],
-            "the requested operation could not complete"
-        );
+        assert!(finding["message"]
+            .as_str()
+            .unwrap()
+            .starts_with("the requested operation could not complete"));
         let action = finding["suggestedAction"].as_str().unwrap();
         assert!(action.contains(wanted), "{code:?}: {action}");
         assert!(!format!("{report}").contains(marker), "{code:?}: {report}");
+        server.verify().await;
+        server.reset().await;
+    }
+}
+
+#[tokio::test]
+async fn a_refusal_names_its_problem_code_and_trace_for_the_operator() {
+    let server = MockServer::start().await;
+    let root = tempfile::tempdir().unwrap();
+    let detail = "the requested operation could not complete";
+    let trace = "4bf92f3577b34da6a3ce929d0e0e4736";
+    for (status, body, wanted) in [
+        (
+            404,
+            json!({"detail":detail, "code":"run.not-visible", "traceId":trace}),
+            format!("{detail} (problem run.not-visible, trace {trace})"),
+        ),
+        (
+            409,
+            json!({"detail":detail, "code":"flow.version-conflict"}),
+            format!("{detail} (problem flow.version-conflict)"),
+        ),
+        (
+            503,
+            json!({"detail":detail, "traceId":trace}),
+            format!("{detail} (trace {trace})"),
+        ),
+        // Only a code from the closed vocabulary and a well-formed trace
+        // identifier are echoed; any other value the service sends is not.
+        (
+            409,
+            json!({"detail":detail, "code":"unknown-refusal", "traceId":"\u{1b}[2J"}),
+            detail.to_owned(),
+        ),
+        (
+            409,
+            json!({"detail":detail, "traceId":"00000000000000000000000000000000"}),
+            detail.to_owned(),
+        ),
+    ] {
+        receiver(&server, ResponseTemplate::new(status).set_body_json(body)).await;
+        let output = start(&server, root.path()).await;
+        let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(report["diagnostics"][0]["message"], wanted);
         server.verify().await;
         server.reset().await;
     }
@@ -238,7 +295,7 @@ async fn a_refusal_message_reaches_the_terminal_without_its_control_characters()
         for format in [&["--format", "json"][..], &[][..]] {
             receiver(
                 &server,
-                ResponseTemplate::new(409).set_body_json(json!({ "message": message })),
+                ResponseTemplate::new(409).set_body_json(json!({ "detail": message })),
             )
             .await;
             let output = start_as(&server, root.path(), format).await;
@@ -274,7 +331,7 @@ async fn remote_responses_remain_bounded_and_unambiguous_before_status_classific
             "the service response was not bounded JSON",
         ),
         (
-            ResponseTemplate::new(503).set_body_json(json!({"message":"x".repeat(1_048_576)})),
+            ResponseTemplate::new(503).set_body_json(json!({"detail":"x".repeat(1_048_576)})),
             "the service response exceeded its bound",
         ),
     ] {
@@ -307,7 +364,7 @@ async fn a_relative_token_file_is_read_from_the_current_directory() {
     receiver(
         &server,
         ResponseTemplate::new(503).set_body_json(json!({
-            "message":"the requested operation could not complete"
+            "detail":"the requested operation could not complete"
         })),
     )
     .await;

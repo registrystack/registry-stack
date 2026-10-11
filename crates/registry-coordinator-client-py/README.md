@@ -38,9 +38,12 @@ Configuration members are keyword arguments: `base_url` (required),
 `max_mutation_retries`. Timeouts are seconds, as a finite non-negative `int` or `float`; the response
 bound is an `int`. A `bool` is not a number here. An unknown keyword is a Python `TypeError`.
 
-`CoordinatorClientError` preserves the status and the Coordinator's open
-problem code, and never carries the server's prose, a token, a key, a URL, or a
-request body. Its `kind` is one of `configuration`, `invalid-request`,
+`CoordinatorClientError` preserves the status and the `family.reason` code of
+the Coordinator's RFC 9457 problem document, such as `run.not-visible`, and
+never carries the problem's title or detail, a token, a key, a URL, or a
+request body. A refusal counts as a `problem` only when it is an exact
+`application/problem+json` document whose status, type, and trace agree with
+the answer; anything else is a `protocol` failure. Its `kind` is one of `configuration`, `invalid-request`,
 `transport`, `problem`, or `protocol`; `protocol_failure` is one of
 `header-bounds`, `media-type`, `body`, `problem`, `status`, or `protocol`.
 
@@ -56,7 +59,7 @@ asking again. When the returned `CoordinatorClientError` still reports
 again with the same service identity, key, and input, because a new key can
 create another run. A key is scoped to the caller and the flow, so the same key
 under two flows starts two runs, and an allowed flow the deployment does not
-serve is refused with 404 `flow-absent`, a known outcome never resent.
+serve is refused with 404 `flow.not-served`, a known outcome never resent.
 `outcome_unknown` is false for a configuration or request
 defect, a connection never established, and every 4xx refusal.
 

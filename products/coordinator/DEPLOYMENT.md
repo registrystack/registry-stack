@@ -403,15 +403,16 @@ The Coordinator then accepts Casework's completion events at
 `POST /v1/review-completions` on the service listener. It finds the connection
 by the `Authorization: Bearer` token and the `registry-recipient-binding`
 header together, comparing the token in constant time, and refuses any other
-sender with HTTP 401 before reading the body. `recipientBinding` is 1 to 256
+sender with HTTP 401 `authentication.refused` before reading the body. `recipientBinding` is 1 to 256
 visible ASCII characters and differs between Casework connections. An
 authenticated event must be `application/json`, at most 2048 bytes, name
 non-nil identifiers, repeat its `eventId` as the `idempotency-key` header and
 carry a `completedAt` no older than 365 days and no more than 5 minutes ahead
-of the Coordinator's clock; anything else answers HTTP 400 or 415. Every
+of the Coordinator's clock; anything else answers HTTP 400 `request.invalid`
+or 415 `request.unsupported-media-type`. Every
 authentic event answers HTTP 204, whether or not a run waits on its request,
 and an event only brings forward the next result read of a run that does.
-HTTP 503 `store-unavailable` asks Casework to deliver it again. Without a
+HTTP 503 `service.unavailable` asks Casework to deliver it again. Without a
 `completion` block the route refuses every event, and waits rely on result
 checks alone.
 
@@ -551,7 +552,7 @@ pause starts at 1 second and doubles up to 30 seconds while failures continue.
 When that check cannot open a database connection, the worker polls nothing,
 logs `store-unavailable` with the fix `restore database connectivity`, and
 waits out the outage; meanwhile `/ready` answers 503 and admissions answer 503
-with `store-unavailable`. The periodic deployment check in recovery-only mode
+`service.unavailable`. The periodic deployment check in recovery-only mode
 waits out an unreachable database the same way. Any other refusal stops the
 service with exit status 1 and its code and fix on standard error:
 `deployment.refused` for an activation moved by an apply, `state-key-custody`
@@ -734,8 +735,8 @@ authority or the existence of an original-key receipt.
 
 A start is admitted under the named flow's active definition; retained runs
 keep their original definitions. A caller whose policy does not list the flow
-is refused with HTTP 403 `access.denied`; an allowed flow this deployment does
-not serve is refused with HTTP 404 `flow-absent`. `GET /v1/runs` returns at
+is refused with HTTP 403 `operation.not-authorized`; an allowed flow this
+deployment does not serve is refused with HTTP 404 `flow.not-served`. `GET /v1/runs` returns at
 most 100 of the caller's most recently admitted runs, newest first, from the
 flows its policy lists; an operator policy lists every owner's runs in those
 flows. `limit` takes 1 to 100 and defaults to 20. The list has no paging cursor
@@ -762,11 +763,14 @@ records a keyed `reasonRef`, scoped to the logical database and shared across
 recovery actions. Raw investigation references stay outside the audit stream;
 operators retain the external investigation record. Authenticated,
 authorized requests with an empty, overlong or control-character reason, or an
-out-of-bounds retention cutoff/limit, return HTTP 400. State and recovery
-conflicts return HTTP 409. Recovery POSTs authenticate and authorize before
+out-of-bounds retention cutoff/limit, return HTTP 400 `request.reason-invalid`
+or `request.retention-invalid`. State and recovery conflicts return HTTP 409.
+Every refusal is an RFC 9457 `application/problem+json` document whose `code`
+names the refusal; `README.md` lists the members and the full code vocabulary.
+Recovery POSTs authenticate and authorize before
 releasing malformed-body errors. They require `application/json` or an
 application media type ending in `+json`; unsupported or absent media types return
-415 only after authorization. Bodies remain bounded to 65,536 bytes and duplicate
+415 `request.unsupported-media-type` only after authorization. Bodies remain bounded to 65,536 bytes and duplicate
 or unknown fields are refused. Doctor exposes
 state counts, aged work, uncertain effects, eligible terminal payload counts and
 oldest terminal payload time, hold and audit readiness without
@@ -921,7 +925,8 @@ new version, startup and `deployment-status` refuse the edited file with
 `state-key-custody` and the fix to run apply. Once apply has registered it,
 every service still running with the previous file refuses with
 `state-key-custody` until it restarts with the edited file. An ordinary service
-answers starts with 409 and `/ready` with 503, and its worker's next poll
+answers starts with 409 `deployment.refused` and `/ready` with 503, and its
+worker's next poll
 dispatches nothing and stops the service with exit status 1. A recovery-only
 service stops the same way at its periodic deployment check, every 30 seconds.
 
@@ -970,8 +975,9 @@ key is exposed, close the deployment and admit new work in a fresh one.
 
 1. Stop admissions. Remove `start` from each caller policy's `actions`; remove
    a policy left with no action, and its client from `allowedClients`. Restart
-   the service. Starts are then refused with HTTP 403 `access.denied`, while
-   status, inspection and operator actions keep working. Do not use
+   the service. Starts are then refused with HTTP 403
+   `operation.not-authorized`, while status, inspection and operator actions
+   keep working. Do not use
    `restore-hold` for this step: it also stops dispatch, so runs in flight
    cannot finish.
 

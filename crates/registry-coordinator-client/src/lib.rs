@@ -16,10 +16,15 @@
 //! holds, execution recovery and retention) are not part of this client;
 //! `coordinatorctl` owns them.
 //!
-//! Coordinator's product-owned problem is JSON `{code,message,suggestedAction}`,
-//! not an RFC 9457 document. The client discards server prose and has no invented
-//! trace requirement. Redirects and ambient proxies are disabled by the shared
-//! transport, and JSON/header/body bounds are enforced on every response.
+//! Every Coordinator refusal is an RFC 9457 `application/problem+json`
+//! document with exactly `type`, `title`, `status`, `detail`, `code` and
+//! `traceId`. The client accepts one as `CoordinatorClientError::Problem` only
+//! when its status equals the answer's, its `traceId` equals the answer's
+//! `traceparent` trace, and its `type` is its `family.reason` code under
+//! `https://id.registrystack.org/problems/registry-coordinator/`; anything else
+//! is a protocol failure. The client discards the title and detail. Redirects
+//! and ambient proxies are disabled by the shared transport, and
+//! JSON/header/body bounds are enforced on every response.
 
 #![deny(unsafe_code)]
 

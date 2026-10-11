@@ -70,12 +70,24 @@ async fn assert_status_audit(
         .unwrap();
     assert_eq!(response.status(), expected_status);
     assert_eq!(response.headers()["cache-control"], "no-store");
+    if expected_status != 200 {
+        assert_eq!(
+            response.headers()["content-type"],
+            "application/problem+json"
+        );
+    }
     let body: Value = response.json().await.unwrap();
     if expected_status == 200 {
         assert_eq!(body["runId"], run);
         assert_eq!(body["workflowId"], "delayed-follow-up");
     } else {
-        assert_eq!(body["code"], "run-absent");
+        assert_eq!(body["code"], "run.not-visible");
+        assert_eq!(
+            body["type"],
+            "https://id.registrystack.org/problems/registry-coordinator/run/not-visible"
+        );
+        assert_eq!(body["status"], 404);
+        assert!(body["traceId"].as_str().is_some_and(|id| id.len() == 32));
         assert!(body.get("runId").is_none());
     }
     let entries = fs::read_to_string(audit_path)
@@ -148,7 +160,7 @@ async fn assert_authenticated_run_validation(
                     assert_eq!(response.headers()["cache-control"], "no-store");
                     assert_eq!(
                         response.json::<Value>().await.unwrap()["code"],
-                        "access.unauthenticated"
+                        "authentication.refused"
                     );
                 }
             }
@@ -184,7 +196,7 @@ async fn assert_authenticated_run_validation(
                 assert!(response.headers().get("www-authenticate").is_none());
                 assert_eq!(
                     response.json::<Value>().await.unwrap()["code"],
-                    "access.denied"
+                    "operation.not-authorized"
                 );
             }
         }
@@ -195,10 +207,15 @@ async fn assert_authenticated_run_validation(
             "unknown=1",
             "limit=1&limit=2",
         ] {
+            let invalid = if matches!(query, "limit=0" | "limit=101") {
+                "request.limit-out-of-range"
+            } else {
+                "request.invalid"
+            };
             for (credential, expected, code) in [
-                (None, 401, "access.unauthenticated"),
-                (Some("not.a.valid-token"), 401, "access.unauthenticated"),
-                (Some(operator), 400, "request.invalid"),
+                (None, 401, "authentication.refused"),
+                (Some("not.a.valid-token"), 401, "authentication.refused"),
+                (Some(operator), 400, invalid),
             ] {
                 let mut request = http.get(format!("{origin}/v1/runs?{query}"));
                 if let Some(credential) = credential {
@@ -258,6 +275,14 @@ async fn assert_authenticated_run_validation(
         .await
         .unwrap();
     assert_eq!(oversized.status(), 413);
+    assert_eq!(
+        oversized.headers()["content-type"],
+        "application/problem+json"
+    );
+    assert_eq!(
+        oversized.json::<Value>().await.unwrap()["code"],
+        "request.body-too-large"
+    );
 }
 async fn fixture_job_state(
     admin: &tokio_postgres::Client,
@@ -1021,9 +1046,9 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
     let long_key = "x".repeat(257);
     for key in [None, Some(""), Some(long_key.as_str())] {
         for (credential, expected, code) in [
-            (None, 401, "access.unauthenticated"),
-            (Some(&op), 403, "access.denied"),
-            (Some(&a), 400, "start-key-invalid"),
+            (None, 401, "authentication.refused"),
+            (Some(&op), 403, "operation.not-authorized"),
+            (Some(&a), 400, "idempotency.key-invalid"),
         ] {
             let mut request = http
                 .post(format!("{origin}/v1/runs"))
@@ -1101,9 +1126,9 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
             "{".to_string(),
         ] {
             for (credential, expected, code) in [
-                (None, 401, "access.unauthenticated"),
-                (Some(&op), 403, "access.denied"),
-                (Some(&a), 415, "request.content-type-invalid"),
+                (None, 401, "authentication.refused"),
+                (Some(&op), 403, "operation.not-authorized"),
+                (Some(&a), 415, "request.unsupported-media-type"),
             ] {
                 let mut request = http
                     .post(format!("{origin}/v1/runs"))
@@ -1150,7 +1175,7 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
     assert_eq!(wrong_flow.status(), 403);
     assert_eq!(
         wrong_flow.json::<Value>().await.unwrap()["code"],
-        "access.denied"
+        "operation.not-authorized"
     );
     // Exercise the actual post-commit audit failure, rather than constructing a
     // problem code: intent is accepted, admission commits, then response audit
@@ -1234,12 +1259,12 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
         let status = response.status();
         assert_eq!(response.headers()["cache-control"], "no-store");
         let problem: Value = response.json().await.unwrap();
-        assert_eq!(problem["code"], "audit-response-unavailable");
+        assert_eq!(problem["code"], "audit.response-unavailable");
         assert_eq!(
-            problem["message"],
-            "the operation may have completed; recover its original identity before trying again"
+            problem["detail"],
+            "The operation may have completed, but its audited result could not be released. Inspect the run before repeating the operation."
         );
-        assert!(problem["suggestedAction"].is_null());
+        assert!(problem.get("suggestedAction").is_none());
         {
             let entries = attempts.lock().unwrap();
             assert_eq!(entries.len(), 2);
@@ -1319,7 +1344,7 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
         assert_eq!(response.status(), 503);
         assert_eq!(response.headers()["cache-control"], "no-store");
         let problem: Value = response.json().await.unwrap();
-        assert_eq!(problem["code"], "audit-response-unavailable");
+        assert_eq!(problem["code"], "audit.response-unavailable");
         assert!(problem.get("runId").is_none());
         {
             let entries = status_attempts.lock().unwrap();
@@ -1453,7 +1478,7 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
                     assert_eq!(response.headers()["cache-control"], "no-store");
                     assert_eq!(
                         response.json::<Value>().await.unwrap()["code"],
-                        "reason-invalid"
+                        "request.reason-invalid"
                     );
                 }
             }
@@ -1474,7 +1499,7 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
             if expected == 400 {
                 assert_eq!(
                     response.json::<Value>().await.unwrap()["code"],
-                    "retention-invalid"
+                    "request.retention-invalid"
                 );
             }
         }
@@ -1558,7 +1583,7 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
         assert_eq!(response.status(), 400);
         assert_eq!(
             response.json::<Value>().await.unwrap()["code"],
-            "reason-invalid"
+            "request.reason-invalid"
         );
     }
     // Observe this exact namespace's binding check waiting on the same guard
@@ -1619,7 +1644,7 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
     assert_eq!(refused.status(), 409);
     assert_eq!(
         refused.json::<Value>().await.unwrap()["code"],
-        "live-binding-conflict"
+        "binding.live-conflict"
     );
     assert_eq!(
         admin
@@ -1755,7 +1780,7 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
     assert_eq!(recovery_start.status(), 409);
     assert_eq!(
         recovery_start.json::<Value>().await.unwrap()["code"],
-        "recovery-only"
+        "admission.recovery-only"
     );
     let protected = http
         .get(format!("{service_origin}/v1/runs/{id}/inspect"))
@@ -1919,10 +1944,16 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
         .await
         .unwrap();
     assert_eq!(absent.status(), 404);
-    assert_eq!(
-        hidden.json::<Value>().await.unwrap(),
-        absent.json::<Value>().await.unwrap()
-    );
+    // Each answer carries its own request's trace; every other member of a
+    // hidden run's problem is the same as an absent run's.
+    let without_trace = |mut problem: Value| {
+        let trace = problem.as_object_mut().unwrap().remove("traceId").unwrap();
+        assert_eq!(trace.as_str().unwrap().len(), 32);
+        problem
+    };
+    let hidden = without_trace(hidden.json::<Value>().await.unwrap());
+    assert_eq!(hidden["code"], "run.not-visible");
+    assert_eq!(hidden, without_trace(absent.json::<Value>().await.unwrap()));
     let list = http
         .get(format!("{origin}/v1/runs"))
         .bearer_auth(&b)
@@ -2867,7 +2898,7 @@ async fn two_flows_upgrade_roll_back_and_remove_without_touching_each_other() {
     .await;
     assert_eq!(
         (status, body["code"].as_str()),
-        (403, Some("access.denied"))
+        (403, Some("operation.not-authorized"))
     );
     let (status, body) = start_run(
         &http,
@@ -2878,8 +2909,15 @@ async fn two_flows_upgrade_roll_back_and_remove_without_touching_each_other() {
         governed_input.clone(),
     )
     .await;
-    assert_eq!((status, body["code"].as_str()), (404, Some("flow-absent")));
-    assert!(body["suggestedAction"].as_str().is_some());
+    assert_eq!(
+        (status, body["code"].as_str(), body["detail"].as_str()),
+        (
+            404,
+            Some("flow.not-served"),
+            Some("This deployment does not serve the named flow.")
+        )
+    );
+    assert!(body.get("suggestedAction").is_none());
     let admitted: i64 = f
         .admin
         .query_one(&format!("SELECT count(*) FROM {}.runs", f.namespace), &[])
@@ -2956,7 +2994,7 @@ async fn two_flows_upgrade_roll_back_and_remove_without_touching_each_other() {
             .unwrap();
         assert_eq!(response.status(), 403, "{path}");
         let body: Value = response.json().await.unwrap();
-        assert_eq!(body["code"], "access.denied", "{path}");
+        assert_eq!(body["code"], "operation.not-authorized", "{path}");
     }
     let control_after: Value = f
         .admin
@@ -3281,7 +3319,7 @@ async fn deployment_operators_act_on_every_flow_without_a_flow_list() {
     .await;
     assert_eq!(
         (status, body["code"].as_str()),
-        (403, Some("access.denied"))
+        (403, Some("operation.not-authorized"))
     );
     server.abort();
     f.stop().await;
@@ -3405,17 +3443,10 @@ async fn the_service_waits_out_an_unreachable_database_and_stops_on_a_moved_acti
     )
     .await;
     assert_eq!(
-        (
-            status,
-            body["code"].as_str(),
-            body["suggestedAction"].as_str()
-        ),
-        (
-            503,
-            Some("store-unavailable"),
-            Some("restore database connectivity")
-        )
+        (status, body["code"].as_str()),
+        (503, Some("service.unavailable"))
     );
+    assert!(body.get("suggestedAction").is_none());
 
     f.admin
         .batch_execute(&format!("ALTER ROLE {} LOGIN", f.role))
@@ -3500,13 +3531,14 @@ async fn a_rotated_key_set_refuses_starts_and_readiness_on_the_old_runtime_file(
     .await;
     assert_eq!(
         (status, refused["code"].as_str()),
-        (409, Some("state-key-custody")),
+        (409, Some("deployment.refused")),
         "{refused}"
     );
+    // The caller is not the deployment's operator: the problem carries no
+    // configuration key and no operator fix.
     assert!(
-        refused["suggestedAction"]
-            .as_str()
-            .is_some_and(|action| action.contains("deployment.stateKeys")),
+        refused.get("suggestedAction").is_none()
+            && !refused.to_string().contains("deployment.stateKeys"),
         "{refused}"
     );
     assert_eq!(f.run_rows(DELAYED).await, json!({"runs":null,"jobs":null}));

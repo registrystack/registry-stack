@@ -14,6 +14,7 @@ workspace = true
 [dependencies]
 chrono = { workspace = true, features = ["serde"] }
 registry-platform-canonical-json.workspace = true
+registry-platform-httpsec.workspace = true
 registry-platform-httputil.workspace = true
 reqwest.workspace = true
 serde.workspace = true

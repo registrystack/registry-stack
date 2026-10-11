@@ -13,7 +13,7 @@ Admission requires a caller-chosen idempotency key and `{flow, input}`. HTTP
 answers the same run again for the same caller, flow, key and input, and
 refuses the same key with a different input. A key is scoped to the caller and
 the flow, so the same key under two flows starts two runs, and an allowed flow
-the deployment does not serve is refused with 404 `flow-absent`, a known
+the deployment does not serve is refused with 404 `flow.not-served`, a known
 outcome the client never resends. When an admission's outcome is
 unknown, after a timeout or broken exchange or on a 5xx answer, the client
 resends the identical request under the same key, at most
@@ -45,10 +45,15 @@ saved command again, unchanged, only when the run's inspection allows it.
 Configuration validates a fixed HTTPS endpoint, or an explicit loopback HTTP
 endpoint for local development. Deployment prefixes are preserved. Shared
 transport disables redirects and ambient proxies; body and header limits apply
-to successes and failures. The client validates Coordinator's JSON problem
-shape, discards remote message text, and reports closed error categories with
-the answered status and the product's code. It does not invent an RFC 9457 or
-trace contract.
+to successes and failures. Every refusal is an RFC 9457
+`application/problem+json` document with exactly `type`, `title`, `status`,
+`detail`, `code` and `traceId`. The client accepts it only when its status
+equals the answer's, its `traceId` equals the answer's `traceparent` trace,
+and its `type` is its `family.reason` code under
+`https://id.registrystack.org/problems/registry-coordinator/`; anything else is
+a protocol failure. It discards the title and detail, and reports closed error
+categories with the answered status and the product's code. The code
+vocabulary is listed in the runtime's generated OpenAPI document.
 
 Run `cargo test --locked -p registry-coordinator-client` and
 `cargo clippy --locked -p registry-coordinator-client --all-targets -- -D warnings`.

@@ -175,6 +175,12 @@ has no paging cursor and no state filter. Applications use
 the authenticated HTTP API, through the maintained Coordinator client where one
 fits: `registry_stack_client::coordinator` in Rust or the `coordinator`
 namespace of the unified Node.js and Python clients.
+Every refusal of that API, the request edge and the review-completion route
+included, is an RFC 9457 problem document whose `code` comes from one closed
+`family.reason` vocabulary with one status each. A refusal names no submitted
+value, a missing run and a run the caller may not see are the same
+`run.not-visible`, and the operator fixes that `coordinatorctl` diagnostics
+carry are not part of a problem.
 
 ## Recovery and limits
 

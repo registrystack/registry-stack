@@ -83,7 +83,7 @@ mod tests {
             },
             CoordinatorClientError::Problem {
                 status: 503,
-                code: "store-unavailable".into(),
+                code: "service.unavailable".into(),
             },
             CoordinatorClientError::Protocol {
                 status: 500,
@@ -107,7 +107,7 @@ mod tests {
             },
             CoordinatorClientError::Problem {
                 status: 409,
-                code: "start-conflict".into(),
+                code: "idempotency.key-reused".into(),
             },
             CoordinatorClientError::invalid_request("fixture reason"),
         ];

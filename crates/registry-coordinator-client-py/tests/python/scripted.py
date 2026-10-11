@@ -64,6 +64,9 @@ INSPECTION = {
 }
 
 RETRY_SCHEDULED = {"runId": RUN, "status": "retry-scheduled"}
+TRACE_ID = "4bf92f3577b34da6a3ce929d0e0e4736"
+TRACEPARENT = f"00-{TRACE_ID}-00f067aa0ba902b7-01"
+PROBLEM_TYPE_BASE = "https://id.registrystack.org/problems/registry-coordinator/"
 
 Answer = tuple[int, str, "object"]
 
@@ -72,12 +75,20 @@ def ok(document: object) -> Answer:
     return (200, "application/json", document)
 
 
-def problem(status: int, code: str, message: str = "server-prose-canary") -> Answer:
-    return (
-        status,
-        "application/json",
-        {"code": code, "message": message, "suggestedAction": "server-action-canary"},
-    )
+def problem_document(status: int, code: str) -> dict[str, object]:
+    """A refusal as the runtime answers it, whose trace matches the answer's traceparent."""
+    return {
+        "type": PROBLEM_TYPE_BASE + code.replace(".", "/"),
+        "title": "server-title-canary",
+        "status": status,
+        "detail": "server-prose-canary",
+        "code": code,
+        "traceId": TRACE_ID,
+    }
+
+
+def problem(status: int, code: str) -> Answer:
+    return (status, "application/problem+json", problem_document(status, code))
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -104,6 +115,7 @@ class _Handler(BaseHTTPRequestHandler):
         )
         self.send_response(status)
         self.send_header("content-type", content_type)
+        self.send_header("traceparent", TRACEPARENT)
         self.send_header("location", "/must-not-follow")
         self.send_header("content-length", str(len(payload)))
         self.end_headers()

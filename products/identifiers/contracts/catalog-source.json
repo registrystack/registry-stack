@@ -61,6 +61,16 @@
       "exporterPath": "crates/registry-messaging-core/examples/problem-catalog.rs",
       "cargoPackage": "registry-messaging-core",
       "cargoExample": "problem-catalog"
+    },
+    {
+      "owner": "coordinator",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "uriPrefix": "https://id.registrystack.org/problems/registry-coordinator/",
+      "sourcePath": "crates/registry-coordinator/src/problem.rs",
+      "exporterPath": "crates/registry-coordinator/examples/problem-catalog.rs",
+      "cargoPackage": "registry-coordinator",
+      "cargoExample": "problem-catalog"
     }
   ],
   "referenceExclusions": [

@@ -4,6 +4,7 @@ use crate::{
     access::{Action, Authenticator, Caller},
     deployment::{self, Flows},
     metrics::AuthenticationRefusal,
+    problem::{for_error, type_uri, ProblemCode},
     protocol::AdapterSet,
     runtime::RuntimeConfig,
     store::{RunStatus, Store},
@@ -12,19 +13,28 @@ use crate::{
 use axum::{
     body::Bytes,
     extract::{
-        rejection::{JsonRejection, PathRejection, QueryRejection},
+        rejection::{BytesRejection, JsonRejection, PathRejection, QueryRejection},
         DefaultBodyLimit, FromRequest, Path, Query, State,
     },
-    http::{HeaderMap, StatusCode},
+    http::{
+        header::{CACHE_CONTROL, CONTENT_TYPE, RETRY_AFTER, WWW_AUTHENTICATE},
+        HeaderMap, HeaderValue, StatusCode,
+    },
+    middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
 };
+use registry_platform_httpsec::{ProblemBody, TraceContext};
 use serde::{de::DeserializeOwned, Deserialize};
 use serde_json::{json, Value};
 use std::{future::Future, sync::Arc, time::Duration};
 use tokio::{sync::Mutex, time::Instant};
 use uuid::Uuid;
+
+tokio::task_local! {
+    static REQUEST_TRACE: TraceContext;
+}
 
 const BINDING_RECHECK_INTERVAL: Duration = Duration::from_secs(30);
 
@@ -79,7 +89,7 @@ fn limit() -> u32 {
 pub fn router(state: HttpState) -> Router {
     let ready_state = state.clone();
     let ready_bindings = Arc::new(BindingReadiness::default());
-    Router::new()
+    let routes = Router::new()
         .route("/health", get(|| async { Json(json!({"live":true})) }))
         .route(
             "/ready",
@@ -101,40 +111,165 @@ pub fn router(state: HttpState) -> Router {
             registry_review_protocol::REVIEW_COMPLETIONS_PATH,
             post(review_completion),
         )
+        .with_state(state);
+    http_edge(routes)
+}
+fn http_edge(router: Router) -> Router {
+    router
+        .fallback(route_not_found)
+        .method_not_allowed_fallback(method_not_allowed)
         .layer(DefaultBodyLimit::max(65_536))
         .layer(registry_platform_httpsec::request_body_limit(65_536))
+        .layer(middleware::from_fn(http_boundary))
         .layer(registry_platform_httpsec::security_headers(
             registry_platform_httpsec::CspBuilder::deny_by_default(),
         ))
-        .with_state(state)
 }
-pub(crate) fn problem(error: CoordinatorError) -> Response {
-    let status = match error.code.as_str() {
-        "access.unauthenticated" => StatusCode::UNAUTHORIZED,
-        "access.unavailable" => StatusCode::SERVICE_UNAVAILABLE,
-        "access.denied" => StatusCode::FORBIDDEN,
-        "request.content-type-invalid" => StatusCode::UNSUPPORTED_MEDIA_TYPE,
-        "run-absent" | "run-not-found" | "run.not_found" | "run.missing" | "flow-absent" => {
-            StatusCode::NOT_FOUND
-        }
-        "input-invalid" | "start-key-invalid" | "request.invalid" | "definition.input"
-        | "reason-invalid" | "retention-invalid" => StatusCode::BAD_REQUEST,
-        "store-unavailable"
-        | "audit-unavailable"
-        | "audit-unready"
-        | "audit-response-unavailable" => StatusCode::SERVICE_UNAVAILABLE,
-        _ => StatusCode::CONFLICT,
+async fn http_boundary(request: axum::http::Request<axum::body::Body>, next: Next) -> Response {
+    let trace = TraceContext::from_headers(request.headers());
+    let mut response = REQUEST_TRACE
+        .scope(trace.clone(), async move {
+            normalize_framework_rejection(next.run(request).await)
+        })
+        .await;
+    trace.apply(response.headers_mut());
+    response
+        .headers_mut()
+        .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
+}
+/// Framework rejections carry axum's own bodies, which no Coordinator caller
+/// was promised. The statuses are kept; the body becomes the vocabulary's
+/// `request.*` problem for that status.
+fn normalize_framework_rejection(response: Response) -> Response {
+    let is_problem = response
+        .headers()
+        .get(CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next())
+        == Some("application/problem+json");
+    if is_problem {
+        return response;
+    }
+    let problem = match response.status() {
+        StatusCode::BAD_REQUEST => Some(ProblemCode::RequestInvalid),
+        StatusCode::PAYLOAD_TOO_LARGE => Some(ProblemCode::RequestBodyTooLarge),
+        StatusCode::UNSUPPORTED_MEDIA_TYPE => Some(ProblemCode::RequestUnsupportedMediaType),
+        StatusCode::UNPROCESSABLE_ENTITY => Some(ProblemCode::RequestUnprocessable),
+        _ => None,
     };
-    let mut response=(status,Json(json!({"code":error.code,"message":error.message,"suggestedAction":error.suggested_action}))).into_response();
-    response.headers_mut().insert(
-        "cache-control",
-        axum::http::HeaderValue::from_static("no-store"),
-    );
-    if status == StatusCode::UNAUTHORIZED {
-        response.headers_mut().insert(
-            axum::http::header::WWW_AUTHENTICATE,
-            axum::http::HeaderValue::from_static("Bearer"),
+    problem.map_or(response, problem_response)
+}
+async fn route_not_found() -> Response {
+    problem_response(ProblemCode::RequestNotFound)
+}
+async fn method_not_allowed() -> Response {
+    problem_response(ProblemCode::RequestMethodNotAllowed)
+}
+/// Answer an internal refusal as the public problem it maps to. A server-side
+/// problem is logged by its internal code, a fixed category that carries no
+/// request value, and by the trace its response carries; an internal code with
+/// no problem is a defect and answers `runtime.failure`.
+pub(crate) fn problem(error: CoordinatorError) -> Response {
+    let trace = current_trace();
+    let problem = for_error(&error.code).unwrap_or_else(|| {
+        tracing::error!(
+            code = %error.code,
+            trace_id = %trace.trace_id,
+            "an HTTP refusal has no problem code; answering runtime.failure"
         );
+        ProblemCode::RuntimeFailure
+    });
+    if problem.http_status() >= 500 {
+        tracing::warn!(
+            code = %error.code,
+            problem = problem.code(),
+            trace_id = %trace.trace_id,
+            "the service answered a server problem"
+        );
+    }
+    problem_response(problem)
+}
+fn current_trace() -> TraceContext {
+    REQUEST_TRACE
+        .try_with(Clone::clone)
+        .unwrap_or_else(|_| TraceContext::server_created())
+}
+
+#[cfg(test)]
+mod problem_log_tests {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+
+    #[derive(Clone, Default)]
+    struct Captured(Arc<Mutex<Vec<u8>>>);
+    impl std::io::Write for Captured {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_logged_server_problem_names_the_trace_its_response_carries() {
+        for internal in ["store-unavailable", "no-such-internal-code"] {
+            let captured = Captured::default();
+            let writer = captured.clone();
+            let subscriber = tracing_subscriber::fmt()
+                .with_writer(move || writer.clone())
+                .with_ansi(false)
+                .finish();
+            let trace = TraceContext::server_created();
+            let response = tracing::subscriber::with_default(subscriber, || {
+                REQUEST_TRACE.sync_scope(trace.clone(), || {
+                    problem(CoordinatorError::new(internal, "synthetic"))
+                })
+            });
+            assert!(response.status().is_server_error(), "{internal}");
+            let logged = String::from_utf8(captured.0.lock().unwrap().clone()).unwrap();
+            assert!(
+                logged.contains(&format!("trace_id={}", trace.trace_id)),
+                "{internal}: {logged}"
+            );
+        }
+    }
+}
+/// Render one problem: the pinned code, title, status and detail from the
+/// closed vocabulary, under the answering request's trace.
+fn problem_response(problem: ProblemCode) -> Response {
+    let trace = current_trace();
+    let status = problem.http_status();
+    let body = ProblemBody {
+        type_uri: type_uri(problem.code()),
+        title: problem.title(),
+        status,
+        detail: problem.detail(),
+        code: problem.code(),
+        trace_id: trace.trace_id.clone(),
+    };
+    let status = StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    let mut response = (
+        status,
+        [(CONTENT_TYPE, "application/problem+json")],
+        Json(body),
+    )
+        .into_response();
+    trace.apply(response.headers_mut());
+    response
+        .headers_mut()
+        .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    if status == StatusCode::UNAUTHORIZED {
+        response
+            .headers_mut()
+            .insert(WWW_AUTHENTICATE, HeaderValue::from_static("Bearer"));
+    }
+    if status == StatusCode::SERVICE_UNAVAILABLE {
+        response
+            .headers_mut()
+            .insert(RETRY_AFTER, HeaderValue::from_static("5"));
     }
     response
 }
@@ -315,6 +450,155 @@ mod problem_tests {
         }
     }
 
+    async fn document(response: Response) -> Value {
+        let bytes = axum::body::to_bytes(response.into_body(), 65_536)
+            .await
+            .unwrap();
+        serde_json::from_slice(&bytes).unwrap()
+    }
+
+    fn assert_problem(response: &Response, status: StatusCode) {
+        assert_eq!(response.status(), status);
+        assert_eq!(
+            response.headers()[axum::http::header::CONTENT_TYPE],
+            "application/problem+json"
+        );
+        assert_eq!(response.headers()["cache-control"], "no-store");
+    }
+
+    #[tokio::test]
+    async fn a_refusal_answers_a_namespaced_problem_document_with_its_pinned_status() {
+        let response = problem(CoordinatorError::new(
+            "access.unauthenticated",
+            "synthetic refusal canary",
+        ));
+        assert_problem(&response, StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            response.headers()[axum::http::header::WWW_AUTHENTICATE],
+            "Bearer"
+        );
+        let traceparent = response.headers()["traceparent"]
+            .to_str()
+            .unwrap()
+            .to_owned();
+        let body = document(response).await;
+        let members: Vec<&str> = body
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(
+            members,
+            ["code", "detail", "status", "title", "traceId", "type"]
+        );
+        assert_eq!(
+            body["type"],
+            "https://id.registrystack.org/problems/registry-coordinator/authentication/refused"
+        );
+        assert_eq!(body["code"], "authentication.refused");
+        assert_eq!(body["status"], 401);
+        let trace = body["traceId"].as_str().unwrap();
+        assert_eq!(trace.len(), 32);
+        assert!(traceparent.contains(trace));
+        assert!(!body.to_string().contains("canary"));
+    }
+
+    #[tokio::test]
+    async fn internal_refusal_codes_answer_their_public_problem() {
+        for (internal, status, public) in [
+            ("access.denied", 403, "operation.not-authorized"),
+            ("run-absent", 404, "run.not-visible"),
+            ("flow-absent", 404, "flow.not-served"),
+            ("start-conflict", 409, "idempotency.key-reused"),
+            ("store-unavailable", 503, "service.unavailable"),
+            (
+                "request.content-type-invalid",
+                415,
+                "request.unsupported-media-type",
+            ),
+            ("list-limit-invalid", 400, "request.limit-out-of-range"),
+            ("definition.cycle", 409, "definition.refused"),
+            ("status-unavailable", 500, "runtime.failure"),
+        ] {
+            let response = problem(CoordinatorError::new(internal, "synthetic"));
+            assert_problem(&response, StatusCode::from_u16(status).unwrap());
+            assert!(response
+                .headers()
+                .get(axum::http::header::WWW_AUTHENTICATE)
+                .is_none());
+            let unavailable = status == 503;
+            assert_eq!(
+                response
+                    .headers()
+                    .get(axum::http::header::RETRY_AFTER)
+                    .is_some(),
+                unavailable,
+                "{internal}"
+            );
+            let body = document(response).await;
+            assert_eq!(body["code"], public, "{internal}");
+            assert_eq!(body["status"], status, "{internal}");
+        }
+    }
+
+    #[tokio::test]
+    async fn an_unmapped_internal_code_answers_a_runtime_failure() {
+        // A binding, not a literal, so the source scan in `problem` does not
+        // read this synthetic code as one the crate raises.
+        let unmapped = "synthetic-unmapped";
+        let response = problem(CoordinatorError::new(unmapped, "canary"));
+        assert_problem(&response, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(document(response).await["code"], "runtime.failure");
+    }
+
+    #[tokio::test]
+    async fn request_edge_rejections_answer_problem_documents_under_the_request_trace() {
+        use tower::ServiceExt as _;
+        let app = || {
+            http_edge(Router::new().route(
+                "/v1/echo",
+                post(|body: BoundedBody| async move {
+                    answer(request_body::<Value>(body).map(|_| json!({})))
+                }),
+            ))
+        };
+        let traceparent = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01";
+        for (method, uri, length, status, code) in [
+            ("GET", "/v1/absent", None, 404, "request.not-found"),
+            ("GET", "/v1/echo", None, 405, "request.method-not-allowed"),
+            (
+                "POST",
+                "/v1/echo",
+                Some(65_537),
+                413,
+                "request.body-too-large",
+            ),
+        ] {
+            let mut request = axum::http::Request::builder()
+                .method(method)
+                .uri(uri)
+                .header("traceparent", traceparent);
+            let body = match length {
+                Some(length) => {
+                    request = request.header("content-type", "application/json");
+                    axum::body::Body::from(vec![b' '; length])
+                }
+                None => axum::body::Body::empty(),
+            };
+            let response = app().oneshot(request.body(body).unwrap()).await.unwrap();
+            assert_problem(&response, StatusCode::from_u16(status).unwrap());
+            assert!(response.headers()["traceparent"]
+                .to_str()
+                .unwrap()
+                .contains("0af7651916cd43dd8448eb211c80319c"));
+            let body = document(response).await;
+            assert_eq!(body["code"], code, "{method} {uri}");
+            assert_eq!(body["status"], status);
+            assert_eq!(body["traceId"], "0af7651916cd43dd8448eb211c80319c");
+        }
+    }
+
     #[test]
     fn openapi_documents_challenges_only_on_authenticated_route_401s() {
         let document = openapi();
@@ -337,6 +621,102 @@ mod problem_tests {
             }
         }
     }
+
+    fn operations(document: &Value) -> impl Iterator<Item = (&String, &Value)> {
+        document["paths"]
+            .as_object()
+            .unwrap()
+            .values()
+            .flat_map(|path| path.as_object().unwrap().iter())
+    }
+
+    #[test]
+    fn openapi_summarizes_every_operation_once() {
+        let document = openapi();
+        let mut seen = std::collections::BTreeSet::new();
+        for (_, operation) in operations(&document) {
+            let id = operation["operationId"].as_str().unwrap();
+            let summary = operation["summary"].as_str().unwrap_or_default();
+            assert!(!summary.is_empty(), "{id} has no summary");
+            assert!(seen.insert(summary.to_owned()), "{id} repeats {summary}");
+        }
+    }
+
+    #[test]
+    fn openapi_answers_every_refusal_with_problems_of_its_own_status() {
+        let document = openapi();
+        for (_, operation) in operations(&document) {
+            let id = operation["operationId"].as_str().unwrap();
+            for (status, response) in operation["responses"].as_object().unwrap() {
+                if status.starts_with('2') || ["live", "ready"].contains(&id) && status == "503" {
+                    continue;
+                }
+                let schema = &response["content"]["application/problem+json"]["schema"];
+                assert_eq!(
+                    schema["allOf"][0]["$ref"], "#/components/schemas/Problem",
+                    "{id} {status}"
+                );
+                let codes = schema["allOf"][1]["properties"]["code"]["enum"]
+                    .as_array()
+                    .unwrap_or_else(|| panic!("{id} {status}"));
+                assert!(!codes.is_empty(), "{id} {status}");
+                for code in codes {
+                    let problem = ProblemCode::from_code(code.as_str().unwrap()).unwrap();
+                    assert_eq!(problem.http_status().to_string(), *status, "{id} {code}");
+                }
+                if status == "503" {
+                    assert_eq!(
+                        response["headers"]["Retry-After"]["schema"]["minimum"], 1,
+                        "{id}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn openapi_problem_schema_is_the_closed_vocabulary() {
+        let document = openapi();
+        let schema = &document["components"]["schemas"]["Problem"];
+        assert_eq!(schema["additionalProperties"], false);
+        assert_eq!(
+            schema["required"],
+            json!(["type", "title", "status", "detail", "code", "traceId"])
+        );
+        let codes: Vec<&str> = ProblemCode::ALL.iter().map(|p| p.code()).collect();
+        let types: Vec<String> = codes.iter().map(|code| type_uri(code)).collect();
+        assert_eq!(schema["properties"]["code"]["enum"], json!(codes));
+        assert_eq!(schema["properties"]["type"]["enum"], json!(types));
+    }
+
+    #[test]
+    fn every_problem_an_operation_can_answer_is_documented_on_one() {
+        let document = openapi();
+        let documented: std::collections::BTreeSet<ProblemCode> = operations(&document)
+            .flat_map(|(_, operation)| operation["responses"].as_object().unwrap().values())
+            .filter_map(|response| {
+                response["content"]["application/problem+json"]["schema"]["allOf"][1]["properties"]
+                    ["code"]["enum"]
+                    .as_array()
+            })
+            .flatten()
+            .map(|code| ProblemCode::from_code(code.as_str().unwrap()).unwrap())
+            .collect();
+        // An unrouted path belongs to no operation, and every handler takes
+        // its own extractor rejections, so neither edge problem is listed.
+        let unlisted = [
+            ProblemCode::RequestNotFound,
+            ProblemCode::RequestUnprocessable,
+        ];
+        for problem in ProblemCode::ALL {
+            assert_eq!(
+                documented.contains(problem),
+                !unlisted.contains(problem),
+                "{}",
+                problem.code()
+            );
+        }
+    }
 }
 
 #[cfg(test)]
@@ -357,10 +737,23 @@ mod list_query_tests {
         }
     }
 }
-type BoundedBody = std::result::Result<Bytes, axum::extract::rejection::BytesRejection>;
+type BoundedBody = std::result::Result<Bytes, BytesRejection>;
+/// A body the size limit cut short is too large; any other unreadable body is
+/// an invalid request.
+fn bounded_bytes(body: BoundedBody) -> Result<Bytes> {
+    body.map_err(|rejection| {
+        if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE {
+            CoordinatorError::new(
+                "request.body-too-large",
+                "supply a JSON object of at most 65536 bytes",
+            )
+        } else {
+            CoordinatorError::new("request.invalid", "supply a bounded JSON object")
+        }
+    })
+}
 fn request_body<T: DeserializeOwned>(body: BoundedBody) -> Result<T> {
-    let bytes =
-        body.map_err(|_| CoordinatorError::new("request.invalid", "supply a bounded JSON object"))?;
+    let bytes = bounded_bytes(body)?;
     let value = registry_platform_canonical_json::parse_json_strict(&bytes)
         .map_err(|_| CoordinatorError::new("request.invalid", "supply unambiguous bounded JSON"))?;
     serde_json::from_value(value).map_err(|_| {
@@ -370,8 +763,7 @@ fn request_body<T: DeserializeOwned>(body: BoundedBody) -> Result<T> {
 // Preserve Axum's JSON media contract, but release its rejection only after
 // caller authentication and action/ownership authorization have succeeded.
 async fn json_body<T: DeserializeOwned>(headers: &HeaderMap, body: BoundedBody) -> Result<T> {
-    let bytes =
-        body.map_err(|_| CoordinatorError::new("request.invalid", "supply a bounded JSON object"))?;
+    let bytes = bounded_bytes(body)?;
     let mut request = axum::http::Request::new(axum::body::Body::from(bytes.clone()));
     *request.headers_mut() = headers.clone();
     if matches!(
@@ -468,10 +860,8 @@ fn answer(result: Result<Value>) -> Response {
     match result {
         Ok(v) => {
             let mut r = Json(v).into_response();
-            r.headers_mut().insert(
-                "cache-control",
-                axum::http::HeaderValue::from_static("no-store"),
-            );
+            r.headers_mut()
+                .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
             r
         }
         Err(e) => problem(e),
@@ -504,7 +894,7 @@ async fn list(
             })?;
             if !(1..=100).contains(&q.limit) {
                 return Err(CoordinatorError::new(
-                    "request.invalid",
+                    "list-limit-invalid",
                     "limit must be between 1 and 100",
                 ));
             }
@@ -727,100 +1117,291 @@ async fn review_completion(
     )
     .await
 }
+/// Every problem an authenticated operation can answer: its caller is
+/// verified and authorized against durable, audited state.
+const AUTHENTICATED_PROBLEMS: [ProblemCode; 6] = [
+    ProblemCode::AuthenticationRefused,
+    ProblemCode::OperationNotAuthorized,
+    ProblemCode::RequestMethodNotAllowed,
+    ProblemCode::AuditResponseUnavailable,
+    ProblemCode::ServiceUnavailable,
+    ProblemCode::RuntimeFailure,
+];
+/// Every problem reading a JSON request body can answer.
+const BODY_PROBLEMS: [ProblemCode; 3] = [
+    ProblemCode::RequestInvalid,
+    ProblemCode::RequestBodyTooLarge,
+    ProblemCode::RequestUnsupportedMediaType,
+];
+/// Every problem resolving the `{run}` path segment can answer.
+const RUN_PROBLEMS: [ProblemCode; 2] = [ProblemCode::RequestInvalid, ProblemCode::RunNotVisible];
+/// Every problem a review completion sender can be answered with.
+const REVIEW_COMPLETION_PROBLEMS: [ProblemCode; 6] = [
+    ProblemCode::AuthenticationRefused,
+    ProblemCode::RequestInvalid,
+    ProblemCode::RequestBodyTooLarge,
+    ProblemCode::RequestUnsupportedMediaType,
+    ProblemCode::RequestMethodNotAllowed,
+    ProblemCode::ServiceUnavailable,
+];
+/// The problem responses of one operation, one per status, each naming the
+/// codes it carries.
+fn problem_responses(problems: &[ProblemCode]) -> serde_json::Map<String, Value> {
+    let mut by_status: std::collections::BTreeMap<u16, Vec<&str>> = Default::default();
+    for problem in problems {
+        let codes = by_status.entry(problem.http_status()).or_default();
+        if !codes.contains(&problem.code()) {
+            codes.push(problem.code());
+        }
+    }
+    by_status
+        .into_iter()
+        .map(|(status, mut codes)| {
+            codes.sort_unstable();
+            let mut response = json!({
+                "description": format!("A problem: {}.", codes.join(", ")),
+                "content": {"application/problem+json": {"schema": {"allOf": [
+                    {"$ref": "#/components/schemas/Problem"},
+                    {"properties": {"code": {"enum": codes}}}
+                ]}}}
+            });
+            match status {
+                401 => {
+                    response["headers"] = json!({"WWW-Authenticate":{
+                        "description":"Bearer authentication challenge for missing or refused credentials.",
+                        "schema":{"type":"string","const":"Bearer"}
+                    }})
+                }
+                503 => {
+                    response["headers"] = json!({"Retry-After":{
+                        "description":"Whole seconds to wait before trying again.",
+                        "schema":{"type":"integer","minimum":1}
+                    }})
+                }
+                _ => {}
+            }
+            (status.to_string(), response)
+        })
+        .collect()
+}
+/// One documented operation: its path, method, operation identifier, request
+/// schema, response schema and the problems it can answer.
+type DocumentedOperation = (
+    &'static str,
+    &'static str,
+    &'static str,
+    Option<&'static str>,
+    &'static str,
+    Vec<ProblemCode>,
+);
+/// The one-line summary the API reference shows as each operation's title.
+fn summary(operation_id: &str) -> &'static str {
+    match operation_id {
+        "live" => "Liveness",
+        "ready" => "Readiness",
+        "startRun" => "Start a run of a served flow",
+        "listRuns" => "List the caller's recent runs",
+        "runStatus" => "Read one run's status",
+        "inspectRun" => "Inspect a run's steps and recovery options",
+        "retrySame" => "Retry a held step with the same command",
+        "cancelRun" => "Cancel a run",
+        "reconcileRun" => "Reconcile an uncertain step against its receipt",
+        "doctor" => "Report deployment readiness and run state",
+        "restoreHold" => "Place the restore hold",
+        "releaseRestoreHold" => "Release the restore hold",
+        "releaseAdmissionHold" => "Release the admission hold",
+        "completeExecutionRecovery" => "Complete execution recovery after a restore",
+        "retainTerminal" => "Erase the payloads of terminal runs",
+        "receiveReviewCompletion" => "Receive a Casework review completion event",
+        _ => "",
+    }
+}
+
 pub fn openapi() -> Value {
+    use ProblemCode as P;
     let run_param = json!({"name":"run","in":"path","required":true,"schema":{"type":"string","format":"uuid"}});
     let mut paths = serde_json::Map::new();
-    let operations = [
-        ("/v1/runs", "get", "listRuns", None, Some("RunList")),
+    let operations: [DocumentedOperation; 13] = [
+        (
+            "/v1/runs",
+            "get",
+            "listRuns",
+            None,
+            "RunList",
+            vec![P::RequestInvalid, P::RequestLimitOutOfRange],
+        ),
         (
             "/v1/runs",
             "post",
             "startRun",
             Some("Start"),
-            Some("RunStatus"),
+            "RunStatus",
+            [
+                &BODY_PROBLEMS[..],
+                &[
+                    P::FlowNotServed,
+                    P::AdmissionRecoveryOnly,
+                    P::AdmissionHeld,
+                    P::ExecutionHeld,
+                    P::DeploymentRefused,
+                    P::DeploymentActivationChanged,
+                    P::DefinitionRefused,
+                    P::BindingConflict,
+                    P::BindingLiveConflict,
+                    P::FlowVersionConflict,
+                    P::IdempotencyKeyInvalid,
+                    P::IdempotencyKeyReused,
+                    P::InputInvalid,
+                ],
+            ]
+            .concat(),
         ),
         (
             "/v1/runs/{run}",
             "get",
             "runStatus",
             None,
-            Some("RunStatus"),
+            "RunStatus",
+            RUN_PROBLEMS.to_vec(),
         ),
         (
             "/v1/runs/{run}/inspect",
             "get",
             "inspectRun",
             None,
-            Some("RunInspection"),
+            "RunInspection",
+            [
+                &RUN_PROBLEMS[..],
+                &[
+                    P::RunPayloadErased,
+                    P::BindingConflict,
+                    P::DefinitionRefused,
+                ],
+            ]
+            .concat(),
         ),
         (
             "/v1/runs/{run}/retry-same",
             "post",
             "retrySame",
             Some("Reason"),
-            Some("RetryScheduled"),
+            "RetryScheduled",
+            [
+                &BODY_PROBLEMS[..],
+                &RUN_PROBLEMS[..],
+                &[
+                    P::RequestReasonInvalid,
+                    P::RunPayloadErased,
+                    P::BindingConflict,
+                    P::DefinitionRefused,
+                    P::RetryRefused,
+                    P::RunDefinitionIncompatible,
+                    P::ReceiptExpired,
+                    P::EvaluationUncertain,
+                ],
+            ]
+            .concat(),
         ),
         (
             "/v1/runs/{run}/cancel",
             "post",
             "cancelRun",
             Some("Reason"),
-            Some("RunStatus"),
+            "RunStatus",
+            [
+                &BODY_PROBLEMS[..],
+                &RUN_PROBLEMS[..],
+                &[P::RequestReasonInvalid],
+            ]
+            .concat(),
         ),
         (
             "/v1/runs/{run}/reconcile",
             "post",
             "reconcileRun",
             Some("Reason"),
-            Some("RunInspection"),
+            "RunInspection",
+            [
+                &BODY_PROBLEMS[..],
+                &RUN_PROBLEMS[..],
+                &[
+                    P::RequestReasonInvalid,
+                    P::RunPayloadErased,
+                    P::BindingConflict,
+                    P::DefinitionRefused,
+                    P::ReconcileRefused,
+                    P::ReconcileUnsupported,
+                    P::ReconcileRaced,
+                ],
+            ]
+            .concat(),
         ),
-        ("/v1/doctor", "get", "doctor", None, Some("Doctor")),
+        ("/v1/doctor", "get", "doctor", None, "Doctor", vec![]),
         (
             "/v1/restore-hold",
             "post",
             "restoreHold",
             Some("Reason"),
-            Some("Hold"),
+            "Hold",
+            [&BODY_PROBLEMS[..], &[P::RequestReasonInvalid]].concat(),
         ),
         (
             "/v1/release-restore-hold",
             "post",
             "releaseRestoreHold",
             Some("Reason"),
-            Some("Hold"),
+            "Hold",
+            [
+                &BODY_PROBLEMS[..],
+                &[P::RequestReasonInvalid, P::RestoreUnresolved],
+            ]
+            .concat(),
         ),
         (
             "/v1/release-admission-hold",
             "post",
             "releaseAdmissionHold",
             Some("AdmissionRelease"),
-            Some("AdmissionHold"),
+            "AdmissionHold",
+            [
+                &BODY_PROBLEMS[..],
+                &[P::RequestReasonInvalid, P::AdmissionHeld, P::ExecutionHeld],
+            ]
+            .concat(),
         ),
         (
             "/v1/complete-execution-recovery",
             "post",
             "completeExecutionRecovery",
             Some("ExecutionRecovery"),
-            Some("ExecutionReviewed"),
+            "ExecutionReviewed",
+            [
+                &BODY_PROBLEMS[..],
+                &[
+                    P::RequestReasonInvalid,
+                    P::RestoreReviewRequired,
+                    P::RestoreHoldRequired,
+                    P::RestoreLeaseIncompatible,
+                ],
+            ]
+            .concat(),
         ),
         (
             "/v1/retention",
             "post",
             "retainTerminal",
             Some("Retention"),
-            Some("Erased"),
+            "Erased",
+            [&BODY_PROBLEMS[..], &[P::RequestRetentionInvalid]].concat(),
         ),
     ];
-    for (path, method, id, request, response) in operations {
-        let mut op = json!({"operationId":id,"security":[{"bearer":[]}],"responses":{"200":{"description":"Authorized result","content":{"application/json":{"schema":{"$ref":format!("#/components/schemas/{}",response.unwrap_or("Problem"))}}}},"400":{"description":"Invalid bounded request"},"401":{"description":"Verified access token required"},"403":{"description":"Current caller policy refused"},"404":{"description":"Absent or unauthorized run"},"409":{"description":"State or recovery conflict"},"503":{"description":"Database, audit or verifier unavailable"}}});
-        op["responses"]["401"]["headers"] = json!({"WWW-Authenticate":{
-            "description":"Bearer authentication challenge for missing or refused credentials.",
-            "schema":{"type":"string","const":"Bearer"}
-        }});
-        if method == "post" {
-            op["responses"]["415"] =
-                json!({"description":"JSON media type required after caller authorization"});
-        }
+    for (path, method, id, request, response, problems) in operations {
+        let mut responses = problem_responses(&[&AUTHENTICATED_PROBLEMS[..], &problems].concat());
+        responses.insert(
+            "200".into(),
+            json!({"description":"Authorized result","content":{"application/json":{"schema":{"$ref":format!("#/components/schemas/{response}")}}}}),
+        );
+        let mut op = json!({"operationId":id,"summary":summary(id),"security":[{"bearer":[]}],"responses":responses});
         if path.contains("{run}") {
             op["parameters"] = json!([run_param.clone()]);
         }
@@ -828,7 +1409,6 @@ pub fn openapi() -> Value {
             op["parameters"] = json!([{"name":"limit","in":"query","schema":{"type":"integer","minimum":1,"maximum":100,"default":20}}]);
         }
         if id == "startRun" {
-            op["responses"]["404"]["description"] = json!("Flow not served by this deployment");
             op["parameters"] = json!([{"name":"Idempotency-Key","in":"header","required":true,"schema":{"type":"string","minLength":1,"maxLength":256}}]);
         }
         if let Some(request) = request {
@@ -840,6 +1420,7 @@ pub fn openapi() -> Value {
         registry_review_protocol::REVIEW_COMPLETIONS_PATH.into(),
         json!({"post":{
             "operationId":"receiveReviewCompletion",
+            "summary":summary("receiveReviewCompletion"),
             "description":"Casework's completion destination for a review producer connection reports that a review result exists. The event only wakes the step waiting on that request, which then reads the result with the connection's producer credential. Every authentic, well-formed event answers 204 whether or not a step waits on its request.",
             "security":[{"reviewCompletion":[]}],
             "parameters":[
@@ -847,21 +1428,30 @@ pub fn openapi() -> Value {
                 {"name":"Idempotency-Key","in":"header","required":true,"description":"The event identifier.","schema":{"type":"string","format":"uuid"}}
             ],
             "requestBody":{"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/ReviewCompletion"}}}},
-            "responses":{
-                "204":{"description":"Authentic completion accepted"},
-                "400":{"description":"Invalid bounded completion event"},
-                "401":{"description":"Configured completion credential and recipient binding required","headers":{"WWW-Authenticate":{
-                    "description":"Bearer authentication challenge for missing or refused credentials.",
-                    "schema":{"type":"string","const":"Bearer"}
-                }}},
-                "415":{"description":"JSON media type required after sender authentication"},
-                "503":{"description":"Database unavailable"}
-            }
+            "responses":{}
         }}),
     );
+    let mut responses = problem_responses(&REVIEW_COMPLETION_PROBLEMS);
+    responses.insert(
+        "204".into(),
+        json!({"description":"Authentic completion accepted"}),
+    );
+    paths[registry_review_protocol::REVIEW_COMPLETIONS_PATH]["post"]["responses"] =
+        Value::Object(responses);
     for (path, key) in [("/health", "live"), ("/ready", "ready")] {
-        paths.insert(path.into(),json!({"get":{"operationId":key,"responses":{"200":{"description":"Health result","content":{"application/json":{"schema":{"type":"object","required":[key],"properties":{key:{"type":"boolean"}}}}}},"503":{"description":"Deployment unavailable or in recovery hold"}}}}));
+        let mut responses = problem_responses(&[ProblemCode::RequestMethodNotAllowed]);
+        responses.insert("200".into(), json!({"description":"Health result","content":{"application/json":{"schema":{"type":"object","required":[key],"properties":{key:{"type":"boolean"}}}}}}));
+        responses.insert(
+            "503".into(),
+            json!({"description":"Deployment unavailable or in recovery hold"}),
+        );
+        paths.insert(
+            path.into(),
+            json!({"get":{"operationId":key,"summary":summary(key),"responses":responses}}),
+        );
     }
+    let problem_codes: Vec<&str> = ProblemCode::ALL.iter().map(|p| p.code()).collect();
+    let problem_types: Vec<String> = problem_codes.iter().map(|code| type_uri(code)).collect();
     let nullable_text = json!({"type":["string","null"]});
     let date = json!({"type":"string","format":"date-time"});
     let operation_ids: Vec<_> = crate::operations::descriptors()
@@ -885,7 +1475,7 @@ pub fn openapi() -> Value {
       "RetryScheduled":{"type":"object","required":["runId","status"],"properties":{"runId":{"type":"string","format":"uuid"},"status":{"const":"retry-scheduled"}}},
       "Hold":{"type":"object","required":["restoreHold"],"properties":{"restoreHold":{"type":"boolean"}}},"Erased":{"type":"object","required":["erased"],"properties":{"erased":{"type":"integer","minimum":0}}},
       "ReviewCompletion":{"type":"object","additionalProperties":false,"required":["type","eventId","requestId","resultId","completedAt"],"properties":{"type":{"const":"review.completed"},"eventId":{"type":"string","format":"uuid"},"requestId":{"type":"string","format":"uuid"},"resultId":{"type":"string","format":"uuid"},"completedAt":date}},
-      "Problem":{"type":"object","required":["code","message"],"properties":{"code":{"type":"string"},"message":{"type":"string"},"suggestedAction":{"type":["string","null"]}}}
+      "Problem":{"type":"object","additionalProperties":false,"required":["type","title","status","detail","code","traceId"],"properties":{"type":{"type":"string","enum":problem_types},"title":{"type":"string"},"status":{"type":"integer"},"detail":{"type":"string"},"code":{"type":"string","enum":problem_codes},"traceId":{"type":"string"}}}
     });
-    json!({"openapi":"3.1.0","info":{"title":"Registry Coordinator","version":env!("CARGO_PKG_VERSION")},"components":{"securitySchemes":{"bearer":{"type":"http","scheme":"bearer","bearerFormat":"JWT"},"reviewCompletion":{"type":"http","scheme":"bearer","description":"The completion credential configured for a Casework review connection, presented with its recipient binding."}},"schemas":schemas},"paths":paths})
+    json!({"openapi":"3.1.0","info":{"title":"Registry Coordinator","version":env!("CARGO_PKG_VERSION"),"description":"Registry Coordinator HTTP contract. Every refusal is one application/problem+json document from the closed vocabulary."},"components":{"securitySchemes":{"bearer":{"type":"http","scheme":"bearer","bearerFormat":"JWT"},"reviewCompletion":{"type":"http","scheme":"bearer","description":"The completion credential configured for a Casework review connection, presented with its recipient binding."}},"schemas":schemas},"paths":paths})
 }

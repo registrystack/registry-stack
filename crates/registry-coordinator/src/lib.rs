@@ -13,6 +13,7 @@ pub mod external_http;
 mod functions;
 mod mapping_check;
 pub mod operations;
+pub mod problem;
 pub mod project;
 mod project_check;
 pub mod protocol;

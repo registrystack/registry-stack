@@ -724,6 +724,28 @@ async fn an_inauthentic_or_malformed_event_is_refused_and_wakes_nothing() {
         if expected == StatusCode::UNAUTHORIZED {
             assert_eq!(response.headers()["www-authenticate"], "Bearer", "{case}");
         }
+        assert_eq!(
+            response.headers()["content-type"],
+            "application/problem+json",
+            "{case}"
+        );
+        let problem: Value = serde_json::from_slice(
+            &axum::body::to_bytes(response.into_body(), 4096)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        let code = match expected {
+            StatusCode::UNAUTHORIZED => "authentication.refused",
+            StatusCode::BAD_REQUEST => "request.invalid",
+            _ => "request.unsupported-media-type",
+        };
+        assert_eq!(problem["code"], code, "{case}");
+        assert_eq!(problem["status"], expected.as_u16(), "{case}");
+        assert!(
+            !problem.to_string().contains("canary"),
+            "a refusal repeats no credential: {case}"
+        );
     }
     assert!(!h.wait_row(run).await.unwrap().woken);
     let due = h.due_in(run).await.unwrap();

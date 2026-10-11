@@ -2,16 +2,17 @@
 use std::fmt;
 
 use registry_platform_canonical_json::parse_json_strict;
+use registry_platform_httpsec::{response_trace_id, ProblemDocument};
 use registry_platform_httputil::client::{
     build_client, classify_keyed_attempt, read_failure_kind, retry_keyed_mutation,
     send_failure_kind, KeyedMutationAttempt, OutboundOptions, RetryAfter, ServiceBaseUrl,
 };
 use registry_platform_httputil::{read_bounded, validate_response_headers};
 use reqwest::{
-    header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE},
+    header::{HeaderMap, ACCEPT, AUTHORIZATION, CONTENT_TYPE},
     Method, RequestBuilder, Response, StatusCode,
 };
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Serialize};
 use serde_json::json;
 
 use crate::{
@@ -23,6 +24,11 @@ use crate::{
 const MAXIMUM_REQUEST_BYTES: usize = 65_536;
 const MAXIMUM_PROBLEM_BYTES: u64 = 8192;
 const MAXIMUM_LIST_LIMIT: u32 = 100;
+const JSON_MEDIA_TYPE: &str = "application/json";
+const PROBLEM_MEDIA_TYPE: &str = "application/problem+json";
+/// The problem type namespace the runtime pins: a problem's `type` is its
+/// code under this base, with each `.` read as a path separator.
+const PROBLEM_TYPE_BASE: &str = "https://id.registrystack.org/problems/registry-coordinator/";
 
 /// A complete authenticated answer. This product does not define a trace field.
 pub struct CoordinatorComplete<T> {
@@ -286,12 +292,12 @@ impl CoordinatorClient {
             .http
             .request(method, url)
             .header(AUTHORIZATION, token.authorization_header_value())
-            .header(ACCEPT, "application/json");
+            .header(ACCEPT, JSON_MEDIA_TYPE);
         if let Some(key) = key {
             request = request.header("idempotency-key", key);
         }
         if let Some(body) = body {
-            request = request.header(CONTENT_TYPE, "application/json").body(body);
+            request = request.header(CONTENT_TYPE, JSON_MEDIA_TYPE).body(body);
         }
         Ok(request)
     }
@@ -307,59 +313,92 @@ impl CoordinatorClient {
 
     async fn answer<T: DeserializeOwned>(&self, response: Response) -> Result<T, Error> {
         let status = response.status();
-        let media: Vec<_> = response.headers().get_all(CONTENT_TYPE).iter().collect();
-        if media.len() != 1 || media[0].to_str().ok() != Some("application/json") {
+        if status != StatusCode::OK {
+            return Err(self.problem(response).await);
+        }
+        if !exact_media_type(response.headers(), JSON_MEDIA_TYPE) {
             return Err(protocol(status.as_u16(), Failure::MediaType));
         }
-        let bound = if status == StatusCode::OK {
-            self.max_response_bytes
-        } else {
-            self.max_response_bytes.min(MAXIMUM_PROBLEM_BYTES)
-        };
-        let bytes = read_bounded(response, bound)
+        let bytes = read_bounded(response, self.max_response_bytes)
             .await
             .map_err(|e| Error::Transport {
                 kind: read_failure_kind(&e),
             })?;
         let value =
             parse_json_strict(&bytes).map_err(|_| protocol(status.as_u16(), Failure::Body))?;
-        if status != StatusCode::OK {
-            if !status.is_client_error() && !status.is_server_error() {
-                return Err(protocol(status.as_u16(), Failure::Status));
-            }
-            let problem: Problem = serde_json::from_value(value)
-                .map_err(|_| protocol(status.as_u16(), Failure::Problem))?;
-            if problem.code.is_empty()
-                || problem.code.len() > 128
-                || !problem.code.bytes().all(|b| {
-                    b.is_ascii_lowercase() || b.is_ascii_digit() || matches!(b, b'.' | b'_' | b'-')
-                })
-                || problem.message.is_empty()
-                || problem.message.len() > 4096
-                || problem
-                    .suggested_action
-                    .as_ref()
-                    .is_some_and(|v| v.len() > 4096)
-            {
-                return Err(protocol(status.as_u16(), Failure::Problem));
-            }
-            // The runtime contract owns an open code string, but never exposes
-            // protected values through its prose. Discard all prose regardless.
-            return Err(Error::Problem {
-                status: status.as_u16(),
-                code: problem.code,
-            });
-        }
         serde_json::from_value(value).map_err(|_| protocol(status.as_u16(), Failure::Body))
+    }
+
+    /// A refusal is a product problem only when the answer is an exact
+    /// RFC 9457 document under the problem media type whose status equals the
+    /// answer's, whose `traceId` equals the answer's `traceparent` trace, and
+    /// whose `type` is its well-formed code under the runtime's namespace.
+    /// Anything else is the edge or a defect talking: a protocol failure.
+    ///
+    /// The client has no copy of the runtime's vocabulary, so it checks the
+    /// code's grammar, not its membership, and carries the code as the
+    /// runtime spelled it. The title and detail are read and discarded.
+    async fn problem(&self, response: Response) -> Error {
+        let status = response.status();
+        if !status.is_client_error() && !status.is_server_error() {
+            return protocol(status.as_u16(), Failure::Status);
+        }
+        if !exact_media_type(response.headers(), PROBLEM_MEDIA_TYPE) {
+            return protocol(status.as_u16(), Failure::MediaType);
+        }
+        let trace = response_trace_id(response.headers()).ok();
+        let bound = self.max_response_bytes.min(MAXIMUM_PROBLEM_BYTES);
+        let bytes = match read_bounded(response, bound).await {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                return Error::Transport {
+                    kind: read_failure_kind(&error),
+                }
+            }
+        };
+        if parse_json_strict(&bytes).is_err() {
+            return protocol(status.as_u16(), Failure::Problem);
+        }
+        let Ok(document) = ProblemDocument::parse_exact(&bytes, MAXIMUM_PROBLEM_BYTES as usize)
+        else {
+            return protocol(status.as_u16(), Failure::Problem);
+        };
+        if document.status != status.as_u16()
+            || trace.as_ref().map(|trace| trace.as_str()) != Some(document.trace_id.as_str())
+            || !well_formed_code(&document.code)
+            || document.type_uri
+                != format!("{PROBLEM_TYPE_BASE}{}", document.code.replace('.', "/"))
+        {
+            return protocol(status.as_u16(), Failure::Problem);
+        }
+        Error::Problem {
+            status: status.as_u16(),
+            code: document.code,
+        }
     }
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct Problem {
-    code: String,
-    message: String,
-    suggested_action: Option<String>,
+/// The runtime's code grammar, `family.reason`: two lowercase kebab-case
+/// words joined by one dot.
+fn well_formed_code(code: &str) -> bool {
+    let word = |part: &str| {
+        !part.is_empty()
+            && part.bytes().all(|b| b.is_ascii_lowercase() || b == b'-')
+            && !part.starts_with('-')
+            && !part.ends_with('-')
+    };
+    code.len() <= 128
+        && code
+            .split_once('.')
+            .is_some_and(|(family, reason)| word(family) && word(reason))
+}
+
+fn exact_media_type(headers: &HeaderMap, expected: &str) -> bool {
+    let mut values = headers.get_all(CONTENT_TYPE).iter();
+    matches!(
+        (values.next(), values.next()),
+        (Some(value), None) if value.as_bytes() == expected.as_bytes()
+    )
 }
 
 fn request_bytes(value: &impl Serialize) -> Result<Vec<u8>, Error> {

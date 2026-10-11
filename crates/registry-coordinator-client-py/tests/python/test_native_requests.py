@@ -20,6 +20,7 @@ from scripted import (  # noqa: E402
     Scripted,
     ok,
     problem,
+    problem_document,
 )
 
 
@@ -187,8 +188,8 @@ class NativeRequestTests(unittest.TestCase):
     def test_a_refused_list_retry_or_cancellation_keeps_the_status_and_code(self) -> None:
         for call, answer in (
             (lambda: self.client.list("answered-token-canary", 20), problem(400, "request.invalid")),
-            (lambda: self.client.retry_same("answered-token-canary", RUN, "reason"), problem(409, "retry-refused")),
-            (lambda: self.client.cancel("answered-token-canary", RUN, "reason"), problem(409, "restore-hold")),
+            (lambda: self.client.retry_same("answered-token-canary", RUN, "reason"), problem(409, "retry.refused")),
+            (lambda: self.client.cancel("answered-token-canary", RUN, "reason"), problem(409, "execution.held")),
         ):
             status, _, document = answer
             self.service.script(answer)
@@ -200,7 +201,7 @@ class NativeRequestTests(unittest.TestCase):
             self.assertEqual(error.code, document["code"])
             self.assertIs(error.outcome_unknown, False)
             text = rendered(error)
-            for canary in ("server-prose-canary", "server-action-canary", "answered-token-canary"):
+            for canary in ("server-prose-canary", "server-title-canary", "answered-token-canary"):
                 self.assertNotIn(canary, text)
 
     def test_a_retry_answer_outside_the_request_is_a_protocol_failure(self) -> None:
@@ -218,7 +219,7 @@ class NativeRequestTests(unittest.TestCase):
                 self.assertIs(raised.exception.outcome_unknown, True)
 
     def test_a_problem_preserves_status_and_code_and_never_the_prose(self) -> None:
-        self.service.script(problem(409, "start-conflict"))
+        self.service.script(problem(409, "idempotency.key-reused"))
 
         with self.assertRaises(CoordinatorClientError) as raised:
             self.client.start("answered-token-canary", KEY, START_REQUEST)
@@ -226,38 +227,39 @@ class NativeRequestTests(unittest.TestCase):
         error = raised.exception
         self.assertEqual(error.kind, "problem")
         self.assertEqual(error.status, 409)
-        self.assertEqual(error.code, "start-conflict")
+        self.assertEqual(error.code, "idempotency.key-reused")
         self.assertIs(error.outcome_unknown, False)
         self.assertIsNone(error.protocol_failure)
         self.assertIsNone(error.transport_kind)
         text = rendered(error)
-        for canary in ("server-prose-canary", "server-action-canary", "answered-token-canary", KEY):
+        for canary in ("server-prose-canary", "server-title-canary", "answered-token-canary", KEY):
             self.assertNotIn(canary, text)
         self.assertFalse(hasattr(error, "trace_id"))
 
-    def test_a_problem_with_a_null_suggested_action_maps(self) -> None:
-        self.service.script((404, "application/json", {"code": "run-not-found", "message": "m", "suggestedAction": None}))
-        with self.assertRaises(CoordinatorClientError) as raised:
-            self.client.status("token", RUN)
-        self.assertEqual(raised.exception.code, "run-not-found")
-        self.assertEqual(raised.exception.status, 404)
-
-    def test_a_problem_media_type_of_problem_json_is_a_protocol_failure(self) -> None:
-        self.service.script((409, "application/problem+json", {"code": "x", "message": "m", "suggestedAction": None}))
+    def test_a_problem_answered_as_plain_json_is_a_protocol_failure(self) -> None:
+        self.service.script((404, "application/json", problem_document(404, "run.not-visible")))
         with self.assertRaises(CoordinatorClientError) as raised:
             self.client.status("token", RUN)
         self.assertEqual(raised.exception.kind, "protocol")
         self.assertEqual(raised.exception.protocol_failure, "media-type")
+        self.assertIsNone(raised.exception.code)
 
     def test_a_problem_outside_the_shape_is_a_protocol_failure(self) -> None:
+        valid = problem_document(400, "request.invalid")
+        without_code = {name: value for name, value in valid.items() if name != "code"}
         for answer in (
-            {"code": "UPPER", "message": "m", "suggestedAction": None},
-            {"code": "", "message": "m", "suggestedAction": None},
-            {"code": "ok", "message": "m", "suggestedAction": None, "extra": 1},
-            {"message": "m"},
+            {**valid, "code": "UPPER.invalid"},
+            {**valid, "code": ""},
+            {**valid, "code": "request-invalid"},
+            {**valid, "suggestedAction": None},
+            without_code,
+            {"code": "request.invalid", "message": "m", "suggestedAction": None},
+            {**valid, "status": 409},
+            {**valid, "type": "https://id.registrystack.org/problems/registry-casework/request/invalid"},
+            {**valid, "traceId": "0af7651916cd43dd8448eb211c80319c"},
         ):
             with self.subTest(answer=answer):
-                self.service.script((400, "application/json", answer))
+                self.service.script((400, "application/problem+json", answer))
                 with self.assertRaises(CoordinatorClientError) as raised:
                     self.client.status("token", RUN)
                 self.assertEqual(raised.exception.kind, "protocol")

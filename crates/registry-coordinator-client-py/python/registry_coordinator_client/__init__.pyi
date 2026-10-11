@@ -120,7 +120,8 @@ CoordinatorProtocolFailure: TypeAlias = Literal[
 
 class CoordinatorClientError(Exception):
     kind: CoordinatorErrorKind
-    # The Coordinator's open problem code; set only when kind is "problem".
+    # The `family.reason` code of the Coordinator's RFC 9457 problem document,
+    # such as "run.not-visible"; set only when kind is "problem".
     code: str | None
     status: int | None
     transport_kind: str | None
@@ -140,7 +141,7 @@ class CoordinatorClient:
     # up to `max_mutation_retries` times when the outcome is unknown. The key
     # is scoped to the caller and the flow, so the same key under two flows
     # starts two runs, and an allowed flow the deployment does not serve is
-    # refused with 404 `flow-absent`, a known outcome never resent.
+    # refused with 404 `flow.not-served`, a known outcome never resent.
     def start(self, token: str, idempotency_key: str, request: StartRunRequest) -> Complete[RunStatus]: ...
     def status(self, token: str, run_id: RunId) -> Complete[RunStatus]: ...
     def inspect(self, token: str, run_id: RunId) -> Complete[RunInspection]: ...

@@ -126,6 +126,11 @@ export class CoordinatorClientError extends Error {
    * every 4xx refusal.
    */
   readonly outcomeUnknown: boolean
+  /**
+   * The `family.reason` code of the RFC 9457 problem document the service
+   * answered, such as `run.not-visible`, present only when `kind` is
+   * `'problem'`. The service's title and detail are never copied.
+   */
   readonly code?: string
   readonly status?: SafeInteger
   readonly transportKind?: string
@@ -139,7 +144,7 @@ export class CoordinatorClient {
    * the same key and body at most `maxMutationRetries` times; a 4xx is never
    * resent. The key is scoped to the caller and the flow, so the same key
    * under two flows starts two runs, and an allowed flow the deployment does
-   * not serve is refused with 404 `flow-absent`, a known outcome never resent.
+   * not serve is refused with 404 `flow.not-served`, a known outcome never resent.
    */
   start(token: string, idempotencyKey: string, request: StartRunRequest): Promise<CoordinatorOutcome<RunStatus>>
   status(token: string, runId: RunId): Promise<CoordinatorOutcome<RunStatus>>

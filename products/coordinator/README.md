@@ -426,6 +426,67 @@ client packages carry it from the release that admits the Coordinator. It
 resends only an admission whose outcome is unknown, under the same key, and
 grants no access to the product records a flow touches.
 
+Every refusal of the HTTP API, including a request refused before its route
+runs and a refused review-completion event, is an RFC 9457
+`application/problem+json` document with `type`, `title`, `status`, `detail`,
+`code` and `traceId`. The `type` is the code with its dot replaced by a slash
+under `https://id.registrystack.org/problems/registry-coordinator/`, the title
+and detail are fixed sentences that belong to the code, and no member repeats
+a submitted value. A refusal carries `Cache-Control: no-store` and a
+`traceparent` header whose trace matches `traceId`; a 401 also carries
+`WWW-Authenticate: Bearer`, and a 503 `Retry-After`. A run that does not exist
+and a run the caller may not see answer the same 404 `run.not-visible`. The
+generated OpenAPI document lists the codes each operation can answer, and the
+identifier catalog registers the vocabulary. `coordinatorctl` diagnostics keep
+their own `coordinator.*` codes and fixes, and a refused remote command names
+the problem code and trace it received, such as `(problem run.not-visible,
+trace 4bf92f3577b34da6a3ce929d0e0e4736)`. The service logs each server problem
+(5xx) with its internal code and that `trace_id`; it does not log other
+refusals.
+
+| Code | Status | Title |
+|---|---|---|
+| `admission.held` | 409 | Admissions held |
+| `admission.recovery-only` | 409 | Service admits no runs |
+| `audit.response-unavailable` | 503 | Audited result unavailable |
+| `authentication.refused` | 401 | Authentication refused |
+| `binding.conflict` | 409 | Connection settings changed |
+| `binding.live-conflict` | 409 | Live connection settings changed |
+| `definition.refused` | 409 | Workflow definition refused |
+| `deployment.activation-changed` | 409 | Active packages changed |
+| `deployment.refused` | 409 | Deployment not serving |
+| `evaluation.uncertain` | 409 | Evaluation outcome uncertain |
+| `execution.held` | 409 | Execution held |
+| `flow.not-served` | 404 | Flow not served |
+| `flow.version-conflict` | 409 | Workflow version conflict |
+| `idempotency.key-invalid` | 400 | Idempotency key invalid |
+| `idempotency.key-reused` | 409 | Idempotency key reused |
+| `input.invalid` | 400 | Start input invalid |
+| `operation.not-authorized` | 403 | Operation not authorized |
+| `receipt.expired` | 409 | Original receipt expired |
+| `reconcile.raced` | 409 | Run changed during reconciliation |
+| `reconcile.refused` | 409 | Reconciliation refused |
+| `reconcile.unsupported` | 409 | Reconciliation unsupported |
+| `request.body-too-large` | 413 | Payload too large |
+| `request.invalid` | 400 | Request invalid |
+| `request.limit-out-of-range` | 400 | List limit out of range |
+| `request.method-not-allowed` | 405 | Method not allowed |
+| `request.not-found` | 404 | Route not found |
+| `request.reason-invalid` | 400 | Reason invalid |
+| `request.retention-invalid` | 400 | Retention request invalid |
+| `request.unprocessable` | 422 | Request unprocessable |
+| `request.unsupported-media-type` | 415 | Unsupported media type |
+| `restore.hold-required` | 409 | Restore hold required |
+| `restore.lease-incompatible` | 409 | Held work incompatible |
+| `restore.review-required` | 409 | Recovery review incomplete |
+| `restore.unresolved` | 409 | Held work unresolved |
+| `retry.refused` | 409 | Retry refused |
+| `run.definition-incompatible` | 409 | Run definition unsupported |
+| `run.not-visible` | 404 | Run not visible |
+| `run.payload-erased` | 409 | Run payloads erased |
+| `runtime.failure` | 500 | Coordinator runtime failure |
+| `service.unavailable` | 503 | Coordinator service unavailable |
+
 After a lost Messaging or Scheduling response, reconcile against the receiving
 product's original-key receipt before retrying. BReg action reconciliation remains
 unresolved because no read-only action receipt is available; an ordinary record

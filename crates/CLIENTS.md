@@ -80,9 +80,11 @@ or unify distinct authority contracts. Shared HTTP/token primitives live in
   `{flow, input}`; a binding never generates the key and never interprets the
   flow or its input. Only the Rust client's bounded same-key retry resends an
   admission; listing, status, inspection, reconciliation, same-command retry,
-  and cancellation are sent once, and the last two take no key. Coordinator
-  problem codes are open, so bindings pass the answered code through unchanged
-  instead of checking it against a catalogue, and the run status and
+  and cancellation are sent once, and the last two take no key. The
+  Coordinator's problem vocabulary is closed but lives in its runtime, which
+  no client may depend on: the Rust client holds each answered code to the
+  `family.reason` grammar and to its type URI, bindings pass that code through
+  unchanged instead of checking it against a catalogue, and the run status and
   inspection documents come from the Rust client unchanged. A run is owned by
   the caller that started it; the client grants no access to the product
   records a flow touches.

@@ -10,7 +10,7 @@ identically and under the caller's same key, at most `maxMutationRetries` times
 (default 2, at most 2, 0 disables); a 4xx refusal is never resent. A key is
 scoped to the caller and the flow, so the same key under two flows starts two
 runs, and an allowed flow the deployment does not serve is refused with 404
-`flow-absent`, a known outcome never resent. `list`,
+`flow.not-served`, a known outcome never resent. `list`,
 `status`, `inspect`, `reconcile`, `retrySame`, and `cancel` send exactly one
 request. `reconcile` reads the receipt for the original operation and updates
 recovery state; it never resubmits that operation. `retrySame` and `cancel`
@@ -20,6 +20,8 @@ owns them.
 
 Configuration, request documents, UUIDs, and JavaScript integer bounds are
 checked before I/O. Errors expose a fixed safe message and the closed failure
-category. Coordinator problem codes remain strings because they are authored
-by the Coordinator contract. Response messages, credentials, request bodies,
-and transport chains are not copied into errors.
+category. A refusal is a `problem` error only when the service answered an
+exact RFC 9457 `application/problem+json` document whose status, type and
+trace agree with the answer; its `family.reason` code stays a string because
+the Coordinator contract authors the vocabulary. Problem titles and details,
+credentials, request bodies, and transport chains are not copied into errors.

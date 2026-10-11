@@ -21,6 +21,9 @@ use tokio::task::JoinHandle;
 use url::Url;
 
 const RUN: &str = "7e367d42-b001-4d44-b94c-9447bfa182aa";
+const PROBLEM_MEDIA: &str = "application/problem+json";
+const TRACE: &str = "4bf92f3577b34da6a3ce929d0e0e4736";
+const TRACEPARENT: &str = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
 
 fn status() -> Value {
     json!({"runId":RUN,"workflowId":"nursing-notice","workflowVersion":"1","definitionDigest":"sha256:definition","bindingDigest":"sha256:binding","step":"notify","state":"pending","outcome":null,"output":null,"failureCode":null,"failurePath":null,"admittedAt":"2026-10-10T12:00:00Z","deadlineAt":"2026-10-10T12:05:00Z","nextDueAt":null,"uncertain":false,"restoreReviewRequired":false,"cancelRequested":false})
@@ -64,6 +67,7 @@ async fn handle(
         [
             ("content-type", media),
             ("location", "/must-not-follow".to_string()),
+            ("traceparent", TRACEPARENT.to_string()),
         ],
         body,
     )
@@ -111,7 +115,12 @@ impl Server {
     fn script(&self, replies: &[(u16, &str)]) {
         let mut script = self.fixture.script.lock().unwrap();
         for (code, bytes) in replies {
-            script.push_back((*code, "application/json".into(), (*bytes).into()));
+            let media = if *code == 200 {
+                "application/json"
+            } else {
+                PROBLEM_MEDIA
+            };
+            script.push_back((*code, media.into(), (*bytes).into()));
         }
     }
     fn client_with_retries(&self, retries: u8) -> CoordinatorClient {
@@ -278,20 +287,12 @@ async fn a_refused_listing_retry_or_cancellation_keeps_the_status_and_code() {
     let server = Server::new(status()).await;
     let client = server.client();
     let run = Uuid::parse_str(RUN).unwrap();
-    server.answer(
-        400,
-        "application/json",
-        &json!({"code":"request.invalid","message":"sensitive-canary"}).to_string(),
-    );
+    server.answer(400, PROBLEM_MEDIA, &problem(400, "request.invalid"));
     let error = client.list(&token(), 20).await.err().unwrap();
     assert!(
         matches!(&error, CoordinatorClientError::Problem { status: 400, code } if code == "request.invalid")
     );
-    server.answer(
-        409,
-        "application/json",
-        &json!({"code":"retry-refused","message":"sensitive-canary","suggestedAction":"secret-recovery-canary"}).to_string(),
-    );
+    server.answer(409, PROBLEM_MEDIA, &problem(409, "retry.refused"));
     for error in [
         client
             .retry_same(&token(), run, "operator-ticket-4821")
@@ -305,7 +306,7 @@ async fn a_refused_listing_retry_or_cancellation_keeps_the_status_and_code() {
             .unwrap(),
     ] {
         assert!(
-            matches!(&error, CoordinatorClientError::Problem { status: 409, code } if code == "retry-refused")
+            matches!(&error, CoordinatorClientError::Problem { status: 409, code } if code == "retry.refused")
         );
         assert!(!error.is_outcome_unknown());
         assert!(!format!("{error:?} {error}").contains("canary"));
@@ -316,7 +317,7 @@ async fn a_refused_listing_retry_or_cancellation_keeps_the_status_and_code() {
 #[tokio::test]
 async fn listing_retry_and_cancellation_are_never_resent() {
     let server = Server::new(status()).await;
-    server.answer(503, "application/json", &problem("store-unavailable"));
+    server.answer(503, PROBLEM_MEDIA, &problem(503, "service.unavailable"));
     let client = server.client_with_retries(2);
     let run = Uuid::parse_str(RUN).unwrap();
     assert!(client.list(&token(), 20).await.is_err());
@@ -427,13 +428,13 @@ async fn invalid_admission_and_recovery_fail_before_io() {
 async fn problems_are_product_owned_and_prose_is_never_released() {
     let server = Server::new(status()).await;
     for (code, status) in [
-        ("access.unauthenticated", 401),
-        ("access.denied", 403),
-        ("run-absent", 404),
-        ("start-conflict", 409),
-        ("store-unavailable", 503),
+        ("authentication.refused", 401),
+        ("operation.not-authorized", 403),
+        ("run.not-visible", 404),
+        ("idempotency.key-reused", 409),
+        ("service.unavailable", 503),
     ] {
-        server.answer(status, "application/json", &json!({"code":code,"message":"sensitive-canary","suggestedAction":"secret-recovery-canary"}).to_string());
+        server.answer(status, PROBLEM_MEDIA, &problem(status, code));
         let error = server
             .client_with_retries(0)
             .start(&token(), "key", &request())
@@ -456,11 +457,7 @@ async fn problems_are_product_owned_and_prose_is_never_released() {
 #[tokio::test]
 async fn a_problem_keeps_the_answered_status_and_code_without_a_client_side_status_table() {
     let server = Server::new(status()).await;
-    server.answer(
-        403,
-        "application/json",
-        &json!({"code":"start-conflict","message":"refused","suggestedAction":null}).to_string(),
-    );
+    server.answer(403, PROBLEM_MEDIA, &problem(403, "idempotency.key-reused"));
     let error = server
         .client()
         .start(&token(), "key", &request())
@@ -468,7 +465,7 @@ async fn a_problem_keeps_the_answered_status_and_code_without_a_client_side_stat
         .err()
         .unwrap();
     assert!(
-        matches!(&error, CoordinatorClientError::Problem { status: 403, code } if code == "start-conflict")
+        matches!(&error, CoordinatorClientError::Problem { status: 403, code } if code == "idempotency.key-reused")
     );
     assert!(!error.is_outcome_unknown());
     assert_eq!(server.count(), 1, "a 4xx refusal is never resent");
@@ -477,11 +474,7 @@ async fn a_problem_keeps_the_answered_status_and_code_without_a_client_side_stat
 #[tokio::test]
 async fn a_flow_the_deployment_does_not_serve_is_refused_once_with_a_known_outcome() {
     let server = Server::new(status()).await;
-    server.answer(
-        404,
-        "application/json",
-        &json!({"code":"flow-absent","message":"sensitive-canary","suggestedAction":"secret-recovery-canary"}).to_string(),
-    );
+    server.answer(404, PROBLEM_MEDIA, &problem(404, "flow.not-served"));
     let error = server
         .client()
         .start(&token(), "key", &request())
@@ -489,7 +482,7 @@ async fn a_flow_the_deployment_does_not_serve_is_refused_once_with_a_known_outco
         .err()
         .unwrap();
     assert!(
-        matches!(&error, CoordinatorClientError::Problem { status: 404, code } if code == "flow-absent")
+        matches!(&error, CoordinatorClientError::Problem { status: 404, code } if code == "flow.not-served")
     );
     assert!(!error.is_outcome_unknown());
     assert!(!format!("{error:?} {error}").contains("canary"));
@@ -499,12 +492,7 @@ async fn a_flow_the_deployment_does_not_serve_is_refused_once_with_a_known_outco
 #[tokio::test]
 async fn a_run_of_a_flow_outside_the_caller_policy_reads_as_absent_on_every_run_action() {
     let server = Server::new(status()).await;
-    server.answer(
-        404,
-        "application/json",
-        &json!({"code":"run-absent","message":"run was not found","suggestedAction":null})
-            .to_string(),
-    );
+    server.answer(404, PROBLEM_MEDIA, &problem(404, "run.not-visible"));
     let client = server.client();
     let run = Uuid::parse_str(RUN).unwrap();
     for error in [
@@ -523,21 +511,36 @@ async fn a_run_of_a_flow_outside_the_caller_policy_reads_as_absent_on_every_run_
             .unwrap(),
     ] {
         assert!(
-            matches!(&error, CoordinatorClientError::Problem { status: 404, code } if code == "run-absent")
+            matches!(&error, CoordinatorClientError::Problem { status: 404, code } if code == "run.not-visible")
         );
         assert!(!error.is_outcome_unknown());
     }
     assert_eq!(server.count(), 5, "each is sent exactly once");
 }
 
-fn problem(code: &str) -> String {
-    json!({"code":code,"message":"withheld"}).to_string()
+/// A problem document as the runtime answers it, with prose the client must
+/// never release.
+fn problem_document(status: u16, code: &str) -> Value {
+    json!({
+        "type": format!(
+            "https://id.registrystack.org/problems/registry-coordinator/{}",
+            code.replace('.', "/")
+        ),
+        "title": "sensitive-canary title",
+        "status": status,
+        "detail": "sensitive-canary detail",
+        "code": code,
+        "traceId": TRACE,
+    })
+}
+fn problem(status: u16, code: &str) -> String {
+    problem_document(status, code).to_string()
 }
 
 #[tokio::test]
 async fn an_unknown_admission_outcome_is_resent_under_the_same_key_and_body() {
     let server = Server::new(status()).await;
-    server.script(&[(503, &problem("store-unavailable"))]);
+    server.script(&[(503, &problem(503, "service.unavailable"))]);
     let outcome = server
         .client()
         .start(&token(), "event start original", &request())
@@ -558,7 +561,7 @@ async fn an_unknown_admission_outcome_is_resent_under_the_same_key_and_body() {
 async fn admission_resends_at_most_the_configured_count_and_keeps_the_outcome_unknown() {
     for (retries, sent) in [(0, 1), (1, 2), (2, 3)] {
         let server = Server::new(status()).await;
-        server.answer(503, "application/json", &problem("audit-unavailable"));
+        server.answer(503, PROBLEM_MEDIA, &problem(503, "service.unavailable"));
         let error = server
             .client_with_retries(retries)
             .start(&token(), "key", &request())
@@ -573,7 +576,11 @@ async fn admission_resends_at_most_the_configured_count_and_keeps_the_outcome_un
         assert_eq!(server.count(), sent, "{retries} retries");
     }
     let server = Server::new(status()).await;
-    server.answer(503, "application/json", &problem("audit-unavailable"));
+    server.answer(
+        503,
+        PROBLEM_MEDIA,
+        &problem(503, "audit.response-unavailable"),
+    );
     server
         .client()
         .start(&token(), "key", &request())
@@ -586,8 +593,8 @@ async fn admission_resends_at_most_the_configured_count_and_keeps_the_outcome_un
 async fn a_refusal_after_an_unknown_admission_outcome_keeps_the_outcome_unknown() {
     let server = Server::new(status()).await;
     server.script(&[
-        (503, &problem("store-unavailable")),
-        (409, &problem("start-conflict")),
+        (503, &problem(503, "service.unavailable")),
+        (409, &problem(409, "idempotency.key-reused")),
     ]);
     let error = server
         .client()
@@ -626,7 +633,7 @@ async fn an_answer_that_would_repeat_unchanged_is_not_resent() {
 #[tokio::test]
 async fn reads_and_reconciliation_are_never_resent() {
     let server = Server::new(status()).await;
-    server.answer(503, "application/json", &problem("store-unavailable"));
+    server.answer(503, PROBLEM_MEDIA, &problem(503, "service.unavailable"));
     let client = server.client();
     let run = Uuid::parse_str(RUN).unwrap();
     assert!(client.status(&token(), run).await.is_err());
@@ -642,33 +649,57 @@ async fn malformed_ambiguous_redirected_or_wrong_run_answers_are_refused() {
     other["runId"] = json!(Uuid::nil());
     let mut duplicate = status().to_string();
     duplicate.insert_str(1, "\"state\":\"done\",");
+    let altered = |member: &str, value: Value| {
+        let mut document = problem_document(404, "run.not-visible");
+        document[member] = value;
+        document.to_string()
+    };
+    let mut extra = problem_document(404, "run.not-visible");
+    extra["suggestedAction"] = json!("secret-recovery-canary");
+    // Casework answers the same code under its own type.
+    let mut foreign = problem_document(404, "request.not-found");
+    foreign["type"] =
+        json!("https://id.registrystack.org/problems/registry-casework/request/not-found");
+    let mut duplicate_problem = problem(404, "run.not-visible");
+    duplicate_problem.insert_str(1, "\"code\":\"run.not-visible\",");
     let cases = [
         (200, "application/json", duplicate),
         (200, "text/html", status().to_string()),
         (302, "application/json", status().to_string()),
         (200, "application/json", other.to_string()),
+        // A problem is only ever the exact problem media type.
+        (404, "application/json", problem(404, "run.not-visible")),
+        (404, PROBLEM_MEDIA, extra.to_string()),
+        (404, PROBLEM_MEDIA, duplicate_problem),
         (
-            403,
-            "application/json",
-            json!({"code":"start-conflict","message":"refused","extra":true}).to_string(),
+            404,
+            PROBLEM_MEDIA,
+            json!({"code":"run.not-visible","message":"refused"}).to_string(),
         ),
+        (404, PROBLEM_MEDIA, altered("code", json!("secret value"))),
+        (404, PROBLEM_MEDIA, altered("code", json!("run-absent"))),
+        // The document's status, type and trace must agree with the answer.
+        (404, PROBLEM_MEDIA, altered("status", json!(409))),
+        (404, PROBLEM_MEDIA, foreign.to_string()),
         (
-            409,
-            "application/json",
-            json!({"code":"secret value","message":"refused"}).to_string(),
+            404,
+            PROBLEM_MEDIA,
+            altered("traceId", json!("0af7651916cd43dd8448eb211c80319c")),
         ),
     ];
+    let sent = cases.len();
     for (code, media, bytes) in cases {
         server.answer(code, media, &bytes);
-        assert!(matches!(
-            server
-                .client()
-                .status(&token(), Uuid::parse_str(RUN).unwrap())
-                .await,
-            Err(CoordinatorClientError::Protocol { .. })
-        ));
+        let answer = server
+            .client()
+            .status(&token(), Uuid::parse_str(RUN).unwrap())
+            .await;
+        assert!(
+            matches!(answer, Err(CoordinatorClientError::Protocol { .. })),
+            "{code} {media} {bytes}"
+        );
     }
-    assert_eq!(server.count(), 6, "a redirect was never followed");
+    assert_eq!(server.count(), sent, "a redirect was never followed");
     server.answer(200, "application/json", &status().to_string());
     let bounded = CoordinatorClient::new(
         CoordinatorClientConfig::new(server.url.clone()).with_max_response_bytes(64),
@@ -799,10 +830,40 @@ fn dto_contract_tracks_the_runtime_generated_schema() {
         (&schemas["RetryScheduled"], retry_scheduled()),
         (
             &schemas["Problem"],
-            json!({"code":"flow-absent","message":"withheld","suggestedAction":null}),
+            problem_document(404, "flow.not-served"),
         ),
     ] {
         assert_eq!(properties(schema), fields(&value));
+    }
+    // Every code these fixtures answer is one the runtime can return, under
+    // the type the runtime pins for it.
+    let problem_schema = &schemas["Problem"]["properties"];
+    for code in [
+        "audit.response-unavailable",
+        "authentication.refused",
+        "flow.not-served",
+        "idempotency.key-reused",
+        "operation.not-authorized",
+        "request.invalid",
+        "retry.refused",
+        "run.not-visible",
+        "service.unavailable",
+    ] {
+        let document = problem_document(400, code);
+        assert!(
+            problem_schema["code"]["enum"]
+                .as_array()
+                .unwrap()
+                .contains(&document["code"]),
+            "{code}"
+        );
+        assert!(
+            problem_schema["type"]["enum"]
+                .as_array()
+                .unwrap()
+                .contains(&document["type"]),
+            "{code}"
+        );
     }
     let _: registry_coordinator_client::RunStatus = serde_json::from_value(status()).unwrap();
     let _: registry_coordinator_client::RunInspection =

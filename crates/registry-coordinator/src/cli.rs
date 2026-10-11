@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Coordinator authoring, activation and authenticated operation.
 use crate::{
-    definition::Definition, deployment, http, project, runtime::RuntimeConfig, scenarios,
-    CoordinatorError, Result,
+    definition::Definition, deployment, http, problem::ProblemCode, project,
+    runtime::RuntimeConfig, scenarios, CoordinatorError, Result,
 };
 use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use serde_json::{json, Value};
@@ -528,22 +528,34 @@ async fn remote(
                 "inspect caller policy and current run status before repeating the operation",
             )
         };
+        let problem = value["code"].as_str().and_then(ProblemCode::from_code);
+        let detail = value["detail"]
+            .as_str()
+            .map(escape_controls)
+            .filter(|text| text.len() <= 256)
+            .unwrap_or_else(|| message.to_owned());
         return Err(CoordinatorError::new(
             code,
-            value["message"]
-                .as_str()
-                .map(escape_controls)
-                .filter(|text| text.len() <= 256)
-                .unwrap_or_else(|| message.to_owned()),
+            with_reference(detail, problem, value["traceId"].as_str()),
         )
-        .suggest(
-            value["code"]
-                .as_str()
-                .and_then(refusal_advice)
-                .unwrap_or(action),
-        ));
+        .suggest(problem.and_then(refusal_advice).unwrap_or(action)));
     }
     Ok(value)
+}
+/// Name the problem code and trace identifier a refusal carries, so an
+/// operator can look the code up and find the request in the service's logs.
+/// Only a code from the closed vocabulary and a well-formed W3C trace
+/// identifier are echoed.
+fn with_reference(detail: String, problem: Option<ProblemCode>, trace: Option<&str>) -> String {
+    let trace = trace.and_then(|trace| registry_platform_httpsec::TraceId::parse(trace).ok());
+    match (problem, trace) {
+        (Some(problem), Some(trace)) => {
+            format!("{detail} (problem {}, trace {trace})", problem.code())
+        }
+        (Some(problem), None) => format!("{detail} (problem {})", problem.code()),
+        (None, Some(trace)) => format!("{detail} (trace {trace})"),
+        (None, None) => detail,
+    }
 }
 /// Escape every C0, DEL and C1 control character in service-supplied text.
 /// JSON output leaves DEL and C1 raw, so a refusal message could otherwise
@@ -559,45 +571,51 @@ fn escape_controls(text: &str) -> String {
     }
     out
 }
-/// The fix for a refusal code the service returns, in this command line's
-/// terms. Only the code is read from a refusal: the service's own suggested
-/// action is never repeated.
-fn refusal_advice(code: &str) -> Option<&'static str> {
-    Some(match code {
-        "access.unauthenticated" => "Write a current access token, issued by the deployment's configured issuer to an admitted client, into the --token-file file.",
-        "access.denied" => "Use a token whose client and scopes match a caller policy that lists this action and, for a run action, this flow; deployment-wide actions need a policy with operator: true.",
-        "access.unavailable" => "Restore the service's access to its configured token issuer, then repeat the same command.",
-        "flow-absent" => "Name a flow this deployment serves; its operator lists them with coordinatorctl deployment-status.",
-        "run-absent" => "Check --run; without operator authority a caller reaches only the runs it started, and only in flows its policy lists.",
-        "definition.input" | "input-invalid" => "Correct the --input file to satisfy the flow's declared input schema and value bounds.",
-        "start-key-invalid" => "Write an idempotency key of 1 to 256 bytes into the --key-file file.",
-        "start-conflict" => "This idempotency key already started a run with different input; resend the original input to reach that run, or use another key for a different operation.",
-        "workflow-version-conflict" => "This deployment's package changed the workflow's definition under a version that runs already use; give the changed definition a new project.version in its workflow.yaml, then package, plan and apply it.",
-        "recovery-only" => "This instance runs in recovery-only mode and admits no runs; send starts to the ordinary service.",
-        "restore-admissions-held" => "Starts stay held after a restore; once execution hold is released, admission history is complete and the prior deployment is fenced, an operator runs coordinatorctl release-admission-hold --recovery-reference REFERENCE --admission-history-complete --prior-deployment-fenced.",
-        "restore-hold" => "Execution is under restore hold; once fencing and reconciliation evidence is recorded, an operator runs coordinatorctl release-restore-hold --reason REFERENCE.",
-        "restore-hold-required" => "Run coordinatorctl restore-hold first, then complete-execution-recovery while that hold remains.",
-        "restore-unresolved" => "Find held work with coordinatorctl doctor and inspect, reconcile uncertain mutations and complete execution recovery where the history allows, then release the hold again.",
-        "restore-lease-incompatible" => "Held work no longer matches its protected definition or prepared command; restore the run snapshots and prepared commands exactly as backed up, with the state keys and Coordinator version that wrote them, then run complete-execution-recovery again while execution hold remains.",
-        "restore-review-required" => "Pass --execution-history-complete and --prior-deployment-fenced only once both are established and recorded.",
-        "retry-refused" => "Inspect the run: retry-same applies only to held work before its original deadline; cancel the run when no further execution is appropriate.",
-        "definition-incompatible" => "This service's Coordinator version cannot interpret the run's pinned definition; send retry-same to a service running a version that can, such as the one that admitted the run, or cancel the run when no further execution is appropriate.",
-        "receipt-expired" => "Consult the receiving product's own records for the original command rather than inferring it was not sent, and cancel the run when no further execution is appropriate.",
-        "evaluation-uncertain" => "Inspect the run and cancel it when no further execution is appropriate; retry-same never reevaluates an evaluation that may have completed.",
-        "payload-erased" => "Retention erased this run's payloads; inspect it, but it can no longer be retried or reconciled.",
-        "binding-conflict" => "Restore the run's original connection settings in the runtime file and restart the service before retrying.",
-        "live-binding-conflict" => "Restore the original connection settings live runs use, or start the service with --recovery-only to investigate.",
-        "reconcile-refused" => "Inspect the run: reconcile applies to a held mutation with a prepared command, its original binding and no active lease; use retry-same for a read.",
-        "reconciliation-unavailable" => "This operation has no original-result lookup; consult the receiving product's records and cancel the held run when no further execution is appropriate.",
-        "reconcile-raced" => "Inspect the run again; its progress changed during reconciliation.",
-        "activation-changed" => "An apply changed the active packages; restart the service with the runtime file that apply used.",
-        "deployment.refused" | "state-key-custody" => "Run coordinatorctl deployment-status with the service's runtime file; it names the failing check and its fix.",
-        "store-unavailable" => "Restore the service's database connectivity, then inspect the original run before repeating the same command.",
-        "audit-unavailable" => "Restore the service's durable audit stream, then repeat the same command.",
-        "audit-response-unavailable" => "The operation may have completed; inspect the run, or run doctor for a deployment-wide action, before repeating it.",
-        "reason-invalid" => "Pass a bounded --reason or --recovery-reference, such as incident-2026-10-09, without personal data or control characters.",
-        "retention-invalid" => "Choose a --before cutoff in the past.",
-        _ => return None,
+/// The fix for a problem code the service returns, in this command line's
+/// terms. Only the code is read from a problem document: the service's own
+/// text is shown as the message, never as the suggested action.
+fn refusal_advice(problem: ProblemCode) -> Option<&'static str> {
+    Some(match problem {
+        ProblemCode::AuthenticationRefused => "Write a current access token, issued by the deployment's configured issuer to an admitted client, into the --token-file file.",
+        ProblemCode::OperationNotAuthorized => "Use a token whose client and scopes match a caller policy that lists this action and, for a run action, this flow; deployment-wide actions need a policy with operator: true.",
+        ProblemCode::FlowNotServed => "Name a flow this deployment serves; its operator lists them with coordinatorctl deployment-status.",
+        ProblemCode::RunNotVisible => "Check --run; without operator authority a caller reaches only the runs it started, and only in flows its policy lists.",
+        ProblemCode::InputInvalid => "Correct the --input file to satisfy the flow's declared input schema and value bounds.",
+        ProblemCode::IdempotencyKeyInvalid => "Write an idempotency key of 1 to 256 bytes into the --key-file file.",
+        ProblemCode::IdempotencyKeyReused => "This idempotency key already started a run with different input; resend the original input to reach that run, or use another key for a different operation.",
+        ProblemCode::FlowVersionConflict => "This deployment's package changed the workflow's definition under a version that runs already use; give the changed definition a new project.version in its workflow.yaml, then package, plan and apply it.",
+        ProblemCode::AdmissionRecoveryOnly => "This instance runs in recovery-only mode and admits no runs; send starts to the ordinary service.",
+        ProblemCode::AdmissionHeld => "Starts stay held after a restore; once execution hold is released, admission history is complete and the prior deployment is fenced, an operator runs coordinatorctl release-admission-hold --recovery-reference REFERENCE --admission-history-complete --prior-deployment-fenced.",
+        ProblemCode::ExecutionHeld => "Execution is under restore hold; once fencing and reconciliation evidence is recorded, an operator runs coordinatorctl release-restore-hold --reason REFERENCE.",
+        ProblemCode::RestoreHoldRequired => "Run coordinatorctl restore-hold first, then complete-execution-recovery while that hold remains.",
+        ProblemCode::RestoreUnresolved => "Find held work with coordinatorctl doctor and inspect, reconcile uncertain mutations and complete execution recovery where the history allows, then release the hold again.",
+        ProblemCode::RestoreLeaseIncompatible => "Held work no longer matches its protected definition or prepared command; restore the run snapshots and prepared commands exactly as backed up, with the state keys and Coordinator version that wrote them, then run complete-execution-recovery again while execution hold remains.",
+        ProblemCode::RestoreReviewRequired => "Pass --execution-history-complete and --prior-deployment-fenced only once both are established and recorded.",
+        ProblemCode::RetryRefused => "Inspect the run: retry-same applies only to held work before its original deadline; cancel the run when no further execution is appropriate.",
+        ProblemCode::RunDefinitionIncompatible => "This service's Coordinator version cannot interpret the run's pinned definition; send retry-same to a service running a version that can, such as the one that admitted the run, or cancel the run when no further execution is appropriate.",
+        ProblemCode::ReceiptExpired => "Consult the receiving product's own records for the original command rather than inferring it was not sent, and cancel the run when no further execution is appropriate.",
+        ProblemCode::EvaluationUncertain => "Inspect the run and cancel it when no further execution is appropriate; retry-same never reevaluates an evaluation that may have completed.",
+        ProblemCode::RunPayloadErased => "Retention erased this run's payloads; inspect it, but it can no longer be retried or reconciled.",
+        ProblemCode::BindingConflict => "Restore the run's original connection settings in the runtime file and restart the service before retrying.",
+        ProblemCode::BindingLiveConflict => "Restore the original connection settings live runs use, or start the service with --recovery-only to investigate.",
+        ProblemCode::ReconcileRefused => "Inspect the run: reconcile applies to a held mutation with a prepared command, its original binding and no active lease; use retry-same for a read.",
+        ProblemCode::ReconcileUnsupported => "This operation has no original-result lookup; consult the receiving product's records and cancel the held run when no further execution is appropriate.",
+        ProblemCode::ReconcileRaced => "Inspect the run again; its progress changed during reconciliation.",
+        ProblemCode::DeploymentActivationChanged => "An apply changed the active packages; restart the service with the runtime file that apply used.",
+        ProblemCode::DeploymentRefused => "Run coordinatorctl deployment-status with the service's runtime file; it names the failing check and its fix.",
+        ProblemCode::ServiceUnavailable => "Restore the service's database connectivity, durable audit stream and access to its configured token issuer, then inspect the original run before repeating the same command.",
+        ProblemCode::AuditResponseUnavailable => "The operation may have completed; inspect the run, or run doctor for a deployment-wide action, before repeating it.",
+        ProblemCode::RequestReasonInvalid => "Pass a bounded --reason or --recovery-reference, such as incident-2026-10-09, without personal data or control characters.",
+        ProblemCode::RequestRetentionInvalid => "Choose a --before cutoff in the past.",
+        ProblemCode::DefinitionRefused
+        | ProblemCode::RequestBodyTooLarge
+        | ProblemCode::RequestInvalid
+        | ProblemCode::RequestLimitOutOfRange
+        | ProblemCode::RequestMethodNotAllowed
+        | ProblemCode::RequestNotFound
+        | ProblemCode::RequestUnprocessable
+        | ProblemCode::RequestUnsupportedMediaType
+        | ProblemCode::RuntimeFailure => return None,
     })
 }
 async fn execute(cli: &Cli) -> Result<Value> {
