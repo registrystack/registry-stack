@@ -9490,6 +9490,15 @@
               "environment": null
             },
             {
+              "display": "--preserve-target-authenticated-context",
+              "description": "Preserve the selected local target's reviewed human authenticated-context subject bindings. Requires a target and its borrowed BReg issuer owner",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
               "display": "--format <FORMAT>",
               "description": "Emit the selected command's report in this format. `junit` is accepted only by `test` and `fixtures run`",
               "always_required": false,
@@ -9589,6 +9598,15 @@
                   "environment": null
                 },
                 {
+                  "display": "--preserve-target-authenticated-context",
+                  "description": "Preserve the selected local target's reviewed human authenticated-context subject bindings. Requires a target and its borrowed BReg issuer owner",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
                   "display": "--format <FORMAT>",
                   "description": "Emit the selected command's report in this format. `junit` is accepted only by `test` and `fixtures run`",
                   "always_required": false,
@@ -9613,7 +9631,16 @@
                   "environment": null
                 }
               ],
-              "constraints": [],
+              "constraints": [
+                {
+                  "kind": "requires-all",
+                  "when": "--preserve-target-authenticated-context",
+                  "arguments": [
+                    "--target <TARGET>",
+                    "--issuer-project <PROJECT>"
+                  ]
+                }
+              ],
               "subcommands": []
             },
             {
@@ -9691,6 +9718,15 @@
                   "environment": null
                 },
                 {
+                  "display": "--preserve-target-authenticated-context",
+                  "description": "Preserve the selected local target's reviewed human authenticated-context subject bindings. Requires a target and its borrowed BReg issuer owner",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
                   "display": "--format <FORMAT>",
                   "description": "Emit the selected command's report in this format. `junit` is accepted only by `test` and `fixtures run`",
                   "always_required": false,
@@ -9715,7 +9751,16 @@
                   "environment": null
                 }
               ],
-              "constraints": [],
+              "constraints": [
+                {
+                  "kind": "requires-all",
+                  "when": "--preserve-target-authenticated-context",
+                  "arguments": [
+                    "--target <TARGET>",
+                    "--issuer-project <PROJECT>"
+                  ]
+                }
+              ],
               "subcommands": []
             },
             {
@@ -9782,6 +9827,15 @@
                   "environment": null
                 },
                 {
+                  "display": "--preserve-target-authenticated-context",
+                  "description": "Preserve the selected local target's reviewed human authenticated-context subject bindings. Requires a target and its borrowed BReg issuer owner",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
                   "display": "--format <FORMAT>",
                   "description": "Emit the selected command's report in this format. `junit` is accepted only by `test` and `fixtures run`",
                   "always_required": false,
@@ -9806,7 +9860,16 @@
                   "environment": null
                 }
               ],
-              "constraints": [],
+              "constraints": [
+                {
+                  "kind": "requires-all",
+                  "when": "--preserve-target-authenticated-context",
+                  "arguments": [
+                    "--target <TARGET>",
+                    "--issuer-project <PROJECT>"
+                  ]
+                }
+              ],
               "subcommands": []
             },
             {
@@ -9875,6 +9938,15 @@
                   "environment": null
                 },
                 {
+                  "display": "--preserve-target-authenticated-context",
+                  "description": "Preserve the selected local target's reviewed human authenticated-context subject bindings. Requires a target and its borrowed BReg issuer owner",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
                   "display": "--format <FORMAT>",
                   "description": "Emit the selected command's report in this format. `junit` is accepted only by `test` and `fixtures run`",
                   "always_required": false,
@@ -9899,7 +9971,16 @@
                   "environment": null
                 }
               ],
-              "constraints": [],
+              "constraints": [
+                {
+                  "kind": "requires-all",
+                  "when": "--preserve-target-authenticated-context",
+                  "arguments": [
+                    "--target <TARGET>",
+                    "--issuer-project <PROJECT>"
+                  ]
+                }
+              ],
               "subcommands": []
             },
             {
@@ -9977,6 +10058,15 @@
                   "environment": null
                 },
                 {
+                  "display": "--preserve-target-authenticated-context",
+                  "description": "Preserve the selected local target's reviewed human authenticated-context subject bindings. Requires a target and its borrowed BReg issuer owner",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
                   "display": "--format <FORMAT>",
                   "description": "Emit the selected command's report in this format. `junit` is accepted only by `test` and `fixtures run`",
                   "always_required": false,
@@ -10001,7 +10091,16 @@
                   "environment": null
                 }
               ],
-              "constraints": [],
+              "constraints": [
+                {
+                  "kind": "requires-all",
+                  "when": "--preserve-target-authenticated-context",
+                  "arguments": [
+                    "--target <TARGET>",
+                    "--issuer-project <PROJECT>"
+                  ]
+                }
+              ],
               "subcommands": []
             },
             {
@@ -10097,6 +10196,15 @@
                   "environment": null
                 },
                 {
+                  "display": "--preserve-target-authenticated-context",
+                  "description": "Preserve the selected local target's reviewed human authenticated-context subject bindings. Requires a target and its borrowed BReg issuer owner",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
                   "display": "--format <FORMAT>",
                   "description": "Emit the selected command's report in this format. `junit` is accepted only by `test` and `fixtures run`",
                   "always_required": false,
@@ -10121,7 +10229,16 @@
                   "environment": null
                 }
               ],
-              "constraints": [],
+              "constraints": [
+                {
+                  "kind": "requires-all",
+                  "when": "--preserve-target-authenticated-context",
+                  "arguments": [
+                    "--target <TARGET>",
+                    "--issuer-project <PROJECT>"
+                  ]
+                }
+              ],
               "subcommands": []
             }
           ]

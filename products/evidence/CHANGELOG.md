@@ -12,7 +12,6 @@
   assertion-issuer admission. The default remains request-origin, and retained
   sessions refuse a restart that changes the mode.
 
-
 - BREAKING: `evidence-oid4vci check`, `inspect`, and `serve` take
   `--runtime-config FILE` instead of `--config FILE`, and
   `EVIDENCE_OID4VCI_RUNTIME_CONFIG` instead of `EVIDENCE_OID4VCI_CONFIG`.
