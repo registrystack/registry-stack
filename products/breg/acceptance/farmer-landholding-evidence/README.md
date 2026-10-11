@@ -48,11 +48,11 @@ selector resolution is an explicit first-use trust decision. Two assertions are
 separate observations; applications requiring a common observation should use a
 single appropriately minimized Evidence requirement.
 
-This remains a trial ABI. External calls are optional and bounded, while local
-write-target admission, conditions and requirements remain mandatory even for
-omitted write slots. Receipt replay performs no calls. Retention and real
-Evidence/PostgreSQL integration are host responsibilities and require their
-separate executable acceptance checks.
+Consuming Evidence from an action remains a trial. External calls are optional
+and bounded, while local write-target admission, conditions and requirements
+remain mandatory even for omitted write slots. Receipt replay performs no calls.
+Retention and real Evidence/PostgreSQL integration are host responsibilities and
+require their separate executable acceptance checks.
 
 Erase expired protected assertion material using the configured migration role:
 

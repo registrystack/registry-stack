@@ -1,6 +1,6 @@
 ---
 title: Governed registry actions
-description: How an immediate action applies bounded writes, where a Rhai handler computes them, and what the Evidence trial adds under action handler ABI version 2.
+description: How an immediate action applies bounded writes, where a Rhai handler computes them, and what the Evidence trial adds to an action that declares it.
 status: current
 owner: registry-docs
 source_repos:
@@ -79,9 +79,10 @@ fixed-effect action rejects explicit null instead.
 
 ## Evidence inside a handler
 
-`registry.action-handler/v2` is a trial ABI that lets a project-level action call
-`evidence::resolve(capability_id, subjects)` inside `handle(ctx)`. Version 1 input-only actions keep
-their existing path. The project declares each provider under `evidenceProviders` with an `id`, a
+As a trial, a project-level action that declares `evidence` may call
+`evidence::resolve(capability_id, subjects)` inside `handle(ctx)`. Its handler declares the same
+`registry.action-handler/v1` ABI, and an action that declares no `evidence` keeps its input-only
+path. The project declares each provider under `evidenceProviders` with an `id`, a
 reviewed client `contracts` file, and `subjectResolution: trusted-provider-exact-selector`; the
 imported contract becomes part of the package closure, so compilation and explanation need no
 network. Each action's `evidence` entries then select a local `id`, that provider, an exact
@@ -129,7 +130,7 @@ record history: ordinary history erasure does not cover it, and
 [erase expired Evidence uses](../../operate/breg-retention/#erase-expired-evidence-uses) is the
 operator command that removes it once a window has closed.
 
-{/* Evidence: crates/registry-breg/src/contract.rs, ACTION_HANDLER_ABI_V2;
+{/* Evidence: crates/registry-breg/src/action_handler.rs, compile_source_for_action;
     crates/registry-breg/src/action_evidence_config.rs, EvidenceProviderConfig;
     crates/registry-breg/src/action_evidence_contracts.rs, MAX_EVIDENCE_CAPABILITIES;
     crates/registry-breg/src/action_evidence.rs, MAXIMUM_EVIDENCE_EVALUATIONS;
@@ -146,4 +147,4 @@ operator command that removes it once a window has closed.
 - [Retain, erase, and audit](../../operate/breg-retention/) for the retention scopes an operator
   runs, including expired Evidence uses.
 - [Immediate action configuration examples](https://github.com/registrystack/registry-stack/blob/main/products/breg/immediate-actions.md)
-  for the full handler contract, the ABI version 2 trial, and its acceptance projects.
+  for the full handler contract, the Evidence trial, and its acceptance projects.

@@ -46,7 +46,7 @@ are enforced by tests that write and compile a derived project, run every
 starter's authored journey and security journey through the real router, and
 start a session without a flag.
 
-Two rows are deliberately not complete. The `registry.action-handler/v2` ABI
+Two rows are deliberately not complete. An action's `evidence` declaration
 with its `evidence::resolve` helper is a trial in `immediate-actions.md` and
 `EVIDENCE.md`, and so is the retained evidence-use scope that
 `bregctl evidence-retention erase-expired` deletes. Their implementations and

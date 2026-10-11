@@ -201,9 +201,9 @@ refuses it with a diagnostic naming the violation.
 
 ## What is out of scope
 
-- Handler ABI v2 (`registry.action-handler/v2`, the Evidence resolver
-  contract) is not authorable as WASM in this release; the SDK targets
-  input-only v1 action handlers.
+- An action that declares `evidence` (the Evidence resolver contract) is not
+  authorable as WASM in this release; the SDK targets input-only action
+  handlers.
 - Change-request planners stay Rhai-only; a WASM planner is refused at
   admission.
 - Everything a handler cannot do by construction: no I/O, no clock, no

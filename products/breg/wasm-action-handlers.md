@@ -13,8 +13,9 @@ configuration, and the upgrade and rollback paths. Authoring help lives in
   admission and execution. Maintained `registry-breg` and `registry-bregctl`
   builds enable the feature by default. A custom `--no-default-features` build
   omits WASM support and the Wasmtime dependency.
-- A WASM handler is v1-only, input-only, and resolver-free. WASM change-request
-  planners and v2 handlers are refused typed at admission.
+- A WASM handler is input-only and resolver-free. WASM change-request
+  planners are refused typed at admission, and so is an action that declares
+  `evidence` with a WASM handler.
 - The execution backend is Pulley by default (no runtime code generation) with
   native as an operator opt-in; see the configuration table below.
 - The guest contract is a closed byte ABI: zero imports, five required exports

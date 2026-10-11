@@ -2777,6 +2777,91 @@ and client admission are unchanged for accepted configuration.
 Operators must write the discriminator as `type`; the diagnostic names that
 fix without repeating the configured value.
 
+## Evidence in an action is gated by the action's declaration
+
+### Threat
+
+An action handler reaches `evidence::resolve`, and through it an operator
+credential and an outbound request, without the reviewed project declaring
+that the action consumes Evidence. The handler ABI identifier used to be a
+second statement of that fact beside the action's `evidence` declaration.
+With one ABI, `registry.action-handler/v1`, the declaration is the only
+statement, so every branch that read the identifier must read the declaration
+and must refuse wherever the identifier refused.
+
+### Enforcement and defaults
+
+- `compile_handler` in `crates/registry-breg/src/immediate_actions.rs`
+  accepts one `abi` value. `registry.action-handler/v2` is refused as
+  `breg.action.handler-abi-invalid` at the handler's `abi`, with no alias
+  and no reading of the retired value; the message names the accepted
+  identifier and repeats nothing from the file.
+- `compile_source_for_action` in `crates/registry-breg/src/action_handler.rs`
+  walks the handler source and admits a call in the `evidence` namespace only
+  when the action declares `evidence` and the call is `evidence::resolve`
+  with two arguments. A handler whose action declares none fails to compile
+  with `breg.action.handler-helper-contract`, in statements, expressions,
+  and nested blocks, exactly where a `registry.action-handler/v1` handler
+  failed before.
+- The declaration that opens the helper is itself checked after every
+  handler has compiled: `compile_evidence` in
+  `crates/registry-breg/src/action_evidence_contracts.rs` still requires a
+  declared provider, a capability in the sealed contract, an exact
+  fingerprint, and at most two capabilities. It refuses `evidence` on an
+  action whose handler is absent or not Rhai with
+  `breg.action.evidence-ceiling-invalid`, so a WASM handler never receives
+  a resolver; a module action still cannot declare `evidence`.
+- At run time `evaluate_with_engine` compiles the handler under the compiled
+  action's own `evidence`, and `admit_handler` refuses an action that
+  declares Evidence when no resolver is supplied, so its handler never runs
+  on the input-only path. A resolver never reaches a WASM handler.
+- `activate` in `crates/registry-breg/src/action_evidence_config.rs` binds
+  an evaluator exactly when the compiled registry requires a provider, and
+  still refuses a runtime binding set that differs from the required one.
+  `invoke_action` in `crates/registry-breg/src/postgres/mutation.rs` routes
+  an action that declares Evidence to the Evidence path, which answers
+  unavailable when no evaluator is bound.
+- One state disappears and none is added. A `registry.action-handler/v2`
+  handler on an action with no `evidence` ran on the Evidence path with a
+  zero-call ceiling and activated an evaluator with no provider. That
+  project is now refused until it declares `registry.action-handler/v1`,
+  and it then runs as an input-only action with no evaluator. Every handler
+  that can call `evidence::resolve` now could call it before: it belonged to
+  an action that declared `evidence` and named a Rhai handler.
+
+### Tests
+
+- `crates/registry-breg/tests/action_evidence_compiler.rs`:
+  `evidence_calls_require_a_declared_capability_in_statements_expressions_and_nested_blocks`,
+  `the_evidence_declaration_selects_the_capability_under_the_one_handler_abi`,
+  `the_retired_evidence_abi_is_refused_where_it_is_declared`,
+  `published_authoring_schema_accepts_farmer_and_rejects_every_other_abi`,
+  and `refuses_origin_profile_output_ambiguity_and_budget_widening`.
+- `crates/registry-breg/tests/immediate_action_compiler.rs`:
+  `the_retired_v2_abi_is_refused_and_wasm_needs_a_wasm_capable_build`.
+- `crates/registry-breg/tests/wasm_handler_admission.rs`:
+  `an_evidence_declaration_stays_refused_for_wasm_handlers_under_the_feature`.
+- `crates/registry-breg/src/action_evidence_config.rs`:
+  `an_action_declaring_no_evidence_activates_no_evaluator_and_extra_bindings_fail_closed`.
+- `crates/registry-breg/src/tests/action_handler_benchmark_tests.rs`:
+  `cached_program_refuses_evaluation_for_a_different_evidence_declaration`.
+- `crates/registry-bregctl/src/lib.rs`:
+  `an_action_declaring_no_evidence_explains_no_evidence_lifecycle` and
+  `an_action_declaring_evidence_explains_the_external_lifecycle_and_call_ceiling`.
+- `crates/registry-breg/tests/postgres_action_evidence.rs`,
+  `postgres_action_evidence_targets.rs`, and
+  `postgres_action_evidence_retention.rs` run the farmer acceptance project,
+  now declaring `registry.action-handler/v1`, against PostgreSQL.
+
+### Accepted residuals
+
+No alias or conversion is supplied: a project that still declares
+`registry.action-handler/v2` does not compile, and a package that holds one
+is refused when it is rederived. Evidence stays Rhai-only, and consuming
+Evidence from an action remains a trial whose authoring contract is not
+frozen for Version 1. These references name proof obligations, not an
+execution claim.
+
 ## Client refusal and webhook audit vocabulary
 
 ### Threat
