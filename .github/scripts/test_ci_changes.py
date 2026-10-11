@@ -1865,6 +1865,46 @@ class CiChangesTest(unittest.TestCase):
                     f"messaging-postgres invokes missing test target {target}",
                 )
 
+    def test_messaging_checkpoint_is_the_one_schema_drift_step(self) -> None:
+        # The checkpoint runs every schema-feature test of the runtime crate,
+        # the drift tests among them, so no second step repeats them. That
+        # leaves the checkpoint step as the only drift gate: it must run
+        # unconditionally, unfiltered, and in a job that review selects.
+        checkpoint = "products/messaging/scripts/check-checkpoint.sh"
+        drift_scripts = (checkpoint, "products/messaging/scripts/check-schemas.sh")
+        carriers = [
+            (name, step)
+            for name, job in self.workflow_jobs.items()
+            for step in job.get("steps", ())
+            if any(script in str(step.get("run", "")) for script in drift_scripts)
+        ]
+        self.assertEqual(["messaging-postgres"], [name for name, _ in carriers])
+        step = carriers[0][1]
+        self.assertEqual(f"{PinnedYamlGateStepTest.PINNED} {checkpoint}", step["run"])
+        self.assertNotIn("if", step)
+        self.assertNotIn("continue-on-error", step)
+        self.assertEqual(
+            ["cargo test --locked --quiet -p registry-messaging --features schema"],
+            [
+                line.strip()
+                for line in Path(checkpoint).read_text().splitlines()
+                if "--features schema" in line
+            ],
+        )
+        for path in (
+            "crates/registry-messaging/src/schema.rs",
+            "crates/registry-messaging-core/src/lib.rs",
+            "products/messaging/generated/registry-messaging.openapi.json",
+            "products/messaging/generated/authoring/project.schema.json",
+            "products/messaging/generated/runtime/runtime.schema.json",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(
+                    classify(self.workspace, (path,), pull_request=True)[
+                        "messaging_postgres"
+                    ]
+                )
+
     def test_docs_only_change_skips_rust(self) -> None:
         outputs = classify(
             self.workspace,

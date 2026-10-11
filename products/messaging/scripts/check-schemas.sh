@@ -4,7 +4,8 @@ set -euo pipefail
 # Every committed Messaging schema and the OpenAPI document are reproduced by
 # their generators, never hand-edited. The drift tests compile only under the
 # schema feature, which a default-feature test run leaves off, so this script
-# is the gate that runs them. It needs no database.
+# runs them on their own; check-checkpoint.sh is the gate that runs them in
+# CI. It needs no database.
 repo_root=$(CDPATH='' cd -- "$(dirname -- "$0")/../../.." && pwd)
 cd "$repo_root"
 
