@@ -27,7 +27,7 @@ test('registry metadata retains statistical datasets without entity authority', 
     granularity: 'month', firstPeriod: '2025-01',
     dimensions: [{ field: 'category', vocabulary: 'company-category', codes: ['Registered', '_U', '_T'] }],
     definitionDigest: metadata.revision,
-    operations: ['list_releases', 'read_latest_release', 'read_release_version', 'read_released_series'],
+    operations: ['list-releases', 'read-latest-release', 'read-release-version', 'read-released-series'],
   }];
   const server = http.createServer((request, response) => {
     response.setHeader('content-type', 'application/json');

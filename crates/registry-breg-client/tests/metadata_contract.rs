@@ -245,7 +245,7 @@ fn statistical_dataset() -> Value {
             "codes": ["Registered", "other", "_U", "_T"]
         }],
         "definitionDigest": REVISION,
-        "operations": ["read_live", "list_releases", "read_latest_release", "read_release_version", "read_released_series"]
+        "operations": ["read-live", "list-releases", "read-latest-release", "read-release-version", "read-released-series"]
     })
 }
 
@@ -267,10 +267,10 @@ fn runtime_v1_accepts_statistical_datasets_without_adding_entity_authority() {
     release_only["entities"] = json!([]);
     release_only["operations"] = json!([]);
     release_only["statisticalDatasets"][0]["operations"] = json!([
-        "list_releases",
-        "read_latest_release",
-        "read_release_version",
-        "read_released_series"
+        "list-releases",
+        "read-latest-release",
+        "read-release-version",
+        "read-released-series"
     ]);
     release_only.as_object_mut().unwrap().remove("actions");
     let metadata = parse(&release_only);
@@ -322,7 +322,7 @@ fn statistical_dataset_metadata_is_closed_and_validates_domains_and_periods() {
                     .unwrap()
                     .remove("operations");
                 value["statisticalDatasets"][0]["accessProfiles"] =
-                    json!({"reader": ["read_live"]});
+                    json!({"reader": ["read-live"]});
             },
         ),
         ("missing member", BRegMetadataErrorKind::Shape, |value| {
@@ -424,7 +424,7 @@ fn statistical_dataset_metadata_is_closed_and_validates_domains_and_periods() {
             "duplicate operation",
             BRegMetadataErrorKind::DuplicateIdentifier,
             |value| {
-                value["statisticalDatasets"][0]["operations"] = json!(["read_live", "read_live"]);
+                value["statisticalDatasets"][0]["operations"] = json!(["read-live", "read-live"]);
             },
         ),
         ("unknown operation", BRegMetadataErrorKind::Shape, |value| {
@@ -455,7 +455,7 @@ fn statistical_dataset_metadata_is_closed_and_validates_domains_and_periods() {
         dataset["granularity"] = json!(granularity);
         dataset["firstPeriod"] = json!(period);
         dataset["dimensions"] = json!([]);
-        dataset["operations"] = json!(["read_live"]);
+        dataset["operations"] = json!(["read-live"]);
         value["statisticalDatasets"] = json!([dataset]);
         parse(&value);
     }

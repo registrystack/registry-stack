@@ -2960,13 +2960,13 @@ fn validate_statistical_datasets(value: Value) -> Result<(), BRegMetadataError> 
             || operations.iter().any(|operation| {
                 !matches!(
                     operation.as_str(),
-                    "read_live"
-                        | "list_releases"
-                        | "read_released_series"
-                        | "read_latest_release"
-                        | "read_release_version"
-                        | "publish_release"
-                        | "withdraw_release"
+                    "read-live"
+                        | "list-releases"
+                        | "read-released-series"
+                        | "read-latest-release"
+                        | "read-release-version"
+                        | "publish-release"
+                        | "withdraw-release"
                 )
             })
         {
