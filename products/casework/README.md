@@ -500,9 +500,10 @@ caseworkctl check ./casework
 caseworkctl test ./casework
 ```
 
-`source add` drives the same-version public `bregctl check` and `bregctl explain
-change-requests` interfaces. Preview reports the exact local BReg event and
-read-only service grant additions plus the authority and optional executor runtime candidates. Apply
+`source add` drives the same-version public `bregctl check`, `bregctl explain
+access`, and `bregctl explain change-requests` interfaces. Preview reports the
+exact local BReg event and read-only service grant additions plus the authority
+and optional executor runtime candidates. Apply
 checks a staged copy before changing the authored registry, writes the imported
 source description and runtime candidate, and checks BReg again. It does not
 activate a package, provision an identity provider, or infer authority from the
@@ -527,6 +528,12 @@ and `kind: CaseworkBregSourceDescription`, and lists every paired entity in a
 `requests` array in declaration order, one entry for a source with one
 entity. Requests that share a review authority must agree on its producer
 admission.
+
+The generated reader profile preserves the BReg project's common
+`principalClaim`; source add refuses mixed existing claims. For `sub`, the local
+reader client uses the issuer's verified subject and declares no artificial
+subject claim. This service-reader choice is separate from the explicit stable
+principal claim used by the local human reviewer bridge.
 
 `check` and `test` are offline. Check's `--format json` report carries
 effective inbox limits and the passive target default. When source metadata has been imported, it checks the

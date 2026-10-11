@@ -19,11 +19,11 @@ const MAX_BREG_DEV_CLIENTS: usize = 32;
 const MAX_BREG_DEV_CLIENT_SCOPES: usize = 32;
 const MAX_BREG_DEV_CLIENT_CLAIMS: usize = 32;
 
-/// The casework-reader access profile's identity: the client id, access
-/// profile id, required scope, required purpose, and principal claim name
-/// `candidate_fragments` authors into the BReg project. The local dev client
-/// that exercises the profile, and the Casework clients that act through it,
-/// read these same constants so neither can name a different one.
+/// The casework-reader access profile's fixed identity: its client id, access
+/// profile id, required scope, and required purpose. Its principal claim is
+/// inferred from the BReg project. The registry_principal constant remains the
+/// legacy default and the explicit stable claim required by the human reviewer
+/// bridge.
 const READER_CLIENT_ID: &str = "casework-reader";
 const READER_PRINCIPAL_CLAIM: &str = "registry_principal";
 const READER_SCOPE: &str = "casework:source-reader";
@@ -70,6 +70,13 @@ pub(super) fn run(args: &SourceAddArgs) -> Result<Value> {
         &registry,
     )?;
     require_ok("explain change-requests", &explained)?;
+    let access_explained = invoke(
+        &args.bregctl_bin,
+        &["--format", "json", "explain", "access"],
+        &registry,
+    )?;
+    require_ok("explain access", &access_explained)?;
+    let reader_principal_claim = source_reader_principal_claim(&access_explained)?;
     let registry_yaml = registry.join("registry.yaml");
     let bytes = fs::read(&registry_yaml).context("reading BReg registry.yaml")?;
     if bytes.len() > MAX_PROVIDER_OUTPUT {
@@ -104,7 +111,11 @@ pub(super) fn run(args: &SourceAddArgs) -> Result<Value> {
                 source_projection(&project, &args.source_id, entity, request.metadata)?;
             Ok((
                 entity.to_owned(),
-                reader_grant(request.metadata, &projection)?,
+                reader_grant_with_principal(
+                    request.metadata,
+                    &projection,
+                    &reader_principal_claim,
+                )?,
             ))
         })
         .collect::<Result<Vec<_>>>()?;
@@ -116,10 +127,11 @@ pub(super) fn run(args: &SourceAddArgs) -> Result<Value> {
         &registry_id,
         &candidate_explanation,
     )?;
-    let dev_clients_plan = plan_breg_dev_clients(
+    let dev_clients_plan = plan_breg_dev_clients_with_reader_claim(
         &registry,
         &project,
         &authored,
+        &reader_principal_claim,
         &candidate_requests,
         casework_endpoint,
     )?;
@@ -934,13 +946,63 @@ fn source_projection(
 struct ReaderGrant {
     fields: Vec<String>,
     event_field: String,
+    principal_claim: String,
+}
+
+/// BReg accepts one configured authority principal claim for a project. Reuse
+/// the complete compiled inventory reported by `bregctl explain access`, which
+/// includes grants contributed by modules, entity extensions, and actions. An
+/// empty inventory retains the historical generator default.
+fn source_reader_principal_claim(report: &Value) -> Result<String> {
+    let explanation = report["explanation"]
+        .as_object()
+        .context("bregctl explain access report has no explanation object")?;
+    if !matches!(explanation.get("claimContractError"), Some(Value::Null)) {
+        bail!("bregctl explain access reported a claimContractError; resolve the compiled authority contract before source add");
+    }
+    let contract = explanation
+        .get("claimContract")
+        .and_then(Value::as_object)
+        .context("bregctl explain access reported no compiled claimContract; resolve its claimContractError before source add")?;
+    let claims = contract
+        .get("principalClaims")
+        .and_then(Value::as_array)
+        .context("bregctl explain access claimContract.principalClaims must be a list")?;
+    if claims.is_empty() {
+        return Ok(READER_PRINCIPAL_CLAIM.to_owned());
+    }
+    let claims = claims
+        .iter()
+        .map(|claim| {
+            let claim = claim.as_str().context(
+                "bregctl explain access claimContract.principalClaims must contain only strings",
+            )?;
+            if claim.is_empty() {
+                bail!("bregctl explain access claimContract.principalClaims must contain only non-empty strings");
+            }
+            Ok(claim)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    if claims.len() != 1 {
+        bail!("bregctl explain access reports that the BReg compiled authority inventory uses more than one principalClaim, so source add cannot choose the one runtime authority principal for casework-reader; align every root or module-contributed entity profile and action grant to one principalClaim, then repeat source add");
+    }
+    Ok(claims[0].to_owned())
 }
 
 /// The reader reads every request field that names an existing target record,
 /// whatever the model calls it, plus the Casework projection. A request that
 /// only creates records has no target field, so its event carries the first
 /// projected field instead.
+#[cfg(test)]
 fn reader_grant(metadata: &Value, projection: &[String]) -> Result<ReaderGrant> {
+    reader_grant_with_principal(metadata, projection, READER_PRINCIPAL_CLAIM)
+}
+
+fn reader_grant_with_principal(
+    metadata: &Value,
+    projection: &[String],
+    principal_claim: &str,
+) -> Result<ReaderGrant> {
     let declared = metadata["effects"]
         .as_array()
         .into_iter()
@@ -972,6 +1034,7 @@ fn reader_grant(metadata: &Value, projection: &[String]) -> Result<ReaderGrant> 
     Ok(ReaderGrant {
         fields,
         event_field,
+        principal_claim: principal_claim.to_owned(),
     })
 }
 
@@ -1107,7 +1170,7 @@ fn candidate_fragments(entity_id: &str, reader: &ReaderGrant) -> (Value, Value) 
     (
         json!({"id":lifecycle_event_type(entity_id),"phase":"after","trigger":"request-lifecycle","projection":[reader.event_field],"handler":{"type":"url","destinationId":"casework"}}),
         json!({
-            "id":READER_CLIENT_ID, "default":false, "principalClaim":READER_PRINCIPAL_CLAIM,
+            "id":READER_CLIENT_ID, "default":false, "principalClaim":reader.principal_claim,
             "requiredScopes":[READER_SCOPE], "requiredPurposes":[READER_PURPOSE],
             "permissions":{"entities":[{"entity":entity_id,"operations":["get","list"],"readableFields":fields,"readableRequestFields":["review-state"],"rowBoundaries":"unrestricted"}]}
         }),
@@ -1259,7 +1322,8 @@ fn insert_entity_hook(text: &str, entity_id: &str, event_field: &str) -> Result<
 
 fn insert_access_profile(text: &str, entity_id: &str, reader: &ReaderGrant) -> Result<String> {
     let permission = reader_permission_yaml(8, entity_id, reader)?;
-    let block = format!("  - id: {READER_CLIENT_ID}\n    default: false\n    principalClaim: {READER_PRINCIPAL_CLAIM}\n    requiredScopes: [{READER_SCOPE}]\n    requiredPurposes: [{READER_PURPOSE}]\n    permissions:\n      entities:\n{permission}");
+    let principal_claim = yaml_string(&reader.principal_claim);
+    let block = format!("  - id: {READER_CLIENT_ID}\n    default: false\n    principalClaim: {principal_claim}\n    requiredScopes: [{READER_SCOPE}]\n    requiredPurposes: [{READER_PURPOSE}]\n    permissions:\n      entities:\n{permission}");
     insert_yaml_collection_items(text, "accessProfiles", "[]", &block)
 }
 
@@ -1392,18 +1456,33 @@ fn leading_spaces(line: &str) -> usize {
 }
 
 /// The local BReg service client exercising the casework-reader access profile,
-/// with the same id, scope, purpose, and principal claim `candidate_fragments`
-/// authors the profile itself with.
-fn reader_dev_client() -> Value {
+/// with the same id, scope, purpose, and custom principal claim
+/// `candidate_fragments` authors the profile itself with. The issuer supplies
+/// `sub` directly, so that claim is deliberately absent from a `sub` client.
+fn reader_dev_client(principal_claim: &str) -> Value {
+    let mut claims = serde_json::Map::from_iter([
+        (
+            ACTOR_KIND_CLAIM.to_owned(),
+            Value::String(SERVICE_ACTOR_KIND.to_owned()),
+        ),
+        (
+            PURPOSE_CLAIM.to_owned(),
+            Value::String(READER_PURPOSE.to_owned()),
+        ),
+    ]);
+    // `sub` is an immutable issuer identity. A declarative local client may
+    // request scopes and fixed auxiliary claims, but must not forge its subject.
+    if principal_claim != "sub" {
+        claims.insert(
+            principal_claim.to_owned(),
+            Value::String(READER_CLIENT_ID.to_owned()),
+        );
+    }
     json!({
         "id": READER_CLIENT_ID,
         "accessProfiles": [READER_CLIENT_ID],
         "scopes": [READER_SCOPE],
-        "claims": {
-            ACTOR_KIND_CLAIM: SERVICE_ACTOR_KIND,
-            READER_PRINCIPAL_CLAIM: READER_CLIENT_ID,
-            PURPOSE_CLAIM: READER_PURPOSE,
-        },
+        "claims": claims,
     })
 }
 
@@ -1803,10 +1882,11 @@ fn human_dev_client(
 /// Reads but never writes; the caller decides whether and when to apply
 /// `write`. A deployment project with either local clients file absent skips
 /// this auxiliary local-development patch.
-fn plan_breg_dev_clients(
+fn plan_breg_dev_clients_with_reader_claim(
     registry: &Path,
     project: &Path,
     authored: &Value,
+    reader_principal_claim: &str,
     requests: &[SelectedRequest<'_>],
     casework_endpoint: &str,
 ) -> Result<DevClientsPlan> {
@@ -1963,7 +2043,7 @@ fn plan_breg_dev_clients(
         .as_ref()
         .map(|authority| authority.row_boundary_findings.clone())
         .unwrap_or_default();
-    let mut clients = vec![reader_dev_client()];
+    let mut clients = vec![reader_dev_client(reader_principal_claim)];
     for (client, role, principal_claim) in &eligible {
         clients.push(human_dev_client(
             client,
@@ -2046,6 +2126,24 @@ fn plan_breg_dev_clients(
         }),
         Err(error) => Err(error).context("reading BReg dev-clients.yaml"),
     }
+}
+
+#[cfg(test)]
+fn plan_breg_dev_clients(
+    registry: &Path,
+    project: &Path,
+    authored: &Value,
+    requests: &[SelectedRequest<'_>],
+    casework_endpoint: &str,
+) -> Result<DevClientsPlan> {
+    plan_breg_dev_clients_with_reader_claim(
+        registry,
+        project,
+        authored,
+        READER_PRINCIPAL_CLAIM,
+        requests,
+        casework_endpoint,
+    )
 }
 
 fn apply_local_review_authority_candidate(
@@ -3872,6 +3970,105 @@ mod tests {
         reader_grant(&metadata, projection).unwrap()
     }
 
+    fn record_reader_with_principal(projection: &[String], principal_claim: &str) -> ReaderGrant {
+        let metadata = json!({"effects":[target(json!({"type":"existing","fromField":{"field":"record","apiName":"record"}}))]});
+        reader_grant_with_principal(&metadata, projection, principal_claim).unwrap()
+    }
+
+    fn access_report(principal_claims: Value) -> Value {
+        json!({
+            "ok":true,
+            "explanation":{
+                "claimContract":{"principalClaims":principal_claims},
+                "claimContractError":null
+            }
+        })
+    }
+
+    #[test]
+    fn source_reader_inherits_the_compiled_authority_principal_claim() {
+        assert_eq!(
+            source_reader_principal_claim(&access_report(json!(["sub"]))).unwrap(),
+            "sub"
+        );
+
+        assert_eq!(
+            source_reader_principal_claim(&access_report(json!([]))).unwrap(),
+            READER_PRINCIPAL_CLAIM
+        );
+    }
+
+    #[test]
+    fn source_reader_refuses_a_module_contributed_mixed_principal_claim() {
+        // This is the complete compiled inventory when the root project uses
+        // `sub` and a module extension or action contributes registry_principal.
+        let report = access_report(json!(["registry_principal", "sub"]));
+        let error = source_reader_principal_claim(&report).unwrap_err();
+        let message = error.to_string();
+        assert!(message.contains("more than one principalClaim"));
+        assert!(message.contains("align every root or module-contributed entity profile"));
+    }
+
+    #[test]
+    fn source_reader_validates_the_public_access_report_shape() {
+        let malformed = [
+            json!({"ok":true}),
+            json!({"ok":true,"explanation":{"claimContractError":null}}),
+            access_report(json!("sub")),
+            access_report(json!(["sub", 7])),
+            access_report(json!([""])),
+            access_report(json!(["sub", "sub"])),
+            json!({"ok":true,"explanation":{"claimContract":null,"claimContractError":"principal-claim-missing"}}),
+        ];
+        for report in malformed {
+            let error = source_reader_principal_claim(&report)
+                .expect_err("a malformed public access report must be refused");
+            assert!(error.to_string().contains("bregctl explain access"));
+        }
+    }
+
+    #[test]
+    fn generated_sub_reader_is_idempotent_and_preserves_the_authored_claim() {
+        let input = "entities:\n  - id: request\n    route: requests\naccessProfiles:\n  - id: applicant\n    default: false\n    principalClaim: sub\n    permissions: {}\n";
+        let reader = record_reader_with_principal(&[], "sub");
+        let mut first: Value = serde_norway::from_str(input).unwrap();
+        apply_breg_candidate(&mut first, "request", &reader).unwrap();
+        let rendered =
+            render_candidate_preserving_authored_text(input.as_bytes(), "request", &first, &reader)
+                .unwrap();
+        assert_eq!(
+            first["accessProfiles"][1]["principalClaim"],
+            Value::String("sub".to_owned())
+        );
+
+        let mut second: Value = serde_norway::from_str(&rendered).unwrap();
+        apply_breg_candidate(&mut second, "request", &reader).unwrap();
+        let repeated = render_candidate_preserving_authored_text(
+            rendered.as_bytes(),
+            "request",
+            &second,
+            &reader,
+        )
+        .unwrap();
+        assert_eq!(repeated, rendered);
+        assert_eq!(second, first);
+    }
+
+    #[test]
+    fn sub_reader_dev_client_does_not_synthesize_the_issuer_subject() {
+        let client = reader_dev_client("sub");
+        assert!(client["claims"].get("sub").is_none());
+        assert_eq!(client["claims"][ACTOR_KIND_CLAIM], SERVICE_ACTOR_KIND);
+        assert_eq!(client["claims"][PURPOSE_CLAIM], READER_PURPOSE);
+
+        let legacy = reader_dev_client(READER_PRINCIPAL_CLAIM);
+        assert_eq!(legacy["claims"][READER_PRINCIPAL_CLAIM], READER_CLIENT_ID);
+
+        let custom = reader_dev_client("employee_id");
+        assert_eq!(custom["claims"]["employee_id"], READER_CLIENT_ID);
+        assert!(custom["claims"].get(READER_PRINCIPAL_CLAIM).is_none());
+    }
+
     #[test]
     fn reader_grant_reads_the_request_target_field_whatever_its_name() {
         let metadata = json!({
@@ -5187,7 +5384,7 @@ mod tests {
             .as_array_mut()
             .unwrap()
             .push(json!({
-                "id":"automatic-applier", "actorKind":"service", "principalClaim":"sub",
+                "id":"automatic-applier", "actorKind":"service", "principalClaim":"registry_principal",
                 "requesterClients":["executor"], "requiredScopes":["requests:apply"],
                 "permissions":{"entities":[{"entity":"requests","operations":["get","apply-request"]}]}
             }));
@@ -5195,7 +5392,7 @@ mod tests {
             .as_array_mut()
             .unwrap()
             .push(json!({
-                "id":"citizen-reader", "actorKind":"human", "principalClaim":"sub",
+                "id":"citizen-reader", "actorKind":"human", "principalClaim":"registry_principal",
                 "requesterClients":["citizen"], "requiredScopes":["citizen:read"],
                 "permissions":{"entities":[{"entity":"requests","operations":["get"]}]}
             }));

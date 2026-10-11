@@ -1,0 +1,20 @@
+apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
+journeys:
+  # The protected citizen and reviewer lifecycle uses real interactive tokens in
+  # live_journey.py. This offline fixture binds only the existing source-reader
+  # service client and exercises its bounded empty-registry application read.
+  - id: casework-source-reader-boundary
+    steps:
+      - id: lists-empty-registration-applications
+        entity: registration-application
+        accessProfile: casework-reader
+        claims:
+          # Native dev service subject for registry citizen-self-registration
+          # and client casework-reader, from local::agent_id. The schema test
+          # verifies the real issuer token against this exact expected subject.
+          principal: 0e0d0a5c-3bf4-75e8-8b6e-50ed61b01a3f
+          scopes: [casework:source-reader]
+          purpose: casework-sync
+        request: {type: list}
+        expect: {outcome: success, status: 200, count: 0}

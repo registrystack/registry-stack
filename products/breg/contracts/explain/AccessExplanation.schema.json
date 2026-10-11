@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://id.registrystack.org/schemas/breg/access-explanation/access-explanation.v1alpha4.schema.json",
   "title": "AccessExplanation",
-  "description": "Wire shape of `explanation` for `bregctl explain access` without `--scenario`. The evaluation-rule strings are hand-authored constants and are pinned; `routes`, `entities`, `actions`, `rowReach`, `claimContract`, and `claimContractError` are passthroughs of compiled-model values and are declared opaque, except `routes.entries[].entityId`, which is pinned because consumers read it today. `consent` and `statisticalDatasets` are pinned in full: their structure exists only to be this payload.",
+  "description": "Wire shape of `explanation` for `bregctl explain access` without `--scenario`. The evaluation-rule strings are hand-authored constants and are pinned; `routes`, `entities`, `actions`, and `rowReach` are passthroughs of compiled-model values and are declared opaque, except `routes.entries[].entityId`, which is pinned because consumers read it today. `claimContract` remains opaque except for its pinned `principalClaims`, and its success/error relationship with `claimContractError` is pinned. `consent` and `statisticalDatasets` are pinned in full: their structure exists only to be this payload.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -75,12 +75,23 @@
     },
     "claimContract": {
       "type": ["object", "null"],
-      "description": "Passthrough of the compiled authority inventory, or null when the registry declares no authority contract; shape follows AuthorityInventory and is outside this contract version.",
-      "x-registry-passthrough": "bregctl writes the compiled authority inventory as the engine holds it; its shape follows AuthorityInventory and is outside this contract version."
+      "description": "Passthrough of the compiled authority inventory, or null when that inventory failed. `principalClaims` is pinned for the Casework source-add consumer; every other member follows AuthorityInventory and remains outside this contract version.",
+      "x-registry-passthrough": "bregctl writes the compiled authority inventory as the engine holds it; only principalClaims is pinned, and its other members follow AuthorityInventory outside this contract version.",
+      "required": ["principalClaims"],
+      "properties": {
+        "principalClaims": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
     },
     "claimContractError": {
       "type": ["string", "null"],
-      "description": "The compiled authority inventory's failure, or null when the inventory was built. AuthorityInventoryError is a value-free enum serialized as one of these snake_case strings; the vocabulary is pinned and grows only with an apiVersion bump.",
+      "description": "The compiled authority inventory's failure, or null when the inventory was built. AuthorityInventoryError is a value-free enum serialized as one of these kebab-case strings; the vocabulary is pinned and grows only with an apiVersion bump.",
       "enum": [
         "principal-claim-missing",
         "target-entity-not-compiled",
@@ -405,6 +416,26 @@
       }
     }
   },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "claimContract": { "type": "null" }
+        },
+        "required": ["claimContract"]
+      },
+      "then": {
+        "properties": {
+          "claimContractError": { "type": "string" }
+        }
+      },
+      "else": {
+        "properties": {
+          "claimContractError": { "type": "null" }
+        }
+      }
+    }
+  ],
   "$defs": {
     "LocalId": {
       "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",

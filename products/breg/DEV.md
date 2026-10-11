@@ -12,6 +12,14 @@ Prepare the project with `bregctl init ./registry`. The generated
 access profiles, journey fixtures and local clients before the first start.
 A later dedicated Evidence source can be prepared explicitly on a stopped session.
 
+The generated local runtime uses the compiled registry's one common principal
+claim. A project whose authenticated grants all use `principalClaim: sub`
+therefore uses the issuer's verified subject, including native citizen accounts.
+Projects with multiple principal claims are refused before local services start.
+An access-free project keeps the existing `registry_principal` local default.
+An operated runtime still explicitly sets `authentication.authorityClaims.principal`
+to match its governed grants.
+
 ```sh
 bregctl dev ./registry
 bregctl dev stop ./registry

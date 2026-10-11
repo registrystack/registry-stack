@@ -1,0 +1,84 @@
+resource_type: flow
+id: 01990000-0000-7000-8000-000000000061
+name: Citizen SMS authentication
+handle: citizen-sms-authentication
+flowType: AUTHENTICATION
+nodes:
+  - id: start
+    type: START
+    onSuccess: choose_mode
+  - id: choose_mode
+    type: PROMPT
+    prompts:
+      - action:
+          ref: action_login
+          nextNode: prompt_mobile
+      - action:
+          ref: action_signup
+          nextNode: call_registration
+  - id: prompt_mobile
+    type: PROMPT
+    prompts:
+      - inputs:
+          - ref: input_mobile
+            identifier: mobile_number
+            type: PHONE_INPUT
+            required: true
+        action:
+          ref: action_send_otp
+          nextNode: generate_otp
+  - id: generate_otp
+    type: TASK_EXECUTION
+    executor:
+      name: OTPExecutor
+      mode: generate
+      inputs:
+        - ref: input_mobile
+          identifier: mobile_number
+          type: PHONE_INPUT
+          required: true
+    onSuccess: send_sms
+    onFailure: prompt_mobile
+  - id: send_sms
+    type: TASK_EXECUTION
+    properties:
+      senderId: 01990000-0000-7000-8000-000000000080
+      smsTemplate: OTP
+    executor:
+      name: SMSExecutor
+    onSuccess: prompt_otp
+  - id: prompt_otp
+    type: PROMPT
+    prompts:
+      - inputs:
+          - ref: input_otp
+            identifier: otp
+            type: OTP_INPUT
+            required: true
+        action:
+          ref: action_verify_otp
+          nextNode: verify_otp
+  - id: verify_otp
+    type: TASK_EXECUTION
+    executor:
+      name: OTPExecutor
+      mode: verify
+    onSuccess: authorization_check
+    onIncomplete: prompt_otp
+  - id: call_registration
+    type: CALL
+    flow:
+      ref: 01990000-0000-7000-8000-000000000064
+    onSuccess: authorization_check
+  - id: authorization_check
+    type: TASK_EXECUTION
+    executor:
+      name: AuthorizationExecutor
+    onSuccess: auth_assert
+  - id: auth_assert
+    type: TASK_EXECUTION
+    executor:
+      name: AuthAssertExecutor
+    onSuccess: end
+  - id: end
+    type: END

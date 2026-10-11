@@ -1,0 +1,207 @@
+apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
+  id: citizen-self-registration
+  canonicalBaseIri: https://citizen-self-registration.example.gov
+  version: 0.1.0
+  defaultLanguage: en
+package:
+  sourceRevision: citizen-self-registration-acceptance-0.1.0
+manifestProjection:
+  accessProfile: registration-operator
+  classificationCeiling: restricted
+  catalog:
+    baseUrl: https://citizen-self-registration.example.gov
+    title: Citizen Self-registration Catalog
+    description: Synthetic acceptance fixture for account-owned citizen registration applications.
+    publisher:
+      id: citizen-registration-authority
+      name: Citizen Registration Authority
+      iri: https://citizen-self-registration.example.gov/authority
+  datasets:
+    - id: citizen-self-registration
+      title: Citizen Self-registration Registry
+      description: Registration applications, people, account links, and program enrollments.
+      owner: Citizen Registration Authority
+      status: active
+  dataServices:
+    - id: citizen-self-registration-data-service
+      title: Citizen Self-registration Service
+      endpointUrl: https://citizen-self-registration.example.gov
+      servesDatasets: [citizen-self-registration]
+  publicService:
+    id: citizen-self-registration-service
+    title: Citizen Self-registration Service
+  distributions: []
+entities:
+  - id: person
+    primaryDataset: citizen-self-registration
+    route: persons
+    mutationMode: mutable
+    classification: restricted
+    changeControl:
+      requiredFor: [create]
+    fields:
+      - {id: given-name, type: string, required: true, minimumLength: 1, maximumLength: 120, classification: restricted}
+      - {id: family-name, type: string, required: true, minimumLength: 1, maximumLength: 120, classification: restricted}
+      - {id: date-of-birth, type: date, required: true, classification: restricted}
+  - id: self-service-link
+    primaryDataset: citizen-self-registration
+    route: self-service-links
+    mutationMode: mutable
+    classification: restricted
+    changeControl:
+      requiredFor: [create]
+    fields:
+      - {id: person, type: reference, target: person, required: true, classification: restricted}
+      - {id: principal, type: string, required: true, maximumLength: 128, classification: restricted}
+      - {id: active, type: boolean, required: true, classification: restricted}
+    constraints:
+      - {type: unique, fields: [principal]}
+      - {type: unique, fields: [person]}
+    indexes:
+      - {id: self-service-link-principal-key, fields: [principal, person, active]}
+  - id: program-enrollment
+    primaryDataset: citizen-self-registration
+    route: program-enrollments
+    mutationMode: mutable
+    classification: restricted
+    changeControl:
+      requiredFor: [create]
+    fields:
+      - {id: person, type: reference, target: person, required: true, classification: restricted}
+      - {id: program-code, type: vocabulary-code, vocabulary: registration-program, required: true, classification: restricted}
+    constraints:
+      - {type: unique, fields: [person, program-code]}
+  - id: registration-application
+    primaryDataset: citizen-self-registration
+    route: registration-applications
+    mutationMode: mutable
+    classification: restricted
+    fields:
+      - {id: owner, type: string, required: true, maximumLength: 128, classification: restricted}
+      - {id: given-name, type: string, required: true, minimumLength: 1, maximumLength: 120, classification: restricted}
+      - {id: family-name, type: string, required: true, minimumLength: 1, maximumLength: 120, classification: restricted}
+      - {id: date-of-birth, type: date, required: true, classification: restricted}
+      - {id: program-code, type: vocabulary-code, vocabulary: registration-program, required: true, classification: restricted}
+    changeRequest:
+      planner:
+        kind: rhai
+        script: scripts/registration-plan.rhai
+        abi: registry.change-request-plan/v1
+        requestFields: [owner, given-name, family-name, date-of-birth, program-code]
+        writes:
+          - target: {entity: person}
+            operation: create
+            fields: [given-name, family-name, date-of-birth]
+          - target: {entity: program-enrollment}
+            operation: create
+            fields: [person, program-code]
+          - target: {entity: self-service-link}
+            operation: create
+            fields: [person, principal, active]
+      review:
+        type: required
+        authority: casework
+        policyId: citizen-registration
+      onApproved:
+        mode: automatic
+        executor: registration-applier
+      retention:
+        mode: operator-erase
+    hooks:
+      - id: casework-lifecycle-v1-registration-application
+        phase: after
+        trigger: request-lifecycle
+        projection: [owner]
+        handler: {type: url, destinationId: casework}
+accessProfiles:
+  - id: registration-applicant
+    principalClaim: sub
+    actorKind: human
+    requesterClients: [citizen-portal]
+    requiredScopes: [registration:self]
+    permissions:
+      entities:
+        - entity: registration-application
+          rowBoundaries:
+            - {field: owner, claim: sub, operator: equals}
+          operations: [create, get, list, patch, submit-request, revise-request, cancel-request]
+          readableFields: [owner, given-name, family-name, date-of-birth, program-code]
+          readableRequestFields: [review-state]
+          writableFields: [owner, given-name, family-name, date-of-birth, program-code]
+          requestVisibility: owner
+  - id: registration-member
+    principalClaim: sub
+    actorKind: human
+    requesterClients: [citizen-portal]
+    requiredScopes: [registration:read]
+    permissions:
+      entities:
+        - entity: program-enrollment
+          rowBoundaries: unrestricted
+          membershipBoundaries:
+            - {field: person, membershipEntity: self-service-link, membershipKeyField: person, principalField: principal, activeField: active}
+          operations: [get, list]
+          readableFields: [person, program-code]
+  - id: casework-reader
+    default: false
+    principalClaim: sub
+    requiredScopes: [casework:source-reader]
+    requiredPurposes: [casework-sync]
+    permissions:
+      entities:
+        - entity: registration-application
+          rowBoundaries: unrestricted
+          operations: [get, list]
+          readableFields: [date-of-birth, family-name, given-name, owner, program-code]
+          readableRequestFields: [review-state]
+  - id: registration-reviewer
+    principalClaim: sub
+    actorKind: human
+    requesterClients: [registration-console]
+    requiredScopes: [registration:review]
+    permissions:
+      entities:
+        - entity: registration-application
+          rowBoundaries: unrestricted
+          operations: [get, list]
+          readableFields: [owner, given-name, family-name, date-of-birth, program-code]
+          readableRequestFields: [review-state]
+  - id: registration-applier
+    principalClaim: sub
+    actorKind: service
+    requesterClients: [registration-applier]
+    requiredScopes: [registration:apply]
+    permissions:
+      entities:
+        - entity: registration-application
+          rowBoundaries: unrestricted
+          operations: [get, apply-request]
+          readableFields: [owner, given-name, family-name, date-of-birth, program-code]
+          readableRequestFields: [review-state]
+          applyTargets:
+            - {entity: person, rowBoundaries: unrestricted}
+            - {entity: program-enrollment, rowBoundaries: unrestricted}
+            - {entity: self-service-link, rowBoundaries: unrestricted}
+  - id: registration-operator
+    principalClaim: sub
+    actorKind: human
+    requesterClients: [registration-console]
+    requiredScopes: [registry:steward]
+    permissions:
+      entities:
+        - entity: registration-application
+          rowBoundaries: unrestricted
+          operations: [get, list]
+          readableFields: [owner, given-name, family-name, date-of-birth, program-code]
+          readableRequestFields: [review-state]
+        - {entity: person, rowBoundaries: unrestricted, operations: [get, list], readableFields: [given-name, family-name, date-of-birth]}
+        - entity: self-service-link
+          rowBoundaries: unrestricted
+          operations: [get, list, patch]
+          readableFields: [person, principal, active]
+          writableFields: [active]
+        - {entity: program-enrollment, rowBoundaries: unrestricted, operations: [get, list], readableFields: [person, program-code]}
+vocabularies:
+  - {id: registration-program, values: [synthetic-citizen-program]}

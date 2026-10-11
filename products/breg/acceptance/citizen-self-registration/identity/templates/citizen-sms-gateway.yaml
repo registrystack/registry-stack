@@ -1,0 +1,8 @@
+resource_type: connection
+id: 01990000-0000-7000-8000-000000000080
+type: sms-gateway
+name: Citizen acceptance SMS sink
+description: Host-only fake SMS delivery for the citizen self-registration acceptance journey.
+url: __SMS_SINK_URL__
+httpMethod: POST
+contentType: JSON
