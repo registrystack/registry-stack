@@ -245,7 +245,7 @@ jobs:
     # which fail rather than skip without their disposable database.
     services:
       postgres:
-        image: postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675
+        image: public.ecr.aws/docker/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675
         env:
           POSTGRES_DB: dispatch
           POSTGRES_USER: dispatch
@@ -760,7 +760,7 @@ jobs:
     timeout-minutes: 30
     services:
       postgres:
-        image: postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675
+        image: public.ecr.aws/docker/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675
         env:
           POSTGRES_DB: casework
           POSTGRES_USER: casework
@@ -957,7 +957,7 @@ jobs:
     timeout-minutes: 30
     services:
       postgres:
-        image: postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675
+        image: public.ecr.aws/docker/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675
         env:
           POSTGRES_DB: scheduling
           POSTGRES_USER: scheduling
@@ -1091,7 +1091,7 @@ jobs:
     timeout-minutes: 30
     services:
       postgres:
-        image: postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675
+        image: public.ecr.aws/docker/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675
         env:
           POSTGRES_DB: messaging
           POSTGRES_USER: messaging
@@ -1167,7 +1167,7 @@ jobs:
     timeout-minutes: 20
     services:
       mailpit:
-        image: axllent/mailpit:v1.31.2@sha256:74d609a42ec279aa63c6b4622a6fa9b5408d1ad5b1d76a1c4be40a265ce0863d
+        image: ghcr.io/axllent/mailpit:v1.31.2@sha256:74d609a42ec279aa63c6b4622a6fa9b5408d1ad5b1d76a1c4be40a265ce0863d
         options: >-
           --health-cmd "/mailpit readyz"
           --health-interval 5s
@@ -2068,7 +2068,7 @@ jobs:
     timeout-minutes: 30
     services:
       postgres:
-        image: postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675
+        image: public.ecr.aws/docker/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675
         env:
           POSTGRES_DB: casework
           POSTGRES_USER: casework

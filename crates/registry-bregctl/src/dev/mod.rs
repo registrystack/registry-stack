@@ -55,7 +55,11 @@ use zeroize::Zeroizing;
 const DATABASE_ID: &str = "breg-dev-database";
 const MIGRATION_ROLE: &str = "breg_dev_migration";
 const RUNTIME_ROLE: &str = "breg_dev_runtime";
+// Pull the digest-identical Docker Official Images mirror. Public help keeps
+// the canonical upstream tag and digest, whose image identity is unchanged.
 const IMAGE: &str =
+    "public.ecr.aws/docker/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675";
+const CANONICAL_IMAGE: &str =
     "postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675";
 const SPATIAL_IMAGE: &str =
     "postgis/postgis@sha256:01a6a70e41e6c4467c8f55f6063555ed72db2d6662cd0d571040d42eadaeb6f6";
@@ -2159,9 +2163,18 @@ fn inspect(docker: &Path, state: &State) -> Result<Option<Value>> {
         .into_iter()
         .next()
         .context("Docker returned no exact container")?;
+    verified_container(state, &container)?;
+    Ok(Some(container))
+}
+
+fn verified_container(state: &State, container: &Value) -> Result<()> {
+    let image = container["Config"]["Image"].as_str();
+    let expected_image = state.database_image();
+    let image_matches = image == Some(expected_image)
+        || (!state.requires_postgis && image == Some(CANONICAL_IMAGE));
     if container["Name"] != format!("/{}", state.container_name())
         || container["Config"]["Labels"][LABEL] != state.owner
-        || container["Config"]["Image"] != state.database_image()
+        || !image_matches
         || state
             .container_id
             .as_ref()
@@ -2169,7 +2182,7 @@ fn inspect(docker: &Path, state: &State) -> Result<Option<Value>> {
     {
         bail!("container ownership differs from retained local state; no resource was changed");
     }
-    Ok(Some(container))
+    Ok(())
 }
 
 fn database(docker: &Path, state: &mut State) -> Result<()> {
