@@ -13,6 +13,7 @@ import {
   type ReviewResultOutcome,
   type ReviewTaskContext,
   type ReviewTaskDecisionRequest,
+  type TaskAuthorizationMode,
   type ReviewTaskQuery,
   type SupervisoryReviewTask,
   type OwnReviewDecision,
@@ -289,15 +290,21 @@ void client.updateDirectoryTeam(token, 'administrator', 'review-team', 4, 'team-
 void client.previewTaskTemplates(token, profile, sourceProfile, item.itemId).then(result => {
   const revision: number = result.value.itemRevision
   const lifetime: number | undefined = result.value.templates[0]?.lifetimeSeconds
-  void revision; void lifetime
+  const mode: TaskAuthorizationMode | undefined = result.value.templates[0]?.authorizationMode
+  void revision; void lifetime; void mode
 })
-void client.listTaskGrants(token, profile, sourceProfile, item.itemId)
+void client.listTaskGrants(token, profile, sourceProfile, item.itemId).then(result => {
+  const mode: 'immediate' | 'deferred' | undefined = result.value.grants[0]?.authorizationMode
+  void mode
+})
 void client.approveTaskGrant(token, profile, sourceProfile, item.itemId, 7, 'task-key', { templateId: 'verify-status', templateVersion: '1' })
 void client.revokeTaskGrant(token, profile, sourceProfile, item.itemId, item.itemId)
 void client.taskAssertion(token, item.itemId)
 void client.taskGrantStatus(token, item.itemId)
 // @ts-expect-error Policy bounds must come from the governed template.
 void client.approveTaskGrant(token, profile, sourceProfile, item.itemId, 7, 'task-key', { templateId: 'verify-status', templateVersion: '1', resource: 'urn:forged' })
+// @ts-expect-error The approval cannot change the governed authorization mode.
+void client.approveTaskGrant(token, profile, sourceProfile, item.itemId, 7, 'task-key', { templateId: 'verify-status', templateVersion: '1', authorizationMode: 'deferred' })
 // @ts-expect-error Agent assertion calls do not accept human profiles.
 void client.taskAssertion(token, profile, sourceProfile, item.itemId)
 

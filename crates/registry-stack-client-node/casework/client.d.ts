@@ -37,15 +37,21 @@ export interface TaskPermission { collection: string; operations: ReadonlyArray<
 export interface SchedulingTaskPermission { service: string; location: string; actions: ReadonlyArray<string> }
 export interface EvidenceRequesterContext { requesterTags: ReadonlyArray<string>; audience: string }
 export interface TaskApprovalRequest { templateId: string; templateVersion: string }
+/** Deferred authority keeps its approved deadline; execution credentials stay short-lived. */
+export type TaskAuthorizationMode = 'immediate' | 'deferred'
 export interface TaskTemplatePreview {
   id: string; version: string; label: string; agent: IssuerPrincipal; client: string; resource: string; scopes: ReadonlyArray<string>; purpose: string
   evidenceContext?: EvidenceRequesterContext; bounds: TaskGrantBounds; subjects: { readonly [key: string]: Exclude<JsonScalar, null> }; lifetimeSeconds: SafeInteger
+  /** Omitted for the existing immediate mode. */
+  authorizationMode?: TaskAuthorizationMode
 }
 export interface TaskTemplatePreviews { itemRevision: SafeInteger; templates: ReadonlyArray<TaskTemplatePreview> }
 /** Grant metadata deliberately excludes stored subject values. */
 export interface TaskGrantView {
   id: string; templateId: string; templateVersion: string; agent: IssuerPrincipal; client: string; resource: string; scopes: ReadonlyArray<string>; purpose: string
   evidenceContext?: EvidenceRequesterContext; bounds: TaskGrantBounds; expiresAt: SafeInteger; invalidated: boolean
+  /** Omitted for the existing immediate mode. */
+  authorizationMode?: TaskAuthorizationMode
 }
 export interface TaskGrantList { grants: ReadonlyArray<TaskGrantView> }
 export interface TaskGrantRevocation { id: string; invalidated: boolean }
