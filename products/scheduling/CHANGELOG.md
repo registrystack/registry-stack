@@ -44,6 +44,48 @@
   `config::RETIRED_PACKAGE_MANIFEST_FILE`, and `StoreError::EarlierRelease`.
   `schedulingctl plan` runs its read-only publication check only when no
   schema version is pending; a database v0.40.0 activated has none.
+- The runtime file must state a top-level `taskGrantStatus`, which decides
+  how Scheduling learns whether a task grant is still current. A list of one
+  to 32 Casework task authorities, each named by the exact `sourceIssuer` its
+  grants carry, makes every capacity commitment and idempotent replay first
+  obtain a fresh exact status answer from the grant's authority, with no
+  fallback: an inactive, mismatched, unlisted, or incompletely bound grant
+  answers `operation.not-authorized` (403), even with less than fifteen
+  minutes left, and an authority or credential outage answers
+  `service.unavailable`. The whole check is bounded at ten seconds and ends
+  before the capacity transaction opens. `statusScope` and `statusPath` are
+  optional and default to Casework's `casework:grants:status` scope and
+  `/v1/task-grants/{grantId}/status` route. The keyword
+  `unchecked-final-fifteen-minutes` instead accepts only a grant with at most
+  900 seconds left at request entry and performs no revocation check; a grant
+  with more answers `operation.not-authorized` (403) and is audited as
+  refused. An empty list is refused, naming both choices. See
+  `products/scheduling/RUNTIME-CONFIG.md`.
+- BREAKING: a runtime file without `taskGrantStatus` is refused at startup
+  with `scheduling.runtime.missing-task-grant-status`. v0.40.0 had no such
+  member and accepted every unexpired task grant. A Casework immediate grant
+  never lasts longer than fifteen minutes, so the offline path refuses only a
+  deferred grant or a longer grant from another authority. After it acquires
+  its locks, the capacity transaction rechecks the execution token's expiry
+  as well as the grant's, on either path. Migration: list the task
+  authorities under `taskGrantStatus`, or write
+  `taskGrantStatus: unchecked-final-fifteen-minutes`, which accepts only a
+  grant with at most 900 seconds left at request entry and performs no
+  revocation check.
+- `POST /v1/appointments/receipt` returns the retained original success
+  receipt for the caller's verified issuer and subject, the original
+  `Idempotency-Key`, and the original request body, under ordinary read
+  authentication. It never creates, replays, or claims capacity, and it can
+  observe work after the task grant has ended. A missing, expired, changed,
+  or refused receipt answers `receipt.unresolved` (409), which is not
+  evidence that no effect occurred. The Rust (`appointment_receipt`),
+  Node.js (`appointmentReceipt`), and Python (`appointment_receipt`) clients
+  carry the route.
+- BREAKING (Rust API): `registry_scheduling_core::ProblemCode`, which
+  `registry-scheduling-client` errors carry, gains `ReceiptUnresolved`. The
+  enum is not `#[non_exhaustive]`, so an exhaustive `match` on it no longer
+  compiles. Only Rust code that matches on the enum is affected. Migration:
+  add a `ReceiptUnresolved` arm or a wildcard arm.
 
 ## v0.40.0 - 2026-10-11
 
