@@ -329,6 +329,49 @@ fn publisher(registry: &registry_breg::CompiledRegistry) -> &str {
         .as_str()
 }
 
+/// The dataset project whose publisher `statistician` is a project profile
+/// granting nothing on the unit entity, compiled with a module that
+/// contributes the unit entity profile of the same id and the given actor
+/// kind.
+fn compile_with_module_unit_profile(
+    actor_kind: &str,
+) -> Result<registry_breg::CompiledRegistry, CompileFailure> {
+    let mut value = with_dataset(&[], &[]);
+    value["modules"] = json!([{"id": "assistant-extension", "version": "1"}]);
+    value["accessProfiles"]
+        .as_array_mut()
+        .expect("profiles array")
+        .push(json!({
+            "id": "statistician", "principalClaim": "registry_principal", "requiredScopes": "unrestricted",
+            "permissions": {"datasets": [{"dataset": "notes-by-status", "operations": ["publish", "read-releases"]}]}
+        }));
+    let project = parse_project_json(&serde_json::to_vec(&value).expect("project serializes"))
+        .expect("project parses");
+    let module = parse_module_json(
+        &serde_json::to_vec(&json!({
+            "apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule",
+            "id": "assistant-extension", "version": "1",
+            "extendEntities": [{
+                "entity": "note",
+                "accessProfiles": [{
+                    "id": "statistician", "principalClaim": "registry_principal",
+                    "actorKind": actor_kind, "requesterClients": ["assistant-client"],
+                    "operations": ["list"], "allowCount": true,
+                    "readableFields": ["label", "open", "filed"], "filterableFields": ["open", "filed"],
+                    "requiredScopes": "unrestricted", "rowBoundaries": "unrestricted"
+                }]
+            }]
+        }))
+        .expect("module serializes"),
+    )
+    .expect("module parses");
+    compile_project(
+        &project,
+        std::slice::from_ref(&module),
+        CompileProfile::Authoring,
+    )
+}
+
 #[test]
 fn standing_agent_cannot_publish_a_statistical_release() {
     for clerk in [&[][..], &["read-live", "read-releases"]] {
@@ -357,6 +400,27 @@ fn standing_agent_cannot_publish_a_statistical_release() {
             "publish is neither a lifecycle operation, a record write, nor an action: {codes:?}"
         );
     }
+
+    // Publishing and withdrawing authorize through the publisher's profile on
+    // the unit entity, so a module-contributed standing agent is refused
+    // there, and the same profile declared human publishes.
+    let failure = refused(
+        compile_with_module_unit_profile("agent"),
+        "a module cannot contribute a standing agent that publishes",
+    );
+    let refusal = failure
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.code == PUBLISH_FORBIDDEN)
+        .unwrap_or_else(|| panic!("module publisher was not refused: {:?}", codes(&failure)));
+    assert_eq!(
+        refusal.path,
+        "entities[id=note].accessProfiles[id=statistician]"
+    );
+
+    let registry =
+        compile_with_module_unit_profile("human").expect("a human unit profile publishes");
+    assert_eq!(publisher(&registry), "statistician");
 }
 
 #[test]
@@ -383,13 +447,17 @@ fn standing_agent_may_read_statistical_counts_and_releases() {
 }
 
 #[test]
-fn human_and_unspecified_profiles_keep_publish() {
+fn human_service_and_unspecified_profiles_keep_publish() {
     // The same profile publishes once it is no longer an agent: bound to the
-    // agent's client as a human, and with no actor kind at all.
-    let mut human = with_dataset(&[], &["publish", "read-releases"]);
-    human["accessProfiles"][1]["actorKind"] = json!("human");
-    let registry = compile(&human).expect("a human profile keeps publish");
-    assert_eq!(publisher(&registry), "assistant");
+    // agent's client as a human or as a service, and with no actor kind at all.
+    for actor_kind in ["human", "service"] {
+        let mut direct = with_dataset(&[], &["publish", "read-releases"]);
+        direct["accessProfiles"][1]["actorKind"] = json!(actor_kind);
+        let registry = compile(&direct).unwrap_or_else(|failure| {
+            panic!("a {actor_kind} profile lost publish: {:?}", codes(&failure))
+        });
+        assert_eq!(publisher(&registry), "assistant");
+    }
 
     let mut unspecified = with_dataset(&[], &["publish", "read-releases"]);
     let profile = unspecified["accessProfiles"][1]
@@ -419,66 +487,6 @@ fn task_grant_profile_cannot_be_a_dataset_publisher() {
         "a task-grant publisher was not refused: {codes:?}"
     );
     assert!(!codes.contains(&PUBLISH_FORBIDDEN));
-}
-
-#[test]
-fn module_contributed_standing_agent_cannot_authorize_a_publication() {
-    // Publishing and withdrawing authorize through the publisher's profile on
-    // the unit entity. A project profile that grants nothing on that entity
-    // leaves a module to contribute the profile of the same id.
-    let mut value = with_dataset(&[], &[]);
-    value["modules"] = json!([{"id": "assistant-extension", "version": "1"}]);
-    value["accessProfiles"]
-        .as_array_mut()
-        .expect("profiles array")
-        .push(json!({
-            "id": "statistician", "principalClaim": "registry_principal", "requiredScopes": "unrestricted",
-            "permissions": {"datasets": [{"dataset": "notes-by-status", "operations": ["publish", "read-releases"]}]}
-        }));
-    let project = parse_project_json(&serde_json::to_vec(&value).expect("project serializes"))
-        .expect("project parses");
-    let compile_with_unit_profile = |actor_kind: &str| {
-        let module = parse_module_json(
-            &serde_json::to_vec(&json!({
-                "apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule",
-                "id": "assistant-extension", "version": "1",
-                "extendEntities": [{
-                    "entity": "note",
-                    "accessProfiles": [{
-                        "id": "statistician", "principalClaim": "registry_principal",
-                        "actorKind": actor_kind, "requesterClients": ["assistant-client"],
-                        "operations": ["list"], "allowCount": true,
-                        "readableFields": ["label", "open", "filed"], "filterableFields": ["open", "filed"],
-                        "requiredScopes": "unrestricted", "rowBoundaries": "unrestricted"
-                    }]
-                }]
-            }))
-            .expect("module serializes"),
-        )
-        .expect("module parses");
-        compile_project(
-            &project,
-            std::slice::from_ref(&module),
-            CompileProfile::Authoring,
-        )
-    };
-
-    let failure = refused(
-        compile_with_unit_profile("agent"),
-        "a module cannot contribute a standing agent that publishes",
-    );
-    let refusal = failure
-        .diagnostics()
-        .iter()
-        .find(|diagnostic| diagnostic.code == PUBLISH_FORBIDDEN)
-        .unwrap_or_else(|| panic!("module publisher was not refused: {:?}", codes(&failure)));
-    assert_eq!(
-        refusal.path,
-        "entities[id=note].accessProfiles[id=statistician]"
-    );
-
-    let registry = compile_with_unit_profile("human").expect("a human unit profile publishes");
-    assert_eq!(publisher(&registry), "statistician");
 }
 
 #[test]

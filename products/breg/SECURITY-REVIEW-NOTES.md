@@ -2910,14 +2910,16 @@ permissions only, so a standing agent profile holding the dataset operation
 
 `crates/registry-breg/tests/standing_agent_ceiling.rs`:
 `standing_agent_cannot_publish_a_statistical_release` is the named negative
-for the invariant row and also checks that the three sibling refusals stay
-silent. `module_contributed_standing_agent_cannot_authorize_a_publication`
-covers the unit entity profile a module contributes.
+for the invariant row and exercises both enforcement points. It refuses a
+standing agent declared as the project access profile and one a module
+contributes as the unit entity profile, asserts the diagnostic path of each,
+checks that the three sibling refusals stay silent, and compiles the
+module-contributed profile declared human as its control.
 `standing_agent_may_read_statistical_counts_and_releases` and
-`human_and_unspecified_profiles_keep_publish` hold the accepted cases, and
-`task_grant_profile_cannot_be_a_dataset_publisher` pins the existing
-task-grant refusal. These are compiler tests; no PostgreSQL suite changes,
-because no runtime path changes.
+`human_service_and_unspecified_profiles_keep_publish` hold the accepted
+cases, and `task_grant_profile_cannot_be_a_dataset_publisher` pins the
+existing task-grant refusal. These are compiler tests; no PostgreSQL suite
+changes, because no request path changes.
 
 ### Accepted residuals
 
