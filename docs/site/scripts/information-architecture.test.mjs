@@ -710,6 +710,23 @@ test('redirects the retired Server webhook, history, and event pages to their me
   }
 });
 
+test('redirects the retired deprecation policy page and its Markdown twin to the stability page', () => {
+  assert.match(
+    configSource,
+    /'\/reference\/deprecation-policy\/': internalRedirect\('\/reference\/api-stability\/'\)/,
+  );
+  assert.match(
+    configSource,
+    /'\/reference\/deprecation-policy\.md': internalRedirect\('\/reference\/api-stability\/'\)/,
+  );
+  assert.equal(
+    hasDocForSlug('reference/deprecation-policy'),
+    false,
+    'reference/deprecation-policy must not be a published page',
+  );
+  assert.ok(hasDocForSlug('reference/api-stability'), 'reference/api-stability must be a published page');
+});
+
 test('organizes Evidence Gateway tasks without publishing the obsolete Relay composition', () => {
   const evidence = topLevelSection(sidebarSource, 'Evidence Gateway');
   assertOrdered(

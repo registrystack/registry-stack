@@ -59,9 +59,9 @@ Evidence Gateway's versioned routes are `POST /v1/evidence`, `POST /v1/evidence/
 The promise also covers the client SDKs: the Node.js package `@registrystack/client`, the Python
 package `registry-stack-client`, and the Rust crate `registry-stack-client` taken from the release
 tag. In each, the `breg`, `evidence`, `casework`, and `discovery` namespaces are promised. The SDKs
-are additive-only across 1.x, because npm `^1.x`, Cargo `1.x`, and pip `~=1.x` ranges pick up minor
-releases automatically: a minor release may deprecate an SDK method, and its removal waits for
-`2.0`. See the [client API reference](../client-api/).
+are additive-only across 1.x, because a version range on a published package, such as npm `^1.2.0`
+or pip `~=1.2`, picks up minor releases automatically: a minor release may deprecate an SDK method,
+and its removal waits for `2.0`. See the [client API reference](../client-api/).
 
 ## Experimental surfaces
 
