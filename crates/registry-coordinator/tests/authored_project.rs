@@ -44,7 +44,7 @@ fn authored_project_converts_to_the_versioned_snapshot_abi() {
         frozen["workflow"]["steps"]["done"]["output"]["arguments"],
         json!(["input"])
     );
-    assert_eq!(frozen["adapterAbi"], "coordinator/product-operations/v4");
+    assert_eq!(frozen["adapterAbi"], "coordinator/product-operations/v1");
     let restored = Definition::from_snapshot(&snapshot).unwrap();
     assert_eq!(restored.digest, definition.digest);
     assert_eq!(restored.workflow, definition.workflow);

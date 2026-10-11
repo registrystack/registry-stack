@@ -21,7 +21,7 @@ fn snapshots_restore_their_exact_bytes_under_the_one_operation_contract() {
     assert_eq!(restored.snapshot().unwrap(), bytes);
     assert_eq!(
         restored.explain().unwrap()["adapterAbi"],
-        "coordinator/product-operations/v4"
+        "coordinator/product-operations/v1"
     );
     assert_eq!(
         restored.digest,
@@ -30,8 +30,8 @@ fn snapshots_restore_their_exact_bytes_under_the_one_operation_contract() {
 
     // No other operation contract is read, with or without pinned identities.
     for abi in [
-        "coordinator/product-operations/v3",
-        "coordinator/product-operations/v5",
+        "coordinator/product-operations/v0",
+        "coordinator/product-operations/v2",
     ] {
         let mut other = original.clone();
         other["adapterAbi"] = json!(abi);

@@ -38,9 +38,9 @@ enum InspectionBinding<'a> {
     Supplied(&'a str),
 }
 
-pub(crate) const SCHEMA_VERSION: i32 = 4;
+pub(crate) const SCHEMA_VERSION: i32 = 1;
 
-const NAMESPACE_MARKER: &str = "registry-coordinator/v2 protected-state";
+const NAMESPACE_MARKER: &str = "registry-coordinator/v1 protected-state";
 
 pub(crate) const AUDIT_SCHEMA: &str = "registry-coordinator/audit/v1";
 

@@ -24,7 +24,7 @@ use crate::{
 pub const SNAPSHOT_API_VERSION: &str =
     "id.registrystack.org/formats/coordinator/definition-snapshot/v1alpha1";
 pub const SNAPSHOT_KIND: &str = "CoordinatorDefinitionSnapshot";
-const ADAPTER_ABI: &str = "coordinator/product-operations/v4";
+const ADAPTER_ABI: &str = "coordinator/product-operations/v1";
 const SCHEMA_ABI: &str = "coordinator/jsonschema-0.18/draft202012/formats-asserted+uuid/v1";
 const MAX_DOCUMENT_BYTES: usize = 1_048_576;
 /// Maximum canonical snapshot size, shared by authoring, restore and packaging.

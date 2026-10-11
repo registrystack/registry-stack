@@ -70,7 +70,7 @@ async fn job_shape_admits_only_the_governed_zero_attempt_hold() {
 
 #[tokio::test]
 async fn a_store_recording_another_revision_is_refused_unchanged() {
-    for other in [3, 5] {
+    for other in [0, 2] {
         let h = harness().await;
         let run = h.admit().await;
         let identity = restored_lease_identity(&h, run).await;

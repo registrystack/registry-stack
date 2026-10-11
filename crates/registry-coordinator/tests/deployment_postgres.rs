@@ -463,24 +463,24 @@ async fn assert_other_revision_refused(
     let before: Value = admin.query_one(&rows_sql, &[]).await.unwrap().get(0);
     assert!(!before["runs"].as_array().unwrap().is_empty());
     assert!(!before["jobs"].as_array().unwrap().is_empty());
-    assert_eq!(before["ledger"], json!([4]));
+    assert_eq!(before["ledger"], json!([1]));
     // A store is created at one revision. Neither serving nor explicit apply
     // changes a database that records another one, in control or in the ledger.
     for (damage, repair, code) in [
         (
             format!(
                 "ALTER TABLE {namespace}.control DROP CONSTRAINT control_schema_version_check;
-                UPDATE {namespace}.control SET schema_version=3 WHERE id"
+                UPDATE {namespace}.control SET schema_version=2 WHERE id"
             ),
             format!(
-                "UPDATE {namespace}.control SET schema_version=4 WHERE id;
-                ALTER TABLE {namespace}.control ADD CONSTRAINT control_schema_version_check CHECK(schema_version=4)"
+                "UPDATE {namespace}.control SET schema_version=1 WHERE id;
+                ALTER TABLE {namespace}.control ADD CONSTRAINT control_schema_version_check CHECK(schema_version=1)"
             ),
             "coordinator.command.schema-version",
         ),
         (
-            format!("INSERT INTO {namespace}.coordinator_migrations VALUES(3)"),
-            format!("DELETE FROM {namespace}.coordinator_migrations WHERE version=3"),
+            format!("INSERT INTO {namespace}.coordinator_migrations VALUES(2)"),
+            format!("DELETE FROM {namespace}.coordinator_migrations WHERE version=2"),
             "coordinator.deployment.refused",
         ),
     ] {
@@ -774,7 +774,7 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
     assert_eq!(checked["status"], "checked");
     assert_eq!(checked["databaseId"], "router-pilot-test");
     assert_eq!(checked["packageDigest"], digest);
-    assert_eq!(checked["schemaVersion"], 4);
+    assert_eq!(checked["schemaVersion"], 1);
     assert_eq!(checked["runtimeRole"], role);
     assert_eq!(checked["active"]["roleMode"], "split");
     status_doc["deployment"]["runtimeRole"] = json!("wrong_runtime_role");
@@ -839,8 +839,8 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
     // control write authority all refuse status while plan still reports observation.
     for (damage, repair) in [
         (
-            format!("INSERT INTO {namespace}.coordinator_migrations VALUES(5)"),
-            format!("DELETE FROM {namespace}.coordinator_migrations WHERE version=5"),
+            format!("INSERT INTO {namespace}.coordinator_migrations VALUES(2)"),
+            format!("DELETE FROM {namespace}.coordinator_migrations WHERE version=2"),
         ),
         (
             format!("REVOKE SELECT ON {namespace}.jobs FROM {role}"),

@@ -44,6 +44,12 @@
   `generated/openapi/coordinator.openapi.json` describes. Every refusal
   carries one code of the form `coordinator.<area>.<condition>`, written the
   same way in the HTTP answer and the `coordinatorctl` report.
+- This first release creates its store at schema revision 1, marks the
+  namespace `registry-coordinator/v1 protected-state`, and seals a package
+  under the operation contract `coordinator/product-operations/v1`. A store
+  or a package made by a build that predates this release records other
+  values and is refused, never upgraded: apply to a new database and package
+  the project again.
 - The Coordinator has no export in `@registrystack/client` or the Python
   client. An application calls the HTTP API.
 - `SECURITY-REVIEW-NOTES.md` lists the authentication, authorization,

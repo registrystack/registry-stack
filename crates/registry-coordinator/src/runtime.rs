@@ -690,7 +690,7 @@ impl RuntimeConfig {
             identities.insert(name, json!({"product":binding.product,"baseUrl":binding.base_url,
                 "clientId":auth.client_id,"tokenEndpoint":auth.token_endpoint,
                 "clientAssertionAudience":auth.client_assertion_audience.as_deref().unwrap_or(auth.token_endpoint.as_str()),
-                "resource":auth.resource,"scopes":scopes,"profile":binding.profile,"taskAuthority":auth.task_authority,"observationAuthorization":binding.observation_authorization.as_ref().map(|auth| json!({"tokenEndpoint":auth.token_endpoint,"clientId":auth.client_id,"resource":auth.resource,"clientAssertionAudience":auth.client_assertion_audience.as_deref().unwrap_or(auth.token_endpoint.as_str()),"scopes":({let mut s=auth.scopes.clone();s.sort();s})})),"abi":"coordinator-adapters/v3"}));
+                "resource":auth.resource,"scopes":scopes,"profile":binding.profile,"taskAuthority":auth.task_authority,"observationAuthorization":binding.observation_authorization.as_ref().map(|auth| json!({"tokenEndpoint":auth.token_endpoint,"clientId":auth.client_id,"resource":auth.resource,"clientAssertionAudience":auth.client_assertion_audience.as_deref().unwrap_or(auth.token_endpoint.as_str()),"scopes":({let mut s=auth.scopes.clone();s.sort();s})})),"abi":"coordinator-adapters/v1"}));
         }
         let value = serde_json::to_value(identities)
             .map_err(|_| config_error("connections", "correct the binding model"))?;
