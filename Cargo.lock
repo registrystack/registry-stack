@@ -6235,6 +6235,7 @@ dependencies = [
 name = "registry-record"
 version = "0.41.0"
 dependencies = [
+ "schemars",
  "serde",
  "serde_json",
  "thiserror 2.0.21",

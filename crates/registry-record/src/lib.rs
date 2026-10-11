@@ -97,8 +97,38 @@ impl Serialize for RegistryRecordJsonLdContext {
     }
 }
 
+/// The `@context` grammar of the published Registry Record v1 schema: the
+/// shared scalar, or an ordered composition that starts with it. The HTTPS
+/// pattern carries the product context rule without naming a format.
+#[cfg(feature = "schema")]
+impl schemars::JsonSchema for RegistryRecordJsonLdContext {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "RegistryRecordJsonLdContext".into()
+    }
+
+    fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "oneOf": [
+                {"const": REGISTRY_RECORD_CONTEXT_IDENTIFIER},
+                {
+                    "type": "array",
+                    "minItems": 2,
+                    "uniqueItems": true,
+                    "prefixItems": [{"const": REGISTRY_RECORD_CONTEXT_IDENTIFIER}],
+                    "items": {
+                        "type": "string",
+                        "minLength": 1,
+                        "pattern": "^[hH][tT][tT][pP][sS]://[^/?#\\s]+(?:[/?#][^\\s]*)?$"
+                    }
+                }
+            ]
+        })
+    }
+}
+
 /// One Registry Record v1 member.
 #[derive(Clone, Debug, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct RegistryRecord {
     pub record_identifier: String,
@@ -112,6 +142,7 @@ pub struct RegistryRecord {
 /// The homogeneous Registry, primary dataset, and entity context shared by a
 /// single response or every member of a collection.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct RegistryRecordMeta {
     pub registry_identifier: String,
@@ -135,6 +166,7 @@ pub struct RegistryRecordPageInfo {
 
 /// One Registry Record v1 single-response envelope.
 #[derive(Clone, Debug, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct RegistryRecordSingleResponse {
     #[serde(rename = "@context", skip_serializing_if = "Option::is_none")]
