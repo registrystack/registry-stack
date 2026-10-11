@@ -43,6 +43,7 @@ use crate::{
     access,
     authoring::{
         compile_local_project_with_ports_and_resource,
+        compile_local_project_with_target_authenticated_context,
         compile_local_project_with_target_inputs_and_resource, valid_local_audience,
         CompiledAccessPolicy, CompiledConceptForm, CompiledQuestion, LocalAdmission,
         LocalServicePorts, MAX_SOURCE_ARTIFACT_BYTES, SOURCES_DIRECTORY,
@@ -190,6 +191,11 @@ pub struct DevArgs {
     /// local caller rehearsal. Target service authentication is not replayed.
     #[arg(long, global = true)]
     target: Option<PathBuf>,
+
+    /// Preserve the selected local target's reviewed human authenticated-context
+    /// subject bindings. Requires a target and its borrowed BReg issuer owner.
+    #[arg(long, global = true, requires_all = ["target", "issuer_project"])]
+    preserve_target_authenticated_context: bool,
 
     #[arg(long, hide = true, global = true)]
     evidence_bin: Option<PathBuf>,
@@ -556,6 +562,8 @@ pub(crate) fn run_with_format(args: DevArgs, format: OutputFormat) -> Result<Exi
                 DevStartSelection {
                     target: args.target.as_deref(),
                     issuer_project: args.issuer_project.as_deref(),
+                    preserve_target_authenticated_context: args
+                        .preserve_target_authenticated_context,
                     requested_resource: args.resource.as_deref(),
                     name_prefix: start.name_prefix.as_deref(),
                 },
@@ -609,6 +617,8 @@ pub(crate) fn run_with_format(args: DevArgs, format: OutputFormat) -> Result<Exi
                 DevStartSelection {
                     target: args.target.as_deref(),
                     issuer_project: args.issuer_project.as_deref(),
+                    preserve_target_authenticated_context: args
+                        .preserve_target_authenticated_context,
                     requested_resource: args.resource.as_deref(),
                     name_prefix: None,
                 },
@@ -807,6 +817,46 @@ fn client_task_sources(
     Ok(task_sources)
 }
 
+fn verify_authenticated_context_clients(
+    clients: &[access::ActiveClientRegistration],
+    admission: &LocalAdmission,
+) -> Result<()> {
+    if clients.len() != admission.allowed_clients.len() {
+        bail!("preserved authenticated context requires every admitted client to be active");
+    }
+    for client in clients {
+        let binding = client
+            .exchange
+            .as_ref()
+            .filter(|binding| binding.kind == access::ActiveClientExchangeKind::FirstParty)
+            .context("preserved authenticated context requires first-party exchange for every active client")?;
+        let source_issuer = binding
+            .source_issuer
+            .as_ref()
+            .context("preserved authenticated context client has no source issuer")?
+            .as_str();
+        if admission.assertion_issuers.get(&client.client_id)
+            != Some(&vec![source_issuer.to_owned()])
+        {
+            bail!("preserved authenticated context requires one exact owner assertion issuer per active client");
+        }
+    }
+    Ok(())
+}
+
+fn exchange_client_actor(
+    binding: &access::ActiveClientExchange,
+    preserve_target_authenticated_context: bool,
+) -> (&'static str, bool) {
+    match binding.kind {
+        access::ActiveClientExchangeKind::FirstParty if preserve_target_authenticated_context => {
+            ("human", true)
+        }
+        access::ActiveClientExchangeKind::FirstParty => ("service", false),
+        access::ActiveClientExchangeKind::InstitutionalGrant => ("agent", false),
+    }
+}
+
 /// The assertion authorities the issuer owner pairs each admitted client with,
 /// derived the way the owner's own BREG runtime derives its pairing: every
 /// exchange connection names the clients that may present its authority.
@@ -889,9 +939,13 @@ fn verify_borrowed_registrations(
                 )
             })?;
         let exchange = exchange_bindings.get(&client.client_id);
+        let registered_allow_human_fixture = match registered.get("allowHumanFixture") {
+            None => Some(false),
+            Some(value) => value.as_bool(),
+        };
         if registered["scopes"] != json!(client.scopes)
             || registered["claims"] != json!(client.claims)
-            || registered["allowHumanFixture"] == true
+            || registered_allow_human_fixture != Some(client.allow_human_fixture)
             || registered["allowBregAccess"] == true
             || match exchange {
                 Some((binding, _)) => {
@@ -1565,29 +1619,9 @@ fn state_matches_sealed_bundle(
     access_policies: &[AccessPolicyState],
     dev_root: &Path,
 ) -> Result<bool> {
-    let package_root = dev_root.join("bundle");
-    let verified = registry_platform_config::verify_package(
-        &package_root,
-        &crate::authoring::package_limits(),
-        "evidencectl dev start",
-    )?;
-    let path = package_root.join("evidence.yaml");
-    require_owned_regular_file(&path, 0o400)?;
-    let bytes = fs::read(&path).context("failed to read the sealed local bundle")?;
-    if verified.file_digest("evidence.yaml").as_deref()
-        != Some(registry_platform_config::sha256_uri(&bytes).as_str())
-    {
-        bail!("the sealed local package changed after package verification");
-    }
-    if bytes.len() > 1024 * 1024 {
+    let Some(bundle) = read_sealed_bundle(dev_root)? else {
         return Ok(false);
-    }
-    // The bundle is this command's own generated output, read back through
-    // the shared YAML subset; its grammar is the runtime's to check.
-    let bundle = registry_platform_yaml::Reader::new("evidence.yaml")
-        .scan(&bytes)
-        .map(crate::authored::node_value)
-        .map_err(|_| anyhow!("the sealed local bundle is invalid"))?;
+    };
     let requirements = bundle
         .get("requirements")
         .and_then(Value::as_array)
@@ -1667,44 +1701,175 @@ fn state_matches_sealed_bundle(
         .get("authorityProfiles")
         .and_then(Value::as_object)
         .ok_or_else(|| anyhow!("the sealed local bundle has no authority profiles"))?;
+    Ok([false, true].into_iter().any(|preserved_context| {
+        authority_profiles_match_state(
+            authority_profiles,
+            questions,
+            access_policies,
+            preserved_context,
+        )
+    }))
+}
+
+fn read_sealed_bundle(dev_root: &Path) -> Result<Option<Value>> {
+    let package_root = dev_root.join("bundle");
+    let verified = registry_platform_config::verify_package(
+        &package_root,
+        &crate::authoring::package_limits(),
+        "evidencectl dev start",
+    )?;
+    let path = package_root.join("evidence.yaml");
+    require_owned_regular_file(&path, 0o400)?;
+    let bytes = fs::read(&path).context("failed to read the sealed local bundle")?;
+    if verified.file_digest("evidence.yaml").as_deref()
+        != Some(registry_platform_config::sha256_uri(&bytes).as_str())
+    {
+        bail!("the sealed local package changed after package verification");
+    }
+    if bytes.len() > 1024 * 1024 {
+        return Ok(None);
+    }
+    // The bundle is this command's own generated output, read back through
+    // the shared YAML subset; its grammar is the runtime's to check.
+    let bundle = registry_platform_yaml::Reader::new("evidence.yaml")
+        .scan(&bytes)
+        .map(crate::authored::node_value)
+        .map_err(|_| anyhow!("the sealed local bundle is invalid"))?;
+    Ok(Some(bundle))
+}
+
+fn sealed_bundle_uses_authenticated_context(dev_root: &Path) -> Result<bool> {
+    let bundle = read_sealed_bundle(dev_root)?
+        .context("the retained Evidence session has no readable sealed bundle")?;
+    bundle_uses_authenticated_context(&bundle)
+}
+
+fn bundle_uses_authenticated_context(bundle: &Value) -> Result<bool> {
+    let origins = bundle
+        .get("authorityProfiles")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flat_map(|profiles| profiles.values())
+        .flat_map(|profile| {
+            profile
+                .get("grants")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+        })
+        .flat_map(|grant| {
+            grant
+                .get("subjects")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+        })
+        .filter_map(|subject| subject.get("valueOrigin").and_then(Value::as_str))
+        .collect::<BTreeSet<_>>();
+    if origins.len() == 1 && origins.contains("authenticated-context") {
+        Ok(true)
+    } else if !origins.is_empty()
+        && origins
+            .iter()
+            .all(|origin| matches!(*origin, "request" | "authenticated-grant"))
+    {
+        Ok(false)
+    } else {
+        bail!("the retained Evidence session mixes or omits subject binding origins")
+    }
+}
+
+fn authority_profiles_match_state(
+    authority_profiles: &serde_json::Map<String, Value>,
+    questions: &[QuestionState],
+    access_policies: &[AccessPolicyState],
+    preserved_context: bool,
+) -> bool {
     if access_policies.is_empty() {
+        if preserved_context {
+            return false;
+        }
         let Some(profile) = authority_profiles.get(LOCAL_REQUESTER_TAG) else {
-            return Ok(false);
+            return false;
         };
-        return Ok(authority_profiles.len() == 1
+        return authority_profiles.len() == 1
             && authority_profile_matches(
                 profile,
                 LOCAL_REQUESTER_TAG,
                 &questions.iter().collect::<Vec<_>>(),
                 None,
-            ));
+                preserved_context,
+            );
     }
     if authority_profiles.len() != access_policies.len() {
-        return Ok(false);
+        return false;
     }
-    for policy in access_policies {
-        let Some(profile) = authority_profiles.get(
-            &crate::authoring::access_policy_authority_profile_id(&policy.requester_tag),
-        ) else {
-            return Ok(false);
+    if preserved_context
+        && access_policies
+            .iter()
+            .any(|policy| policy.task_grant.is_some())
+    {
+        return false;
+    }
+    if !preserved_context {
+        return access_policies.iter().all(|policy| {
+            let Some(profile) = authority_profiles.get(
+                &crate::authoring::access_policy_authority_profile_id(&policy.requester_tag),
+            ) else {
+                return false;
+            };
+            let governed_questions = policy
+                .questions
+                .iter()
+                .filter_map(|alias| questions.iter().find(|question| question.alias == *alias))
+                .collect::<Vec<_>>();
+            governed_questions.len() == policy.questions.len()
+                && authority_profile_matches(
+                    profile,
+                    &policy.requester_tag,
+                    &governed_questions,
+                    policy.task_grant.as_ref(),
+                    false,
+                )
+        });
+    }
+    let mut profiles_by_tag = BTreeMap::new();
+    for profile in authority_profiles.values() {
+        let Some(tags) = profile.get("requesterTags").and_then(Value::as_array) else {
+            return false;
+        };
+        if tags.len() != 1 {
+            return false;
+        }
+        let Some(tag) = tags[0].as_str() else {
+            return false;
+        };
+        if profiles_by_tag.insert(tag, profile).is_some() {
+            return false;
+        }
+    }
+    let mut matched = BTreeSet::new();
+    access_policies.iter().all(|policy| {
+        if !matched.insert(policy.requester_tag.as_str()) {
+            return false;
+        }
+        let Some(profile) = profiles_by_tag.get(policy.requester_tag.as_str()) else {
+            return false;
         };
         let governed_questions = policy
             .questions
             .iter()
             .filter_map(|alias| questions.iter().find(|question| question.alias == *alias))
             .collect::<Vec<_>>();
-        if governed_questions.len() != policy.questions.len()
-            || !authority_profile_matches(
+        governed_questions.len() == policy.questions.len()
+            && authority_profile_matches(
                 profile,
                 &policy.requester_tag,
                 &governed_questions,
                 policy.task_grant.as_ref(),
+                preserved_context,
             )
-        {
-            return Ok(false);
-        }
-    }
-    Ok(true)
+    })
 }
 
 fn authority_profile_matches(
@@ -1712,6 +1877,7 @@ fn authority_profile_matches(
     requester_tag: &str,
     questions: &[&QuestionState],
     task_grant: Option<&AccessTaskGrant>,
+    preserved_context: bool,
 ) -> bool {
     let expected_kind = task_grant.map_or("explicit-request", |grant| grant.kind.as_str());
     if profile.get("kind").and_then(Value::as_str) != Some(expected_kind)
@@ -1759,7 +1925,7 @@ fn authority_profile_matches(
         }) else {
             return false;
         };
-        grant_matches_question(grant, question, task_grant)
+        grant_matches_question(grant, question, task_grant, preserved_context)
             && seen.insert((
                 question.requirement_uri.as_str(),
                 grant["subjects"].to_string(),
@@ -1771,6 +1937,7 @@ fn grant_matches_question(
     grant: &Value,
     question: &QuestionState,
     task_grant: Option<&AccessTaskGrant>,
+    preserved_context: bool,
 ) -> bool {
     if grant.get("requirement").and_then(Value::as_str) != Some(question.requirement_uri.as_str())
         || grant.get("purpose").and_then(Value::as_str) != Some(question.purpose.as_str())
@@ -1787,12 +1954,14 @@ fn grant_matches_question(
                     .iter()
                     .zip(&question.subjects)
                     .all(|(configured, expected)| {
+                        let Some(selector) = expected.selectors.iter().find(|selector| {
+                            configured.get("selectorProfile").and_then(Value::as_str)
+                                == Some(selector.profile.as_str())
+                        }) else {
+                            return false;
+                        };
                         configured.get("role").and_then(Value::as_str)
                             == Some(expected.role.as_str())
-                            && expected.selectors.iter().any(|selector| {
-                                configured.get("selectorProfile").and_then(Value::as_str)
-                                    == Some(selector.profile.as_str())
-                            })
                             && match task_grant {
                                 Some(task) => task.bindings.iter().any(|binding| {
                                     binding.question == question.alias
@@ -1804,6 +1973,25 @@ fn grant_matches_question(
                                         && configured.get("valueClaims")
                                             == Some(&json!(binding.value_claims))
                                 }),
+                                None if preserved_context => {
+                                    configured.get("valueOrigin").and_then(Value::as_str)
+                                        == Some("authenticated-context")
+                                        && configured
+                                            .get("valueClaims")
+                                            .and_then(Value::as_object)
+                                            .is_some_and(|claims| {
+                                                claims.keys().collect::<BTreeSet<_>>()
+                                                    == selector
+                                                        .fields
+                                                        .iter()
+                                                        .collect::<BTreeSet<_>>()
+                                                    && claims.values().all(|claim| {
+                                                        claim
+                                                            .as_str()
+                                                            .is_some_and(|claim| !claim.is_empty())
+                                                    })
+                                            })
+                                }
                                 None => {
                                     configured.get("valueOrigin").and_then(Value::as_str)
                                         == Some("request")
@@ -1851,6 +2039,7 @@ fn valid_local_identifier(value: &str) -> bool {
 struct DevStartSelection<'a> {
     target: Option<&'a Path>,
     issuer_project: Option<&'a Path>,
+    preserve_target_authenticated_context: bool,
     requested_resource: Option<&'a str>,
     name_prefix: Option<&'a str>,
 }
@@ -1867,6 +2056,7 @@ fn start_detached(
     let DevStartSelection {
         target,
         issuer_project,
+        preserve_target_authenticated_context,
         requested_resource,
         name_prefix,
     } = selection;
@@ -1886,6 +2076,12 @@ fn start_detached(
     } else {
         None
     };
+    if prior.is_some()
+        && sealed_bundle_uses_authenticated_context(&dev_root)?
+            != preserve_target_authenticated_context
+    {
+        bail!("--preserve-target-authenticated-context differs from the retained Evidence session");
+    }
     let resource = select_resource(
         prior
             .as_ref()
@@ -1949,6 +2145,7 @@ fn start_detached(
             ready_timeout_seconds,
             ports,
             target,
+            preserve_target_authenticated_context,
             owner.as_ref(),
             resource,
             &name_prefix,
@@ -2364,6 +2561,7 @@ fn prepare_and_start(
     ready_timeout_seconds: u64,
     ports: LocalServicePorts,
     target: Option<&Path>,
+    preserve_target_authenticated_context: bool,
     owner: Option<&BorrowedIssuer>,
     resource: &str,
     name_prefix: &str,
@@ -2405,17 +2603,34 @@ fn prepare_and_start(
         };
         let compiled = match target {
             Some(target) => {
-                let (connections, outbound_tls) = crate::build::local_dev_target_inputs(target)?;
-                let compiled = compile_local_project_with_target_inputs_and_resource(
-                    project,
-                    dev_root,
-                    &evidence_bin,
-                    ports,
-                    connections,
-                    outbound_tls,
-                    resource,
-                    &admission,
-                )?;
+                let compiled = if preserve_target_authenticated_context {
+                    let target =
+                        crate::build::compile_local_dev_target(project, target, &evidence_bin)?;
+                    compile_local_project_with_target_authenticated_context(
+                        project,
+                        dev_root,
+                        &evidence_bin,
+                        ports,
+                        target.source_connections,
+                        target.outbound_tls,
+                        resource,
+                        &admission,
+                        &target.bundle,
+                    )?
+                } else {
+                    let (connections, outbound_tls) =
+                        crate::build::local_dev_target_inputs(target)?;
+                    compile_local_project_with_target_inputs_and_resource(
+                        project,
+                        dev_root,
+                        &evidence_bin,
+                        ports,
+                        connections,
+                        outbound_tls,
+                        resource,
+                        &admission,
+                    )?
+                };
                 if format == OutputFormat::Human {
                     println!("Local caller rehearsal uses the target's source connections and outbound TLS; Evidence and the local issuer use generated local governance.");
                 }
@@ -2484,49 +2699,48 @@ fn prepare_and_start(
         if registrations.is_empty() {
             bail!("explicit access policies require at least one active client");
         }
+        if preserve_target_authenticated_context {
+            verify_authenticated_context_clients(&registrations, &admission)?;
+        }
         for registration in registrations {
             let task_sources =
                 client_task_sources(&registration, &compiled.access_policies, owner.is_some())?;
-            let (claims, scopes) = if let Some(binding) = &registration.exchange {
-                exchange_bindings.insert(
-                    registration.client_id.clone(),
-                    (binding.clone(), task_sources),
-                );
-                (
-                    BTreeMap::from([(
-                        "registry_actor_kind".to_owned(),
-                        json!(
-                            if binding.kind == access::ActiveClientExchangeKind::FirstParty {
-                                "service"
-                            } else {
-                                "agent"
-                            }
-                        ),
-                    )]),
-                    vec![binding.bootstrap_scope.clone()],
-                )
-            } else {
-                (
-                    BTreeMap::from([
-                        ("registry_actor_kind".to_owned(), json!("service")),
-                        (
-                            "evidence_tags".to_owned(),
-                            json!(registration.requester_tags),
-                        ),
-                        (
-                            "evidence_audience".to_owned(),
-                            json!(registration.evidence_audience),
-                        ),
-                    ]),
-                    vec!["evidence:invoke".to_owned()],
-                )
-            };
+            let (claims, scopes, allow_human_fixture) =
+                if let Some(binding) = &registration.exchange {
+                    exchange_bindings.insert(
+                        registration.client_id.clone(),
+                        (binding.clone(), task_sources),
+                    );
+                    let (actor_kind, allow_human_fixture) =
+                        exchange_client_actor(binding, preserve_target_authenticated_context);
+                    (
+                        BTreeMap::from([("registry_actor_kind".to_owned(), json!(actor_kind))]),
+                        vec![binding.bootstrap_scope.clone()],
+                        allow_human_fixture,
+                    )
+                } else {
+                    (
+                        BTreeMap::from([
+                            ("registry_actor_kind".to_owned(), json!("service")),
+                            (
+                                "evidence_tags".to_owned(),
+                                json!(registration.requester_tags),
+                            ),
+                            (
+                                "evidence_audience".to_owned(),
+                                json!(registration.evidence_audience),
+                            ),
+                        ]),
+                        vec!["evidence:invoke".to_owned()],
+                        false,
+                    )
+                };
             issuer_clients.push(registry_thunderid_tooling::local::TypedLocalClient {
                 client_id: registration.client_id,
                 public_jwks: registration.public_jwks,
                 claims,
                 scopes,
-                allow_human_fixture: false,
+                allow_human_fixture,
             });
         }
         None
@@ -3847,7 +4061,31 @@ mod tests {
             &profile,
             "policy-v2-example",
             &[&question],
-            Some(&task)
+            Some(&task),
+            false,
+        ));
+        let policy = AccessPolicyState {
+            id: "delegated-check".to_owned(),
+            requester_tag: "policy-v2-example".to_owned(),
+            questions: vec![question.alias.clone()],
+            task_grant: Some(task.clone()),
+        };
+        let exact = serde_json::Map::from_iter([(
+            crate::authoring::access_policy_authority_profile_id(&policy.requester_tag),
+            profile.clone(),
+        )]);
+        assert!(authority_profiles_match_state(
+            &exact,
+            std::slice::from_ref(&question),
+            std::slice::from_ref(&policy),
+            false,
+        ));
+        let renamed = serde_json::Map::from_iter([("reviewed-task".to_owned(), profile.clone())]);
+        assert!(!authority_profiles_match_state(
+            &renamed,
+            std::slice::from_ref(&question),
+            std::slice::from_ref(&policy),
+            false,
         ));
         for pointer in [
             "/grantSourceIssuer",
@@ -3860,9 +4098,182 @@ mod tests {
                 &changed,
                 "policy-v2-example",
                 &[&question],
-                Some(&task)
+                Some(&task),
+                false,
             ));
         }
+    }
+
+    #[test]
+    fn preserved_context_clients_require_one_exact_first_party_owner_pairing() {
+        let first_party = access::ActiveClientExchange {
+            kind: access::ActiveClientExchangeKind::FirstParty,
+            bootstrap_scope: "evidence:invoke".to_owned(),
+            bootstrap_resource: Some(LOCAL_ACCESS_TOKEN_AUDIENCE.to_owned()),
+            source_issuer: Some(
+                registry_platform_yaml::Url::new("https://app.invalid").expect("a URL"),
+            ),
+        };
+        let client = access::ActiveClientRegistration {
+            client_id: "citizen-download".to_owned(),
+            public_jwks: "{\"keys\":[]}".to_owned(),
+            requester_tags: vec!["policy-v1-example".to_owned()],
+            evidence_audience: LOCAL_ACCESS_TOKEN_AUDIENCE.to_owned(),
+            exchange: Some(first_party.clone()),
+        };
+        let admission = LocalAdmission {
+            allowed_clients: vec![client.client_id.clone()],
+            assertion_issuers: BTreeMap::from([(
+                client.client_id.clone(),
+                vec!["https://app.invalid".to_owned()],
+            )]),
+        };
+        verify_authenticated_context_clients(std::slice::from_ref(&client), &admission)
+            .expect("the exact first-party pairing is accepted");
+
+        let mut changed = client.clone();
+        changed.exchange = None;
+        assert!(verify_authenticated_context_clients(&[changed], &admission).is_err());
+
+        let mut changed = client.clone();
+        changed.exchange.as_mut().unwrap().kind =
+            access::ActiveClientExchangeKind::InstitutionalGrant;
+        changed.exchange.as_mut().unwrap().source_issuer = None;
+        assert!(verify_authenticated_context_clients(&[changed], &admission).is_err());
+
+        let mut extra_pairing = admission.clone();
+        extra_pairing
+            .assertion_issuers
+            .get_mut("citizen-download")
+            .unwrap()
+            .push("https://other.invalid".to_owned());
+        assert!(verify_authenticated_context_clients(
+            std::slice::from_ref(&client),
+            &extra_pairing
+        )
+        .is_err());
+
+        let mut wrong_pairing = admission;
+        wrong_pairing.assertion_issuers.insert(
+            "citizen-download".to_owned(),
+            vec!["https://other.invalid".to_owned()],
+        );
+        assert!(verify_authenticated_context_clients(
+            std::slice::from_ref(&client),
+            &wrong_pairing
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn preserved_context_marks_only_first_party_exchange_clients_human() {
+        let first_party = access::ActiveClientExchange {
+            kind: access::ActiveClientExchangeKind::FirstParty,
+            bootstrap_scope: "evidence:invoke".to_owned(),
+            bootstrap_resource: Some(LOCAL_ACCESS_TOKEN_AUDIENCE.to_owned()),
+            source_issuer: Some(
+                registry_platform_yaml::Url::new("https://app.invalid").expect("a URL"),
+            ),
+        };
+        assert_eq!(exchange_client_actor(&first_party, true), ("human", true));
+        assert_eq!(
+            exchange_client_actor(&first_party, false),
+            ("service", false)
+        );
+
+        let institutional = access::ActiveClientExchange {
+            kind: access::ActiveClientExchangeKind::InstitutionalGrant,
+            bootstrap_scope: "casework:grants:assert".to_owned(),
+            bootstrap_resource: None,
+            source_issuer: None,
+        };
+        assert_eq!(
+            exchange_client_actor(&institutional, true),
+            ("agent", false)
+        );
+    }
+
+    #[test]
+    fn retained_binding_mode_is_derived_from_the_sealed_authority() {
+        let bundle = |origins: &[&str]| {
+            json!({"authorityProfiles":{"profile":{"grants":[{"subjects":
+                origins.iter().map(|origin| json!({"valueOrigin":origin})).collect::<Vec<_>>()
+            }]}}})
+        };
+        assert!(!bundle_uses_authenticated_context(&bundle(&["request"])).unwrap());
+        assert!(
+            !bundle_uses_authenticated_context(&bundle(&["request", "authenticated-grant"]))
+                .unwrap()
+        );
+        assert!(bundle_uses_authenticated_context(&bundle(&["authenticated-context"])).unwrap());
+        assert!(
+            bundle_uses_authenticated_context(&bundle(&["request", "authenticated-context"]))
+                .is_err()
+        );
+        assert!(bundle_uses_authenticated_context(&bundle(&[])).is_err());
+    }
+
+    #[test]
+    fn retained_access_policy_profiles_match_by_one_exact_requester_tag() {
+        let question = QuestionState::from(&compiled(Path::new("/tmp/unused")).questions[0]);
+        let policy = AccessPolicyState {
+            id: "age-checks".to_owned(),
+            requester_tag: "policy-v1-example".to_owned(),
+            questions: vec![question.alias.clone()],
+            task_grant: None,
+        };
+        let profile = json!({
+            "kind": "explicit-request",
+            "requesterTags": [policy.requester_tag],
+            "grants": [{
+                "requirement": question.requirement_uri,
+                "purpose": question.purpose,
+                "audienceFrom": "authenticated-requester",
+                "responseFormats": ["signed-jws"],
+                "subjects": [{
+                    "role": "person",
+                    "selectorProfile": "local-subject-adult-status-v1",
+                    "valueOrigin": "authenticated-context",
+                    "valueClaims": {"person_id": "identity.person_reference"},
+                }],
+            }],
+        });
+        let renamed =
+            serde_json::Map::from_iter([("citizen-record-holder".to_owned(), profile.clone())]);
+        assert!(authority_profiles_match_state(
+            &renamed,
+            std::slice::from_ref(&question),
+            std::slice::from_ref(&policy),
+            true,
+        ));
+        assert!(!authority_profiles_match_state(
+            &renamed,
+            std::slice::from_ref(&question),
+            std::slice::from_ref(&policy),
+            false,
+        ));
+
+        let duplicate = serde_json::Map::from_iter([
+            ("citizen-record-holder".to_owned(), profile.clone()),
+            ("duplicate-name".to_owned(), profile.clone()),
+        ]);
+        assert!(!authority_profiles_match_state(
+            &duplicate,
+            std::slice::from_ref(&question),
+            std::slice::from_ref(&policy),
+            true,
+        ));
+
+        let mut wrong_tag = profile;
+        wrong_tag["requesterTags"] = json!(["policy-v1-other"]);
+        let wrong_tag =
+            serde_json::Map::from_iter([("citizen-record-holder".to_owned(), wrong_tag)]);
+        assert!(!authority_profiles_match_state(
+            &wrong_tag,
+            &[question],
+            &[policy],
+            true,
+        ));
     }
 
     fn compiled(runtime: &Path) -> CompiledProject {
@@ -4630,6 +5041,50 @@ requirements:
             &exchanges,
         )
         .expect("registered first-party context client borrows the owner");
+        inventory["clients"][0]["allowHumanFixture"] = json!(true);
+        fs::write(&clients_path, serde_json::to_vec(&inventory).unwrap()).unwrap();
+        assert!(verify_borrowed_registrations(
+            &owner,
+            LOCAL_ACCESS_TOKEN_AUDIENCE,
+            std::slice::from_ref(&portal_client),
+            &admitted,
+            &portal_paired,
+            &exchanges,
+        )
+        .is_err());
+
+        let mut human_portal_client = portal_client.clone();
+        human_portal_client.claims =
+            BTreeMap::from([("registry_actor_kind".into(), json!("human"))]);
+        human_portal_client.allow_human_fixture = true;
+        inventory["clients"][0]["claims"] = json!(human_portal_client.claims);
+        fs::write(&clients_path, serde_json::to_vec(&inventory).unwrap()).unwrap();
+        verify_borrowed_registrations(
+            &owner,
+            LOCAL_ACCESS_TOKEN_AUDIENCE,
+            std::slice::from_ref(&human_portal_client),
+            &admitted,
+            &portal_paired,
+            &exchanges,
+        )
+        .expect("the exact preserved human fixture borrows the owner");
+        inventory["clients"][0]["allowHumanFixture"] = json!(false);
+        fs::write(&clients_path, serde_json::to_vec(&inventory).unwrap()).unwrap();
+        assert!(verify_borrowed_registrations(
+            &owner,
+            LOCAL_ACCESS_TOKEN_AUDIENCE,
+            &[human_portal_client],
+            &admitted,
+            &portal_paired,
+            &exchanges,
+        )
+        .is_err());
+
+        inventory["clients"][0]["claims"] = json!(portal_client.claims);
+        inventory["clients"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("allowHumanFixture");
         // The owner's other mapping, and the underscore spelling the owner
         // no longer writes, each leave the first-party binding unregistered.
         for mapping in ["institutional-grant", "first_party"] {

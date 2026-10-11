@@ -110,12 +110,24 @@ private key. Map each client to `urn:registrystack:evidence:local:gateway` with
 `evidencectl dev start ./evidence --issuer-project ./issuer-owner`. Evidence
 verifies the owner session, client keys, claims, scopes, and audience before
 starting, uses that issuer's loopback endpoint, and never stops its container.
+By default, `--target` reuses only the target's source connections and outbound
+TLS while local authority still binds selector values to the request. A human
+first-party rehearsal may add `--preserve-target-authenticated-context`; that
+explicit opt-in requires both `--target` and `--issuer-project`, compiles and
+validates the local target, and preserves its reviewed `authenticated-context`
+bindings only when its profiles differ from the generated local authority by
+those bindings and their exact selector-field `valueClaims`. The target's
+allowed clients and assertion issuers must exactly match the borrowed owner's
+active first-party registrations. Each preserved first-party client must be a
+local human fixture: its owner registration carries `registry_actor_kind:
+human` and `allowHumanFixture: true`. A retained session must be restarted
+with the same opt-in or cleaned before changing modes.
 An unavailable or replaced owner is refused on restart. The Evidence runtime
 still enforces its own issuer, audience, scope, and authority policy.
 An Evidence client the owner also registered as a token-exchange client is
-refused: an exchange client may present any assertion authority the shared
-issuer trusts, and a local Evidence bundle carries no per-client pairing to
-refuse the others with.
+refused unless the authenticated-context opt-in above carries the target's
+exact first-party pairing. Institutional grant exchange remains governed by a
+task policy and is not a human authenticated-context substitute.
 The bundle a borrowed session compiles names the Evidence clients it admits, so
 the shared issuer's other clients are refused where Evidence enforces its own
 boundary rather than left to the issuer that holds them. It admits at most 32
