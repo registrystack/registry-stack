@@ -493,6 +493,17 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         "cargo test --locked -p registry-messaging --features postgres-test --test postgres_migrate",
     ),
     (
+        "Coordinator path filter",
+        "coordinator: ${{ steps.filter.outputs.coordinator }}",
+    ),
+    (
+        # The Coordinator has no job of its own: its steps run in the
+        # Messaging PostgreSQL job, which a Coordinator change selects too.
+        "Coordinator PostgreSQL job selection",
+        "(needs.changes.outputs.messaging_postgres == 'true' || "
+        "needs.changes.outputs.coordinator == 'true')",
+    ),
+    (
         "Coordinator product checkpoint wrapper",
         "run: products/coordinator/scripts/check-checkpoint.sh",
     ),
@@ -509,6 +520,10 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         # is the checkpoint's own command line and not a workflow step.
         "Coordinator generated schema drift check",
         "\nproducts/coordinator/scripts/check-schemas.sh\n",
+    ),
+    (
+        "Coordinator PostgreSQL suite",
+        "run: products/coordinator/scripts/test-postgres.sh",
     ),
     (
         "Release Linux Node client path filter",

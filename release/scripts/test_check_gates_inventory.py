@@ -1138,13 +1138,26 @@ class GateInventoryTest(unittest.TestCase):
     def test_missing_coordinator_workflow_gates_are_reported(self) -> None:
         for snippet, gate in (
             (
+                "coordinator: ${{ steps.filter.outputs.coordinator }}",
+                "Coordinator path filter",
+            ),
+            (
+                "(needs.changes.outputs.messaging_postgres == 'true' || "
+                "needs.changes.outputs.coordinator == 'true')",
+                "Coordinator PostgreSQL job selection",
+            ),
+            (
                 "run: products/coordinator/scripts/check-checkpoint.sh",
                 "Coordinator product checkpoint wrapper",
+            ),
+            (
+                "run: products/coordinator/scripts/test-postgres.sh",
+                "Coordinator PostgreSQL suite",
             ),
         ):
             with self.subTest(gate=gate):
                 self.assertEqual(self.workflow.count(snippet), 1)
-                text = self.workflow.replace(snippet, "run: true # disabled", 1)
+                text = self.workflow.replace(snippet, "true # disabled", 1)
                 self.assertIn(gate, self.module.missing_gates(text))
 
     def test_missing_coordinator_checkpoint_wrapper_steps_are_reported(self) -> None:
@@ -1175,22 +1188,24 @@ class GateInventoryTest(unittest.TestCase):
                     ),
                 )
 
-    def test_coordinator_checkpoint_runs_whenever_the_coordinator_is_affected(
+    def test_coordinator_gates_run_whenever_the_coordinator_is_affected(
         self,
     ) -> None:
         steps = yaml.safe_load(self.workflow)["jobs"]["messaging-postgres"]["steps"]
         commands = [step.get("run") for step in steps]
         checkpoint = "products/coordinator/scripts/check-checkpoint.sh"
-        self.assertIn(checkpoint, commands)
-        step = steps[commands.index(checkpoint)]
-        self.assertEqual(step.get("if"), "needs.changes.outputs.coordinator == 'true'")
-        self.assertNotIn("continue-on-error", step)
+        suite = "products/coordinator/scripts/test-postgres.sh"
+        for command in (checkpoint, suite):
+            with self.subTest(command=command):
+                self.assertIn(command, commands)
+                step = steps[commands.index(command)]
+                self.assertEqual(
+                    step.get("if"), "needs.changes.outputs.coordinator == 'true'"
+                )
+                self.assertNotIn("continue-on-error", step)
         # The database-free checkpoint answers before the PostgreSQL suite
         # spends its build.
-        self.assertLess(
-            commands.index(checkpoint),
-            commands.index("products/coordinator/scripts/test-postgres.sh"),
-        )
+        self.assertLess(commands.index(checkpoint), commands.index(suite))
 
     def test_linux_node_release_proof_is_two_runner_read_only_and_aggregated(
         self,
