@@ -1,0 +1,97 @@
+{
+  "$defs": {
+    "RegistryRecord": {
+      "additionalProperties": true,
+      "description": "One Registry Record v1 member.",
+      "properties": {
+        "domainData": {
+          "additionalProperties": true,
+          "description": "Project-defined record data. The registry project's entity schema owns these members, so check accepts any path beneath domainData and test and the runtime decide.",
+          "type": "object"
+        },
+        "recordIdentifier": {
+          "type": "string"
+        },
+        "revisionIdentifier": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "recordIdentifier",
+        "revisionIdentifier",
+        "domainData"
+      ],
+      "type": "object"
+    },
+    "RegistryRecordJsonLdContext": {
+      "oneOf": [
+        {
+          "const": "https://id.registrystack.org/contexts/registry-record/v1"
+        },
+        {
+          "items": {
+            "minLength": 1,
+            "pattern": "^[hH][tT][tT][pP][sS]://[^/?#\\s]+(?:[/?#][^\\s]*)?$",
+            "type": "string"
+          },
+          "minItems": 2,
+          "prefixItems": [
+            {
+              "const": "https://id.registrystack.org/contexts/registry-record/v1"
+            }
+          ],
+          "type": "array",
+          "uniqueItems": true
+        }
+      ]
+    },
+    "RegistryRecordMeta": {
+      "additionalProperties": true,
+      "description": "The homogeneous Registry, primary dataset, and entity context shared by a\nsingle response or every member of a collection.",
+      "properties": {
+        "datasetIdentifier": {
+          "type": "string"
+        },
+        "entityTypeIdentifier": {
+          "type": "string"
+        },
+        "registryIdentifier": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "registryIdentifier",
+        "datasetIdentifier",
+        "entityTypeIdentifier"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": true,
+  "description": "One Registry Record v1 single-response envelope.",
+  "properties": {
+    "@context": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/RegistryRecordJsonLdContext"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "data": {
+      "$ref": "#/$defs/RegistryRecord"
+    },
+    "meta": {
+      "$ref": "#/$defs/RegistryRecordMeta"
+    }
+  },
+  "required": [
+    "data",
+    "meta"
+  ],
+  "title": "read-record output",
+  "type": "object"
+}

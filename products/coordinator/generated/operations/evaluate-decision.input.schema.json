@@ -1,0 +1,99 @@
+{
+  "$defs": {
+    "Question": {
+      "description": "Authored questions are distinct from each provider's external DTO spelling.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "instructions": {
+              "type": "string"
+            },
+            "type": {
+              "const": "predicate",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "instructions"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "criteria": {
+              "additionalProperties": false,
+              "patternProperties": {
+                "^[a-z][a-z0-9_-]{0,63}$": {
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
+            "instructions": {
+              "type": "string"
+            },
+            "type": {
+              "const": "choice",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "instructions",
+            "criteria"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "criteria": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "instructions": {
+              "type": "string"
+            },
+            "type": {
+              "const": "score",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "instructions",
+            "criteria"
+          ],
+          "type": "object"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "questions": {
+      "additionalProperties": false,
+      "patternProperties": {
+        "^[a-z][a-z0-9_-]{0,63}$": {
+          "$ref": "#/$defs/Question"
+        }
+      },
+      "type": "object"
+    },
+    "state": {
+      "description": "The evaluated state: any JSON object, string or array."
+    }
+  },
+  "required": [
+    "state",
+    "questions"
+  ],
+  "title": "evaluate-decision input",
+  "type": "object"
+}

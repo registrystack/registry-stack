@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "What `GET /v1/scheduling` answers: which deployment and which policy.",
+  "properties": {
+    "policyDigest": {
+      "type": "string"
+    },
+    "policyRevision": {
+      "maximum": 9007199254740991,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "schedulingId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "schedulingId",
+    "policyRevision",
+    "policyDigest"
+  ],
+  "title": "read-scheduling output",
+  "type": "object"
+}

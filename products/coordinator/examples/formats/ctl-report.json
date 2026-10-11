@@ -1,0 +1,7 @@
+{
+  "apiVersion": "id.registrystack.org/formats/coordinator/ctl-report/v1alpha1",
+  "kind": "CoordinatorCtlReport",
+  "ok": true,
+  "command": "check",
+  "valid": true
+}

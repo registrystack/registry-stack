@@ -6810,6 +6810,1648 @@
       ]
     },
     {
+      "name": "coordinator",
+      "invocation": "coordinator",
+      "about": "Authenticated Registry Coordinator workflow service",
+      "long_about": null,
+      "usage": "coordinator [OPTIONS] --runtime-config <ABSOLUTE_FILE>",
+      "arguments": [],
+      "options": [
+        {
+          "display": "--runtime-config <ABSOLUTE_FILE>",
+          "description": "Runtime configuration file",
+          "always_required": true,
+          "repeatable": false,
+          "default_values": [],
+          "possible_values": [],
+          "environment": null
+        },
+        {
+          "display": "--poll-ms <POLL_MS>",
+          "description": "Milliseconds between worker polls",
+          "always_required": false,
+          "repeatable": false,
+          "default_values": [
+            "100"
+          ],
+          "possible_values": [],
+          "environment": null
+        },
+        {
+          "display": "--recovery-only",
+          "description": "Serve authenticated recovery operations with worker dispatch disabled",
+          "always_required": false,
+          "repeatable": false,
+          "default_values": [],
+          "possible_values": [],
+          "environment": null
+        },
+        {
+          "display": "-h, --help",
+          "description": "Print help",
+          "always_required": false,
+          "repeatable": false,
+          "default_values": [],
+          "possible_values": [],
+          "environment": null
+        },
+        {
+          "display": "-V, --version",
+          "description": "Print version",
+          "always_required": false,
+          "repeatable": false,
+          "default_values": [],
+          "possible_values": [],
+          "environment": null
+        }
+      ],
+      "constraints": [],
+      "subcommands": []
+    },
+    {
+      "name": "coordinatorctl",
+      "invocation": "coordinatorctl",
+      "about": "Author, package, activate and operate Registry Coordinator",
+      "long_about": null,
+      "usage": "coordinatorctl [OPTIONS] <COMMAND>",
+      "arguments": [],
+      "options": [
+        {
+          "display": "--format <FORMAT>",
+          "description": "Output format for local reports and authenticated API responses: readable text, or one JSON report",
+          "always_required": false,
+          "repeatable": false,
+          "default_values": [
+            "human"
+          ],
+          "possible_values": [
+            "human",
+            "json"
+          ],
+          "environment": null
+        },
+        {
+          "display": "--runtime-config <FILE>",
+          "description": "Runtime configuration file",
+          "always_required": false,
+          "repeatable": false,
+          "default_values": [],
+          "possible_values": [],
+          "environment": null
+        },
+        {
+          "display": "-h, --help",
+          "description": "Print help",
+          "always_required": false,
+          "repeatable": false,
+          "default_values": [],
+          "possible_values": [],
+          "environment": null
+        },
+        {
+          "display": "-V, --version",
+          "description": "Print version",
+          "always_required": false,
+          "repeatable": false,
+          "default_values": [],
+          "possible_values": [],
+          "environment": null
+        }
+      ],
+      "constraints": [],
+      "subcommands": [
+        {
+          "name": "init",
+          "invocation": "coordinatorctl init",
+          "about": "Create a reviewed four-file starter and its .gitignore in a new or empty directory",
+          "long_about": null,
+          "usage": "coordinatorctl init [OPTIONS] --directory <DIRECTORY>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--directory <DIRECTORY>",
+              "description": "New or empty project directory; a directory with content is refused",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--id <ID>",
+              "description": "Project id written into workflow.yaml; defaults to the directory name",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--format <FORMAT>",
+              "description": "Output format for local reports and authenticated API responses: readable text, or one JSON report",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "--runtime-config <FILE>",
+              "description": "Runtime configuration file",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
+        {
+          "name": "check",
+          "invocation": "coordinatorctl check",
+          "about": "Validate the workflow, functions and root YAML companions offline",
+          "long_about": null,
+          "usage": "coordinatorctl check [OPTIONS]",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--project <PROJECT>",
+              "description": "Directory containing workflow.yaml and functions.rhai",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--explain",
+              "description": "Include reviewed call semantics, recovery and execution bounds",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--deny-warnings",
+              "description": "Refuse warnings, including checks deferred until environment values are supplied",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--environment",
+              "description": "Substitute runtime environment expressions; secret values are never resolved",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--format <FORMAT>",
+              "description": "Output format for local reports and authenticated API responses: readable text, or one JSON report",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "--runtime-config <FILE>",
+              "description": "Runtime configuration file",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [
+            {
+              "kind": "requires-all",
+              "when": "--explain",
+              "arguments": [
+                "--project <PROJECT>"
+              ]
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "name": "explain",
+          "invocation": "coordinatorctl explain",
+          "about": "Explain a checked graph, mappings and execution bounds offline",
+          "long_about": null,
+          "usage": "coordinatorctl explain [OPTIONS] --project <PROJECT>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--project <PROJECT>",
+              "description": "Directory containing workflow.yaml and functions.rhai",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--format <FORMAT>",
+              "description": "Output format for local reports and authenticated API responses: readable text, or one JSON report",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "--runtime-config <FILE>",
+              "description": "Runtime configuration file",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
+        {
+          "name": "test",
+          "invocation": "coordinatorctl test",
+          "about": "Run deterministic scenarios with a virtual clock and fake products offline",
+          "long_about": null,
+          "usage": "coordinatorctl test [OPTIONS] --project <PROJECT>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--project <PROJECT>",
+              "description": "Directory containing workflow.yaml and functions.rhai",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--scenarios <SCENARIOS>",
+              "description": "Scenario YAML file; defaults to scenarios.yaml in the project",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--format <FORMAT>",
+              "description": "Output format for local reports and authenticated API responses: readable text, or one JSON report",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "--runtime-config <FILE>",
+              "description": "Runtime configuration file",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
+        {
+          "name": "package",
+          "invocation": "coordinatorctl package",
+          "about": "Build a new immutable package; existing output is never overwritten",
+          "long_about": null,
+          "usage": "coordinatorctl package [OPTIONS] --project <PROJECT> --output <OUTPUT>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--project <PROJECT>",
+              "description": "Directory containing workflow.yaml and functions.rhai",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--output <OUTPUT>",
+              "description": "New package directory; existing content is refused",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--format <FORMAT>",
+              "description": "Output format for local reports and authenticated API responses: readable text, or one JSON report",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "--runtime-config <FILE>",
+              "description": "Runtime configuration file",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
+        {
+          "name": "plan",
+          "invocation": "coordinatorctl plan",
+          "about": "Inspect activation, schema and each flow's package change using runtime credentials, without migrating",
+          "long_about": null,
+          "usage": "coordinatorctl plan [OPTIONS]",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--remove-flow <FLOW>",
+              "description": "Active flow to retire because its package is no longer listed; repeat for each flow",
+              "always_required": false,
+              "repeatable": true,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--format <FORMAT>",
+              "description": "Output format for local reports and authenticated API responses: readable text, or one JSON report",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "--runtime-config <FILE>",
+              "description": "Runtime configuration file",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
+        {
+          "name": "apply",
+          "invocation": "coordinatorctl apply",
+          "about": "Apply every listed flow's package and least-privileged runtime grants using migration credentials",
+          "long_about": null,
+          "usage": "coordinatorctl apply [OPTIONS]",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--remove-flow <FLOW>",
+              "description": "Active flow to retire because its package is no longer listed; refused while it has runs that are not terminal",
+              "always_required": false,
+              "repeatable": true,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--format <FORMAT>",
+              "description": "Output format for local reports and authenticated API responses: readable text, or one JSON report",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "--runtime-config <FILE>",
+              "description": "Runtime configuration file",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
+        {
+          "name": "deployment-status",
+          "invocation": "coordinatorctl deployment-status",
+          "about": "Inspect deployed flow packages and schema using runtime credentials",
+          "long_about": null,
+          "usage": "coordinatorctl deployment-status [OPTIONS]",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--format <FORMAT>",
+              "description": "Output format for local reports and authenticated API responses: readable text, or one JSON report",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "--runtime-config <FILE>",
+              "description": "Runtime configuration file",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
+        {
+          "name": "openapi",
+          "invocation": "coordinatorctl openapi",
+          "about": "Generate the authenticated service OpenAPI document offline",
+          "long_about": null,
+          "usage": "coordinatorctl openapi [OPTIONS]",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--format <FORMAT>",
+              "description": "Output format for local reports and authenticated API responses: readable text, or one JSON report",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "--runtime-config <FILE>",
+              "description": "Runtime configuration file",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
+        {
+          "name": "start",
+          "invocation": "coordinatorctl start",
+          "about": "Start one allowed flow with caller ownership and an idempotency key",
+          "long_about": null,
+          "usage": "coordinatorctl start [OPTIONS] --flow <FLOW> --input <INPUT> --key-file <KEY_FILE>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--flow <FLOW>",
+              "description": "Allowed flow identifier from the activated workflow package",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--input <INPUT>",
+              "description": "JSON input file validated against the workflow input schema",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--key-file <KEY_FILE>",
+              "description": "UTF-8 file containing the idempotency key for this logical operation",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--url <URL>",
+              "description": "Authenticated Coordinator service origin, HTTPS or explicit loopback HTTP",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--token-file <FILE>",
+              "description": "File containing a current access token; a relative path is read from the current directory. Token values are never printed",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--format <FORMAT>",
+              "description": "Output format for local reports and authenticated API responses: readable text, or one JSON report",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "--runtime-config <FILE>",
+              "description": "Runtime configuration file",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
+        {
+          "name": "status",
+          "invocation": "coordinatorctl status",
+          "about": "Read caller-owned or explicitly operator-authorized run progress",
+          "long_about": null,
+          "usage": "coordinatorctl status [OPTIONS] --run <RUN>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--run <RUN>",
+              "description": "Durable run UUID returned by admission",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--url <URL>",
+              "description": "Authenticated Coordinator service origin, HTTPS or explicit loopback HTTP",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--token-file <FILE>",
+              "description": "File containing a current access token; a relative path is read from the current directory. Token values are never printed",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--format <FORMAT>",
+              "description": "Output format for local reports and authenticated API responses: readable text, or one JSON report",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "--runtime-config <FILE>",
+              "description": "Runtime configuration file",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
+        {
+          "name": "list",
+          "invocation": "coordinatorctl list",
+          "about": "List the most recently admitted runs the current caller policy permits, newest first; at most 100, with no paging cursor and no state filter",
+          "long_about": null,
+          "usage": "coordinatorctl list [OPTIONS]",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--limit <LIMIT>",
+              "description": "Number of most recent runs to return, from 1 through 100",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "20"
+              ],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--url <URL>",
+              "description": "Authenticated Coordinator service origin, HTTPS or explicit loopback HTTP",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--token-file <FILE>",
+              "description": "File containing a current access token; a relative path is read from the current directory. Token values are never printed",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--format <FORMAT>",
+              "description": "Output format for local reports and authenticated API responses: readable text, or one JSON report",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "--runtime-config <FILE>",
+              "description": "Runtime configuration file",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
+        {
+          "name": "inspect",
+          "invocation": "coordinatorctl inspect",
+          "about": "Inspect bounded durable step metadata without input or command payloads",
+          "long_about": null,
+          "usage": "coordinatorctl inspect [OPTIONS] --run <RUN>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--run <RUN>",
+              "description": "Durable run UUID returned by admission",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--url <URL>",
+              "description": "Authenticated Coordinator service origin, HTTPS or explicit loopback HTTP",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--token-file <FILE>",
+              "description": "File containing a current access token; a relative path is read from the current directory. Token values are never printed",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--format <FORMAT>",
+              "description": "Output format for local reports and authenticated API responses: readable text, or one JSON report",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "--runtime-config <FILE>",
+              "description": "Runtime configuration file",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
+        {
+          "name": "retry-same",
+          "invocation": "coordinatorctl retry-same",
+          "about": "Retry only the original stored command identity under its recovery contract",
+          "long_about": null,
+          "usage": "coordinatorctl retry-same [OPTIONS] --run <RUN> --reason <REASON>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--run <RUN>",
+              "description": "Durable run UUID returned by admission",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--reason <REASON>",
+              "description": "Bounded investigation identifier without personal data",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--url <URL>",
+              "description": "Authenticated Coordinator service origin, HTTPS or explicit loopback HTTP",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--token-file <FILE>",
+              "description": "File containing a current access token; a relative path is read from the current directory. Token values are never printed",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--format <FORMAT>",
+              "description": "Output format for local reports and authenticated API responses: readable text, or one JSON report",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "--runtime-config <FILE>",
+              "description": "Runtime configuration file",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
+        {
+          "name": "cancel",
+          "invocation": "coordinatorctl cancel",
+          "about": "Prevent future dispatch where possible and preserve unresolved effects",
+          "long_about": null,
+          "usage": "coordinatorctl cancel [OPTIONS] --run <RUN> --reason <REASON>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--run <RUN>",
+              "description": "Durable run UUID returned by admission",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--reason <REASON>",
+              "description": "Bounded investigation identifier without personal data",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--url <URL>",
+              "description": "Authenticated Coordinator service origin, HTTPS or explicit loopback HTTP",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--token-file <FILE>",
+              "description": "File containing a current access token; a relative path is read from the current directory. Token values are never printed",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--format <FORMAT>",
+              "description": "Output format for local reports and authenticated API responses: readable text, or one JSON report",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "--runtime-config <FILE>",
+              "description": "Runtime configuration file",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
+        {
+          "name": "reconcile",
+          "invocation": "coordinatorctl reconcile",
+          "about": "Observe the receiving product using the original command key and owner",
+          "long_about": null,
+          "usage": "coordinatorctl reconcile [OPTIONS] --run <RUN> --reason <REASON>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--run <RUN>",
+              "description": "Durable run UUID returned by admission",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--reason <REASON>",
+              "description": "Bounded investigation identifier without personal data",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--url <URL>",
+              "description": "Authenticated Coordinator service origin, HTTPS or explicit loopback HTTP",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--token-file <FILE>",
+              "description": "File containing a current access token; a relative path is read from the current directory. Token values are never printed",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--format <FORMAT>",
+              "description": "Output format for local reports and authenticated API responses: readable text, or one JSON report",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "--runtime-config <FILE>",
+              "description": "Runtime configuration file",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
+        {
+          "name": "doctor",
+          "invocation": "coordinatorctl doctor",
+          "about": "Bounded operator diagnostics through authenticated HTTP",
+          "long_about": null,
+          "usage": "coordinatorctl doctor [OPTIONS]",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--url <URL>",
+              "description": "Authenticated Coordinator service origin, HTTPS or explicit loopback HTTP",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--token-file <FILE>",
+              "description": "File containing a current access token; a relative path is read from the current directory. Token values are never printed",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--format <FORMAT>",
+              "description": "Output format for local reports and authenticated API responses: readable text, or one JSON report",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "--runtime-config <FILE>",
+              "description": "Runtime configuration file",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
+        {
+          "name": "restore-hold",
+          "invocation": "coordinatorctl restore-hold",
+          "about": "Stop dispatch before a restore or recovery investigation",
+          "long_about": null,
+          "usage": "coordinatorctl restore-hold [OPTIONS] --reason <REASON>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--reason <REASON>",
+              "description": "Bounded investigation identifier without personal data",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--url <URL>",
+              "description": "Authenticated Coordinator service origin, HTTPS or explicit loopback HTTP",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--token-file <FILE>",
+              "description": "File containing a current access token; a relative path is read from the current directory. Token values are never printed",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--format <FORMAT>",
+              "description": "Output format for local reports and authenticated API responses: readable text, or one JSON report",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "--runtime-config <FILE>",
+              "description": "Runtime configuration file",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
+        {
+          "name": "release-restore-hold",
+          "invocation": "coordinatorctl release-restore-hold",
+          "about": "Release hold only after external fencing and authoritative reconciliation",
+          "long_about": null,
+          "usage": "coordinatorctl release-restore-hold [OPTIONS] --reason <REASON>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--reason <REASON>",
+              "description": "Bounded investigation identifier without personal data",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--url <URL>",
+              "description": "Authenticated Coordinator service origin, HTTPS or explicit loopback HTTP",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--token-file <FILE>",
+              "description": "File containing a current access token; a relative path is read from the current directory. Token values are never printed",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--format <FORMAT>",
+              "description": "Output format for local reports and authenticated API responses: readable text, or one JSON report",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "--runtime-config <FILE>",
+              "description": "Runtime configuration file",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
+        {
+          "name": "release-admission-hold",
+          "invocation": "coordinatorctl release-admission-hold",
+          "about": "Release restored ingress only with complete retained admission evidence and fencing",
+          "long_about": null,
+          "usage": "coordinatorctl release-admission-hold [OPTIONS] --recovery-reference <RECOVERY_REFERENCE>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--recovery-reference <RECOVERY_REFERENCE>",
+              "description": "Bounded reference to retained recovery evidence without personal data",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--admission-history-complete",
+              "description": "Attest complete authoritative spent-admission history",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--prior-deployment-fenced",
+              "description": "Attest that every prior service and worker has been externally fenced",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--url <URL>",
+              "description": "Authenticated Coordinator service origin, HTTPS or explicit loopback HTTP",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--token-file <FILE>",
+              "description": "File containing a current access token; a relative path is read from the current directory. Token values are never printed",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--format <FORMAT>",
+              "description": "Output format for local reports and authenticated API responses: readable text, or one JSON report",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "--runtime-config <FILE>",
+              "description": "Runtime configuration file",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
+        {
+          "name": "complete-execution-recovery",
+          "invocation": "coordinatorctl complete-execution-recovery",
+          "about": "Attest complete execution history and external fencing while recovery hold remains",
+          "long_about": null,
+          "usage": "coordinatorctl complete-execution-recovery [OPTIONS] --recovery-reference <RECOVERY_REFERENCE>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--recovery-reference <RECOVERY_REFERENCE>",
+              "description": "Bounded reference to retained recovery evidence without personal data",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--execution-history-complete",
+              "description": "Attest complete authoritative execution history for restored work",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--prior-deployment-fenced",
+              "description": "Attest that every prior service and worker has been externally fenced",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--url <URL>",
+              "description": "Authenticated Coordinator service origin, HTTPS or explicit loopback HTTP",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--token-file <FILE>",
+              "description": "File containing a current access token; a relative path is read from the current directory. Token values are never printed",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--format <FORMAT>",
+              "description": "Output format for local reports and authenticated API responses: readable text, or one JSON report",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "--runtime-config <FILE>",
+              "description": "Runtime configuration file",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
+        {
+          "name": "retain",
+          "invocation": "coordinatorctl retain",
+          "about": "Erase eligible terminal payloads and preserve spent-key tombstones",
+          "long_about": null,
+          "usage": "coordinatorctl retain [OPTIONS] --before <BEFORE>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--before <BEFORE>",
+              "description": "Erase only eligible terminal payloads older than this RFC 3339 timestamp",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--limit <LIMIT>",
+              "description": "Maximum number of records, from 1 through 100",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "100"
+              ],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--url <URL>",
+              "description": "Authenticated Coordinator service origin, HTTPS or explicit loopback HTTP",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--token-file <FILE>",
+              "description": "File containing a current access token; a relative path is read from the current directory. Token values are never printed",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--format <FORMAT>",
+              "description": "Output format for local reports and authenticated API responses: readable text, or one JSON report",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "--runtime-config <FILE>",
+              "description": "Runtime configuration file",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        }
+      ]
+    },
+    {
       "name": "evidence",
       "invocation": "evidence",
       "about": "Evidence Gateway Version 1",

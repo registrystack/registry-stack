@@ -350,3 +350,26 @@ test('the docs check generates missing outputs before validating CLI parity', as
     sourceSteps.indexOf('npm run generate') < sourceSteps.indexOf('npm run check:cli-reference'),
   );
 });
+
+test('new unreviewed binaries stay draft while reviewed pages stay current', () => {
+  const catalog = fixtureCatalog();
+  catalog.binaries.find((binary) => binary.name === 'coordinatorctl').subcommands.push(command('start', 'coordinatorctl'));
+  const excluded = ['coordinator', 'coordinatorctl'];
+  const metadata = fixtureReviewMetadata({
+    status: 'current',
+    last_reviewed: '2026-10-06',
+    unreviewed_binaries: excluded,
+  });
+  const pages = renderCatalog(catalog, metadata);
+  assert.match(pages.get('breg.mdx'), /status: current/u);
+  assert.doesNotMatch(pages.get('breg.mdx'), /draft: true/u);
+  assert.match(pages.get('coordinatorctl.mdx'), /status: draft\ndraft: true/u);
+  assert.match(pages.get('coordinatorctl.mdx'), /last_reviewed: "unreviewed"/u);
+  assert.match(pages.get('coordinatorctl/start.mdx'), /status: draft\ndraft: true/u);
+  assert.doesNotMatch(pages.get('index.mdx'), /\.\/coordinator(?:ctl)?\//u);
+  assert.match(pages.get('index.mdx'), /\.\/breg\//u);
+
+  assert.throws(() => validateReviewMetadata({ ...metadata, unreviewed_binaries: null }, catalog), /array of strings/u);
+  assert.throws(() => validateReviewMetadata({ ...metadata, unreviewed_binaries: ['unknown'] }, catalog), /unknown binary/u);
+  assert.throws(() => validateReviewMetadata({ ...metadata, unreviewed_binaries: ['coordinator', 'coordinator'] }, catalog), /duplicates/u);
+});

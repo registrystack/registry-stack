@@ -1,0 +1,52 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/coordinator/project/project.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/coordinator/project/v1alpha1
+kind: CoordinatorProject
+project:
+  id: external-directory
+  version: "1"
+input:
+  type: object
+  additionalProperties: false
+  required: [district]
+  properties:
+    district: {type: string, minLength: 1, maxLength: 128}
+connections:
+  directory: external-http
+functionsFile: functions.rhai
+# Ten attempts and nine waits of at most the 300-second backoff cap fit, so a
+# directory that stays busy reaches the workflow on the final attempt.
+deadlineSeconds: 3600
+start: lookup
+steps:
+  lookup:
+    type: call
+    connection: directory
+    operation: external-get
+    input: {type: function, function: lookup_request, arguments: [{type: input}]}
+    next: result
+  result:
+    type: choose
+    choose: {type: function, function: office_route, arguments: [{type: step, step: lookup}]}
+    cases: {found: found, missing: missing, unavailable: unavailable}
+  found:
+    type: finish
+    outcome: office-found
+    output:
+      type: fields
+      fields:
+        officeId: {type: step, step: lookup, path: /body/items/0/id}
+  missing:
+    type: finish
+    outcome: no-directory-entry
+  unavailable:
+    type: finish
+    outcome: directory-unavailable
+outcomes:
+  office-found:
+    type: object
+    additionalProperties: false
+    required: [officeId]
+    properties:
+      officeId: {type: string, minLength: 1, maxLength: 128}
+  no-directory-entry: {type: "null"}
+  directory-unavailable: {type: "null"}

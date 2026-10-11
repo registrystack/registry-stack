@@ -1,0 +1,51 @@
+{
+  "$defs": {
+    "BRegActionResultReference": {
+      "description": "One disclosed effect reference in a successful action receipt.",
+      "properties": {
+        "entity": {
+          "type": "string"
+        },
+        "recordId": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "revision": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "entity",
+        "recordId",
+        "revision"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Successful immediate-action application receipt.",
+  "properties": {
+    "action": {
+      "type": "string"
+    },
+    "applicationId": {
+      "format": "uuid",
+      "type": "string"
+    },
+    "results": {
+      "additionalProperties": {
+        "$ref": "#/$defs/BRegActionResultReference"
+      },
+      "type": "object"
+    }
+  },
+  "required": [
+    "action",
+    "applicationId",
+    "results"
+  ],
+  "title": "invoke-breg-action output",
+  "type": "object"
+}

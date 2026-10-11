@@ -1,0 +1,779 @@
+{
+  "$defs": {
+    "AuthoredInput": {
+      "description": "A call input or finish output: a pure function over references, or an\nobject built member by member from references.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Computes the value with a pure function from `functions.rhai`.",
+          "properties": {
+            "arguments": {
+              "description": "The references passed to the function, in order, at most 16.",
+              "items": {
+                "$ref": "#/$defs/Reference"
+              },
+              "maxItems": 16,
+              "type": "array"
+            },
+            "function": {
+              "$ref": "#/$defs/LocalId",
+              "description": "The function `functions.rhai` exports."
+            },
+            "type": {
+              "const": "function",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "function",
+            "arguments"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Builds an object member by member.",
+          "properties": {
+            "fields": {
+              "$ref": "#/$defs/Fields",
+              "description": "The members to write, each from one reference, at most 64."
+            },
+            "type": {
+              "const": "fields",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "fields"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "AuthoredSelector": {
+      "description": "A waitUntil instant or a choose label: a pure function over references,\nor one reference.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Computes the value with a pure function from `functions.rhai`.",
+          "properties": {
+            "arguments": {
+              "description": "The references passed to the function, in order, at most 16.",
+              "items": {
+                "$ref": "#/$defs/Reference"
+              },
+              "maxItems": 16,
+              "type": "array"
+            },
+            "function": {
+              "$ref": "#/$defs/LocalId",
+              "description": "The function `functions.rhai` exports."
+            },
+            "type": {
+              "const": "function",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "function",
+            "arguments"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Reads the workflow input.",
+          "properties": {
+            "path": {
+              "$ref": "#/$defs/JsonPointer",
+              "description": "The member of the input to read; omit it to read the whole input."
+            },
+            "type": {
+              "const": "input",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Reads the output of a call step that completed earlier on every route\nto this one.",
+          "properties": {
+            "path": {
+              "$ref": "#/$defs/JsonPointer",
+              "description": "The member of the output to read; omit it to read the whole output."
+            },
+            "step": {
+              "$ref": "#/$defs/LocalId",
+              "description": "The call step whose output this reads."
+            },
+            "type": {
+              "const": "step",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "step"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Supplies an authored JSON value.",
+          "properties": {
+            "type": {
+              "const": "literal",
+              "type": "string"
+            },
+            "value": {
+              "description": "The JSON value this selector supplies.",
+              "x-registry-foreign": "json"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "AuthoredStep": {
+      "description": "One step of the workflow graph, named by its `type`.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Waits until an instant, then continues.",
+          "properties": {
+            "next": {
+              "$ref": "#/$defs/LocalId",
+              "description": "The step that follows the wait."
+            },
+            "type": {
+              "const": "wait-until",
+              "type": "string"
+            },
+            "waitUntil": {
+              "$ref": "#/$defs/AuthoredSelector",
+              "description": "The RFC 3339 instant to wait for."
+            }
+          },
+          "required": [
+            "type",
+            "waitUntil",
+            "next"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "operation": {
+                    "const": "read-record"
+                  }
+                },
+                "required": [
+                  "operation"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "input": {
+                    "properties": {
+                      "fields": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "collection": true,
+                          "grant": true,
+                          "recordId": true
+                        },
+                        "required": [
+                          "collection",
+                          "recordId"
+                        ]
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "operation": {
+                    "const": "submit-message"
+                  }
+                },
+                "required": [
+                  "operation"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "input": {
+                    "properties": {
+                      "fields": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "content": true,
+                          "correlationId": true,
+                          "data": true,
+                          "expiresAt": true,
+                          "locale": true,
+                          "notBefore": true,
+                          "senderProfile": true,
+                          "template": true,
+                          "to": true
+                        },
+                        "required": [
+                          "senderProfile",
+                          "to"
+                        ]
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "operation": {
+                    "const": "read-scheduling"
+                  }
+                },
+                "required": [
+                  "operation"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "input": {
+                    "properties": {
+                      "fields": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "grant": true
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "operation": {
+                    "const": "read-availability"
+                  }
+                },
+                "required": [
+                  "operation"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "input": {
+                    "properties": {
+                      "fields": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "end": true,
+                          "grant": true,
+                          "limit": true,
+                          "offering": true,
+                          "start": true
+                        },
+                        "required": [
+                          "offering",
+                          "start",
+                          "end",
+                          "limit"
+                        ]
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "operation": {
+                    "const": "create-appointment"
+                  }
+                },
+                "required": [
+                  "operation"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "input": {
+                    "properties": {
+                      "fields": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "appointment": true,
+                          "grant": true
+                        },
+                        "required": [
+                          "grant",
+                          "appointment"
+                        ]
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "operation": {
+                    "const": "invoke-breg-action"
+                  }
+                },
+                "required": [
+                  "operation"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "input": {
+                    "properties": {
+                      "fields": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "action": true,
+                          "input": true
+                        },
+                        "required": [
+                          "action",
+                          "input"
+                        ]
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "operation": {
+                    "const": "external-get"
+                  }
+                },
+                "required": [
+                  "operation"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "input": {
+                    "properties": {
+                      "fields": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "path": true,
+                          "query": true
+                        },
+                        "required": [
+                          "path"
+                        ]
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "operation": {
+                    "const": "evaluate-decision"
+                  }
+                },
+                "required": [
+                  "operation"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "input": {
+                    "properties": {
+                      "fields": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "questions": true,
+                          "state": true
+                        },
+                        "required": [
+                          "state",
+                          "questions"
+                        ]
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          ],
+          "description": "Calls one operation through a connection, then continues with its\noutput available to later steps.",
+          "properties": {
+            "connection": {
+              "$ref": "#/$defs/LocalId",
+              "description": "The connection the call goes through, declared under `connections`."
+            },
+            "input": {
+              "$ref": "#/$defs/AuthoredInput",
+              "description": "The operation input, which must satisfy the operation's input\ncontract."
+            },
+            "next": {
+              "$ref": "#/$defs/LocalId",
+              "description": "The step that follows a completed call."
+            },
+            "operation": {
+              "$ref": "#/$defs/Operation",
+              "description": "The operation to call; it must belong to the connection's product."
+            },
+            "type": {
+              "const": "call",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "connection",
+            "operation",
+            "input",
+            "next"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Selects a label and continues with the step its case names.",
+          "properties": {
+            "cases": {
+              "additionalProperties": {
+                "$ref": "#/$defs/LocalId"
+              },
+              "description": "The step to continue with for each label, at most 32.",
+              "maxProperties": 32,
+              "minProperties": 1,
+              "propertyNames": {
+                "$ref": "#/$defs/LocalId"
+              },
+              "type": "object"
+            },
+            "choose": {
+              "$ref": "#/$defs/AuthoredSelector",
+              "description": "The label to select; it must be one of `cases`."
+            },
+            "type": {
+              "const": "choose",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "choose",
+            "cases"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Ends the run with a declared outcome.",
+          "properties": {
+            "outcome": {
+              "$ref": "#/$defs/LocalId",
+              "description": "The outcome, declared under `outcomes`."
+            },
+            "output": {
+              "$ref": "#/$defs/AuthoredInput",
+              "description": "The run output, which must satisfy the outcome's schema. Omit it\nwhen the outcome schema accepts null."
+            },
+            "type": {
+              "const": "finish",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "outcome"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ExternalId": {
+      "description": "An identifier another system issues, written exactly as its issuer gives it.",
+      "maxLength": 512,
+      "minLength": 1,
+      "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
+      "type": "string"
+    },
+    "FieldName": {
+      "description": "A member name a fields mapping writes.",
+      "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,63}$",
+      "type": "string"
+    },
+    "Fields": {
+      "additionalProperties": {
+        "$ref": "#/$defs/Reference"
+      },
+      "description": "The members a fields mapping writes, each from one reference.",
+      "maxProperties": 64,
+      "propertyNames": {
+        "allOf": [
+          {
+            "$ref": "#/$defs/ExternalId"
+          },
+          {
+            "$ref": "#/$defs/FieldName"
+          }
+        ]
+      },
+      "type": "object"
+    },
+    "JsonPointer": {
+      "description": "An RFC 6901 JSON Pointer into the referenced value, such as /member/0. Omit path to use the whole value.",
+      "maxLength": 256,
+      "pattern": "^/([^~]|~[01])*$",
+      "type": "string"
+    },
+    "LocalId": {
+      "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+      "type": "string"
+    },
+    "Operation": {
+      "enum": [
+        "read-record",
+        "submit-message",
+        "read-scheduling",
+        "read-availability",
+        "create-appointment",
+        "invoke-breg-action",
+        "external-get",
+        "evaluate-decision"
+      ],
+      "type": "string"
+    },
+    "Product": {
+      "description": "The product a connection reaches: `breg` (Base Registry Engine),\n`messaging`, `scheduling`, `external-http` (a configured external HTTP\nservice) or `decision` (a configured typed decision service).",
+      "enum": [
+        "breg",
+        "messaging",
+        "scheduling",
+        "external-http",
+        "decision"
+      ],
+      "type": "string"
+    },
+    "ProjectIdentity": {
+      "additionalProperties": false,
+      "description": "The members that name a project (CFG-ENV-6): a project's `project` block\nholds these, and may add project-wide members of the product's own.\nSchema name `ProjectIdentity`.",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/LocalId",
+          "description": "The workflow identifier a caller names as `flow` to start a run."
+        },
+        "version": {
+          "description": "The version of this definition: 1 to 64 letters, digits, hyphens or underscores. A deployment refuses a changed definition under a version it already applied.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "version"
+      ],
+      "type": "object"
+    },
+    "Reference": {
+      "description": "A value a mapping reads: the workflow input, a preceding call's output,\nor an authored literal. A path selects a member inside the value.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Reads the workflow input.",
+          "properties": {
+            "path": {
+              "$ref": "#/$defs/JsonPointer",
+              "description": "The member of the input to read; omit it to read the whole input."
+            },
+            "type": {
+              "const": "input",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Reads the output of a call step that completed earlier on every route\nto this one.",
+          "properties": {
+            "path": {
+              "$ref": "#/$defs/JsonPointer",
+              "description": "The member of the output to read; omit it to read the whole output."
+            },
+            "step": {
+              "$ref": "#/$defs/LocalId",
+              "description": "The call step whose output this reads."
+            },
+            "type": {
+              "const": "step",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "step"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Supplies an authored JSON value.",
+          "properties": {
+            "type": {
+              "const": "literal",
+              "type": "string"
+            },
+            "value": {
+              "description": "The JSON value this reference supplies.",
+              "x-registry-foreign": "json"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        }
+      ]
+    }
+  },
+  "$id": "https://id.registrystack.org/schemas/coordinator/project/project.v1alpha1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "A Coordinator workflow: a finite graph of steps that waits, calls fixed\nproduct operations through named connections and finishes with a declared\noutcome. Its pure functions live in `functions.rhai` beside it.",
+  "properties": {
+    "apiVersion": {
+      "const": "id.registrystack.org/formats/coordinator/project/v1alpha1",
+      "description": "The format and version this document is written in.",
+      "type": "string"
+    },
+    "connections": {
+      "additionalProperties": {
+        "$ref": "#/$defs/Product"
+      },
+      "description": "The logical connections call steps use, each naming the product it\nreaches. The runtime configuration binds each one to an endpoint and\nits credentials.",
+      "maxProperties": 16,
+      "minProperties": 0,
+      "propertyNames": {
+        "$ref": "#/$defs/LocalId"
+      },
+      "type": "object"
+    },
+    "deadlineSeconds": {
+      "description": "How long a run may take, in seconds from admission, at most one year.\nA run that has not finished by its deadline expires.",
+      "format": "uint32",
+      "maximum": 31536000,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "functionsFile": {
+      "const": "functions.rhai",
+      "description": "The file beside the workflow holding its pure Rhai functions; always\n`functions.rhai`.",
+      "type": "string"
+    },
+    "input": {
+      "description": "The JSON Schema (2020-12) every start input must satisfy. Steps read\nthe input through `{type: input}` references.",
+      "x-registry-foreign": "json-schema-2020-12"
+    },
+    "kind": {
+      "const": "CoordinatorProject",
+      "description": "The kind of document this is.",
+      "type": "string"
+    },
+    "outcomes": {
+      "additionalProperties": {
+        "x-registry-foreign": "json-schema-2020-12"
+      },
+      "description": "The outcomes a finish step may name, each with the JSON Schema\n(2020-12) its output must satisfy.",
+      "maxProperties": 64,
+      "minProperties": 1,
+      "propertyNames": {
+        "$ref": "#/$defs/LocalId"
+      },
+      "type": "object"
+    },
+    "project": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/ProjectIdentity"
+        },
+        {
+          "properties": {
+            "version": {
+              "description": "The version of this definition: 1 to 64 letters, digits, hyphens or underscores. A deployment refuses a changed definition under a version it already applied.",
+              "maxLength": 64,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_-]+$",
+              "type": "string"
+            }
+          }
+        }
+      ],
+      "description": "The workflow `id` a caller names as `flow` to start a run, and the\n`version` of this definition. Give a changed definition a new version.",
+      "unevaluatedProperties": false
+    },
+    "start": {
+      "$ref": "#/$defs/LocalId",
+      "description": "The step every run begins with."
+    },
+    "steps": {
+      "additionalProperties": {
+        "$ref": "#/$defs/AuthoredStep"
+      },
+      "description": "The steps of the workflow graph, by step identifier, at most 64.",
+      "maxProperties": 64,
+      "minProperties": 1,
+      "propertyNames": {
+        "$ref": "#/$defs/LocalId"
+      },
+      "type": "object"
+    }
+  },
+  "required": [
+    "project",
+    "input",
+    "connections",
+    "functionsFile",
+    "deadlineSeconds",
+    "start",
+    "steps",
+    "outcomes",
+    "apiVersion",
+    "kind"
+  ],
+  "title": "CoordinatorProject",
+  "type": "object"
+}

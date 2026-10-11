@@ -1,0 +1,183 @@
+{
+  "$defs": {
+    "AdmissionRequest": {
+      "additionalProperties": false,
+      "description": "A request for one admission decision. The evaluator is pure: it resolves\nnothing, fetches nothing, and reads exactly what it is handed.",
+      "properties": {
+        "capabilities": {
+          "description": "The party's held capability references, matched against the offering's\nrequirements.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "channel": {
+          "description": "The authenticated channel, when the deployment allocates supply\nthrough channel subquotas.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "duplicateKey": {
+          "description": "The duplicate-active key, derived the same way the offering's policy\nprescribes.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "externalReferences": {
+          "default": [],
+          "description": "Opaque record links Scheduling retains with the hold or booking. Their\norder is not significant.",
+          "items": {
+            "$ref": "#/$defs/ExternalReference"
+          },
+          "type": "array"
+        },
+        "offering": {
+          "type": "string"
+        },
+        "party": {
+          "$ref": "#/$defs/PartyCounts"
+        },
+        "policyRevision": {
+          "description": "The policy revision the caller resolved the offering under.",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "prerequisites": {
+          "description": "The party's held prerequisite references, matched against the\noffering's requirements.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "start": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "windowRevision": {
+          "description": "The window revision the caller resolved an arrival window under.",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "offering",
+        "start",
+        "party",
+        "policyRevision",
+        "capabilities",
+        "prerequisites"
+      ],
+      "type": "object"
+    },
+    "CreateAppointmentRequest": {
+      "additionalProperties": false,
+      "description": "The request behind `POST /v1/appointments`: confirm a held allocation, or\ncreate an appointment directly.",
+      "properties": {
+        "admission": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AdmissionRequest"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The direct-create admission request. Mutually exclusive with `hold`."
+        },
+        "hold": {
+          "description": "The hold being confirmed. Mutually exclusive with `admission`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "ExternalReference": {
+      "additionalProperties": false,
+      "description": "An opaque link to a record owned by another product.\n\nScheduling stores and returns this tuple without resolving it. The\nidentifier names only the referenced record; callers must not put personal\ndata in any field.",
+      "properties": {
+        "identifier": {
+          "type": "string"
+        },
+        "product": {
+          "type": "string"
+        },
+        "recordType": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "product",
+        "recordType",
+        "identifier"
+      ],
+      "type": "object"
+    },
+    "GrantReference": {
+      "additionalProperties": false,
+      "description": "An approval reference, never an assertion or bearer credential. The shared\nCasework source requires the signed authority's original deadline to match.",
+      "properties": {
+        "expiresAt": {
+          "maximum": 9007199254740991,
+          "minimum": -9007199254740991,
+          "type": "integer"
+        },
+        "id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "expiresAt"
+      ],
+      "type": "object"
+    },
+    "PartyCounts": {
+      "additionalProperties": false,
+      "description": "The party summary capacity is derived from. Recipients are the people the\nservice is delivered to; attendees are everyone present, recipients\nincluded. A parent accompanying two children is three attendees and two\nrecipients, and consumes recipient units, never attendee counts.",
+      "properties": {
+        "attendees": {
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "recipients": {
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "recipients",
+        "attendees"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "appointment": {
+      "$ref": "#/$defs/CreateAppointmentRequest"
+    },
+    "grant": {
+      "$ref": "#/$defs/GrantReference"
+    }
+  },
+  "required": [
+    "grant",
+    "appointment"
+  ],
+  "title": "create-appointment input",
+  "type": "object"
+}

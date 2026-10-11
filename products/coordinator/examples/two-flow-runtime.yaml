@@ -1,0 +1,82 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/coordinator/runtime/runtime.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/coordinator/runtime/v1alpha1
+kind: CoordinatorRuntimeConfig
+# One deployment serving the delayed-follow-up and governed-action-follow-up
+# example projects. Each project is packaged on its own and pinned below; the
+# flow id each package serves is its workflow id. Both flows share the
+# connections, so the applications connection carries the read and act scopes
+# the governed flow needs.
+secretProviders:
+  file:
+    root: /run/registry-coordinator/secrets
+  environment: {}
+database:
+  runtimeUrlRef: secret:env/COORDINATOR_DATABASE_URL
+  migrationUrlRef: secret:env/COORDINATOR_MIGRATION_URL
+  trustedRootCertificateRef: secret:file/postgres-root.pem
+namespace: coordinator_follow_up
+connections:
+  applications:
+    product: breg
+    baseUrl: https://breg.example.org
+    profile: workflow-actions
+    authorization:
+      tokenEndpoint: https://issuer.example.org/oauth/token
+      clientId: coordinator-agent
+      signingKeyRef: secret:file/reader-jwk
+      resource: urn:example:applications
+      scopes: [applications:read, applications:act]
+  notices:
+    product: messaging
+    baseUrl: https://messaging.example.org
+    authorization:
+      tokenEndpoint: https://issuer.example.org/oauth/token
+      clientId: coordinator-notices
+      signingKeyRef: secret:file/notices-jwk
+      resource: urn:example:messaging
+      scopes: [messaging:send]
+deployment:
+  databaseId: coordinator-institution-follow-up
+  runtimeRole: coordinator_runtime
+  packages:
+    - root: /opt/registry-coordinator/delayed-follow-up
+      expectedDigest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+    - root: /opt/registry-coordinator/governed-action-follow-up
+      expectedDigest: sha256:1111111111111111111111111111111111111111111111111111111111111111
+  listener:
+    bind: 127.0.0.1:8108
+    tlsTermination: operator-controlled-upstream
+  authentication:
+    issuer: https://issuer.example.org
+    audience: urn:example:coordinator
+    jwksSource:
+      type: discovery
+    allowedClients: [reminder-producer, information-producer, institution-operator, deployment-operator]
+    # Run actions reach only the flows a policy lists. Deployment-wide actions
+    # reach every flow this deployment serves, including flows added later, so
+    # the deployment operator lists no flows.
+    policies:
+      - clientId: reminder-producer
+        requiredScopes: [coordinator:start]
+        flows: [delayed-follow-up]
+        actions: [start, status]
+      - clientId: information-producer
+        requiredScopes: [coordinator:start]
+        flows: [governed-action-follow-up]
+        actions: [start, status]
+      - clientId: institution-operator
+        requiredScopes: [coordinator:operate]
+        flows: [delayed-follow-up, governed-action-follow-up]
+        actions: [status, inspect, retry-same, cancel, reconcile]
+        operator: true
+      - clientId: deployment-operator
+        requiredScopes: [coordinator:operate]
+        actions: [doctor, restore-hold, release-restore-hold, release-admission-hold, complete-execution-recovery, retain]
+        operator: true
+  auditFile: /var/lib/registry-coordinator/audit.jsonl
+  auditKeyRef: secret:file/audit-key
+  activeStateKey: 1
+  stateKeys:
+    "1":
+      keyRef: secret:file/state-key-1
+  admissionKeyRef: secret:file/admission-key

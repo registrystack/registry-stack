@@ -45,6 +45,23 @@ class ConfigureTests(unittest.TestCase):
                 self.assertIsNotNone(version)
                 self.assertEqual(version.group(1), expected)
 
+    def test_coordinator_maps_registered_formats_and_offline_check(self):
+        project = self.project(
+            "coordinator", "workflow.yaml",
+            "products/coordinator/examples/delayed-follow-up/workflow.yaml",
+        )
+        configure.configure("coordinator", project, self.workspace, None)
+        schemas = json.loads((self.workspace / ".vscode/settings.json").read_text())["yaml.schemas"]
+        managed = project / ".registry-stack-editor/schemas"
+        self.assertEqual(schemas[(managed / "project.schema.json").as_uri()], [str(project / "workflow.yaml")])
+        self.assertEqual(schemas[(managed / "runtime.schema.json").as_uri()], [
+            str(project / "runtime.yaml"), str(project / "runtime.example.yaml"), str(project / "*-runtime.yaml"),
+        ])
+        self.assertEqual(schemas[(managed / "scenarios.schema.json").as_uri()], [str(project / "scenarios.yaml")])
+        tasks = json.loads((self.workspace / ".vscode/tasks.json").read_text())["tasks"]
+        self.assertEqual(tasks[0]["command"], "coordinatorctl")
+        self.assertEqual(tasks[0]["args"], ["check", "--project", str(project)])
+
     def test_breg_schema_snapshots_tasks_and_idempotent_merge(self):
         project = self.project(
             "breg",

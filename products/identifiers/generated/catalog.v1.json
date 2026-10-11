@@ -3766,6 +3766,60 @@
       }
     },
     {
+      "uri": "https://id.registrystack.org/schemas/coordinator/project/project.v1alpha1.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "coordinator",
+      "title": "CoordinatorProject",
+      "description": "Registry Coordinator portable project authoring JSON Schema.",
+      "source": {
+        "path": "crates/registry-coordinator/src/authoring.rs",
+        "sha256": "796f3fb9588f9ae24d4b3c4af8f04760f177dc01f3e9599e231ab29d11ed2416"
+      },
+      "artifact": {
+        "path": "products/coordinator/generated/project/project.schema.json",
+        "sha256": "ee08241cc14692b2af07c8c292f8400478bf041910296e47a70d18a415c8ad92",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/schemas/coordinator/runtime/runtime.v1alpha1.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "coordinator",
+      "title": "RuntimeConfig",
+      "description": "Registry Coordinator runtime configuration JSON Schema.",
+      "source": {
+        "path": "crates/registry-coordinator/src/runtime.rs",
+        "sha256": "0d6220f42f3e5f808a0a06cd797ce1fcda9371c9156b682bbea497b3a7acb4f7"
+      },
+      "artifact": {
+        "path": "products/coordinator/generated/runtime/runtime.schema.json",
+        "sha256": "bcdbaa84be789f3cab09c2168353ceaccb4ae20db71b51bd3f645d41cb444f29",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/schemas/coordinator/scenarios/scenarios.v1alpha1.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "coordinator",
+      "title": "CoordinatorScenarios",
+      "description": "Registry Coordinator deterministic scenario authoring JSON Schema.",
+      "source": {
+        "path": "crates/registry-coordinator/src/scenarios.rs",
+        "sha256": "d2a7c84bb1a052115fb5ea45111c02c665cd95146a4d8875c2e65309ca7ae28a"
+      },
+      "artifact": {
+        "path": "products/coordinator/generated/scenarios/scenarios.schema.json",
+        "sha256": "3d8eede1f1593fb2a4159f5d59ad2a9dab375e0b4d6fbd5ca743316c351e573d",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
       "uri": "https://id.registrystack.org/schemas/discovery/evidence-mapping/evidence-mapping.v1alpha1.schema.json",
       "kind": "schema",
       "status": "active",
