@@ -29,6 +29,7 @@ use crate::model::AdmissionRequest;
 
 /// What `GET /v1/scheduling` answers: which deployment and which policy.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct SchedulingServiceDocument {
     pub scheduling_id: String,
@@ -122,6 +123,7 @@ pub struct LocationDocument {
 /// One availability answer entry. Exact-time offerings answer in grid slots;
 /// arrival-window offerings answer in windows.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(
     tag = "kind",
     rename_all = "camelCase",
@@ -147,6 +149,7 @@ pub enum AvailabilityEntry {
 
 /// One page of a bounded listing, with the opaque cursor that continues it.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct PageDocument<T> {
     pub items: Vec<T>,
@@ -159,6 +162,7 @@ pub struct PageDocument<T> {
 /// identifier names only the referenced record; callers must not put personal
 /// data in any field.
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ExternalReference {
     pub product: String,
@@ -186,6 +190,7 @@ pub struct HoldDocument {
 
 /// The lifecycle state of an appointment on the wire.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "kebab-case")]
 pub enum AppointmentStateDocument {
     Confirmed,
@@ -204,6 +209,7 @@ impl AppointmentStateDocument {
 
 /// A confirmed appointment.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct AppointmentDocument {
     pub appointment_id: String,
@@ -225,6 +231,7 @@ pub struct AppointmentDocument {
 /// The request behind `POST /v1/appointments`: confirm a held allocation, or
 /// create an appointment directly.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CreateAppointmentRequest {
     /// The hold being confirmed. Mutually exclusive with `admission`.
