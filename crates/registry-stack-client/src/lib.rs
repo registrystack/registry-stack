@@ -70,6 +70,15 @@ pub mod casework {
     };
 }
 
+pub mod coordinator {
+    pub use registry_coordinator_client::{
+        BearerToken, CoordinatorClient, CoordinatorClientConfig, CoordinatorClientError,
+        CoordinatorComplete, CoordinatorProtocolFailure, EffectKind, KeyRequirement,
+        OperationIdentity, RecoverySemantics, RecoveryStatus, RetryBlockReason, RetryScheduled,
+        RunInspection, RunList, RunStatus, StartRunRequest, StepStatus, TransportKind, Uuid,
+    };
+}
+
 pub mod messaging {
     pub use registry_messaging_client::{
         type_uri, AttemptOutcome, AttemptSummary, BearerToken, Channel, DirectContent,
