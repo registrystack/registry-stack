@@ -425,9 +425,16 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
             with self.subTest(version=version):
                 self.assertEqual(
                     (module._candidate_image_names("0.37.0") - ({"relay"} if version == "1.0.0" else set()))
-                    | {"registry-render", "evidence-oid4vci", "breg-mcp", "breg-review", "messaging"},
+                    | {"registry-render", "evidence-oid4vci", "breg-mcp", "breg-review", "messaging"}
+                    | ({"coordinator"} if version == "1.0.0" else set()),
                     module._candidate_image_names(version),
                 )
+        # Coordinator joins a release only from the one release_roster names.
+        self.assertNotIn("coordinator", module._candidate_image_names("0.40.0"))
+        self.assertEqual(
+            module._candidate_image_names("0.40.0") | {"coordinator"},
+            module._candidate_image_names("0.41.0"),
+        )
         with mock.patch.object(
             module.release_roster, "MESSAGING_FIRST_RELEASE", (0, 36, 0)
         ):
@@ -739,6 +746,26 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         self.assertIn("dist/image-bin/messagingctl --version", messaging_smoke)
         self.assertNotIn(
             "messagingctl", operator_tools.split(messaging_gate, 1)[0]
+        )
+        coordinator_gate = (
+            'coordinator_in_release="$(python3 release/scripts/release_roster.py \\\n'
+            '  coordinator-in-release "${{ needs.validate.outputs.version }}")"\n'
+            'if [[ "${coordinator_in_release}" == true ]]; then\n'
+        )
+        self.assertIn(coordinator_gate, merge)
+        coordinator_smoke = merge.split(coordinator_gate, 1)[1].split("\nfi\n", 1)[0]
+        for binary in ("coordinator", "coordinatorctl"):
+            self.assertIn(
+                f'"dist/bin/{binary}-${{{{ needs.validate.outputs.tag }}}}-linux-amd64" --version',
+                coordinator_smoke,
+            )
+            self.assertIn(f"dist/image-bin/{binary} --version", coordinator_smoke)
+            self.assertIn(
+                f'"{binary} ${{{{ needs.validate.outputs.version }}}}"',
+                coordinator_smoke,
+            )
+        self.assertNotIn(
+            "coordinator", operator_tools.split(coordinator_gate, 1)[0]
         )
         breg_services = merge.split(
             'breg_services_in_release="$(python3 release/scripts/release_roster.py \\\n'
@@ -1607,6 +1634,27 @@ class MessagingClientWorkflowStructureTest(unittest.TestCase):
                 self.assertIn('"${render_binary}" compile --bundle "${render_package}"', smoke)
                 self.assertIn("--issued-at 2026-01-01T00:00:00Z", smoke)
                 self.assertIn('--strict --out "${RUNNER_TEMP}/release-render-letter.pdf"', smoke)
+
+    def test_coordinator_smokes_follow_the_shared_release_roster(self) -> None:
+        for name, job in (
+            ("release-candidate.yml", "build-canonical"),
+            ("release-rehearsal.yml", "canonical-linux"),
+        ):
+            with self.subTest(workflow=name):
+                _, document = workflow(name)
+                smoke = step_run(document, job, "Merge and smoke the canonical Linux payload")
+                self.assertIn("coordinator-in-release", smoke)
+                coordinator = smoke.split("coordinator-in-release", 1)[1].split("\nfi\n", 1)[0]
+                for binary in ("coordinator", "coordinatorctl"):
+                    self.assertIn(f"dist/image-bin/{binary} --version", coordinator)
+                self.assertIn(
+                    '"${coordinatorctl_binary}" init --directory "${coordinator_project}"',
+                    coordinator,
+                )
+                self.assertIn(
+                    '"${coordinatorctl_binary}" check --project "${coordinator_project}"',
+                    coordinator,
+                )
 
     def test_release_client_jobs_select_messaging_from_the_shared_roster(self) -> None:
         for name, job, steps in (
@@ -2482,7 +2530,9 @@ class SupportingWorkflowStructureTest(unittest.TestCase):
                 "scheduling",
             ],
         }
-        cases["v1.0.0"] = list(cases["v0.39.0"])
+        cases["v0.40.0"] = list(cases["v0.39.0"])
+        cases["v0.41.0"] = sorted([*cases["v0.39.0"], "coordinator"])
+        cases["v1.0.0"] = list(cases["v0.41.0"])
         manifests = {}
         for tag, image_names in cases.items():
             with self.subTest(tag=tag):
@@ -2573,6 +2623,38 @@ class SupportingWorkflowStructureTest(unittest.TestCase):
                 )
                 self.assertNotEqual(0, rejected.returncode)
 
+        with_coordinator = dict(manifests["v0.40.0"])
+        with_coordinator["images"] = [
+            *with_coordinator["images"],
+            {
+                "name": "coordinator",
+                "digest": "sha256:fixture",
+                "final_ref": "ghcr.io/registrystack/coordinator:v0.40.0",
+                "candidate_ref": (
+                    "ghcr.io/registrystack/coordinator-candidate@sha256:fixture"
+                ),
+            },
+        ]
+        missing_coordinator = dict(manifests["v0.41.0"])
+        missing_coordinator["images"] = [
+            image
+            for image in missing_coordinator["images"]
+            if image["name"] != "coordinator"
+        ]
+        for tag, changed in (
+            ("v0.40.0", with_coordinator),
+            ("v0.41.0", missing_coordinator),
+        ):
+            with self.subTest(tag=tag, changed="coordinator"):
+                rejected = subprocess.run(
+                    ["jq", "-e", "--arg", "tag", tag, jq_filter],
+                    input=json.dumps(changed),
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertNotEqual(0, rejected.returncode)
+
         for tag in ("v0.36.0", "v0.37.0"):
             for service in ("breg-mcp", "breg-review"):
                 with self.subTest(tag=tag, unexpected=service):
@@ -2599,9 +2681,11 @@ class SupportingWorkflowStructureTest(unittest.TestCase):
                     self.assertNotEqual(0, rejected.returncode)
 
         self.assertIn(
-            "breg|breg-mcp|breg-review|casework|discovery|evidence|evidence-oid4vci|messaging|mint|registry-render|relay|scheduling)",
+            "breg|breg-mcp|breg-review|casework|coordinator|discovery|evidence|evidence-oid4vci|messaging|mint|registry-render|relay|scheduling)",
             verify,
         )
+        self.assertIn("Registry Coordinator joins at `v0.41.0`", verify)
+        self.assertIn("`COORDINATOR_FIRST_RELEASE`", verify)
         self.assertIn("Registry Casework joins at `v0.30.0`", verify)
         self.assertIn("Registry Scheduling joins at `v0.33.0`", verify)
         self.assertIn("Registry Messaging", verify)

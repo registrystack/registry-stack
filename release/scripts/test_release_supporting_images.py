@@ -103,6 +103,28 @@ class SupportingReleaseImageTests(unittest.TestCase):
         )
         self.assertNotIn("if [ -e /workspace/image-bin/messagingctl ]", dockerfile)
 
+    def test_coordinator_image_carries_its_operator_tool_and_audit_directory(self) -> None:
+        dockerfile = self.dockerfile("coordinator")
+        for binary in ("coordinator", "coordinatorctl"):
+            self.assertIn(
+                f"install -m 0755 /workspace/image-bin/{binary} "
+                f"/workspace/runtime-root/usr/local/bin/{binary}",
+                dockerfile,
+            )
+        self.assertIn("gcr.io/distroless/cc-debian13:nonroot@sha256:", dockerfile)
+        self.assertIn('org.registrystack.runtime.uid="65532"', dockerfile)
+        self.assertIn("/licenses/coordinator/THIRD_PARTY_NOTICES", dockerfile)
+        self.assertIn("WORKDIR /var/lib/registry-coordinator", dockerfile)
+        self.assertIn(
+            "chmod 0700 /workspace/runtime-root/var/lib/registry-coordinator",
+            dockerfile,
+        )
+        self.assertIn('ENTRYPOINT ["/usr/local/bin/coordinator"]', dockerfile)
+        self.assertIn(
+            'CMD ["--runtime-config", "/etc/registry-coordinator/runtime.yaml"]',
+            dockerfile,
+        )
+
     def test_shared_publication_surfaces_admit_every_supporting_image(self) -> None:
         builder = (ROOT / "release/scripts/build-release-image.sh").read_text(
             encoding="utf-8"

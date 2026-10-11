@@ -54,6 +54,7 @@ def security_evidence_members(
         "messaging",
         "evidence-oid4vci",
         "registry-render",
+        "coordinator",
     ),
 ) -> dict[str, bytes]:
     refs = {
@@ -1006,7 +1007,7 @@ class ReleaseCandidateTest(TestCase):
             self.module.image_operator_tools("0.37.99"),
         )
         # The Messaging image carries messagingctl only from its first release.
-        for version in ("0.38.0", "1.0.0"):
+        for version in ("0.38.0", "0.40.99"):
             with self.subTest(version=version):
                 self.assertEqual(
                     {
@@ -1014,6 +1015,19 @@ class ReleaseCandidateTest(TestCase):
                         "casework": "caseworkctl",
                         "scheduling": "schedulingctl",
                         "messaging": "messagingctl",
+                    },
+                    self.module.image_operator_tools(version),
+                )
+        # The Coordinator image carries coordinatorctl only from its first release.
+        for version in ("0.41.0", "1.0.0"):
+            with self.subTest(version=version):
+                self.assertEqual(
+                    {
+                        "breg": "bregctl",
+                        "casework": "caseworkctl",
+                        "scheduling": "schedulingctl",
+                        "messaging": "messagingctl",
+                        "coordinator": "coordinatorctl",
                     },
                     self.module.image_operator_tools(version),
                 )
@@ -1033,6 +1047,11 @@ class ReleaseCandidateTest(TestCase):
                 "0.38.0",
                 "breg=bregctl casework=caseworkctl messaging=messagingctl "
                 "scheduling=schedulingctl\n",
+            ),
+            (
+                "0.41.0",
+                "breg=bregctl casework=caseworkctl coordinator=coordinatorctl "
+                "messaging=messagingctl scheduling=schedulingctl\n",
             ),
         ):
             with self.subTest(version=version):
@@ -1092,6 +1111,10 @@ class ReleaseCandidateTest(TestCase):
                         expected_images |= (
                             self.module.EVIDENCE_OID4VCI_RUNTIME_IMAGE_NAMES
                         )
+                    if self.module.release_roster.coordinator_in_release(parsed):
+                        expected_images |= (
+                            self.module.COORDINATOR_RUNTIME_IMAGE_NAMES
+                        )
                     self.assertEqual(
                         expected_images,
                         self.module._candidate_image_names(version),
@@ -1121,6 +1144,88 @@ class ReleaseCandidateTest(TestCase):
                         )
                     self.assertEqual(0, result)
                     self.assertNotIn("messagingctl", stdout.getvalue())
+
+    def test_coordinator_joins_only_the_rosters_from_its_first_release(self) -> None:
+        self.assertEqual(
+            self.module._candidate_image_names("0.40.99") | {"coordinator"},
+            self.module._candidate_image_names("0.41.0"),
+        )
+        self.assertNotIn("coordinator", self.module._candidate_image_names("0.40.0"))
+        self.assertNotIn(
+            "coordinator", self.module.image_operator_tools("0.40.0")
+        )
+        self.assertEqual(
+            "coordinatorctl", self.module.image_operator_tools("0.41.0")["coordinator"]
+        )
+        historical = self.module._release_payload_inventory("0.40.0")
+        self.assertFalse(any(name.startswith("coordinator") for name in historical))
+        current = self.module._release_payload_inventory("0.41.0")
+        self.assertEqual(
+            {
+                "coordinator-v0.41.0-linux-amd64": "binary",
+                "coordinatorctl-v0.41.0-linux-amd64": "binary",
+            },
+            {
+                name: kind
+                for name, kind in current.items()
+                if name.startswith("coordinator")
+            },
+        )
+        self.assertEqual(
+            {name.replace("0.40.0", "0.41.0"): kind for name, kind in historical.items()},
+            {
+                name: kind
+                for name, kind in current.items()
+                if not name.startswith("coordinator")
+            },
+        )
+        required = self.module._security_evidence_required_files(
+            self.module._candidate_image_names("0.41.0")
+        )
+        self.assertTrue(
+            {
+                "image-sbom/coordinator.spdx.json",
+                "syft/coordinator.syft.json",
+                "grype/coordinator.grype.json",
+            }.issubset(required)
+        )
+        self.assertTrue(
+            {
+                "image-sbom/coordinator.spdx.json",
+                "syft/coordinator.syft.json",
+                "grype/coordinator.grype.json",
+            }.issubset(self.module.SECURITY_EVIDENCE_REQUIRED_FILES)
+        )
+
+    def test_no_version_ships_coordinator_until_the_roster_names_a_first_release(
+        self,
+    ) -> None:
+        with mock.patch.object(
+            self.module.release_roster, "COORDINATOR_FIRST_RELEASE", None
+        ):
+            for version in ("0.41.0", "1.0.0"):
+                with self.subTest(version=version):
+                    self.assertNotIn(
+                        "coordinator", self.module._candidate_image_names(version)
+                    )
+                    self.assertFalse(
+                        any(
+                            name.startswith("coordinator")
+                            for name in self.module._release_payload_inventory(
+                                version
+                            )
+                        )
+                    )
+                    self.assertNotIn(
+                        "coordinator", self.module.image_operator_tools(version)
+                    )
+                    stdout = io.StringIO()
+                    with redirect_stdout(stdout), redirect_stderr(io.StringIO()):
+                        result = self.module.main(
+                            ["image-names", "--version", version]
+                        )
+                    self.assertEqual(0, result)
+                    self.assertNotIn("coordinator", stdout.getvalue().split())
 
     def test_breg_services_join_only_the_rosters_from_their_first_release(
         self,
@@ -1182,6 +1287,10 @@ class ReleaseCandidateTest(TestCase):
                     ):
                         expected_images |= (
                             self.module.EVIDENCE_OID4VCI_RUNTIME_IMAGE_NAMES
+                        )
+                    if self.module.release_roster.coordinator_in_release(parsed):
+                        expected_images |= (
+                            self.module.COORDINATOR_RUNTIME_IMAGE_NAMES
                         )
                     self.assertEqual(
                         expected_images,
@@ -1246,6 +1355,17 @@ class ReleaseCandidateTest(TestCase):
                 "0.39.0",
                 "breg breg-mcp breg-review casework discovery evidence "
                 "evidence-oid4vci messaging registry-render scheduling\n",
+            ),
+            (
+                "0.40.0",
+                "breg breg-mcp breg-review casework discovery evidence "
+                "evidence-oid4vci messaging registry-render scheduling\n",
+            ),
+            (
+                "0.41.0",
+                "breg breg-mcp breg-review casework coordinator discovery "
+                "evidence evidence-oid4vci messaging registry-render "
+                "scheduling\n",
             ),
         )
         for version, expected in cases:
@@ -1456,6 +1576,54 @@ class ReleaseCandidateTest(TestCase):
                 root, "0.39.0", allow_missing_baseline=True
             ),
         )
+
+    def test_coordinator_onboarding_stays_closed_until_external_setup(self) -> None:
+        root = self.onboarding_repository()
+        shutil.copy2(
+            ROOT / "release/docker/Dockerfile.coordinator",
+            root / "release/docker/Dockerfile.coordinator",
+        )
+        with self.assertRaisesRegex(
+            self.module.CandidateError,
+            "coordinator advisory baseline is missing",
+        ):
+            self.module.check_image_onboarding(root, "0.41.0")
+        with self.assertRaisesRegex(
+            self.module.CandidateError,
+            "CANDIDATE_PACKAGES must contain coordinator-candidate",
+        ):
+            self.module.check_image_onboarding(
+                root, "0.41.0", allow_missing_baseline=True
+            )
+        cleanup = root / "release/scripts/cleanup-release-candidates.py"
+        cleanup.write_text(
+            cleanup.read_text(encoding="utf-8").replace(
+                '    "messaging-candidate",\n',
+                '    "messaging-candidate",\n    "coordinator-candidate",\n',
+            ),
+            encoding="utf-8",
+        )
+        self.assertEqual(
+            self.module._candidate_image_names("0.41.0"),
+            self.module.check_image_onboarding(
+                root, "0.41.0", allow_missing_baseline=True
+            ),
+        )
+        recipe = root / "release/scripts/build-release-binaries.sh"
+        recipe.write_text(
+            recipe.read_text(encoding="utf-8").replace(
+                "cp target/release/coordinatorctl dist/image-bin/coordinatorctl",
+                "cp target/release/coordinatorctl dist/image-bin/wrong-coordinatorctl",
+            ),
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(
+            self.module.CandidateError,
+            "canonical binary recipe must stage dist/image-bin/coordinatorctl",
+        ):
+            self.module.check_image_onboarding(
+                root, "0.41.0", allow_missing_baseline=True
+            )
 
     def test_breg_services_onboarding_stays_closed_until_external_setup(
         self,

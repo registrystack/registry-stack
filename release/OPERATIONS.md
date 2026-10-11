@@ -87,9 +87,9 @@ Complete new-image onboarding outside the release clock, in this order:
    token on the command line:
 
 ```sh
-package="${PACKAGE:?set PACKAGE to evidence, discovery, breg, breg-mcp, breg-review, casework, scheduling, messaging, registry-render, or evidence-oid4vci}"
+package="${PACKAGE:?set PACKAGE to evidence, discovery, breg, breg-mcp, breg-review, casework, scheduling, messaging, registry-render, evidence-oid4vci, or coordinator}"
 case "${package}" in
-  evidence|discovery|breg|breg-mcp|breg-review|casework|scheduling|messaging|registry-render|evidence-oid4vci) ;;
+  evidence|discovery|breg|breg-mcp|breg-review|casework|scheduling|messaging|registry-render|evidence-oid4vci|coordinator) ;;
   *) echo "unsupported release image package: ${package}" >&2; exit 1 ;;
 esac
 
@@ -149,10 +149,12 @@ Starting with `v0.21.0`, the release requires public `relay`, `evidence`, and
 supporting services, Registry Messaging, Registry Render, and the separate
 `evidence-oid4vci` image join from `v0.38.0`.
 Registry Relay's final numbered release is `v0.38.0`; releases from `v0.39.0`
-exclude its image, binaries, installers, and client namespace.
+exclude its image, binaries, installers, and client namespace. Registry
+Coordinator joins from `v0.41.0`.
 `BREG_SERVICES_FIRST_RELEASE`, `MESSAGING_FIRST_RELEASE`,
-`RENDER_FIRST_RELEASE`, and `EVIDENCE_OID4VCI_IMAGE_FIRST_RELEASE` in
-`release/scripts/release_roster.py` own those boundaries. The existing
+`RENDER_FIRST_RELEASE`, `EVIDENCE_OID4VCI_IMAGE_FIRST_RELEASE`, and
+`COORDINATOR_FIRST_RELEASE` in `release/scripts/release_roster.py` own those
+boundaries. The existing
 OID4VCI binary stays in earlier inventories. v0.38.0 also adds the Linux amd64
 `discoveryctl` asset beside the existing Discovery runtime asset, completing
 the released authoring and runtime pair. Earlier releases require operators to
@@ -271,6 +273,29 @@ public `messaging` package and includes the bootstrapped private
 have the visibility and Actions access documented above, and require the
 reviewed `release/security/messaging-advisory-baseline.json` before requesting
 a candidate at or after that release.
+
+Registry Coordinator joins from `v0.41.0`. `COORDINATOR_FIRST_RELEASE` in
+`release/scripts/release_roster.py` is the single place that decides the first
+release that ships the `coordinator` and `coordinatorctl` Linux amd64 binaries
+and the `coordinator` image, and every release script and workflow reads it.
+From `v0.41.0`, both checks include Coordinator. The release source deny-lists
+the public `coordinator` package. Complete the onboarding steps above before
+the first candidate: provision both identities, add `coordinator-candidate` to
+scheduled cleanup only after its bootstrap creates the private package, and
+author `release/security/coordinator-advisory-baseline.json` from the
+baseline-bootstrap rehearsal's evidence. Until then, the image-onboarding check
+refuses a `v0.41.0` or later candidate.
+
+The Coordinator image runs as the Distroless `nonroot` user (UID and GID 65532)
+and starts the runtime with the runtime configuration at
+`/etc/registry-coordinator/runtime.yaml`, which the operator mounts along with
+the flow packages and secrets the configuration references. Run state and
+prepared commands live in the Coordinator's PostgreSQL database; only the audit
+journal needs local storage. Point `deployment.auditFile` under the working
+directory `/var/lib/registry-coordinator` and mount a persistent volume there
+that keeps the image's ownership and `0700` mode. The image carries
+`coordinatorctl` at `/usr/local/bin/coordinatorctl` for the operator commands
+in `products/coordinator/DEPLOYMENT.md`; run it by overriding the entrypoint.
 
 The daily cleanup tolerates one delete failure: GitHub's 400 stating that
 publicly visible package versions with more than 5000 downloads cannot be
@@ -694,7 +719,8 @@ Every entry marked `review_required` needs a reviewer's judgement, such as a
 wrapper that forwards a runtime name.
 
 From v0.36.0 the BReg, Casework, and Scheduling images also carry their
-operator tool at `/usr/local/bin/<name>ctl`; Messaging joins from v0.38.0. The
+operator tool at `/usr/local/bin/<name>ctl`; Messaging joins from v0.38.0 and
+Coordinator from v0.41.0. The
 `exposure/<name>.<name>ctl.json` report records the same facts for it. The tool
 is not the Entrypoint, so an exception's whole-image fingerprint `files` do not name
 it, and renewal moves the application layer that holds it without reading
@@ -937,7 +963,7 @@ evidence with the scanner versions pinned in the candidate workflow:
 ```sh
 run_id=<failed-run-id>
 run_attempt=<failed-run-attempt>
-name=evidence # or discovery, breg, breg-mcp, breg-review, casework, scheduling, messaging, registry-render, or evidence-oid4vci
+name=evidence # or discovery, breg, breg-mcp, breg-review, casework, scheduling, messaging, registry-render, evidence-oid4vci, or coordinator
 candidate_tag="ghcr.io/registrystack/${name}-candidate:candidate-${run_id}-${run_attempt}"
 digest="$(crane digest "${candidate_tag}")"
 candidate_ref="ghcr.io/registrystack/${name}-candidate@${digest}"

@@ -204,6 +204,8 @@ def manifest(version: str, release_id: str, source_ref: str, status: str) -> dic
         inventory += ("messaging", "messagingctl")
     if REGISTRY_RELEASE.release_roster.render_in_release(version_tuple):
         inventory += ("registry-render",)
+    if REGISTRY_RELEASE.release_roster.coordinator_in_release(version_tuple):
+        inventory += ("coordinator", "coordinatorctl")
     if version_tuple >= (0, 39, 0):
         inventory = tuple(name for name in inventory if not name.startswith("relay"))
     data = {
@@ -706,6 +708,23 @@ class RegistryReleasePlanTest(unittest.TestCase):
         self.assertEqual(
             [],
             owner.artifact_inventory_errors("0.38.0", current["artifacts"]),
+        )
+
+    def test_coordinator_artifacts_join_only_the_v0_41_manifest_inventory(self) -> None:
+        owner = _load_registry_release()
+        historical = manifest("0.40.0", "beta-fixture", "v0.40.0", "candidate")
+        current = manifest("0.41.0", "beta-fixture", "v0.41.0", "candidate")
+        for name in ("coordinator", "coordinatorctl"):
+            with self.subTest(name=name):
+                self.assertNotIn(name, historical["artifacts"])
+                self.assertIn(name, current["artifacts"])
+        self.assertEqual(
+            [],
+            owner.artifact_inventory_errors("0.40.0", historical["artifacts"]),
+        )
+        self.assertEqual(
+            [],
+            owner.artifact_inventory_errors("0.41.0", current["artifacts"]),
         )
 
     def setUp(self) -> None:

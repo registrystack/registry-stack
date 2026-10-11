@@ -316,7 +316,18 @@ class CollectRehearsalAdvisoryEvidenceTest(TestCase):
                     MODULE.parse_operator_tools(output, roster)
 
     def test_operator_tools_are_owned_by_the_release_roster(self) -> None:
-        for version in ("0.39.0", "1.0.0"):
+        tools = {
+            "breg": "bregctl",
+            "casework": "caseworkctl",
+            "messaging": "messagingctl",
+            "scheduling": "schedulingctl",
+        }
+        for version, expected in (
+            ("0.39.0", tools),
+            ("0.40.0", tools),
+            ("0.41.0", tools | {"coordinator": "coordinatorctl"}),
+            ("1.0.0", tools | {"coordinator": "coordinatorctl"}),
+        ):
             with self.subTest(version=version):
                 results = [
                     subprocess.run(
@@ -335,16 +346,25 @@ class CollectRehearsalAdvisoryEvidenceTest(TestCase):
                 ]
                 roster = MODULE.parse_roster(results[0])
                 self.assertEqual(
-                    {
-                        "breg": "bregctl",
-                        "casework": "caseworkctl",
-                        "messaging": "messagingctl",
-                        "scheduling": "schedulingctl",
-                    },
-                    MODULE.parse_operator_tools(results[1], roster),
+                    expected, MODULE.parse_operator_tools(results[1], roster)
                 )
-                # The collector supports no image the roster holds out.
-                self.assertEqual(MODULE.IMAGE_NAMES, set(roster))
+                # The collector supports exactly the newest roster, so an
+                # older roster is a subset of it.
+                self.assertLessEqual(set(roster), MODULE.IMAGE_NAMES)
+        current = subprocess.run(
+            [
+                "python3",
+                str(ROOT / "release/scripts/release_candidate.py"),
+                "image-names",
+                "--version",
+                "1.0.0",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+        # The collector supports no image the roster holds out.
+        self.assertEqual(MODULE.IMAGE_NAMES, set(MODULE.parse_roster(current)))
 
     def test_each_operator_tool_gets_its_own_exposure_report(self) -> None:
         tools = {"breg": "bregctl"}

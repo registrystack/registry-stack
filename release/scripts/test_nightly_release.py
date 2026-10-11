@@ -149,7 +149,7 @@ class NightlyTest(unittest.TestCase):
         path.write_text(json.dumps(report))
         return path
 
-    def payload(self):
+    def payload(self, base=BASE, tag=TAG):
         # Mirror the directories the workflow's prepare job passes to assemble:
         # the merged canonical Linux bin, the arm64 artifact and merged macOS.
         suffix = "1-1"
@@ -160,7 +160,7 @@ class NightlyTest(unittest.TestCase):
         ]
         for directory in directories:
             directory.mkdir(parents=True)
-        for name, kind in release_candidate._release_payload_inventory(BASE).items():
+        for name, kind in release_candidate._release_payload_inventory(base).items():
             if kind != "binary":
                 continue
             directory = (
@@ -170,9 +170,9 @@ class NightlyTest(unittest.TestCase):
                 if "linux-arm64" in name
                 else directories[0]
             )
-            binary = name.split(f"-v{BASE}-", 1)[0]
-            asset = directory / name.replace(f"v{BASE}", TAG)
-            version = f"{binary} {TAG[1:]}"
+            binary = name.split(f"-v{base}-", 1)[0]
+            asset = directory / name.replace(f"v{base}", tag)
+            version = f"{binary} {tag[1:]}"
             if binary == "registry-render":
                 source = (nightly.ROOT / "crates/registry-render/src/lib.rs").read_text()
                 typst = re.search(r'pub const TYPST_PIN: &str = "([^"]+)";', source)[1]
@@ -185,7 +185,7 @@ class NightlyTest(unittest.TestCase):
         )
         images = self.root / "images"
         images.mkdir()
-        for name in nightly.image_names(BASE):
+        for name in nightly.image_names(base):
             (images / f"{name}.digest").write_text(
                 f"ghcr.io/registrystack/{name}-candidate@sha256:{'1' * 64}\n"
             )
@@ -199,16 +199,19 @@ class NightlyTest(unittest.TestCase):
         nightly.assemble(self.plan, directories, images, output)
         return output
 
-    def manifest_for_roster(self, roster=None):
+    def manifest_for_roster(self, roster=None, tag=TAG):
         manifest = json.loads(json.dumps(self.record))
         manifest.pop("skip")
+        manifest.update(
+            tag=tag, version=tag[1:], base_version=nightly.identity(tag)[0]
+        )
         manifest["roster"] = roster or manifest["roster"]
         manifest["assets"] = [
             {"name": name, "sha256": "0" * 64}
             for name in manifest["roster"]["payloads"]
         ]
         for product in manifest["roster"]["installers"]:
-            for name in (f"{product}-{TAG}-install.sh", f"{product}-install.sh"):
+            for name in (f"{product}-{tag}-install.sh", f"{product}-install.sh"):
                 manifest["assets"].append({"name": name, "sha256": "0" * 64})
         for image in manifest["roster"]["images"]:
             for suffix in ("grype.json", "sbom.spdx.json"):
@@ -320,6 +323,80 @@ class NightlyTest(unittest.TestCase):
                 path.write_text(json.dumps(self.manifest_for_roster(roster)))
                 with self.assertRaisesRegex(nightly.NightlyError, "frozen profile"):
                     nightly.read_manifest(path)
+
+    def test_coordinator_joins_the_nightly_roster_under_profile_v2_1(self):
+        tag_40 = f"v0.40.0-nightly.20261012.{SHA}"
+        tag_41 = f"v0.41.0-nightly.20261012.{SHA}"
+        before = nightly.current_roster("0.40.0", tag_40)
+        after = nightly.current_roster("0.41.0", tag_41)
+        self.assertEqual("registry-stack.nightly-roster.v2.0", before["profile"])
+        self.assertEqual("registry-stack.nightly-roster.v2.1", after["profile"])
+        self.assertNotIn("coordinator", before["images"])
+        self.assertEqual({*before["images"], "coordinator"}, set(after["images"]))
+        self.assertEqual(before["installers"], after["installers"])
+        self.assertEqual(
+            {
+                *(name.replace(tag_40, tag_41) for name in before["payloads"]),
+                f"coordinator-{tag_41}-linux-amd64",
+                f"coordinatorctl-{tag_41}-linux-amd64",
+            },
+            set(after["payloads"]),
+        )
+        self.assertEqual(after, nightly.validate_v2_roster(after, tag_41))
+
+    def test_published_roster_profiles_keep_their_meaning(self):
+        path = self.root / "nightly.json"
+        tag_41 = f"v0.41.0-nightly.20261012.{SHA}"
+        v2_1 = nightly.current_roster("0.41.0", tag_41)
+        with patch.object(nightly.release_roster, "COORDINATOR_FIRST_RELEASE", None):
+            v2_0 = nightly.current_roster("0.41.0", tag_41)
+        self.assertEqual("registry-stack.nightly-roster.v2.0", v2_0["profile"])
+        # A v0.41.0 nightly published before Coordinator joined stays readable,
+        # and so does a v2.1 one after its first release is withdrawn.
+        for name, roster, first_release in (
+            ("v2.0 at v0.41.0", v2_0, (0, 41, 0)),
+            ("v2.1 without a first release", v2_1, None),
+        ):
+            with self.subTest(name=name), patch.object(
+                nightly.release_roster, "COORDINATOR_FIRST_RELEASE", first_release
+            ):
+                manifest = self.manifest_for_roster(roster, tag_41)
+                path.write_text(json.dumps(manifest))
+                self.assertEqual(manifest, nightly.read_manifest(path))
+        for name, roster in {
+            "v2.1 without coordinator": {**v2_1, "images": v2_0["images"]},
+            "v2.1 without coordinatorctl": {
+                **v2_1,
+                "payloads": [
+                    name for name in v2_1["payloads"] if "coordinatorctl" not in name
+                ],
+            },
+            "v2.0 with coordinator": {**v2_0, "images": v2_1["images"]},
+        }.items():
+            with self.subTest(name=name):
+                path.write_text(json.dumps(self.manifest_for_roster(roster, tag_41)))
+                with self.assertRaisesRegex(nightly.NightlyError, "frozen profile"):
+                    nightly.read_manifest(path)
+
+    def test_v0_41_nightly_publishes_coordinator(self):
+        base = "0.41.0"
+        tag = f"v{base}-nightly.20261012.{SHA}"
+        record = {
+            **self.record,
+            "tag": tag,
+            "version": tag[1:],
+            "base_version": base,
+            "roster": nightly.current_roster(base, tag),
+        }
+        self.plan.write_text(json.dumps(record))
+        directories, images = self.payload(base, tag)
+        output = self.root / "public"
+        nightly.assemble(self.plan, directories, images, output)
+        manifest = nightly.read_manifest(output / "nightly.json")
+        self.assertIn("coordinator", manifest["images"])
+        names = {asset["name"] for asset in manifest["assets"]}
+        for binary in ("coordinator", "coordinatorctl"):
+            self.assertIn(f"{binary}-{tag}-linux-amd64", names)
 
     def test_complete_payload_hashes_and_pins_installers(self):
         output = self.assembled()

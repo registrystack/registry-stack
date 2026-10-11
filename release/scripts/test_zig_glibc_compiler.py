@@ -297,7 +297,7 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
             "for binary in ('registry-manifest', 'relay', 'relayctl', 'evidence', "
             "'evidencectl', 'evidence-oid4vci', 'discovery', 'discoveryctl', 'breg', 'bregctl', "
             "'casework', 'caseworkctl', 'scheduling', 'schedulingctl', 'messaging', "
-            "'messagingctl', 'registry-render'):\n"
+            "'messagingctl', 'registry-render', 'coordinator', 'coordinatorctl'):\n"
             "    path = target / binary\n"
             "    if binary == 'registry-manifest':\n"
             "        version = os.environ.get('FAKE_MANIFEST_VERSION') or os.environ.get('REGISTRY_NIGHTLY_TAG') or os.environ['REGISTRY_RELEASE_TAG']\n"
@@ -336,6 +336,8 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
             "    core.append('discoveryctl')\n"
             "if release_roster.render_in_release(parsed):\n"
             "    core.append('registry-render')\n"
+            "if release_roster.coordinator_in_release(parsed):\n"
+            "    core += ['coordinator', 'coordinatorctl']\n"
             "breg = ['breg', 'bregctl'] if parsed >= (0, 26, 0) else []\n"
             "if release_roster.breg_services_in_release(parsed):\n"
             "    breg += ['breg-mcp', 'breg-review']\n"
@@ -355,6 +357,8 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
             "    images.append('evidence-oid4vci')\n"
             "if release_roster.render_in_release(parsed):\n"
             "    images.append('registry-render')\n"
+            "if release_roster.coordinator_in_release(parsed):\n"
+            "    images += ['coordinator', 'coordinatorctl']\n"
             "if parsed >= (0, 36, 0):\n"
             "    images += ['bregctl', 'caseworkctl', 'schedulingctl', 'messagingctl']\n"
             "for name in images:\n"
@@ -562,6 +566,41 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
         self.assertIn("discoveryctl-v0.38.0-linux-amd64", current_bin)
         self.assertIn("registry-render", current_images)
         self.assertIn("evidence-oid4vci", current_images)
+
+    def test_core_stages_coordinator_only_from_its_first_release(self) -> None:
+        result, historical_calls = self.run_payload(version="0.40.0", group="core")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(
+            any("registry-coordinator" in call["args"] for call in historical_calls)
+        )
+        historical_bin, historical_images = self.staged()
+        self.assertFalse(
+            any(name.startswith("coordinator") for name in historical_bin)
+        )
+        self.assertNotIn("coordinator", historical_images)
+        self.assertNotIn("coordinatorctl", historical_images)
+
+        result, current_calls = self.run_payload(version="0.41.0", group="core")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(
+            [
+                "build",
+                "--release",
+                "--locked",
+                "-p",
+                "registry-coordinator",
+                "--bin",
+                "coordinator",
+                "--bin",
+                "coordinatorctl",
+            ],
+            [call["args"] for call in current_calls],
+        )
+        current_bin, current_images = self.staged()
+        self.assertIn("coordinator-v0.41.0-linux-amd64", current_bin)
+        self.assertIn("coordinatorctl-v0.41.0-linux-amd64", current_bin)
+        self.assertIn("coordinator", current_images)
+        self.assertIn("coordinatorctl", current_images)
 
     def test_casework_group_builds_both_exact_binary_targets_from_v0_30(self) -> None:
         result, calls = self.run_payload(version="0.30.0", group="casework")
@@ -906,6 +945,22 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
                 self.assert_merged_groups_equivalent_to_all(version, groups)
         self.assertTrue(
             (self.root / "merge-0.39.0/merged-groups/image-bin/messaging").is_file()
+        )
+
+    def test_v0_41_merged_groups_stage_coordinator_in_the_core_shard(self) -> None:
+        self.assert_merged_groups_equivalent_to_all(
+            "0.41.0", ("core", "breg", "casework", "scheduling", "messaging")
+        )
+        merged = self.root / "merge-0.41.0/merged-groups"
+        sums = (merged / "bin/SHA256SUMS").read_text()
+        self.assertIn("coordinator-v0.41.0-linux-amd64", sums)
+        self.assertIn("coordinatorctl-v0.41.0-linux-amd64", sums)
+        self.assertEqual(
+            ["registry-render", "coordinator", "coordinatorctl"],
+            [
+                line.split("  ", 1)[1]
+                for line in (merged / "image-bin/SHA256SUMS").read_text().splitlines()
+            ][-3:],
         )
 
     def test_v0_36_merged_groups_with_operator_tools_are_equivalent_to_all(

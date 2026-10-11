@@ -2537,6 +2537,7 @@ class RegistryReleaseTest(TestCase):
                 "casework",
                 "scheduling",
                 "messaging",
+                "coordinator",
             )
         }
 
@@ -2561,6 +2562,7 @@ class RegistryReleaseTest(TestCase):
             "casework",
             "scheduling",
             "messaging",
+            "coordinator",
         ):
             self.assertIn(
                 f"cp target/release/{name} dist/image-bin/{name}",
@@ -2571,7 +2573,7 @@ class RegistryReleaseTest(TestCase):
                 f"/workspace/runtime-root/usr/local/bin/{name}",
                 release_dockerfiles[name],
             )
-        for tool in ("bregctl", "caseworkctl", "schedulingctl"):
+        for tool in ("bregctl", "caseworkctl", "schedulingctl", "coordinatorctl"):
             runtime = tool.removesuffix("ctl")
             self.assertIn(
                 f"cp target/release/{tool} dist/image-bin/{tool}",
@@ -2598,6 +2600,7 @@ class RegistryReleaseTest(TestCase):
             "casework",
             "scheduling",
             "messaging",
+            "coordinator",
         ):
             self.assertIn(
                 "--mount=type=bind,source=THIRD_PARTY_NOTICES,"
@@ -2611,7 +2614,7 @@ class RegistryReleaseTest(TestCase):
             )
         self.assertNotIn("THIRD_PARTY_NOTICES", release_dockerfiles["discovery"])
         self.assertIn(
-            "discovery|evidence|evidence-oid4vci|registry-render|breg|breg-mcp|breg-review|casework|scheduling|messaging)",
+            "discovery|evidence|evidence-oid4vci|registry-render|breg|breg-mcp|breg-review|casework|scheduling|messaging|coordinator)",
             image_recipe,
         )
         self.assertNotIn("registry-relay)", image_recipe)
@@ -3019,6 +3022,8 @@ class RegistryReleaseTest(TestCase):
                 inventory.update({"breg-mcp": version, "breg-review": version})
             if module.release_roster.discoveryctl_in_release(version_tuple):
                 inventory["discoveryctl"] = version
+            if module.release_roster.coordinator_in_release(version_tuple):
+                inventory.update({"coordinator": version, "coordinatorctl": version})
             if version_tuple >= (0, 39, 0):
                 inventory = {name: value for name, value in inventory.items() if not name.startswith("relay")}
             return inventory
@@ -3075,6 +3080,106 @@ class RegistryReleaseTest(TestCase):
         self.assertIn('"messaging-${tag}-linux-amd64"', recipe)
         self.assertIn('"messagingctl-${tag}-linux-amd64"', recipe)
         self.assertIn("image_bin_binaries+=(messaging)", recipe)
+
+    def test_coordinator_release_surface_begins_at_its_first_release(self) -> None:
+        module = load_registry_release()
+        published = {
+            name
+            for name in (
+                module.RELAY_V2_ARTIFACT_INVENTORY
+                | {
+                    "registry-docs",
+                    "discovery",
+                    "breg",
+                    "bregctl",
+                    "breg-installer",
+                    "casework",
+                    "caseworkctl",
+                    "casework-installer",
+                    "scheduling",
+                    "schedulingctl",
+                    "registry-client-node",
+                    "registry-client-python",
+                }
+            )
+            if name != "mint"
+            and not name.startswith("relay")
+            and name
+            not in {
+                "evidence-client-node",
+                "evidence-client-python",
+            }
+        }
+
+        def released(version: str) -> dict[str, str]:
+            version_tuple = tuple(map(int, version.split(".")))
+            roster = module.release_roster
+            inventory = {name: version for name in published}
+            if roster.render_in_release(version_tuple):
+                inventory["registry-render"] = version
+            if roster.breg_services_in_release(version_tuple):
+                inventory.update({"breg-mcp": version, "breg-review": version})
+            if roster.discoveryctl_in_release(version_tuple):
+                inventory["discoveryctl"] = version
+            if roster.messaging_in_release(version_tuple):
+                inventory.update({"messaging": version, "messagingctl": version})
+            if roster.coordinator_in_release(version_tuple):
+                inventory.update({"coordinator": version, "coordinatorctl": version})
+            return inventory
+
+        historical = released("0.40.0")
+        self.assertNotIn("coordinator", historical)
+        self.assertNotIn("coordinatorctl", historical)
+        self.assertEqual([], module.artifact_inventory_errors("0.40.0", historical))
+        self.assertNotEqual(
+            [],
+            module.artifact_inventory_errors(
+                "0.40.0",
+                historical | {"coordinator": "0.40.0", "coordinatorctl": "0.40.0"},
+            ),
+        )
+
+        current = released("0.41.0")
+        self.assertEqual("0.41.0", current["coordinator"])
+        self.assertEqual("0.41.0", current["coordinatorctl"])
+        self.assertEqual([], module.artifact_inventory_errors("0.41.0", current))
+        for missing in ("coordinator", "coordinatorctl"):
+            with self.subTest(missing=missing):
+                incomplete = dict(current)
+                del incomplete[missing]
+                self.assertNotEqual(
+                    [], module.artifact_inventory_errors("0.41.0", incomplete)
+                )
+
+        # No version ships Coordinator while the roster names no first release.
+        with mock.patch.object(
+            module.release_roster, "COORDINATOR_FIRST_RELEASE", None
+        ):
+            for version in ("0.41.0", "1.0.0"):
+                with self.subTest(version=version, roster=None):
+                    held = released(version)
+                    self.assertNotIn("coordinator", held)
+                    self.assertEqual(
+                        [], module.artifact_inventory_errors(version, held)
+                    )
+                    self.assertNotEqual(
+                        [],
+                        module.artifact_inventory_errors(
+                            version,
+                            held | {"coordinator": version, "coordinatorctl": version},
+                        ),
+                    )
+
+        recipe = (ROOT / "release/scripts/build-release-binaries.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("RELEASE_INCLUDE_COORDINATOR", recipe)
+        self.assertIn(
+            "-p registry-coordinator --bin coordinator --bin coordinatorctl", recipe
+        )
+        self.assertIn('"coordinator-${tag}-linux-amd64"', recipe)
+        self.assertIn('"coordinatorctl-${tag}-linux-amd64"', recipe)
+        self.assertIn("image_bin_binaries+=(coordinator coordinatorctl)", recipe)
 
     def test_release_candidate_smokes_messaging_assets_from_its_first_release(
         self,
@@ -3151,6 +3256,8 @@ class RegistryReleaseTest(TestCase):
                         current["discoveryctl"] = version
                     if module.release_roster.messaging_in_release(version_tuple):
                         current.update({"messaging": version, "messagingctl": version})
+                    if module.release_roster.coordinator_in_release(version_tuple):
+                        current.update({"coordinator": version, "coordinatorctl": version})
                     if version_tuple >= (0, 39, 0):
                         current = {name: value for name, value in current.items() if not name.startswith("relay")}
                     self.assertEqual(
@@ -4774,6 +4881,9 @@ def write_manifest(
     if load_release_roster().messaging_in_release(version_tuple):
         artifacts["messaging"] = version
         artifacts["messagingctl"] = version
+    if load_release_roster().coordinator_in_release(version_tuple):
+        artifacts["coordinator"] = version
+        artifacts["coordinatorctl"] = version
     if version_tuple >= (0, 39, 0):
         artifacts = {name: value for name, value in artifacts.items() if not name.startswith("relay")}
     manifest = {

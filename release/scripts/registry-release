@@ -279,6 +279,8 @@ def artifact_inventory_errors(version: str, artifacts: dict[Any, Any]) -> list[s
             expected_inventory.update({"messaging", "messagingctl"})
         if release_roster.render_in_release(parsed_version):
             expected_inventory.add("registry-render")
+        if release_roster.coordinator_in_release(parsed_version):
+            expected_inventory.update({"coordinator", "coordinatorctl"})
         missing = sorted(expected_inventory - artifact_names)
         unexpected = sorted(artifact_names - expected_inventory)
         if missing or unexpected:

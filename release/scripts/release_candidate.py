@@ -76,6 +76,7 @@ IMAGE_OPERATOR_TOOLS = {
     "casework": "caseworkctl",
     "scheduling": "schedulingctl",
     "messaging": "messagingctl",
+    "coordinator": "coordinatorctl",
 }
 # Registry Messaging joins the release set from the release that
 # release_roster.MESSAGING_FIRST_RELEASE names.
@@ -88,6 +89,9 @@ BREG_SERVICES_RUNTIME_IMAGE_NAMES = SCHEDULING_RUNTIME_IMAGE_NAMES | {
 }
 RENDER_RUNTIME_IMAGE_NAMES = {"registry-render"}
 EVIDENCE_OID4VCI_RUNTIME_IMAGE_NAMES = {"evidence-oid4vci"}
+# Registry Coordinator joins the release set from the release that
+# release_roster.COORDINATOR_FIRST_RELEASE names.
+COORDINATOR_RUNTIME_IMAGE_NAMES = {"coordinator"}
 V2_TOP_LEVEL_FIELDS = {
     "schema_version",
     "repository",
@@ -132,6 +136,7 @@ SECURITY_EVIDENCE_REQUIRED_FILES = SECURITY_EVIDENCE_COMMON_REQUIRED_FILES | {
         | BREG_SERVICES_RUNTIME_IMAGE_NAMES
         | RENDER_RUNTIME_IMAGE_NAMES
         | EVIDENCE_OID4VCI_RUNTIME_IMAGE_NAMES
+        | COORDINATOR_RUNTIME_IMAGE_NAMES
     )
     for directory, suffix in (
         ("image-sbom", "spdx"),
@@ -173,6 +178,8 @@ def _candidate_image_names(version: str) -> set[str]:
         image_names = image_names | RENDER_RUNTIME_IMAGE_NAMES
     if release_roster.evidence_oid4vci_image_in_release(parsed):
         image_names = image_names | EVIDENCE_OID4VCI_RUNTIME_IMAGE_NAMES
+    if release_roster.coordinator_in_release(parsed):
+        image_names = image_names | COORDINATOR_RUNTIME_IMAGE_NAMES
     if not release_roster.relay_in_release(parsed):
         image_names = image_names - {"relay"}
     return image_names
@@ -491,6 +498,9 @@ def _release_payload_inventory(version: str) -> dict[str, str]:
         inventory[f"messagingctl-{tag}-linux-amd64"] = "binary"
     if release_roster.render_in_release(version_tuple):
         inventory[f"registry-render-{tag}-linux-amd64"] = "binary"
+    if release_roster.coordinator_in_release(version_tuple):
+        inventory[f"coordinator-{tag}-linux-amd64"] = "binary"
+        inventory[f"coordinatorctl-{tag}-linux-amd64"] = "binary"
     if version_tuple >= THIRD_PARTY_NOTICES_MINIMUM_VERSION:
         inventory["THIRD_PARTY_NOTICES"] = "notice"
     if version_tuple >= MACOS_FIPS_BUNDLE_MINIMUM_VERSION:

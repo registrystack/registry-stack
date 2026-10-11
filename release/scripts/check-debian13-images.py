@@ -116,6 +116,7 @@ DOCKERFILES = (
     Path("release/docker/Dockerfile.casework"),
     Path("release/docker/Dockerfile.scheduling"),
     Path("release/docker/Dockerfile.messaging"),
+    Path("release/docker/Dockerfile.coordinator"),
 )
 
 # Adopter and development images. They build from source like the per-product
@@ -203,6 +204,12 @@ HTTP_PROBE_DOCKERFILES = {
         "tool": "messagingctl",
         "entrypoint": 'ENTRYPOINT ["/usr/local/bin/messaging"]',
         "command": 'CMD ["--runtime-config", "/etc/registry-messaging/runtime.yaml", "serve"]',
+    },
+    Path("release/docker/Dockerfile.coordinator"): {
+        "binary": "coordinator",
+        "tool": "coordinatorctl",
+        "entrypoint": 'ENTRYPOINT ["/usr/local/bin/coordinator"]',
+        "command": 'CMD ["--runtime-config", "/etc/registry-coordinator/runtime.yaml"]',
     },
 }
 

@@ -1138,6 +1138,7 @@ REQUIRED_RELEASE_SECURITY_GATES = (
             '    "casework",\n',
             '    "scheduling",\n',
             '    "messaging",\n',
+            '    "coordinator",\n',
             '    "relay",\n',
             "if package in PUBLIC_PACKAGES:",
             "if package not in CANDIDATE_PACKAGES:",

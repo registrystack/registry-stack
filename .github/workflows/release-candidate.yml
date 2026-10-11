@@ -427,6 +427,22 @@ jobs:
             test "$(dist/image-bin/messagingctl --version)" = \
               "messagingctl ${{ needs.validate.outputs.version }}"
           fi
+          coordinator_in_release="$(python3 release/scripts/release_roster.py \
+            coordinator-in-release "${{ needs.validate.outputs.version }}")"
+          if [[ "${coordinator_in_release}" == true ]]; then
+            test "$("dist/bin/coordinator-${{ needs.validate.outputs.tag }}-linux-amd64" --version)" = \
+              "coordinator ${{ needs.validate.outputs.version }}"
+            test "$("dist/bin/coordinatorctl-${{ needs.validate.outputs.tag }}-linux-amd64" --version)" = \
+              "coordinatorctl ${{ needs.validate.outputs.version }}"
+            test "$(dist/image-bin/coordinator --version)" = \
+              "coordinator ${{ needs.validate.outputs.version }}"
+            test "$(dist/image-bin/coordinatorctl --version)" = \
+              "coordinatorctl ${{ needs.validate.outputs.version }}"
+            coordinatorctl_binary="${GITHUB_WORKSPACE}/dist/bin/coordinatorctl-${{ needs.validate.outputs.tag }}-linux-amd64"
+            coordinator_project="${RUNNER_TEMP}/release-coordinator-project"
+            "${coordinatorctl_binary}" init --directory "${coordinator_project}"
+            "${coordinatorctl_binary}" check --project "${coordinator_project}"
+          fi
 
           render_in_release="$(python3 release/scripts/release_roster.py \
             render-in-release "${{ needs.validate.outputs.version }}")"
