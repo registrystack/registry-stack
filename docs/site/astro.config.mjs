@@ -264,6 +264,7 @@ export default defineConfig({
     '/reference/breg-client-api/': internalRedirect('/reference/client-api/'),
     // The deprecation rules are a section of the one stability promise page.
     '/reference/deprecation-policy/': internalRedirect('/reference/api-stability/'),
+    '/reference/deprecation-policy.md': internalRedirect('/reference/api-stability/'),
     // Retired pages keep old links useful by sending readers to a supported
     // task or reference page.
     '/journeys/': internalRedirect('/'),
