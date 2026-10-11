@@ -35,9 +35,41 @@ Start release preparation when:
 - Every dependency pinned to a long-term-support line has been checked for
   remaining upstream support: more than six months must remain, or the
   next-LTS migration is already promoted to a release blocker for this cut.
+  This includes compatibility-only test images. Check both the image's
+  operating-system lifecycle and its language-runtime support line.
 
 The scheduled release canary is useful maintenance telemetry, but it is not a
 Beta release prerequisite.
+
+### Linux Node compatibility smoke
+
+The candidate and read-only rehearsal use the same immutable UBI 8 Node 22
+image in `NODE_RUNTIME_SMOKE_IMAGE`. The current multi-architecture pin runs
+Node 22.23.2 with glibc 2.28 on both amd64 and arm64. It exercises the installed
+npm package, optional platform dependency, native loading, CommonJS, and ESM
+without network access. UBI 8 receives public updates under the RHEL lifecycle;
+the tighter support limit is the Node 22 stream, which retires in April 2027.
+Recheck both lifecycles before each release.
+
+Both jobs retain a separate Node 22.12 executable before installing the newer
+build runtime required by napi-rs. Every installed-package smoke also runs
+through that minimum executable on the supported build host. The minimum-Node
+check and the older-glibc container check cover separate runtime combinations;
+the UBI image does not claim to run Node 22.12.
+
+This runtime smoke is separate from the addon's ABI floor.
+`build-linux-node-client` targets glibc 2.17 and refuses newer ELF symbol
+requirements. The installed Node executable may require a newer system glibc.
+Moving the smoke from Debian 11 glibc 2.31 to UBI 8 glibc 2.28 retains testing
+on an older runtime without changing that addon target. It does not establish
+dynamic execution on glibc 2.17 or promise support for a particular Linux
+distribution. The standalone product binaries retain their separate glibc 2.35
+floor in `release/glibc-floor.env`.
+
+Support sources: [UBI updates](https://access.redhat.com/support/policy/updates/ubi),
+[RHEL lifecycle](https://access.redhat.com/support/policy/updates/errata),
+[RHEL application streams](https://access.redhat.com/support/policy/updates/rhel-app-streams-life-cycle),
+and [Node release schedule](https://github.com/nodejs/Release/blob/main/schedule.json).
 
 ### Onboard a new release image
 
