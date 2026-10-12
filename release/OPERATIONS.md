@@ -63,7 +63,7 @@ requirements. The installed Node executable may require a newer system glibc.
 Moving the smoke from Debian 11 glibc 2.31 to UBI 8 glibc 2.28 retains testing
 on an older runtime without changing that addon target. It does not establish
 dynamic execution on glibc 2.17 or promise support for a particular Linux
-distribution. The standalone product binaries retain their separate glibc 2.35
+distribution. The standalone product binaries retain their separate glibc 2.34
 floor in `release/glibc-floor.env`.
 
 Support sources: [UBI updates](https://access.redhat.com/support/policy/updates/ubi),

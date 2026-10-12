@@ -888,8 +888,8 @@ class NightlyTest(unittest.TestCase):
         commands.mkdir()
         scripts = {
             "uname": '#!/bin/sh\ncase "$1" in -s) echo Linux;; -m) echo x86_64;; *) exit 1;; esac\n',
-            "getconf": '#!/bin/sh\necho "glibc 2.35"\n',
-            "ldd": '#!/bin/sh\necho "ldd (GNU libc) 2.35"\n',
+            "getconf": '#!/bin/sh\necho "glibc 2.34"\n',
+            "ldd": '#!/bin/sh\necho "ldd (GNU libc) 2.34"\n',
             # Emulate GNU mv's atomic replacement on macOS as well as Linux.
             "mv": "#!/usr/bin/env python3\nimport os,sys\nos.replace(sys.argv[-2], sys.argv[-1])\n",
             "curl": """#!/usr/bin/env bash
@@ -968,8 +968,8 @@ cp "$source" "$destination"
             commands.mkdir()
             scripts = {
                 "uname": f'#!/bin/sh\ncase "$1" in -s) echo {os_name};; -m) echo {arch};; *) exit 1;; esac\n',
-                "getconf": '#!/bin/sh\necho "glibc 2.35"\n',
-                "ldd": '#!/bin/sh\necho "ldd (GNU libc) 2.35"\n',
+                "getconf": '#!/bin/sh\necho "glibc 2.34"\n',
+                "ldd": '#!/bin/sh\necho "ldd (GNU libc) 2.34"\n',
                 # Emulate GNU mv's atomic replacement on macOS as well as Linux.
                 "mv": "#!/usr/bin/env python3\nimport os,sys\nos.replace(sys.argv[-2], sys.argv[-1])\n",
             }

@@ -349,7 +349,7 @@ asset_name() {
 # the dynamic linker only says so at the first run, long after this installer
 # would have reported success. Refuse here instead, before anything downloads.
 if [ "$os_label" = "linux" ]; then
-	libc_floor="2.35"
+	libc_floor="2.34"
 	# musl's ldd exits non-zero when asked for a version, and this installer runs
 	# under pipefail, so its report is captured once here instead of being read
 	# through a pipeline whose status would hide the match.

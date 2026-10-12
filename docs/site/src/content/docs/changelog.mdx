@@ -37,6 +37,15 @@ relevant product pages on this site rather than duplicating release notes.
     release/scripts/test_release_workflow_structure.py and
     release/scripts/test_release_rehearsal.py, MINIMUM_NODE_BIN. */}
 
+- Standalone Linux binaries, including CLI tools, and the Base Registry Engine (BReg), Registry
+  Casework, Registry Scheduling, and Evidence installers accept glibc 2.34 and newer, where they
+  required 2.35. glibc 2.34 is the version the RHEL 9 family and Amazon Linux 2023 carry. See
+  [known limitations](../explanation/known-limitations/).
+
+{/* Evidence: release/glibc-floor.env, REGISTRY_GLIBC_FLOOR;
+    release/scripts/check-glibc-floor.sh;
+    release/scripts/render-installer-libc-preflight.py, INSTALLERS. */}
+
 ## v0.39.0 beta-51
 
 - BREAKING: Registry Relay is retired and absent from 0.39.0. The `relay` and `relayctl` binaries,
