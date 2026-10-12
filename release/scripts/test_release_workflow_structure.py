@@ -3292,7 +3292,7 @@ PYTHON_VERSION_CLASSIFIER = re.compile(
 )
 PYTHON_WHEEL_ABI_TAG_PATTERN = re.compile(r"cp3\d+-abi3")
 PYTHON_STABLE_ABI_FEATURE_PATTERN = re.compile(r"abi3-py3\d+")
-PYTHON_WHEEL_WORKFLOWS = ("evidence-dev.yml", "release-candidate.yml", "release.yml")
+PYTHON_WHEEL_WORKFLOWS = ("evidence-dev.yml", "release-candidate.yml")
 
 
 def load_release_script(name: str):
@@ -3394,6 +3394,18 @@ class PythonClientFloorStructureTest(unittest.TestCase):
                 if tags:
                     naming.add(path.name)
         self.assertEqual(set(PYTHON_WHEEL_WORKFLOWS), naming)
+
+    def test_promotion_takes_the_wheel_tag_from_the_candidate(self) -> None:
+        # The workflows that build wheels name the floor tag. Promotion also
+        # accepts a candidate of an earlier release, whose wheels keep the tag
+        # they were built with, so it copies whichever stable ABI tag the
+        # candidate carries and `pypi-state` holds the exact names.
+        text = (WORKFLOWS / "release.yml").read_text(encoding="utf-8")
+        self.assertIn(
+            'cp "extracted/registry_${client}_client-${version}-"cp3*-abi3-"${platform}.whl" dist/',
+            text,
+        )
+        self.assertIn("client_registry.py pypi-state", text)
 
 
 if __name__ == "__main__":
