@@ -579,6 +579,18 @@ for binary in "${binaries[@]}"; do
 	else
 		cp "$tmpdir/$(asset_name "$binary")" "$stage_dir/$binary"
 		chmod 0755 "$stage_dir/$binary"
+		# The libc preflight knows only the floor of the release this installer
+		# was published with, and a release's Linux binaries need the GNU libc
+		# that release was built for. Start each staged binary before the
+		# toolset pointer moves, so a release that cannot run here is refused
+		# while the installed toolset is still the selected one.
+		if [ "$os_label" = "linux" ] && ! "$stage_dir/$binary" --version >/dev/null </dev/null; then
+			printf 'The staged %s %s did not start on this system, so this release cannot run here.\n' \
+				"$binary" "$version" >&2
+			printf 'The Linux binaries of a release need the GNU libc that release was built for, which may be newer than the one on this system.\n' >&2
+			printf 'The installed toolset is unchanged. Choose a release built for the GNU libc of this system, or run the published container images.\n' >&2
+			exit 1
+		fi
 	fi
 done
 
