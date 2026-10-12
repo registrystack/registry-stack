@@ -105,7 +105,7 @@ enum Command {
     Target(target::TargetCommand),
     /// Check one runtime configuration and its startup dependencies.
     Doctor(runtime::DoctorArgs),
-    /// Compatibility operations over deployment artifacts.
+    /// Inspect deployment artifact custody.
     #[command(subcommand)]
     Artifact(ArtifactCommand),
     /// Run the private local issuer and Evidence Gateway pair.

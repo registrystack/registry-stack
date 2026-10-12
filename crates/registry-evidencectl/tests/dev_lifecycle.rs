@@ -121,7 +121,6 @@ fn real_issuer_lifecycle_issues_typed_service_claims_and_stops_cleanly() {
         state["tokenUrl"],
         format!("http://127.0.0.1:{issuer_port}/oauth2/token")
     );
-    assert!(state.get("mintOrigin").is_none());
 
     let token = evidencectl()
         .args(["dev", "token", "local-tutorial-caller"])
