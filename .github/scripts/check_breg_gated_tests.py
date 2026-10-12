@@ -33,7 +33,9 @@ so the predicates that are not features answer for that target: `test` and
 `linux` and `unix` alone. A test whose conditions no feature set satisfies on
 that target, such as one that is also `#[cfg(windows)]`, is out of scope: no
 CI command could select it, so the gate asks for none, lists it with its
-conditions, and refuses a KNOWN_UNSELECTED entry for it.
+conditions, and refuses a KNOWN_UNSELECTED entry for it. A feature set is one
+Cargo can build: a feature brings the features it implies, so a test that
+needs `postgres-test` without `runtime` is out of scope too.
 
 Limits, stated so nobody trusts this for more than it reads:
 
@@ -44,6 +46,10 @@ Limits, stated so nobody trusts this for more than it reads:
   error.
 - `#[ignore]` is not read: an ignored test is credited to a command that
   builds it, although that command does not run it.
+- A `#[cfg_attr(...)]` that names a feature and adds `test` or `tokio::test`,
+  and a library, binary, or integration target with `test = false`, stop the
+  gate with an error: the first makes a test the scanner does not see, the
+  second leaves a target out of the commands that name no target.
 - A file under `src/` belongs to a binary target when it is that target's root
   file or lies in its `src/bin/<name>/` directory, and to the library
   otherwise; the `mod` declarations that decide it for the compiler are not
@@ -138,6 +144,8 @@ CFG_TOKEN = re.compile(r'\s*(?:(\w+)|"([^"]*)"|([(),=]))')
 CFG_LINE = re.compile(r"^#(!?)\[cfg\((.*)\)\]$")
 FEATURE = re.compile(r'\bfeature\s*=\s*"([^"]*)"')
 TEST_ATTRIBUTE = re.compile(r"^#\[(?:tokio::)?test\b")
+CFG_ATTR_LINE = re.compile(r"^#!?\[cfg_attr\((.*)\)\]$")
+ADDS_TEST = re.compile(r"^(?:tokio::)?test\b")
 ITEM = re.compile(r"^(?:pub(?:\([^)]*\))?\s+)?(?:(?:async\s+)?fn\s+(\w+)|mod\s+(\w+))")
 
 
@@ -366,6 +374,28 @@ def names_feature(conditions: Iterable[str]) -> bool:
     return any(FEATURE.search(condition) for condition in conditions)
 
 
+def adds_test_behind_a_feature(attribute: str) -> bool:
+    """Whether a `cfg_attr` names a feature and adds a test attribute."""
+    match = CFG_ATTR_LINE.match(attribute)
+    if match is None:
+        return False
+    arguments: list[str] = []
+    depth = 0
+    start = 0
+    for position, character in enumerate(match[1]):
+        if character == "(":
+            depth += 1
+        elif character == ")":
+            depth -= 1
+        elif character == "," and depth == 0:
+            arguments.append(match[1][start:position].strip())
+            start = position + 1
+    arguments.append(match[1][start:].strip())
+    return FEATURE.search(arguments[0]) is not None and any(
+        ADDS_TEST.match(argument) for argument in arguments[1:]
+    )
+
+
 def scan(path: Path, label: str) -> tuple[tuple[str, ...], list[tuple[str, tuple[str, ...]]]]:
     """Return a file's inner conditions and its feature-gated tests and modules."""
     lines = path.read_text(encoding="utf-8").splitlines()
@@ -416,6 +446,11 @@ def scan(path: Path, label: str) -> tuple[tuple[str, ...], list[tuple[str, tuple
                         "code; the gate cannot read it"
                     )
                 (file_conditions if match[1] else conditions).append(match[2])
+            if adds_test_behind_a_feature(line):
+                raise GateError(
+                    f"{label}:{start + 1}: cfg_attr makes a test only under a feature; "
+                    "the gate cannot read it"
+                )
             is_test = is_test or TEST_ATTRIBUTE.match(line) is not None
         item = ITEM.match(lines[index].strip()) if index < len(lines) else None
         if names_feature(conditions) and item is not None:
@@ -457,8 +492,23 @@ def binary_roots(
     return roots
 
 
+def feature_table(crate: Path) -> Mapping[str, Iterable[str]]:
+    manifest = tomllib.loads((crate / "Cargo.toml").read_text(encoding="utf-8"))
+    return manifest.get("features", {})
+
+
+def refuse_targets_left_out_of_the_default_set(manifest: Mapping[str, Any]) -> None:
+    targets = [("the library", manifest.get("lib", {}))]
+    targets.extend((f"binary target {target['name']}", target) for target in manifest.get("bin", ()))
+    targets.extend((f"test target {target['name']}", target) for target in manifest.get("test", ()))
+    for name, target in targets:
+        if target.get("test") is False:
+            raise GateError(f"{name} sets test = false, which the gate does not model")
+
+
 def gated_tests(crate: Path) -> list[GatedTest]:
     manifest = tomllib.loads((crate / "Cargo.toml").read_text(encoding="utf-8"))
+    refuse_targets_left_out_of_the_default_set(manifest)
     declared = {
         target.get("path", f"tests/{target['name']}.rs"): (
             target["name"],
@@ -518,23 +568,24 @@ def selects(invocation: Invocation, test: GatedTest) -> bool:
     return all(cfg_holds(condition, invocation.features) for condition in test.conditions)
 
 
-def unreachable(test: GatedTest) -> bool:
-    """Whether no feature set satisfies the test's conditions on the CI target."""
+def unreachable(test: GatedTest, table: Mapping[str, Iterable[str]]) -> bool:
+    """Whether no feature set Cargo can build satisfies the test's conditions."""
     named = sorted({name for condition in test.conditions for name in FEATURE.findall(condition)})
     return not any(
-        all(cfg_holds(condition, frozenset(enabled)) for condition in test.conditions)
+        all(cfg_holds(condition, features) for condition in test.conditions)
         for size in range(len(named) + 1)
         for enabled in combinations(named, size)
+        for features in (feature_closure(table, enabled, default_features=False),)
     )
 
 
-def out_of_scope(tests: Iterable[GatedTest]) -> list[str]:
+def out_of_scope(tests: Iterable[GatedTest], table: Mapping[str, Iterable[str]]) -> list[str]:
     """Describe the gated tests the gate asks no CI invocation for."""
     return [
         f"{test.key}: no feature set satisfies {' and '.join(test.conditions)} "
         "on the Linux CI target"
         for test in tests
-        if unreachable(test)
+        if unreachable(test, table)
     ]
 
 
@@ -542,12 +593,13 @@ def violations(
     tests: Iterable[GatedTest],
     invocations: Iterable[Invocation],
     known_unselected: Mapping[str, str],
+    table: Mapping[str, Iterable[str]],
 ) -> list[str]:
     invocations = list(invocations)
     unselected = [
         test
         for test in tests
-        if not unreachable(test)
+        if not unreachable(test, table)
         and not any(selects(invocation, test) for invocation in invocations)
     ]
     # A target nothing builds is one finding, not one per test inside it.
@@ -578,9 +630,7 @@ def ci_invocations(
     sources: Iterable[str] = INVOCATION_SOURCES,
     shard: Iterable[str] | None = None,
 ) -> tuple[list[Invocation], int]:
-    table = tomllib.loads((root / "crates" / CRATE / "Cargo.toml").read_text(encoding="utf-8"))[
-        "features"
-    ]
+    table = feature_table(root / "crates" / CRATE)
     invocations = [shard_invocation(root, shard or shard_packages(SHARDS), table)]
     ignored = 0
     for source in sources:
@@ -604,6 +654,7 @@ def repository_violations(
         gated_tests(root / "crates" / CRATE),
         invocations,
         KNOWN_UNSELECTED if known_unselected is None else known_unselected,
+        feature_table(root / "crates" / CRATE),
     )
 
 
@@ -611,8 +662,9 @@ def main() -> int:
     try:
         tests = gated_tests(ROOT / "crates" / CRATE)
         invocations, ignored = ci_invocations(ROOT)
-        problems = violations(tests, invocations, KNOWN_UNSELECTED)
-        skipped = out_of_scope(tests)
+        table = feature_table(ROOT / "crates" / CRATE)
+        problems = violations(tests, invocations, KNOWN_UNSELECTED, table)
+        skipped = out_of_scope(tests, table)
     except GateError as error:
         print(f"gated test selection gate cannot read its input: {error}", file=sys.stderr)
         return 2
