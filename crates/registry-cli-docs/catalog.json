@@ -9347,7 +9347,7 @@
         {
           "name": "artifact",
           "invocation": "evidencectl artifact",
-          "about": "Compatibility operations over deployment artifacts",
+          "about": "Inspect deployment artifact custody",
           "long_about": null,
           "usage": "evidencectl artifact [OPTIONS] <COMMAND>",
           "arguments": [],
