@@ -761,9 +761,11 @@ guards, and the removed-key refusals are unchanged.
   verification. A `casework.package.json` the sums do not list is an extra
   file, refused by name with `casework.package.invalid`. One the sums do
   list is a file `casework.yaml` does not name, refused by
-  `verify_casework_contents` with `casework.package.unexpected-contents`. A
-  root without `SHA256SUMS` is refused with `casework.package.invalid`
-  whatever else it holds. Each refusal names `caseworkctl package`, and each
+  `verify_casework_contents` with `casework.package.unexpected-contents`. The
+  `package.expectedDigest` pin is compared before the contents, so a listed
+  file under a pin that names another digest is refused with
+  `casework.package.digest-mismatch`. A root without `SHA256SUMS` is refused
+  with `casework.package.invalid` whatever else it holds. Each refusal names `caseworkctl package`, and each
   is raised before the database is opened.
 - `command` in `crates/registry-casework/src/runtime.rs` declares one
   subcommand, `serve`, and requires a subcommand. `caseworkctl` declares no
