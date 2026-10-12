@@ -217,8 +217,10 @@ relevant product pages on this site rather than duplicating release notes.
 - BREAKING: Registry Messaging scopes a spent submission key to the caller's verified issuer and
   subject, and rotating the audit hash key no longer frees it. A changed request under a key
   whose receipt has passed `retention.submissionReceiptRetentionDays` answers
-  `409 idempotency.key-reused`. [Deploy Registry Messaging](../operate/messaging/) gives the drain
-  to finish before you move senders to the new runtime.
+  `409 idempotency.key-reused` for as long as the message record is held. Once
+  `retention.recordRetentionDays` has cleared the record and its request hash, every request under
+  the key answers `410 idempotency.expired`. [Deploy Registry Messaging](../operate/messaging/)
+  gives the drain to finish before you move senders to the new runtime.
 
 {/* Evidence: crates/registry-messaging/tests/postgres_migrate.rs,
     the_runtime_scopes_spent_keys_to_the_verified_caller;
