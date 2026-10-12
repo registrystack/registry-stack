@@ -161,7 +161,7 @@ jobs:
       - name: Install Go for the AWS-LC-FIPS source build
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: 1.24.4
+          go-version: 1.27.2
           cache: false
 
       - name: Restore Evidence development Cargo cache
@@ -171,9 +171,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: registry-evidence-dev-go-1.24.4-${{ matrix.asset }}-${{ matrix.runner }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
+          key: registry-evidence-dev-go-1.27.2-${{ matrix.asset }}-${{ matrix.runner }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
           restore-keys: |
-            registry-evidence-dev-go-1.24.4-${{ matrix.asset }}-${{ matrix.runner }}-
+            registry-evidence-dev-go-1.27.2-${{ matrix.asset }}-${{ matrix.runner }}-
 
       - name: Build native Evidence development binaries
         shell: bash
@@ -254,7 +254,7 @@ jobs:
       - name: Install Go for the AWS-LC-FIPS source build
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: 1.24.4
+          go-version: 1.27.2
           cache: false
 
       - name: Setup Node
@@ -271,9 +271,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: registry-evidence-dev-clients-go-1.24.4-zig-0.12.1-${{ matrix.asset }}-${{ matrix.runner }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock', 'release/requirements/maturin-1.9.6.txt', 'release/scripts/zig-glibc-compiler', 'release/scripts/build-linux-python-client') }}
+          key: registry-evidence-dev-clients-go-1.27.2-zig-0.12.1-${{ matrix.asset }}-${{ matrix.runner }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock', 'release/requirements/maturin-1.9.6.txt', 'release/scripts/zig-glibc-compiler', 'release/scripts/build-linux-python-client') }}
           restore-keys: |
-            registry-evidence-dev-clients-go-1.24.4-zig-0.12.1-${{ matrix.asset }}-${{ matrix.runner }}-
+            registry-evidence-dev-clients-go-1.27.2-zig-0.12.1-${{ matrix.asset }}-${{ matrix.runner }}-
 
       - name: Build the Python client wheel
         working-directory: crates/registry-evidence-client-py

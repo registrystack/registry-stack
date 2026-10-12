@@ -20,6 +20,10 @@ WORKFLOWS = ROOT / ".github" / "workflows"
 LATEST_RELEASE_HELPER = ROOT / "release/scripts/verify_latest_published_release.py"
 LINUX_NODE_BUILD_HELPER = ROOT / "release/scripts/build-linux-node-client"
 SETUP_GO_ACTION = "actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e"
+# Go builds AWS-LC-FIPS and is not shipped. Every hosted job installs this one
+# release, and every cache that holds its output names it.
+GO_VERSION = "1.27.2"
+GO_CACHE_TOKEN_RE = re.compile(r"\bgo-([0-9]+(?:\.[0-9]+)+)")
 
 
 def workflow(name: str) -> tuple[str, dict]:
@@ -42,7 +46,7 @@ def assert_pinned_go(test: unittest.TestCase, document: dict, job: str) -> None:
         if item.get("name") == "Install Go for the AWS-LC-FIPS source build"
     )
     test.assertEqual(step["uses"], SETUP_GO_ACTION)
-    test.assertEqual(step["with"], {"go-version": "1.24.4", "cache": False})
+    test.assertEqual(step["with"], {"go-version": GO_VERSION, "cache": False})
 
 
 def verify_latest_release_fixture(
@@ -84,7 +88,7 @@ class EvidenceDevelopmentWorkflowStructureTest(unittest.TestCase):
                 for step in document["jobs"][job]["steps"]
                 if "Cargo cache" in step.get("name", "")
             )
-            self.assertIn("go-1.24.4", cache["with"]["key"])
+            self.assertIn(f"go-{GO_VERSION}", cache["with"]["key"])
 
     def test_is_manual_main_only_with_one_narrow_publication_job(self) -> None:
         text, document = workflow("evidence-dev.yml")
@@ -1019,8 +1023,8 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         self.assertIn(macos_recipe, cache_key)
         self.assertIn(macos_recipe, restore_key)
         self.assertIn(".github/workflows/release-candidate.yml", cache_key)
-        self.assertIn("go-1.24.4", cache_key)
-        self.assertIn("go-1.24.4", restore_key)
+        self.assertIn(f"go-{GO_VERSION}", cache_key)
+        self.assertIn(f"go-{GO_VERSION}", restore_key)
         self.assertIn("zig-0.12.1-glibc-2.17", cache_key)
         self.assertIn("release/requirements/maturin-1.9.6.txt", cache_key)
         self.assertIn("release/scripts/zig-glibc-compiler", cache_key)
@@ -2368,7 +2372,43 @@ class SupportingWorkflowStructureTest(unittest.TestCase):
             for step in document["jobs"]["golden"]["steps"]
             if step.get("name") == "Cache Cargo registry and build artifacts"
         )
-        self.assertIn("go-1.24.4", cache["with"]["key"])
+        self.assertIn(f"go-{GO_VERSION}", cache["with"]["key"])
+
+    def test_every_go_setup_pins_the_supported_toolchain(self) -> None:
+        setup_go_jobs = set()
+        for path in sorted(WORKFLOWS.glob("*.yml")):
+            text, document = workflow(path.name)
+            for job_name, job in document["jobs"].items():
+                for step in job.get("steps", ()):
+                    if not step.get("uses", "").startswith("actions/setup-go@"):
+                        continue
+                    setup_go_jobs.add((path.name, job_name))
+                    with self.subTest(workflow=path.name, job=job_name):
+                        self.assertEqual(step["uses"], SETUP_GO_ACTION)
+                        self.assertEqual(
+                            step["with"], {"go-version": GO_VERSION, "cache": False}
+                        )
+            with self.subTest(workflow=path.name, check="cache identity"):
+                self.assertLessEqual(
+                    set(GO_CACHE_TOKEN_RE.findall(text)), {GO_VERSION}
+                )
+        self.assertEqual(
+            setup_go_jobs,
+            {
+                ("ci.yml", "release-linux-node-clients"),
+                ("evidence-dev.yml", "build"),
+                ("evidence-dev.yml", "clients"),
+                ("macos-contributor.yml", "direct-cargo-binaries"),
+                ("nightly-release.yml", "arm64"),
+                ("nightly-release.yml", "macos"),
+                ("release-candidate.yml", "build-macos-platforms"),
+                ("release-candidate.yml", "build-platforms"),
+                ("release-candidate.yml", "clients"),
+                ("release-native-benchmark.yml", "build"),
+                ("release-rehearsal.yml", "node-clients"),
+                ("render-golden.yml", "golden"),
+            },
+        )
 
     def test_public_verification_selects_the_versioned_image_roster(self) -> None:
         verify = (ROOT / "release/VERIFY.md").read_text(encoding="utf-8")

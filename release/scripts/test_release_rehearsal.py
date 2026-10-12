@@ -377,7 +377,7 @@ class ReleaseRehearsalTest(unittest.TestCase):
         )
         self.assertEqual(setup_go["uses"], SETUP_GO_ACTION)
         self.assertEqual(
-            {"go-version": "1.24.4", "cache": False}, setup_go["with"]
+            {"go-version": "1.27.2", "cache": False}, setup_go["with"]
         )
         self.assertFalse(
             any("upload-artifact@" in str(step) for step in clients["steps"])
