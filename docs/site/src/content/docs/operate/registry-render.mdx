@@ -18,13 +18,15 @@ answering them. At the end of this page one `registry-render` process serves you
 address behind your TLS proxy, answers `GET /health` and `GET /ready`, renders under API-key
 authentication with a per-render audit trail, and shuts down within a bounded window.
 
-Registry Render is pre-release software for institutional pilots. It has not joined a published
-release. The release roster admits its binaries and container image starting with v0.38.0. Until a
-release at or after that boundary is published, build the binary from source.
+Registry Render is pre-1.0 software for institutional pilots. Releases from v0.38.0 publish its
+Linux amd64 binary and container image, and it remains an
+[experimental surface](../../reference/api-stability/#experimental-surfaces) outside the
+compatibility promise. Build the binary from source for another platform.
 
 {/* Evidence: products/render/ACCEPTANCE.md;
     products/render/DEFINITION-OF-DONE.md;
-    release/scripts/release_roster.py, RENDER_FIRST_RELEASE and render_in_release. */}
+    release/scripts/release_roster.py, RENDER_FIRST_RELEASE and render_in_release;
+    release/scripts/build-release-binaries.sh, registry-render asset staging. */}
 
 [Rendering your first document](../../tutorials/first-render-document/) covers the bundle side:
 scaffolding, authoring, and packaging. This page starts from a package directory.

@@ -54,6 +54,19 @@ ignore = [
     # ttf-parser 0.25.1 (via krilla/fontdb; also a direct render dependency
     # for label-coverage checks): unmaintained advisory.
     "RUSTSEC-2026-0192",
+    # unsafe-libyaml 0.2.11 (via serde_yaml 0.9.34 in typst-library, directly
+    # and through hayagriva): unmaintained, no patched release. It runs only
+    # when a template calls Typst's `yaml()`, `yaml.encode()`, or
+    # `bibliography()`; no bundle in this repository does. Request data
+    # reaches a template as JSON in `sys.inputs.data`, and a YAML data file a
+    # bundle keeps for its template is package bytes. Render does not withhold
+    # these functions, so keeping request text and request assets away from
+    # them is a template review duty, not a renderer guarantee; this ignore
+    # does not accept a template that passes them request data.
+    # Reviewed 2026-10-12. Beyond the triggers above, review this one when a
+    # bundle's template starts calling any of those three functions: the Typst
+    # pin and the renderer can stay unchanged while that happens.
+    "RUSTSEC-2024-0449",
     # yaml-rust 0.4.5 (via syntect/two-face in typst-library): unmaintained.
     "RUSTSEC-2024-0320",
 ]
