@@ -274,6 +274,10 @@ select an opaque immediate-action binding only after validating its operation,
 profile, source/package identity, route, input contracts, bounds, target
 condition requirements, and permitted result effects.
 
+An immediate-action descriptor may include `requiredCapabilities`; absence is
+equivalent to an empty list. A client does not promote an action when the list
+contains a capability it does not understand.
+
 Input descriptors distinguish requiredness from nullability and retain the
 owning action's input mode and bounds. Target-condition retrieval and invocation
 are separate explicit methods. Invocation retains the original input,
@@ -286,11 +290,18 @@ or replace execution-time authorization.
 
 Parsed Rust, Node, and Python metadata retains selectors, read paths, vocabulary
 labels, reference-operation details, immediate actions, and change-request
-capabilities. New optional descriptors remain optional when reading older
-servers, but a missing executable request contract returns an unsupported
-selection error. Older strict clients may reject added metadata members, so
-upgrade clients and servers together. These descriptors expose existing runtime
-capabilities without changing permissions, history retention, or database schema.
+capabilities. Clients ignore unknown object members but still refuse duplicate
+members, exceeded resource bounds, missing required members, and known members
+with the wrong type. A missing executable request contract returns an unsupported
+selection error. `requiredCapabilities` is the must-understand gate: an unknown
+capability disables only the operation that names it, while other operations in
+the same document remain usable. An engine addition that changes how an existing
+member must be interpreted or executed must add a new `requiredCapabilities`
+value; every other additive member is ignorable. The engine still authorizes every
+request at execution time.
+
+These descriptors expose existing runtime capabilities without changing
+permissions, history retention, or database schema.
 
 A successful `GET /v1/registry` response carries a `Registry-Engine-Version`
 header naming the engine release that served it, the same value `breg --version`

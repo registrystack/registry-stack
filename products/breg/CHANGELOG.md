@@ -33,6 +33,31 @@
   for this package`. A database v0.40.0 created holds the storage and needs
   no action. A database last applied before v0.38.0 is not upgraded in place:
   apply to a new database, as v0.40.0 already required.
+- Fixed actions accept omitted optional reference inputs on create and patch,
+  consistently with optional scalar inputs. Supplied references still require
+  an existing authorized target; explicit null and missing required inputs
+  remain invalid. Handler reference restrictions are unchanged.
+- Rust, Node.js, and Python metadata readers ignore unknown object members
+  while retaining duplicate, type, required-member, and resource checks.
+  Unsupported `requiredCapabilities` disable the affected executable binding
+  without blocking supported operations. Immediate-action descriptors also
+  recognize an optional must-understand capability list. Tombstone, batch,
+  and lifecycle selection now report `required-capability`, where they
+  reported `contract-mismatch`, when no selected operation carries
+  capabilities the client understands.
+- Well-formed unsupported metadata vocabulary now omits only the affected
+  statistical dataset, descriptive change-request capability, selector, or
+  spatial capability. An unsupported temporal mode keeps its `temporal`
+  descriptor as served, because null already means the collection is not
+  temporal. Supported siblings remain usable; malformed known fields,
+  bindings, disclosure grants, and execution gates stay strict.
+- Rust, Node.js, and Python clients handle valid unknown Problem codes by HTTP
+  status and trace ID, with no inferred code or extension semantics. Known
+  codes keep their exact validation; additive object members are ignored after
+  duplicate checks. Malformed envelopes still refuse as protocol errors.
+- The `immutable-identity-corrections` fixture demonstrates a required subject
+  reference on creation and later description corrections using separate
+  existing access profiles, with no subject-retargeting patch authority.
 
 ## v0.40.0 - 2026-10-11
 

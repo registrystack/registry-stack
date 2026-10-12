@@ -197,9 +197,18 @@ caller omits that input, the effect leaves the field out: a create stores the
 field's ordinary absent value and a patch leaves the stored value unchanged.
 Only omission skips the field: an explicit JSON `null` for that optional input
 returns HTTP `400 request.invalid` and changes nothing.
+An optional reference input used as a fixed value follows the same rule. When
+it is absent, BREG does not resolve or lock a link target. When it is supplied,
+the target must exist and the selected action permission must authorize it.
+References used as patch targets remain required and keep their condition and
+ordered-lock requirements.
 Omitting a required input still refuses the request, as does an absent input
 mapped to a required field. A handler's proposal is taken as written, so a
 proposal that names an absent input is refused rather than skipped.
+Rhai handlers currently accept only required reference sources for their
+declared reference writes. The compiler refuses an optional reference source with
+`breg.action.handler-reference-required`; the fixed-effect omission rule does
+not extend that handler surface.
 Rhai has no database query, stored-record snapshot, clock, filesystem or network
 API. The script returns exactly one of `effects` or `refusal`:
 

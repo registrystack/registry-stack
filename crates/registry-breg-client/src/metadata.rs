@@ -1254,6 +1254,7 @@ impl BRegImmediateActionBounds {
 #[derive(Clone, PartialEq)]
 pub struct BRegImmediateActionDescriptor {
     id: String,
+    required_capabilities: Vec<String>,
     route: String,
     condition_route: Option<String>,
     contract_fingerprint: String,
@@ -1345,8 +1346,9 @@ pub struct BRegMetadata {
 }
 
 impl BRegMetadata {
-    /// Parse exact runtime metadata v1 bytes using duplicate-key detection and
-    /// resource bounds before interpreting any operation as authority.
+    /// Parse runtime metadata v1 bytes using duplicate-key detection and
+    /// resource bounds before interpreting known members. Unknown object
+    /// members are ignored; required capabilities still gate execution.
     pub fn from_slice(bytes: &[u8]) -> Result<Self, BRegMetadataError> {
         if bytes.len() > MAX_BREG_METADATA_BYTES {
             return Err(metadata_error(BRegMetadataErrorKind::Size));
@@ -1437,6 +1439,11 @@ impl BRegMetadata {
         if action.access_profile != expected_profile {
             return Err(selection_error(
                 BRegMetadataSelectionErrorKind::ProfileMismatch,
+            ));
+        }
+        if !action.required_capabilities.is_empty() {
+            return Err(selection_error(
+                BRegMetadataSelectionErrorKind::RequiredCapability,
             ));
         }
         let semantics_are_exact = match action.input_mode.as_deref() {
@@ -1632,7 +1639,12 @@ impl BRegMetadata {
                     selection_error(BRegMetadataSelectionErrorKind::NotFound)
                 }
             })?;
-        if operation.response_entity != entity.id || !operation.required_capabilities.is_empty() {
+        if !operation_capabilities_are_understood(operation) {
+            return Err(selection_error(
+                BRegMetadataSelectionErrorKind::RequiredCapability,
+            ));
+        }
+        if operation.response_entity != entity.id {
             return Err(selection_error(
                 BRegMetadataSelectionErrorKind::ContractMismatch,
             ));
@@ -1823,12 +1835,21 @@ impl BRegMetadata {
             ));
         }
 
+        let understood = candidates
+            .into_iter()
+            .filter(|(operation, _)| operation_capabilities_are_understood(operation))
+            .collect::<Vec<_>>();
+        if understood.is_empty() {
+            return Err(selection_error(
+                BRegMetadataSelectionErrorKind::RequiredCapability,
+            ));
+        }
+
         let base_path = format!("/v1/records/{}/{{record_id}}/actions", entity.route);
-        let mut bindings = Vec::with_capacity(candidates.len());
-        for (operation, kind) in candidates {
+        let mut bindings = Vec::with_capacity(understood.len());
+        for (operation, kind) in understood {
             if operation.response_entity != entity.id
                 || operation.method != "POST"
-                || operation.required_capabilities != ["change_request_lifecycle"]
                 || !operation.create_writable_fields.is_empty()
                 || !operation.patch_writable_fields.is_empty()
                 || !lifecycle_request_is_exact(operation, kind)
@@ -1898,6 +1919,16 @@ impl BRegMetadata {
             ));
         }
 
+        let understood = candidates
+            .into_iter()
+            .filter(|operation| operation_capabilities_are_understood(operation))
+            .collect::<Vec<_>>();
+        if understood.is_empty() {
+            return Err(selection_error(
+                BRegMetadataSelectionErrorKind::RequiredCapability,
+            ));
+        }
+
         let source = crate::BRegAttachmentSource {
             registry_identifier: self.id.clone(),
             dataset_identifier: entity.dataset_identifier.clone(),
@@ -1907,33 +1938,47 @@ impl BRegMetadata {
             collection_path: format!("/v1/records/{}", entity.route),
             source_binding: source_binding.clone(),
         };
-        let mut descriptors: BTreeMap<&str, &Value> = BTreeMap::new();
-        for operation in candidates {
+        let mut slots: BTreeMap<&str, crate::BRegAttachmentSlot> = BTreeMap::new();
+        for operation in understood {
             for field in operation.fields.iter().filter(|field| {
                 attachment_capability_present(field)
                     && operation.readable_fields.contains(&field.id)
             }) {
                 let descriptor = &field.schema["x-registry-attachment"];
-                if descriptors
-                    .insert(field.id.as_str(), descriptor)
-                    .is_some_and(|previous| previous != descriptor)
-                {
-                    return Err(selection_error(
-                        BRegMetadataSelectionErrorKind::ContractMismatch,
-                    ));
+                let slot = crate::BRegAttachmentSlot::from_descriptor(
+                    &source,
+                    field.id.as_str(),
+                    descriptor,
+                )
+                .map_err(|_| selection_error(BRegMetadataSelectionErrorKind::ContractMismatch))?;
+                if let Some(previous) = slots.get(field.id.as_str()) {
+                    if previous != &slot {
+                        return Err(selection_error(
+                            BRegMetadataSelectionErrorKind::ContractMismatch,
+                        ));
+                    }
+                } else {
+                    slots.insert(field.id.as_str(), slot);
                 }
             }
         }
-        if descriptors.is_empty() {
+        if slots.is_empty() {
             return Err(selection_error(BRegMetadataSelectionErrorKind::NotFound));
         }
-        descriptors
-            .into_iter()
-            .map(|(slot_identifier, descriptor)| {
-                crate::BRegAttachmentSlot::from_descriptor(&source, slot_identifier, descriptor)
-                    .map_err(|_| selection_error(BRegMetadataSelectionErrorKind::ContractMismatch))
-            })
-            .collect()
+        Ok(slots.into_values().collect())
+    }
+}
+
+fn operation_capabilities_are_understood(operation: &BRegMetadataOperation) -> bool {
+    match &operation.kind {
+        BRegOperationKind::SubmitRequest
+        | BRegOperationKind::ReviseRequest
+        | BRegOperationKind::CancelRequest
+        | BRegOperationKind::ApplyRequest => {
+            operation.required_capabilities == ["change_request_lifecycle"]
+        }
+        BRegOperationKind::Unknown(_) => false,
+        _ => operation.required_capabilities.is_empty(),
     }
 }
 
@@ -2798,7 +2843,22 @@ fn lifecycle_request_is_exact(
         && request.maximum_body_bytes.is_none()
         && request.allow_create.is_none()
         && request.allow_patch.is_none()
-        && request.schema.as_ref() == Some(&expected_lifecycle_schema(kind))
+        && request.schema.as_ref().is_some_and(|schema| {
+            expected_object_members_match(schema, &expected_lifecycle_schema(kind))
+        })
+}
+
+fn expected_object_members_match(actual: &Value, expected: &Value) -> bool {
+    match expected {
+        Value::Object(expected) => actual.as_object().is_some_and(|actual| {
+            expected.iter().all(|(member, expected)| {
+                actual
+                    .get(member)
+                    .is_some_and(|actual| expected_object_members_match(actual, expected))
+            })
+        }),
+        _ => actual == expected,
+    }
 }
 
 fn expected_lifecycle_schema(kind: crate::BRegLifecycleOperation) -> Value {
@@ -3866,6 +3926,9 @@ fn parse_immediate_actions(
         }
         let mut action = object(action)?;
         let id = identifier(required(&mut action, "id")?)?;
+        let required_capabilities =
+            optional_identifier_array(&mut action, "requiredCapabilities")?.unwrap_or_default();
+        ensure_unique(required_capabilities.iter().map(String::as_str))?;
         let route = path(required(&mut action, "route")?)?;
         let condition_route = nullable_path(required(&mut action, "conditionRoute")?)?;
         let contract_fingerprint = string(required(&mut action, "contractFingerprint")?)?;
@@ -3961,6 +4024,7 @@ fn parse_immediate_actions(
         finish(action)?;
         parsed.push(BRegImmediateActionDescriptor {
             id,
+            required_capabilities,
             route,
             condition_route,
             contract_fingerprint,
@@ -4449,12 +4513,10 @@ fn text_array(value: Value) -> Result<Vec<String>, BRegMetadataError> {
     array(value)?.into_iter().map(bounded_text).collect()
 }
 
-fn finish(object: Map<String, Value>) -> Result<(), BRegMetadataError> {
-    if object.is_empty() {
-        Ok(())
-    } else {
-        Err(metadata_error(BRegMetadataErrorKind::Shape))
-    }
+fn finish(_unknown_members: Map<String, Value>) -> Result<(), BRegMetadataError> {
+    // The duplicate-key decoder and whole-document bound walk run before
+    // parsing, so ignored extension members remain unique and resource-bounded.
+    Ok(())
 }
 
 fn api_names_for(operation: &BRegMetadataOperation, logical_ids: &[String]) -> BTreeSet<String> {

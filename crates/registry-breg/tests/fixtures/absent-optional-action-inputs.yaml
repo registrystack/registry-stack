@@ -8,28 +8,33 @@ entities:
     mutationMode: mutable
     fields:
       - {id: label, type: string, maximumLength: 40, required: true, classification: internal}
+      - {id: jurisdiction, type: string, maximumLength: 20, required: true, classification: internal}
       - {id: note, type: string, maximumLength: 80, required: false, classification: internal}
       - {id: status, type: string, maximumLength: 20, required: false, classification: internal}
+      - {id: related-entry, apiName: relatedEntry, type: reference, target: entry, required: false, classification: internal}
 actions:
   - id: create-entry
     inputs:
       - {id: label, type: string, maximumLength: 40, required: true, classification: internal}
+      - {id: jurisdiction, type: string, maximumLength: 20, required: true, classification: internal}
       - {id: note, type: string, maximumLength: 80, required: false, classification: internal}
+      - {id: related-entry, apiName: relatedEntry, type: reference, target: entry, required: false, classification: internal}
     effects:
       - id: created
         target: {entity: entry}
         operation: create
-        set: {label: {fromField: label}, note: {fromField: note}}
+        set: {label: {fromField: label}, jurisdiction: {fromField: jurisdiction}, note: {fromField: note}, related-entry: {fromField: related-entry}}
   - id: update-entry
     inputs:
       - {id: entry, apiName: entryId, type: reference, target: entry, required: true, classification: internal}
       - {id: status, type: string, maximumLength: 20, required: true, classification: internal}
       - {id: note, type: string, maximumLength: 80, required: false, classification: internal}
+      - {id: related-entry, apiName: relatedEntry, type: reference, target: entry, required: false, classification: internal}
     effects:
       - id: updated
         target: {fromField: entry}
         operation: patch
-        set: {status: {fromField: status}, note: {fromField: note}}
+        set: {status: {fromField: status}, note: {fromField: note}, related-entry: {fromField: related-entry}}
 accessProfiles:
   - id: registrar
     default: true
@@ -39,9 +44,9 @@ accessProfiles:
       actions:
         - action: create-entry
           operations: [invoke]
-          targets: [{entity: entry, rowBoundaries: unrestricted}]
+          targets: [{entity: entry, rowBoundaries: [{field: jurisdiction, claim: jurisdiction, operator: equals}]}]
           results: [created]
         - action: update-entry
           operations: [invoke]
-          targets: [{entity: entry, rowBoundaries: unrestricted}]
+          targets: [{entity: entry, rowBoundaries: [{field: jurisdiction, claim: jurisdiction, operator: equals}]}]
           results: [updated]

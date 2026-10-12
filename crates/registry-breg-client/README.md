@@ -122,8 +122,9 @@ require complete executable contracts bound to the source, profile, and package.
 Every operation lists its `readableRequestFields`, empty when the selected
 profile holds no request metadata grant; metadata without it is refused. A
 descriptor the engine does not serve is absent, and an absent executable contract
-produces an unsupported selection error. Upgrade clients and servers together
-because older strict metadata decoders can reject added descriptors.
+produces an unsupported selection error. Metadata decoding ignores unknown object
+members while retaining duplicate-member and resource-bound refusals. An unknown
+`requiredCapabilities` value disables only the operation that names it.
 
 Immediate action target conditions are an explicit read before invocation;
 invocation never refreshes them. Batch builders send one atomic same-entity
