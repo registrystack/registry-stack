@@ -1240,7 +1240,6 @@ async fn pattern_conflicts_preserve_typed_conflicts_and_reject_inexact_metadata(
         }
     }
     for (member, value) in [
-        ("extra", json!("response-canary")),
         ("detail", json!("response-canary")),
         ("status", json!(400)),
         ("fieldPath", json!("/evidence/status")),
@@ -1269,12 +1268,17 @@ async fn pattern_conflicts_preserve_typed_conflicts_and_reject_inexact_metadata(
         bad.push(duplicate);
     }
     let failures = bad.len();
+    let mut additive = pattern.clone();
+    additive["extra"] = json!({"future": "response-canary"});
+    let accepted = [
+        generic.clone(),
+        response_for(without_location),
+        response_for(pattern),
+        response_for(additive),
+    ];
+    let accepted_count = accepted.len();
     let responses = std::iter::once(metadata_response())
-        .chain([
-            generic.clone(),
-            response_for(without_location),
-            response_for(pattern),
-        ])
+        .chain(accepted)
         .chain(bad)
         .collect();
     let fixture = single_attempt_client(responses).await;
@@ -1285,7 +1289,7 @@ async fn pattern_conflicts_preserve_typed_conflicts_and_reject_inexact_metadata(
         .unwrap()
         .value;
     let binding = create_binding(&metadata);
-    for index in 0..3 + failures {
+    for index in 0..accepted_count + failures {
         let error = fixture
             .client
             .create_record(
@@ -1296,7 +1300,7 @@ async fn pattern_conflicts_preserve_typed_conflicts_and_reject_inexact_metadata(
             )
             .await
             .expect_err("conflict or protocol refusal");
-        if index < 3 {
+        if index < accepted_count {
             assert_eq!(
                 error.problem_code(),
                 Some(BRegProblemCode::MutationConflict)
@@ -1315,7 +1319,7 @@ async fn pattern_conflicts_preserve_typed_conflicts_and_reject_inexact_metadata(
     }
     assert_eq!(
         fixture.requests.lock().unwrap().len(),
-        1 + 3 + failures,
+        1 + accepted_count + failures,
         "each scripted answer is read by exactly one exchange"
     );
 }
@@ -1365,8 +1369,10 @@ async fn evidence_failure_paths_are_closed_bounded_and_discarded() {
     }
     let mut located = document.clone();
     located["fieldPath"] = json!("/evidence/evidence-canary");
+    let mut additive = located.clone();
+    additive["extra"] = json!({"future": "private-canary"});
+    accepted.push(response_for(additive));
     for (member, value) in [
-        ("extra", json!("private-canary")),
         ("refusalCode", json!("private-canary")),
         ("entityId", json!("private-canary")),
         ("detail", json!("private-canary")),

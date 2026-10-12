@@ -158,7 +158,9 @@ fn sdk_error(py: Python<'_>, error: RustClientError) -> PyErr {
                 code: BRegProblemCode::ResourceNotFound,
                 ..
             } => "not-found",
-            RustClientError::Problem { .. } => "problem",
+            RustClientError::Problem { .. } | RustClientError::UnrecognizedProblem { .. } => {
+                "problem"
+            }
             RustClientError::Protocol { .. } => "protocol",
             _ => "client",
         },
@@ -187,6 +189,10 @@ fn sdk_error(py: Python<'_>, error: RustClientError) -> PyErr {
                 mapped.reason_code = mapped.refusal_code.take();
             }
             mapped.field_path = field_path.map(|value| value.as_str().to_owned());
+        }
+        RustClientError::UnrecognizedProblem { status, trace_id } => {
+            mapped.status = Some(status);
+            mapped.trace_id = Some(trace_id.as_str().to_owned());
         }
         RustClientError::Protocol {
             status,
