@@ -308,7 +308,8 @@ discovery or selection boundary:
 | Statistical period kind, granularity, reserved dimension code, or operation | Omits the affected dataset; supported datasets remain available. |
 | Change-request review type, approved mode, planner kind/ABI, or write/effect operation | Omits that entity's descriptive change-request capability; lifecycle execution remains separately capability-gated. |
 | Selector value origin | Omits the affected selector after validating its fields and references. |
-| Temporal mode or spatial CRS/semantics | Omits that typed query capability; the rest of the operation remains available. |
+| Spatial CRS or semantics | Omits that typed query capability; the rest of the operation remains available. |
+| Temporal mode | Retains the `temporal` descriptor as served, uninterpreted; the rest of the operation remains available. Null still means the collection is not temporal. |
 | Operation kind or immediate-action input mode | Retains an inert descriptor and refuses unsupported executable selection. |
 | Attachment classification, verification, or route semantics | Refuses only the requested slot selection. |
 

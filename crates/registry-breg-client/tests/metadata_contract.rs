@@ -1256,7 +1256,7 @@ fn list_query_and_presentation_descriptors_are_retained_without_authority() {
 }
 
 #[test]
-fn unsupported_selector_and_temporal_vocabulary_omit_only_the_affected_surfaces() {
+fn unsupported_selector_is_omitted_and_unsupported_temporal_mode_stays_visible() {
     let mut value = fixture();
     value["operations"][2]["selectors"] = json!([
         {
@@ -1286,7 +1286,15 @@ fn unsupported_selector_and_temporal_vocabulary_omit_only_the_affected_surfaces(
     let get = metadata.operation("records.company.get").unwrap();
     assert_eq!(get.selectors().len(), 1);
     assert_eq!(get.selectors()[0].identifier(), "by-name");
-    assert!(get.query().unwrap().temporal.is_none());
+    // Null already means the collection is not temporal, so a mode this
+    // client does not understand must reach the caller as served.
+    let query = get.query().unwrap();
+    assert_eq!(
+        query.temporal,
+        Some(json!({"mode": "future-temporal-mode", "futureParameter": "at"}))
+    );
+    assert_eq!(query.selectable_fields[0].api_name, "legalName");
+    assert_eq!(query.maximum_page_size, 100);
     assert!(metadata
         .select_direct_write("records.company.create", "company-writer")
         .is_ok());

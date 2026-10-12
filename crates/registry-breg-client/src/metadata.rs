@@ -943,6 +943,10 @@ pub struct BRegQueryDescriptor {
     pub maximum_filter_clauses: u64,
     pub maximum_in_values: u64,
     pub pagination: BRegQueryPagination,
+    /// The temporal descriptor as served. `None` means the collection is not
+    /// temporal. A `mode` this client does not understand is retained
+    /// uninterpreted, so the caller can tell that default results are not
+    /// described by a mode it knows.
     pub temporal: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spatial_queries: Option<BRegSpatialQueryDescriptor>,
@@ -3509,14 +3513,7 @@ fn parse_operation(value: Value) -> Result<BRegMetadataOperation, BRegMetadataEr
         .map(|field| field.id.as_str())
         .collect::<BTreeSet<_>>();
     let mut query_value = required(&mut operation, "query")?;
-    let (temporal_is_supported, spatial_is_supported) =
-        validate_query(query_value.clone(), &slots)?;
-    if !temporal_is_supported {
-        query_value
-            .as_object_mut()
-            .ok_or_else(|| metadata_error(BRegMetadataErrorKind::Shape))?
-            .insert("temporal".to_owned(), Value::Null);
-    }
+    let spatial_is_supported = validate_query(query_value.clone(), &slots)?;
     if !spatial_is_supported {
         query_value
             .as_object_mut()
@@ -3784,9 +3781,9 @@ fn parse_selectors(value: Value) -> Result<Vec<BRegLookupSelectorDescriptor>, BR
     Ok(parsed)
 }
 
-fn validate_query(value: Value, slots: &BTreeSet<&str>) -> Result<(bool, bool), BRegMetadataError> {
+fn validate_query(value: Value, slots: &BTreeSet<&str>) -> Result<bool, BRegMetadataError> {
     if value.is_null() {
-        return Ok((true, true));
+        return Ok(true);
     }
     let mut query = object(value)?;
     identifier(required(&mut query, "kind")?)?;
@@ -3807,14 +3804,14 @@ fn validate_query(value: Value, slots: &BTreeSet<&str>) -> Result<(bool, bool), 
     positive_integer(required(&mut query, "maximumFilterClauses")?)?;
     positive_integer(required(&mut query, "maximumInValues")?)?;
     validate_pagination(required(&mut query, "pagination")?)?;
-    let temporal_is_supported = validate_temporal(required(&mut query, "temporal")?)?;
+    validate_temporal(required(&mut query, "temporal")?)?;
     let spatial_is_supported = query
         .remove("spatialQueries")
         .map(validate_spatial_queries)
         .transpose()?
         .unwrap_or(true);
     finish(query)?;
-    Ok((temporal_is_supported, spatial_is_supported))
+    Ok(spatial_is_supported)
 }
 
 fn validate_spatial_queries(value: Value) -> Result<bool, BRegMetadataError> {
@@ -3884,9 +3881,9 @@ fn validate_pagination(value: Value) -> Result<(), BRegMetadataError> {
     finish(pagination)
 }
 
-fn validate_temporal(value: Value) -> Result<bool, BRegMetadataError> {
+fn validate_temporal(value: Value) -> Result<(), BRegMetadataError> {
     if value.is_null() {
-        return Ok(true);
+        return Ok(());
     }
     let mut temporal = object(value)?;
     let mode = identifier(required(&mut temporal, "mode")?)?;
@@ -3903,13 +3900,12 @@ fn validate_temporal(value: Value) -> Result<bool, BRegMetadataError> {
                 validate_temporal_parameter(valid_at)?;
             }
         }
-        _ => {
-            finish(temporal)?;
-            return Ok(false);
-        }
+        // A mode this client does not understand has no members it can
+        // check. The descriptor stays as served: null already means the
+        // collection is not temporal.
+        _ => {}
     }
-    finish(temporal)?;
-    Ok(true)
+    finish(temporal)
 }
 
 fn validate_temporal_parameter(value: Value) -> Result<(), BRegMetadataError> {
