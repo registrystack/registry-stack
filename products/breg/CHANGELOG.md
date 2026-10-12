@@ -58,6 +58,34 @@
 - The `immutable-identity-corrections` fixture demonstrates a required subject
   reference on creation and later description corrections using separate
   existing access profiles, with no subject-retargeting patch authority.
+- `bregctl dev` compiles the captured project whenever it generates the local
+  runtime and writes the compiled registry's one principal claim to
+  `authentication.authorityClaims.principal`, where it always wrote
+  `registry_principal`. A project whose entity profiles and action grants all
+  name another claim, such as `principalClaim: sub`, now gets a local runtime
+  that agrees with it; before, the engine refused that runtime because the
+  configured principal claim was not the one the profiles require. A local
+  client's token must carry the claim the project names; for `sub` that is the
+  issuer's verified subject. A project with no authenticated grant keeps
+  `registry_principal`, and a project whose grants all name
+  `registry_principal` gets the same principal claim as before: no action is
+  needed. An operated runtime is unchanged and still sets
+  `authentication.authorityClaims.principal` itself.
+- `bregctl dev` writes `authentication.authorityClaims.purpose`, as
+  `registry_purpose`, only when a compiled access profile requires a purpose,
+  where it wrote the member for every project. The engine accepts a purpose
+  claim exactly when a profile requires one, so a project that requires no
+  purpose now gets a local runtime the engine accepts. No action is needed.
+- `bregctl dev` checks the generated runtime's authentication against the
+  compiled registry before a first start retains the project's `.breg/dev`
+  state, and refuses a project it cannot serve under one claim mapping:
+  grants that name more than one `principalClaim` (the refusal lists them), a
+  `principalClaim` of `scope`, and a `principalClaim` of `registry_purpose` in
+  a project that requires a purpose. Each of these projects already failed
+  later in the start, when the engine refused the generated runtime's claim
+  mapping, so no project that started before is refused now. If affected, give
+  every entity profile and action grant, including those a module contributes,
+  one `principalClaim` that is neither the scope claim nor the purpose claim.
 
 ## v0.40.0 - 2026-10-11
 
