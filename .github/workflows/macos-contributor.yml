@@ -35,8 +35,9 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          # napi-rs CLI 3.8.2 requires Node 22.13 or later.
-          node-version: 22.20.0
+          # The napi-rs CLI's toolchain dependencies require Node 24.12 or
+          # later, above the Node 24.11 floor the client packages declare.
+          node-version: 24.21.0
           cache: npm
           cache-dependency-path: |
             crates/registry-discovery-client-node/package-lock.json

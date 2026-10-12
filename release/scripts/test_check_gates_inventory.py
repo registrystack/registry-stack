@@ -1164,7 +1164,7 @@ class GateInventoryTest(unittest.TestCase):
         setup_node = next(
             step for step in job["steps"] if step.get("name") == "Setup Node"
         )
-        self.assertEqual("22.20.0", setup_node["with"]["node-version"])
+        self.assertEqual("24.21.0", setup_node["with"]["node-version"])
         setup_go = next(
             step
             for step in job["steps"]

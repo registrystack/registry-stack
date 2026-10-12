@@ -56,7 +56,7 @@ for explicit audit or recovery work.
 To prepare a new archived docset, follow the
 [canonical archive preparation procedure](../../release/OPERATIONS.md#prepare-the-documentation-archive-lock).
 It builds committed inputs in a fresh Ubuntu 24.04 Linux x64 checkout with
-Node 22.12.0 and the locked npm dependencies. The archive builder stages its
+Node 24.11.0 and the locked npm dependencies. The archive builder stages its
 owned generated inputs from the docset's source ref. Historical refs supply
 committed outputs; refs with `generate:source` rebuild them in a clean source
 export using that ref's dependency lock. The fresh checkout also excludes

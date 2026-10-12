@@ -7,11 +7,11 @@ apt-get update -qq
 # None compiles Rust: the CLI reference renders the committed command catalog.
 apt-get install -y -qq ca-certificates curl git python3 python3-yaml xz-utils
 cd /tmp
-curl -fsSLO https://nodejs.org/dist/v22.12.0/node-v22.12.0-linux-x64.tar.xz
-curl -fsSLO https://nodejs.org/dist/v22.12.0/SHASUMS256.txt
-grep '  node-v22.12.0-linux-x64.tar.xz$' SHASUMS256.txt | sha256sum -c -
-tar -xJf node-v22.12.0-linux-x64.tar.xz
-export PATH="/tmp/node-v22.12.0-linux-x64/bin:${PATH}"
+curl -fsSLO https://nodejs.org/dist/v24.11.0/node-v24.11.0-linux-x64.tar.xz
+curl -fsSLO https://nodejs.org/dist/v24.11.0/SHASUMS256.txt
+grep '  node-v24.11.0-linux-x64.tar.xz$' SHASUMS256.txt | sha256sum -c -
+tar -xJf node-v24.11.0-linux-x64.tar.xz
+export PATH="/tmp/node-v24.11.0-linux-x64/bin:${PATH}"
 cd /workspace/docs/site
 npm ci
 node scripts/prepare-release-docs-metadata.mjs \

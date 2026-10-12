@@ -2415,7 +2415,7 @@ class CiChangesTest(unittest.TestCase):
             "uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
             discovery_job,
         )
-        self.assertIn("node-version: 22.12.0", discovery_job)
+        self.assertIn("node-version: 24.11.0", discovery_job)
         self.assertIn("cache: npm", discovery_job)
         self.assertIn(
             "cache-dependency-path: docs/site/package-lock.json\n", discovery_job

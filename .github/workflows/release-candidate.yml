@@ -523,7 +523,7 @@ jobs:
       - name: Setup Node for exact release docs archive
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 22.12.0
+          node-version: 24.11.0
           cache: npm
           cache-dependency-path: docs/site/package-lock.json
 
@@ -777,7 +777,7 @@ jobs:
       # Native client packages are self-contained. aws-lc-fips-sys otherwise
       # defaults to a build-directory dylib on macOS.
       AWS_LC_FIPS_SYS_STATIC: "1"
-      NODE_RUNTIME_SMOKE_IMAGE: registry.access.redhat.com/ubi8/nodejs-22-minimal:1-1791478428@sha256:d8eb7fb50c650455750f30a7250a8b5498cd2881bfa8eaf170490ad66504511c
+      NODE_RUNTIME_SMOKE_IMAGE: registry.access.redhat.com/ubi8/nodejs-24-minimal:1-1791463611@sha256:dc01310904907c73f7e5faddc0bc062e6d24561a01716bbc6701ba2072e18e08
     permissions:
       contents: read
     strategy:
@@ -820,7 +820,7 @@ jobs:
       - name: Setup minimum Node runtime
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 22.12.0
+          node-version: 24.11.0
           package-manager-cache: false
 
       - name: Retain minimum Node runtime for package smokes
@@ -828,15 +828,16 @@ jobs:
         run: |
           minimum_node_bin="$(command -v node)"
           [[ "${minimum_node_bin}" == /* ]]
-          test "$("${minimum_node_bin}" --version)" = v22.12.0
+          test "$("${minimum_node_bin}" --version)" = v24.11.0
           printf 'MINIMUM_NODE_BIN=%s\n' "${minimum_node_bin}" >> "${GITHUB_ENV}"
 
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          # napi-rs CLI 3.8.2 requires Node 22.13 or later. Package smokes
-          # independently exercise the retained minimum Node 22.12 runtime.
-          node-version: 22.20.0
+          # The napi-rs CLI's toolchain dependencies require Node 24.12 or
+          # later. Package smokes independently exercise the retained minimum
+          # Node 24.11 runtime.
+          node-version: 24.21.0
           cache: npm
           cache-dependency-path: |
             crates/registry-discovery-client-node/package-lock.json

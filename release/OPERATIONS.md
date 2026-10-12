@@ -43,19 +43,19 @@ Beta release prerequisite.
 
 ### Linux Node compatibility smoke
 
-The candidate and read-only rehearsal use the same immutable UBI 8 Node 22
+The candidate and read-only rehearsal use the same immutable UBI 8 Node 24
 image in `NODE_RUNTIME_SMOKE_IMAGE`. The current multi-architecture pin runs
-Node 22.23.2 with glibc 2.28 on both amd64 and arm64. It exercises the installed
+Node 24.21.0 with glibc 2.28 on both amd64 and arm64. It exercises the installed
 npm package, optional platform dependency, native loading, CommonJS, and ESM
 without network access. UBI 8 receives public updates under the RHEL lifecycle;
-the tighter support limit is the Node 22 stream, which retires in April 2027.
+the tighter support limit is the Node 24 stream, which retires in April 2028.
 Recheck both lifecycles before each release.
 
-Both jobs retain a separate Node 22.12 executable before installing the newer
+Both jobs retain a separate Node 24.11 executable before installing the newer
 build runtime required by napi-rs. Every installed-package smoke also runs
 through that minimum executable on the supported build host. The minimum-Node
 check and the older-glibc container check cover separate runtime combinations;
-the UBI image does not claim to run Node 22.12.
+the UBI image does not claim to run Node 24.11.
 
 This runtime smoke is separate from the addon's ABI floor.
 `build-linux-node-client` targets glibc 2.17 and refuses newer ELF symbol
@@ -459,7 +459,7 @@ Conflicting existing candidate metadata
 or changes to a frozen archive stop preparation.
 
 The command builds a committed-source clone in Ubuntu 24.04 on Linux AMD64,
-with Node 22.12.0 and `npm ci` but no Rust toolchain: the CLI reference
+with Node 24.11.0 and `npm ci` but no Rust toolchain: the CLI reference
 renders the committed command catalog, so no step compiles Rust. It excludes
 local dependencies, uncommitted files, and ignored generated assets. It runs
 `npm test`, draft-link checks, and evidence-anchor checks before building the

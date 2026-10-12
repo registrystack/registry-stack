@@ -961,19 +961,19 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         setup_node = next(
             step for step in clients["steps"] if step.get("name") == "Setup Node"
         )
-        self.assertEqual(setup_node["with"]["node-version"], "22.20.0")
+        self.assertEqual(setup_node["with"]["node-version"], "24.21.0")
         minimum_node = next(
             step for step in clients["steps"]
             if step.get("name") == "Setup minimum Node runtime"
         )
-        self.assertEqual(minimum_node["with"]["node-version"], "22.12.0")
+        self.assertEqual(minimum_node["with"]["node-version"], "24.11.0")
         self.assertFalse(minimum_node["with"]["package-manager-cache"])
         retain_minimum = step_run(
             document, "clients", "Retain minimum Node runtime for package smokes"
         )
         self.assertIn('minimum_node_bin="$(command -v node)"', retain_minimum)
         self.assertIn('[[ "${minimum_node_bin}" == /* ]]', retain_minimum)
-        self.assertIn('test "$("${minimum_node_bin}" --version)" = v22.12.0', retain_minimum)
+        self.assertIn('test "$("${minimum_node_bin}" --version)" = v24.11.0', retain_minimum)
         self.assertIn("MINIMUM_NODE_BIN=%s\\n", retain_minimum)
         self.assertIn('"${GITHUB_ENV}"', retain_minimum)
         step_names = [step.get("name") for step in clients["steps"]]
@@ -1255,7 +1255,7 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         )
         baseline = clients["env"]["NODE_RUNTIME_SMOKE_IMAGE"]
         self.assertRegex(
-            baseline, r"^registry\.access\.redhat\.com/ubi8/nodejs-22-minimal:1-[0-9]+@sha256:[0-9a-f]{64}$"
+            baseline, r"^registry\.access\.redhat\.com/ubi8/nodejs-24-minimal:1-[0-9]+@sha256:[0-9a-f]{64}$"
         )
         self.assertIn("-maxdepth 1 -name '*.node'", node_smoke)
         self.assertIn("node_modules/@registrystack/${client}-client-", node_smoke)
@@ -2259,6 +2259,21 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
             self.assertIn("now_epoch >= expires_epoch", expiry)
         self.assertNotIn("NODE_AUTH_TOKEN", text)
         self.assertNotIn("PYPI_TOKEN", text)
+
+    def test_every_node_setup_pins_the_build_runtime(self) -> None:
+        _, document = workflow("release.yml")
+        setup_node_steps = [
+            (job_name, step)
+            for job_name, job in document["jobs"].items()
+            for step in job.get("steps", ())
+            if step.get("uses", "").startswith("actions/setup-node@")
+        ]
+        self.assertIn(
+            "publish_client_npm", [job_name for job_name, _ in setup_node_steps]
+        )
+        for job_name, step in setup_node_steps:
+            with self.subTest(job=job_name, step=step.get("name")):
+                self.assertEqual(step["with"]["node-version"], "24.21.0")
 
 
     def test_client_publication_matrices_preserve_historical_relay_only(self) -> None:

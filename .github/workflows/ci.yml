@@ -697,7 +697,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
-          node-version: 22.12.0
+          node-version: 24.11.0
           cache: npm
           cache-dependency-path: docs/site/package-lock.json
 
@@ -1833,7 +1833,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
-          node-version: 22.12.0
+          node-version: 24.11.0
           cache: npm
           cache-dependency-path: docs/site/package-lock.json
 
@@ -1961,7 +1961,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
-          node-version: 22.12.0
+          node-version: 24.11.0
           cache: npm
           cache-dependency-path: docs/site/package-lock.json
 
@@ -2077,7 +2077,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
-          node-version: 22.12.0
+          node-version: 24.11.0
           cache: npm
           cache-dependency-path: docs/site/package-lock.json
 
@@ -2169,7 +2169,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
-          node-version: 22.12.0
+          node-version: 24.11.0
           cache: npm
           cache-dependency-path: docs/site/package-lock.json
 
@@ -2279,7 +2279,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
-          node-version: 22.12.0
+          node-version: 24.11.0
 
       - name: Check documentation anchors against the source tree
         run: node docs/site/scripts/check-evidence-anchors.mjs
@@ -2300,7 +2300,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
-          node-version: 22.12.0
+          node-version: 24.11.0
           cache: npm
           cache-dependency-path: docs/site/package-lock.json
 
@@ -2394,7 +2394,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
-          node-version: 22.12.0
+          node-version: 24.11.0
           cache: npm
           cache-dependency-path: docs/site/package-lock.json
 
@@ -2450,7 +2450,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
-          node-version: 22.12.0
+          node-version: 24.11.0
           cache: npm
           cache-dependency-path: editors/vscode/package-lock.json
 
@@ -2493,9 +2493,10 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
-          # napi-rs CLI 3.8.2 requires Node 22.13 or later. Candidate package
-          # smoke tests separately retain the Node 22.12 runtime floor.
-          node-version: 22.20.0
+          # The napi-rs CLI's toolchain dependencies require Node 24.12 or
+          # later. Candidate package smoke tests separately retain the Node
+          # 24.11 runtime floor.
+          node-version: 24.21.0
           cache: npm
           cache-dependency-path: |
             crates/registry-discovery-client-node/package-lock.json
@@ -2586,7 +2587,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
-          node-version: 22.20.0
+          node-version: 24.21.0
           cache: npm
           cache-dependency-path: |
             crates/registry-discovery-client-node/package-lock.json
