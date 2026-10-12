@@ -13,7 +13,7 @@ use crate::contract::{
 use crate::model::{
     CompiledAction, CompiledActionEffect, CompiledActionInventory, CompiledActionMutation,
     CompiledActionTargetUse, CompiledActionTargetUseSource, CompiledChangeRequestEffect,
-    CompiledChangeRequestMutation, CompiledEntity, CompiledLogicalField,
+    CompiledChangeRequestMutation, CompiledEntity, CompiledLogicalField, REFERENCE_INDEX_PREFIX,
 };
 use crate::physical_names::{
     hex_prefix, spatial_candidate_view_name, spatial_geometry_column_name,
@@ -339,11 +339,18 @@ pub(crate) fn generate_ddl_with_actions(
         }
 
         for (index_id, fields) in &entity.indexes {
-            let columns = fields
+            let mut columns = fields
                 .iter()
                 .map(|field| quote_identifier(&entity.fields[field].physical_name))
-                .collect::<Vec<_>>()
-                .join(", ");
+                .collect::<Vec<_>>();
+            // Every list page orders by the record id last, so an authored
+            // index ends with it: the index then holds the complete page
+            // order and a continuation seeks to its position. A reference
+            // index serves lookups by the referenced record, not page order.
+            if !index_id.starts_with(REFERENCE_INDEX_PREFIX) {
+                columns.push(RECORD_ID_COLUMN.to_owned());
+            }
+            let columns = columns.join(", ");
             statements.push(DdlStatement {
                 id: format!("entity.{}.index.{index_id}", entity.id),
                 kind: DdlStatementKind::Index,
@@ -514,12 +521,17 @@ pub(crate) fn generate_ddl_with_actions(
                 quote_identifier(&field.logical.sql_name)
             ));
         }
+        // The source view is not a barrier view, so the planner flattens it
+        // and a list page can reach the declared indexes of the entity table.
+        // Row security does not depend on the barrier: PostgreSQL evaluates
+        // the policies of the table before any predicate that is not
+        // leakproof, whether or not the view above it is a barrier.
         statements.push(DdlStatement {
             id: format!("entity.{}.source-view", entity.id),
             kind: DdlStatementKind::View,
             sql: format!(
                 "CREATE VIEW registry_source.{source_view}
-                 WITH (security_invoker=true, security_barrier=true)
+                 WITH (security_invoker=true)
                  AS SELECT {}
                     FROM registry_data.{}
                    WHERE record_lifecycle = 'active'",

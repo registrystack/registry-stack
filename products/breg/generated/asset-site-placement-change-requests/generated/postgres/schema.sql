@@ -20,7 +20,7 @@ ALTER TABLE registry_data."breg_e_asset_placement_a1ec82196d1fb9aa" ADD CONSTRAI
 ALTER TABLE registry_data."breg_e_asset_placement_a1ec82196d1fb9aa" ADD CONSTRAINT "breg_r_asset_placement_asset_5a15f70a6700e4be" FOREIGN KEY ("breg_f_asset_placement_asset_ae18966e6e9ad0b1") REFERENCES registry_data."breg_e_asset_item_2815cb9d14108c83" (record_id) ON DELETE RESTRICT;
 ALTER TABLE registry_data."breg_e_asset_placement_a1ec82196d1fb9aa" ADD CONSTRAINT "breg_r_asset_placement_site_37f4493377dd371c" FOREIGN KEY ("breg_f_asset_placement_site_ef922606d2e209b2") REFERENCES registry_data."breg_e_asset_site_35b319554e063cf2" (record_id) ON DELETE RESTRICT;
 ALTER TABLE registry_data."breg_e_asset_placement_a1ec82196d1fb9aa" ADD CONSTRAINT "breg_c_asset_placement_temporal_non_overlap_bc_5a77de4caad25cf3" EXCLUDE USING gist ("breg_f_asset_placement_asset_ae18966e6e9ad0b1" WITH =, daterange("breg_f_asset_placement_valid_from_da74266cfa6fd079", "breg_f_asset_placement_valid_to_ebeee625ee688b46", '[)') WITH &&) DEFERRABLE INITIALLY IMMEDIATE;
-CREATE INDEX "breg_i_asset_placement_placement_valid_from_ae597d193a829b6a" ON registry_data."breg_e_asset_placement_a1ec82196d1fb9aa" ("breg_f_asset_placement_valid_from_da74266cfa6fd079");
+CREATE INDEX "breg_i_asset_placement_placement_valid_from_ae597d193a829b6a" ON registry_data."breg_e_asset_placement_a1ec82196d1fb9aa" ("breg_f_asset_placement_valid_from_da74266cfa6fd079", record_id);
 CREATE INDEX "breg_ri_asset_placement_asset_054356a940e9af4a" ON registry_data."breg_e_asset_placement_a1ec82196d1fb9aa" ("breg_f_asset_placement_asset_ae18966e6e9ad0b1");
 CREATE INDEX "breg_ri_asset_placement_site_7dc9d636ea3210bc" ON registry_data."breg_e_asset_placement_a1ec82196d1fb9aa" ("breg_f_asset_placement_site_ef922606d2e209b2");
 ALTER TABLE registry_data."breg_e_asset_site_35b319554e063cf2" ADD CONSTRAINT "breg_c_asset_site_unique_18e908ba8aa5dfa0_a21f0e21fadf9d5e" UNIQUE ("breg_f_asset_site_site_code_9c520104d98bf34c");
@@ -316,27 +316,27 @@ CREATE POLICY "registry_cr_presence_rls_select_f43b8a613a7c48feaa2db2ea" ON regi
                AND cr_target.target_record_id = (NULLIF(current_setting('registry.change_request_presence_context', true), '')::jsonb ->> 'targetRecordId')::uuid
         ) AND record_lifecycle = 'active');
 CREATE VIEW registry_source."asset_item"
-                 WITH (security_invoker=true, security_barrier=true)
+                 WITH (security_invoker=true)
                  AS SELECT record_id AS "id", "breg_f_asset_item_asset_code_6c16fb1ab277d053" AS "asset_code", "breg_f_asset_item_label_60d11cc69eac40cc" AS "label", "breg_f_asset_item_asset_class_59b0ac5555eaf27f" AS "asset_class"
                     FROM registry_data."breg_e_asset_item_2815cb9d14108c83"
                    WHERE record_lifecycle = 'active';
 CREATE VIEW registry_source."asset_placement"
-                 WITH (security_invoker=true, security_barrier=true)
+                 WITH (security_invoker=true)
                  AS SELECT record_id AS "id", "breg_f_asset_placement_asset_ae18966e6e9ad0b1" AS "asset", "breg_f_asset_placement_site_ef922606d2e209b2" AS "site", "breg_f_asset_placement_valid_from_da74266cfa6fd079" AS "valid_from", "breg_f_asset_placement_valid_to_ebeee625ee688b46" AS "valid_to"
                     FROM registry_data."breg_e_asset_placement_a1ec82196d1fb9aa"
                    WHERE record_lifecycle = 'active';
 CREATE VIEW registry_source."asset_site"
-                 WITH (security_invoker=true, security_barrier=true)
+                 WITH (security_invoker=true)
                  AS SELECT record_id AS "id", "breg_f_asset_site_site_code_9c520104d98bf34c" AS "site_code", "breg_f_asset_site_label_bf8e4ab79ef7876a" AS "label"
                     FROM registry_data."breg_e_asset_site_35b319554e063cf2"
                    WHERE record_lifecycle = 'active';
 CREATE VIEW registry_source."inspection_event"
-                 WITH (security_invoker=true, security_barrier=true)
+                 WITH (security_invoker=true)
                  AS SELECT record_id AS "id", "breg_f_inspection_event_asset_7854fa088701aba4" AS "asset", "breg_f_inspection_event_observed_at_9fc390c09be3d77c" AS "observed_at", "breg_f_inspection_event_result_564a810a0ba8c9b5" AS "result"
                     FROM registry_data."breg_e_inspection_event_bb44743156e02dc6"
                    WHERE record_lifecycle = 'active';
 CREATE VIEW registry_source."placement_correction_request"
-                 WITH (security_invoker=true, security_barrier=true)
+                 WITH (security_invoker=true)
                  AS SELECT record_id AS "id", "breg_f_placement_correction_request_placement_bb10e70c28c318b2" AS "placement", "breg_f_placement_correction_request_proposed_s_d5e8e428243fdb95" AS "proposed_site", "breg_f_placement_correction_request_reason_aa8c4debecd1ed82" AS "reason"
                     FROM registry_data."breg_e_placement_correction_request_adb618290778d325"
                    WHERE record_lifecycle = 'active';

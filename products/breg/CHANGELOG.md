@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- BREAKING: a filtered, sorted list page is served from an index. The
+  compiler appends the record id as the last column of every authored index
+  under `entities[].indexes`, because every list orders by the record id
+  last; entity source views are no longer `security_barrier` views, so the
+  planner reaches those indexes; and a continuation over a required stored
+  field is one row comparison the index can seek. Reference, unique
+  constraint, and spatial indexes are unchanged, and so are row-level
+  security policies, cursors, and page order. An index declared as the
+  fields a list filters by followed by the field it sorts by now returns
+  each page of that list, first or deep, without ordering the filtered set.
+  The generated DDL, and with it every package revision and managed schema
+  fingerprint, changes. This release does not upgrade v0.41.0 state in
+  place: rebuild the package with this release and apply it to a new
+  database.
 - `bregctl dev` requests local client tokens for the resource that
   `issuer.clientResources` assigns to that client. Previously, startup requested
   every token for the owner BReg audience, so an owner that registered a client

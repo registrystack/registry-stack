@@ -19,18 +19,18 @@ ALTER TABLE registry_data."breg_e_group_membership_a576b1bf8befd33b" ADD CONSTRA
 ALTER TABLE registry_data."breg_e_group_membership_a576b1bf8befd33b" ADD CONSTRAINT "breg_r_group_membership_person_965f8c356cba2594" FOREIGN KEY ("breg_f_group_membership_person_b4d3c53f32217ad4") REFERENCES registry_data."breg_e_person_6ebfb4811e7ddd30" (record_id) ON DELETE RESTRICT;
 ALTER TABLE registry_data."breg_e_group_membership_a576b1bf8befd33b" ADD CONSTRAINT "breg_c_group_membership_temporal_non_overlap_7_5cbbf721a315ff31" EXCLUDE USING gist ("breg_f_group_membership_person_b4d3c53f32217ad4" WITH =, daterange("breg_f_group_membership_valid_from_cba66c902e0f83cf", "breg_f_group_membership_valid_to_2f9e1d3cbf7607d8", '[)') WITH &&) DEFERRABLE INITIALLY IMMEDIATE;
 ALTER TABLE registry_data."breg_e_group_membership_a576b1bf8befd33b" ADD CONSTRAINT "breg_c_group_membership_unique_5e8e930ba4a880b_71e8a8978496d497" UNIQUE ("breg_f_group_membership_person_b4d3c53f32217ad4", "breg_f_group_membership_household_8cbe77251d9392e6", "breg_f_group_membership_valid_from_cba66c902e0f83cf");
-CREATE INDEX "breg_i_group_membership_by_relationship_a4e2d77a5db0ac09" ON registry_data."breg_e_group_membership_a576b1bf8befd33b" ("breg_f_group_membership_relationship_ec7e247cd8f2b4f2");
-CREATE INDEX "breg_i_group_membership_by_valid_from_a3ed2c065cfd514d" ON registry_data."breg_e_group_membership_a576b1bf8befd33b" ("breg_f_group_membership_valid_from_cba66c902e0f83cf");
+CREATE INDEX "breg_i_group_membership_by_relationship_a4e2d77a5db0ac09" ON registry_data."breg_e_group_membership_a576b1bf8befd33b" ("breg_f_group_membership_relationship_ec7e247cd8f2b4f2", record_id);
+CREATE INDEX "breg_i_group_membership_by_valid_from_a3ed2c065cfd514d" ON registry_data."breg_e_group_membership_a576b1bf8befd33b" ("breg_f_group_membership_valid_from_cba66c902e0f83cf", record_id);
 CREATE INDEX "breg_ri_group_membership_household_b439c12a4bd03278" ON registry_data."breg_e_group_membership_a576b1bf8befd33b" ("breg_f_group_membership_household_8cbe77251d9392e6");
 ALTER TABLE registry_data."breg_e_household_99c2dbe1ce1a9259" ADD CONSTRAINT "breg_r_household_contact_person_5381ccdfab06666b" FOREIGN KEY ("breg_f_household_contact_person_330b11b0eeead1b6") REFERENCES registry_data."breg_e_person_6ebfb4811e7ddd30" (record_id) ON DELETE RESTRICT;
 ALTER TABLE registry_data."breg_e_household_99c2dbe1ce1a9259" ADD CONSTRAINT "breg_c_household_unique_6e9780fdf9ad5e72_453168b50dfdb542" UNIQUE ("breg_f_household_administrative_area_d3fa495469b6d12d", "breg_f_household_local_household_number_8b485583b3d6dab1");
 ALTER TABLE registry_data."breg_e_household_99c2dbe1ce1a9259" ADD CONSTRAINT "breg_c_household_unique_9eef3521606bfbcf_273e908cd5d7f294" UNIQUE ("breg_f_household_household_code_f238efd499532525");
-CREATE INDEX "breg_i_household_by_household_type_bdc290df3c986d2f" ON registry_data."breg_e_household_99c2dbe1ce1a9259" ("breg_f_household_household_type_076fde56b770f55f");
-CREATE INDEX "breg_i_household_by_local_household_number_3a6d16259617582b" ON registry_data."breg_e_household_99c2dbe1ce1a9259" ("breg_f_household_local_household_number_8b485583b3d6dab1");
+CREATE INDEX "breg_i_household_by_household_type_bdc290df3c986d2f" ON registry_data."breg_e_household_99c2dbe1ce1a9259" ("breg_f_household_household_type_076fde56b770f55f", record_id);
+CREATE INDEX "breg_i_household_by_local_household_number_3a6d16259617582b" ON registry_data."breg_e_household_99c2dbe1ce1a9259" ("breg_f_household_local_household_number_8b485583b3d6dab1", record_id);
 CREATE INDEX "breg_ri_household_contact_person_888362405b2bf0c1" ON registry_data."breg_e_household_99c2dbe1ce1a9259" ("breg_f_household_contact_person_330b11b0eeead1b6");
 ALTER TABLE registry_data."breg_e_person_6ebfb4811e7ddd30" ADD CONSTRAINT "breg_c_person_unique_c76634a86f384b67_424c8dc6ea3275b7" UNIQUE ("breg_f_person_person_code_33b91e7fc3da213f");
-CREATE INDEX "breg_i_person_by_person_sex_07837d9ad0f53a56" ON registry_data."breg_e_person_6ebfb4811e7ddd30" ("breg_f_person_person_sex_cf81d5ee04828574");
-CREATE INDEX "breg_i_person_by_residency_status_f0c0493387e28960" ON registry_data."breg_e_person_6ebfb4811e7ddd30" ("breg_f_person_residency_status_939e06866486fc70");
+CREATE INDEX "breg_i_person_by_person_sex_07837d9ad0f53a56" ON registry_data."breg_e_person_6ebfb4811e7ddd30" ("breg_f_person_person_sex_cf81d5ee04828574", record_id);
+CREATE INDEX "breg_i_person_by_residency_status_f0c0493387e28960" ON registry_data."breg_e_person_6ebfb4811e7ddd30" ("breg_f_person_residency_status_939e06866486fc70", record_id);
 ALTER TABLE registry_data."breg_e_register_household_contact_request_9fac95c7279ab034" ADD CONSTRAINT "breg_r_register_household_contact_request_hous_70d74d2e7036773d" FOREIGN KEY ("breg_f_register_household_contact_request_hous_471cd2a13ef70fc3") REFERENCES registry_data."breg_e_household_99c2dbe1ce1a9259" (record_id) ON DELETE RESTRICT;
 CREATE INDEX "breg_ri_register_household_contact_request_hou_38c06748a147db13" ON registry_data."breg_e_register_household_contact_request_9fac95c7279ab034" ("breg_f_register_household_contact_request_hous_471cd2a13ef70fc3");
 ALTER TABLE registry_data."breg_e_group_membership_a576b1bf8befd33b" ENABLE ROW LEVEL SECURITY;
@@ -425,22 +425,22 @@ CREATE POLICY "registry_cr_presence_rls_select_f3c259981b5d0c368bf44beb" ON regi
                AND cr_target.target_record_id = (NULLIF(current_setting('registry.change_request_presence_context', true), '')::jsonb ->> 'targetRecordId')::uuid
         ) AND record_lifecycle = 'active');
 CREATE VIEW registry_source."group_membership"
-                 WITH (security_invoker=true, security_barrier=true)
+                 WITH (security_invoker=true)
                  AS SELECT record_id AS "id", "breg_f_group_membership_person_b4d3c53f32217ad4" AS "person", "breg_f_group_membership_household_8cbe77251d9392e6" AS "household", "breg_f_group_membership_relationship_ec7e247cd8f2b4f2" AS "relationship", "breg_f_group_membership_valid_from_cba66c902e0f83cf" AS "valid_from", "breg_f_group_membership_valid_to_2f9e1d3cbf7607d8" AS "valid_to"
                     FROM registry_data."breg_e_group_membership_a576b1bf8befd33b"
                    WHERE record_lifecycle = 'active';
 CREATE VIEW registry_source."household"
-                 WITH (security_invoker=true, security_barrier=true)
+                 WITH (security_invoker=true)
                  AS SELECT record_id AS "id", "breg_f_household_household_code_f238efd499532525" AS "household_code", "breg_f_household_local_household_number_8b485583b3d6dab1" AS "local_household_number", "breg_f_household_household_name_35f883b330ca6ddc" AS "household_name", "breg_f_household_administrative_area_d3fa495469b6d12d" AS "administrative_area", "breg_f_household_household_type_076fde56b770f55f" AS "household_type", "breg_f_household_contact_person_330b11b0eeead1b6" AS "contact_person"
                     FROM registry_data."breg_e_household_99c2dbe1ce1a9259"
                    WHERE record_lifecycle = 'active';
 CREATE VIEW registry_source."person"
-                 WITH (security_invoker=true, security_barrier=true)
+                 WITH (security_invoker=true)
                  AS SELECT record_id AS "id", "breg_f_person_person_code_33b91e7fc3da213f" AS "person_code", "breg_f_person_legal_name_223940d7af1e1d37" AS "legal_name", "breg_f_person_family_name_a314dc1812282a5c" AS "family_name", "breg_f_person_date_of_birth_b73fadfd42ce68a3" AS "date_of_birth", "breg_f_person_person_sex_cf81d5ee04828574" AS "person_sex", "breg_f_person_residency_status_939e06866486fc70" AS "residency_status", "breg_f_person_preferred_language_5859f75022e77b8f" AS "preferred_language"
                     FROM registry_data."breg_e_person_6ebfb4811e7ddd30"
                    WHERE record_lifecycle = 'active';
 CREATE VIEW registry_source."register_household_contact_request"
-                 WITH (security_invoker=true, security_barrier=true)
+                 WITH (security_invoker=true)
                  AS SELECT record_id AS "id", "breg_f_register_household_contact_request_hous_471cd2a13ef70fc3" AS "household", "breg_f_register_household_contact_request_pers_aa284e97744e9db6" AS "person_code", "breg_f_register_household_contact_request_lega_bc9ef094b6a2e2ce" AS "legal_name", "breg_f_register_household_contact_request_fami_569f51308804f3c9" AS "family_name", "breg_f_register_household_contact_request_pers_4eb04ef50da638e8" AS "person_sex", "breg_f_register_household_contact_request_resi_ff38fcb1677755ef" AS "residency_status", "breg_f_register_household_contact_request_rela_9ef63170917ac85f" AS "relationship", "breg_f_register_household_contact_request_vali_dca56825becd6b88" AS "valid_from", "breg_f_register_household_contact_request_reas_aa0a9ea43bf37b89" AS "reason"
                     FROM registry_data."breg_e_register_household_contact_request_9fac95c7279ab034"
                    WHERE record_lifecycle = 'active';

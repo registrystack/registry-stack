@@ -3293,3 +3293,112 @@ declare `clientResources`.
 - This is local development tooling. The token endpoint is the session's
   loopback issuer origin (`State::issuer_origin`), and these tokens are not
   deployment credentials.
+
+## Entity source views without a security barrier
+
+An entity source view, `registry_source.<entity>`, is created
+`WITH (security_invoker=true)` and no longer with `security_barrier=true`
+(`generate_ddl_with_actions` in `crates/registry-breg/src/generated_ddl.rs`).
+Derived views and the spatial candidate view keep their barrier, and no
+policy, grant, or role changes. The same change appends the record id to
+every authored index and lets a list continuation over a required stored
+field use one row comparison, so a filtered, sorted list page is served from
+an index instead of reading and ordering every row the caller may read. The
+barrier is what kept the planner from reaching those indexes: it holds a
+barrier view as a separate subquery and pushes no ordering or limit through
+it.
+
+### Threat
+
+A barrier view promises one thing: no predicate from outside the view that
+is not leakproof runs against a row before the view's own condition has
+accepted it. The source view's own condition is `record_lifecycle =
+'active'`. Without the barrier the planner may evaluate a cheaper outside
+predicate first, so the question is whether any row a caller may not read
+can now reach such a predicate.
+
+It cannot, because the rows a caller may read were never bounded by the view.
+The view runs with `security_invoker`, every entity table has forced
+row-level security, and PostgreSQL applies the policies of a table as
+security conditions of that table: they run before every predicate that is
+not leakproof, whether or not a view above the table is a barrier. Every
+read policy carries `record_lifecycle = 'active'` itself, so a tombstoned row
+is refused by the policy before any outside predicate sees it.
+
+One read policy admits a row the view's condition refuses. The get policy of
+a change-request entity (`request_get_lifecycle_expression`) also admits a
+tombstoned request whose state is `cancelled` or `applied` and whose detail
+is erased, so its owner or reviewer can still read that it ended. Such a row
+may now reach an outside predicate before the view's lifecycle condition
+drops it. The caller is one the same policy already lets get that request,
+and the row's detail is erased, so no value reaches a predicate that the
+caller could not already read.
+
+### Enforcement and defaults
+
+- Row-level security policies on `registry_data` tables stay the single
+  read boundary. They are unchanged, and `FORCE ROW LEVEL SECURITY` stays on
+  every entity table.
+- The source view keeps `security_invoker=true`, so the policies evaluated
+  are the runtime role's under the caller's claim context, never the view
+  owner's.
+- The view option is part of the managed schema fingerprint. A database
+  whose source view regains `security_barrier`, or loses `security_invoker`,
+  is drift and the runtime refuses to start against it.
+- `CREATE OR REPLACE VIEW ... WITH (security_invoker=true)` over a view that
+  held both options leaves `security_invoker=true` alone, as verified on
+  PostgreSQL 17.5, so a replaced source view matches a fresh one and the DDL
+  carries no explicit `security_barrier=false`.
+- The runtime sends only SQL the engine generates. A list filter compares a
+  column with a bound parameter through built-in operators, and reviewed
+  derived SQL is held to the allowlist of BREG-SEC-143. The barrier was
+  defense in depth against a predicate the engine does not emit.
+- A current list uses the row comparison `(sort, id) > (...)` only for a
+  required stored field read through the source view, where a served
+  database holds no NULL (`FieldExpression::never_null` in
+  `crates/registry-breg/src/postgres/read.rs`). Every other sort, and every
+  history list, keeps the form that admits NULLS LAST. The cursor, its
+  binding, and the page order are unchanged.
+
+### Tests
+
+`a_source_view_never_shows_a_predicate_a_record_that_row_security_hides` in
+`crates/registry-breg/tests/postgres_compiled_schema.rs` is the executed
+proof. On the compiled schema it asserts the source view carries only
+`security_invoker=true` and that the plan of a read through it has no
+subquery scan, so the view is flattened. It then reads the view as a
+tenant-a caller through a predicate function that is not leakproof, costs
+almost nothing so the planner would run it first if it could, and raises
+when it is shown a named record. With a tenant-b record and a tombstoned
+tenant-a record named, the read returns the one visible record and nothing
+is raised: neither hidden row reached the predicate. With the visible record
+named, the same read raises, which shows the probe does fire on a row that
+passes the policy.
+
+`package_fingerprint_starts_refuses_drift_and_upgrades_without_rewriting_package_bytes`
+in `crates/registry-breg/tests/postgres_package/fingerprint.rs` sets
+`security_barrier = true` on a source view, sees startup refused, resets it,
+and sees startup allowed again, next to the existing `security_invoker`
+pair.
+
+`crates/registry-breg/tests/postgres_list_page_plans.rs` holds the plan
+shape the change exists for: a filtered page sorted by a near-unique field,
+by a low-cardinality field, and in record id order, each on its first page
+and on a deep continuation, reads a bounded number of rows from its
+declared index and has no sort node. The existing keyset, NULLS LAST,
+tie-break, row-level security, and path-visibility suites pass unchanged.
+
+### Accepted residuals
+
+- A tombstoned, detail-erased change request may reach an outside predicate
+  before the view's lifecycle condition, for a caller the get policy already
+  lets read it. The row is still absent from every result, because the
+  view's condition still applies.
+- The order in which PostgreSQL evaluates policy conditions before other
+  predicates is PostgreSQL behaviour the engine relies on and does not
+  enforce itself. The executed proof would fail on a server that broke it.
+- A read policy written to admit more than
+  `record_lifecycle = 'active'` would widen what can reach a predicate. Any
+  change that adds such a read policy must revisit this note.
+- No security invariant row changes. No row names the barrier, and the
+  read boundary rows already rest on row-level security.
