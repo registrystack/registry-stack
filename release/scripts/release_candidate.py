@@ -381,6 +381,7 @@ def _release_payload_inventory(version: str) -> dict[str, str]:
     if not unified_client:
         for platform in ("linux-amd64-glibc", "linux-arm64-glibc", "macos-arm64"):
             inventory[f"evidence-client-node-{tag}-{platform}.tgz"] = "client-package"
+    wheel_abi_tag = release_roster.python_wheel_abi_tag(version_tuple)
     wheel_platforms = ("linux_x86_64", "linux_aarch64", "macosx_11_0_arm64")
     if version_tuple >= CLIENT_REGISTRY_PACKAGE_MINIMUM_VERSION:
         wheel_platforms = (
@@ -391,7 +392,7 @@ def _release_payload_inventory(version: str) -> dict[str, str]:
     if not unified_client:
         for platform in wheel_platforms:
             inventory[
-                f"registry_evidence_client-{version}-cp310-abi3-{platform}.whl"
+                f"registry_evidence_client-{version}-{wheel_abi_tag}-{platform}.whl"
             ] = "client-package"
     inventory.update(
         {
@@ -421,7 +422,7 @@ def _release_payload_inventory(version: str) -> dict[str, str]:
             inventory[f"relay-client-node-{tag}-{platform}.tgz"] = "client-package"
         for platform in wheel_platforms:
             inventory[
-                f"registry_relay_client-{version}-cp310-abi3-{platform}.whl"
+                f"registry_relay_client-{version}-{wheel_abi_tag}-{platform}.whl"
             ] = "client-package"
     if (
         version_tuple >= CLIENT_REGISTRY_PACKAGE_MINIMUM_VERSION
@@ -443,7 +444,7 @@ def _release_payload_inventory(version: str) -> dict[str, str]:
             inventory[f"discovery-client-node-{tag}-{platform}.tgz"] = "client-package"
         for platform in wheel_platforms:
             inventory[
-                f"registry_discovery_client-{version}-cp310-abi3-{platform}.whl"
+                f"registry_discovery_client-{version}-{wheel_abi_tag}-{platform}.whl"
             ] = "client-package"
         inventory[f"registrystack-discovery-client-{version}.tgz"] = "client-package"
         for platform in ("darwin-arm64", "linux-arm64-gnu", "linux-x64-gnu"):
@@ -458,7 +459,7 @@ def _release_payload_inventory(version: str) -> dict[str, str]:
             )
         for platform in wheel_platforms:
             inventory[
-                f"registry_stack_client-{version}-cp310-abi3-{platform}.whl"
+                f"registry_stack_client-{version}-{wheel_abi_tag}-{platform}.whl"
             ] = "client-package"
     if version_tuple >= DISCOVERY_RUNTIME_MINIMUM_VERSION:
         inventory[f"discovery-{tag}-linux-amd64"] = "binary"

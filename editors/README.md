@@ -53,7 +53,7 @@ languages' own language servers.
 
 ## Configure a project
 
-From the source checkout, use Python 3.10 or newer to prepare both editors:
+From the source checkout, use Python 3.11 or newer to prepare both editors:
 
 ```console
 python3 editors/configure.py breg /path/to/registry-project

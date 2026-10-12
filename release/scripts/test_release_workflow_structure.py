@@ -239,19 +239,19 @@ class EvidenceDevelopmentWorkflowStructureTest(unittest.TestCase):
                 (
                     "linux-amd64",
                     "x86_64-unknown-linux-gnu",
-                    "cp310-abi3-linux_x86_64",
+                    "cp311-abi3-linux_x86_64",
                     "linux-x64-gnu",
                 ),
                 (
                     "linux-arm64",
                     "aarch64-unknown-linux-gnu",
-                    "cp310-abi3-linux_aarch64",
+                    "cp311-abi3-linux_aarch64",
                     "linux-arm64-gnu",
                 ),
                 (
                     "macos-arm64",
                     "aarch64-apple-darwin",
-                    "cp310-abi3-macosx_11_0_arm64",
+                    "cp311-abi3-macosx_11_0_arm64",
                     "darwin-arm64",
                 ),
             },
@@ -302,7 +302,7 @@ class EvidenceDevelopmentWorkflowStructureTest(unittest.TestCase):
         )
         self.assertIn('echo "evidence-client-node-${tag}-${platform}.tgz"', roster)
         self.assertIn(
-            'echo "registry_evidence_client-${python_version}-cp310-abi3-${wheel_platform}.whl"',
+            'echo "registry_evidence_client-${python_version}-cp311-abi3-${wheel_platform}.whl"',
             roster,
         )
         self.assertIn(
@@ -949,22 +949,22 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
                 (
                     "linux-amd64-glibc",
                     "x86_64-unknown-linux-gnu",
-                    "cp310-abi3-linux_x86_64",
-                    "cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64",
+                    "cp311-abi3-linux_x86_64",
+                    "cp311-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64",
                     "linux-x64-gnu",
                 ),
                 (
                     "linux-arm64-glibc",
                     "aarch64-unknown-linux-gnu",
-                    "cp310-abi3-linux_aarch64",
-                    "cp310-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64",
+                    "cp311-abi3-linux_aarch64",
+                    "cp311-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64",
                     "linux-arm64-gnu",
                 ),
                 (
                     "macos-arm64",
                     "aarch64-apple-darwin",
-                    "cp310-abi3-macosx_11_0_arm64",
-                    "cp310-abi3-macosx_11_0_arm64",
+                    "cp311-abi3-macosx_11_0_arm64",
+                    "cp311-abi3-macosx_11_0_arm64",
                     "darwin-arm64",
                 ),
             },
@@ -3272,6 +3272,128 @@ class BregServicesRosterStructureTest(unittest.TestCase):
             self.assertFalse(roster.breg_services_in_release((0, 36, 9)))
             self.assertTrue(roster.breg_services_in_release((0, 37, 0)))
             self.assertTrue(roster.breg_services_in_release((1, 0, 0)))
+
+
+PYTHON_FLOOR = (3, 11)
+PYTHON_REQUIRES = ">=3.11"
+PYTHON_STABLE_ABI_FEATURE = "abi3-py311"
+PYTHON_WHEEL_ABI_TAG = "cp311-abi3"
+PYTHON_CLIENT_PACKAGES = (
+    "registry-breg-client-py",
+    "registry-casework-client-py",
+    "registry-discovery-client-py",
+    "registry-evidence-client-py",
+    "registry-messaging-client-py",
+    "registry-scheduling-client-py",
+    "registry-stack-client-py",
+)
+PYTHON_VERSION_CLASSIFIER = re.compile(
+    r"^Programming Language :: Python :: (\d+)\.(\d+)$"
+)
+PYTHON_WHEEL_ABI_TAG_PATTERN = re.compile(r"cp3\d+-abi3")
+PYTHON_STABLE_ABI_FEATURE_PATTERN = re.compile(r"abi3-py3\d+")
+PYTHON_WHEEL_WORKFLOWS = ("evidence-dev.yml", "release-candidate.yml", "release.yml")
+
+
+def load_release_script(name: str):
+    spec = importlib.util.spec_from_file_location(
+        f"{Path(name).stem.replace('-', '_')}_python_floor_under_test",
+        ROOT / "release/scripts" / name,
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    # A dataclass resolves its own module through sys.modules while it is defined.
+    with mock.patch.dict(sys.modules, {spec.name: module}):
+        spec.loader.exec_module(module)
+    return module
+
+
+class PythonClientFloorStructureTest(unittest.TestCase):
+    """Every statement of the minimum Python of the client packages agrees.
+
+    The floor is stated by the package metadata, by the PyO3 stable ABI
+    feature the wheels are compiled against, by the wheel tag maturin derives
+    from that feature, and by each workflow and release script that names a
+    wheel file. A wheel named for one stable ABI and built against another is
+    published under a requirement it does not meet, so the statements move
+    together or this test fails.
+    """
+
+    def test_every_python_client_package_declares_the_floor(self) -> None:
+        import tomllib
+
+        self.assertEqual(
+            sorted(PYTHON_CLIENT_PACKAGES),
+            sorted(
+                path.parent.name
+                for path in (ROOT / "crates").glob("registry-*-client-py/pyproject.toml")
+            ),
+        )
+        for package in PYTHON_CLIENT_PACKAGES:
+            with self.subTest(package=package):
+                project = tomllib.loads(
+                    (ROOT / "crates" / package / "pyproject.toml").read_text(
+                        encoding="utf-8"
+                    )
+                )["project"]
+                self.assertEqual(PYTHON_REQUIRES, project["requires-python"])
+                versions = [
+                    (int(match.group(1)), int(match.group(2)))
+                    for match in map(
+                        PYTHON_VERSION_CLASSIFIER.match, project.get("classifiers", [])
+                    )
+                    if match
+                ]
+                self.assertEqual([], [v for v in versions if v < PYTHON_FLOOR])
+
+    def test_the_stable_abi_feature_matches_the_floor(self) -> None:
+        import tomllib
+
+        workspace = tomllib.loads((ROOT / "Cargo.toml").read_text(encoding="utf-8"))
+        self.assertEqual(
+            [PYTHON_STABLE_ABI_FEATURE],
+            workspace["workspace"]["dependencies"]["pyo3"]["features"],
+        )
+
+    def test_the_unified_wheel_metadata_declares_the_floor(self) -> None:
+        assembler = load_release_script("assemble-registry-client-wheel.py")
+        self.assertIn(
+            f"\nRequires-Python: {PYTHON_REQUIRES}\n",
+            assembler.metadata("0.0.0").decode("utf-8"),
+        )
+
+    def test_release_scripts_name_the_floor_wheel_tag(self) -> None:
+        import tomllib
+
+        version = tuple(
+            int(part)
+            for part in tomllib.loads(
+                (ROOT / "Cargo.toml").read_text(encoding="utf-8")
+            )["workspace"]["package"]["version"].split(".")
+        )
+        roster = load_release_script("release_roster.py")
+        self.assertEqual(PYTHON_WHEEL_ABI_TAG, roster.python_wheel_abi_tag(version))
+        packages = load_release_script("assemble-registry-client-packages.py")
+        for platform, definition in packages.PLATFORMS.items():
+            with self.subTest(platform=platform):
+                self.assertTrue(
+                    definition["wheel_tag"].startswith(f"{PYTHON_WHEEL_ABI_TAG}-")
+                )
+
+    def test_workflows_name_only_the_floor_wheel_tag(self) -> None:
+        naming = set()
+        for path in sorted(WORKFLOWS.glob("*.yml")):
+            text = path.read_text(encoding="utf-8")
+            with self.subTest(workflow=path.name):
+                tags = set(PYTHON_WHEEL_ABI_TAG_PATTERN.findall(text))
+                self.assertLessEqual(tags, {PYTHON_WHEEL_ABI_TAG})
+                self.assertLessEqual(
+                    set(PYTHON_STABLE_ABI_FEATURE_PATTERN.findall(text)),
+                    {PYTHON_STABLE_ABI_FEATURE},
+                )
+                if tags:
+                    naming.add(path.name)
+        self.assertEqual(set(PYTHON_WHEEL_WORKFLOWS), naming)
 
 
 if __name__ == "__main__":

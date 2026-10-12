@@ -67,6 +67,13 @@ class ReleaseRosterTest(TestCase):
         self.assertFalse(release_roster.relay_in_release((0, 39, 0)))
         self.assertFalse(release_roster.relay_in_release((1, 0, 0)))
 
+    def test_python_wheels_use_the_311_stable_abi_from_v0_41(self) -> None:
+        self.assertEqual((0, 41, 0), release_roster.PYTHON_311_ABI_FIRST_RELEASE)
+        self.assertEqual("cp310-abi3", release_roster.python_wheel_abi_tag((0, 40, 0)))
+        self.assertEqual("cp310-abi3", release_roster.python_wheel_abi_tag((0, 40, 99)))
+        self.assertEqual("cp311-abi3", release_roster.python_wheel_abi_tag((0, 41, 0)))
+        self.assertEqual("cp311-abi3", release_roster.python_wheel_abi_tag((1, 0, 0)))
+
     def test_cli_reports_the_version_selected_roster(self) -> None:
         for command in (
             "breg-services-in-release",
