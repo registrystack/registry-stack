@@ -2517,7 +2517,9 @@ class RegistryReleaseTest(TestCase):
             checksums = []
             for binary in ("breg", "bregctl"):
                 name = f"{binary}-v0.26.0-{platform_name}"
-                body = f"{binary} fixture\n".encode()
+                # The installer starts each staged Linux binary, so the fixture
+                # is a script that starts.
+                body = f"#!/bin/sh\necho '{binary} fixture'\n".encode()
                 (assets / name).write_bytes(body)
                 checksums.append(f"{hashlib.sha256(body).hexdigest()}  {name}\n")
             (assets / "SHA256SUMS").write_text("".join(checksums), encoding="utf-8")
@@ -2539,7 +2541,9 @@ class RegistryReleaseTest(TestCase):
             self.assertEqual(0, result.returncode, result.stderr)
             for binary in ("breg", "bregctl"):
                 installed = destination / binary
-                self.assertEqual(f"{binary} fixture\n", installed.read_text())
+                self.assertEqual(
+                    f"#!/bin/sh\necho '{binary} fixture'\n", installed.read_text()
+                )
                 self.assertTrue(installed.stat().st_mode & stat.S_IXUSR)
 
     def test_release_builds_installs_and_smokes_casework_from_v0_30(self) -> None:
@@ -2592,7 +2596,9 @@ class RegistryReleaseTest(TestCase):
             checksums = []
             for binary in ("casework", "caseworkctl"):
                 name = f"{binary}-v0.30.0-{platform_name}"
-                body = f"{binary} fixture\n".encode()
+                # The installer starts each staged Linux binary, so the fixture
+                # is a script that starts.
+                body = f"#!/bin/sh\necho '{binary} fixture'\n".encode()
                 (assets / name).write_bytes(body)
                 checksums.append(f"{hashlib.sha256(body).hexdigest()}  {name}\n")
             (assets / "SHA256SUMS").write_text("".join(checksums), encoding="utf-8")
@@ -2614,7 +2620,9 @@ class RegistryReleaseTest(TestCase):
             self.assertEqual(0, result.returncode, result.stderr)
             for binary in ("casework", "caseworkctl"):
                 installed = destination / binary
-                self.assertEqual(f"{binary} fixture\n", installed.read_text())
+                self.assertEqual(
+                    f"#!/bin/sh\necho '{binary} fixture'\n", installed.read_text()
+                )
                 self.assertTrue(installed.stat().st_mode & stat.S_IXUSR)
 
 
