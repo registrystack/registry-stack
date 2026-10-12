@@ -27,11 +27,13 @@ a synthetic record, then add a narrow Evidence source without resetting the regi
   outcome="A verified Evidence answer from a record retained across BReg stop and restart."
   time="About 30 minutes, plus the first PostgreSQL image download"
   level="Local development with synthetic records"
-  prerequisites={['Matching candidate breg, bregctl, evidence and evidencectl binaries on PATH', 'A running Docker engine', 'A shell with curl, tar, Python 3 and awk', 'An editor']}
+  prerequisites={['The breg, bregctl, evidence and evidencectl binaries from one release on PATH', 'A running Docker engine', 'A shell with curl, tar, Python 3 and awk', 'An editor']}
 />
 
-Use the matching candidate toolset that accompanies this page. Guided source setup
-and retained source preparation require this candidate, not an older release.
+Take all four binaries from one release. `evidencectl source add` drives the `bregctl` on
+`PATH` and refuses one whose version differs from its own.
+
+{/* Evidence: crates/registry-evidencectl/src/source_add.rs, BregctlVersionMismatch. */}
 
 ## Start with your model
 
