@@ -2201,13 +2201,22 @@ fn apply_local_review_executor_candidates(
 
         let mut candidates = Vec::new();
         for client in clients {
-            if is_service_client_for_profile(client, &access_profile)?.is_some() {
+            let test_bindings: &[Value] = match client.get("testBindings") {
+                Some(bindings) => bindings
+                    .as_array()
+                    .context("each BReg dev client testBindings must be an array")?
+                    .as_slice(),
+                None => &[],
+            };
+            if test_bindings.is_empty()
+                && is_service_client_for_profile(client, &access_profile)?.is_some()
+            {
                 candidates.push(client);
             }
         }
         match candidates.as_slice() {
             [] => warnings.push(format!(
-                "automatic BReg executor {executor} has no local service client bound to {access_profile}; define that client and reviewExecutors.{executor} before bregctl dev start"
+                "automatic BReg executor {executor} has no default local service client bound to {access_profile}; add one default client or author reviewExecutors.{executor} with one exact service client before bregctl dev start"
             )),
             [client] => {
                 let client_id = client["id"].as_str().with_context(|| {
@@ -5271,7 +5280,7 @@ mod tests {
         assert!(missing_client
             .warnings
             .iter()
-            .any(|warning| warning.contains("no local service client")));
+            .any(|warning| warning.contains("no default local service client")));
         let proposed: Value =
             serde_norway::from_str(&missing_client.write.unwrap().proposed).unwrap();
         assert!(proposed.get("reviewExecutors").is_none());
@@ -5325,6 +5334,166 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.to_string().contains("principal") || error.to_string().contains("human"));
+    }
+
+    #[test]
+    fn automatic_executor_inference_selects_the_default_beside_an_exact_test_variant() {
+        let metadata = json!({});
+        let mut request = selected_request(&metadata);
+        request.application = ApplicationPlan::Automatic {
+            executor: "applier".to_owned(),
+            access_profile: "automatic-applier".to_owned(),
+        };
+        let clients = json!({
+            "clients": [
+                {
+                    "id": "executor",
+                    "accessProfiles": ["automatic-applier"],
+                    "scopes": ["requests:apply"],
+                    "claims": {"registry_actor_kind": "service"}
+                },
+                {
+                    "id": "executor-without-purpose",
+                    "accessProfiles": ["automatic-applier"],
+                    "scopes": ["requests:apply"],
+                    "claims": {"registry_actor_kind": "service"},
+                    "testBindings": [{
+                        "journeyId": "automatic-application",
+                        "stepId": "missing-purpose-is-refused"
+                    }]
+                }
+            ]
+        });
+        let mut candidate = clients.clone();
+        apply_dev_clients_candidate(&mut candidate, &[])
+            .expect("one default and one exact variant are valid BReg client bindings");
+        let mut changes = json!([]);
+
+        let (bindings, warnings) =
+            apply_local_review_executor_candidates(&mut candidate, &[request], &mut changes)
+                .expect("executor inference must select the default service client");
+
+        assert!(warnings.is_empty());
+        assert_eq!(
+            bindings["applier"],
+            json!({"accessProfile":"automatic-applier", "client":"executor"})
+        );
+        assert_eq!(candidate["clients"], clients["clients"]);
+        assert_eq!(
+            candidate["reviewExecutors"]["applier"],
+            json!({"accessProfile":"automatic-applier", "client":"executor"})
+        );
+
+        let mut request = selected_request(&metadata);
+        request.application = ApplicationPlan::Automatic {
+            executor: "applier".to_owned(),
+            access_profile: "automatic-applier".to_owned(),
+        };
+        let mut empty_binding_default = clients.clone();
+        empty_binding_default["clients"][0]["testBindings"] = json!([]);
+        apply_dev_clients_candidate(&mut empty_binding_default, &[])
+            .expect("an empty testBindings list is a default client binding");
+        let mut changes = json!([]);
+        let (bindings, warnings) = apply_local_review_executor_candidates(
+            &mut empty_binding_default,
+            &[request],
+            &mut changes,
+        )
+        .expect("executor inference must select an explicitly empty default binding");
+        assert!(warnings.is_empty());
+        assert_eq!(bindings["applier"]["client"], "executor");
+    }
+
+    #[test]
+    fn automatic_executor_explicit_binding_may_select_an_exact_test_variant() {
+        let metadata = json!({});
+        let mut request = selected_request(&metadata);
+        request.application = ApplicationPlan::Automatic {
+            executor: "applier".to_owned(),
+            access_profile: "automatic-applier".to_owned(),
+        };
+        let mut candidate = json!({
+            "clients": [
+                {
+                    "id": "executor",
+                    "accessProfiles": ["automatic-applier"],
+                    "scopes": ["requests:apply"],
+                    "claims": {"registry_actor_kind": "service"}
+                },
+                {
+                    "id": "executor-without-purpose",
+                    "accessProfiles": ["automatic-applier"],
+                    "scopes": ["requests:apply"],
+                    "claims": {"registry_actor_kind": "service"},
+                    "testBindings": [{
+                        "journeyId": "automatic-application",
+                        "stepId": "missing-purpose-is-refused"
+                    }]
+                }
+            ],
+            "reviewExecutors": {
+                "applier": {
+                    "accessProfile": "automatic-applier",
+                    "client": "executor-without-purpose"
+                }
+            }
+        });
+        apply_dev_clients_candidate(&mut candidate, &[]).unwrap();
+        let original = candidate.clone();
+        let mut changes = json!([]);
+
+        let (bindings, warnings) =
+            apply_local_review_executor_candidates(&mut candidate, &[request], &mut changes)
+                .expect("an explicit executor binding owns its exact service client selection");
+
+        assert!(warnings.is_empty());
+        assert_eq!(bindings["applier"]["client"], "executor-without-purpose");
+        assert_eq!(candidate, original);
+        assert_eq!(changes, json!([]));
+    }
+
+    #[test]
+    fn automatic_executor_variants_without_a_default_require_explicit_authoring() {
+        let metadata = json!({});
+        let mut request = selected_request(&metadata);
+        request.application = ApplicationPlan::Automatic {
+            executor: "applier".to_owned(),
+            access_profile: "automatic-applier".to_owned(),
+        };
+        let mut candidate = json!({
+            "clients": [
+                {
+                    "id": "executor-first-variant",
+                    "accessProfiles": ["automatic-applier"],
+                    "scopes": ["requests:apply"],
+                    "claims": {"registry_actor_kind": "service"},
+                    "testBindings": [{"journeyId": "automatic-application", "stepId": "first-refusal"}]
+                },
+                {
+                    "id": "executor-second-variant",
+                    "accessProfiles": ["automatic-applier"],
+                    "scopes": ["requests:apply"],
+                    "claims": {"registry_actor_kind": "service"},
+                    "testBindings": [{"journeyId": "automatic-application", "stepId": "second-refusal"}]
+                }
+            ]
+        });
+        apply_dev_clients_candidate(&mut candidate, &[])
+            .expect("distinct exact variants do not require a default client");
+        let clients = candidate["clients"].clone();
+        let mut changes = json!([]);
+
+        let (bindings, warnings) =
+            apply_local_review_executor_candidates(&mut candidate, &[request], &mut changes)
+                .expect("exact test variants alone are not inferred as a runtime executor");
+
+        assert!(bindings.is_empty());
+        assert!(warnings
+            .iter()
+            .any(|warning| warning.contains("no default local service client")));
+        assert_eq!(candidate["clients"], clients);
+        assert!(candidate.get("reviewExecutors").is_none());
+        assert_eq!(changes, json!([]));
     }
 
     #[test]
