@@ -208,26 +208,12 @@ impl BregAdapter {
         })
     }
 
-    /// Decode a stored discovery cursor. A one-entity source keeps its binding
-    /// generation, so it also resumes from a cursor stored as a bare BReg
-    /// continuation; with several entities that shape names no entity and is
-    /// refused.
+    /// Decode a stored discovery cursor. Every cursor this adapter writes
+    /// names the request entity it continues; any other shape is refused.
     fn discovery_position(
-        &self,
         cursor: &DiscoveryCursor,
     ) -> Result<DiscoveryPosition, SourceAdapterError> {
-        if let Ok(position) = serde_json::from_str::<DiscoveryPosition>(&cursor.0) {
-            return Ok(position);
-        }
-        let [only] = self.config.requests.as_slice() else {
-            return Err(SourceAdapterError::Invalid);
-        };
-        let continuation: BRegContinuationProjection =
-            serde_json::from_str(&cursor.0).map_err(|_| SourceAdapterError::Invalid)?;
-        Ok(DiscoveryPosition {
-            entity: only.entity.clone(),
-            continuation: Some(continuation),
-        })
+        serde_json::from_str(&cursor.0).map_err(|_| SourceAdapterError::Invalid)
     }
 
     /// Verify the configured BReg runtime and the complete read contract
@@ -1163,7 +1149,7 @@ impl SourceAdapter for BregAdapter {
             .await?;
         let (mut index, mut continuation) = match cursor {
             Some(cursor) => {
-                let position = self.discovery_position(cursor)?;
+                let position = Self::discovery_position(cursor)?;
                 let index = self
                     .config
                     .requests
@@ -1493,9 +1479,9 @@ impl SourceAdapter for BregAdapter {
 mod tests {
     use super::*;
 
-    fn saved_attempt(version: u32) -> SavedAttempt {
+    fn saved_attempt() -> SavedAttempt {
         SavedAttempt {
-            version,
+            version: CURRENT_SAVED_ATTEMPT_VERSION,
             subject: SubjectRef {
                 source_id: "source".into(),
                 kind: "company".into(),
@@ -1542,7 +1528,7 @@ mod tests {
 
     #[test]
     fn saved_attempt_current_version_round_trips_with_additive_fields() {
-        let expected = saved_attempt(CURRENT_SAVED_ATTEMPT_VERSION);
+        let expected = saved_attempt();
         let encoded = encode_saved_attempt(&expected).expect("encode current saved attempt");
         let mut value: Value = serde_json::from_slice(&encoded).expect("saved attempt JSON");
         assert_eq!(value["version"], CURRENT_SAVED_ATTEMPT_VERSION);

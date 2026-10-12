@@ -436,8 +436,7 @@ descriptions it names. A start that verifies the package records the package dig
 digest of `SHA256SUMS`, in the runtime log before anything else happens.
 
 With `tlsTermination: operator-controlled-upstream`, an absent `SHA256SUMS` is a refusal rather
-than a fallback to the authored project. A directory that still holds `casework.package.json` is
-refused and names `caseworkctl package` as the command that rebuilds it.
+than a fallback to the authored project.
 
 A verified package proves its files match its own `SHA256SUMS`, not that it is the package you
 reviewed. Set `package.expectedDigest` to the `packageDigest` that `caseworkctl package` reported
@@ -588,8 +587,8 @@ refuses the response entry after the commit, apply exits `3` with
 `casework.activation.applied-unaudited`: the package is active, so do not apply it again; restore
 the audit destination and record the activation `status` names in your audit trail.
 
-`casework migrate` and `caseworkctl db migrate` no longer migrate. Each still parses only to exit
-`2` and name `caseworkctl plan` then `caseworkctl apply`. The first `apply` on a fresh database
+`casework` has no `migrate` subcommand and `caseworkctl` has no `db` subcommand. Each is refused
+as an unrecognized subcommand with exit `2`. The first `apply` on a fresh database
 installs the current schema and records the first activation. For a release upgrade, follow
 [Upgrade and retire](../advanced/upgrade-and-retire/). The v0.39.0-to-v0.40.0 step requires a new
 database; v0.40.0 supports no in-place upgrade from v0.39.0. From v0.40.0 onward, upgrade one
@@ -1060,7 +1059,7 @@ bound to the actor and selected profile for 15 minutes; an expired preview retur
 | `casework.activation.already-active` | The active package is applied with nothing to change. Nothing needs applying. |
 | `casework.activation.audit-unavailable` | The audit destination refused the request entry, so nothing was applied. Restore the destination named at `audit`, then apply again. |
 | `casework.activation.applied-unaudited` | The package is active but its response entry did not reach the audit destination. Do not apply again; restore the destination and record the activation `caseworkctl status` names. |
-| `casework migrate` or `caseworkctl db migrate` exits `2` | Those commands were removed. Run `caseworkctl plan --runtime-config FILE` then `caseworkctl apply --runtime-config FILE`. |
+| `casework migrate` or `caseworkctl db migrate` exits `2` | Those commands do not exist. Run `caseworkctl plan --runtime-config FILE` then `caseworkctl apply --runtime-config FILE`. |
 | `the Casework database schema version N is newer than this binary supports (M)` | A newer release already migrated this database. Run that release or a later one; Casework does not migrate a schema down. |
 | `the Casework database holds hosted work that schema migration 15 would drop` | The database still holds hosted work from Casework 0.32.0 or earlier. Keep it with that release until its work is exported, then apply this release to a fresh database as [Plan, apply, and serve](#plan-apply-and-serve) describes. |
 | `the Casework database holds N audit record(s) that schema migration 17 would drop` | The earlier database has unpublished audit records. Keep it with the release that wrote it until its audit records are published and its work and accountability records are exported, then apply v0.40.0 to a new database as [earlier database and audit state](#earlier-database-and-audit-state) describes. |

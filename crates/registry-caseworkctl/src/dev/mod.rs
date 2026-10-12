@@ -1820,9 +1820,6 @@ fn service_ports_must_be_free(status: &Status) -> bool {
 /// reclamation or a manual removal already took is tolerated; ownership is
 /// still verified for anything that is still there.
 fn reclaim(docker: &Path, state: &mut State) -> Result<()> {
-    // Preserve a verified container description through removal. It is the
-    // only acceptable proof for a legacy, unlabeled volume created before
-    // volume labels were introduced.
     let container = if listed(docker, state)? {
         Some(inspect(docker, state)?.context("owned container listing changed")?)
     } else {
@@ -1830,7 +1827,7 @@ fn reclaim(docker: &Path, state: &mut State) -> Result<()> {
     };
     let volume = inspect_volume_with_termination(docker, state, None)?;
     if let Some(volume) = volume.as_ref() {
-        verified_volume_name(state, volume, container.as_ref())?;
+        verified_volume_name(state, volume)?;
     }
     if let Some(container) = container.as_ref() {
         let id = container["Id"]
@@ -1849,7 +1846,7 @@ fn reclaim(docker: &Path, state: &mut State) -> Result<()> {
     if current_volume != volume {
         bail!("database volume changed during removal; no volume was removed");
     }
-    remove_verified_volume(state, current_volume, container.as_ref(), |name| {
+    remove_verified_volume(state, current_volume, |name| {
         docker_command(
             docker,
             state,
@@ -3836,49 +3833,14 @@ fn inspect_volume_with_termination(
     Ok(values.pop())
 }
 
-fn verified_volume_name<'a>(
-    state: &State,
-    volume: &'a Value,
-    legacy_container: Option<&Value>,
-) -> Result<&'a str> {
+fn verified_volume_name<'a>(state: &State, volume: &'a Value) -> Result<&'a str> {
     let name = volume["Name"]
         .as_str()
         .context("Docker volume name missing")?;
-    if name != state.volume_name() {
+    if name != state.volume_name() || volume["Labels"][LABEL] != state.owner {
         bail!(
             "database volume ownership differs from retained local state; no resource was changed"
         );
-    }
-    if volume["Labels"][LABEL] == state.owner {
-        return Ok(name);
-    }
-    let labels = volume
-        .get("Labels")
-        .context("Docker volume labels missing")?;
-    if !(labels.is_null() || labels.as_object().is_some_and(serde_json::Map::is_empty)) {
-        bail!(
-            "database volume ownership differs from retained local state; no resource was changed"
-        );
-    }
-    let container = legacy_container.context(
-        "legacy database volume has no ownership label and its retained container is absent; no resource was changed",
-    )?;
-    verified_container(state, container)?;
-    let retained_id = state.container_id.as_ref().context(
-        "legacy database volume has no ownership label or retained container ID; no resource was changed",
-    )?;
-    if container["Id"] != *retained_id {
-        bail!("legacy database container ID differs from retained local state; no resource was changed");
-    }
-    let mounted = container["Mounts"].as_array().is_some_and(|mounts| {
-        mounts.iter().any(|mount| {
-            mount["Type"] == "volume"
-                && mount["Name"] == name
-                && mount["Destination"] == "/var/lib/postgresql/data"
-        })
-    });
-    if !mounted {
-        bail!("legacy database volume is not mounted by the retained container at /var/lib/postgresql/data; no resource was changed");
     }
     Ok(name)
 }
@@ -3896,18 +3858,17 @@ fn ensure_volume(docker: &Path, state: &State, terminate: &AtomicBool) -> Result
     )?;
     let volume = inspect_volume_with_termination(docker, state, Some(terminate))?
         .context("owned database volume was not created")?;
-    verified_volume_name(state, &volume, None)?;
+    verified_volume_name(state, &volume)?;
     Ok(())
 }
 
 fn remove_verified_volume(
     state: &State,
     volume: Option<Value>,
-    legacy_container: Option<&Value>,
     remove: impl FnOnce(&str) -> Result<()>,
 ) -> Result<()> {
     if let Some(volume) = volume {
-        remove(verified_volume_name(state, &volume, legacy_container)?)?;
+        remove(verified_volume_name(state, &volume)?)?;
     }
     Ok(())
 }

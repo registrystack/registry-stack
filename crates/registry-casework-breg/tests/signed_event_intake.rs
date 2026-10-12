@@ -932,64 +932,43 @@ async fn a_discovery_cursor_naming_an_unconfigured_request_entity_is_refused() {
     );
 }
 
-/// A one-entity source keeps its binding generation, so a cursor stored as a
-/// bare BReg continuation before request entities were named must still resume.
-fn bare_continuation(cursor: &registry_casework_core::DiscoveryCursor) -> Value {
-    let position: Value = serde_json::from_str(&cursor.0).unwrap();
-    position["continuation"].clone()
-}
-
+/// A discovery cursor names the request entity it continues. A BReg
+/// continuation on its own is not a cursor this adapter writes, so it is
+/// refused like any other malformed cursor, whether the source has one
+/// request entity or several.
 #[tokio::test]
-async fn a_one_entity_source_resumes_from_a_bare_continuation_cursor() {
-    let server = MockServer::start().await;
-    mount_metadata_times(&server, 2).await;
-    mount_listing(
-        &server,
-        "corrections",
-        None,
-        listing(&[RECORD_ID], "correction", Some("next-token")),
-    )
-    .await;
-    mount_listing(
-        &server,
-        "corrections",
-        Some("next-token"),
-        listing(&[SECOND_RECORD_ID], "correction", None),
-    )
-    .await;
-    let adapter = adapter_at("source_a", EVENT_SOURCE_A, &server.uri());
+async fn a_bare_continuation_is_refused_like_any_malformed_discovery_cursor() {
+    for several_entities in [false, true] {
+        let server = MockServer::start().await;
+        mount_metadata_times(&server, 3).await;
+        mount_listing(
+            &server,
+            "corrections",
+            None,
+            listing(&[RECORD_ID], "correction", Some("next-token")),
+        )
+        .await;
+        let adapter = if several_entities {
+            two_entity_adapter(&server.uri())
+        } else {
+            adapter_at("source_a", EVENT_SOURCE_A, &server.uri())
+        };
 
-    let first = adapter.discover_active(None, 50).await.unwrap();
-    let legacy = registry_casework_core::DiscoveryCursor(
-        bare_continuation(&first.next_cursor.expect("the listing continues")).to_string(),
-    );
-    let second = adapter.discover_active(Some(&legacy), 50).await.unwrap();
-    assert_eq!(second.subjects.len(), 1);
-    assert_eq!(second.subjects[0].id, SECOND_RECORD_ID);
-    assert!(second.next_cursor.is_none());
-}
-
-#[tokio::test]
-async fn a_several_entity_source_refuses_a_bare_continuation_cursor() {
-    let server = MockServer::start().await;
-    mount_metadata_times(&server, 2).await;
-    mount_listing(
-        &server,
-        "corrections",
-        None,
-        listing(&[RECORD_ID], "correction", Some("next-token")),
-    )
-    .await;
-    let adapter = two_entity_adapter(&server.uri());
-
-    let first = adapter.discover_active(None, 50).await.unwrap();
-    let legacy = registry_casework_core::DiscoveryCursor(
-        bare_continuation(&first.next_cursor.expect("the listing continues")).to_string(),
-    );
-    assert_eq!(
-        adapter.discover_active(Some(&legacy), 50).await,
-        Err(SourceAdapterError::Invalid)
-    );
+        let first = adapter.discover_active(None, 50).await.unwrap();
+        let position: Value =
+            serde_json::from_str(&first.next_cursor.expect("the listing continues").0).unwrap();
+        for malformed in [
+            position["continuation"].to_string(),
+            "not a cursor".to_owned(),
+        ] {
+            let cursor = registry_casework_core::DiscoveryCursor(malformed);
+            assert_eq!(
+                adapter.discover_active(Some(&cursor), 50).await,
+                Err(SourceAdapterError::Invalid),
+                "several entities: {several_entities}"
+            );
+        }
+    }
 }
 
 #[test]

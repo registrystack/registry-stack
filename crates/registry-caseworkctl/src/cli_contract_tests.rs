@@ -475,11 +475,7 @@ fn every_public_json_report_matches_its_schema() {
     assert_eq!(exit, ExitCode::from(2));
     reports.push(("usage", "CaseworkUsageReport", usage));
 
-    let (exit, removed) = invoke(arguments(&["db", "migrate", "."]));
-    assert_eq!(exit, ExitCode::from(2));
-    reports.push(("removed command", "CaseworkUsageReport", removed));
-
-    assert_eq!(reports.len(), 23);
+    assert_eq!(reports.len(), 22);
     for (label, kind, report) in reports {
         assert_matches_contract(label, kind, &report);
     }
