@@ -8283,10 +8283,10 @@ async fn a_permission_refusal_the_destination_refuses_answers_service_unavailabl
     assert_eq!(problem["code"], "service.unavailable");
 }
 
-/// Rewrite the retained current policy document into the shape the previous
-/// release stored: the identity under a top-level `scheduling` member where
-/// this release stores `project`.
-async fn retain_predecessor_policy_document(fx: &Fixture) {
+/// Rewrite the retained current policy document so its identity sits under a
+/// top-level `scheduling` member, which the policy model does not define,
+/// leaving the required `project` block absent.
+async fn retain_policy_identity_under_scheduling(fx: &Fixture) {
     let mut document = serde_json::to_value(read_policy(POLICY).expect("the current policy"))
         .expect("the policy serializes");
     let object = document.as_object_mut().expect("a policy object");
@@ -8299,18 +8299,19 @@ async fn retain_predecessor_policy_document(fx: &Fixture) {
             &[&document],
         )
         .await
-        .expect("retain the predecessor's document shape");
+        .expect("retain the document without its project block");
     assert!(updated > 0, "a retained document was rewritten");
 }
 
-/// A database the previous release wrote retains its policy under a top-level
-/// `scheduling` member. Publication and the records swap name that cause and
-/// the way out, never a corrupt database, and repeat nothing the document
-/// holds.
+/// A retained policy whose identity sits under a `scheduling` member has no
+/// `project` block, and no release this one upgrades from stored that shape.
+/// Publication and the records swap refuse it as a corrupt database like any
+/// other document the policy model does not read, never as an activation
+/// refusal an operator could act on, and repeat nothing the document holds.
 #[tokio::test]
-async fn a_database_an_earlier_release_wrote_is_refused_by_name() {
+async fn a_retained_policy_without_a_project_identity_is_refused_as_corrupt() {
     let fx = fixture().await;
-    retain_predecessor_policy_document(&fx).await;
+    retain_policy_identity_under_scheduling(&fx).await;
 
     let mut replacement = read_policy(POLICY).expect("the current policy");
     replacement.project.version = "2".to_owned();
@@ -8327,7 +8328,7 @@ async fn a_database_an_earlier_release_wrote_is_refused_by_name() {
         .store
         .apply_policy(SCHEDULING_ID, &digest, &pool_ids, &replacement)
         .await
-        .expect_err("the predecessor's retained document is not read");
+        .expect_err("a retained document without a project block is not read");
     let records = fx
         .store
         .replace_facts(SCHEDULING_ID, &records_without(&[]))
@@ -8335,12 +8336,11 @@ async fn a_database_an_earlier_release_wrote_is_refused_by_name() {
         .expect_err("the records swap does not read it either");
     for refusal in [publication, records] {
         assert!(
-            matches!(refusal, StoreError::EarlierRelease),
-            "{refusal:?} is not the earlier-release refusal"
+            matches!(refusal, StoreError::Corrupt),
+            "{refusal:?} is not the corrupt-database refusal"
         );
+        assert!(!refusal.is_activation_refusal(), "{refusal:?}");
         let text = refusal.to_string();
-        assert!(text.contains("earlier release"), "{text}");
-        assert!(text.contains("new database"), "{text}");
         assert!(!text.contains("registry-updates"), "{text}");
     }
 }

@@ -115,8 +115,7 @@ in its upgrade step. Rehearse the whole sequence on a restored copy first, as
    FILE` and `schedulingctl apply --runtime-config FILE` with the new binary, then start
    `scheduling`; `schedulingctl status --runtime-config FILE` confirms what the database activated.
    For v0.39.0 to v0.40.0, the new `schedulingctl` does not upgrade a database the earlier release
-   wrote: `plan`, `apply`, and `records apply` refuse it as
-   `schedulingctl.activation.earlier-release`. Start from a new database, then run `schedulingctl
+   wrote. Start from a new database, then run `schedulingctl
    apply --runtime-config FILE` and `schedulingctl records apply --runtime-config FILE RECORDS` with the
    files changed as the release notes list. Nothing the earlier database held carries over,
    published windows, holds, and appointments included.
@@ -172,8 +171,8 @@ in its upgrade step. Rehearse the whole sequence on a restored copy first, as
     release/notes/v0.36.0.md, "Upgrade Scheduling, Relay, and Discovery from v0.35.0"
     (apply before start, hook drain);
     release/notes/config-conventions/scheduling.md, "BREAKING: a database an earlier release
-    wrote is not read"; crates/registry-scheduling/src/store.rs, StoreError::EarlierRelease and
-    retained_policy(); crates/registry-schedulingctl/src/lib.rs, RecordsApplyArgs;
+    wrote is not read"; crates/registry-scheduling/src/store.rs, retained_policy();
+    crates/registry-schedulingctl/src/lib.rs, RecordsApplyArgs;
     release/scripts/rehearse-upgrade.py rehearses each product alone, not this composition. */}
 
 ## Roll back

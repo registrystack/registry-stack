@@ -325,10 +325,10 @@ runtime that reads an authored project directly, or a package whose files
 were edited after review, serves a policy nobody packaged. *Default:* at
 every start, in every listener mode and with or without a pin, the runtime
 verifies `package.root` against its `SHA256SUMS`: a changed, missing, or
-extra file, an absent `SHA256SUMS`, or the retired `scheduling.package.json`
-is refused by name before the policy is parsed, and the package digest is
-the SHA-256 digest of `SHA256SUMS`. The semantic policy digest the store and
-hooks record is unchanged and no longer doubles as the package identity.
+extra file or an absent `SHA256SUMS` is refused by name before the policy is
+parsed, and the package digest is the SHA-256 digest of `SHA256SUMS`. The
+semantic policy digest the store and hooks record is unchanged and no longer
+doubles as the package identity.
 *Tests:* `every_listener_mode_verifies_the_package_without_a_pin`,
 `crates/registry-scheduling/src/config.rs`, and
 `package_writes_a_package_the_runtime_verifies_and_refuses_replacement`,
@@ -603,8 +603,7 @@ the ledger holds no row, when the ledger belongs to another
 when `package.expectedDigest` names another package than `package.root`
 holds. Each ledger refusal names `schedulingctl plan --runtime-config FILE`
 then `schedulingctl apply --runtime-config FILE`. Startup no longer migrates,
-adopts, or publishes, and `scheduling migrate` exits 2 naming the same two
-commands.
+adopts, or publishes, and `serve` is the runtime's only command.
 
 **Tests, one per invariant:**
 `startup_refuses_a_database_the_ledger_does_not_name_for_this_package`
@@ -639,7 +638,7 @@ test shows the same for CREATE),
 `plan_before_the_first_split_apply_reports_the_initial_activation`, and
 `apply_records_one_row_per_activation_and_a_previous_package_is_a_new_row`
 (which also shows one operator reference hashing differently in two
-activations) in the same suite; `the_removed_migrate_command_refuses_as_usage_naming_plan_then_apply`
+activations) in the same suite; `serve_is_the_only_command_and_any_other_name_is_a_usage_error`
 (`crates/registry-scheduling/src/runtime.rs`); and
 `records_apply_refuses_a_database_where_this_package_is_not_active`
 (`crates/registry-schedulingctl/tests/records_apply_postgres.rs`).
@@ -1006,3 +1005,84 @@ field. This regression is excluded from `postgres-test` builds so a permissive
 test binary cannot satisfy the shipped-feature proof. The runtime guard and
 release build feature selection are unchanged; the existing default-feature
 test suite owns this check.
+
+## State no predecessor wrote is refused without a name of its own
+
+Recorded 2026-10-12. Three refusals that named a shape only releases before
+v0.40.0 wrote or accepted are removed, together with one `plan` condition
+only a schema older than the activation ledger could meet. Before 1.0 a
+release reads only what its immediate predecessor wrote or accepted. v0.40.0
+neither wrote nor accepted any of these shapes: it carried the same three
+refusals, and every v0.40.0 database is a new database at schema version 12.
+The change touches deployment defaults: which refusal out-of-promise input
+meets, and under which code. Authentication, authorization, the capacity
+transaction, the activation ledger, and audit are unchanged.
+
+**What was removed.**
+
+- `scheduling.package.retired-manifest`
+  (`RuntimeConfigError::RetiredPackageManifest`): the startup refusal that
+  named a `package.root` holding `scheduling.package.json`.
+- The hidden `scheduling migrate` command, which parsed only so it could
+  exit 2 naming `schedulingctl plan` then `schedulingctl apply`.
+- `schedulingctl.activation.earlier-release`
+  (`StoreError::EarlierRelease`): the refusal that named a retained policy
+  document whose identity sits under `scheduling` with no `project` block.
+- In `plan_activation`, the allowance that ran the read-only publication
+  check while schema version 9, the activation ledger, was the only one
+  pending. `plan` now runs that check exactly when no schema version is
+  pending.
+
+**Threat.** Dropping a refusal by name turns the input it named into accepted
+input: a stale manifest served as package content, a command that migrates
+from the runtime, or an earlier policy document reinterpreted as the current
+one.
+
+**Enforcement.** Each input still meets a refusal that does not depend on
+recognizing it.
+
+- `verify_scheduling_package` verifies `package.root` against its
+  `SHA256SUMS` before the policy is parsed. A file `SHA256SUMS` does not
+  list is refused as an extra file whatever its name
+  (`scheduling.package.invalid`), and one it does list is refused because
+  the package must hold exactly `scheduling.yaml`
+  (`scheduling.package.unexpected-contents`). Both name
+  `schedulingctl package` (SCHEDULING-SEC-15).
+- `serve` is the runtime's only command. Any other name is the argument
+  parser's usage error, exit 2, raised before the runtime file is read, so
+  no command line makes the runtime migrate, adopt, or publish
+  (SCHEDULING-SEC-29).
+- `SchedulingPolicy` requires `project` and denies unknown members, so
+  `retained_policy` fails to read the document and answers
+  `StoreError::Corrupt`. That is not an activation refusal: `schedulingctl`
+  reports `schedulingctl.store-unavailable` with its operational-failure
+  exit, publishes nothing, and repeats nothing the document holds.
+- A database v0.40.0 activated has no pending schema version. With any
+  version pending, `plan` leaves the publication absent and `apply` runs the
+  check inside its transaction after migrating, as before. The two
+  conditions differ only for a ledger missing version 9 alone, which ordered
+  application never produces, and there `plan` skips a read-only check that
+  `apply` still makes.
+
+**Tests.** `every_listener_mode_verifies_the_package_without_a_pin`
+(`crates/registry-scheduling/src/config.rs`) refuses an unlisted
+`scheduling.package.json` as an extra file.
+`serve_is_the_only_command_and_any_other_name_is_a_usage_error`
+(`crates/registry-scheduling/src/runtime.rs`) and
+`a_command_other_than_serve_is_a_usage_error_that_reads_no_configuration`
+(`crates/registry-scheduling/tests/usage_errors.rs`) hold the command line,
+the second against the built binary.
+`a_retained_policy_without_a_project_identity_is_refused_as_corrupt`
+(`crates/registry-scheduling/tests/postgres_commitments.rs`) holds
+publication and the records swap against PostgreSQL, and
+`an_activation_refusal_is_a_domain_refusal_and_a_store_failure_is_operational`
+(`crates/registry-schedulingctl/src/lib.rs`) holds how `schedulingctl`
+reports it.
+
+**Accepted residual.** Input older than v0.40.0 now meets a less specific
+refusal. The usage error does not name `schedulingctl plan` and `apply`, and
+the corrupt-database refusal does not say to start from a new database; its
+suggested action is the one for a damaged database. The release notes of
+the release that made each break, v0.36.0 and v0.40.0, carry the
+instruction. The unpublished-audit guard (SCHEDULING-SEC-14) and the
+removed-key refusals remain.

@@ -47,11 +47,6 @@ const MAXIMUM_POLICY_FILE_BYTES: usize = 1024 * 1024;
 /// refusal.
 pub const PACKAGE_COMMAND: &str = "schedulingctl package";
 
-/// The manifest file an earlier `schedulingctl package` wrote beside the
-/// policy. A package root that still holds it is refused with the command
-/// that rebuilds the package.
-pub const RETIRED_PACKAGE_MANIFEST_FILE: &str = "scheduling.package.json";
-
 /// The default number of days a stored idempotency receipt is replayable
 /// before the retention sweep erases it. The default is a floor, not a
 /// recommendation: a jurisdiction's retention schedule approves the deployed
@@ -494,9 +489,6 @@ pub fn package_limits() -> PackageLimits {
 pub fn verify_scheduling_package(
     package: &PackageConfig,
 ) -> Result<VerifiedPackage, RuntimeConfigError> {
-    if std::fs::symlink_metadata(package.root.join(RETIRED_PACKAGE_MANIFEST_FILE)).is_ok() {
-        return Err(RuntimeConfigError::RetiredPackageManifest);
-    }
     let verified = package
         .verify_package(&package_limits(), PACKAGE_COMMAND)
         .map_err(|error| match error.kind() {
@@ -1184,10 +1176,6 @@ pub enum RuntimeConfigError {
     )]
     PackageContents { extra: Vec<String> },
     #[error(
-        "package.root holds scheduling.package.json, which Scheduling no longer reads; rebuild the package with `schedulingctl package`, which writes SHA256SUMS"
-    )]
-    RetiredPackageManifest,
-    #[error(
         "package.root/scheduling.yaml changed after its package was verified; deploy the whole package again"
     )]
     PolicyChanged,
@@ -1263,9 +1251,7 @@ impl RuntimeConfigError {
             Self::Policy(_) | Self::PolicyUnreadable | Self::PolicyChanged => {
                 "package.root/scheduling.yaml"
             }
-            Self::Package(_) | Self::PackageContents { .. } | Self::RetiredPackageManifest => {
-                "package.root"
-            }
+            Self::Package(_) | Self::PackageContents { .. } => "package.root",
             Self::PackageDigest(_) => "package.expectedDigest",
         }
     }
@@ -1285,8 +1271,7 @@ impl RuntimeConfigError {
             | Self::PolicyUnreadable
             | Self::PolicyChanged
             | Self::Package(_)
-            | Self::PackageContents { .. }
-            | Self::RetiredPackageManifest => "/package/root".to_owned(),
+            | Self::PackageContents { .. } => "/package/root".to_owned(),
             _ => pointer_to(&self.member().split('.').collect::<Vec<_>>()),
         }
     }
@@ -1307,7 +1292,6 @@ impl RuntimeConfigError {
             Self::Package(_) => "scheduling.package.invalid",
             Self::PackageDigest(_) => "scheduling.package.digest-mismatch",
             Self::PackageContents { .. } => "scheduling.package.unexpected-contents",
-            Self::RetiredPackageManifest => "scheduling.package.retired-manifest",
             Self::PolicyChanged => "scheduling.package.file-changed",
             Self::InvalidListener => "scheduling.runtime.invalid-listener",
             Self::InvalidOidcClaim { .. } => "scheduling.runtime.invalid-oidc-claim",
@@ -1347,7 +1331,6 @@ impl RuntimeConfigError {
             Self::PolicyUnreadable
             | Self::Package(_)
             | Self::PackageContents { .. }
-            | Self::RetiredPackageManifest
             | Self::PolicyChanged => REBUILD_PACKAGE,
             Self::PackageDigest(_) => {
                 "Set package.expectedDigest to the digest `schedulingctl package` reported for the package at package.root, or remove it."
@@ -1398,7 +1381,6 @@ impl RuntimeConfigError {
                 | Self::Package(_)
                 | Self::PackageDigest(_)
                 | Self::PackageContents { .. }
-                | Self::RetiredPackageManifest
                 | Self::PolicyChanged
                 | Self::Oidc
                 | Self::OidcJwksSecret(_)
@@ -2011,9 +1993,15 @@ holdPolicy:
             std::fs::write(&policy, POLICY).unwrap();
             RuntimeConfig::load(&operator).expect("the restored package is admitted");
 
-            std::fs::write(package.join(RETIRED_PACKAGE_MANIFEST_FILE), "{}").unwrap();
-            refused(RETIRED_PACKAGE_MANIFEST_FILE);
-            std::fs::remove_file(package.join(RETIRED_PACKAGE_MANIFEST_FILE)).unwrap();
+            // No unlisted file name is read as a manifest: a JSON manifest
+            // beside the policy is one more extra file.
+            std::fs::write(package.join("scheduling.package.json"), "{}").unwrap();
+            refused("extra: scheduling.package.json");
+            assert_eq!(
+                RuntimeConfig::load(&operator).unwrap_err().code(),
+                "scheduling.package.invalid"
+            );
+            std::fs::remove_file(package.join("scheduling.package.json")).unwrap();
 
             std::fs::remove_file(package.join(SUM_FILE)).unwrap();
             refused("has no SHA256SUMS");

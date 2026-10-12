@@ -225,7 +225,7 @@ entries:
     tests:
       - {path: crates/registry-schedulingctl/tests/activation_postgres.rs, name: startup_refuses_a_database_the_ledger_does_not_name_for_this_package, features: [postgres-test]}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_divergent_startup_leaves_the_published_policy_untouched}
-      - {path: crates/registry-scheduling/src/runtime.rs, name: the_removed_migrate_command_refuses_as_usage_naming_plan_then_apply}
+      - {path: crates/registry-scheduling/src/runtime.rs, name: serve_is_the_only_command_and_any_other_name_is_a_usage_error}
       - {path: crates/registry-scheduling/src/config.rs, name: a_pinned_package_digest_must_match_the_verified_package}
       - {path: crates/registry-scheduling/src/config.rs, name: a_missing_identity_block_is_refused_with_the_key_to_add}
       - {path: crates/registry-schedulingctl/tests/activation_postgres.rs, name: plan_on_an_empty_database_reports_the_initial_activation_and_writes_nothing, features: [postgres-test]}

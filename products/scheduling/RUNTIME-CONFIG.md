@@ -45,8 +45,7 @@ must be a package `schedulingctl package --output` wrote: a `SHA256SUMS` file
 listing exactly `scheduling.yaml`, whose bytes match the listed digest. A
 changed, missing, or extra file is refused by name, and so is a directory
 without `SHA256SUMS`, such as an authored project; each refusal names
-`schedulingctl package`. A directory that holds the retired
-`scheduling.package.json` is refused the same way.
+`schedulingctl package`.
 
 `package.expectedDigest` optionally pins the package the runtime must serve:
 `sha256:` followed by 64 lowercase hexadecimal digits, the `packageDigest`
@@ -69,8 +68,7 @@ reads the ledger with the runtime credential and writes no activation state:
 it refuses when no package has been applied, when the verified package at
 `package.root` is not the active one, and when the ledger belongs to another
 `identity.databaseId`. Each refusal names `schedulingctl plan --runtime-config
-FILE` then `schedulingctl apply --runtime-config FILE`. `scheduling migrate`
-is removed and exits 2 naming the same two commands.
+FILE` then `schedulingctl apply --runtime-config FILE`.
 
 `listener` is required. `listener.bind` is required and is one numeric
 socket address, including bracketed IPv6 forms. `listener.tlsTermination` is
