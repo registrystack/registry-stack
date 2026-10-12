@@ -565,15 +565,57 @@ fn glibc_below_the_floor_refuses_before_download() {
 fn glibc_at_the_floor_installs_the_complete_toolset() {
     let (major, minor) = glibc_floor();
     let fixture = InstallerFixture::new();
+    let start_log = fixture.temp_path().join("started");
     let mut command = fixture.command();
-    command.env("FAKE_GLIBC", format!("{major}.{minor}"));
+    command
+        .env("FAKE_GLIBC", format!("{major}.{minor}"))
+        .env("FIXTURE_START_LOG", &start_log);
     let output = command.output().unwrap();
     assert!(
         output.status.success(),
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+    assert_eq!(
+        fs::read_to_string(&start_log).unwrap(),
+        "evidence\nevidencectl\nevidence-oid4vci\n",
+        "every staged binary must be started before the toolset is selected"
+    );
     fixture.assert_toolset_installed();
+}
+
+#[cfg(unix)]
+#[test]
+fn linux_binary_that_cannot_start_leaves_the_previous_toolset_selected() {
+    for failing in BINARIES {
+        let fixture = InstallerFixture::new();
+        fixture.preinstall_runnable_pointer_toolset();
+        fixture.make_release_binary_unstartable(failing);
+
+        let output = fixture.run();
+
+        assert!(
+            !output.status.success(),
+            "a release whose {failing} cannot start must be refused"
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(&format!(
+                "The staged {failing} {TEST_VERSION} did not start on this system, \
+                 so this release cannot run here."
+            )),
+            "stderr: {stderr}"
+        );
+        assert!(
+            stderr.contains("need the GNU libc that release was built for"),
+            "stderr: {stderr}"
+        );
+        assert!(
+            stderr.contains("The installed toolset is unchanged."),
+            "stderr: {stderr}"
+        );
+        fixture.assert_previous_pointer_toolset_selected();
+    }
 }
 
 #[cfg(unix)]
@@ -726,7 +768,32 @@ exec /bin/mv "${arguments[@]}"
         for binary in BINARIES {
             let asset = self.asset_name(binary);
             let path = self.release_dir.join(&asset);
-            fs::write(&path, format!("{binary} release binary\n")).unwrap();
+            // Published without the executable bit, so the installed mode is
+            // the installer's own doing.
+            fs::write(&path, fixture_binary(binary, &self.version)).unwrap();
+            checksums.push(format!("{}  {}\n", sha256(&path), asset));
+        }
+        fs::write(self.release_dir.join("SHA256SUMS"), checksums.concat()).unwrap();
+    }
+
+    /// Replaces one release asset with a binary that cannot start, the way a
+    /// binary built for a newer GNU libc cannot, and rewrites the checksums so
+    /// the asset still passes integrity verification.
+    fn make_release_binary_unstartable(&self, failing: &str) {
+        let mut checksums = Vec::new();
+        for binary in BINARIES {
+            let asset = self.asset_name(binary);
+            let path = self.release_dir.join(&asset);
+            if binary == failing {
+                fs::write(
+                    &path,
+                    r#"#!/usr/bin/env bash
+printf '%s\n' "$0: /lib/x86_64-linux-gnu/libc.so.6: version 'GLIBC_9.99' not found" >&2
+exit 1
+"#,
+                )
+                .unwrap();
+            }
             checksums.push(format!("{}  {}\n", sha256(&path), asset));
         }
         fs::write(self.release_dir.join("SHA256SUMS"), checksums.concat()).unwrap();
@@ -793,6 +860,67 @@ exec /bin/mv "${arguments[@]}"
         .unwrap();
     }
 
+    /// A machine an earlier release installed in full through the pointer,
+    /// with commands that run.
+    fn preinstall_runnable_pointer_toolset(&self) {
+        let toolset = self.install_dir.join(".evidence-toolset.earlier");
+        fs::create_dir_all(&toolset).unwrap();
+        for binary in BINARIES {
+            write_executable(
+                &toolset.join(binary),
+                &format!("#!/usr/bin/env bash\nprintf '%s\\n' '{binary} previous binary'\n"),
+            );
+            std::os::unix::fs::symlink(
+                format!(".evidence-current/{binary}"),
+                self.install_dir.join(binary),
+            )
+            .unwrap();
+        }
+        std::os::unix::fs::symlink(
+            ".evidence-toolset.earlier",
+            self.install_dir.join(".evidence-current"),
+        )
+        .unwrap();
+    }
+
+    fn assert_previous_pointer_toolset_selected(&self) {
+        assert_eq!(
+            fs::read_link(self.install_dir.join(".evidence-current")).unwrap(),
+            PathBuf::from(".evidence-toolset.earlier"),
+            "the toolset pointer must not move"
+        );
+        for binary in BINARIES {
+            let output = Command::new(self.install_dir.join(binary))
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{binary} stderr: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(
+                String::from_utf8(output.stdout).unwrap(),
+                format!("{binary} previous binary\n")
+            );
+        }
+        let mut entries: Vec<String> = fs::read_dir(&self.install_dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .collect();
+        entries.sort();
+        assert_eq!(
+            entries,
+            [
+                ".evidence-current",
+                ".evidence-toolset.earlier",
+                "evidence",
+                "evidence-oid4vci",
+                "evidencectl"
+            ],
+            "the refused release must leave nothing staged behind"
+        );
+    }
+
     fn assert_previous_toolset_intact(&self) {
         for binary in BINARIES {
             let contents = fs::read_to_string(self.install_dir.join(binary)).unwrap();
@@ -812,8 +940,16 @@ exec /bin/mv "${arguments[@]}"
                 PathBuf::from(format!(".evidence-current/{binary}")),
                 "{binary} must be a stable command link through the toolset pointer"
             );
-            let contents = fs::read_to_string(&path).unwrap();
-            assert_eq!(contents, format!("{binary} release binary\n"));
+            let output = Command::new(&path).output().unwrap();
+            assert!(
+                output.status.success(),
+                "{binary} stderr: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(
+                String::from_utf8(output.stdout).unwrap(),
+                format!("{binary} release binary\n")
+            );
             let mode = fs::metadata(&path).unwrap().permissions().mode();
             assert_eq!(mode & 0o777, 0o755, "{binary} must be executable");
         }
@@ -1023,6 +1159,31 @@ fn reinterpret(source: Command, shell: &Path) -> Command {
 fn write_executable(path: &Path, body: &str) {
     fs::write(path, body).unwrap();
     fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+/// A release asset that starts: it answers `--version` the way a build of
+/// `tag` does and otherwise names itself. A development build answers with the
+/// bare `-dev` suffix, without the run numbers its tag ends in.
+#[cfg(unix)]
+fn fixture_binary(binary: &str, tag: &str) -> String {
+    let version = tag.trim_start_matches('v');
+    let version = match version.split_once("-dev.") {
+        Some((base, _)) => format!("{base}-dev"),
+        None => version.to_owned(),
+    };
+    format!(
+        r#"#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${{1:-}}" == --version ]]; then
+  if [[ -n "${{FIXTURE_START_LOG:-}}" ]]; then
+    printf '%s\n' '{binary}' >> "$FIXTURE_START_LOG"
+  fi
+  printf '%s\n' '{binary} {version}'
+else
+  printf '%s\n' '{binary} release binary'
+fi
+"#
+    )
 }
 
 #[cfg(unix)]
