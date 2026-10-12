@@ -150,9 +150,9 @@ jobs:
             .cargo-home/registry
             .cargo-home/git
             target
-          key: registry-stack-release-${{ runner.os }}-${{ matrix.group }}-${{ hashFiles('rust-toolchain.toml', 'release/scripts/build-release-binaries.sh', 'release/docker/Dockerfile.builder', 'release/requirements/ziglang-0.12.1.txt', 'release/glibc-floor.env', 'release/scripts/zig-glibc-compiler') }}-${{ hashFiles('Cargo.lock') }}
+          key: registry-stack-release-${{ runner.os }}-${{ matrix.group }}-${{ hashFiles('rust-toolchain.toml', 'release/scripts/build-release-binaries.sh', 'release/docker/Dockerfile.builder', 'release/requirements/ziglang-0.12.1.txt', 'release/glibc-floor.env', 'release/scripts/zig-glibc-compiler', 'release/scripts/zig-glibc-toolchain.sh') }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
-            registry-stack-release-${{ runner.os }}-${{ matrix.group }}-${{ hashFiles('rust-toolchain.toml', 'release/scripts/build-release-binaries.sh', 'release/docker/Dockerfile.builder', 'release/requirements/ziglang-0.12.1.txt', 'release/glibc-floor.env', 'release/scripts/zig-glibc-compiler') }}-
+            registry-stack-release-${{ runner.os }}-${{ matrix.group }}-${{ hashFiles('rust-toolchain.toml', 'release/scripts/build-release-binaries.sh', 'release/docker/Dockerfile.builder', 'release/requirements/ziglang-0.12.1.txt', 'release/glibc-floor.env', 'release/scripts/zig-glibc-compiler', 'release/scripts/zig-glibc-toolchain.sh') }}-
 
       - name: Build canonical Linux binary shard
         env:

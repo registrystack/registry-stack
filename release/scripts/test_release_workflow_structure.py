@@ -767,7 +767,7 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
             )
         )
 
-    def test_arm64_platform_runner_matches_the_glibc_floor_and_is_checked(
+    def test_arm64_platform_build_links_at_the_glibc_floor_and_is_checked(
         self,
     ) -> None:
         _, document = workflow("release-candidate.yml")
@@ -775,7 +775,7 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         self.assertEqual(
             {(entry["runner"], entry["target"], entry["asset"]) for entry in matrix},
             {
-                ("ubuntu-22.04-arm", "aarch64-unknown-linux-gnu", "linux-arm64"),
+                ("ubuntu-24.04-arm", "aarch64-unknown-linux-gnu", "linux-arm64"),
             },
         )
         steps = document["jobs"]["build-platforms"]["steps"]
@@ -791,6 +791,18 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         native = step_run(
             document, "build-platforms", "Build native platform payload once"
         )
+        # The runner's own glibc is newer than the floor, so the build reaches
+        # the floor through the shared Zig toolchain, installed before the
+        # first compile and never configured in the workflow itself.
+        toolchain = native.index(". release/scripts/zig-glibc-toolchain.sh\n")
+        install = native.index(
+            'install_zig_glibc_toolchain "${RUNNER_TEMP:?RUNNER_TEMP is required}'
+            '/zig-glibc-toolchain"\n'
+        )
+        self.assertLess(toolchain, install)
+        self.assertLess(install, native.index("cargo build"))
+        self.assertNotIn("REGISTRY_ZIG_TARGET", native)
+        self.assertNotIn("_LINKER", native)
         schedulingctl = native.split(
             "if (( release_major > 0 || release_minor >= 36 )); then", 1
         )[1]
@@ -1413,7 +1425,8 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
             "'release/docker/Dockerfile.builder', "
             "'release/requirements/ziglang-0.12.1.txt', "
             "'release/glibc-floor.env', "
-            "'release/scripts/zig-glibc-compiler') }}-"
+            "'release/scripts/zig-glibc-compiler', "
+            "'release/scripts/zig-glibc-toolchain.sh') }}-"
         )
         for filename, job_name in (
             ("release-candidate.yml", "build-canonical-binaries"),

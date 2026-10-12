@@ -276,9 +276,9 @@ jobs:
             .cargo-home/registry
             .cargo-home/git
             target
-          key: registry-stack-release-${{ runner.os }}-${{ matrix.group }}-${{ hashFiles('rust-toolchain.toml', 'release/scripts/build-release-binaries.sh', 'release/docker/Dockerfile.builder', 'release/requirements/ziglang-0.12.1.txt', 'release/glibc-floor.env', 'release/scripts/zig-glibc-compiler') }}-${{ hashFiles('Cargo.lock') }}
+          key: registry-stack-release-${{ runner.os }}-${{ matrix.group }}-${{ hashFiles('rust-toolchain.toml', 'release/scripts/build-release-binaries.sh', 'release/docker/Dockerfile.builder', 'release/requirements/ziglang-0.12.1.txt', 'release/glibc-floor.env', 'release/scripts/zig-glibc-compiler', 'release/scripts/zig-glibc-toolchain.sh') }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
-            registry-stack-release-${{ runner.os }}-${{ matrix.group }}-${{ hashFiles('rust-toolchain.toml', 'release/scripts/build-release-binaries.sh', 'release/docker/Dockerfile.builder', 'release/requirements/ziglang-0.12.1.txt', 'release/glibc-floor.env', 'release/scripts/zig-glibc-compiler') }}-
+            registry-stack-release-${{ runner.os }}-${{ matrix.group }}-${{ hashFiles('rust-toolchain.toml', 'release/scripts/build-release-binaries.sh', 'release/docker/Dockerfile.builder', 'release/requirements/ziglang-0.12.1.txt', 'release/glibc-floor.env', 'release/scripts/zig-glibc-compiler', 'release/scripts/zig-glibc-toolchain.sh') }}-
 
       - name: Build canonical Linux binary shard
         env:
@@ -553,14 +553,16 @@ jobs:
     name: Build native ${{ matrix.asset }} payload once
     needs: validate
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 35
+    # Covers an uncached native compile through the pinned Zig toolchain,
+    # AWS-LC-FIPS included, plus the toolchain install.
+    timeout-minutes: 60
     permissions:
       contents: read
     strategy:
       fail-fast: false
       matrix:
         include:
-          - runner: ubuntu-22.04-arm
+          - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             asset: linux-arm64
     steps:
@@ -586,6 +588,12 @@ jobs:
           set -euo pipefail
           rustup toolchain install 1.95.0 \
             --profile minimal --target "${{ matrix.target }}"
+          # The runner's glibc is newer than the release floor. Compile and
+          # link through the same pinned Zig toolchain as the canonical Linux
+          # recipe, so the floor is set by release/glibc-floor.env and never
+          # by the runner image.
+          . release/scripts/zig-glibc-toolchain.sh
+          install_zig_glibc_toolchain "${RUNNER_TEMP:?RUNNER_TEMP is required}/zig-glibc-toolchain"
           cargo build --release --locked \
             -p registry-evidence -p registry-evidencectl \
             -p registry-evidence-oid4vci \

@@ -234,8 +234,9 @@ class NightlyTest(unittest.TestCase):
                 nightly.identity(tag)
 
     def test_identity_loads_without_tomllib(self):
-        # The native arm64 builder runs the runner's Python 3.10, which has no
-        # tomllib, and imports this module only to check the nightly identity.
+        # The native arm64 builder imports this module only to check the
+        # nightly identity, and that check must load on an interpreter that
+        # has no tomllib.
         script = (
             "import sys\n"
             "sys.modules['tomllib'] = None\n"

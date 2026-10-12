@@ -8,6 +8,7 @@ import importlib.util
 import io
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -17,6 +18,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 GATE = ROOT / "release/scripts/check-glibc-floor.sh"
 FLOOR_FILE = ROOT / "release/glibc-floor.env"
+TOOLCHAIN = ROOT / "release/scripts/zig-glibc-toolchain.sh"
+COMPILER = ROOT / "release/scripts/zig-glibc-compiler"
+ZIG_REQUIREMENTS = ROOT / "release/requirements/ziglang-0.12.1.txt"
+CANONICAL_RECIPE = ROOT / "release/scripts/build-release-binaries.sh"
+ARM64_NIGHTLY_RECIPE = ROOT / "release/scripts/build-nightly-linux-arm64.sh"
+WORKFLOWS = ROOT / ".github/workflows"
 
 RENDERER_PATH = Path(__file__).with_name("render-installer-libc-preflight.py")
 SPEC = importlib.util.spec_from_file_location(
@@ -57,6 +64,59 @@ case "$1" in
     ;;
 esac
 """
+
+
+# Stand-ins for the runner's interpreter and the virtual environment it makes.
+# The interpreter accepts only the one call the toolchain makes of it, and the
+# environment's pip and python record what they were asked to do.
+FAKE_SYSTEM_PYTHON = """#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$#" != 3 || "$1" != -m || "$2" != venv ]]; then
+  printf 'unexpected python3 invocation: %s\n' "$*" >&2
+  exit 2
+fi
+mkdir -p -- "$3/bin"
+cp -- "${FIXTURE_TOOLS}/venv-python" "$3/bin/python"
+cp -- "${FIXTURE_TOOLS}/venv-pip" "$3/bin/pip"
+"""
+FAKE_VENV_PIP = """#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >>"${PIP_LOG}"
+"""
+FAKE_VENV_PYTHON = """#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$*" == "-m ziglang version" ]]; then
+  if [[ -n "${FIXTURE_WITHOUT_ZIGLANG:-}" ]]; then
+    printf 'No module named ziglang\n' >&2
+    exit 1
+  fi
+  printf '0.12.1\n'
+  exit 0
+fi
+printf '%s\n' "$*" >>"${ZIG_LOG}"
+"""
+FAKE_UNAME = """#!/bin/sh
+printf '%s\n' "${FIXTURE_MACHINE}"
+"""
+# What a native recipe does with the toolchain: source it, install it, and
+# compile. The selected variables are printed so the test reads them back.
+NATIVE_PROBE = """set -euo pipefail
+. "$1"
+install_zig_glibc_toolchain "$2"
+shift 2
+for name in "$@"; do
+  printf '%s=%s\n' "${name}" "${!name}"
+done
+"${HOST_CC}" -c probe.c
+"${HOST_CXX}" -c probe.cc
+"""
+
+# A build recipe that names a compiler, a linker, or a Zig target itself has
+# stepped around the shared toolchain.
+COMPILER_ASSIGNMENT = re.compile(
+    r"\b(?:CC|CXX|HOST_CC|HOST_CXX|TARGET_CC|TARGET_CXX|CC_\w+|CXX_\w+"
+    r"|CARGO_TARGET_\w+_LINKER|REGISTRY_ZIG_\w+|ZIG_\w+_CACHE_DIR)="
+)
 
 
 def repository_floor() -> str:
@@ -334,9 +394,13 @@ class SharedFloorTests(unittest.TestCase):
         floor = repository_floor()
         for relative in (
             "release/scripts/build-release-binaries.sh",
+            "release/scripts/build-nightly-linux-arm64.sh",
             "release/scripts/check-glibc-floor.sh",
             "release/scripts/zig-glibc-compiler",
+            "release/scripts/zig-glibc-toolchain.sh",
             "release/docker/Dockerfile.builder",
+            ".github/workflows/nightly-release.yml",
+            ".github/workflows/release-candidate.yml",
         ):
             with self.subTest(path=relative):
                 text = (ROOT / relative).read_text(encoding="utf-8")
@@ -351,7 +415,14 @@ class SharedFloorTests(unittest.TestCase):
             encoding="utf-8"
         )
         self.assertIn("prepare_zig_toolchain", recipe)
-        self.assertIn('REGISTRY_ZIG_TARGET="${zig_arch}-linux-gnu.${floor}"', recipe)
+        self.assertIn(
+            'select_zig_glibc_toolchain /usr/bin/python3 "${release_zig_wrapper_root}"',
+            recipe,
+        )
+        self.assertIn(
+            'REGISTRY_ZIG_TARGET="${zig_arch}-linux-gnu.${floor}"',
+            TOOLCHAIN.read_text(encoding="utf-8"),
+        )
         self.assertIn("local staged_binaries=(dist/bin/* dist/image-bin/*)", recipe)
         self.assertIn(
             '"${script_dir}/check-glibc-floor.sh" "${staged_binaries[@]}"', recipe
@@ -364,14 +435,13 @@ class SharedFloorTests(unittest.TestCase):
         # megabytes of build artefacts into the working tree it is building
         # from. Both cache directories are therefore named explicitly, inside
         # the wrapper directory the run removes when it exits.
-        recipe = (ROOT / "release/scripts/build-release-binaries.sh").read_text(
-            encoding="utf-8"
-        )
+        toolchain = TOOLCHAIN.read_text(encoding="utf-8")
         for variable in ("ZIG_GLOBAL_CACHE_DIR", "ZIG_LOCAL_CACHE_DIR"):
             with self.subTest(variable=variable):
-                self.assertIn(
-                    f'export {variable}="${{release_zig_wrapper_root}}/', recipe
-                )
+                self.assertIn(f'export {variable}="${{wrapper_root}}/', toolchain)
+        recipe = CANONICAL_RECIPE.read_text(encoding="utf-8")
+        self.assertIn('rm -rf -- "${release_zig_wrapper_root}"', recipe)
+        self.assertIn("trap cleanup_zig_toolchain EXIT", recipe)
 
     def test_zig_pin_matches_the_node_client_requirements(self) -> None:
         def ziglang_block(relative: str) -> list[str]:
@@ -391,6 +461,219 @@ class SharedFloorTests(unittest.TestCase):
             ziglang_block("release/requirements/ziglang-0.12.1.txt"),
             ziglang_block("release/requirements/maturin-1.9.6.txt"),
         )
+
+
+class ZigToolchainTests(unittest.TestCase):
+    """One Zig toolchain, at the floor, behind every Linux product build."""
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        # A floor the repository does not use, so a target that names it can
+        # only have been read from the floor file beside the toolchain.
+        self.floor = "2.31"
+        self.assertNotEqual(self.floor, repository_floor())
+        scripts = self.root / "release/scripts"
+        scripts.mkdir(parents=True)
+        self.toolchain = scripts / TOOLCHAIN.name
+        self.compiler = scripts / COMPILER.name
+        for source, destination in (
+            (TOOLCHAIN, self.toolchain),
+            (COMPILER, self.compiler),
+        ):
+            destination.write_bytes(source.read_bytes())
+            destination.chmod(0o755)
+        (self.root / "release/glibc-floor.env").write_text(
+            f"REGISTRY_GLIBC_FLOOR={self.floor}\n", encoding="utf-8"
+        )
+        self.requirements = self.root / "release/requirements" / ZIG_REQUIREMENTS.name
+        self.requirements.parent.mkdir()
+        self.requirements.write_bytes(ZIG_REQUIREMENTS.read_bytes())
+        self.tools = self.root / "fixture-tools"
+        self.tools.mkdir()
+        self.fake_bin = self.root / "fake-bin"
+        self.fake_bin.mkdir()
+        for path, body in (
+            (self.fake_bin / "python3", FAKE_SYSTEM_PYTHON),
+            (self.fake_bin / "uname", FAKE_UNAME),
+            (self.tools / "venv-python", FAKE_VENV_PYTHON),
+            (self.tools / "venv-pip", FAKE_VENV_PIP),
+        ):
+            path.write_text(body, encoding="utf-8")
+            path.chmod(0o755)
+        self.pip_log = self.root / "pip.log"
+        self.zig_log = self.root / "zig.log"
+        self.install_root = self.root / "runner-temp/zig-glibc-toolchain"
+        self.install_root.parent.mkdir()
+
+    def install(
+        self, machine: str, **overrides: str
+    ) -> tuple[subprocess.CompletedProcess[str], dict[str, str]]:
+        target = f"{machine}_unknown_linux_gnu"
+        names = (
+            "REGISTRY_ZIG_PYTHON",
+            "REGISTRY_ZIG_TARGET",
+            "ZIG_GLOBAL_CACHE_DIR",
+            "ZIG_LOCAL_CACHE_DIR",
+            "HOST_CC",
+            "HOST_CXX",
+            "TARGET_CC",
+            "TARGET_CXX",
+            f"CC_{target}",
+            f"CXX_{target}",
+            f"CARGO_TARGET_{target.upper()}_LINKER",
+        )
+        result = subprocess.run(
+            [
+                "bash",
+                "-c",
+                NATIVE_PROBE,
+                "native-probe",
+                str(self.toolchain),
+                str(self.install_root),
+                *names,
+            ],
+            env={
+                **os.environ,
+                "PATH": f"{self.fake_bin}:{os.environ.get('PATH', '')}",
+                "FIXTURE_MACHINE": machine,
+                "FIXTURE_TOOLS": str(self.tools),
+                "PIP_LOG": str(self.pip_log),
+                "ZIG_LOG": str(self.zig_log),
+                **overrides,
+            },
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        selected = dict(
+            line.split("=", 1) for line in result.stdout.splitlines() if "=" in line
+        )
+        return result, selected
+
+    def test_native_install_links_through_the_wrapper_at_the_floor(self) -> None:
+        for machine in ("aarch64", "x86_64"):
+            with self.subTest(machine=machine):
+                for log in (self.pip_log, self.zig_log):
+                    log.unlink(missing_ok=True)
+                shutil.rmtree(self.install_root, ignore_errors=True)
+                result, selected = self.install(machine)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                zig_target = f"{machine}-linux-gnu.{self.floor}"
+                zig_python = self.install_root / "python/bin/python"
+                wrappers = self.install_root / "compiler"
+                target = f"{machine}_unknown_linux_gnu"
+                self.assertEqual(selected["REGISTRY_ZIG_TARGET"], zig_target)
+                self.assertEqual(selected["REGISTRY_ZIG_PYTHON"], str(zig_python))
+                for variable in (
+                    "HOST_CC",
+                    "TARGET_CC",
+                    f"CC_{target}",
+                    f"CARGO_TARGET_{target.upper()}_LINKER",
+                ):
+                    self.assertEqual(selected[variable], str(wrappers / "zig-cc"))
+                for variable in ("HOST_CXX", "TARGET_CXX", f"CXX_{target}"):
+                    self.assertEqual(selected[variable], str(wrappers / "zig-cxx"))
+                for driver in ("zig-cc", "zig-cxx"):
+                    self.assertEqual(
+                        (wrappers / driver).resolve(), self.compiler.resolve()
+                    )
+                for variable in ("ZIG_GLOBAL_CACHE_DIR", "ZIG_LOCAL_CACHE_DIR"):
+                    self.assertEqual(Path(selected[variable]).parent, wrappers)
+                # The wheel is the hash-pinned one, from its single home.
+                self.assertEqual(
+                    self.pip_log.read_text(encoding="utf-8").splitlines(),
+                    [
+                        "install --quiet --require-hashes --only-binary=:all: "
+                        f"--requirement {self.requirements}"
+                    ],
+                )
+                # A compile through the selected variables reaches Zig at the
+                # floor, whatever glibc the machine itself carries.
+                self.assertEqual(
+                    self.zig_log.read_text(encoding="utf-8").splitlines(),
+                    [
+                        f"-m ziglang cc -target {zig_target} -c probe.c",
+                        f"-m ziglang c++ -target {zig_target} -c probe.cc",
+                    ],
+                )
+
+    def test_native_install_refuses_a_machine_without_an_approved_target(
+        self,
+    ) -> None:
+        result, selected = self.install("riscv64")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("no approved zig glibc target for riscv64", result.stderr)
+        self.assertEqual(selected, {})
+        self.assertFalse(self.install_root.exists())
+        self.assertFalse(self.pip_log.exists())
+
+    def test_native_install_refuses_a_directory_it_did_not_create(self) -> None:
+        self.install_root.mkdir()
+        sentinel = self.install_root / "sentinel"
+        sentinel.write_text("keep", encoding="utf-8")
+        result, selected = self.install("aarch64")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("cannot create zig toolchain directory", result.stderr)
+        self.assertEqual(selected, {})
+        self.assertEqual(sentinel.read_text(encoding="utf-8"), "keep")
+        self.assertFalse(self.pip_log.exists())
+
+    def test_native_install_refuses_an_environment_without_the_pinned_zig(
+        self,
+    ) -> None:
+        # The requirement carries a platform marker. Where it does not match,
+        # pip installs nothing and still succeeds, so the install is proved by
+        # running the module rather than by pip's exit status.
+        result, selected = self.install("aarch64", FIXTURE_WITHOUT_ZIGLANG="1")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("No module named ziglang", result.stderr)
+        self.assertEqual(selected, {})
+        self.assertFalse(self.zig_log.exists())
+
+    def arm64_recipes(self) -> dict[str, str]:
+        workflow = (WORKFLOWS / "release-candidate.yml").read_text(encoding="utf-8")
+        step = workflow.split("      - name: Build native platform payload once\n", 1)[1]
+        return {
+            "nightly": ARM64_NIGHTLY_RECIPE.read_text(encoding="utf-8"),
+            "numbered": step.split("\n      - name: ", 1)[0],
+        }
+
+    def test_arm64_release_recipes_install_the_toolchain_before_any_build(
+        self,
+    ) -> None:
+        for name, recipe in self.arm64_recipes().items():
+            with self.subTest(recipe=name):
+                source = recipe.index(". release/scripts/zig-glibc-toolchain.sh\n")
+                install = recipe.index(
+                    'install_zig_glibc_toolchain "${RUNNER_TEMP:?RUNNER_TEMP is required}'
+                    '/zig-glibc-toolchain"\n'
+                )
+                self.assertLess(source, install)
+                self.assertLess(install, recipe.index("cargo build"))
+
+    def test_no_release_recipe_names_a_compiler_itself(self) -> None:
+        recipes = {
+            "canonical": CANONICAL_RECIPE.read_text(encoding="utf-8"),
+            **self.arm64_recipes(),
+        }
+        for name, recipe in recipes.items():
+            with self.subTest(recipe=name):
+                self.assertIsNone(COMPILER_ASSIGNMENT.search(recipe))
+
+    def test_no_workflow_borrows_the_glibc_of_an_older_runner(self) -> None:
+        # The floor is reached by linking against its stubs, never by picking
+        # a runner image that happens to carry that glibc: such an image ages
+        # out of upstream support on its own schedule and takes the release
+        # path with it.
+        workflows = sorted(WORKFLOWS.glob("*.yml"))
+        self.assertTrue(workflows)
+        for workflow in workflows:
+            with self.subTest(workflow=workflow.name):
+                self.assertNotIn(
+                    "ubuntu-22.04", workflow.read_text(encoding="utf-8")
+                )
 
 
 if __name__ == "__main__":
