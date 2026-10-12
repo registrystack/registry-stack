@@ -450,6 +450,29 @@ class ScanTests(unittest.TestCase):
             self.scan({"src/main.rs": GATED_UNIT_TEST}, BINARY_MANIFEST)
         self.assertIn("tool", str(raised.exception))
 
+    def test_declared_test_target_the_gate_does_not_read_is_refused(self) -> None:
+        manifest = """
+            [package]
+            name = "registry-breg"
+
+            [features]
+            schema = []
+
+            [[test]]
+            name = "nested"
+            path = "tests/nested/main.rs"
+            required-features = ["schema"]
+        """
+        for files in (
+            {"tests/nested/main.rs": "#[test]\nfn plain() {}\n"},
+            {"tests/other.rs": "#[test]\nfn plain() {}\n"},
+        ):
+            with self.subTest(files=sorted(files)):
+                with self.assertRaises(gate.GateError) as raised:
+                    self.scan(files, manifest)
+                self.assertIn("nested", str(raised.exception))
+                self.assertIn("tests/nested/main.rs", str(raised.exception))
+
     def test_blank_lines_and_comments_do_not_end_an_attribute_group(self) -> None:
         found = self.scan(
             {
