@@ -1802,8 +1802,11 @@ impl BRegMetadata {
         }
     }
 
-    /// Promote the complete set of caller-visible lifecycle routes for one
-    /// request entity and one exact selected access profile.
+    /// Promote the caller-visible lifecycle routes for one request entity and
+    /// one exact selected access profile. Only a route whose required
+    /// capabilities are exactly the lifecycle capability is promoted; any
+    /// other route is left out of the authority, and selection is refused
+    /// when none remains.
     pub fn select_lifecycle(
         &self,
         entity_identifier: &str,
@@ -1885,8 +1888,11 @@ impl BRegMetadata {
     /// selected access profile.
     ///
     /// The engine repeats the same slot capability on every surface that
-    /// carries the slot, so a slot promotes only when each surface agrees
-    /// exactly and every advertised route matches that slot's own route.
+    /// carries the slot. A surface with an operation kind or required
+    /// capability this client does not understand is left out, and selection
+    /// is refused when none remains. A slot promotes only when the remaining
+    /// surfaces agree exactly and every advertised route matches that slot's
+    /// own route.
     pub fn select_attachments(
         &self,
         entity_identifier: &str,
