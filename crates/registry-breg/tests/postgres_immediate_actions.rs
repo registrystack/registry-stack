@@ -719,14 +719,9 @@ async fn action_written_revisions_are_readable_through_revision_history() {
         json!({"householdCode": "H-HISTORY", "statusNote": "renamed by action"})
     );
 
-    // A journal written before actions recorded the canonical operation holds
-    // the compiled effect identifier instead. It stays readable only when the
-    // compiled package declares that effect against the same entity with the
-    // same operation.
-    set_journal_operation(&database, "person", &person_id, 1, "person-only", "create").await;
-    let detail = history_read(&app, &person_detail).await;
-    assert_eq!(detail.status, StatusCode::OK, "{}", detail.body);
-    assert_eq!(detail.body["data"]["operationIdentifier"], "person-only");
+    // An effect identifier is not a journal operation. A revision journaled
+    // under one is refused even when the action that wrote it still declares
+    // that effect against the same entity with the same operation.
     set_journal_operation(
         &database,
         "household",
@@ -736,14 +731,32 @@ async fn action_written_revisions_are_readable_through_revision_history() {
         "patch",
     )
     .await;
+    let refused = history_read(&app, &household_detail).await;
+    assert_eq!(
+        refused.status,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "a declared patch effect identifier is corrupt provenance: {}",
+        refused.body
+    );
+    assert_eq!(refused.body["code"], "source.unavailable");
+    set_journal_operation(
+        &database,
+        "household",
+        HOUSEHOLD_ID,
+        2,
+        "records.household.patch",
+        "patch",
+    )
+    .await;
     let detail = history_read(&app, &household_detail).await;
     assert_eq!(detail.status, StatusCode::OK, "{}", detail.body);
-    assert_eq!(
-        detail.body["data"]["operationIdentifier"],
-        "household-code-update"
-    );
 
     for (operation_id, mutation_kind, why) in [
+        (
+            "person-only",
+            "create",
+            "the effect identifier the writing action declares",
+        ),
         (
             "undeclared-effect",
             "create",
@@ -790,20 +803,9 @@ async fn action_written_revisions_are_readable_through_revision_history() {
         assert_eq!(refused.body["code"], "source.unavailable", "{why}");
     }
 
-    // Effect identifiers are unique only within one action. A legacy revision
-    // whose stored result link names an action the package no longer declares
-    // stays unavailable even though another action declares the same effect
-    // against the same entity with the same operation.
+    // The list refuses the same revision, and the record's history reads
+    // again once the journal names the canonical operation.
     set_journal_operation(&database, "person", &person_id, 1, "person-only", "create").await;
-    set_result_link_action(&database, "person", &person_id, 1, "retired-person-action").await;
-    let refused = history_read(&app, &person_detail).await;
-    assert_eq!(
-        refused.status,
-        StatusCode::SERVICE_UNAVAILABLE,
-        "another action's effect is foreign provenance: {}",
-        refused.body
-    );
-    assert_eq!(refused.body["code"], "source.unavailable");
     let list = history_read(
         &app,
         &format!("/v1/records/people/{person_id}/revisions?accessProfile=record-history"),
@@ -816,12 +818,21 @@ async fn action_written_revisions_are_readable_through_revision_history() {
         list.body
     );
     assert_eq!(list.body["code"], "source.unavailable");
-    set_result_link_action(&database, "person", &person_id, 1, "create-local-person").await;
+    set_journal_operation(
+        &database,
+        "person",
+        &person_id,
+        1,
+        "records.person.create",
+        "create",
+    )
+    .await;
     let detail = history_read(&app, &person_detail).await;
     assert_eq!(detail.status, StatusCode::OK, "{}", detail.body);
 
-    // A request lifecycle revision never takes the effect-identifier path,
-    // even when the effect is declared against this entity and operation.
+    // A request lifecycle revision journaled under an effect identifier is
+    // refused the same way.
+    set_journal_operation(&database, "person", &person_id, 1, "person-only", "create").await;
     database
         .admin
         .batch_execute(&format!(
@@ -890,36 +901,6 @@ async fn set_journal_operation(
         .await
         .expect("administrator rewrites the journal provenance fixture");
     assert_eq!(changed, 1, "the journal fixture revision exists");
-}
-
-/// Rename the originating action of every stored action result and its
-/// application that wrote one revision.
-async fn set_result_link_action(
-    database: &TestDatabase,
-    entity_id: &str,
-    record_id: &str,
-    revision: i64,
-    action_id: &str,
-) {
-    let changed = database
-        .admin
-        .execute(
-            "WITH results AS (
-                 UPDATE registry_internal.registry_immediate_action_results
-                    SET action_id = $4
-                  WHERE target_entity_id = $1
-                    AND target_record_id = $2::text::uuid
-                    AND target_record_revision = $3
-                 RETURNING key_reference
-             )
-             UPDATE registry_internal.registry_immediate_action_applications
-                SET action_id = $4
-              WHERE key_reference IN (SELECT key_reference FROM results)",
-            &[&entity_id, &record_id, &revision, &action_id],
-        )
-        .await
-        .expect("administrator rewrites the action result link fixture");
-    assert_eq!(changed, 1, "one application wrote the fixture revision");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

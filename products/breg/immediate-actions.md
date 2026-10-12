@@ -684,10 +684,9 @@ effect still has its own result reference in the receipt. Revision history
 records each such revision under the entity's canonical operation identifier,
 `records.<entity>.create` or `records.<entity>.patch`, as a reviewed
 application does; the receipt keeps which action and effects produced it.
-A revision journaled under an effect identifier instead, as releases before
-canonical action journaling wrote, stays readable only while the action its
-stored result names still declares that effect against the same entity with
-the same operation; otherwise it answers `503 source.unavailable`.
+A revision journaled under any other identifier, an effect identifier the
+action declares included, is corrupt provenance: reading that record's
+revision history answers `503 source.unavailable`.
 
 ## Trial: conditional Evidence in Rhai
 

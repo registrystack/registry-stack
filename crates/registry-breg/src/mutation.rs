@@ -319,12 +319,11 @@ pub async fn install_mutation_schema(
 }
 
 /// Installs, with the migration role, the index that finds an immediate
-/// action's stored result by the record revision it wrote, or removes it. The
-/// revision-history reader uses it to bind a revision journaled under an
-/// effect identifier to the action whose stored result names that revision.
+/// action's stored result by the record revision it wrote, or removes it.
 ///
 /// The index exists exactly when the compiled Registry declares an immediate
-/// action, because only then does that reader look results up by target. A
+/// action. No query reads results by target: the index is kept because the
+/// recorded schema fingerprint of every such Registry binds it. A
 /// Registry that declares none keeps the catalog, and so the schema
 /// fingerprint, it had before the index existed. The managed schema
 /// fingerprint measures the index, so every path that reconciles a compiled
