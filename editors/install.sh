@@ -196,8 +196,8 @@ install_vscode() {
   node_major="${node_major%%.*}"
   [[ "${node_major}" =~ ^[0-9]+$ ]] ||
     fail "unexpected Node.js version output: ${node_version}"
-  ((node_major >= 22)) ||
-    fail "Node.js 22 or newer is required; found ${node_version}"
+  ((node_major >= 24)) ||
+    fail "Node.js 24 or newer is required; found ${node_version}"
 
   printf 'Packaging Registry Stack for VS Code\n'
   npm --prefix "${vscode_root}" ci

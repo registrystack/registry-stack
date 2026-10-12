@@ -101,7 +101,7 @@ case "${command_name}" in
     ;;
   node)
     if [[ "${1:-}" == "--version" ]]; then
-      printf '%s\n' "${FAKE_NODE_VERSION:-v22.12.0}"
+      printf '%s\n' "${FAKE_NODE_VERSION:-v24.11.0}"
     fi
     ;;
   npm)
@@ -278,11 +278,11 @@ assert_not_contains 'npm <' "${COMMAND_LOG}"
 
 reset_log
 old_node_output="${TEST_ROOT}/old-node-output"
-if FAKE_NODE_VERSION=v20.19.0 "${INSTALLER}" vscode \
+if FAKE_NODE_VERSION=v23.11.1 "${INSTALLER}" vscode \
   > "${old_node_output}" 2>&1; then
   fail 'old Node.js version should fail'
 fi
-assert_contains 'Node.js 22 or newer is required' "${old_node_output}"
+assert_contains 'Node.js 24 or newer is required' "${old_node_output}"
 assert_not_contains 'npm <' "${COMMAND_LOG}"
 
 missing_output="${TEST_ROOT}/missing-output"

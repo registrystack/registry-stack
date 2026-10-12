@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- BREAKING: the published `@registrystack/client` Node.js package, which
+  carries the Evidence client, requires Node.js 24.11.0 or later: its
+  `engines.node` is `>=24.11.0` (was `>=22.12.0`). Node.js 22 is no longer
+  supported. Migration: run Node.js 24.11.0 or later.
+  `editors/install.sh vscode` likewise needs Node.js 24 or later to package
+  the VS Code extension.
+
 ## v0.40.0 - 2026-10-11
 
 - BREAKING: `evidence-oid4vci check`, `inspect`, and `serve` take

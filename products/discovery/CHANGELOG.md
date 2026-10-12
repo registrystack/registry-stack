@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- BREAKING: the published `@registrystack/client` Node.js package, which
+  carries the Registry Discovery client, requires Node.js 24.11.0 or later:
+  its `engines.node` is `>=24.11.0` (was `>=22.12.0`). Node.js 22 is no longer
+  supported. Migration: run Node.js 24.11.0 or later.
+
 ## v0.40.0 - 2026-10-11
 
 - Runtime file flags use the help text "Runtime configuration file" and

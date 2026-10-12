@@ -18,6 +18,25 @@ relevant product pages on this site rather than duplicating release notes.
 
 ## Unreleased
 
+- BREAKING: the published `@registrystack/client` Node.js package and its platform packages
+  `@registrystack/client-darwin-arm64`, `@registrystack/client-linux-arm64-gnu`, and
+  `@registrystack/client-linux-x64-gnu` require Node.js 24.11.0 or later: their `engines.node` is
+  `>=24.11.0` (was `>=22.12.0`), and Node.js 22 is no longer supported. The floor moves because
+  Node.js 22 reaches end of life on 2027-04-30, so from 2026-10-30 it no longer has the more than
+  six months of upstream support that release preparation requires of a dependency pinned to a
+  long-term-support line. Migration: run your application on Node.js 24 LTS, version 24.11.0 or
+  later, before you upgrade the client package. The
+  [client API reference](../reference/client-api/) gives the runtime and platform requirements of
+  the package.
+
+{/* Evidence: crates/registry-stack-client-node/package.json, engines;
+    crates/registry-stack-client-node/npm/{darwin-arm64,linux-arm64-gnu,linux-x64-gnu}/package.json;
+    release/scripts/client_registry.py, npm_root_package;
+    release/OPERATIONS.md, the long-term-support rule under release preparation and the Node
+    release schedule it names as the support source for the end-of-life date;
+    release/scripts/test_release_workflow_structure.py and
+    release/scripts/test_release_rehearsal.py, MINIMUM_NODE_BIN. */}
+
 ## v0.39.0 beta-51
 
 - BREAKING: Registry Relay is retired and absent from 0.39.0. The `relay` and `relayctl` binaries,
