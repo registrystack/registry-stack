@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{borrow::Cow, collections::BTreeSet, fmt::Write};
+use std::{collections::BTreeSet, fmt::Write};
 
 use sha2::{Digest, Sha256};
 use tokio_postgres::GenericClient;
@@ -120,19 +120,11 @@ const SUBJECT_ACCESS_LOG_EXPIRY: &str = "registry_internal.expire_subject_access
 /// Construction is deliberately closed to either the explicit feasibility
 /// kernel or one compiler-produced Registry plus the current product-owned
 /// mutation tables. There is no wildcard or ambient-catalog mode.
-///
-/// The one alternative a compiled catalog admits is the subject access-log
-/// storage: a database a release before that storage activated gains it only
-/// at its next apply. Until then, a Registry that collects no subject access
-/// log is checked against the catalog without it (see
-/// `installed_managed_catalog`). The recorded schema fingerprint still pins
-/// which of the two shapes the active package was activated against.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ExpectedManagedCatalog {
     objects: BTreeSet<ManagedObject>,
     column_privileges: BTreeSet<ManagedColumnPrivilege>,
     policies: BTreeSet<ManagedPolicy>,
-    subject_access_log_optional: bool,
 }
 
 impl ExpectedManagedCatalog {
@@ -150,30 +142,6 @@ impl ExpectedManagedCatalog {
             Some("EXECUTE"),
             None,
         );
-    }
-
-    /// Exact catalog of the release before subject access-log storage existed.
-    #[cfg(feature = "postgres-test")]
-    #[doc(hidden)]
-    #[must_use]
-    pub fn without_subject_access_log_for_test(self) -> Self {
-        self.without_subject_access_log()
-    }
-
-    fn without_subject_access_log(mut self) -> Self {
-        self.objects.retain(|object| {
-            object.name != SUBJECT_ACCESS_LOG_TABLE && object.name != SUBJECT_ACCESS_LOG_EXPIRY
-        });
-        self.subject_access_log_optional = false;
-        self
-    }
-
-    /// Whether this catalog includes the subject access-log storage.
-    #[must_use]
-    pub(crate) fn includes_subject_access_log(&self) -> bool {
-        self.objects
-            .iter()
-            .any(|object| object.name == SUBJECT_ACCESS_LOG_TABLE)
     }
 
     /// Explicit compatibility inventory for the W2 feasibility kernel.
@@ -208,12 +176,6 @@ impl ExpectedManagedCatalog {
             Some((false, false)),
         );
         catalog.function(SUBJECT_ACCESS_LOG_EXPIRY, Some("EXECUTE"), None);
-        // A Registry that collects a subject access log is never served
-        // without the storage it writes to.
-        catalog.subject_access_log_optional = registry
-            .entities()
-            .values()
-            .all(|entity| entity.access_log.is_none());
         if registry.ddl().requires_postgis {
             catalog.grant_schema_spatial_bbox("registry_data");
             catalog.grant_schema_spatial_bbox("registry_context");
@@ -427,7 +389,6 @@ impl ExpectedManagedCatalog {
             objects: BTreeSet::new(),
             column_privileges: BTreeSet::new(),
             policies: BTreeSet::new(),
-            subject_access_log_optional: false,
         };
         for schema in MANAGED_SCHEMAS {
             catalog.schema(schema);
@@ -1182,43 +1143,6 @@ pub async fn verify_catalog_identity(
     .await
 }
 
-/// Resolves the exact catalog `client`'s database is checked against.
-///
-/// Threat: a release that adds subject access-log storage would otherwise
-/// refuse every database an earlier release activated, before any apply could
-/// install it, and an apply of the active package cannot install it without
-/// changing the fingerprint that package records. Enforcement: only a catalog
-/// whose Registry collects no subject access log, and only while the
-/// access-log table is absent, drops the access-log table and function; every
-/// other check stays exact, so a partial install still fails the ownership
-/// check and the recorded fingerprint still has to match.
-pub(crate) async fn installed_managed_catalog<'a>(
-    client: &impl GenericClient,
-    expected_catalog: &'a ExpectedManagedCatalog,
-) -> Result<Cow<'a, ExpectedManagedCatalog>> {
-    if !expected_catalog.subject_access_log_optional {
-        return Ok(Cow::Borrowed(expected_catalog));
-    }
-    let installed: bool = client
-        .query_one(
-            "SELECT EXISTS (
-                 SELECT 1 FROM pg_catalog.pg_class AS class
-                 JOIN pg_catalog.pg_namespace AS namespace
-                   ON namespace.oid = class.relnamespace
-                 WHERE namespace.nspname = 'registry_internal'
-                   AND class.relname = 'registry_subject_access_log'
-             )",
-            &[],
-        )
-        .await?
-        .get(0);
-    Ok(if installed {
-        Cow::Borrowed(expected_catalog)
-    } else {
-        Cow::Owned(expected_catalog.clone().without_subject_access_log())
-    })
-}
-
 pub(crate) async fn verify_managed_catalog(
     client: &impl GenericClient,
     expected: &ExpectedRegistryIdentity,
@@ -1226,7 +1150,6 @@ pub(crate) async fn verify_managed_catalog(
     migration_role: &SqlIdentifier,
     runtime_role: &SqlIdentifier,
 ) -> Result<()> {
-    let expected_catalog = &*installed_managed_catalog(client, expected_catalog).await?;
     verify_managed_owners_for_catalog(client, migration_role, runtime_role, expected_catalog)
         .await?;
     verify_closed_ambient_catalog(client).await?;
@@ -1643,7 +1566,6 @@ pub(crate) async fn runtime_grants_missing(
     runtime_role: &SqlIdentifier,
     expected_catalog: &ExpectedManagedCatalog,
 ) -> Result<bool> {
-    let expected_catalog = &*installed_managed_catalog(client, expected_catalog).await?;
     let held: BTreeSet<(String, String, String)> = query_categorized_acl(client, runtime_role)
         .await?
         .into_iter()
@@ -1798,7 +1720,6 @@ pub async fn managed_schema_fingerprint(
     runtime_role: &SqlIdentifier,
     expected_catalog: &ExpectedManagedCatalog,
 ) -> Result<String> {
-    let expected_catalog = &*installed_managed_catalog(client, expected_catalog).await?;
     let migration_role = current_role(client).await?;
     verify_managed_owners_for_catalog(client, &migration_role, runtime_role, expected_catalog)
         .await?;

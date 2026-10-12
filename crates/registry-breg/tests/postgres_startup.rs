@@ -1519,6 +1519,109 @@ async fn split_startup_refuses_a_runtime_role_that_can_write_the_ledger_and_writ
     database.cleanup().await;
 }
 
+/// Every activation installs the subject access-log storage, whether or not
+/// the package collects a log, so a database without it is not one an
+/// activation left behind. Startup refuses it before serving and writes
+/// nothing, with separate roles and with one role. The apply the split-role
+/// refusal names reinstalls the storage.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn startup_refuses_a_database_without_subject_access_log_storage_and_writes_nothing() {
+    let _runtime_guard = WASM_RUNTIME_TEST_LOCK.lock().await;
+    let database = TestDatabase::create(4).await;
+    let fixture = StartupFixture::new();
+    let (package, verified, active) = split_activated_startup_package(&database, &fixture).await;
+    let idp = MockIdp::start().await;
+    let config_path = fixture.write_static_jwks_config(
+        &package,
+        &database.migration_role,
+        &database.runtime_role,
+        &idp,
+        Some("0123456789abcdef0123456789abcdef"),
+    );
+    let prepared =
+        prepare_with_connection_config_for_test(&config_path, database.runtime_config.clone())
+            .await
+            .expect("the activation serves with its access-log storage");
+    drop(prepared);
+
+    database
+        .admin
+        .batch_execute(
+            "DROP FUNCTION registry_internal.expire_subject_access_log();
+             DROP TABLE registry_internal.registry_subject_access_log",
+        )
+        .await
+        .expect("administrator removes the access-log storage");
+    let before = managed_database_snapshot(&database.admin).await;
+    let refusal =
+        prepare_with_connection_config_for_test(&config_path, database.runtime_config.clone())
+            .await
+            .err();
+    assert_eq!(refusal, Some(StartupError::RuntimeGrantsMissing));
+    assert_eq!(
+        managed_database_snapshot(&database.admin).await,
+        before,
+        "a refused startup writes nothing"
+    );
+
+    let active = apply_startup_package_result(
+        &database,
+        &verified,
+        ApplyPrecondition::RoleChange { current: &active },
+    )
+    .await
+    .expect("the apply reinstalls the access-log storage");
+    prepare_with_connection_config_for_test(&config_path, database.runtime_config.clone())
+        .await
+        .expect("the reinstalled storage serves");
+
+    // One role serving its own activation is refused the same way: the
+    // catalog it verifies before serving is closed over the storage.
+    apply_verified_package(ApplyVerifiedPackageRequest::new(
+        &database.migration_config,
+        &verified,
+        ActivationDeployment::new("production", INSTANCE, DATABASE),
+        ApplyPrecondition::RoleChange { current: &active },
+        ApplyRoles::new(&database.migration_role, &database.migration_role),
+        ApplyTimeouts::new(Duration::from_secs(5), Duration::from_secs(5))
+            .expect("test apply timeouts are bounded"),
+        database.activation_audit(),
+    ))
+    .await
+    .expect("the apply activates the package for one role");
+    let single_config_path = write_single_role_config(&fixture, &package, &database, &idp);
+    let prepared = prepare_with_connection_config_for_test(
+        &single_config_path,
+        database.migration_config.clone(),
+    )
+    .await
+    .expect("one role serves its own activation");
+    drop(prepared);
+    database
+        .admin
+        .batch_execute(
+            "DROP FUNCTION registry_internal.expire_subject_access_log();
+             DROP TABLE registry_internal.registry_subject_access_log",
+        )
+        .await
+        .expect("administrator removes the access-log storage");
+    let before = managed_database_snapshot(&database.admin).await;
+    let refusal = prepare_with_connection_config_for_test(
+        &single_config_path,
+        database.migration_config.clone(),
+    )
+    .await
+    .err();
+    assert_eq!(refusal, Some(StartupError::DatabaseUnready));
+    assert_eq!(
+        managed_database_snapshot(&database.admin).await,
+        before,
+        "a refused startup writes nothing"
+    );
+    idp.stop().await;
+    database.cleanup().await;
+}
+
 /// Activate the startup package in split mode against a fingerprint the
 /// compiled schema rehearses.
 async fn split_activated_startup_package(

@@ -66,10 +66,9 @@ journeys: []
 const ACTION_RESULTS_PRIMARY_KEY: &str = "registry_immediate_action_results_pkey";
 const ACTION_RESULTS_TARGET_INDEX: &str = "registry_immediate_action_results_target_idx";
 
-/// The legacy action-revision lookup reads immediate-action results by target
-/// record revision under the history statement budget. A Registry that
-/// declares immediate actions installs the index that lookup uses, and its
-/// recorded fingerprint binds it. A Registry that declares none keeps exactly
+/// A Registry that declares immediate actions installs the index over the
+/// record revision each stored action result names, and its recorded
+/// fingerprint binds it. A Registry that declares none keeps exactly
 /// the catalog it had before the index existed, so its fingerprint is
 /// unchanged.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -104,7 +103,7 @@ async fn action_result_target_index_follows_declared_immediate_actions() {
         indexes[1]
             .1
             .ends_with("USING btree (target_entity_id, target_record_id, target_record_revision)"),
-        "the target index covers the legacy lookup predicate: {}",
+        "the target index covers the result target columns: {}",
         indexes[1].1
     );
     drop_action_result_target_index(&database).await;

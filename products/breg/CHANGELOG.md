@@ -6,6 +6,27 @@
   carries the Base Registry Engine client, requires Node.js 24.11.0 or later:
   its `engines.node` is `>=24.11.0` (was `>=22.12.0`). Node.js 22 is no longer
   supported. Migration: run Node.js 24.11.0 or later.
+- BREAKING: revision history no longer reads a revision journaled under an
+  immediate action's effect identifier. The detail read of such a revision,
+  and any list page that includes it, answer `503 source.unavailable`, whether
+  or not the active package still declares that effect. Only v0.38.0 and
+  earlier journaled an action's revision this way; every release since
+  journals it under the entity's canonical operation identifier, such as
+  `records.person.create`, and v0.40.0 serves only a database a v0.40.0 apply
+  created. A database v0.40.0 created needs no action. Rows an earlier release
+  wrote are not read in place: apply to a new database, as v0.40.0 already
+  required.
+- BREAKING: a database without the subject access-log storage is no longer
+  verified or served. v0.38.0 introduced the storage, and every apply since
+  installs it whether or not the package declares `accessLog`; a database
+  last applied by an earlier release was served without it, until its next
+  apply, as long as its package declared no `accessLog`. Startup now refuses
+  such a database before binding a listener and writes nothing: with separate
+  roles it answers `the Registry runtime role is missing grants the active
+  package gives it`, and with one role `the Registry database is not ready
+  for this package`. A database v0.40.0 created holds the storage and needs
+  no action. A database last applied before v0.38.0 is not upgraded in place:
+  apply to a new database, as v0.40.0 already required.
 
 ## v0.40.0 - 2026-10-11
 
