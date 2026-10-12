@@ -1148,9 +1148,19 @@ fn default_ports_lie_below_the_source_port_range() {
 
 #[test]
 fn ports_must_be_three_distinct_loopback_ports() {
-    ports(8092, 8093, 55433).unwrap();
-    assert!(ports(8092, 8092, 55433).is_err());
-    assert!(ports(0, 8093, 55433).is_err());
+    ports(
+        DEFAULT_CASEWORK_PORT,
+        DEFAULT_ISSUER_PORT,
+        DEFAULT_DATABASE_PORT,
+    )
+    .unwrap();
+    assert!(ports(
+        DEFAULT_CASEWORK_PORT,
+        DEFAULT_CASEWORK_PORT,
+        DEFAULT_DATABASE_PORT
+    )
+    .is_err());
+    assert!(ports(0, DEFAULT_ISSUER_PORT, DEFAULT_DATABASE_PORT).is_err());
 }
 
 #[test]
@@ -1667,7 +1677,7 @@ fn volume_removal_requires_the_retained_owner_label() {
 
     let refusal = format!(
         "{:#}",
-        remove_verified_volume(&state, Some(unrelated), None, |_| {
+        remove_verified_volume(&state, Some(unrelated), |_| {
             removed = true;
             Ok(())
         })
@@ -1683,7 +1693,7 @@ fn volume_removal_requires_the_retained_owner_label() {
         "Name": state.volume_name(),
         "Labels": Value::Object(owned_labels),
     });
-    remove_verified_volume(&state, Some(owned), None, |name| {
+    remove_verified_volume(&state, Some(owned), |name| {
         assert_eq!(name, state.volume_name());
         removed = true;
         Ok(())
@@ -1692,91 +1702,32 @@ fn volume_removal_requires_the_retained_owner_label() {
     assert!(removed);
 }
 
-fn legacy_database_container(state: &State, volume_name: &str, destination: &str) -> Value {
-    let mut labels = serde_json::Map::new();
-    labels.insert(LABEL.to_owned(), Value::String(state.owner.clone()));
-    json!({
-        "Id": state.container_id.as_ref().unwrap(),
-        "Name": format!("/{}", state.container_name()),
-        "Config": {
-            "Labels": Value::Object(labels),
-            "Image": IMAGE,
-        },
-        "Mounts": [{
-            "Type": "volume",
-            "Name": volume_name,
-            "Destination": destination,
-        }],
-    })
-}
-
+/// A volume is owned only through its label: one that carries no label is
+/// refused like one labeled for another owner.
 #[test]
-fn legacy_unlabeled_volume_requires_the_exact_retained_container_and_mount() {
+fn a_volume_without_the_owner_label_is_never_removed() {
     let root = crate::canonical_tempdir();
     let project = standalone(root.path());
-    let mut state = session(&project);
-    state.container_id = Some("retained-container-id".to_owned());
-    let volume = json!({
-        "Name": state.volume_name(),
-        "Labels": null,
-    });
-    let container =
-        legacy_database_container(&state, &state.volume_name(), "/var/lib/postgresql/data");
-    let mut removed = false;
+    let state = session(&project);
 
-    remove_verified_volume(&state, Some(volume.clone()), Some(&container), |name| {
-        assert_eq!(name, state.volume_name());
-        removed = true;
-        Ok(())
-    })
-    .unwrap();
-    assert!(removed);
-
-    for (container, expected) in [
-        (None, "retained container is absent"),
-        (
-            Some(legacy_database_container(
-                &state,
-                "different-volume",
-                "/var/lib/postgresql/data",
-            )),
-            "is not mounted",
-        ),
-        (
-            Some(legacy_database_container(
-                &state,
-                &state.volume_name(),
-                "/different-destination",
-            )),
-            "is not mounted",
-        ),
-    ] {
-        removed = false;
+    for labels in [Value::Null, json!({})] {
+        let volume = json!({
+            "Name": state.volume_name(),
+            "Labels": labels,
+        });
+        let mut removed = false;
         let refusal = format!(
             "{:#}",
-            remove_verified_volume(&state, Some(volume.clone()), container.as_ref(), |_| {
+            remove_verified_volume(&state, Some(volume), |_| {
                 removed = true;
                 Ok(())
             })
             .unwrap_err()
         );
-        assert!(refusal.contains(expected), "{refusal}");
+        assert!(refusal.contains("volume ownership differs"), "{refusal}");
+        assert!(refusal.contains("no resource was changed"), "{refusal}");
         assert!(!removed);
     }
-
-    let mut wrong_container = container.clone();
-    wrong_container["Id"] = Value::String("different-container-id".to_owned());
-    removed = false;
-    let refusal = format!(
-        "{:#}",
-        remove_verified_volume(&state, Some(volume), Some(&wrong_container), |_| {
-            removed = true;
-            Ok(())
-        })
-        .unwrap_err()
-    );
-    assert!(refusal.contains("container ownership differs"), "{refusal}");
-    assert!(!removed);
 }
 
 #[test]

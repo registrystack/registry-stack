@@ -598,9 +598,9 @@ Startup only reads: it refuses a database with no activation, a schema other
 than its own, an active package other than the one it loaded, a source
 generation the ledger has not registered, or an activation recorded split-role
 whose runtime credential can now write the ledger, and each refusal names
-`caseworkctl plan` then `caseworkctl apply`. `casework migrate` and
-`caseworkctl db migrate` were removed; each still parses only to refuse with
-exit 2 and name the two commands. The first `caseworkctl apply` on a database
+`caseworkctl plan` then `caseworkctl apply`. `casework` has no `migrate`
+subcommand and `caseworkctl` has no `db` subcommand: each is refused as an
+unrecognized subcommand with exit 2. The first `caseworkctl apply` on a database
 an earlier release migrated adopts it: it migrates to the current schema and
 records the first activation.
 

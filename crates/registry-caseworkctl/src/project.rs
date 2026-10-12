@@ -3297,7 +3297,6 @@ mod tests {
         assert_eq!(report["secretsIncluded"], false);
         assert!(output.join("casework.yaml").is_file());
         assert!(output.join(SUM_FILE).is_file());
-        assert!(!output.join("casework.package.json").exists());
         assert!(!output.join("runtime.example.yaml").exists());
         assert!(!output.join("fixtures").exists());
         let verified = verify_package(&output, &package_limits(), PACKAGE_COMMAND).unwrap();

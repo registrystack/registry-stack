@@ -6,6 +6,27 @@
   carries the Registry Casework client, requires Node.js 24.11.0 or later: its
   `engines.node` is `>=24.11.0` (was `>=22.12.0`). Node.js 22 is no longer
   supported. Migration: run Node.js 24.11.0 or later.
+- BREAKING: `casework migrate` and `caseworkctl db` are no longer subcommands.
+  Each is refused as an unrecognized subcommand with exit 2, without the
+  sentence naming its replacement, and `caseworkctl --format json` reports
+  `usage.invalid` where it reported `usage.removed-command`. Migration: apply
+  database changes with `caseworkctl plan --runtime-config FILE` then
+  `caseworkctl apply --runtime-config FILE`.
+- BREAKING: the refusal code `casework.package.retired-manifest` is removed. A
+  package root that holds `casework.package.json` is refused as any file the
+  package does not list: `casework.package.invalid` names it as an extra file,
+  or `casework.package.unexpected-contents` when `SHA256SUMS` lists it.
+  Migration: rebuild the package with `caseworkctl package`.
+- BREAKING: `caseworkctl dev` removes a database volume only when the volume
+  carries the session's ownership label. A volume with no label is refused
+  even when the session's own container mounts it. Every session v0.40.0
+  started labels its volume. Migration: remove an unlabeled
+  `casework-dev-<identifier>` volume with `docker volume rm`.
+- BREAKING: the Base Registry Engine source adapter refuses a stored discovery
+  cursor that is a bare continuation naming no request entity, as it refuses
+  any malformed cursor. A source with one request entity resumed from one
+  before. Every cursor v0.40.0 stored names its entity. Migration: none for a
+  database v0.40.0 created.
 
 ## v0.40.0 - 2026-10-11
 

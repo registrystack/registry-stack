@@ -95,8 +95,8 @@ two-person rule enforce it on who can read the migration credential.
   meet, counting the hosted-work and audit outbox rows without a lock and
   passing over a table the runtime role cannot read; apply counts them again
   under an exclusive lock in its own transaction.
-- `casework migrate` and `caseworkctl db migrate` still parse, only to refuse
-  with exit 2 and name the two commands.
+- `casework` has no `migrate` subcommand and `caseworkctl` has no `db`
+  subcommand; each is refused as an unrecognized subcommand with exit 2.
 
 ### Role separation and grants
 
@@ -246,8 +246,10 @@ holds no lock stronger than a row lock while the runtime works.
   `a_plan_whose_runtime_role_cannot_read_the_ledger_is_a_refusal_naming_apply`
   (in `registry-caseworkctl`),
   `a_session_connects_the_runtime_and_apply_with_one_database_credential` (in
-  `registry-caseworkctl` dev), and the removed-command tests in `runtime.rs`
-  and `registry-caseworkctl`.
+  `registry-caseworkctl` dev), `serve_is_the_only_subcommand` (in
+  `runtime.rs`), `casework_migrate_is_refused_as_an_unrecognized_subcommand`
+  (in `tests/command_line.rs`), and `db_is_refused_as_an_unrecognized_command`
+  (in `registry-caseworkctl`).
 - CASEWORK-SEC-24: `a_refused_audit_request_leaves_the_database_untouched`,
   `a_refused_audit_response_after_commit_reports_the_activation_applied_but_unaudited`,
   `the_same_operator_reference_in_two_activations_is_stored_under_different_hashes`,
@@ -699,3 +701,129 @@ Proof obligations:
 The Python test does not enumerate every protocol word; the closed mapping
 defines those words. These references do not assert that a native binding,
 listener or live database test has executed.
+
+## Inputs the immediate predecessor neither wrote nor accepted
+
+Before 1.0 a release reads only the state its immediate predecessor wrote or
+accepted. v0.40.0 was a clean break: every v0.40.0 Casework database starts
+empty and is migrated to schema 21 by its own `caseworkctl apply`. The change
+removes four pieces of code that recognized, by name or by shape, an input
+v0.40.0 never wrote and already refused or never produced:
+
+- the reading of a bare BReg continuation as a discovery cursor in the BReg
+  source adapter;
+- the by-name refusal of `casework.package.json` in a package root
+  (`casework.package.retired-manifest`);
+- the hidden `casework migrate` and `caseworkctl db` subcommands, which parsed
+  only to refuse (`usage.removed-command` in the JSON report);
+- the proof `caseworkctl dev` accepted in place of the ownership label on a
+  database volume: the exact retained container mounting it.
+
+It touches package verification (what a package root may hold), the command
+surface through which a database is changed, authorization of local resource
+removal (which Docker volume `caseworkctl dev` may remove), and source
+discovery (what the adapter accepts as its own stored position). The
+migrations, the activation ledger, the hosted-work and audit-outbox drop
+guards, and the removed-key refusals are unchanged.
+
+### Threat
+
+1. Without the by-name refusal, a package root that holds
+   `casework.package.json` verifies, and the runtime serves a directory
+   `caseworkctl package` did not write.
+2. Without the hidden subcommands, `casework migrate` or
+   `caseworkctl db migrate` does something other than refuse: it starts the
+   service, changes the database, or exits 0 so that a deployment script
+   takes the database as migrated.
+3. Without the container proof, a volume that carries no ownership label is
+   taken as owned and removed.
+4. A stored cursor that names no request entity is read as continuing some
+   entity's listing.
+
+### Why the guarded state cannot exist
+
+- `caseworkctl package` at v0.40.0 writes `SHA256SUMS` and never
+  `casework.package.json`, and the v0.40.0 runtime refused a root that held
+  the file. No package v0.40.0 built or served holds it.
+- `casework migrate` and `caseworkctl db migrate` already refused at v0.40.0.
+  No procedure that works against v0.40.0 runs either.
+- `caseworkctl dev` at v0.40.0 creates its volume with the ownership label
+  and names it after a session identifier it generates. It reads only its own
+  state format, which earlier releases did not write, so every session this
+  release can read owns a volume v0.40.0 labeled.
+- The adapter at v0.40.0 writes only cursors that name their request entity,
+  into a database that began empty at v0.40.0.
+
+### Enforcement and defaults
+
+- `verify_casework_envelope` in `crates/registry-casework/src/config.rs`
+  holds a package root to its `SHA256SUMS` through the shared package
+  verification. A `casework.package.json` the sums do not list is an extra
+  file, refused by name with `casework.package.invalid`. One the sums do
+  list is a file `casework.yaml` does not name, refused by
+  `verify_casework_contents` with `casework.package.unexpected-contents`. A
+  root without `SHA256SUMS` is refused with `casework.package.invalid`
+  whatever else it holds. Each refusal names `caseworkctl package`, and each
+  is raised before the database is opened.
+- `command` in `crates/registry-casework/src/runtime.rs` declares one
+  subcommand, `serve`, and requires a subcommand. `caseworkctl` declares no
+  `db` subcommand. The argument parser refuses either word as an
+  unrecognized subcommand with exit 2 before any configuration is read:
+  `casework` prints the parser's usage error, and `caseworkctl` prints its
+  usage error or, with `--format json`, reports `usage.invalid` in a
+  `CaseworkUsageReport`. Only `caseworkctl apply` resolves the migration
+  credential, as before.
+- `verified_volume_name` in `crates/registry-caseworkctl/src/dev/mod.rs`
+  accepts a volume only when its name is the session's and its ownership
+  label carries the session's identifier. Every other volume, including one
+  with no labels, is refused with "database volume ownership differs from
+  retained local state; no resource was changed" before any removal.
+- `discovery_position` in `crates/registry-casework-breg/src/lib.rs` decodes
+  a cursor only as a position that names its request entity. Any other
+  shape is `SourceAdapterError::Invalid`, raised before a listing is
+  requested, and an entity the source no longer declares is refused the same
+  way.
+
+### Tests
+
+1. `crates/registry-casework/src/config.rs`:
+   `a_stray_casework_package_json_is_refused_as_any_file_the_package_does_not_list`
+   (unlisted, listed, and without `SHA256SUMS`).
+2. `crates/registry-casework/src/runtime.rs`: `serve_is_the_only_subcommand`;
+   `crates/registry-casework/tests/command_line.rs`:
+   `casework_migrate_is_refused_as_an_unrecognized_subcommand`, which runs the
+   binary with and without `--runtime-config` and compares the refusal with
+   the one for a word that was never a command.
+3. `crates/registry-caseworkctl/src/lib.rs`:
+   `db_is_refused_as_an_unrecognized_command` (human and JSON output).
+4. `crates/registry-caseworkctl/src/dev/tests.rs`:
+   `a_volume_without_the_owner_label_is_never_removed` and
+   `volume_removal_requires_the_retained_owner_label`.
+5. `crates/registry-casework-breg/tests/signed_event_intake.rs`:
+   `a_bare_continuation_is_refused_like_any_malformed_discovery_cursor` (one
+   request entity and several).
+
+### Accepted residuals
+
+- **The replacement commands are no longer named.** A script that still runs
+  `casework migrate` or `caseworkctl db migrate` gets the argument parser's
+  usage error with exit 2, without the instruction to run `caseworkctl plan`
+  then `caseworkctl apply`. The changelog and the deployment guide carry
+  that instruction.
+- **A retired package manifest is no longer named.** A root that holds
+  `casework.package.json` is refused as holding an extra file, without the
+  sentence that Casework no longer reads it. The refusal still names
+  `caseworkctl package`, which writes a root without it.
+- **An unlabeled dev volume is never reclaimed.** A volume named for the
+  session that carries no ownership label is left in place and the command
+  refuses. An operator who has one removes it with Docker.
+- **A bare stored cursor stops discovery for its source.** A database that
+  held one, which no supported upgrade produces, would have that source's
+  discovery refused on every pass that resumes from it. No listing is
+  requested from the source under it.
+- **Schema versions before the predecessor's are still handled.** The
+  `EFFECTS_SCHEMA_VERSION` comparison in
+  `crates/registry-casework/src/activation.rs` stays: on a database older
+  than the review tables it is what lets `caseworkctl plan` and `apply`
+  reach the named hosted-work and audit-outbox drop refusals instead of a
+  database error. It leaves with the decision on those guards.

@@ -976,27 +976,6 @@ async fn occurrence_index(client: &tokio_postgres::Client, schema: &str) -> (u32
     (row.get(0), row.get(1))
 }
 
-async fn review_discovery_indexes(
-    client: &tokio_postgres::Client,
-    schema: &str,
-) -> Vec<(String, u32)> {
-    client
-        .query(
-            "SELECT c.relname,c.oid,i.indisvalid,i.indisready FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace JOIN pg_index i ON i.indexrelid=c.oid WHERE n.nspname=$1 AND c.relname IN ('casework_review_task_queue_position_idx','casework_review_task_assigned_position_idx','casework_review_accountability_task_idx') ORDER BY c.relname",
-            &[&schema],
-        )
-        .await
-        .expect("read review discovery indexes")
-        .into_iter()
-        .map(|row| {
-            let name: String = row.get(0);
-            assert!(row.get::<_, bool>(2), "{name} is valid");
-            assert!(row.get::<_, bool>(3), "{name} is ready");
-            (name, row.get(1))
-        })
-        .collect()
-}
-
 async fn applied_versions(client: &tokio_postgres::Client) -> Vec<i64> {
     client
         .query(
@@ -1234,60 +1213,6 @@ async fn a_database_failure_names_the_violated_constraint_without_row_data() {
     assert_eq!(
         StoreError::Postgres(violation).to_string(),
         "the Casework database operation failed (constraint casework_schema_migrations_pkey)"
-    );
-}
-
-#[tokio::test]
-async fn migration_16_releases_superseded_identities_in_a_database_that_holds_them() {
-    let (store, client, _schema) = isolated_schema("occurrence_identity_upgrade").await;
-    store.migrate().await.expect("establish current schema");
-    client
-        .batch_execute(
-            "DROP INDEX casework_items_occurrence_idx; \
-             CREATE UNIQUE INDEX casework_items_occurrence_idx \
-                 ON casework_items(source_id, subject_kind, subject_id, occurrence_key); \
-             DELETE FROM casework_schema_migrations WHERE version=16;",
-        )
-        .await
-        .expect("simulate the schema before migration 16");
-    let first_a = observe_open_in_generation(&store, "binding-a").await;
-    let b = observe_open_in_generation(&store, "binding-b").await;
-
-    store
-        .migrate()
-        .await
-        .expect("migration 16 applies over superseded rows");
-
-    assert_eq!(
-        applied_versions(&client).await,
-        (1..=21).collect::<Vec<_>>()
-    );
-    let second_a = observe_open_in_generation(&store, "binding-a").await;
-    let states: Vec<(uuid::Uuid, String)> = items_by_state(&client)
-        .await
-        .into_iter()
-        .map(|(_, state, item_id)| (item_id, state))
-        .collect();
-    assert_eq!(
-        states,
-        [
-            (first_a, "superseded".to_owned()),
-            (b, "superseded".to_owned()),
-            (second_a, "open".to_owned()),
-        ]
-    );
-    let duplicate_active = client
-        .execute(
-            "INSERT INTO casework_items(item_id,source_id,subject_kind,subject_id,occurrence_kind,occurrence_key,stage,binding,state,queue_id,revision,first_observed_at,updated_at) SELECT $1,source_id,subject_kind,subject_id,occurrence_kind,occurrence_key,stage,binding,'open',queue_id,1,now(),now() FROM casework_items WHERE item_id=$2",
-            &[&uuid::Uuid::new_v4(), &second_a],
-        )
-        .await
-        .expect_err("a second live item for one occurrence identity is refused");
-    assert_eq!(
-        duplicate_active
-            .as_db_error()
-            .and_then(|error| error.constraint()),
-        Some("casework_items_occurrence_idx")
     );
 }
 
@@ -1530,102 +1455,6 @@ async fn migration_locks_hosted_work_before_counting_it_for_the_drop() {
     assert_eq!(
         applied_versions(&client).await,
         (1..=21).collect::<Vec<_>>()
-    );
-}
-
-#[tokio::test]
-async fn migration_13_adds_sync_claim_indexes_to_an_existing_schema() {
-    let (store, client, _schema) = isolated_schema("sync_claim_indexes").await;
-    store.migrate().await.expect("establish current schema");
-    client
-        .batch_execute(
-            "DROP INDEX casework_subjects_sync_claim_idx; \
-             DROP INDEX casework_subjects_source_sync_claim_idx; \
-             DELETE FROM casework_schema_migrations WHERE version=13;",
-        )
-        .await
-        .expect("simulate a schema missing migration 13 indexes");
-
-    store.migrate().await.expect("apply sync claim indexes");
-
-    assert_eq!(
-        applied_versions(&client).await,
-        (1..=21).collect::<Vec<_>>()
-    );
-    let indexes: Vec<String> = client
-        .query(
-            "SELECT indexrelid::regclass::text FROM pg_index WHERE indexrelid IN ('casework_subjects_sync_claim_idx'::regclass,'casework_subjects_source_sync_claim_idx'::regclass) ORDER BY indexrelid::regclass::text",
-            &[],
-        )
-        .await
-        .expect("read upgraded sync claim indexes")
-        .into_iter()
-        .map(|row| row.get(0))
-        .collect();
-    assert_eq!(
-        indexes,
-        [
-            "casework_subjects_source_sync_claim_idx",
-            "casework_subjects_sync_claim_idx"
-        ]
-    );
-}
-
-#[tokio::test]
-async fn migration_20_adds_review_discovery_indexes_to_an_existing_schema() {
-    let (store, client, schema) = isolated_schema("review_discovery_indexes").await;
-    store.migrate().await.expect("establish current schema");
-    // Remove migration 21's outcome and author index too, so removing migration
-    // 20's discovery indexes and every later ledger entry restores version 19.
-    // The protocol word migrations after them apply again over rows and
-    // constraints already in the current spelling.
-    client
-        .batch_execute(
-            "DROP INDEX casework_review_decision_author_position_idx; \
-             ALTER TABLE casework_review_accountability DROP COLUMN outcome; \
-             DROP INDEX casework_review_task_queue_position_idx; \
-             DROP INDEX casework_review_task_assigned_position_idx; \
-             DROP INDEX casework_review_accountability_task_idx; \
-             DELETE FROM casework_schema_migrations WHERE version>=20;",
-        )
-        .await
-        .expect("return the schema to version 19");
-    assert_eq!(
-        applied_versions(&client).await,
-        (1..=19).collect::<Vec<_>>()
-    );
-
-    store
-        .migrate()
-        .await
-        .expect("apply review discovery indexes");
-    assert_eq!(
-        applied_versions(&client).await,
-        (1..=21).collect::<Vec<_>>()
-    );
-    let indexes = review_discovery_indexes(&client, &schema).await;
-    assert_eq!(
-        indexes
-            .iter()
-            .map(|(name, _)| name.as_str())
-            .collect::<Vec<_>>(),
-        [
-            "casework_review_accountability_task_idx",
-            "casework_review_task_assigned_position_idx",
-            "casework_review_task_queue_position_idx",
-        ]
-    );
-    store.ready().await.expect("the upgraded schema is current");
-
-    store.migrate().await.expect("repeat the migration");
-    assert_eq!(
-        applied_versions(&client).await,
-        (1..=21).collect::<Vec<_>>()
-    );
-    assert_eq!(
-        review_discovery_indexes(&client, &schema).await,
-        indexes,
-        "repeated migration leaves the review discovery indexes in place"
     );
 }
 
