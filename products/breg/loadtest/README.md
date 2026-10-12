@@ -235,6 +235,53 @@ counters, manifest, safety scan and raw k6 results. The build sampler counts
 command lines matching Cargo/rustc, including wrappers, so its peaks are
 conservative overlap indicators rather than exact compiler-process counts.
 
+## Baseline and saturation cause
+
+The 2026-10-12 baseline used a release build at `ac52a5892` with a fresh
+100,000-establishment seed, 2,000 businesses, 5,000 assignments, the stock
+four-connection pool, and `RANDOM_SEED=20260902`. The cursor-smoke check
+passed. The steady profile ran once at each rate: three minutes at 50
+operations/s and one minute at each lower rate. The machine was the same shared
+Apple M5 Max with macOS 26.4.1 and Docker PostgreSQL, and start/end one-minute
+host load averages ranged from 13.77 to 26.52, so all figures are directional.
+
+| Offered operations/s | Completed operations/s | Dropped iterations | p50 (ms) | p95 (ms) | p99 (ms) | SLO thresholds |
+|---:|---:|---:|---:|---:|---:|---|
+| 10 | 9.978 | 0 | 18.12 | 158.46 | 186.85 | pass |
+| 20 | 19.902 | 0 | 22.16 | 226.60 | 362.70 | fail |
+| 30 | 29.942 | 0 | 145.89 | 641.22 | 821.09 | fail |
+| 40 | 39.656 | 0 | 475.63 | 1,280.92 | 1,417.61 | fail |
+| 50 | 47.989 | 179 | 261.30 | 4,356.70 | 5,045.86 | fail |
+
+No run returned an HTTP 504, and sampled lock waiters peaked at 1. The 50
+operations/s run issued 10,899 HTTP requests. The September series above
+returned 2,938–3,929 HTTP 504 responses at the same rate; this baseline did not
+isolate which change since then removed them.
+
+The saturating statement is the filtered, sorted collection page. At 10
+operations/s the per-operation latencies were:
+
+| Operation | p50 (ms) | p95 (ms) | p99 (ms) |
+|---|---:|---:|---:|
+| `filtered_list` | 140.06 | 181.13 | 204.73 |
+| `filtered_list` continuation page | 140.89 | 179.82 | 197.51 |
+| `lookup_by_code` | 14.75 | 26.76 | 49.98 |
+| `get` | 14.02 | 28.69 | 63.36 |
+| `create` | 21.83 | 31.44 | 47.90 |
+| `patch` | 23.27 | 31.16 | 33.35 |
+| `patch` prefetch | 14.05 | 17.57 | 18.75 |
+
+At 50 operations/s, `pg_stat_activity` sampled every 200 ms showed the
+collection page statement in 1,834 of 1,875 active client backend samples, and
+at least three of the four connections were busy in 500 of 691 samples. Every
+other operation queues behind it: the `get` median rose from 14 ms at 10
+operations/s to 450 ms at 40.
+
+`EXPLAIN (ANALYZE, BUFFERS)` on that statement, under the runtime's role and
+settings, read 33,379 rows and sorted them to return a 51-row page, in 100–140
+ms. [Issue #1564](https://github.com/registrystack/registry-stack/issues/1564)
+records the plan experiments and tracks the fix.
+
 ## Verification
 
 ```bash
