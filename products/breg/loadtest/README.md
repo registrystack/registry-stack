@@ -282,6 +282,52 @@ settings, read 33,379 rows and sorted them to return a 51-row page, in 100–140
 ms. [Issue #1564](https://github.com/registrystack/registry-stack/issues/1564)
 records the plan experiments and tracks the fix.
 
+## Results with index-served list pages
+
+The same procedure was repeated on 2026-10-12 against a release build in which
+a filtered, sorted collection page is served from a declared index: entity
+source views carry no security barrier, every authored index ends in the record
+id, and the continuation is a row comparison where the sort field cannot be
+null. The seed sizes, connection pool, `RANDOM_SEED`, machine, and run lengths
+were those of the baseline. Start/end one-minute host load averages ranged
+from 5.64 to 10.98, lower than during the baseline, so the comparison is
+directional too.
+
+| Offered operations/s | Completed operations/s | Dropped iterations | p50 (ms) | p95 (ms) | p99 (ms) | SLO thresholds |
+|---:|---:|---:|---:|---:|---:|---|
+| 10 | 10.015 | 0 | 11.81 | 15.92 | 18.05 | pass |
+| 20 | 20.000 | 0 | 11.59 | 15.91 | 17.62 | pass |
+| 30 | 30.000 | 0 | 11.56 | 15.92 | 18.13 | pass |
+| 40 | 39.999 | 0 | 11.59 | 15.92 | 20.19 | pass |
+| 50 | 49.996 | 0 | 11.63 | 16.65 | 19.90 | pass |
+
+No run returned an HTTP 504, and sampled lock waiters peaked at 0. The 50
+operations/s run issued 11,087 HTTP requests. At 10 operations/s the
+per-operation latencies were:
+
+| Operation | p50 (ms) | p95 (ms) | p99 (ms) |
+|---|---:|---:|---:|
+| `filtered_list` | 12.38 | 15.55 | 16.90 |
+| `filtered_list` continuation page | 11.78 | 13.85 | 15.59 |
+| `lookup_by_code` | 11.76 | 13.98 | 15.53 |
+| `get` | 11.67 | 13.70 | 15.06 |
+| `create` | 15.77 | 19.71 | 23.46 |
+| `patch` | 16.97 | 18.07 | 18.81 |
+| `patch` prefetch | 11.75 | 13.84 | 15.11 |
+
+The read-only sweep, held two minutes at each rate, located the next ceiling:
+
+| Offered operations/s | Completed operations/s | Dropped iterations | p95 (ms) | p99 (ms) | HTTP 504 | SLO thresholds |
+|---:|---:|---:|---:|---:|---:|---|
+| 75 | 74.993 | 0 | 15.84 | 21.53 | 0 | pass |
+| 100 | 99.996 | 0 | 18.75 | 22.40 | 0 | pass |
+| 150 | 149.983 | 0 | 23.24 | 400.68 | 0 | pass |
+| 250 | 211.105 | 2,409 | 10,001.44 | 10,001.94 | 4,945 | fail |
+
+At 250 operations/s every operation slowed by the same amount, and sampled
+lock waiters and blocked backends stayed at 0. That pattern fits the
+four-connection pool running out of capacity; these runs did not profile it.
+
 ## Verification
 
 ```bash
