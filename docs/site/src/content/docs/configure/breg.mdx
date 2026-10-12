@@ -118,8 +118,8 @@ This page describes the Base Registry Engine (BReg)
 |---|---|
 | `apiVersion`, `kind` | `id.registrystack.org/formats/breg/project/v1alpha1` and `BRegProject`. |
 | `project` | `id`, `version`, `defaultLanguage`, and `canonicalBaseIri`, the base of every record IRI. |
-| `package` | Production identity: `sourceRevision`. Required for a production package. The retired `environment`, `instanceId`, and `sequence` keys are refused; the environment and instance belong in the runtime file's `identity`. |
-| `manifestProjection` | The Registry Manifest catalog a deployment publishes: the `accessProfile` it describes, a `classificationCeiling`, `catalog` metadata, and the `datasets[]` and `dataServices[]` it lists. Omitting it raises the finding `breg.manifest-projection.missing`, which is reported only in authoring mode: it does not fail `bregctl check --production`, and `package` builds a package without one. A project that still carries the retired singular `dataset` or `dataService` is refused; declare `datasets[]` and `dataServices[]` instead. |
+| `package` | Production identity: `sourceRevision`. Required for a production package. The environment and instance belong in the runtime file's `identity`. |
+| `manifestProjection` | The Registry Manifest catalog a deployment publishes: the `accessProfile` it describes, a `classificationCeiling`, `catalog` metadata, and the `datasets[]` and `dataServices[]` it lists. Omitting it raises the finding `breg.manifest-projection.missing`, which is reported only in authoring mode: it does not fail `bregctl check --production`, and `package` builds a package without one. |
 | `modules` | Included modules by `id`, `version`, and `digest`. A production compilation requires a digest on every lock, and a lock and a loaded source for every module. |
 | `entities` | Entities declared in this file. |
 | `accessProfiles` | Every profile a token can select. |

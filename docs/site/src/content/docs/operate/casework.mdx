@@ -93,11 +93,10 @@ and the release also publishes `casework-install.sh` as a movable alias of the p
 Each release publishes the container image `ghcr.io/registrystack/casework:<tag>`, built on a
 distroless nonroot base for `linux/amd64`. Its entrypoint is `/usr/local/bin/casework`, its default arguments are
 `--runtime-config /etc/registry-casework/runtime.yaml serve`, and it exposes port 8100. It carries
-no shell and no healthcheck command. From `v0.36.0` it also carries the matching `caseworkctl` at
-`/usr/local/bin/caseworkctl`, and the entrypoint stays `casework`; an earlier image carries the
-runtime binary alone. `plan`, `apply`, `status`, and `doctor` belong to `caseworkctl`, so they run
-from an operator host that has that binary installed and reaches the database, or, from `v0.36.0`,
-from the image with its entrypoint overridden, as
+no shell and no healthcheck command. It also carries the matching `caseworkctl` at
+`/usr/local/bin/caseworkctl`, and the entrypoint stays `casework`. `plan`, `apply`, `status`, and
+`doctor` belong to `caseworkctl`, so they run from an operator host that has that binary installed
+and reaches the database, or from the image with its entrypoint overridden, as
 [Run plan, apply, and status from the image](#run-plan-apply-and-status-from-the-image) shows. One directory is
 writable, `/var/lib/registry-casework/audit`, owned by UID and GID 65532 with mode `0700`, for the
 audit file; mount the runtime file, the policy package, and the secret root read-only. The
@@ -631,11 +630,9 @@ disposable local session, use `caseworkctl dev stop PROJECT --remove` and start 
     migration_refuses_to_drop_retained_hosted_work_and_writes_nothing(); CONTRIBUTING.md,
     schema migration and predecessor-readability policy. */}
 
-If you run Casework 0.33.0 or earlier, upgrade one release at a time using each target release's
-notes. Do not rely on the current runtime to supersede or convert its stored work. At the
-v0.39.0-to-v0.40.0 step, finish or settle source-backed work before the move, then apply the rebuilt
-package to a new database. Stored work items, claims, drafts, and pending attempts do not carry
-into that database. Follow [Upgrade and retire](../advanced/upgrade-and-retire/) for the full
+At the v0.39.0-to-v0.40.0 step, finish or settle source-backed work before the move, then apply the
+rebuilt package to a new database. Stored work items, claims, drafts, and pending attempts do not
+carry into that database. Follow [Upgrade and retire](../advanced/upgrade-and-retire/) for the full
 product order and recovery boundary.
 
 {/* Evidence: CONTRIBUTING.md, schema migration and predecessor-readability policy;
@@ -643,9 +640,9 @@ product order and recovery boundary.
 
 ### Run plan, apply, and status from the image
 
-From `v0.36.0` the Casework image carries the `caseworkctl` built from the same source as its
-`casework`, so you can activate the package from the image digest you serve, without installing
-`caseworkctl` on an operator host. Override the entrypoint with `/usr/local/bin/caseworkctl`, mount
+The Casework image carries the `caseworkctl` built from the same source as its `casework`, so you
+can activate the package from the image digest you serve, without installing `caseworkctl` on an
+operator host. Override the entrypoint with `/usr/local/bin/caseworkctl`, mount
 the runtime file, the package, and the secret root read-only at the absolute paths the runtime file
 names, and pass the same arguments as on the operator host:
 
