@@ -1060,7 +1060,10 @@ request for this exact release source commit and identifier catalog digest.
 That commit exists only once the release PR above has merged, so this step
 cannot happen earlier. Publication dispatches `registrystack-id` with the
 released tag, source commit, and catalog digest, and fails closed if the
-committed bundle differs.
+committed bundle differs. That dispatch runs after the tag is pushed, so
+`publish` refuses to create the tag until the pin is in place.
+`verify-candidate` makes the same read and prints a warning, without failing,
+while `registrystack-id` `main` does not yet pin this release source.
 
 ## Tag and publish
 
@@ -1075,7 +1078,13 @@ release/scripts/registry-release publish \
 ```
 
 The command re-verifies the plan against the exact candidate, protected-main
-ancestry, source commit policy, and current public destinations. It creates and
+ancestry, source commit policy, and current public destinations. Before it
+creates or pushes the tag of an initial publication, it reads
+`src/upstream/source.json` from `registrystack-id` `main` and refuses unless
+`commit` is the plan's source commit and `catalog_sha256` is the SHA-256 of
+`products/identifiers/generated/catalog.v1.json` at that commit. A pin it cannot
+read is a refusal too. The refusal names the expected and found values; merge
+the reviewed synchronization pull request, then rerun. It creates and
 inspects the exact annotated candidate tag, pushes only that tag ref, dispatches
 publication with a unique correlation ID, follows only the correlated run, runs
 the public verifier, and waits for the correlated documentation and identifier
@@ -1099,7 +1108,9 @@ public state. Add `--verbose-wait` only when raw job output is useful.
 
 For break-glass manual operation, omitting `--plan-output` from
 `verify-candidate` still prints the three low-level tag, push, and dispatch
-commands. The reviewed-plan path is the maintained default.
+commands. The reviewed-plan path is the maintained default. The low-level
+commands do not check the `registrystack-id` pin; resolve the `verify-candidate`
+warning before running them.
 
 The publication workflow runs from protected `main`, while the candidate and
 tag remain bound to the release source commit. This separation permits a
@@ -1275,6 +1286,7 @@ published release before it is promoted.
 | Candidate infrastructure failure before sealing | Rerun the candidate workflow |
 | Candidate byte, recipe, scan, or advisory decision changes | Build and verify a new candidate |
 | Candidate expires before the tag is pushed | Request and verify a new candidate |
+| `publish` refuses because `registrystack-id` `main` does not pin the release source, or the pin cannot be read | The tag has not been pushed. Merge the reviewed `registrystack-id` synchronization pull request for the exact release source commit and identifier catalog digest, or restore read access to the pin, then rerun `registry-release publish --plan <candidate-plan.json> --wait` |
 | Bound draft or publication step fails while the candidate remains valid | Fix the workflow on protected `main` if needed, then rerun `registry-release publish --plan <candidate-plan.json> --wait` |
 | Documentation dispatch or deployment fails after publication | Rerun `registry-release publish --plan <candidate-plan.json> --wait`; it verifies the immutable release and safely dispatches a new exact docs request when no healthy correlated run remains |
 | Identifier dispatch, deployment, or live smoke fails after publication | The identifier catalog is published by the same bound `release.yml` run as the images and tag, not by a separate closeout dispatch. Recover that run directly with `gh run rerun <run> --failed`, then rerun `registry-release publish --plan <candidate-plan.json> --wait` to verify; it reports the bound run's exact conclusion and refuses to report completion while it is failed. If the publisher bundle does not match, merge the reviewed synchronization for that exact released source before retrying. If it reports conflicting immutable bytes, stop and fix forward with a new release |

@@ -47,6 +47,13 @@ DOCS_RELEASE_RESUMPTION_VERSION = (0, 19, 1)
 RELAY_CLIENT_PACKAGE_MINIMUM_VERSION = (0, 19, 1)
 IDENTIFIER_CATALOG_RELEASE_MINIMUM_VERSION = (0, 19, 1)
 IDENTIFIER_CATALOG_RELATIVE_PATH = "products/identifiers/generated/catalog.v1.json"
+IDENTIFIER_PUBLISHER_REPOSITORY = "registrystack/registrystack-id"
+IDENTIFIER_PUBLISHER_PIN_PATH = "src/upstream/source.json"
+PIN_IDENTIFIER_PUBLISHER = (
+    f"merge the reviewed {IDENTIFIER_PUBLISHER_REPOSITORY} synchronization pull "
+    "request for that exact commit and digest, then run publish "
+    '(release/OPERATIONS.md, "Tag and publish")'
+)
 RELAY_V2_ARTIFACT_INVENTORY = {
     "registry-manifest",
     "relay",
@@ -3012,6 +3019,69 @@ def verify_absent_image_destinations(images: list[dict[str, Any]]) -> None:
             )
 
 
+def verify_identifier_publisher_pin(
+    repo: Path,
+    *,
+    version: str,
+    source_sha: str,
+) -> None:
+    """Refuse unless the identifier publisher's main pins this release source.
+
+    Publication dispatches the identifier publisher with the release source
+    commit and the SHA-256 of the identifier catalog at that commit, and the
+    publisher refuses any other pin. That dispatch runs after the tag is
+    pushed, so the pin has to be in place before the tag exists.
+    """
+    if strict_semver(version) < IDENTIFIER_CATALOG_RELEASE_MINIMUM_VERSION:
+        return
+    catalog = subprocess.run(
+        ["git", "show", f"{source_sha}:{IDENTIFIER_CATALOG_RELATIVE_PATH}"],
+        cwd=repo,
+        capture_output=True,
+        check=False,
+    )
+    if catalog.returncode != 0:
+        detail = catalog.stderr.decode("utf-8", errors="replace").strip()
+        raise ReleasePlanError(
+            f"cannot read {IDENTIFIER_CATALOG_RELATIVE_PATH} at release source "
+            f"{source_sha}: {detail}"
+        )
+    catalog_sha256 = hashlib.sha256(catalog.stdout).hexdigest()
+    pin_location = (
+        f"{IDENTIFIER_PUBLISHER_REPOSITORY} main {IDENTIFIER_PUBLISHER_PIN_PATH}"
+    )
+    try:
+        pin = json.loads(
+            run_checked(
+                [
+                    "gh",
+                    "api",
+                    f"repos/{IDENTIFIER_PUBLISHER_REPOSITORY}/contents/"
+                    f"{IDENTIFIER_PUBLISHER_PIN_PATH}?ref=refs/heads/main",
+                    "--header",
+                    "Accept: application/vnd.github.raw+json",
+                ]
+            )
+        )
+        if not isinstance(pin, dict):
+            raise ReleasePlanError("the document is not a JSON object")
+    except (ReleasePlanError, json.JSONDecodeError) as exc:
+        raise ReleasePlanError(
+            f"cannot read {pin_location} to confirm it pins the v{version} "
+            f"release source: {exc}"
+        ) from exc
+    found_commit = pin.get("commit")
+    found_catalog_sha256 = pin.get("catalog_sha256")
+    if found_commit != source_sha or found_catalog_sha256 != catalog_sha256:
+        raise ReleasePlanError(
+            f"{IDENTIFIER_PUBLISHER_REPOSITORY} main does not pin the v{version} "
+            f"release source: expected commit {source_sha} and catalog_sha256 "
+            f"{catalog_sha256} in {IDENTIFIER_PUBLISHER_PIN_PATH}, found commit "
+            f"{found_commit!r} and catalog_sha256 {found_catalog_sha256!r}; "
+            f"{PIN_IDENTIFIER_PUBLISHER}"
+        )
+
+
 def verify_candidate_run(
     repo: Path,
     *,
@@ -3894,6 +3964,11 @@ def publish_candidate_plan(
                     f"GitHub Release destination {tag} exists before its remote tag"
                 )
             verify_absent_image_destinations(manifest["images"])
+            verify_identifier_publisher_pin(
+                repo,
+                version=release_identity["version"],
+                source_sha=source_sha,
+            )
         else:
             validate_recovery_release(
                 release,
@@ -4217,6 +4292,14 @@ def verify_candidate_for_tag(
                 f"{release_command}",
                 file=sys.stderr,
             )
+        try:
+            verify_identifier_publisher_pin(
+                context["repo"],
+                version=version,
+                source_sha=source_sha,
+            )
+        except (OSError, UnicodeError, ReleasePlanError) as exc:
+            print(f"warning: publish will refuse to tag {tag}: {exc}", file=sys.stderr)
     except (
         OSError,
         UnicodeError,
