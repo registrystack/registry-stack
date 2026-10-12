@@ -120,13 +120,10 @@ reinterpret it. Activation refuses a destination change that would strand a
 retained non-terminal delivery.
 
 The stored outbox payload is that envelope, byte for byte, and the delivery
-worker sends it unchanged. A row captured under the earlier bare-data body is
-not an envelope; the worker refuses it rather than reshaping it. That refusal
-is a failed attempt, not a terminal one, so the row retries on the captured
-schedule and dead-letters only once its attempt budget is exhausted. A
-deployment upgrading across this change should drain the outbox, or let it
-settle, before the upgrade: every delivery captured under the earlier body
-spends its whole retry budget on attempts that cannot succeed.
+worker sends it unchanged. The worker refuses a stored row that is not an
+envelope rather than reshaping it. That refusal is a failed attempt, not a
+terminal one, so the row retries on the captured schedule and dead-letters
+only once its attempt budget is exhausted.
 
 This contract does not reinterpret delivery history created by the earlier
 experimental webhook shape. The delivery tables are read only as the previous
