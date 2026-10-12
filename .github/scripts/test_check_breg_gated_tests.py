@@ -46,6 +46,27 @@ MANIFEST = """
     required-features = ["runtime", "tooling"]
 """
 
+BINARY_MANIFEST = """
+    [package]
+    name = "registry-breg"
+
+    [features]
+    default = ["wasm"]
+    runtime = []
+    schema = []
+    tooling = []
+    wasm = []
+
+    [[bin]]
+    name = "breg"
+    path = "src/main.rs"
+    required-features = ["runtime"]
+
+    [[bin]]
+    name = "tool"
+    required-features = ["tooling"]
+"""
+
 SIBLING_MANIFEST = """
     [package]
     name = "registry-bregctl"
@@ -61,6 +82,7 @@ SIBLING_MANIFEST = """
 
 SHARD = ("registry-breg", "registry-bregctl")
 SOURCES = (".github/workflows/ci.yml",)
+GATED_UNIT_TEST = '#[cfg(feature = "schema")]\n#[test]\nfn schema_only() {}\n'
 
 
 def write(root: Path, relative: str, text: str) -> None:
@@ -88,8 +110,35 @@ class CfgTests(unittest.TestCase):
         self.assertTrue(gate.cfg_holds('all(test, feature = "schema", unix)', frozenset({"schema"})))
         self.assertTrue(gate.cfg_holds('any(test, feature = "schema")', frozenset()))
 
+    def test_target_predicates_answer_for_the_linux_ci_target(self) -> None:
+        on = frozenset({"schema"})
+        for expression in (
+            "not(windows)",
+            'target_os = "linux"',
+            'target_family = "unix"',
+            'all(feature = "schema", not(target_os = "macos"))',
+            'any(windows, feature = "schema")',
+        ):
+            with self.subTest(expression=expression):
+                self.assertTrue(gate.cfg_holds(expression, on))
+        for expression in (
+            "windows",
+            "not(unix)",
+            'target_os = "macos"',
+            'target_family = "windows"',
+            'all(feature = "schema", windows)',
+        ):
+            with self.subTest(expression=expression):
+                self.assertFalse(gate.cfg_holds(expression, on))
+
     def test_unknown_predicate_is_refused_instead_of_guessed(self) -> None:
-        for expression in ('all(feature = "schema", windows)', 'target_os = "linux"', "all(feature"):
+        for expression in (
+            'all(feature = "schema", debug_assertions)',
+            'target_arch = "x86_64"',
+            'target_feature = "sse2"',
+            'unix = "linux"',
+            "all(feature",
+        ):
             with self.subTest(expression=expression), self.assertRaises(gate.GateError):
                 gate.cfg_holds(expression, frozenset({"schema"}))
 
@@ -116,13 +165,30 @@ class InvocationTests(unittest.TestCase):
         )
         self.assertTrue(invocation.lib)
         self.assertEqual(invocation.tests, frozenset({"fixtures", "other"}))
+        self.assertEqual(invocation.bins, frozenset())
 
-    def test_no_target_flags_select_the_library_and_every_test_target(self) -> None:
+    def test_no_target_flags_select_the_library_and_every_other_target(self) -> None:
         invocation = read("cargo test --locked -p registry-breg --features registry-breg/schema")
         self.assertIsNotNone(invocation)
         self.assertEqual(invocation.features, frozenset({"default", "schema", "wasm"}))
         self.assertTrue(invocation.lib)
         self.assertIsNone(invocation.tests)
+        self.assertIsNone(invocation.bins)
+
+    def test_binary_targets_are_selected_by_name_or_all_together(self) -> None:
+        named = read("cargo test --locked -p registry-breg --bin breg --bin tool")
+        self.assertIsNotNone(named)
+        self.assertEqual(named.bins, frozenset({"breg", "tool"}))
+        self.assertFalse(named.lib)
+        self.assertEqual(named.tests, frozenset())
+
+        every = read("cargo test --locked -p registry-breg --lib --bins --test fixtures")
+        self.assertIsNotNone(every)
+        self.assertIsNone(every.bins)
+        self.assertTrue(every.lib)
+        self.assertEqual(every.tests, frozenset({"fixtures"}))
+
+        self.assertIsNone(read("cargo test --locked -p registry-breg --bin"))
 
     def test_named_test_targets_leave_the_library_out(self) -> None:
         invocation = read(
@@ -133,6 +199,7 @@ class InvocationTests(unittest.TestCase):
         self.assertEqual(invocation.features, frozenset({"postgres-test", "runtime"}))
         self.assertFalse(invocation.lib)
         self.assertEqual(invocation.tests, frozenset({"fixtures"}))
+        self.assertEqual(invocation.bins, frozenset())
 
     def test_partial_or_unreadable_invocations_select_nothing(self) -> None:
         for command in (
@@ -179,13 +246,14 @@ class InvocationTests(unittest.TestCase):
         )
         self.assertTrue(invocation.lib)
         self.assertIsNone(invocation.tests)
+        self.assertIsNone(invocation.bins)
 
 
 class ScanTests(unittest.TestCase):
-    def scan(self, files: dict[str, str]) -> dict[str, gate.GatedTest]:
+    def scan(self, files: dict[str, str], manifest: str = MANIFEST) -> dict[str, gate.GatedTest]:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            write(root, "crates/registry-breg/Cargo.toml", MANIFEST)
+            write(root, "crates/registry-breg/Cargo.toml", manifest)
             for relative, text in files.items():
                 write(root, f"crates/registry-breg/{relative}", text)
             found = gate.gated_tests(root / "crates/registry-breg")
@@ -303,13 +371,233 @@ class ScanTests(unittest.TestCase):
             ],
         )
         self.assertIsNone(found["src/lib.rs::mod schema"].target)
+        self.assertIsNone(found["src/lib.rs::mod schema"].binary)
         self.assertEqual(
             found["src/postgres/config.rs::mod tests"].conditions,
             ('all(test, feature = "postgres-test")',),
         )
 
+    def test_discovered_binary_roots_are_binary_targets_not_the_library(self) -> None:
+        found = self.scan(
+            {
+                "src/lib.rs": GATED_UNIT_TEST,
+                "src/main.rs": GATED_UNIT_TEST,
+                "src/bin/tool.rs": GATED_UNIT_TEST,
+                "src/bin/multi/main.rs": GATED_UNIT_TEST,
+                "src/bin/multi/support.rs": GATED_UNIT_TEST,
+                "src/binary.rs": GATED_UNIT_TEST,
+            }
+        )
+        self.assertEqual(
+            {key: test.binary for key, test in found.items()},
+            {
+                "src/lib.rs::schema_only": None,
+                "src/main.rs::schema_only": "registry-breg",
+                "src/bin/tool.rs::schema_only": "tool",
+                "src/bin/multi/main.rs::schema_only": "multi",
+                "src/bin/multi/support.rs::schema_only": "multi",
+                "src/binary.rs::schema_only": None,
+            },
+        )
+        for test in found.values():
+            with self.subTest(key=test.key):
+                self.assertIsNone(test.target)
+                self.assertEqual(test.conditions, ('feature = "schema"',))
+
+    def test_declared_binary_targets_carry_their_name_and_required_features(self) -> None:
+        found = self.scan(
+            {
+                "src/main.rs": GATED_UNIT_TEST,
+                "src/bin/tool.rs": "#[test]\nfn plain() {}\n",
+                "src/bin/other.rs": GATED_UNIT_TEST,
+            },
+            BINARY_MANIFEST,
+        )
+        self.assertEqual(
+            {key: (test.binary, test.conditions) for key, test in found.items()},
+            {
+                # A binary target behind `required-features` is gated as a whole.
+                "src/main.rs": ("breg", ('feature = "runtime"',)),
+                "src/main.rs::schema_only": (
+                    "breg",
+                    ('feature = "runtime"', 'feature = "schema"'),
+                ),
+                # A `[[bin]]` without a path claims the discovered file of its name.
+                "src/bin/tool.rs": ("tool", ('feature = "tooling"',)),
+                "src/bin/other.rs::schema_only": ("other", ('feature = "schema"',)),
+            },
+        )
+
+    def test_autobins_off_leaves_only_declared_binary_targets(self) -> None:
+        manifest = BINARY_MANIFEST.replace(
+            'name = "registry-breg"\n', 'name = "registry-breg"\n    autobins = false\n'
+        )
+        self.assertIn("autobins = false", manifest)
+        found = self.scan(
+            {
+                "src/main.rs": GATED_UNIT_TEST,
+                "src/bin/tool.rs": GATED_UNIT_TEST,
+                "src/bin/other.rs": GATED_UNIT_TEST,
+            },
+            manifest,
+        )
+        self.assertEqual(found["src/main.rs::schema_only"].binary, "breg")
+        self.assertEqual(found["src/bin/tool.rs::schema_only"].binary, "tool")
+        self.assertIsNone(found["src/bin/other.rs::schema_only"].binary)
+
+    def test_declared_binary_target_without_a_file_is_refused(self) -> None:
+        with self.assertRaises(gate.GateError) as raised:
+            self.scan({"src/main.rs": GATED_UNIT_TEST}, BINARY_MANIFEST)
+        self.assertIn("tool", str(raised.exception))
+
+    def test_blank_lines_and_comments_do_not_end_an_attribute_group(self) -> None:
+        found = self.scan(
+            {
+                "tests/plain.rs": """
+                    #[cfg(feature = "schema")]
+
+                    #[test]
+                    fn after_a_blank_line() {}
+
+                    #[cfg(feature = "schema")]
+                    /// An outer doc comment.
+                    //! An inner doc comment.
+                    // A plain comment.
+
+                    #[test]
+                    /** A block doc comment. */
+                    fn after_line_and_block_comments() {}
+
+                    #[cfg(feature = "schema")]
+                    /*
+                     * A block comment over several lines, /* nested */ once.
+                     */
+                    #[tokio::test]
+                    async fn after_a_nested_block_comment() {}
+
+                    #[cfg(feature = "schema")]
+
+                    /// The blank line and this comment leave the module gated.
+                    mod gated {}
+                """
+            }
+        )
+        self.assertEqual(
+            sorted(found),
+            [
+                "tests/plain.rs::after_a_blank_line",
+                "tests/plain.rs::after_a_nested_block_comment",
+                "tests/plain.rs::after_line_and_block_comments",
+                "tests/plain.rs::mod gated",
+            ],
+        )
+        for test in found.values():
+            with self.subTest(key=test.key):
+                self.assertEqual(test.conditions, ('feature = "schema"',))
+
+    def test_every_cfg_in_a_feature_gated_group_is_retained(self) -> None:
+        found = self.scan(
+            {
+                "tests/plain.rs": """
+                    #[cfg(feature = "schema")]
+                    #[cfg(windows)]
+                    #[test]
+                    fn windows_only() {}
+
+                    #[cfg(unix)]
+                    #[cfg(feature = "schema")]
+                    #[test]
+                    fn unix_only() {}
+
+                    #[cfg(windows)]
+                    #[test]
+                    fn names_no_feature() {}
+                """,
+                "tests/postgres_load.rs": """
+                    #![cfg(feature = "postgres-test")]
+                    #![cfg(target_os = "macos")]
+
+                    #[cfg(feature = "schema")]
+                    #[test]
+                    fn loads() {}
+                """,
+                "tests/unix_only.rs": """
+                    #![cfg(unix)]
+
+                    #[cfg(feature = "schema")]
+                    #[test]
+                    fn runs() {}
+                """,
+            }
+        )
+        self.assertEqual(
+            {key: test.conditions for key, test in found.items()},
+            {
+                "tests/plain.rs::windows_only": ('feature = "schema"', "windows"),
+                "tests/plain.rs::unix_only": ("unix", 'feature = "schema"'),
+                "tests/postgres_load.rs": (
+                    'feature = "postgres-test"',
+                    'target_os = "macos"',
+                ),
+                "tests/postgres_load.rs::loads": (
+                    'feature = "postgres-test"',
+                    'target_os = "macos"',
+                    'feature = "schema"',
+                ),
+                "tests/unix_only.rs::runs": ("unix", 'feature = "schema"'),
+            },
+        )
+
+    def test_tests_no_feature_set_builds_on_the_ci_target_are_out_of_scope(self) -> None:
+        found = self.scan(
+            {
+                "tests/plain.rs": """
+                    #[cfg(feature = "schema")]
+                    #[cfg(windows)]
+                    #[test]
+                    fn windows_only() {}
+
+                    #[cfg(all(feature = "schema", target_os = "macos"))]
+                    #[test]
+                    fn macos_only() {}
+
+                    #[cfg(feature = "schema")]
+                    #[cfg(not(windows))]
+                    #[test]
+                    fn linux_too() {}
+
+                    #[cfg(any(feature = "schema", windows))]
+                    #[test]
+                    fn either() {}
+
+                    #[cfg(not(feature = "wasm"))]
+                    #[test]
+                    fn without_a_feature() {}
+                """
+            }
+        )
+        self.assertEqual(
+            gate.out_of_scope(found.values()),
+            [
+                (
+                    "tests/plain.rs::windows_only: no feature set satisfies "
+                    'feature = "schema" and windows on the Linux CI target'
+                ),
+                (
+                    "tests/plain.rs::macos_only: no feature set satisfies "
+                    'all(feature = "schema", target_os = "macos") on the Linux CI target'
+                ),
+            ],
+        )
+
     def test_cfg_attribute_the_scanner_cannot_read_is_refused(self) -> None:
         text = '#[test]\n#[cfg(feature = "schema")] fn shared_line() {}\n'
+        with self.assertRaises(gate.GateError) as raised:
+            self.scan({"tests/fixtures.rs": text})
+        self.assertIn("tests/fixtures.rs:2", str(raised.exception))
+
+    def test_block_comment_closing_on_a_line_with_code_is_refused(self) -> None:
+        text = '#[cfg(feature = "schema")]\n/* why */ #[test]\nfn shared_line() {}\n'
         with self.assertRaises(gate.GateError) as raised:
             self.scan({"tests/fixtures.rs": text})
         self.assertIn("tests/fixtures.rs:2", str(raised.exception))
@@ -374,6 +662,50 @@ class SelectionTests(unittest.TestCase):
         )
         self.assertEqual(self.problems(selecting, tests), [])
 
+    def test_test_out_of_scope_on_the_ci_target_needs_no_invocation(self) -> None:
+        tests = {
+            "tests/plain.rs": """
+                #[cfg(feature = "schema")]
+                #[cfg(windows)]
+                #[test]
+                fn windows_only() {}
+
+                #[cfg(feature = "schema")]
+                #[cfg(not(windows))]
+                #[test]
+                fn linux_too() {}
+            """
+        }
+        problems = self.problems("", tests)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("tests/plain.rs::linux_too", problems[0])
+        self.assertIn('feature = "schema" and not(windows)', problems[0])
+
+        selecting = "run: cargo test --locked -p registry-breg --features schema --test plain\n"
+        self.assertEqual(self.problems(selecting, tests), [])
+
+        # Recording a test the gate does not hold is refused like any stale entry.
+        known = {"tests/plain.rs::windows_only": "runs on Windows only"}
+        stale = self.problems(selecting, tests, known)
+        self.assertEqual(len(stale), 1)
+        self.assertIn("tests/plain.rs::windows_only", stale[0])
+        self.assertIn("KNOWN_UNSELECTED", stale[0])
+        self.assertIn("out of scope", stale[0])
+
+    def test_unknown_predicate_beside_a_feature_stops_the_gate(self) -> None:
+        tests = {
+            "tests/plain.rs": """
+                #[cfg(feature = "schema")]
+                #[cfg(target_arch = "wasm32")]
+                #[test]
+                fn wasm_only() {}
+            """
+        }
+        selecting = "run: cargo test --locked -p registry-breg --features schema --test plain\n"
+        with self.assertRaises(gate.GateError) as raised:
+            self.problems(selecting, tests)
+        self.assertIn("`target_arch`", str(raised.exception))
+
     def test_gated_library_module_needs_a_library_invocation(self) -> None:
         tests = {"src/lib.rs": '#[cfg(feature = "schema")]\nmod schema;\n'}
         named = "run: cargo test --locked -p registry-breg --features schema --test fixtures\n"
@@ -382,6 +714,41 @@ class SelectionTests(unittest.TestCase):
         self.assertIn("src/lib.rs::mod schema", problems[0])
         library = "run: cargo test --locked -p registry-breg --features schema --lib\n"
         self.assertEqual(self.problems(library, tests), [])
+
+    def test_gated_binary_test_needs_an_invocation_that_builds_the_binary(self) -> None:
+        tests = {"src/main.rs": GATED_UNIT_TEST}
+        for workflow in (
+            # The shard builds the binary without the feature.
+            "",
+            # `--lib` and `--test` do not build the binary's tests.
+            "run: cargo test --locked -p registry-breg --features schema --lib\n",
+            "run: cargo test --locked -p registry-breg --features schema --lib --test fixtures\n",
+            # Naming another binary, or building this one without the feature,
+            # still leaves the test out.
+            "run: cargo test --locked -p registry-breg --features schema --bin other\n",
+            "run: cargo test --locked -p registry-breg --bins\n",
+        ):
+            with self.subTest(workflow=workflow):
+                problems = self.problems(workflow, tests)
+                self.assertEqual(len(problems), 1)
+                self.assertIn("src/main.rs::schema_only", problems[0])
+                self.assertIn("binary target registry-breg", problems[0])
+
+        for workflow in (
+            "run: cargo test --locked -p registry-breg --features schema --bins\n",
+            "run: cargo test --locked -p registry-breg --features schema --lib --bin registry-breg\n",
+            "run: cargo test --locked -p registry-breg --features schema\n",
+        ):
+            with self.subTest(workflow=workflow):
+                self.assertEqual(self.problems(workflow, tests), [])
+
+    def test_binary_selection_does_not_cover_the_library(self) -> None:
+        tests = {"src/lib.rs": '#[cfg(feature = "schema")]\nmod schema;\n'}
+        binaries = "run: cargo test --locked -p registry-breg --features schema --bins\n"
+        problems = self.problems(binaries, tests)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("src/lib.rs::mod schema", problems[0])
+        self.assertIn("the library", problems[0])
 
     def test_unselected_target_is_reported_once_not_per_test(self) -> None:
         tests = {
@@ -439,6 +806,17 @@ class RepositoryTests(unittest.TestCase):
         ):
             with self.subTest(key=key):
                 self.assertIn(key, problems)
+
+    def test_runtime_binary_is_its_own_target_behind_its_required_features(self) -> None:
+        tests = {test.key: test for test in gate.gated_tests(ROOT / "crates" / gate.CRATE)}
+        binary = tests["src/main.rs"]
+        self.assertEqual(binary.binary, "breg")
+        self.assertEqual(binary.conditions, ('feature = "runtime"',))
+        invocations, _ = gate.ci_invocations(ROOT)
+        targeted = [invocation for invocation in invocations if invocation.bins is not None]
+        self.assertTrue(targeted)
+        self.assertFalse(any(gate.selects(invocation, binary) for invocation in targeted))
+        self.assertTrue(any(gate.selects(invocation, binary) for invocation in invocations))
 
     def test_shard_model_names_the_shard_that_owns_the_crate(self) -> None:
         self.assertIn(gate.CRATE, SHARDS["breg"])
