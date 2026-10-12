@@ -73,10 +73,6 @@ pub struct NewArgs {
     /// Explicit development profile for local authoring.
     #[arg(long, value_enum, required = true)]
     pub profile: Option<AuthoringProfile>,
-
-    /// Compatibility flag; local projects now always generate disposable keys.
-    #[arg(long = "generate-keys", requires = "openapi", hide = true)]
-    pub _generate_keys: bool,
 }
 
 pub(crate) fn run_with_format(
@@ -103,7 +99,6 @@ pub(crate) fn create_source_project(directory: &Path) -> Result<()> {
             transport: None,
             starter: Some(starter.path().to_path_buf()),
             profile: Some(AuthoringProfile::Local),
-            _generate_keys: false,
         },
         None,
         OutputFormat::Human,
