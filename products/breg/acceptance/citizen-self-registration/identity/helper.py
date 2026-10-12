@@ -568,6 +568,7 @@ class NativeIdentity:
             try:
                 os.unlink(temporary)
             except FileNotFoundError:
+                # The temporary file may already be gone; preserve the original failure.
                 pass
             raise
 
