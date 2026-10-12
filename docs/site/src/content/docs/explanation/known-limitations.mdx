@@ -55,8 +55,8 @@ Registry Render.
 - The release publishes no Windows, Intel macOS, or musl Linux artifact. Installers refuse
   unsupported operating systems and architectures before downloading.
 - Standalone Linux binaries, including CLI tools, link the GNU C library dynamically and require
-  glibc 2.35 or newer. Installers reject detected musl hosts, including Alpine, and glibc versions
-  below 2.35. Python client wheels are `manylinux_2_17`; no `musllinux` wheel is published.
+  glibc 2.34 or newer. Installers reject detected musl hosts, including Alpine, and glibc versions
+  below 2.34. Python client wheels are `manylinux_2_17`; no `musllinux` wheel is published.
 - Each container image is `linux/amd64`; no multi-architecture image index is published. An arm64
   container host therefore needs amd64 emulation.
 - Published macOS executables use arm64 bundles that include the executable, its shared
