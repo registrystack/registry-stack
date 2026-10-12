@@ -16,7 +16,7 @@ documents.
 Per-product release notes live in each product repository; the entries below link to the
 relevant product pages on this site rather than duplicating release notes.
 
-## Unreleased
+## v0.41.0 beta-53
 
 - BREAKING: the published `registry-stack-client` Python package requires Python 3.11 or later:
   its `Requires-Python` is `>=3.11` (was `>=3.10`), its wheels are built against the Python 3.11
@@ -64,12 +64,20 @@ relevant product pages on this site rather than duplicating release notes.
     release/scripts/check-glibc-floor.sh;
     release/scripts/render-installer-libc-preflight.py, INSTALLERS. */}
 
-- The Base Registry Engine (BReg), Registry Casework, Registry Scheduling, and Evidence installers
-  start every Linux binary they verified before they select the release, as they already did on
-  macOS. An installer checks the glibc floor of the release it was published with, so an installer
-  asked for an earlier release could select binaries built for a newer glibc than the host carries;
-  those binaries then failed at first run. The installer now refuses that release, names the binary
-  that did not start, and leaves the installed toolset selected. See
+- Workflow `actions/setup-go` steps that compile AWS-LC-FIPS from source use Go 1.27.2, where they
+  used 1.24.4. Go remains a build tool and is not shipped. The distinct canonical Linux builder
+  still uses the snapshot-pinned Go package in its Debian 13 builder image.
+
+{/* Evidence: .github/workflows/release-candidate.yml, actions/setup-go steps;
+    release/notes/dependency-vetting-aws-lc-fips.md, Build prerequisites;
+    release/scripts/test_release_workflow_structure.py, GO_VERSION. */}
+
+- The four BReg, Registry Casework, Registry Scheduling, and Evidence installers start every staged
+  Linux binary with `--version` before they select the release, as they already did on macOS. An
+  installer checks the glibc floor of the release it was published with, so an installer asked for
+  an earlier release could select binaries built for a newer glibc than the host carries; those
+  binaries then failed at first run. The installer now refuses that release, names the binary that
+  did not start, and leaves the installed toolset selected. See
   [known limitations](../explanation/known-limitations/).
 
 {/* Evidence: crates/registry-breg/install.sh; crates/registry-casework/install.sh;
@@ -78,6 +86,191 @@ relevant product pages on this site rather than duplicating release notes.
     linux_binary_that_cannot_start_leaves_the_previous_toolset_selected;
     release/scripts/test_nightly_release.py,
     test_linux_binary_that_cannot_start_never_replaces_the_installed_toolset. */}
+
+- BREAKING: BReg revision reads no longer accept the v0.38.0-and-earlier provenance that journaled
+  an immediate action under its effect identifier. A detail read, or a list page containing such a
+  revision, answers `503 source.unavailable`. v0.41.0 reads only predecessor state created by a
+  v0.40.0 apply, which already journals the entity's canonical operation identifier and needs no
+  change. An older deployment must first follow the v0.40.0 fresh-database migration, then upgrade
+  that v0.40.0 predecessor state.
+
+{/* Evidence: products/breg/CHANGELOG.md, "revision history no longer reads a revision journaled
+    under an immediate action's effect identifier". */}
+
+- BREAKING: BReg refuses a database without subject access-log storage before it binds a listener.
+  Every apply from v0.38.0 onward installed that storage, including when the package declares no
+  `accessLog`, so predecessor state created by a v0.40.0 apply needs no change. v0.41.0 does not
+  upgrade older state in place: an older deployment must first follow the v0.40.0 fresh-database
+  migration, then upgrade that v0.40.0 predecessor state.
+
+{/* Evidence: products/breg/CHANGELOG.md, "a database without the subject access-log storage is no
+    longer verified or served". */}
+
+- BReg's Rust, Node.js, and Python clients accept additive object members in metadata and valid
+  Problem envelopes. Unsupported must-understand capabilities disable only the affected binding,
+  and unsupported descriptive metadata omits only the affected statistical dataset, descriptive
+  change-request capability, selector, or spatial capability. An unknown temporal mode retains its
+  inert `temporal` descriptor because null means the collection is non-temporal. Valid unknown
+  Problem codes retain their HTTP status and trace ID without inferred semantics; malformed known
+  fields and envelopes still fail as protocol errors.
+
+{/* Evidence: products/breg/CHANGELOG.md, "metadata readers ignore unknown object members",
+    "Well-formed unsupported metadata vocabulary", and "clients handle valid unknown Problem
+    codes". */}
+
+- `bregctl dev` derives the local runtime's principal and purpose claim mappings from the compiled
+  project and refuses an unservable mixed mapping before it retains development state.
+  `caseworkctl source add` uses the same-version `bregctl explain access` result to generate the
+  `casework-reader` profile with the BReg project's one compiled `principalClaim`, preserves exact
+  test-bound client variants, and accepts equivalent trailing-slash spellings of the Casework
+  review endpoint.
+
+{/* Evidence: products/breg/CHANGELOG.md, the three `bregctl dev` claim-mapping entries;
+    products/casework/CHANGELOG.md, `caseworkctl source add` and source pairing entries. */}
+
+- The native citizen self-registration acceptance project combines ThunderID SMS signup,
+  account-owned BReg applications, Casework review, and transactional Person creation, account
+  linking, and program enrollment through configured BReg actions. It proves an adopter
+  composition across existing product boundaries and adds no built-in business model or runtime.
+
+{/* Evidence: products/breg/acceptance/citizen-self-registration/README.md;
+    products/breg/acceptance/citizen-self-registration/tests/run-live.py;
+    release/notes/v0.41.0.md, "Acceptance projects and release operation". */}
+
+- Registry Casework task templates can use `authorizationMode: deferred` with a lifetime of up to
+  seven days. Immediate grants keep their 900-second ceiling. A deferred review grant is bound to
+  the task's assignment generation and ends when assignment or terminal state changes; deferred
+  grants cannot carry Evidence bounds. Casework migration 0022 installs the grant-window constraints
+  and assignment-generation trigger, validating the affected tables under an exclusive lock.
+
+{/* Evidence: products/casework/CHANGELOG.md, `authorizationMode: deferred` and migration 0022. */}
+
+- The shared Registry Platform task-grant status transport now supplies BReg and Scheduling with
+  `TaskGrantStatusConfig`, endpoint validation, status credentials, exact binding checks, and the
+  default Casework status scope and route. BReg accepts optional `statusScope` and `statusPath`, and
+  its development tooling can bind declared Casework task authorities into the generated runtime.
+
+{/* Evidence: products/platform/CHANGELOG.md, `registry-platform-oidc` task_grant module and
+    `TaskGrantStatusConfig`; products/breg/CHANGELOG.md, `statusScope`, `statusPath`, and
+    `bregctl dev` taskGrantStatus entries. */}
+
+- BREAKING: BReg treats a `401` or `403` from the Casework task-grant status endpoint as an outage,
+  answering `503 service.unavailable` where it answered `412 precondition.failed`. A `404` still
+  refuses the grant with `412`. The shared transport identifies itself as `registry-task-status`
+  instead of `registry-breg-task-status`. Update alerts for a revoked or misconfigured status
+  client, and update access-log user-agent matches.
+
+{/* Evidence: products/breg/CHANGELOG.md, "task-grant status check before a governed write". */}
+
+- BREAKING: BReg validates each `taskGrantStatus` entry when it reads the runtime file and reports
+  `breg.runtime.invalid-task-grant-status` at `/taskGrantStatus`, where activation reported
+  `breg.runtime.invalid-binding`. The endpoint and client members now use their URL, external
+  identifier, resource URI, and issuer types at that boundary. A configuration that v0.40.0
+  activated already meets the member rules. Update scripts that match the earlier diagnostic code.
+
+{/* Evidence: products/breg/CHANGELOG.md, "runtime checks each `taskGrantStatus` entry". */}
+
+- BREAKING: Registry Casework removes `casework migrate` and `caseworkctl db`. Use `caseworkctl plan
+  --runtime-config FILE` followed by `caseworkctl apply --runtime-config FILE`. It also removes the
+  `casework.package.retired-manifest` refusal. v0.40.0 already refused these commands and packages
+  with the retired manifest, so no valid v0.40.0 package needs rebuilding for this cleanup. Rebuild
+  an older retained package with `caseworkctl package` instead of matching the removed code.
+
+{/* Evidence: products/casework/CHANGELOG.md, `casework migrate` and
+    `casework.package.retired-manifest`. */}
+
+- BREAKING: `caseworkctl dev` removes a database volume only when it carries the session ownership
+  label. Every v0.40.0 session labels its volume. Before you remove an older unlabeled
+  `casework-dev-<identifier>` volume, inspect and back up its contents. Removing the volume with
+  `docker volume rm` permanently destroys its data. Follow the
+  [v0.41.0 release note](https://github.com/registrystack/registry-stack/blob/v0.41.0/release/notes/v0.41.0.md#retired-command-and-compatibility-paths).
+
+{/* Evidence: products/casework/CHANGELOG.md, "removes a database volume only when the volume
+    carries the session's ownership label". */}
+
+- BREAKING: the Casework BReg source adapter refuses a legacy bare continuation cursor that names
+  no request entity. Every cursor stored by v0.40.0 names its entity, so a v0.40.0 database needs no
+  migration.
+
+{/* Evidence: products/casework/CHANGELOG.md, "source adapter refuses a stored discovery cursor". */}
+
+- BREAKING: `caseworkctl dev` reports five configuration refusals with exit status 1, where it
+  reported `caseworkctl.operational-failure` and exit status 3:
+  `caseworkctl.dev.integrations-invalid`, `caseworkctl.dev.shared-client-mismatch`,
+  `caseworkctl.dev.shared-task-authority-mismatch`,
+  `caseworkctl.dev.source-binding-invalid`, and
+  `caseworkctl.dev.borrowed-principal-invalid`. A borrowed issuer session also refuses
+  `principalClaim: sub`, because that claim names the issuer owner's subject. Use a stable claim in
+  every Casework access profile, register it for each client in both projects' `dev-clients.yaml`,
+  and update scripts that match the earlier status and code.
+
+{/* Evidence: products/casework/CHANGELOG.md, "reports five configuration refusals" and "refuses a
+    session that borrows another project's issuer". */}
+
+- BREAKING: `CaseworkTaskAssertionSource` classifies a Casework `4xx` assertion refusal other than
+  `408` or `429` as `invalid-credential`, where it classified every failure as `unavailable`.
+  Request a new approval instead of retrying an expired, revoked, or absent grant.
+
+{/* Evidence: products/casework/CHANGELOG.md, `CaseworkTaskAssertionSource`. */}
+
+- BREAKING: `evidencectl build` is now an unknown command. Use `evidencectl package` with the project
+  directory as its positional argument and retain the same `--target` and `--output` options.
+  `evidencectl init` and `evidencectl new` no longer accept the inactive `--generate-keys` option;
+  remove it because a local project already creates disposable keys.
+
+{/* Evidence: products/evidence/CHANGELOG.md, "drops two spellings it had stopped acting on". */}
+
+- BREAKING: Registry Scheduling requires a top-level `taskGrantStatus` in every runtime file. List
+  one to 32 task authorities whenever the deployment requires current status or revocation checks,
+  and for deferred work. `taskGrantStatus: unchecked-final-fifteen-minutes` checks only the grant's
+  remaining lifetime because the signed token does not identify its original mode. It admits any
+  grant with at most 900 seconds remaining without checking revocation, including the final 900
+  seconds of a deferred grant. Use it only when the deployment accepts that stale-authority window.
+  An omitted member is refused at startup with `scheduling.runtime.missing-task-grant-status`.
+
+{/* Evidence: products/scheduling/CHANGELOG.md, the `taskGrantStatus` behavior and missing-member
+    refusal; products/scheduling/RUNTIME-CONFIG.md, `taskGrantStatus` offline path. */}
+
+- BREAKING: Registry Scheduling removes three refusals for pre-v0.40.0 inputs. `scheduling migrate`
+  is an unknown command; activate with `schedulingctl plan` and `schedulingctl apply`.
+  `scheduling.package.retired-manifest` is replaced by the ordinary package-content refusals, so
+  rebuild with `schedulingctl package`. `schedulingctl.activation.earlier-release` is replaced by
+  `schedulingctl.store-unavailable`, so start from a new database when the retained policy uses the
+  pre-v0.40.0 identity. A database activated by v0.40.0 needs no reset. Direct Rust consumers must
+  remove `RuntimeError::RemovedCommand`, `RuntimeError::exit_code`,
+  `runtime::removed_command_refusal`, `RuntimeConfigError::RetiredPackageManifest`,
+  `config::RETIRED_PACKAGE_MANIFEST_FILE`, and `StoreError::EarlierRelease`.
+
+{/* Evidence: products/scheduling/CHANGELOG.md, "three refusals that named input only releases
+    before v0.40.0 wrote or accepted". */}
+
+- Registry Scheduling's `POST /v1/appointments/receipt` and Registry Messaging's
+  `POST /v1/messages/receipt` use the original `Idempotency-Key`, request body, and verified caller
+  identity to resolve the retained original success receipt. They do not return the request body or
+  repeat the mutation. Both routes use current ordinary read authority. Scheduling can recover the
+  receipt after the task grant ends. An unresolved receipt answers `409 receipt.unresolved`, which
+  does not prove that no effect occurred. The Rust, Node.js, and Python clients carry both routes.
+
+{/* Evidence: products/scheduling/CHANGELOG.md, `POST /v1/appointments/receipt`;
+    products/messaging/CHANGELOG.md, `POST /v1/messages/receipt`. */}
+
+- BREAKING (Rust API): `registry_scheduling_core::ProblemCode` and
+  `registry_messaging_core::ProblemCode` gain `ReceiptUnresolved`. Add that arm, or a wildcard arm,
+  to exhaustive matches.
+
+{/* Evidence: products/scheduling/CHANGELOG.md and products/messaging/CHANGELOG.md,
+    `ProblemCode` gains `ReceiptUnresolved`. */}
+
+- BReg and Casework local development pull the same pinned PostgreSQL image from
+  `public.ecr.aws/docker/library/postgres`. Messaging pulls that PostgreSQL mirror and Mailpit from
+  `ghcr.io/axllent/mailpit`. Development egress allowlists must admit `public.ecr.aws` and, for
+  Messaging, `ghcr.io`. Retained BReg and Casework containers using the earlier Docker Hub
+  PostgreSQL reference at the same digest remain accepted; BReg PostGIS sessions still use Docker
+  Hub's `postgis/postgis` image.
+
+{/* Evidence: products/breg/CHANGELOG.md, `bregctl dev start` PostgreSQL image;
+    products/casework/CHANGELOG.md, `caseworkctl dev start` PostgreSQL image;
+    products/messaging/CHANGELOG.md, `messagingctl dev` PostgreSQL and Mailpit images. */}
 
 ## v0.40.0 beta-52
 
