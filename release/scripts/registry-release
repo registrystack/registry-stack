@@ -51,7 +51,8 @@ IDENTIFIER_PUBLISHER_REPOSITORY = "registrystack/registrystack-id"
 IDENTIFIER_PUBLISHER_PIN_PATH = "src/upstream/source.json"
 PIN_IDENTIFIER_PUBLISHER = (
     f"merge the reviewed {IDENTIFIER_PUBLISHER_REPOSITORY} synchronization pull "
-    "request for that exact commit and digest, then run publish "
+    "request for that exact commit and digest (its sync-registry-stack.yml "
+    "workflow opens one daily or on manual dispatch), then run publish "
     '(release/OPERATIONS.md, "Tag and publish")'
 )
 RELAY_V2_ARTIFACT_INVENTORY = {
