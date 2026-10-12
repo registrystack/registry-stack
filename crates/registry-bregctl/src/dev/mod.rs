@@ -125,8 +125,9 @@ enum DevAction {
     /// A resident supervisor owns this project's PostgreSQL and ThunderID
     /// containers plus its Base Registry Engine (BReg) child. The database runs
     /// the pinned image
-    /// postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675,
-    /// or, when the compiled schema requires PostGIS,
+    /// public.ecr.aws/docker/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675,
+    /// the Docker Official Images mirror of postgres:17.11 at that digest, or,
+    /// when the compiled schema requires PostGIS, the Docker Hub image
     /// postgis/postgis@sha256:01a6a70e41e6c4467c8f55f6063555ed72db2d6662cd0d571040d42eadaeb6f6,
     /// which the supervisor pulls on the first start. Each supervised
     /// prerequisite command may run for 120 seconds, and the database and each

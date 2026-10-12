@@ -323,9 +323,10 @@ published through `public.ecr.aws/docker/library/postgres`. Debian recipe roots
 use `public.ecr.aws/docker/library/debian`, and Mailpit uses its upstream
 `ghcr.io/axllent/mailpit` mirror. Each reference retains the exact upstream
 manifest digest; the registry endpoint changes, not the selected image bytes.
-Public CLI help retains the canonical `postgres:17.11@sha256:…` and
-`axllent/mailpit:v1.31.2@sha256:…` identities; the implementations pull the
-corresponding mirror URI at the same full digest.
+The `dev start` help of `bregctl` and `caseworkctl` and the `dev` help of
+`messagingctl` name the exact mirror references they pull. A `bregctl`
+session whose schema requires PostGIS still pulls `postgis/postgis` from
+Docker Hub.
 
 [Docker Official Images on ECR Public](https://aws.amazon.com/blogs/containers/docker-official-images-now-available-on-amazon-elastic-container-registry-public/)
 and [Mailpit's Docker installation guide](https://mailpit.axllent.org/docs/install/docker/)

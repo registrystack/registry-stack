@@ -89,6 +89,22 @@ fn the_generated_configuration_is_one_the_runtime_accepts() {
     assert!(document.contains("development-loopback"));
 }
 
+/// An egress allowlist is written from the dev help, so the help names the
+/// exact references the session pulls.
+#[test]
+fn dev_help_names_the_image_references_it_pulls() {
+    let cli = <Cli as clap::CommandFactory>::command();
+    let help = cli
+        .get_subcommands()
+        .find(|command| command.get_name() == "dev")
+        .and_then(|command| command.get_long_about())
+        .expect("messagingctl dev describes its session")
+        .to_string();
+    for image in [docker::POSTGRES_IMAGE, docker::MAILPIT_IMAGE] {
+        assert!(help.contains(image), "messagingctl dev help omits {image}");
+    }
+}
+
 #[test]
 fn every_session_file_is_owner_only() {
     let (_temporary, project, root, _loaded) = session();

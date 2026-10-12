@@ -39,11 +39,13 @@ original ports and clients-file location. Conflicting ports are refused.
 The database runs the pinned image
 `public.ecr.aws/docker/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675`,
 or `postgis/postgis@sha256:01a6a70e41e6c4467c8f55f6063555ed72db2d6662cd0d571040d42eadaeb6f6`
-when the compiled schema requires PostGIS. Public help names the canonical
-`postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675`
-identity; the implementation pulls the byte-identical Docker Official Images
-ECR mirror above. Retained owned containers accept either exact PostgreSQL
-reference at that digest. The selection is retained with the
+when the compiled schema requires PostGIS. The first is the Docker Official
+Images mirror of
+`postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675`,
+byte-identical at that digest; the PostGIS image comes from Docker Hub. The
+`dev start` help names both references, so an egress allowlist can admit
+`public.ecr.aws` and, for spatial schemas, Docker Hub. Retained owned
+containers accept either exact PostgreSQL reference at that digest. The selection is retained with the
 owned database. Spatial setup grants the migration role permission to SET the
 no-login bbox owner; the runtime role never receives that membership.
 Each supervised
