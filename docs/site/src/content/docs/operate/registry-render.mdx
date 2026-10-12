@@ -200,7 +200,7 @@ curl -s http://127.0.0.1:8080/ready
 
 `GET /health` answers with the bundle version and package hash and the renderer version, so you can
 reconcile the running service against what you deployed. `GET /ready` includes the audit writer:
-if it has stopped, readiness fails. Both are value-free.
+if it has stopped, or its `stdout` destination has stalled, readiness fails. Both are value-free.
 `registry-render healthcheck --runtime-config <file>` performs the same probe for a supervisor script.
 
 {/* Evidence: crates/registry-render/src/server.rs, health and healthcheck;
