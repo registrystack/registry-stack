@@ -44,6 +44,22 @@
   Casework review API, including equivalent trailing slashes, while preserving
   the authored spelling. Different destinations and authority bindings still
   require explicit correction.
+- `caseworkctl source add` also drives the same-version `bregctl explain
+  access` and writes the generated `casework-reader` access profile with the
+  BReg project's one compiled `principalClaim`, where it always wrote
+  `registry_principal`. For `sub`, the generated local reader client declares
+  no subject claim, because the issuer supplies the verified subject. A
+  project with no authenticated grant keeps `registry_principal`. Before it
+  reads or writes the registry file, `source add` refuses a project whose
+  grants name more than one `principalClaim`, and an access report that
+  carries a `claimContractError` or a malformed `principalClaims` list. A
+  registry with mixed principal claims was already refused when its BReg
+  runtime started, so no pairing that ran before is refused now. If affected,
+  align every entity profile and action grant, including a `casework-reader`
+  profile an earlier `source add` wrote with `registry_principal`, to one
+  `principalClaim`, then repeat `source add`. The local human reviewer bridge
+  is unchanged: a reviewer profile still authenticates its principal through
+  `registry_principal`.
 
 ## v0.40.0 - 2026-10-11
 
