@@ -40,6 +40,10 @@ Limits, stated so nobody trusts this for more than it reads:
 - Each item is checked against its own conditions and its file's, not against
   the conditions of a module that encloses it.
 - Files under `tests/<directory>/` and tests produced by macros are not read.
+  A `[[test]]` whose file is not `tests/<name>.rs` stops the gate with an
+  error.
+- `#[ignore]` is not read: an ignored test is credited to a command that
+  builds it, although that command does not run it.
 - A file under `src/` belongs to a binary target when it is that target's root
   file or lies in its `src/bin/<name>/` directory, and to the library
   otherwise; the `mod` declarations that decide it for the compiler are not
@@ -463,6 +467,11 @@ def gated_tests(crate: Path) -> list[GatedTest]:
         for target in manifest.get("test", ())
     }
     binaries = binary_roots(crate, manifest)
+    for relative, (target, _) in declared.items():
+        if not re.fullmatch(r"tests/[^/]+\.rs", relative):
+            raise GateError(
+                f"test target {target} is declared at {relative}, which the gate does not read"
+            )
     found: list[GatedTest] = []
     for path in sorted((crate / "tests").glob("*.rs")):
         relative = path.relative_to(crate).as_posix()
