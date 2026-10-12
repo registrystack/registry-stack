@@ -15,7 +15,9 @@
 - BREAKING: the refusal code `casework.package.retired-manifest` is removed. A
   package root that holds `casework.package.json` is refused as any file the
   package does not list: `casework.package.invalid` names it as an extra file,
-  or `casework.package.unexpected-contents` when `SHA256SUMS` lists it.
+  or `casework.package.unexpected-contents` when `SHA256SUMS` lists it. A
+  `package.expectedDigest` that pins another digest is checked before the
+  contents and is reported first, as `casework.package.digest-mismatch`.
   Migration: rebuild the package with `caseworkctl package`.
 - BREAKING: `caseworkctl dev` removes a database volume only when the volume
   carries the session's ownership label. A volume with no label is refused
