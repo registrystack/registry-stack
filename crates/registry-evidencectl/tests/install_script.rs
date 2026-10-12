@@ -565,11 +565,9 @@ fn glibc_below_the_floor_refuses_before_download() {
 fn glibc_at_the_floor_installs_the_complete_toolset() {
     let (major, minor) = glibc_floor();
     let fixture = InstallerFixture::new();
-    let start_log = fixture.temp_path().join("started");
+    let start_log = fixture.start_log();
     let mut command = fixture.command();
-    command
-        .env("FAKE_GLIBC", format!("{major}.{minor}"))
-        .env("FIXTURE_START_LOG", &start_log);
+    command.env("FAKE_GLIBC", format!("{major}.{minor}"));
     let output = command.output().unwrap();
     assert!(
         output.status.success(),
@@ -770,7 +768,11 @@ exec /bin/mv "${arguments[@]}"
             let path = self.release_dir.join(&asset);
             // Published without the executable bit, so the installed mode is
             // the installer's own doing.
-            fs::write(&path, fixture_binary(binary, &self.version)).unwrap();
+            fs::write(
+                &path,
+                fixture_binary(binary, &self.version, &self.start_log()),
+            )
+            .unwrap();
             checksums.push(format!("{}  {}\n", sha256(&path), asset));
         }
         fs::write(self.release_dir.join("SHA256SUMS"), checksums.concat()).unwrap();
@@ -1073,6 +1075,13 @@ exec "$REAL_MV" "${arguments[@]}"
         self._temp.path()
     }
 
+    /// Where each release asset this fixture writes records that it was
+    /// started. The path is written into the asset, because the installer
+    /// starts a staged binary with an empty environment.
+    fn start_log(&self) -> PathBuf {
+        self._temp.path().join("started")
+    }
+
     fn rendered_installer(&self) -> PathBuf {
         let source = fs::read_to_string(installer_path()).unwrap();
         let marker = "default_version=\"\"";
@@ -1165,19 +1174,18 @@ fn write_executable(path: &Path, body: &str) {
 /// `tag` does and otherwise names itself. A development build answers with the
 /// bare `-dev` suffix, without the run numbers its tag ends in.
 #[cfg(unix)]
-fn fixture_binary(binary: &str, tag: &str) -> String {
+fn fixture_binary(binary: &str, tag: &str, start_log: &Path) -> String {
     let version = tag.trim_start_matches('v');
     let version = match version.split_once("-dev.") {
         Some((base, _)) => format!("{base}-dev"),
         None => version.to_owned(),
     };
+    let start_log = start_log.display();
     format!(
         r#"#!/usr/bin/env bash
 set -euo pipefail
 if [[ "${{1:-}}" == --version ]]; then
-  if [[ -n "${{FIXTURE_START_LOG:-}}" ]]; then
-    printf '%s\n' '{binary}' >> "$FIXTURE_START_LOG"
-  fi
+  printf '%s\n' '{binary}' >> '{start_log}'
   printf '%s\n' '{binary} {version}'
 else
   printf '%s\n' '{binary} release binary'

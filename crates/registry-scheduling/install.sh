@@ -583,8 +583,11 @@ for binary in "${binaries[@]}"; do
 		# was published with, and a release's Linux binaries need the GNU libc
 		# that release was built for. Start each staged binary before the
 		# toolset pointer moves, so a release that cannot run here is refused
-		# while the installed toolset is still the selected one.
-		if [ "$os_label" = "linux" ] && ! "$stage_dir/$binary" --version >/dev/null </dev/null; then
+		# while the installed toolset is still the selected one. A runtime
+		# reads its settings from the environment before its arguments, so the
+		# binary starts with an empty one: a setting left in this shell must
+		# not be read as a binary that cannot start.
+		if [ "$os_label" = "linux" ] && ! env -i "$stage_dir/$binary" --version >/dev/null </dev/null; then
 			printf 'The staged %s %s did not start on this system, so this release cannot run here.\n' \
 				"$binary" "$version" >&2
 			printf 'The Linux binaries of a release need the GNU libc that release was built for, which may be newer than the one on this system.\n' >&2
