@@ -22,8 +22,10 @@ const SECRET_CANARY: &str = "production-build-secret-canary";
 const CHECK_DIAGNOSTIC: &str =
     "evidence bundle-check diagnostic: derivations/answer.rhai failed static compilation";
 
+/// `build` is not a command: it is refused as any unknown command is, before
+/// a project is read or an output is created.
 #[test]
-fn retired_build_command_refuses_with_package_replacement() {
+fn build_is_an_unknown_command_and_creates_no_output() {
     let fixture = Fixture::new();
     let output = Command::new(env!("CARGO_BIN_EXE_evidencectl"))
         .arg("build")
@@ -34,13 +36,15 @@ fn retired_build_command_refuses_with_package_replacement() {
         .arg("--output")
         .arg(&fixture.output)
         .output()
-        .expect("retired build command starts");
+        .expect("build command line starts");
 
-    assert_failed(&output, "retired build command");
-    assert!(!fixture.output.exists());
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
     let message = stderr(&output);
-    assert!(message.contains("evidence.build.retired"), "{message}");
-    assert!(message.contains("evidencectl package"), "{message}");
+    assert!(message.starts_with("error[evidencectl.usage]"), "{message}");
+    assert!(!message.contains("evidence.build.retired"), "{message}");
+    assert!(!fixture.output.exists());
+    assert!(fixture.invocations().is_empty());
 }
 
 #[test]

@@ -8,6 +8,16 @@
   supported. Migration: run Node.js 24.11.0 or later.
   `editors/install.sh vscode` likewise needs Node.js 24 or later to package
   the VS Code extension.
+- BREAKING: `evidencectl` drops two spellings it had stopped acting on. Each
+  is now refused as any unknown command or argument is, as the usage error
+  `evidencectl.usage` (exit status 2), before a project is read or written.
+  - `evidencectl build` is an unknown command, where it was refused as
+    `evidence.build.retired` (exit status 1). Run `evidencectl package` with
+    the project directory as its positional argument and the same `--target`
+    and `--output`.
+  - `evidencectl init` and `evidencectl new` no longer accept
+    `--generate-keys`, which was accepted beside `--openapi` and did nothing:
+    a local project always generates its disposable keys. Drop the flag.
 
 ## v0.40.0 - 2026-10-11
 

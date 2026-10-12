@@ -439,7 +439,7 @@ fn invalid_local_or_remote_openapi_writes_nothing_and_cleans_staging() {
     let workspace = TempDir::new().expect("temporary directory");
     let invalid = write_spec(workspace.path(), b"not: openapi\n");
     let invalid_project = workspace.path().join("invalid-project");
-    let output = openapi_new(&invalid_project, path(&invalid), &["--generate-keys"]);
+    let output = openapi_new(&invalid_project, path(&invalid), &[]);
     assert!(!output.status.success());
     assert!(!invalid_project.exists());
 
@@ -482,7 +482,7 @@ fn unsafe_remote_urls_are_value_free_and_fail_before_network_or_writes() {
         ),
     ] {
         let project = workspace.path().join(name);
-        let output = openapi_new(&project, &url, &["--generate-keys"]);
+        let output = openapi_new(&project, &url, &[]);
         assert!(!output.status.success());
         let logged = format!("{}{}", stdout(&output), stderr(&output));
         assert!(logged.contains(expected), "unexpected refusal: {logged}");
@@ -584,7 +584,7 @@ fn existing_paths_and_force_are_refused_without_changes() {
     fs::write(external.join("sentinel"), b"external").expect("external sentinel");
     let symlinked = workspace.path().join("symlinked");
     symlink(&external, &symlinked).expect("project symlink");
-    let output = openapi_new(&symlinked, path(&spec), &["--generate-keys"]);
+    let output = openapi_new(&symlinked, path(&spec), &[]);
     assert!(!output.status.success());
     assert_eq!(
         fs::read(external.join("sentinel")).expect("external sentinel"),
@@ -592,10 +592,12 @@ fn existing_paths_and_force_are_refused_without_changes() {
     );
     assert_eq!(entries(&external), ["sentinel"]);
 
-    let forced = workspace.path().join("forced");
-    let output = openapi_new(&forced, path(&spec), &["--force"]);
-    assert_safe_usage_failure(&output);
-    assert!(!forced.exists());
+    for unsupported in ["--force", "--generate-keys"] {
+        let refused = workspace.path().join("refused");
+        let output = openapi_new(&refused, path(&spec), &[unsupported]);
+        assert_safe_usage_failure(&output);
+        assert!(!refused.exists());
+    }
     assert_no_staging_directories(workspace.path());
 }
 
