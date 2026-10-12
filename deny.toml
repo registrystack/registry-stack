@@ -63,7 +63,9 @@ ignore = [
     # these functions, so keeping request text and request assets away from
     # them is a template review duty, not a renderer guarantee; this ignore
     # does not accept a template that passes them request data.
-    # Reviewed 2026-10-12.
+    # Reviewed 2026-10-12. Beyond the triggers above, review this one when a
+    # bundle's template starts calling any of those three functions: the Typst
+    # pin and the renderer can stay unchanged while that happens.
     "RUSTSEC-2024-0449",
     # yaml-rust 0.4.5 (via syntect/two-face in typst-library): unmaintained.
     "RUSTSEC-2024-0320",
