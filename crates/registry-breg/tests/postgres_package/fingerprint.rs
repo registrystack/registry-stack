@@ -140,7 +140,13 @@ async fn assert_startup_and_drift_refusal(
         ),
         (
             format!("ALTER VIEW {view} SET (security_invoker = false)"),
-            format!("ALTER VIEW {view} SET (security_invoker = true, security_barrier = true)"),
+            format!("ALTER VIEW {view} SET (security_invoker = true)"),
+        ),
+        // A source view is not a barrier view, and the option alone is drift:
+        // a barrier keeps a list page from reaching the entity's indexes.
+        (
+            format!("ALTER VIEW {view} SET (security_barrier = true)"),
+            format!("ALTER VIEW {view} RESET (security_barrier)"),
         ),
     ] {
         migration.batch_execute(&alter).await.unwrap();

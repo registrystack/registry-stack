@@ -88,8 +88,9 @@ functions and forced row-level security. Each generated PL/pgSQL function saves
 the prior authorization context, enables only its matching membership probe,
 and restores the context before returning. Its exception block rolls back the
 local context on errors. It does not grant direct membership endpoints or derived views
-access to private membership records. The existing logical source views retain
-`security_invoker` and `security_barrier` settings. No additional database role
+access to private membership records. The logical source views keep
+`security_invoker`, so the caller's row-level security policies decide every
+read through them; they are not barrier views. No additional database role
 or RLS bypass is required. PostgreSQL 17 remains the minimum for this surface;
 other enabled features can require a newer supported version.
 

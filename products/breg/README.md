@@ -263,7 +263,12 @@ PostgreSQL is the sole Version 1 database. The administrator installs
 The compiler gives every reference column a btree index unless an authored
 index or unique constraint already leads with it, and an authoring compile
 reports `breg.entity.list-unindexed-filter` or `breg.entity.list-unindexed-sort` for a
-granted list filter or sort that no index leads with. A database activated by
+granted list filter or sort that no index leads with. The compiler appends the
+record id as the last column of every authored index: every list orders by
+the record id last, so an index that ends with it returns a filtered, sorted
+page in order and resumes a later page at its cursor. An authored index
+declares the fields a list filters by first, then the field it sorts by; the
+record id is never declared. A database activated by
 an engine that predates reference indexes gains them through an ordinary
 successor package: `bregctl package` classifies each one as a compatible
 additive index and the migration transaction creates it with a plain

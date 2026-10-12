@@ -1062,6 +1062,7 @@ fn summarize_query_plan_for_test(plan: &Value, nodes: &mut Vec<Value>) {
         "indexName": plan.get("Index Name"),
         "actualRows": plan.get("Actual Rows"),
         "actualLoops": plan.get("Actual Loops"),
+        "rowsRemovedByFilter": plan.get("Rows Removed by Filter"),
         "spatialIndexCondition": spatial_index_condition,
     }));
     if let Some(children) = plan.get("Plans").and_then(Value::as_array) {
@@ -2651,6 +2652,7 @@ impl ReadRelations {
                     sql: sql.to_owned(),
                     field_type,
                     encrypted: false,
+                    never_null: false,
                 });
             }
         }
@@ -2659,6 +2661,7 @@ impl ReadRelations {
                 sql: self.id_expression.clone(),
                 field_type: entity.canonical_id.field_type.clone(),
                 encrypted: false,
+                never_null: false,
             });
         }
         if let Some(field) = entity
@@ -2680,6 +2683,7 @@ impl ReadRelations {
                     ),
                     field_type: field.logical.field_type.clone(),
                     encrypted: true,
+                    never_null: false,
                 });
             }
             if !valid_physical_identifier(&field.logical.sql_name) {
@@ -2693,6 +2697,7 @@ impl ReadRelations {
                 ),
                 field_type: field.logical.field_type.clone(),
                 encrypted: false,
+                never_null: field.required,
             });
         }
         if let Some(field) = entity.derived_fields.get(field_id) {
@@ -2704,6 +2709,7 @@ impl ReadRelations {
                 sql: format!("{alias}.{}", quote_identifier(&field.logical.sql_name)),
                 field_type: field.logical.field_type.clone(),
                 encrypted: false,
+                never_null: false,
             });
         }
         Err(ReadServiceError::Unavailable)
@@ -2734,6 +2740,16 @@ pub(crate) struct FieldExpression {
     pub(crate) field_type: FieldTypeSource,
     /// The expression resolves the raw envelope column of an encrypted field.
     pub(crate) encrypted: bool,
+    /// The expression never yields NULL for a row a read can return: it is a
+    /// required stored field read through the entity source view. The view
+    /// returns active rows only, and the column of a required field is
+    /// `NOT NULL`, or for a change-request entity checked non-null on every
+    /// row that is not tombstoned. A successor that adds a required field
+    /// sets that requiredness before its activation completes, and no record
+    /// transaction starts while an apply is in progress, so a served database
+    /// holds no NULL there either. Request state and derived fields arrive
+    /// through outer joins and stay nullable.
+    pub(crate) never_null: bool,
 }
 
 fn compiled_field_type<'a>(
@@ -3041,11 +3057,25 @@ fn list_sql(
                     validate_field_value(value, &field.field_type)
                         .map_err(|_| ReadServiceError::CursorInvalid)?;
                     let sort_parameter = push_value(&mut values, value);
-                    predicates.push(format!(
-                        "({column} > ${sort_parameter}::text::{cast} OR {column} IS NULL OR ({column} = ${sort_parameter}::text::{cast} AND {id} > ${record_parameter}::text::uuid))",
-                        column = field.sql,
-                        id = relations.id_expression
-                    ));
+                    if field.never_null {
+                        // Without NULL in the sort column the page order is
+                        // exactly the row order of (sort, id), so the
+                        // continuation is one row comparison, which
+                        // PostgreSQL turns into a seek on an index that ends
+                        // with those two columns. The general form below
+                        // admits NULLS LAST and cannot be an index bound.
+                        predicates.push(format!(
+                            "({column}, {id}) > (${sort_parameter}::text::{cast}, ${record_parameter}::text::uuid)",
+                            column = field.sql,
+                            id = relations.id_expression
+                        ));
+                    } else {
+                        predicates.push(format!(
+                            "({column} > ${sort_parameter}::text::{cast} OR {column} IS NULL OR ({column} = ${sort_parameter}::text::{cast} AND {id} > ${record_parameter}::text::uuid))",
+                            column = field.sql,
+                            id = relations.id_expression
+                        ));
+                    }
                 }
                 None => predicates.push(format!(
                     "({column} IS NULL AND {id} > ${record_parameter}::text::uuid)",
@@ -3054,9 +3084,18 @@ fn list_sql(
                 )),
             }
         } else {
+            // The base table joins the source view on the record id, and
+            // PostgreSQL does not carry an inequality across that equality.
+            // Repeating the bound on the base table lets a merge join start
+            // its primary key scan at the continuation instead of at the
+            // first record.
             predicates.push(format!(
                 "{} > ${record_parameter}::text::uuid",
                 relations.id_expression
+            ));
+            predicates.push(format!(
+                "{}.record_id > ${record_parameter}::text::uuid",
+                relations.base_alias
             ));
         }
     }

@@ -123,6 +123,11 @@ path = "tests/postgres_reference_indexes.rs"
 required-features = ["postgres-test", "tooling"]
 
 [[test]]
+name = "postgres_list_page_plans"
+path = "tests/postgres_list_page_plans.rs"
+required-features = ["postgres-test", "tooling"]
+
+[[test]]
 name = "postgres_read"
 path = "tests/postgres_read.rs"
 required-features = ["postgres-test"]

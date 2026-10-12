@@ -23,6 +23,7 @@ use registry_breg::postgres::{
 
 const RECORD_ALPHA: &str = "00000000-0000-0000-0000-000000000201";
 const RECORD_BETA: &str = "00000000-0000-0000-0000-000000000202";
+const RECORD_GAMMA: &str = "00000000-0000-0000-0000-000000000205";
 const PACKAGE_ID: &str = "compiled-registry";
 const DATABASE_ID: &str = "compiled-database";
 const PRIOR_REVISION: &str =
@@ -316,6 +317,171 @@ async fn compiled_postgres_schema_enforces_context_rls_and_exact_catalog() {
 
     install_derived_view_fixture().await;
     install_asset_fixture().await;
+}
+
+/// The source view is not a barrier view, so the planner flattens it and may
+/// evaluate a caller predicate before the lifecycle condition of the view.
+/// Row security does not rest on that order: PostgreSQL applies the policies
+/// of the table before any predicate that is not leakproof, and every read
+/// policy of this entity carries the lifecycle condition itself.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_source_view_never_shows_a_predicate_a_record_that_row_security_hides() {
+    let registry = compiled_registry();
+    let database = TestDatabase::create(1).await;
+    database
+        .admin
+        .batch_execute("CREATE EXTENSION btree_gist")
+        .await
+        .expect("administrator installs the declared prerequisite");
+    let (migration, migration_task) = database.connect_migration().await;
+    install_compiled_schema(&migration, &registry, &database.runtime_role)
+        .await
+        .expect("one product installer applies the exact compiled inventory");
+    let catalog = ExpectedManagedCatalog::compiled(&registry);
+    let identity = initialize_registry_state_for_catalog_test(
+        &migration,
+        &database.runtime_role,
+        &catalog,
+        RegistryStateTestIdentity {
+            package_id: PACKAGE_ID,
+            database_id: DATABASE_ID,
+            label: "compiled-package-1",
+        },
+    )
+    .await
+    .expect("compiled catalog binds the active Registry identity");
+    migration_task.abort();
+
+    let entity = &registry.entities()["entry"];
+    let table = quote_identifier(&entity.physical_table);
+    let view = format!(
+        "registry_source.{}",
+        quote_identifier(&entity.source_relation.sql_name)
+    );
+    let options: Vec<String> = database
+        .admin
+        .query_one(
+            "SELECT reloptions FROM pg_catalog.pg_class WHERE oid = $1::text::regclass",
+            &[&view],
+        )
+        .await
+        .expect("source view options are readable")
+        .get(0);
+    assert_eq!(options, ["security_invoker=true"]);
+
+    // The probe is cheaper than any other predicate, so the planner runs it as
+    // early as row security allows, and it is not leakproof.
+    database
+        .admin
+        .batch_execute(&format!(
+            "CREATE SCHEMA leak_probe;
+             CREATE FUNCTION leak_probe.observe(id uuid, hidden uuid[]) RETURNS boolean
+                 LANGUAGE plpgsql COST 0.000001 AS $$
+                 BEGIN
+                     IF id = ANY (hidden) THEN
+                         RAISE EXCEPTION 'a hidden record reached the predicate';
+                     END IF;
+                     RETURN true;
+                 END $$;
+             GRANT USAGE ON SCHEMA leak_probe TO {runtime};
+             GRANT EXECUTE ON FUNCTION leak_probe.observe(uuid, uuid[]) TO {runtime}",
+            runtime = quote_identifier(database.runtime_role.as_str())
+        ))
+        .await
+        .expect("administrator installs the probe");
+
+    let pool = database
+        .runtime_config
+        .build_pool()
+        .expect("bounded runtime pool builds");
+    let mut client = pool
+        .get_for_test()
+        .await
+        .expect("pooled runtime client is available");
+    let lock_key = RegistryLockKey::derive("source-view-probe-test").expect("lock key is bounded");
+    let alpha = context(&registry, "writer", "operations", "tenant-a", &["north"]);
+    let beta = context(&registry, "writer", "operations", "tenant-b", &["north"]);
+    for (caller, record_id, tenant) in [
+        (&alpha, RECORD_ALPHA, "tenant-a"),
+        (&beta, RECORD_BETA, "tenant-b"),
+        (&alpha, RECORD_GAMMA, "tenant-a"),
+    ] {
+        insert_row(
+            &mut client,
+            lock_key,
+            &identity,
+            caller,
+            entity,
+            record_id,
+            tenant,
+        )
+        .await;
+    }
+    // A tombstoned record inside the caller's own boundary: only the lifecycle
+    // condition hides it.
+    let tombstoned = database
+        .admin
+        .execute(
+            &format!(
+                "UPDATE registry_data.{table} SET record_lifecycle = 'tombstoned'
+                  WHERE record_id = $1::text::uuid"
+            ),
+            &[&RECORD_GAMMA],
+        )
+        .await
+        .expect("administrator tombstones one record");
+    assert_eq!(tombstoned, 1);
+
+    let probe = format!(
+        "SELECT id::text FROM {view}
+          WHERE leak_probe.observe(id, ARRAY[$1::text::uuid, $2::text::uuid])"
+    );
+    let transaction = begin_record_transaction(
+        &mut client,
+        lock_key,
+        Duration::from_secs(1),
+        &identity,
+        &alpha,
+    )
+    .await
+    .expect("reader context starts");
+    let plan: Vec<String> = transaction
+        .transaction_for_test()
+        .query(&format!("EXPLAIN {probe}"), &[&RECORD_BETA, &RECORD_GAMMA])
+        .await
+        .expect("the probe query plans")
+        .into_iter()
+        .map(|row| row.get(0))
+        .collect();
+    assert!(
+        plan.iter().all(|line| !line.contains("Subquery Scan")),
+        "the source view is flattened into the query: {plan:?}"
+    );
+    let visible: Vec<String> = transaction
+        .transaction_for_test()
+        .query(&probe, &[&RECORD_BETA, &RECORD_GAMMA])
+        .await
+        .expect("no hidden record reaches the predicate")
+        .into_iter()
+        .map(|row| row.get(0))
+        .collect();
+    assert_eq!(visible, [RECORD_ALPHA]);
+    // The same probe refuses the record the caller may read, so the proof
+    // above does not pass because the predicate went unevaluated.
+    let refused = transaction
+        .transaction_for_test()
+        .query(&probe, &[&RECORD_ALPHA, &RECORD_BETA])
+        .await
+        .expect_err("the visible record reaches the predicate");
+    assert!(
+        refused
+            .as_db_error()
+            .is_some_and(|error| error.message() == "a hidden record reached the predicate"),
+        "{refused:?}"
+    );
+    transaction.rollback().await.expect("probe rolls back");
+    drop(client);
+    database.cleanup().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

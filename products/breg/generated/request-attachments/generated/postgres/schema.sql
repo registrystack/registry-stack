@@ -297,12 +297,12 @@ CREATE POLICY "registry_cr_rls_update_76644d84ef6aea1792564dcf" ON registry_data
                 )
          ) AND jsonb_typeof((NULLIF(current_setting('registry.change_request_target_context', true), '')::jsonb -> 'targetRowBoundaries')) = 'array' AND jsonb_array_length((NULLIF(current_setting('registry.change_request_target_context', true), '')::jsonb -> 'targetRowBoundaries')) = 0 AND record_lifecycle = 'active');
 CREATE VIEW registry_source."correction_request"
-                 WITH (security_invoker=true, security_barrier=true)
+                 WITH (security_invoker=true)
                  AS SELECT record_id AS "id", "breg_f_correction_request_record_0256d0cc16e7e83c" AS "record", "breg_f_correction_request_label_2495c7a3ef0d752c" AS "label"
                     FROM registry_data."breg_e_correction_request_0ee31b2fadfee29d"
                    WHERE record_lifecycle = 'active';
 CREATE VIEW registry_source."record"
-                 WITH (security_invoker=true, security_barrier=true)
+                 WITH (security_invoker=true)
                  AS SELECT record_id AS "id", "breg_f_record_label_afd0f60652254ede" AS "label"
                     FROM registry_data."breg_e_record_da7a7e7c2436c900"
                    WHERE record_lifecycle = 'active';
