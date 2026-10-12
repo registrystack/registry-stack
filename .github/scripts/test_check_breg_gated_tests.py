@@ -234,6 +234,45 @@ class InvocationTests(unittest.TestCase):
         self.assertEqual([invocation.tests for invocation in invocations], [frozenset({"fixtures", "other"})])
         self.assertEqual(ignored, 1)
 
+    def test_source_invocations_join_folded_workflow_scalars(self) -> None:
+        text = textwrap.dedent(
+            """
+            steps:
+              - name: Folded
+                run: >-
+                  cargo test --locked -p registry-breg --features schema
+                  --test fixtures
+
+              - name: Literal
+                run: |
+                  cargo test --locked -p registry-breg --lib
+                  echo done
+            """
+        )
+        invocations, ignored = gate.source_invocations(text, "ci.yml", FEATURES)
+        self.assertEqual(
+            [(invocation.lib, invocation.tests) for invocation in invocations],
+            [(False, frozenset({"fixtures"})), (True, frozenset())],
+        )
+        self.assertEqual(ignored, 0)
+
+    def test_optional_dependency_on_the_crate_in_the_shard_is_refused(self) -> None:
+        sibling = """
+            [package]
+            name = "registry-bregctl"
+
+            [dependencies]
+            registry-breg = { workspace = true, optional = true, features = ["schema"] }
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write(root, "crates/registry-breg/Cargo.toml", MANIFEST)
+            write(root, "crates/registry-bregctl/Cargo.toml", sibling)
+            with self.assertRaises(gate.GateError) as raised:
+                gate.shard_invocation(root, SHARD, FEATURES)
+        self.assertIn("registry-bregctl", str(raised.exception))
+        self.assertIn("optional", str(raised.exception))
+
     def test_shard_unifies_features_requested_by_its_other_members(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -450,6 +489,37 @@ class ScanTests(unittest.TestCase):
             self.scan({"src/main.rs": GATED_UNIT_TEST}, BINARY_MANIFEST)
         self.assertIn("tool", str(raised.exception))
 
+    def test_declared_binary_target_outside_src_is_refused(self) -> None:
+        manifest = """
+            [package]
+            name = "registry-breg"
+
+            [features]
+            schema = []
+
+            [[bin]]
+            name = "tool"
+            path = "cmd/tool.rs"
+            required-features = ["schema"]
+        """
+        with self.assertRaises(gate.GateError) as raised:
+            self.scan({"cmd/tool.rs": "fn main() {}\n"}, manifest)
+        self.assertIn("tool", str(raised.exception))
+        self.assertIn("cmd/tool.rs", str(raised.exception))
+
+    def test_disabled_test_target_discovery_is_refused(self) -> None:
+        manifest = """
+            [package]
+            name = "registry-breg"
+            autotests = false
+
+            [features]
+            schema = []
+        """
+        with self.assertRaises(gate.GateError) as raised:
+            self.scan({"tests/plain.rs": GATED_UNIT_TEST}, manifest)
+        self.assertIn("autotests", str(raised.exception))
+
     def test_declared_test_target_the_gate_does_not_read_is_refused(self) -> None:
         manifest = """
             [package]
@@ -649,6 +719,31 @@ class ScanTests(unittest.TestCase):
                     self.scan({"tests/fixtures.rs": f"{attribute}\nfn conditional() {{}}\n"})
                 self.assertIn("tests/fixtures.rs:1", str(raised.exception))
                 self.assertIn("cfg_attr", str(raised.exception))
+
+    def test_cfg_behind_a_feature_cfg_attr_is_refused(self) -> None:
+        text = (
+            '#[cfg(feature = "schema")]\n'
+            '#[cfg_attr(feature = "schema", cfg(feature = "tooling"))]\n'
+            "#[test]\nfn doubly_gated() {}\n"
+        )
+        with self.assertRaises(gate.GateError) as raised:
+            self.scan({"tests/fixtures.rs": text})
+        self.assertIn("tests/fixtures.rs:2", str(raised.exception))
+        self.assertIn("cfg_attr", str(raised.exception))
+
+    def test_cfg_attribute_spelled_with_inner_whitespace_is_refused(self) -> None:
+        for attribute in (
+            '#[ cfg(feature = "schema")]',
+            '#[cfg (feature = "schema")]',
+            '# [cfg(feature = "schema")]',
+            '#![ cfg(feature = "schema")]',
+            '#[cfg\n(feature = "schema")]',
+            '#[ cfg_attr(feature = "schema", test)]',
+        ):
+            with self.subTest(attribute=attribute):
+                with self.assertRaises(gate.GateError) as raised:
+                    self.scan({"tests/fixtures.rs": f"{attribute}\n#[test]\nfn spaced() {{}}\n"})
+                self.assertIn("tests/fixtures.rs:1", str(raised.exception))
 
     def test_cfg_attr_that_adds_no_test_attribute_is_read_past(self) -> None:
         found = self.scan(

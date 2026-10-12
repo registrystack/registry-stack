@@ -24,7 +24,8 @@ and the `path` of a `[[bin]]`. A command with no target flag builds them all.
 What counts as selecting it: the Rust test shard that owns the crate, and
 every literal `cargo test ... -p registry-breg` command in INVOCATION_SOURCES,
 when the command builds the test's target with features that satisfy every
-condition on it.
+condition on it. A command is one line, after shell continuations and the
+lines of a folded workflow scalar (`run: >`) are joined.
 
 Every `cfg` on a gated test is kept, the ones that name no feature included,
 and they are evaluated together. CI builds the crate's tests on Linux runners,
@@ -46,10 +47,14 @@ Limits, stated so nobody trusts this for more than it reads:
   error.
 - `#[ignore]` is not read: an ignored test is credited to a command that
   builds it, although that command does not run it.
-- A `#[cfg_attr(...)]` that names a feature and adds `test` or `tokio::test`,
-  and a library, binary, or integration target with `test = false`, stop the
-  gate with an error: the first makes a test the scanner does not see, the
-  second leaves a target out of the commands that name no target.
+- A `#[cfg_attr(...)]` that names a feature and adds `test`, `tokio::test`, or
+  a `cfg`, and a `cfg` or `cfg_attr` not spelled `#[cfg(` or `#[cfg_attr(` as
+  rustfmt writes them, stop the gate with an error: each makes or removes a
+  test in a way the scanner does not see.
+- The manifest shapes that change which targets a command builds stop the gate
+  with an error instead of being modelled: `test = false` on a target,
+  `autotests = false`, a `[[bin]]` whose `path` is outside `src/`, and a shard
+  member that takes the crate as an optional dependency.
 - A file under `src/` belongs to a binary target when it is that target's root
   file or lies in its `src/bin/<name>/` directory, and to the library
   otherwise; the `mod` declarations that decide it for the compiler are not
@@ -145,7 +150,10 @@ CFG_LINE = re.compile(r"^#(!?)\[cfg\((.*)\)\]$")
 FEATURE = re.compile(r'\bfeature\s*=\s*"([^"]*)"')
 TEST_ATTRIBUTE = re.compile(r"^#\[(?:tokio::)?test\b")
 CFG_ATTR_LINE = re.compile(r"^#!?\[cfg_attr\((.*)\)\]$")
-ADDS_TEST = re.compile(r"^(?:tokio::)?test\b")
+ADDS_TEST_OR_CFG = re.compile(r"^(?:(?:tokio::)?test|cfg)\b")
+CFG_START = re.compile(r"^#\s*!?\s*\[\s*cfg(?:_attr)?\b")
+CANONICAL_CFG_START = re.compile(r"^#!?\[cfg(?:_attr)?\(")
+FOLDED_SCALAR = re.compile(r"^(\s*)(?:- )?run: >[-+]?\s*$")
 ITEM = re.compile(r"^(?:pub(?:\([^)]*\))?\s+)?(?:(?:async\s+)?fn\s+(\w+)|mod\s+(\w+))")
 
 
@@ -315,13 +323,44 @@ def read_invocation(
     )
 
 
+def unfold(text: str) -> str:
+    """Join each folded workflow scalar into the lines the shell receives.
+
+    YAML folds the lines of a `run: >` scalar into one, and keeps a blank line
+    as the break between two commands.
+    """
+    lines = text.splitlines()
+    unfolded: list[str] = []
+    index = 0
+    while index < len(lines):
+        match = FOLDED_SCALAR.match(lines[index])
+        unfolded.append(lines[index])
+        index += 1
+        if match is None:
+            continue
+        command: list[str] = []
+        while index < len(lines):
+            line = lines[index]
+            if line.strip() and len(line) - len(line.lstrip()) <= len(match[1]):
+                break
+            if line.strip():
+                command.append(line.strip())
+            elif command:
+                unfolded.append(" ".join(command))
+                command = []
+            index += 1
+        if command:
+            unfolded.append(" ".join(command))
+    return "\n".join(unfolded)
+
+
 def source_invocations(
     text: str, source: str, table: Mapping[str, Iterable[str]]
 ) -> tuple[list[Invocation], int]:
     """Return the readable commands in one file and how many were set aside."""
     invocations: list[Invocation] = []
     ignored = 0
-    for line in text.replace("\\\n", " ").splitlines():
+    for line in unfold(text).replace("\\\n", " ").splitlines():
         if line.lstrip().startswith("#") or not CARGO_TEST.search(line):
             continue
         if not NAMES_CRATE.search(line):
@@ -355,6 +394,11 @@ def shard_invocation(
         for dependencies in ("dependencies", "dev-dependencies"):
             entry = manifest.get(dependencies, {}).get(CRATE)
             if isinstance(entry, dict):
+                if entry.get("optional"):
+                    raise GateError(
+                        f"{package} takes {CRATE} as an optional dependency, which the "
+                        "gate does not model"
+                    )
                 requested.update(entry.get("features", ()))
         own = manifest.get("features", {})
         for feature in feature_closure(own, (), default_features=True):
@@ -374,8 +418,8 @@ def names_feature(conditions: Iterable[str]) -> bool:
     return any(FEATURE.search(condition) for condition in conditions)
 
 
-def adds_test_behind_a_feature(attribute: str) -> bool:
-    """Whether a `cfg_attr` names a feature and adds a test attribute."""
+def changes_tests_behind_a_feature(attribute: str) -> bool:
+    """Whether a `cfg_attr` names a feature and adds a test attribute or a `cfg`."""
     match = CFG_ATTR_LINE.match(attribute)
     if match is None:
         return False
@@ -392,13 +436,19 @@ def adds_test_behind_a_feature(attribute: str) -> bool:
             start = position + 1
     arguments.append(match[1][start:].strip())
     return FEATURE.search(arguments[0]) is not None and any(
-        ADDS_TEST.match(argument) for argument in arguments[1:]
+        ADDS_TEST_OR_CFG.match(argument) for argument in arguments[1:]
     )
 
 
 def scan(path: Path, label: str) -> tuple[tuple[str, ...], list[tuple[str, tuple[str, ...]]]]:
     """Return a file's inner conditions and its feature-gated tests and modules."""
     lines = path.read_text(encoding="utf-8").splitlines()
+    for number, line in enumerate(lines, start=1):
+        if CFG_START.match(line.strip()) and not CANONICAL_CFG_START.match(line.strip()):
+            raise GateError(
+                f"{label}:{number}: cfg attribute is not spelled as rustfmt writes it; "
+                "the gate cannot read it"
+            )
     file_conditions: list[str] = []
     items: list[tuple[str, tuple[str, ...]]] = []
     index = 0
@@ -446,10 +496,10 @@ def scan(path: Path, label: str) -> tuple[tuple[str, ...], list[tuple[str, tuple
                         "code; the gate cannot read it"
                     )
                 (file_conditions if match[1] else conditions).append(match[2])
-            if adds_test_behind_a_feature(line):
+            if changes_tests_behind_a_feature(line):
                 raise GateError(
-                    f"{label}:{start + 1}: cfg_attr makes a test only under a feature; "
-                    "the gate cannot read it"
+                    f"{label}:{start + 1}: cfg_attr adds a test or a cfg only under a "
+                    "feature; the gate cannot read it"
                 )
             is_test = is_test or TEST_ATTRIBUTE.match(line) is not None
         item = ITEM.match(lines[index].strip()) if index < len(lines) else None
@@ -488,6 +538,11 @@ def binary_roots(
         root = target.get("path", discovered.get(target["name"]))
         if root is None or not (crate / root).is_file():
             raise GateError(f"binary target {target['name']} has no root file the gate can find")
+        if not root.startswith("src/"):
+            raise GateError(
+                f"binary target {target['name']} is declared at {root}, which the gate "
+                "does not read"
+            )
         roots[root] = (target["name"], required_features(target))
     return roots
 
@@ -509,6 +564,8 @@ def refuse_targets_left_out_of_the_default_set(manifest: Mapping[str, Any]) -> N
 def gated_tests(crate: Path) -> list[GatedTest]:
     manifest = tomllib.loads((crate / "Cargo.toml").read_text(encoding="utf-8"))
     refuse_targets_left_out_of_the_default_set(manifest)
+    if manifest["package"].get("autotests", True) is False:
+        raise GateError("the package sets autotests = false, which the gate does not model")
     declared = {
         target.get("path", f"tests/{target['name']}.rs"): (
             target["name"],
