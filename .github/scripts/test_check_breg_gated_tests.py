@@ -600,7 +600,7 @@ class ScanTests(unittest.TestCase):
             }
         )
         self.assertEqual(
-            gate.out_of_scope(found.values()),
+            gate.out_of_scope(found.values(), FEATURES),
             [
                 (
                     "tests/plain.rs::windows_only: no feature set satisfies "
@@ -612,6 +612,88 @@ class ScanTests(unittest.TestCase):
                 ),
             ],
         )
+
+    def test_conditions_an_implied_feature_contradicts_are_out_of_scope(self) -> None:
+        found = self.scan(
+            {
+                "tests/plain.rs": """
+                    #[cfg(all(feature = "postgres-test", not(feature = "runtime")))]
+                    #[test]
+                    fn never_built() {}
+
+                    #[cfg(all(feature = "runtime", not(feature = "postgres-test")))]
+                    #[test]
+                    fn runtime_alone() {}
+                """
+            }
+        )
+        self.assertEqual(
+            gate.out_of_scope(found.values(), FEATURES),
+            [
+                (
+                    "tests/plain.rs::never_built: no feature set satisfies "
+                    'all(feature = "postgres-test", not(feature = "runtime")) '
+                    "on the Linux CI target"
+                ),
+            ],
+        )
+
+    def test_test_attribute_behind_a_feature_cfg_attr_is_refused(self) -> None:
+        for attribute in (
+            '#[cfg_attr(feature = "schema", test)]',
+            '#[cfg_attr(feature = "schema", allow(dead_code), tokio::test)]',
+            '#[cfg_attr(\n    all(feature = "schema", unix),\n    test\n)]',
+        ):
+            with self.subTest(attribute=attribute):
+                with self.assertRaises(gate.GateError) as raised:
+                    self.scan({"tests/fixtures.rs": f"{attribute}\nfn conditional() {{}}\n"})
+                self.assertIn("tests/fixtures.rs:1", str(raised.exception))
+                self.assertIn("cfg_attr", str(raised.exception))
+
+    def test_cfg_attr_that_adds_no_test_attribute_is_read_past(self) -> None:
+        found = self.scan(
+            {
+                "tests/plain.rs": """
+                    #[cfg_attr(feature = "schema", derive(Debug))]
+                    struct Plain;
+
+                    #[cfg_attr(all(feature = "schema", test), allow(dead_code))]
+                    fn helper() {}
+
+                    #[cfg_attr(unix, test)]
+                    fn unix_test() {}
+
+                    #[cfg(feature = "schema")]
+                    #[cfg_attr(test, allow(dead_code))]
+                    #[test]
+                    fn schema_only() {}
+                """
+            }
+        )
+        self.assertEqual(sorted(found), ["tests/plain.rs::schema_only"])
+
+    def test_target_left_out_of_the_default_test_set_is_refused(self) -> None:
+        base = """
+            [package]
+            name = "registry-breg"
+
+            [features]
+            schema = []
+        """
+        for target, name in (
+            ('[lib]\ntest = false\n', "the library"),
+            ('[[bin]]\nname = "breg"\npath = "src/main.rs"\ntest = false\n', "breg"),
+            ('[[test]]\nname = "fixtures"\ntest = false\n', "fixtures"),
+        ):
+            with self.subTest(target=name):
+                manifest = textwrap.dedent(base) + "\n" + target
+                with self.assertRaises(gate.GateError) as raised:
+                    self.scan(
+                        {"src/main.rs": GATED_UNIT_TEST, "tests/fixtures.rs": GATED_UNIT_TEST},
+                        manifest,
+                    )
+                self.assertIn(name, str(raised.exception))
+                self.assertIn("test = false", str(raised.exception))
 
     def test_cfg_attribute_the_scanner_cannot_read_is_refused(self) -> None:
         text = '#[test]\n#[cfg(feature = "schema")] fn shared_line() {}\n'
@@ -714,6 +796,16 @@ class SelectionTests(unittest.TestCase):
         self.assertIn("tests/plain.rs::windows_only", stale[0])
         self.assertIn("KNOWN_UNSELECTED", stale[0])
         self.assertIn("out of scope", stale[0])
+
+    def test_conditions_an_implied_feature_contradicts_need_no_invocation(self) -> None:
+        tests = {
+            "tests/plain.rs": """
+                #[cfg(all(feature = "postgres-test", not(feature = "runtime")))]
+                #[test]
+                fn never_built() {}
+            """
+        }
+        self.assertEqual(self.problems("", tests), [])
 
     def test_unknown_predicate_beside_a_feature_stops_the_gate(self) -> None:
         tests = {
@@ -821,7 +913,11 @@ class RepositoryTests(unittest.TestCase):
             if not (invocation.lib and "schema" in invocation.features)
         ]
         self.assertLess(len(without), len(invocations))
-        problems = "\n".join(gate.violations(tests, without, gate.KNOWN_UNSELECTED))
+        problems = "\n".join(
+            gate.violations(
+                tests, without, gate.KNOWN_UNSELECTED, gate.feature_table(ROOT / "crates" / gate.CRATE)
+            )
+        )
         for key in (
             "tests/action_evidence_compiler.rs::published_authoring_schema_accepts_farmer_and_rejects_every_other_abi",
             "src/lib.rs::mod schema",
