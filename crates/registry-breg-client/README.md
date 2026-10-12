@@ -126,8 +126,10 @@ produces an unsupported selection error. Metadata decoding ignores unknown objec
 members while retaining duplicate-member and resource-bound refusals. An unknown
 `requiredCapabilities` value disables only the operation that names it.
 Well-formed unsupported statistical vocabulary omits only the affected dataset;
-unsupported descriptive change-request, selector, temporal, or spatial vocabulary
-omits only that capability. Unsupported executable vocabulary remains inert until
+unsupported descriptive change-request, selector, or spatial vocabulary omits
+only that capability. An unsupported temporal mode keeps its `temporal`
+descriptor as served and uninterpreted, because null already means the
+collection is not temporal. Unsupported executable vocabulary remains inert until
 exact selection. Known field shapes, references, identities, and disclosure grants
 remain strict. See `products/breg/metadata.md` for the failure scopes.
 
