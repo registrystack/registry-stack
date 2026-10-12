@@ -248,6 +248,7 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
             "release/scripts/build-release-binaries.sh",
             "release/scripts/merge-release-binary-shards.py",
             "release/scripts/release_roster.py",
+            "release/scripts/zig-glibc-toolchain.sh",
             "release/docker/Dockerfile.builder",
             "release/requirements/ziglang-0.12.1.txt",
             "release/glibc-floor.env",
@@ -1048,6 +1049,7 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
             "release/docker/Dockerfile.builder",
             "release/requirements/ziglang-0.12.1.txt",
             "release/scripts/zig-glibc-compiler",
+            "release/scripts/zig-glibc-toolchain.sh",
             "release/glibc-floor.env",
         ):
             with self.subTest(input=relative):

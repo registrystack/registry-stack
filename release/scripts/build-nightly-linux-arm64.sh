@@ -24,6 +24,16 @@ export AWS_LC_FIPS_SYS_STATIC=1
 target=aarch64-unknown-linux-gnu
 rustup toolchain install 1.95.0 --profile minimal --target "${target}"
 
+# The runner's glibc is newer than the release floor. Compile and link through
+# the same pinned Zig toolchain as the canonical Linux recipe, so the floor is
+# set by release/glibc-floor.env and never by the runner image. The directory
+# is the same on every run, which keeps Cargo's fingerprints of the compiler
+# paths valid for the restored build cache.
+# shellcheck source-path=SCRIPTDIR
+# shellcheck source=zig-glibc-toolchain.sh
+. release/scripts/zig-glibc-toolchain.sh
+install_zig_glibc_toolchain "${RUNNER_TEMP:?RUNNER_TEMP is required}/zig-glibc-toolchain"
+
 # Match the numbered-release arm64 recipe and feature isolation. Scheduling's
 # runtime and Messaging have no native arm64 release
 # asset; their container images use the canonical Linux amd64 binaries.

@@ -244,6 +244,7 @@ class ReleaseRehearsalTest(unittest.TestCase):
             "'release/requirements/ziglang-0.12.1.txt'",
             "'release/glibc-floor.env'",
             "'release/scripts/zig-glibc-compiler'",
+            "'release/scripts/zig-glibc-toolchain.sh'",
         ):
             self.assertIn(recipe_input, prefix)
         canonical_build = next(

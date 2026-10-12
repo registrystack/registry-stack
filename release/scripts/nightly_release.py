@@ -290,8 +290,9 @@ def plan(output: Path) -> None:
         raise NightlyError(
             "main advanced before selection; dispatch again from current main"
         )
-    # Imported here because the native arm64 builder imports this module under
-    # the runner's Python 3.10, which has no tomllib; only the plan reads TOML.
+    # Imported here because the native arm64 builder imports this module only
+    # to check the nightly identity, which must not depend on the interpreter
+    # carrying tomllib; only the plan reads TOML.
     import tomllib
 
     with (ROOT / "Cargo.toml").open("rb") as handle:

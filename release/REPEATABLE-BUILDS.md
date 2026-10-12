@@ -126,7 +126,8 @@ requirement by accident: the binaries start inside the container and refuse to
 start on a supported distribution.
 
 The floor is a build input, but it does not name the builder image the way the
-packages above do. `release/scripts/build-release-binaries.sh` reads
+packages above do. `release/scripts/build-release-binaries.sh` sources
+`release/scripts/zig-glibc-toolchain.sh`, which reads
 `release/glibc-floor.env` fresh at the start of every build instead of baking
 it into the image, so a floor change reuses the same builder image and takes
 effect through the file it reads. The local builder tag is the hash of
@@ -144,11 +145,20 @@ published installer scripts refuse the same two cases before they download
 anything, and carry the floor as a generated block written by
 `release/scripts/render-installer-libc-preflight.py`.
 
-The arm64 path reaches the same floor differently. Instead of cross-compiling
-through Zig, it builds natively on a runner already pinned to the floor's GNU
-libc (`ubuntu-22.04-arm`, glibc 2.35), and a dedicated workflow step runs
-`check-glibc-floor.sh` over the produced binaries before they reach the
-payload.
+The arm64 path reaches the same floor the same way. It builds natively on an
+`ubuntu-24.04-arm` runner, outside the builder image, and that runner's own GNU
+libc is newer than the floor. Both arm64 recipes, the nightly script
+`release/scripts/build-nightly-linux-arm64.sh` and the native platform step of
+the release candidate workflow, therefore source the same
+`release/scripts/zig-glibc-toolchain.sh` before any build. It installs the Zig
+wheel from the same hash-pinned requirements file into a private Python
+environment on the runner, then selects the same wrapper at the same floor, so
+no arm64 binary depends on which GNU libc the runner image carries. The floor
+check stays the independent proof: the nightly script and a dedicated workflow
+step run `check-glibc-floor.sh` over the produced binaries before they reach
+the payload. The rest of the native arm64 toolchain, such as CMake and Go,
+comes from the runner and not from the builder image, which is one reason the
+repeatability claim below does not extend to arm64.
 
 ### Local observation on Apple Silicon
 

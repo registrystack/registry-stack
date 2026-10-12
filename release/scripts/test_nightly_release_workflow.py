@@ -103,6 +103,49 @@ class NightlyWorkflowTest(unittest.TestCase):
                 if step.get("uses", "").startswith("actions/checkout@"):
                     self.assertFalse(step["with"]["persist-credentials"])
 
+    def test_linux_builds_reach_the_glibc_floor_through_one_toolchain(self):
+        # Neither Linux job borrows a runner's glibc. Both link through the
+        # shared Zig toolchain, and each cache is scoped to every file that
+        # decides what that toolchain compiles and links.
+        self.assertEqual(self.jobs["linux"]["runs-on"], "ubuntu-24.04")
+        self.assertEqual(self.jobs["arm64"]["runs-on"], "ubuntu-24.04-arm")
+        toolchain_inputs = (
+            "'release/requirements/ziglang-0.12.1.txt', "
+            "'release/glibc-floor.env', "
+            "'release/scripts/zig-glibc-compiler', "
+            "'release/scripts/zig-glibc-toolchain.sh') }}-"
+        )
+        prefixes = {
+            "linux": (
+                "nightly-linux-${{ matrix.group }}-"
+                "${{ hashFiles('rust-toolchain.toml', "
+                "'release/scripts/build-release-binaries.sh', "
+                "'release/docker/Dockerfile.builder', " + toolchain_inputs
+            ),
+            "arm64": (
+                "nightly-arm64-"
+                "${{ hashFiles('rust-toolchain.toml', "
+                "'release/scripts/build-nightly-linux-arm64.sh', " + toolchain_inputs
+            ),
+        }
+        for job, prefix in prefixes.items():
+            with self.subTest(job=job):
+                cache = next(
+                    step
+                    for step in self.jobs[job]["steps"]
+                    if step.get("uses", "").startswith("actions/cache@")
+                )
+                self.assertEqual(
+                    cache["with"]["key"], prefix + "${{ hashFiles('Cargo.lock') }}"
+                )
+                self.assertEqual(cache["with"]["restore-keys"].strip(), prefix)
+        build = next(
+            step["run"]
+            for step in self.jobs["arm64"]["steps"]
+            if step.get("name") == "Build locked native binaries"
+        )
+        self.assertIn("bash release/scripts/build-nightly-linux-arm64.sh", build)
+
     def test_no_numbered_release_promotion_or_mutable_image_alias(self):
         self.assertNotIn("REGISTRY_RELEASE_TAG:", self.text)
         self.assertNotIn(":nightly", self.text)
