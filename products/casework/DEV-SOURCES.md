@@ -195,12 +195,14 @@ or client admission to the human profiles. For manual application, the apply
 profile must still admit the human reviewers.
 
 For local development, `source add --apply` reuses an exact existing
-`reviewExecutors` entry. When the entry is absent and one authored service
-client is already bound to the automatic apply profile, it adds the executor
-binding without changing that client or its grants. With no such client it
+`reviewExecutors` entry. When the entry is absent and one authored default
+service client is already bound to the automatic apply profile, it adds the
+executor binding without changing that client or its grants. Clients with
+nonempty `testBindings` are excluded from inference; an explicit
+`reviewExecutors` entry may still name one. With no default service client it
 reports the authoring still needed; it does not invent a credential. More than
-one eligible service client, or more than one human source-context profile, is
-refused as ambiguous.
+one default client, or more than one human source-context profile, is refused
+as ambiguous.
 
 BReg local clients may bind one default client to an access profile and add
 claim variants selected by exact `testBindings` journey and step pairs.
