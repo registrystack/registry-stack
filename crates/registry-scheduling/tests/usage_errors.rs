@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! The removed `scheduling migrate` subcommand refuses with a usage exit and
-//! names the commands that replace it, with or without `--runtime-config`.
+//! `scheduling` has one command, `serve`. Any other command line is a usage
+//! error the argument parser reports with exit 2 before any configuration is
+//! read.
 
 use std::process::Command;
 
@@ -14,7 +15,7 @@ fn scheduling(args: &[&str]) -> std::process::Output {
 }
 
 #[test]
-fn scheduling_migrate_refuses_and_names_plan_then_apply() {
+fn a_command_other_than_serve_is_a_usage_error_that_reads_no_configuration() {
     for args in [
         &["migrate"][..],
         &["--runtime-config", "/nonexistent/runtime.yaml", "migrate"],
@@ -25,15 +26,13 @@ fn scheduling_migrate_refuses_and_names_plan_then_apply() {
         assert!(output.stdout.is_empty());
         let stderr = String::from_utf8(output.stderr).expect("UTF-8 stderr");
         assert!(
-            stderr.starts_with("scheduling: `scheduling migrate` is removed"),
+            stderr.starts_with("error: unrecognized subcommand 'migrate'"),
             "{stderr}"
         );
-        assert!(stderr.contains(
-            "run `schedulingctl plan --runtime-config FILE` then `schedulingctl apply --runtime-config FILE`"
-        ));
+        assert!(stderr.contains("Usage: scheduling"), "{stderr}");
         assert!(
             !stderr.contains("/nonexistent"),
-            "the refusal reads no configuration"
+            "a usage error reads no configuration"
         );
     }
 }

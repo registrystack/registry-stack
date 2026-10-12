@@ -6,6 +6,36 @@
   carries the Registry Scheduling client, requires Node.js 24.11.0 or later:
   its `engines.node` is `>=24.11.0` (was `>=22.12.0`). Node.js 22 is no longer
   supported. Migration: run Node.js 24.11.0 or later.
+- BREAKING: three refusals that named input only releases before v0.40.0
+  wrote or accepted are removed. v0.40.0 refused each of them too, so nothing
+  v0.40.0 wrote or accepted changes, and each input is still refused, without
+  a name of its own:
+  - `scheduling migrate` is no longer a command. It was hidden and only
+    exited 2 naming `schedulingctl plan` then `schedulingctl apply`. It now
+    fails as any unknown command does, with the usage error `unrecognized
+    subcommand 'migrate'` and exit 2. Migration: activate with `schedulingctl
+    plan --runtime-config FILE` then `schedulingctl apply --runtime-config
+    FILE`, and start the runtime with `scheduling serve`.
+  - `scheduling.package.retired-manifest` is removed. A `package.root` that
+    holds `scheduling.package.json` is refused at startup like any other
+    file `SHA256SUMS` does not list, as `scheduling.package.invalid` at
+    `/package/root` naming the extra file, or as
+    `scheduling.package.unexpected-contents` when `SHA256SUMS` lists it.
+    Migration: rebuild the package with `schedulingctl package`.
+  - `schedulingctl.activation.earlier-release` is removed. `schedulingctl
+    plan`, `apply`, and `records apply` do not read a retained policy whose
+    identity sits under `scheduling` where `project` is required, and now
+    fail on it as on any database that is not in the state the release
+    expects: `schedulingctl.store-unavailable`, exit 3. Migration: start from
+    a new database, then run `schedulingctl apply --runtime-config FILE` and
+    `schedulingctl records apply --runtime-config FILE RECORDS`.
+
+  The `registry-scheduling` crate loses `RuntimeError::RemovedCommand`,
+  `RuntimeError::exit_code`, `runtime::removed_command_refusal`,
+  `RuntimeConfigError::RetiredPackageManifest`,
+  `config::RETIRED_PACKAGE_MANIFEST_FILE`, and `StoreError::EarlierRelease`.
+  `schedulingctl plan` runs its read-only publication check only when no
+  schema version is pending; a database v0.40.0 activated has none.
 
 ## v0.40.0 - 2026-10-11
 

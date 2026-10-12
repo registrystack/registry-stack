@@ -484,10 +484,6 @@ impl PostgresStore {
                 }
             }
         }
-        let policy_tables_current = schema
-            .pending
-            .iter()
-            .all(|version| *version == ACTIVATIONS_MIGRATION_VERSION);
         let publication = if deployed.is_none() {
             // An empty database holds no windows or commitments to answer
             // for; apply publishes the candidate over the seeded revision.
@@ -503,7 +499,7 @@ impl PostgresStore {
                     None
                 }
             }
-        } else if policy_tables_current {
+        } else if schema.pending.is_empty() {
             match check_policy_publication(&transaction, self.observed_now(), policy).await {
                 Ok(publication) => Some(publication),
                 Err(refusal) if refusal.is_activation_refusal() => {
