@@ -154,9 +154,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: nightly-macos-${{ matrix.group }}-${{ hashFiles('release/scripts/build-release-native-platform.sh', 'release/scripts/macos_fips_packaging.py', 'rust-toolchain.toml') }}-${{ hashFiles('Cargo.lock') }}
+          key: nightly-macos-go-1.27.2-${{ matrix.group }}-${{ hashFiles('release/scripts/build-release-native-platform.sh', 'release/scripts/macos_fips_packaging.py', 'rust-toolchain.toml') }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
-            nightly-macos-${{ matrix.group }}-${{ hashFiles('release/scripts/build-release-native-platform.sh', 'release/scripts/macos_fips_packaging.py', 'rust-toolchain.toml') }}-
+            nightly-macos-go-1.27.2-${{ matrix.group }}-${{ hashFiles('release/scripts/build-release-native-platform.sh', 'release/scripts/macos_fips_packaging.py', 'rust-toolchain.toml') }}-
       - name: Build and smoke relocated native bundles
         env:
           SOURCE_SHA: ${{ needs.select.outputs.source_sha }}
@@ -200,9 +200,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: nightly-arm64-${{ hashFiles('rust-toolchain.toml', 'release/scripts/build-nightly-linux-arm64.sh', 'release/requirements/ziglang-0.12.1.txt', 'release/glibc-floor.env', 'release/scripts/zig-glibc-compiler', 'release/scripts/zig-glibc-toolchain.sh') }}-${{ hashFiles('Cargo.lock') }}
+          key: nightly-arm64-go-1.27.2-${{ hashFiles('rust-toolchain.toml', 'release/scripts/build-nightly-linux-arm64.sh', 'release/requirements/ziglang-0.12.1.txt', 'release/glibc-floor.env', 'release/scripts/zig-glibc-compiler', 'release/scripts/zig-glibc-toolchain.sh') }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
-            nightly-arm64-${{ hashFiles('rust-toolchain.toml', 'release/scripts/build-nightly-linux-arm64.sh', 'release/requirements/ziglang-0.12.1.txt', 'release/glibc-floor.env', 'release/scripts/zig-glibc-compiler', 'release/scripts/zig-glibc-toolchain.sh') }}-
+            nightly-arm64-go-1.27.2-${{ hashFiles('rust-toolchain.toml', 'release/scripts/build-nightly-linux-arm64.sh', 'release/requirements/ziglang-0.12.1.txt', 'release/glibc-floor.env', 'release/scripts/zig-glibc-compiler', 'release/scripts/zig-glibc-toolchain.sh') }}-
       - name: Build locked native binaries
         env:
           SOURCE_SHA: ${{ needs.select.outputs.source_sha }}
