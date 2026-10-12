@@ -17,7 +17,8 @@ import ApiReferenceTable from '../../../../components/ApiReferenceTable.astro';
 Registry Messaging serves one HTTP surface for submitting a message, reading and cancelling it,
 previewing a template, and taking delivery callbacks from providers. Every caller route presents a
 bearer access token, and the access profile that token resolves to decides what the caller may do.
-The contract is unreleased and carries no frozen compatibility promise.
+The contract ships in releases as an [experimental surface](../../api-stability/#experimental-surfaces):
+it stays outside the compatibility promise and may change in any minor release.
 
 [Open the Registry Messaging API operations](../messaging/) for every route, parameter, schema, and
 reachable problem code. This page holds the authentication, idempotency, status, and callback rules

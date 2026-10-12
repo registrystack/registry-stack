@@ -46,6 +46,258 @@ relevant product pages on this site rather than duplicating release notes.
     release/scripts/check-glibc-floor.sh;
     release/scripts/render-installer-libc-preflight.py, INSTALLERS. */}
 
+## v0.40.0 beta-52
+
+- BREAKING: v0.40.0 does not upgrade v0.39.0 configuration, packages, or databases in place, and
+  it provides no automatic migration. Rewrite the configuration you keep, rebuild every package
+  with the v0.40.0 tools, repin expected digests, and apply Base Registry Engine (BReg), Registry
+  Casework, Registry Scheduling, and Registry Messaging to new databases. A new database holds no
+  spent idempotency key, so a committed write replayed against it can execute again: finish
+  recovering outstanding writes against the v0.39.0 runtime, and stop that runtime, before you
+  direct callers to the new deployment. The forward state path starts at v0.40.0, and later
+  releases again read the state their immediate predecessor wrote. Follow the
+  [upgrade steps](../operate/advanced/upgrade-and-retire/#upgrade-in-this-order);
+  [upgrades and state](../reference/api-stability/#upgrades-and-state) gives the rule.
+
+{/* Evidence: release/notes/v0.40.0.md;
+    release/notes/config-conventions/stack.md;
+    release/manifests/registry-stack-beta-52.yaml;
+    release/scripts/rehearse-upgrade.py, FORWARD_PATH_FLOOR. */}
+
+- BREAKING: every maintained product reads its files under one configuration convention.
+  Authored, operator, fixture, development-state, and report formats open with a product-owned
+  `apiVersion` and `kind` envelope and follow shared reader rules, and a retired form has no
+  compatibility alias. Registry Manifest's exchange envelopes and the frozen Evidence Gateway
+  deployment grammars keep their documented exceptions. The v0.40.0 release notes link the
+  complete migration notes: 269 breaking items across nine product fragments, each with its
+  replacement form, migration step, and diagnostic mapping. Read the fragment for every product
+  you run.
+  [Configuration files](../reference/configuration-files/) states the shared rules and lists the
+  [formats by product](../reference/configuration-files/#formats-by-product).
+
+{/* Evidence: products/platform/CONFIG-CONVENTIONS.md;
+    release/notes/v0.40.0.md, "Compatibility and migration";
+    release/notes/config-conventions/{stack,breg,casework,discovery,evidence,manifest,messaging,platform,render,scheduling}.md. */}
+
+- BREAKING: a variant block is tagged by `type` where its format documents one, including an
+  issuer's `jwksSource` and action and hook handlers. Multi-word protocol values, tooling
+  statuses, and client error classifications are written in kebab-case where the product notes
+  say so: for example, the Evidence problem code `evidence.invalid_request` is
+  `evidence.invalid-request`, and the `status` label of `evidence_http_requests_total` is
+  `client-error` or `server-error`. Update configuration and every comparison in scripts,
+  clients, audit queries, and alerts from the old-to-new tables in the migration notes.
+  Standard-owned words, including registered OAuth error codes, keep their standard spelling.
+
+{/* Evidence: release/notes/v0.40.0.md, "Rewrite configuration and rebuild packages";
+    products/evidence/CHANGELOG.md, evidence_http_requests_total;
+    release/notes/config-conventions/evidence.md. */}
+
+- BREAKING: offline checks report positioned, value-free diagnostics and share one exit
+  contract: 0 when the input is accepted, 1 on a refusal or on a warning under
+  `--deny-warnings`, 2 on a usage error, and 3 when an input cannot be read. `bregctl check` and
+  `schedulingctl check` take `--deny-warnings`, where they took `--deny-findings`, and plain
+  `evidence check` is offline: run `evidence check --require-runtime-dependencies` on the target
+  host for the full proof. Update automation that matched earlier sentences, dotted field paths,
+  diagnostic codes, report members, or product-specific exit values. See
+  [read a diagnostic](../reference/configuration-files/#read-a-diagnostic) and
+  [check a file before you deploy it](../reference/configuration-files/#check-a-file-before-you-deploy-it).
+
+{/* Evidence: release/notes/v0.40.0.md, "Rewrite configuration and rebuild packages";
+    products/breg/CHANGELOG.md;
+    products/scheduling/CHANGELOG.md;
+    products/evidence/CHANGELOG.md. */}
+
+- BREAKING: closed inputs refuse unknown or duplicate keys, explicit nulls, substitution outside
+  a declared scalar position, invalid or duplicate identifiers, and out-of-range values. Delete
+  an optional member written as null, and replace secret paths with the documented secret
+  references. Shared URL fields refuse raw backslashes, whitespace, control characters, and a
+  host the URL parser rewrites: write an internationalized host in punycode and an IPv4 address
+  in canonical form.
+
+{/* Evidence: release/notes/v0.40.0.md, "Rewrite configuration and rebuild packages";
+    products/platform/CONFIG-CONVENTIONS.md;
+    products/platform/CHANGELOG.md. */}
+
+- BREAKING: OIDC `allowedClients` is required, and a repeated client is refused. List the
+  clients the deployment admits. Write `unrestricted` only where the product allows it: BReg
+  accepts it, and Registry Scheduling and Registry Messaging accept it in no mode. A client
+  listed under `assertionIssuers` names at least one issuer; remove an empty entry to grant it no
+  exchange authority.
+
+{/* Evidence: release/notes/v0.40.0.md, "Rewrite configuration and rebuild packages";
+    products/breg/CHANGELOG.md;
+    products/scheduling/CHANGELOG.md;
+    products/messaging/CHANGELOG.md. */}
+
+- BREAKING: a BReg registry serves authenticated callers only. `anonymous` on an access profile
+  is refused as `config.removed-key`, and every route except the probes and the review
+  completion receiver answers a request without a verified bearer token with
+  `401 authentication.refused` before any profile, query, or record is read. The
+  `breg_anonymous_refusals_total` metric is removed, and a baseline package that granted
+  unauthenticated access is refused.
+
+{/* Evidence: products/breg/CHANGELOG.md, breg_anonymous_refusals_total;
+    release/notes/config-conventions/breg.md, "BReg access". */}
+
+- BREAKING: a BReg access profile groups its `permissions` as a mapping of `entities`,
+  `actions`, and `datasets`, where it was one list, and `requiredScopes` is required on every
+  profile as `unrestricted` or a list of at least one scope. Access to a statistical dataset is
+  granted there as `{dataset, operations}` with the operations `read-live`, `publish`, and
+  `read-releases`, and `live` and `releases` on a `statisticalDatasets` entry are refused. A
+  standing agent profile, `actorKind: agent` without `taskGrant`, cannot hold `publish`: move it
+  to a profile a person or service uses directly, re-lock affected modules, and rebuild the
+  package.
+
+{/* Evidence: products/breg/CHANGELOG.md;
+    release/notes/config-conventions/breg.md, "BReg access";
+    release/notes/v0.40.0.md, "Base Registry Engine authorization and action handlers". */}
+
+- BREAKING: BReg spends an idempotency key once per configured issuer and verified caller
+  across ordinary write routes. A changed write under a spent key answers
+  `409 idempotency.conflict`, and an exact retry after the receipt horizon answers
+  `410 idempotency.expired` and never executes again in that database. Use a new key for every
+  distinct write. `idempotency.receiptRetentionDays` sets the horizon, 7 days by default and at
+  most 365. BReg schedules no automatic sweep: run `bregctl idempotency-retention erase-expired`
+  as [drop expired idempotency responses](../operate/breg-retention/#drop-expired-idempotency-responses)
+  describes.
+
+{/* Evidence: crates/registry-breg/src/idempotency.rs;
+    products/breg/CHANGELOG.md;
+    release/notes/v0.40.0.md, "Recover outstanding writes before the state reset". */}
+
+- BREAKING: a BReg ingestion run belongs to the verified caller, where it belonged to an
+  audit-keyed pseudonym, and no run, chunk, or receipt crosses the state reset. A
+  `bregctl data import` checkpoint written against v0.39.0 cannot resume against the new
+  registry: import again with a new checkpoint path.
+
+{/* Evidence: products/breg/CHANGELOG.md;
+    release/notes/v0.40.0.md, "Recover outstanding writes before the state reset". */}
+
+- BREAKING: BReg governed record, history, statistics, attachment, GIS, ingestion-run, and
+  discovery reads refuse `HEAD` with the concealed 404 an unsupported method receives. Send
+  `GET`. `/health`, `/healthz`, and `/ready` still answer `HEAD`.
+
+{/* Evidence: products/breg/CHANGELOG.md;
+    release/notes/v0.40.0.md, "Base Registry Engine authorization and action handlers". */}
+
+- BREAKING: every BReg governed action handler declares `abi: registry.action-handler/v1`, and a
+  retained `registry.action-handler/v2` declaration is refused with
+  `breg.action.handler-abi-invalid`. An action's `evidence` declaration alone selects Evidence
+  access for its Rhai handler. Replace the v2 value, keep the `evidence` declaration, re-lock
+  affected modules, and rebuild the package. Evidence consumption by an action remains a trial.
+
+{/* Evidence: crates/registry-breg/src/contract.rs, ACTION_HANDLER_ABI_V1;
+    products/breg/CHANGELOG.md;
+    release/notes/v0.40.0.md, "Base Registry Engine authorization and action handlers". */}
+
+- Registry Casework adds reviewer and Supervisor discovery. Active review-task lists accept
+  `ownership=assigned-to-me` and `ownership=unclaimed`, a decided single-task read includes
+  `decidedByCaller`, and the decision author can recover a minimal `decisionReceipt` that
+  excludes the private reason and the producer result. `GET /v1/review-tasks/own-decisions`
+  lists the caller's retained decisions, and `GET /v1/review-tasks/supervision` lists active and
+  retained terminal tasks in a Supervisor's current queues without a holder, submitted context,
+  private reason, or producer result. An expired, erased, mismatched, or unauthorized
+  continuation answers `410 review.result-expired`: restart without a cursor. See the
+  [Registry Casework API](../reference/apis/registry-casework/).
+
+{/* Evidence: crates/registry-casework/src/{http,review}.rs;
+    products/casework/CHANGELOG.md, decidedByCaller and decisionReceipt;
+    release/notes/v0.40.0.md, "Casework reviewer discovery and retained decisions". */}
+
+- BREAKING: Registry Casework activation refuses a policy package that no longer declares the
+  review producer of an in-flight review. `caseworkctl plan` and `caseworkctl apply` report
+  `casework.activation.stranded-work`, naming the producer and the number of in-flight reviews,
+  and the runtime repeats the refusal before it listens. Let the reviews that producer submitted
+  reach a result before you remove or rename it, or set `package.acknowledgeStrandedWork` to the
+  digest the refusal names.
+
+{/* Evidence: products/casework/CHANGELOG.md, acknowledgeStrandedWork;
+    release/notes/config-conventions/casework.md. */}
+
+- BREAKING: Registry Messaging scopes a spent submission key to the caller's verified issuer and
+  subject, and rotating the audit hash key no longer frees it. A changed request under a key
+  whose receipt has passed `retention.submissionReceiptRetentionDays` answers
+  `409 idempotency.key-reused` for as long as the message record is held. Once
+  `retention.recordRetentionDays` has cleared the record and its request hash, every request under
+  the key answers `410 idempotency.expired`. [Deploy Registry Messaging](../operate/messaging/)
+  gives the drain to finish before you move senders to the new runtime.
+
+{/* Evidence: crates/registry-messaging/tests/postgres_migrate.rs,
+    the_runtime_scopes_spent_keys_to_the_verified_caller;
+    products/messaging/CHANGELOG.md;
+    release/notes/v0.40.0.md, "Recover outstanding writes before the state reset". */}
+
+- Registry Scheduling owns a hold or an appointment by the verified issuer and subject that
+  booked it, so rotating the audit hash key no longer detaches a caller from its claims.
+
+{/* Evidence: products/scheduling/CHANGELOG.md;
+    release/notes/v0.40.0.md, "Recover outstanding writes before the state reset". */}
+
+- BREAKING: several commands rename an argument and accept no alias. `evidence-oid4vci check`,
+  `inspect`, and `serve` take `--runtime-config FILE` and `EVIDENCE_OID4VCI_RUNTIME_CONFIG`,
+  where they took `--config FILE` and `EVIDENCE_OID4VCI_CONFIG`. `schedulingctl records apply`
+  and `intents` take the runtime file as `--runtime-config FILE`, where it was positional.
+  `caseworkctl simulate` takes `--simulation FILE`, where it took `--fixture FILE`. `evidencectl`
+  refuses `--project` on `target explain`, `dev stop`, `dev clean`, `source add`,
+  `source suggest`, `source detach`, `fixtures run`, and `tooling editor`: pass the project
+  directory as the positional argument.
+
+{/* Evidence: products/evidence/CHANGELOG.md, EVIDENCE_OID4VCI_RUNTIME_CONFIG;
+    products/scheduling/CHANGELOG.md;
+    products/casework/CHANGELOG.md. */}
+
+- `evidencectl dev start PROJECT --target TARGET --issuer-project OWNER
+  --preserve-target-authenticated-context` keeps a selected local target's reviewed human
+  `authenticated-context` bindings for a borrowed BReg issuer. A retained local session keeps the
+  mode it started in: stop and clean it before you start it in the other mode.
+
+{/* Evidence: crates/registry-evidencectl/src/dev.rs, preserve_target_authenticated_context;
+    products/evidence/CHANGELOG.md. */}
+
+- The BReg, Registry Casework, Registry Scheduling, and Registry Messaging clients report an
+  unknown mutation outcome and resend a keyed mutation under the same key, with the same
+  request, at most twice by default. A 4xx response or an unusable `Retry-After` stops the
+  resend. See
+  [unknown outcomes and the same-key retry](../reference/client-api/#unknown-outcomes-and-the-same-key-retry).
+
+{/* Evidence: crates/registry-breg-client/src/error.rs, is_outcome_unknown;
+    crates/registry-breg-client/src/config.rs, with_max_mutation_retries;
+    release/notes/v0.40.0.md, "Clients and recovery". */}
+
+- The unified Node.js and Python clients add Registry Scheduling: the `scheduling` namespace of
+  `@registrystack/client` and the `registry_client.scheduling` module of
+  `registry-stack-client`. BReg immediate-action preparation and recovery are available in
+  Node.js and Python. The Rust, Node.js, and Python BReg clients read the caller-filtered
+  `statisticalDatasets` descriptors the runtime publishes, and BReg and its clients accept a
+  record or GeoJSON continuation of up to 10,978 bytes. See the
+  [client API reference](../reference/client-api/).
+
+{/* Evidence: crates/registry-stack-client-node/scheduling/index.d.ts;
+    crates/registry-stack-client-py/python/registry_client/__init__.py;
+    crates/registry-breg-client/src/metadata.rs, statistical_datasets;
+    products/scheduling/CHANGELOG.md;
+    products/breg/CHANGELOG.md;
+    release/notes/v0.40.0.md, "Clients and recovery". */}
+
+- [API stability and versioning](../reference/api-stability/) publishes the compatibility
+  promise that takes effect at 1.0: the promised products and surfaces, the experimental
+  surfaces, and the deprecation rules. v0.40.0 remains pre-1.0, and this release does not
+  activate the promise.
+
+{/* Evidence: docs/site/src/content/docs/reference/api-stability.mdx;
+    release/notes/v0.40.0.md, "Authoring, documentation, and release process". */}
+
+- BREAKING: for direct Rust consumers of the workspace crates, `RuntimeConfigError` exposes
+  diagnostics in place of `RuntimeConfigErrorKind`, `kind()`, `code()`, `field()`, and
+  `message()`. `registry-platform-dispatch` and `registry-platform-hooks` write their state
+  words in kebab-case, Registry Manifest removes `render_entity_shacl` in favor of
+  `render_shacl`, and the shared APIs that only the retired Registry Relay consumed are removed.
+  The Platform changelog keeps the complete inventory of removed items.
+
+{/* Evidence: release/notes/v0.40.0.md, "Rust platform API removals";
+    products/platform/CHANGELOG.md;
+    products/manifest/CHANGELOG.md. */}
+
 ## v0.39.0 beta-51
 
 - BREAKING: Registry Relay is retired and absent from 0.39.0. The `relay` and `relayctl` binaries,

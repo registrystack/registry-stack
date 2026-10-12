@@ -17,8 +17,9 @@ import ApiReferenceTable from '../../../../components/ApiReferenceTable.astro';
 Registry Scheduling serves one HTTP surface for the published catalogue, availability, holds, and
 appointments. Every call presents a bearer access token, and one of three authority profiles decides
 what that token must carry: a read scope for catalogue and owned-record reads, a separate explain scope
-for the diagnostic availability read, or a complete task grant for every commitment. The contract is
-unreleased and carries no frozen compatibility promise.
+for the diagnostic availability read, or a complete task grant for every commitment. The contract
+ships in releases as an [experimental surface](../../api-stability/#experimental-surfaces): it stays
+outside the compatibility promise and may change in any minor release.
 
 [Open the Registry Scheduling API operations](../scheduling/) for every route, parameter, schema, and
 reachable problem code. This page holds the authority, revision, and recovery rules those operations
