@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- BREAKING: `registry-platform-audit` bounds a `stdout` audit destination
+  that stops taking lines. One thread writes the stream, and an append waits
+  at most 5 seconds for its line. A destination that holds one line past that
+  deadline is stalled: audited requests are refused with the added
+  `AuditUnavailableReason::Stalled` and `ready()` is false until the
+  destination takes the line, after which the writer accepts entries again
+  with no restart. A failed write still stops the writer until restart. The
+  added variant breaks an exhaustive match on `AuditUnavailableReason`, and a
+  stream append now waits on the Tokio timer, so the runtime that appends
+  needs its time driver. The deadline is fixed and has no configuration key.
+
 ## 0.41.0 - 2026-10-13
 
 - `registry-platform-oidc` gains a `task_grant` module holding the exact

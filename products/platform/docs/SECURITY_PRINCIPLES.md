@@ -50,7 +50,7 @@ Platform crates outside `audit` deliberately do not take a hard dependency on `a
 
 PII-bearing identifiers must be hashed or redacted before an audit entry is built. Use keyed HMAC hashing in operator-facing environments; `unkeyed_dev_only()` is only for local fixtures and tests.
 
-The writer fails closed: an entry the destination does not accept is an error, and a failed write stops the writer until the process restarts. One process writes one file path and holds a lock beside it for its whole life. Entries are not hash-chained or signed, so a host that can write the audit directory can edit, reorder, or delete entries without detection. Tamper evidence and completeness are deployment properties, not properties of the local file: ship sealed files, or the standard-output stream, to append-only storage outside the host before retention deletes them.
+The writer fails closed: an entry the destination does not accept is an error, and a failed write stops the writer until the process restarts. A standard-output destination that holds one line past the fixed write deadline is stalled, not failed: the writer refuses entries while the stall lasts and accepts them again once the destination takes the line. One process writes one file path and holds a lock beside it for its whole life. Entries are not hash-chained or signed, so a host that can write the audit directory can edit, reorder, or delete entries without detection. Tamper evidence and completeness are deployment properties, not properties of the local file: ship sealed files, or the standard-output stream, to append-only storage outside the host before retention deletes them.
 
 ## 10. Keep Workspace Hygiene Canonical
 
