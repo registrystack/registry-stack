@@ -2944,10 +2944,10 @@ fn parse_metadata(value: Value) -> Result<BRegMetadata, BRegMetadataError> {
         .map(parse_operation)
         .collect::<Result<Vec<_>, _>>()?;
     let actions = root.remove("actions");
-    let statistical_datasets = root.remove("statisticalDatasets");
-    if let Some(value) = &statistical_datasets {
-        validate_statistical_datasets(value.clone())?;
-    }
+    let statistical_datasets = root
+        .remove("statisticalDatasets")
+        .map(parse_statistical_datasets)
+        .transpose()?;
     let immediate_actions = actions
         .as_ref()
         .map(|value| parse_immediate_actions(value.clone()))
@@ -2973,10 +2973,13 @@ fn parse_metadata(value: Value) -> Result<BRegMetadata, BRegMetadataError> {
     })
 }
 
-fn validate_statistical_datasets(value: Value) -> Result<(), BRegMetadataError> {
+fn parse_statistical_datasets(value: Value) -> Result<Value, BRegMetadataError> {
     let mut ids = BTreeSet::new();
+    let mut supported = Vec::new();
     for value in array(value)? {
+        let original = value.clone();
         let mut dataset = object(value)?;
+        let mut vocabulary_is_supported = true;
         let id = identifier(required(&mut dataset, "id")?)?;
         if !ids.insert(id) {
             return Err(metadata_error(BRegMetadataErrorKind::DuplicateIdentifier));
@@ -2984,12 +2987,16 @@ fn validate_statistical_datasets(value: Value) -> Result<(), BRegMetadataError> 
         identifier(required(&mut dataset, "unit")?)?;
         let kind = string(required(&mut dataset, "periodKind")?)?;
         if !matches!(kind.as_str(), "flow" | "stock") {
-            return Err(metadata_error(BRegMetadataErrorKind::Shape));
+            vocabulary_is_supported = false;
         }
         let granularity = string(required(&mut dataset, "granularity")?)?;
         let first_period = string(required(&mut dataset, "firstPeriod")?)?;
-        if !valid_statistical_period(&first_period, &granularity) {
-            return Err(metadata_error(BRegMetadataErrorKind::Shape));
+        if matches!(granularity.as_str(), "day" | "month" | "quarter" | "year") {
+            if !valid_statistical_period(&first_period, &granularity) {
+                return Err(metadata_error(BRegMetadataErrorKind::Shape));
+            }
+        } else {
+            vocabulary_is_supported = false;
         }
         let digest = string(required(&mut dataset, "definitionDigest")?)?;
         if !valid_revision(&digest) {
@@ -3005,36 +3012,42 @@ fn validate_statistical_datasets(value: Value) -> Result<(), BRegMetadataError> 
             identifier(required(&mut dimension, "vocabulary")?)?;
             let codes = text_array(required(&mut dimension, "codes")?)?;
             ensure_unique(codes.iter().map(String::as_str))?;
-            if !codes.iter().any(|code| code == "_T")
-                || codes
-                    .iter()
-                    .any(|code| code.starts_with('_') && !matches!(code.as_str(), "_T" | "_U"))
-            {
+            if !codes.iter().any(|code| code == "_T") {
                 return Err(metadata_error(BRegMetadataErrorKind::Shape));
+            }
+            if codes
+                .iter()
+                .any(|code| code.starts_with('_') && !matches!(code.as_str(), "_T" | "_U"))
+            {
+                vocabulary_is_supported = false;
             }
             finish(dimension)?;
         }
         let operations = identifier_array(required(&mut dataset, "operations")?)?;
         ensure_unique(operations.iter().map(String::as_str))?;
-        if operations.is_empty()
-            || operations.iter().any(|operation| {
-                !matches!(
-                    operation.as_str(),
-                    "read-live"
-                        | "list-releases"
-                        | "read-released-series"
-                        | "read-latest-release"
-                        | "read-release-version"
-                        | "publish-release"
-                        | "withdraw-release"
-                )
-            })
-        {
+        if operations.is_empty() {
             return Err(metadata_error(BRegMetadataErrorKind::Shape));
         }
+        if operations.iter().any(|operation| {
+            !matches!(
+                operation.as_str(),
+                "read-live"
+                    | "list-releases"
+                    | "read-released-series"
+                    | "read-latest-release"
+                    | "read-release-version"
+                    | "publish-release"
+                    | "withdraw-release"
+            )
+        }) {
+            vocabulary_is_supported = false;
+        }
         finish(dataset)?;
+        if vocabulary_is_supported {
+            supported.push(original);
+        }
     }
-    Ok(())
+    Ok(Value::Array(supported))
 }
 
 fn valid_statistical_period(period: &str, granularity: &str) -> bool {
@@ -3111,7 +3124,8 @@ fn parse_entity(value: Value) -> Result<BRegMetadataEntity, BRegMetadataError> {
     let change_request = entity
         .remove("changeRequest")
         .map(parse_change_request_capability)
-        .transpose()?;
+        .transpose()?
+        .flatten();
     finish(entity)?;
     Ok(BRegMetadataEntity {
         id,
@@ -3127,7 +3141,7 @@ fn parse_entity(value: Value) -> Result<BRegMetadataEntity, BRegMetadataError> {
 
 fn parse_change_request_capability(
     value: Value,
-) -> Result<BRegChangeRequestCapability, BRegMetadataError> {
+) -> Result<Option<BRegChangeRequestCapability>, BRegMetadataError> {
     let mut capability = object(value)?;
     let planner = parse_change_request_planner(required(&mut capability, "planner")?)?;
     let effects = array(required(&mut capability, "effects")?)?
@@ -3156,53 +3170,73 @@ fn parse_change_request_capability(
     let on_approved = parse_change_request_on_approved(required(&mut capability, "onApproved")?)?;
     let application = parse_change_request_application(required(&mut capability, "application")?)?;
     finish(capability)?;
-    Ok(BRegChangeRequestCapability {
-        planner,
-        effects,
-        review,
-        on_approved,
-        application,
+    let effects_are_supported = effects.iter().all(|effect| {
+        matches!(
+            effect.operation(),
+            BRegOperationKind::Create | BRegOperationKind::Patch
+        )
+    });
+    Ok(match (planner, review, on_approved) {
+        (Some(planner), Some(review), Some(on_approved)) if effects_are_supported => {
+            Some(BRegChangeRequestCapability {
+                planner,
+                effects,
+                review,
+                on_approved,
+                application,
+            })
+        }
+        _ => None,
     })
 }
 
 fn parse_change_request_review(
     value: Value,
-) -> Result<BRegChangeRequestReviewRequirement, BRegMetadataError> {
+) -> Result<Option<BRegChangeRequestReviewRequirement>, BRegMetadataError> {
     let mut review = object(value)?;
-    match required(&mut review, "type")?.as_str() {
-        Some("none") => {
+    match identifier(required(&mut review, "type")?)?.as_str() {
+        "none" => {
             finish(review)?;
-            return Ok(BRegChangeRequestReviewRequirement::None);
+            return Ok(Some(BRegChangeRequestReviewRequirement::None));
         }
-        Some("required") => {}
-        _ => return Err(metadata_error(BRegMetadataErrorKind::Shape)),
+        "required" => {}
+        _ => {
+            finish(review)?;
+            return Ok(None);
+        }
     }
     let authority = identifier(required(&mut review, "authority")?)?;
     let policy_id = identifier(required(&mut review, "policyId")?)?;
     finish(review)?;
-    Ok(BRegChangeRequestReviewRequirement::External(
+    Ok(Some(BRegChangeRequestReviewRequirement::External(
         BRegChangeRequestExternalReviewRequirement {
             authority,
             policy_id,
         },
-    ))
+    )))
 }
 
 fn parse_change_request_on_approved(
     value: Value,
-) -> Result<BRegChangeRequestOnApprovedCapability, BRegMetadataError> {
+) -> Result<Option<BRegChangeRequestOnApprovedCapability>, BRegMetadataError> {
     let mut policy = object(value)?;
     let mode = match identifier(required(&mut policy, "mode")?)?.as_str() {
         "manual" => BRegChangeRequestOnApprovedMode::Manual,
         "automatic" => BRegChangeRequestOnApprovedMode::Automatic,
-        _ => return Err(metadata_error(BRegMetadataErrorKind::Shape)),
+        _ => {
+            finish(policy)?;
+            return Ok(None);
+        }
     };
     let executor = policy.remove("executor").map(identifier).transpose()?;
     if (mode == BRegChangeRequestOnApprovedMode::Automatic) != executor.is_some() {
         return Err(metadata_error(BRegMetadataErrorKind::Shape));
     }
     finish(policy)?;
-    Ok(BRegChangeRequestOnApprovedCapability { mode, executor })
+    Ok(Some(BRegChangeRequestOnApprovedCapability {
+        mode,
+        executor,
+    }))
 }
 
 fn parse_change_request_application(
@@ -3221,37 +3255,31 @@ fn parse_change_request_application(
 }
 fn parse_change_request_planner(
     value: Value,
-) -> Result<BRegChangeRequestPlannerCapability, BRegMetadataError> {
+) -> Result<Option<BRegChangeRequestPlannerCapability>, BRegMetadataError> {
     let mut planner = object(value)?;
     match identifier(required(&mut planner, "kind")?)?.as_str() {
         "declarative" => {
             finish(planner)?;
-            Ok(BRegChangeRequestPlannerCapability {
+            Ok(Some(BRegChangeRequestPlannerCapability {
                 kind: BRegChangeRequestPlannerKind::Declarative,
                 abi: None,
                 limits: None,
                 possible_write_count: None,
                 possible_write_operations: Vec::new(),
                 writes: Vec::new(),
-            })
+            }))
         }
         "rhai" => {
             let abi = bounded_short_text(required(&mut planner, "abi")?)?;
-            if abi != "registry.change-request-plan/v1" {
-                return Err(metadata_error(BRegMetadataErrorKind::Shape));
-            }
+            let abi_is_supported = abi == "registry.change-request-plan/v1";
             let limits = parse_change_request_planner_limits(required(&mut planner, "limits")?)?;
             let possible_write_count =
                 positive_integer(required(&mut planner, "possibleWriteCount")?)?;
             let possible_write_operations =
                 identifier_array(required(&mut planner, "possibleWriteOperations")?)?
                     .into_iter()
-                    .map(|operation| match operation.as_str() {
-                        "create" => Ok(BRegOperationKind::Create),
-                        "patch" => Ok(BRegOperationKind::Patch),
-                        _ => Err(metadata_error(BRegMetadataErrorKind::Shape)),
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
+                    .map(BRegOperationKind::parse)
+                    .collect::<Vec<_>>();
             if possible_write_operations.is_empty()
                 || u64::try_from(possible_write_operations.len())
                     .map_or(true, |count| count > possible_write_count)
@@ -3271,16 +3299,30 @@ fn parse_change_request_planner(
                 return Err(metadata_error(BRegMetadataErrorKind::Shape));
             }
             finish(planner)?;
-            Ok(BRegChangeRequestPlannerCapability {
-                kind: BRegChangeRequestPlannerKind::Rhai,
-                abi: Some(abi),
-                limits: Some(limits),
-                possible_write_count: Some(possible_write_count),
-                possible_write_operations,
-                writes,
-            })
+            let operations_are_supported = possible_write_operations
+                .iter()
+                .chain(writes.iter().map(BRegChangeRequestPlannerWrite::operation))
+                .all(|operation| {
+                    matches!(
+                        operation,
+                        BRegOperationKind::Create | BRegOperationKind::Patch
+                    )
+                });
+            Ok((abi_is_supported && operations_are_supported).then_some(
+                BRegChangeRequestPlannerCapability {
+                    kind: BRegChangeRequestPlannerKind::Rhai,
+                    abi: Some(abi),
+                    limits: Some(limits),
+                    possible_write_count: Some(possible_write_count),
+                    possible_write_operations,
+                    writes,
+                },
+            ))
         }
-        _ => Err(metadata_error(BRegMetadataErrorKind::Shape)),
+        _ => {
+            finish(planner)?;
+            Ok(None)
+        }
     }
 }
 
@@ -3361,11 +3403,7 @@ fn parse_change_request_binding(
 }
 
 fn parse_change_request_operation(value: Value) -> Result<BRegOperationKind, BRegMetadataError> {
-    match identifier(value)?.as_str() {
-        "create" => Ok(BRegOperationKind::Create),
-        "patch" => Ok(BRegOperationKind::Patch),
-        _ => Err(metadata_error(BRegMetadataErrorKind::Shape)),
-    }
+    Ok(BRegOperationKind::parse(identifier(value)?))
 }
 
 fn parse_change_request_planner_limits(
@@ -3470,8 +3508,21 @@ fn parse_operation(value: Value) -> Result<BRegMetadataOperation, BRegMetadataEr
         })
         .map(|field| field.id.as_str())
         .collect::<BTreeSet<_>>();
-    let query_value = required(&mut operation, "query")?;
-    validate_query(query_value.clone(), &slots)?;
+    let mut query_value = required(&mut operation, "query")?;
+    let (temporal_is_supported, spatial_is_supported) =
+        validate_query(query_value.clone(), &slots)?;
+    if !temporal_is_supported {
+        query_value
+            .as_object_mut()
+            .ok_or_else(|| metadata_error(BRegMetadataErrorKind::Shape))?
+            .insert("temporal".to_owned(), Value::Null);
+    }
+    if !spatial_is_supported {
+        query_value
+            .as_object_mut()
+            .ok_or_else(|| metadata_error(BRegMetadataErrorKind::Shape))?
+            .remove("spatialQueries");
+    }
     let query = serde_json::from_value(query_value)
         .map_err(|_| metadata_error(BRegMetadataErrorKind::Shape))?;
     let read_path = operation
@@ -3682,9 +3733,8 @@ fn parse_selectors(value: Value) -> Result<Vec<BRegLookupSelectorDescriptor>, BR
         }
         let label = bounded_text(required(&mut selector, "label")?)?;
         let value_origin = identifier(required(&mut selector, "valueOrigin")?)?;
-        if !matches!(value_origin.as_str(), "request" | "verified-claim") {
-            return Err(metadata_error(BRegMetadataErrorKind::Shape));
-        }
+        let value_origin_is_supported =
+            matches!(value_origin.as_str(), "request" | "verified-claim");
         let mut api_names = BTreeSet::new();
         let mut field_ids = BTreeSet::new();
         let mut fields = Vec::new();
@@ -3716,25 +3766,27 @@ fn parse_selectors(value: Value) -> Result<Vec<BRegLookupSelectorDescriptor>, BR
             return Err(metadata_error(BRegMetadataErrorKind::DanglingReference));
         }
         finish(selector)?;
-        if (value_origin == "request" && request_fields.len() != fields.len())
-            || (value_origin == "verified-claim" && !request_fields.is_empty())
-        {
-            return Err(metadata_error(BRegMetadataErrorKind::Shape));
+        if value_origin_is_supported {
+            if (value_origin == "request" && request_fields.len() != fields.len())
+                || (value_origin == "verified-claim" && !request_fields.is_empty())
+            {
+                return Err(metadata_error(BRegMetadataErrorKind::Shape));
+            }
+            parsed.push(BRegLookupSelectorDescriptor {
+                id,
+                label,
+                value_origin,
+                fields,
+                request_fields,
+            });
         }
-        parsed.push(BRegLookupSelectorDescriptor {
-            id,
-            label,
-            value_origin,
-            fields,
-            request_fields,
-        });
     }
     Ok(parsed)
 }
 
-fn validate_query(value: Value, slots: &BTreeSet<&str>) -> Result<(), BRegMetadataError> {
+fn validate_query(value: Value, slots: &BTreeSet<&str>) -> Result<(bool, bool), BRegMetadataError> {
     if value.is_null() {
-        return Ok(());
+        return Ok((true, true));
     }
     let mut query = object(value)?;
     identifier(required(&mut query, "kind")?)?;
@@ -3755,26 +3807,27 @@ fn validate_query(value: Value, slots: &BTreeSet<&str>) -> Result<(), BRegMetada
     positive_integer(required(&mut query, "maximumFilterClauses")?)?;
     positive_integer(required(&mut query, "maximumInValues")?)?;
     validate_pagination(required(&mut query, "pagination")?)?;
-    validate_temporal(required(&mut query, "temporal")?)?;
-    if let Some(spatial) = query.remove("spatialQueries") {
-        validate_spatial_queries(spatial)?;
-    }
-    finish(query)
+    let temporal_is_supported = validate_temporal(required(&mut query, "temporal")?)?;
+    let spatial_is_supported = query
+        .remove("spatialQueries")
+        .map(validate_spatial_queries)
+        .transpose()?
+        .unwrap_or(true);
+    finish(query)?;
+    Ok((temporal_is_supported, spatial_is_supported))
 }
 
-fn validate_spatial_queries(value: Value) -> Result<(), BRegMetadataError> {
+fn validate_spatial_queries(value: Value) -> Result<bool, BRegMetadataError> {
     let mut spatial = object(value)?;
     let mut bbox = object(required(&mut spatial, "bbox")?)?;
     api_name(required(&mut bbox, "geometryProperty")?)?;
     positive_number_with_maximum(required(&mut bbox, "maximumLongitudeSpanDegrees")?, 360.0)?;
     positive_number_with_maximum(required(&mut bbox, "maximumLatitudeSpanDegrees")?, 180.0)?;
-    if string(required(&mut bbox, "coordinateReferenceSystem")?)? != "CRS84"
-        || string(required(&mut bbox, "semantics")?)? != "inclusive_2d_non_crossing"
-    {
-        return Err(metadata_error(BRegMetadataErrorKind::Shape));
-    }
+    let coordinate_reference_system = string(required(&mut bbox, "coordinateReferenceSystem")?)?;
+    let semantics = string(required(&mut bbox, "semantics")?)?;
     finish(bbox)?;
-    finish(spatial)
+    finish(spatial)?;
+    Ok(coordinate_reference_system == "CRS84" && semantics == "inclusive_2d_non_crossing")
 }
 
 fn query_field_identifier(value: Value) -> Result<String, BRegMetadataError> {
@@ -3831,9 +3884,9 @@ fn validate_pagination(value: Value) -> Result<(), BRegMetadataError> {
     finish(pagination)
 }
 
-fn validate_temporal(value: Value) -> Result<(), BRegMetadataError> {
+fn validate_temporal(value: Value) -> Result<bool, BRegMetadataError> {
     if value.is_null() {
-        return Ok(());
+        return Ok(true);
     }
     let mut temporal = object(value)?;
     let mode = identifier(required(&mut temporal, "mode")?)?;
@@ -3850,9 +3903,13 @@ fn validate_temporal(value: Value) -> Result<(), BRegMetadataError> {
                 validate_temporal_parameter(valid_at)?;
             }
         }
-        _ => return Err(metadata_error(BRegMetadataErrorKind::Shape)),
+        _ => {
+            finish(temporal)?;
+            return Ok(false);
+        }
     }
-    finish(temporal)
+    finish(temporal)?;
+    Ok(true)
 }
 
 fn validate_temporal_parameter(value: Value) -> Result<(), BRegMetadataError> {
@@ -3936,12 +3993,6 @@ fn parse_immediate_actions(
             return Err(metadata_error(BRegMetadataErrorKind::Revision));
         }
         let input_mode = action.remove("inputMode").map(identifier).transpose()?;
-        if input_mode
-            .as_deref()
-            .is_some_and(|mode| !matches!(mode, "fixed" | "handler"))
-        {
-            return Err(metadata_error(BRegMetadataErrorKind::Shape));
-        }
         let maximum_input_string_bytes = match action.remove("maximumInputStringBytes") {
             None | Some(Value::Null) => None,
             Some(value) => Some(positive_integer(value)?),

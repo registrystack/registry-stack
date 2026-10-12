@@ -156,7 +156,23 @@ class StatisticsTests(unittest.TestCase):
         self.assertEqual(
             self.client.registry_contract("reader").statistical_datasets, datasets
         )
-        datasets[0]["periodKind"] = "future-period-kind"
+        future_dataset = {
+            **datasets[0],
+            "id": "future-counts",
+            "periodKind": "future-period-kind",
+        }
+        self.metadata_document["statisticalDatasets"] = [future_dataset, datasets[0]]
+        compatible = self.client.registry_contract("reader")
+        self.assertEqual(compatible.statistical_datasets, datasets)
+        self.assertEqual(compatible.operations, [])
+        with self.assertRaises(BaseRegistryClientError) as no_future_authority:
+            compatible.select_create("records.company.create", "reader")
+        self.assertEqual(no_future_authority.exception.kind, "metadata-selection")
+        self.assertEqual(no_future_authority.exception.code, "not-found")
+        self.metadata_document["statisticalDatasets"] = [
+            {**datasets[0], "id": "malformed-counts", "periodKind": True},
+            datasets[0],
+        ]
         with self.assertRaises(BaseRegistryClientError) as malformed:
             self.client.registry_contract("reader")
         self.assertEqual(malformed.exception.kind, "protocol")

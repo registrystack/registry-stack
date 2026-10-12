@@ -125,6 +125,11 @@ descriptor the engine does not serve is absent, and an absent executable contrac
 produces an unsupported selection error. Metadata decoding ignores unknown object
 members while retaining duplicate-member and resource-bound refusals. An unknown
 `requiredCapabilities` value disables only the operation that names it.
+Well-formed unsupported statistical vocabulary omits only the affected dataset;
+unsupported descriptive change-request, selector, temporal, or spatial vocabulary
+omits only that capability. Unsupported executable vocabulary remains inert until
+exact selection. Known field shapes, references, identities, and disclosure grants
+remain strict. See `products/breg/metadata.md` for the failure scopes.
 
 Immediate action target conditions are an explicit read before invocation;
 invocation never refreshes them. Batch builders send one atomic same-entity

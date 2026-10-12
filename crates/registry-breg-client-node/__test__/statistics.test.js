@@ -53,7 +53,21 @@ test('registry metadata retains statistical datasets without entity authority', 
     metadata.statisticalDatasets = datasets;
     datasets[0].unexpected = true;
     assert.deepEqual((await client.registryContract('reader')).statisticalDatasets, datasets);
-    datasets[0].periodKind = 'future-period-kind';
+    const futureDataset = {
+      ...datasets[0], id: 'future-counts', periodKind: 'future-period-kind',
+    };
+    metadata.statisticalDatasets = [futureDataset, datasets[0]];
+    const compatible = await client.registryContract('reader');
+    assert.deepEqual(compatible.statisticalDatasets, datasets);
+    assert.deepEqual(compatible.operations, []);
+    assert.throws(
+      () => compatible.selectCreate('records.company.create', 'reader'),
+      error => error.kind === 'metadata-selection' && error.code === 'not-found',
+    );
+    metadata.statisticalDatasets = [
+      { ...datasets[0], id: 'malformed-counts', periodKind: true },
+      datasets[0],
+    ];
     await assert.rejects(client.registryContract('reader'), error => error.kind === 'protocol');
   } finally {
     await new Promise(resolve => server.close(resolve));
