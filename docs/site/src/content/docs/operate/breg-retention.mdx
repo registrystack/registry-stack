@@ -404,6 +404,21 @@ entry. A runtime read or mutation answers with a `response` entry whose record `
 when it is refused, or when it stops with nothing to do, such as a `history rebaseline` with no
 history to rebaseline, so an `unfinished` outcome does not always mean the outcome was unknown.
 
+A `stdout` destination stalls when its collector stops reading the stream.
+Once the writer has held one entry for 5 seconds, the request waiting on that entry is refused as
+audit unavailable, later audited requests are refused at once, and readiness fails.
+The runtime log carries `audit stream has held one entry past the write deadline`.
+When the collector takes the entry, the log carries `audit stream took the entry it was holding`
+and the writer accepts entries again with no restart.
+The stream still receives the held entry, so it can carry an entry for a request that was refused.
+
+{/* Evidence: crates/registry-platform-audit/src/writer.rs, STREAM_WRITE_DEADLINE,
+    AuditUnavailableReason::Stalled, StreamEvent::StallStarted, StreamEvent::StallEnded,
+    StreamEvent::WrittenAfterRefusal,
+    a_stalled_stream_refuses_the_append_at_the_deadline_and_later_ones_at_once, and
+    readiness_follows_a_stall_and_returns_once_the_stream_drains;
+    crates/registry-breg/src/startup.rs, audit_writer. */}
+
 This pairing is a property of a running process, and a request may be answered more than once, so
 read every response under a correlation. A process that crashes, is killed, exits, or shuts its
 runtime down while a write is in flight, or a destination that already stopped accepting entries,
@@ -502,7 +517,7 @@ outside the new writer's retention directory.
 | `request-retention erase` is refused | The request entity's retention mode is `retain`, or the version is pinned. Run the dry run for the exact version first. |
 | `evidence-retention erase-expired` removes nothing | No retained assertion has passed its 24-hour window yet, or the cutoff precedes every expiry. The count is the whole report. |
 | A retry answers `410 idempotency.expired` | The key was spent by a successful write whose receipt horizon has passed. The write committed; read the record or its history instead of retrying, and send a fresh key only for a new write. |
-| Readiness or an operation reports audit unavailable | Check destination permissions, free space, and the single-writer lock. Repair the destination and restart a stopped writer. For a mutation whose response failed after commit, inspect its receipt or domain history before retrying. |
+| Readiness or an operation reports audit unavailable | Check destination permissions, free space, and the single-writer lock. Repair the destination and restart a stopped writer. When the log carries `audit stream has held one entry past the write deadline`, the `stdout` collector stopped reading: restore it, and the writer resumes with no restart. For a mutation whose response failed after commit, inspect its receipt or domain history before retrying. |
 | An operator command cannot reach PostgreSQL | Check the migration URL secret, the role names, and `SSL_CERT_FILE` for a private authority. |
 
 {/* Evidence: crates/registry-breg/src/history_maintenance.rs, lock_registry;

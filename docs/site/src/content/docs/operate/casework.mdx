@@ -859,6 +859,14 @@ the process's life: every later audited call is refused and `/ready` answers `50
 process keeps running, so restart it once the cause is fixed. `/ready` also answers `503` when
 something else replaces or changes the audit file or its lock.
 
+A `stdout` destination whose collector stops reading stalls instead, and a stall ends without a
+restart.
+Once the writer has held one entry for 5 seconds, the call waiting on that entry fails with
+`service.unavailable`, later audited calls are refused at once, and `/ready` answers `503`.
+The runtime log carries `audit stream has held one entry past the write deadline`.
+When the collector takes the entry, the log carries `audit stream took the entry it was holding`
+and the writer accepts entries again.
+
 A maintenance pass runs every two seconds and a source reconciliation pass per bound source at that
 binding's
 `reconciliationIntervalMilliseconds`, every 60 seconds unless set. A source outage stays visible
@@ -893,7 +901,9 @@ is among the items it reads.
 {/* Evidence: crates/registry-casework/src/runtime.rs, check_activation(), serve_from_path(),
     serve_until_worker_stops(), supervise(), operational_log_level(), and open_audit();
     crates/registry-casework/src/audit.rs, CASEWORK_AUDIT_SCHEMA and AuditOperation::commit();
-    crates/registry-platform-audit/src/writer.rs, AuditWriter::ready();
+    crates/registry-platform-audit/src/writer.rs, AuditWriter::ready(), STREAM_WRITE_DEADLINE,
+    AuditUnavailableReason::Stalled, StreamEvent::StallStarted, StreamEvent::StallEnded, and
+    readiness_follows_a_stall_and_returns_once_the_stream_drains;
     crates/registry-casework/src/main.rs, initialize_logging();
     crates/registry-casework/src/store.rs, migrate();
     crates/registry-casework/src/http.rs, health() and ready();
@@ -1063,7 +1073,7 @@ bound to the actor and selected profile for 15 minutes; an expired preview retur
 | `the Casework audit destination could not be opened: another process holds the single-writer lock beside the audit file` | Another `casework` process writes this file. Stop it, or give this process its own `audit.path`. |
 | `the Casework audit destination could not be opened: the audit file could not be opened: ...` | The rest of the message names the rule the audit file or its directory broke and the fix, for example `chown it to the service user and chmod it 0700`, or `archive it and restart with a fresh path` for a file whose last entry is incomplete. Apply it and start again. |
 | `caseworkctl doctor` stops at `the Casework audit destination is not writable by this user` | Run `doctor` as the runtime user, and fix the audit directory's owner and mode, or the audit file's, as the message names. |
-| `GET /ready` returns `503` while `GET /health` returns `200` | The audit writer stopped, PostgreSQL is failing, or a source's reconciliation is failing. Run `caseworkctl doctor`, which names the check, then read the runtime log for `audit file write failed` or the reconciliation entry, and check the audit file, its lock, the free space, and the database. |
+| `GET /ready` returns `503` while `GET /health` returns `200` | The audit writer stopped, PostgreSQL is failing, or a source's reconciliation is failing. Run `caseworkctl doctor`, which names the check, then read the runtime log for `audit file write failed` or the reconciliation entry, and check the audit file, its lock, the free space, and the database. When the log carries `audit stream has held one entry past the write deadline`, restore the `stdout` collector; the writer resumes with no restart. |
 | `doctor` refuses at `doctor:/checks/reconciliation` | The named source's last passes failed. `source-unavailable` means the source did not answer; `source-refused` means it answered with a refusal or a response Casework cannot use; `store` and `configuration` point at the database and the binding. Repair the cause; the next pass that succeeds restores readiness. |
 | `doctor` refuses at `doctor:/checks/pinnedWork`, or `caseworkctl apply` refuses with `would strand work pinned under an earlier package` | The package removes a queue, profile, review producer, or source that in-flight work still needs, edits a pinned review kind without a new version, or changes what a source read discloses. Keep the earlier package until that work finishes, or set `package.acknowledgeStrandedWork` to the digest the refusal names. |
 | `BReg source ID runs engine version X and this Casework runs Y`, or `BReg source ID does not report its engine version` | Casework and that BReg source are on different releases, or a proxy removes the `Registry-Engine-Version` header. Upgrade the one that is behind as [the lock-step upgrade](#upgrade-casework-and-breg-in-lock-step) describes, or let the header through; source reads resume on the next matching read. |
