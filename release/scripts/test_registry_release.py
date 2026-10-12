@@ -1471,6 +1471,8 @@ class RegistryReleaseTest(TestCase):
                     self.assertIn(f"found commit {pinned_commit!r}", message)
                     self.assertIn(f"catalog_sha256 {pinned_digest!r}", message)
                     self.assertIn("synchronization pull request", message)
+                    self.assertIn("sync-registry-stack.yml", message)
+                    self.assertIn("then run publish", message)
                     self.assertIn('release/OPERATIONS.md, "Tag and publish"', message)
 
     def test_identifier_publisher_pin_refuses_an_absent_pin(self) -> None:
