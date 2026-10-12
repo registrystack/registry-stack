@@ -64,7 +64,7 @@ and the additional build packages instead of consulting Debian's mutable
 package indexes.
 
 The native macOS builder uses the hosted runner's CMake and explicitly installs
-Go 1.24.4 for `aws-lc-fips-sys`. From v0.33.0 it preserves the resulting shared module,
+Go 1.27.2 for `aws-lc-fips-sys`. From v0.33.0 it preserves the resulting shared module,
 relocates each executable's loader commands to the adjacent packaged dylibs,
 signs the changed Mach-O files, and creates one deterministic archive per
 executable. Those steps define the supported macOS release payload, but they
