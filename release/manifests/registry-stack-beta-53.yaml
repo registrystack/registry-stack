@@ -1,0 +1,48 @@
+stack:
+  release: beta-53
+  version: 0.41.0
+  source_repo: registrystack/registry-stack
+  source_tag: v0.41.0
+
+artifacts:
+  registry-manifest: 0.41.0
+  evidence: 0.41.0
+  evidencectl: 0.41.0
+  evidence-oid4vci: 0.41.0
+  evidencectl-installer: 0.41.0
+  registry-docs: 0.41.0
+  discovery: 0.41.0
+  discoveryctl: 0.41.0
+  breg: 0.41.0
+  bregctl: 0.41.0
+  breg-mcp: 0.41.0
+  breg-review: 0.41.0
+  breg-installer: 0.41.0
+  casework: 0.41.0
+  caseworkctl: 0.41.0
+  casework-installer: 0.41.0
+  scheduling: 0.41.0
+  schedulingctl: 0.41.0
+  messaging: 0.41.0
+  messagingctl: 0.41.0
+  registry-render: 0.41.0
+  registry-client-node: 0.41.0
+  registry-client-python: 0.41.0
+
+identifier_catalog:
+  path: products/identifiers/generated/catalog.v1.json
+  sha256: 17aa0bc6c94638e2b51393eac46ed6600c8af8e28c54c394a53154c5d99245d9
+  entry_count: 241
+
+external: {}
+
+warnings:
+  - code: client-runtime-floors
+    classification: breaking-change
+    detail: The unified clients require Node.js 24.11.0 or later and Python 3.11 or later. See release/notes/v0.41.0.md.
+  - code: task-grant-status-required
+    classification: breaking-change
+    detail: Scheduling runtime files require taskGrantStatus; BReg validates its entries when reading the file. Casework deferred grants and status failures require the configuration and client handling described in release/notes/v0.41.0.md.
+  - code: retired-compatibility-paths
+    classification: breaking-change
+    detail: Historical BReg state tolerance and Evidence, Casework, and Scheduling compatibility refusals are removed. Valid v0.40.0 state stays readable; command, diagnostic, and Rust API changes are listed in release/notes/v0.41.0.md.

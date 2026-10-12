@@ -28,10 +28,9 @@ rolling upgrade that mixes releases is not supported:
   [Upgrade Casework and BReg in lock-step](../../casework/#upgrade-casework-and-breg-in-lock-step).
 - **Adopter tooling is checked.** `evidencectl` refuses an `evidence` or `bregctl` binary of
   another version.
-- **Clients are not checked, and break silently.** Clients send no version, and runtimes accept any
-  caller. The clients decode responses strictly, so a member one release adds can fail an older
-  client's decoding, and a member one release requires can be missing from an older runtime's
-  answer. Upgrade each client to the same release as the runtime it calls.
+- **Clients are not checked.** Clients send no version, and runtimes accept any caller. Pre-1.0
+  client and wire contracts can change incompatibly between releases, so upgrade each client to
+  the same release as the runtime it calls.
 - **BReg activation is not rolling.** Once `bregctl apply` activates a successor, every `breg`
   process still running the previous package fails readiness until it restarts onto the successor.
   Plan the restart as part of the activation, not after it.
@@ -45,7 +44,6 @@ v0.39.0 wrote in place, and its release notes have you apply it to new databases
 {/* Evidence: Cargo.toml, [workspace.package] version (every crate uses version.workspace);
     crates/registry-casework-breg/src/lib.rs, same_release() and PeerVersionMismatch;
     crates/registry-evidencectl/src/evidence_binary.rs and source_add.rs, check_public_bregctl();
-    crates/registry-breg-client/src/response.rs, deny_unknown_fields;
     docs/site/src/content/docs/operate/breg-changes.mdx, "Activate the successor";
     release/scripts/rehearse-upgrade.py, FORWARD_PATH_FLOOR;
     release/notes/config-conventions/stack.md, "BREAKING: v0.40.0 does not upgrade v0.39.0 state
@@ -61,6 +59,11 @@ reconciliation before that product's apply, and make the listed project and runt
 in its upgrade step. Rehearse the whole sequence on a restored copy first, as
 [Run a disaster-recovery drill](../back-up-and-restore/#run-a-disaster-recovery-drill) describes.
 
+The v0.40.0 to v0.41.0 path upgrades the v0.40.0 databases in place. It does not restore support
+for state or package forms that v0.40.0 already refused. On native Linux, require glibc 2.34 or
+newer. The four product installers start every staged Linux binary before selecting the new
+toolset, so a binary that cannot run leaves the installed toolset selected.
+
 1. **Back up every database.** Take the BReg and Casework `pg_dump`s, and the Scheduling and
    Messaging ones when they run. Copy those products' packages and runtime files, and keep the
    previous release's binaries. These backups are the only way back; see [Roll back](#roll-back).
@@ -68,75 +71,78 @@ in its upgrade step. Rehearse the whole sequence on a restored copy first, as
    [Operational limits](../../../configure/evidence-oid4vci/#operational-limits).
 3. **Pause and drain Evidence traffic** for every question that reads BReg, or pause the whole
    instance when you cannot drain one question at a time. Keep the previous Evidence candidate.
-4. **Upgrade BReg.** For v0.39.0 to v0.40.0, the new `bregctl` does not upgrade a database the
-   earlier release wrote: `plan` and `apply` refuse the package the earlier release built as
-   `apply.package.refused`, naming `package.root`. Finish or cancel active ingestion runs on the
-   earlier release, and record the run metadata, committed counts, and receipts you need. Make
-   the project and runtime-file changes the release notes list, rebuild the project with the new
-   `bregctl test` and `bregctl package --test-receipt FILE --output BUILD`, and apply it to a new
-   database with `bregctl apply --initial --runtime-config FILE --package BUILD/package`. Nothing
-   the earlier database held carries over: not records, not spent idempotency keys, and not stored
-   runs, chunks, or receipts. An earlier checkpoint refuses to resume; import the data again
-   under a fresh checkpoint, as
-   [Load a governed entity through an import window](../../breg-data/#load-a-governed-entity-through-an-import-window)
-   describes. For a later release, make the project and runtime-file changes the release notes list, rebuild the
-   deployed project with no model change using the new `bregctl test` and `bregctl package
-   --test-receipt FILE --output BUILD` (a receipt from the earlier release is not accepted), point
-   `package.root` at `BUILD/package` (and `package.expectedDigest`, when set, at the package
-   digest it reports, `packageDigest` with `--format json`), check it against the live database with
-   `bregctl plan --runtime-config FILE --package BUILD/package` naming the same directory, apply
-   it with `bregctl apply --runtime-config FILE --package BUILD/package`, run `bregctl verify --runtime-config
-   FILE`, and restart every `breg` process on the new binary; `bregctl status --runtime-config
-   FILE` confirms what the database activated. A model change follows as its own successor; see
-   [Activate the successor](../../breg-changes/#activate-the-successor). When an `apply` stops
-   before it finishes, rerun it with the same `database.roles`: a retry under other roles is
-   refused as `apply.resume.roles-differ`, naming the roles the activation started with. A new package applied under `database.roles` other than the ones the active activation serves with is refused as `apply.successor.roles-differ` before maintenance; apply the active package under the new roles first, then the new package. A role change, the active package applied under other `database.roles`, cannot be assessed by `bregctl migration reconcile`: when one stops before it finishes, fix the cause and rerun the same apply, which resumes it. Casework reports each BReg source as unavailable from here until step 5
+4. **Upgrade BReg.** A database created by a v0.40.0 apply already has canonical action-revision
+   provenance and subject access-log storage, so v0.41.0 reads it in place. The `bregctl plan`
+   command later in this step reads and validates every `taskGrantStatus` entry. An entry v0.40.0
+   activated remains valid, but a script that matched `breg.runtime.invalid-binding` for a
+   malformed entry must now match `breg.runtime.invalid-task-grant-status`. Update Casework
+   access-log rules for the
+   `registry-task-status` user agent and alert on `503 service.unavailable` when the status client
+   is misconfigured or revoked. Rebuild the deployed project with no model change using the new
+   `bregctl test` and `bregctl package --test-receipt FILE --output BUILD`; a test receipt from
+   v0.40.0 is not accepted. Point `package.root` at `BUILD/package`, and repin
+   `package.expectedDigest` when set. Run `bregctl plan --runtime-config FILE --package
+   BUILD/package`, apply with `bregctl apply --runtime-config FILE --package BUILD/package`, and
+   run `bregctl verify --runtime-config FILE`. Restart every `breg` process on v0.41.0, then use
+   `bregctl status --runtime-config FILE` to confirm the active package. A model change follows as
+   its own successor; see [Activate the successor](../../breg-changes/#activate-the-successor).
+   When an apply stops, fix the cause and rerun it with the same `database.roles`; changing roles
+   during recovery is refused. Casework reports each BReg source as unavailable until step 5
    finishes.
-5. **Upgrade Casework.** Settle pending attempts first, since an upgrade can strand them. When step
-   4 changed the `registryRevision` a BReg source serves, check each such source with `caseworkctl
-   check PROJECT --against-breg-package DIR --source-id ID`, repin it with `caseworkctl source add
-   BREG_PROJECT --project PROJECT --source-id ID --apply`, package the Casework project again, and
-   point the runtime file's `package.root` at the new package (and `package.expectedDigest`, when
-   set, at its digest); see
-   [Check a BReg source's pinned revision](../../casework/#check-a-breg-sources-pinned-revision).
-   Stop every earlier `casework` process before the apply: one left running holds the audit
-   writer lock the new runtime needs, and can strand a source attempt when the apply changes a
-   source's binding generation. Run `caseworkctl plan --runtime-config FILE` and `caseworkctl apply --runtime-config FILE` with the
-   new binaries, then start `casework` and run `caseworkctl doctor --runtime-config FILE`; see [Plan, apply, and serve](../../casework/#plan-apply-and-serve).
-   For v0.39.0 to v0.40.0, the release notes have you apply Casework to a new database.
-6. **Upgrade Evidence.** Re-import each BReg source whose export the release notes say changed,
-   then package a fresh candidate with the new `evidencectl package`, run `evidence check
-   --runtime-config FILE --require-runtime-dependencies` with the new binary (add
-   `--without-audit-lock` while the earlier instance still runs), stop the earlier `evidence`,
-   start the new one, and verify a fresh synthetic assertion. Then start the new `evidence-oid4vci`.
-7. **Upgrade Scheduling**, when it runs. Stop the earlier `scheduling` runtime, or keep its
-   destination bindings until its hook deliveries drain. Unless the release notes have you start
-   from a new database, run `schedulingctl plan --runtime-config
-   FILE` and `schedulingctl apply --runtime-config FILE` with the new binary, then start
-   `scheduling`; `schedulingctl status --runtime-config FILE` confirms what the database activated.
-   For v0.39.0 to v0.40.0, the new `schedulingctl` does not upgrade a database the earlier release
-   wrote. Start from a new database, then run `schedulingctl
-   apply --runtime-config FILE` and `schedulingctl records apply --runtime-config FILE RECORDS` with the
-   files changed as the release notes list. Nothing the earlier database held carries over,
-   published windows, holds, and appointments included.
-8. **Upgrade Messaging**, when it runs. Stop new submissions, let in-flight senders finish
-   retrying submissions whose answers they lost, then stop every earlier `messaging` runtime. Give
-   graceful shutdown time to finish sends already in flight. After every old runtime stops, refresh
-   the Messaging `pg_dump`; this stopped, pre-apply snapshot includes the old runtime's final sends
-   and is the rollback backup. For v0.39.0 to v0.40.0, the new binaries refuse the earlier runtime
-   file and a package the earlier release built: make the project and runtime-file changes the
-   release notes list, build the package again with the new `messagingctl package PROJECT --output
-   DIRECTORY`, and point `package.root` at the new directory (and `package.expectedDigest`, when
-   set, at the digest it reports). The release notes have you run the plan and apply that follow
-   against a new database, because no schema version rewrites the dispatch job states the earlier
-   release stored. Run `messagingctl plan --runtime-config FILE`, then `messagingctl
-   apply --runtime-config FILE` with the new binary. Confirm the activation with `messagingctl status
-   --runtime-config FILE`, start the new `messaging`, and require `GET /ready` to answer `200` before
-   you resume submissions. For v0.39.0 to v0.40.0, the new database holds no earlier idempotency
-   record, so finish this drain before you point callers at the new runtime; a later retry under
-   an earlier key can send its message twice.
-9. **Resume traffic, and upgrade clients.** Roll out every application that embeds a Registry
-   Stack client at the same release before it calls the upgraded runtimes.
+5. **Upgrade Casework.** Settle pending attempts first because an upgrade can strand them. When
+   step 4 changed a BReg source's `registryRevision`, check and repin that source as
+   [Check a BReg source's pinned revision](../../casework/#check-a-breg-sources-pinned-revision)
+   describes. `caseworkctl source add` now derives the generated `casework-reader` profile from the
+   BReg project's one compiled `principalClaim`; if it refuses mixed claims, align every entity
+   profile and action grant, including module-contributed grants and a `casework-reader` profile an
+   earlier `source add` generated, to one claim and repeat the command. Package the Casework
+   project again, point `package.root` at the package, and repin `package.expectedDigest` when set.
+   If a development session borrows another project's issuer, replace `principalClaim: sub` in
+   every Casework access profile with a stable claim such as `registry_principal`, then register
+   that claim for each client in both projects' `dev-clients.yaml`. Stop every v0.40.0 `casework`
+   process before the apply. Migration 0022 validates the task-grant tables under an exclusive lock
+   and installs the deferred-grant window constraints and assignment generation trigger. Run
+   `caseworkctl plan --runtime-config FILE`, then `caseworkctl apply --runtime-config FILE`; the
+   removed `casework migrate` and `caseworkctl db` commands are not aliases. Start `casework` and
+   run `caseworkctl doctor --runtime-config FILE`; see
+   [Plan, apply, and serve](../../casework/#plan-apply-and-serve).
+6. **Upgrade Evidence.** Replace any `evidencectl build` invocation with `evidencectl package`, and
+   remove `--generate-keys` from `evidencectl init` or `evidencectl new`. Re-import a BReg source
+   when its export changed, then package a fresh candidate with the new `evidencectl package`.
+   Run `evidence check --runtime-config FILE --require-runtime-dependencies` with the new binary,
+   adding `--without-audit-lock` while the v0.40.0 instance still runs. Stop the earlier
+   `evidence`, start v0.41.0, and verify a fresh synthetic assertion. Then start the new
+   `evidence-oid4vci`.
+7. **Upgrade Scheduling**, when it runs. Add the required top-level `taskGrantStatus` before you
+   run the v0.41.0 tooling. List the task authorities whenever Scheduling must check current status
+   or revocation, and when it accepts deferred work. The
+   `taskGrantStatus: unchecked-final-fifteen-minutes` path checks only remaining lifetime because a
+   signed token does not identify its original grant mode. It admits any grant with at most 900
+   seconds remaining without checking revocation, including the final 900 seconds of a deferred
+   grant. Use it only when the deployment accepts that stale-authority window.
+   Run `schedulingctl check --runtime-config FILE`, then stop the v0.40.0 runtime or keep its
+   destination bindings until hook deliveries drain. Run `schedulingctl plan --runtime-config
+   FILE` and `schedulingctl apply --runtime-config FILE` against the v0.40.0 database. Start
+   `scheduling`, then use `schedulingctl status --runtime-config FILE` to confirm the activation.
+   The removed `scheduling migrate` command and pre-v0.40.0 package and policy refusals provide no
+   compatibility path; a database activated by v0.40.0 needs no reset.
+8. **Upgrade Messaging**, when it runs. Stop new submissions, let in-flight senders finish retrying
+   submissions whose answers they lost, then stop every v0.40.0 `messaging` runtime. Give graceful
+   shutdown time to finish sends already in flight. Refresh the `pg_dump` after every earlier
+   runtime stops, so the rollback backup includes their final sends. Rebuild the package when the
+   release notes require it, update `package.root`, and repin `package.expectedDigest` when set.
+   Run `messagingctl plan --runtime-config FILE`, then `messagingctl apply --runtime-config FILE`
+   against the v0.40.0 database. Confirm the activation with `messagingctl status --runtime-config
+   FILE`, start v0.41.0, and require `GET /ready` to answer `200` before you resume submissions.
+9. **Upgrade clients, then resume traffic.** Move Python applications to Python 3.11 or later and
+   Node.js applications to Node.js 24.11.0 or later before installing the v0.41.0 client packages.
+   Update exhaustive Rust matches on the Scheduling or Messaging `ProblemCode` enums for
+   `ReceiptUnresolved`. Treat `CaseworkTaskAssertionSource` `invalid-credential` as a grant refusal:
+   request a new approval and stop retrying that credential. In BReg metadata, an unsupported
+   `requiredCapabilities` value disables only the affected binding and can make selection report
+   `required-capability`. Handle a valid unknown BReg Problem by its HTTP status and trace ID
+   without inferring code or extension semantics. Roll out every application that embeds a
+   Registry Stack client at v0.41.0 before it calls the upgraded runtimes, then resume traffic.
 
 {/* Evidence: docs/site/src/content/docs/operate/casework.mdx, "Upgrade Casework and BReg in
     lock-step" (BReg first, readiness fails in between);
@@ -145,34 +151,19 @@ in its upgrade step. Rehearse the whole sequence on a restored copy first, as
     docs/site/src/content/docs/tutorials/deploy-evidence-from-breg.mdx, "Coordinate a breaking
     update"; crates/registry-casework/src/store.rs, StoreError::AttemptPending;
     crates/registry-breg/src/migration.rs, MigrationError::ResumeRolesDiffer;
-    crates/registry-breg/src/ingestion_store.rs, cancel_run();
-    docs/site/src/content/docs/operate/breg-data.mdx, committedItems and the fresh checkpoint path;
-    crates/registry-bregctl/src/apply_lifecycle.rs, load_active_predecessor_package();
-    crates/registry-bregctl/src/lib.rs, PlanSuccessReport, StatusSuccessReport, and
-    lifecycle_failure() for ApplyLifecycleError::CurrentPackage (apply.package.refused at
-    package.root);
-    crates/registry-breg/src/package.rs, RETIRED_PACKAGE_API_VERSION and
-    PackageError::RetiredApiVersion;
-    release/notes/config-conventions/stack.md, "BREAKING: v0.40.0 does not upgrade v0.39.0 state
-    in place" and "Breaking changes outside the program fragments" (the new BReg database holds
-    no idempotency record and no ingestion run, an earlier checkpoint refuses to resume; the new
-    Messaging database holds no idempotency record);
-    release/notes/config-conventions/casework.md, "BREAKING: a clock is tagged by `type`, and its
-    four values are kebab-case" (apply to a new database);
+    products/breg/CHANGELOG.md, v0.41.0 - 2026-10-13 entries;
+    products/casework/CHANGELOG.md, v0.41.0 - 2026-10-13 entries and migration 0022;
+    products/evidence/CHANGELOG.md, v0.41.0 - 2026-10-13 entries;
+    products/scheduling/CHANGELOG.md, v0.41.0 - 2026-10-13 entries;
+    products/messaging/CHANGELOG.md, v0.41.0 - 2026-10-13 entries;
     docs/site/src/content/docs/operate/messaging.mdx, "Plan, apply, inspect, and serve";
     crates/registry-messaging/src/runtime.rs, shutdown_signal() and Listeners::serve_until();
-    release/notes/config-conventions/messaging.md, "BREAKING: the runtime file's keys and
-    apiVersion are renamed" (the earlier runtime file and package are refused, the upgrade order)
-    and "BREAKING: the dispatch queue's job words are kebab-case" (no schema version rewrites a
-    stored job state);
-    crates/registry-messaging/src/config.rs, MESSAGING_RETIRED_API_VERSIONS and
-    PACKAGE_EXPECTED_DIGEST; crates/registry-messaging-core/src/package.rs,
-    MESSAGING_PROJECT_FORMAT; crates/registry-messagingctl/src/lib.rs, PackageArgs;
     release/notes/v0.36.0.md, "Upgrade Scheduling, Relay, and Discovery from v0.35.0"
     (apply before start, hook drain);
-    release/notes/config-conventions/scheduling.md, "BREAKING: a database an earlier release
-    wrote is not read"; crates/registry-scheduling/src/store.rs, retained_policy();
-    crates/registry-schedulingctl/src/lib.rs, RecordsApplyArgs;
+    release/glibc-floor.env, REGISTRY_GLIBC_FLOOR;
+    crates/registry-breg/install.sh; crates/registry-casework/install.sh;
+    crates/registry-scheduling/install.sh; crates/registry-evidencectl/install.sh,
+    staged Linux --version checks;
     release/scripts/rehearse-upgrade.py rehearses each product alone, not this composition. */}
 
 ## Roll back

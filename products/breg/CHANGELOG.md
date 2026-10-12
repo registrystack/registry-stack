@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.41.0 - 2026-10-13
+
 - BREAKING: the published `registry-stack-client` Python package, which carries
   the Base Registry Engine client, requires Python 3.11 or later: its
   `Requires-Python` is `>=3.11` (was `>=3.10`), and its wheels are built
