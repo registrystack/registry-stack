@@ -326,7 +326,93 @@ The read-only sweep, held two minutes at each rate, located the next ceiling:
 
 At 250 operations/s every operation slowed by the same amount, and sampled
 lock waiters and blocked backends stayed at 0. That pattern fits the
-four-connection pool running out of capacity; these runs did not profile it.
+four-connection pool running out of capacity; the next section measures it.
+
+## What sets the ceiling
+
+Follow-up runs on 2026-10-12 used the same build, seed sizes, `RANDOM_SEED`,
+and machine. The mixed `steady` profile ran one minute at each rate against the
+stock four-connection pool, with start/end one-minute host load averages
+between 3.30 and 5.50:
+
+| Offered operations/s | Completed operations/s | Dropped iterations | p50 (ms) | p95 (ms) | p99 (ms) | HTTP 504 | SLO thresholds |
+|---:|---:|---:|---:|---:|---:|---:|---|
+| 50 | 50.006 | 0 | 10.84 | 15.36 | 18.93 | 0 | pass |
+| 75 | 74.998 | 0 | 10.98 | 16.63 | 22.91 | 0 | pass |
+| 100 | 99.997 | 0 | 12.80 | 20.75 | 31.30 | 0 | pass |
+| 150 | 149.967 | 0 | 13.58 | 24.08 | 32.02 | 0 | pass |
+| 200 | 199.612 | 0 | 59.37 | 270.15 | 329.64 | 0 | fail |
+| 250 | 202.682 | 1,194 | 3,786.22 | 6,584.32 | 6,722.03 | 0 | fail |
+| 300 | 217.706 | 2,550 | 6,718.80 | 10,001.16 | 10,001.72 | 2,527 | fail |
+| 400 | 293.723 | 3,439 | 10,001.03 | 10,002.17 | 10,002.52 | 14,078 | fail |
+
+Completed operations include the ones answered with HTTP 504. A repeat at 250
+operations/s completed 196.439 operations/s with 1,386 dropped iterations.
+Throughput levels off near 200 operations/s, which is about 245 HTTP requests/s.
+
+The database is not what runs out. During the repeat at 250 operations/s,
+`pg_stat_activity` sampled every 200 ms showed no busy backend in 114 of 293
+samples, one in 101, two in 60, three in 16, and all four in 2. Active
+transactions were 3 ms old at the median and 14 ms at p95.
+
+Each HTTP request writes two audit entries, one before its work and one after,
+and waits for each to be synced: every run wrote exactly twice as many entries
+as it issued requests (7,402 entries for 3,701 requests at 50 operations/s).
+A request takes its pooled connection before the first entry and returns it
+after the second, so a connection is held across both syncs while PostgreSQL
+is idle for most of that time. At 245 requests/s over four connections, each
+request holds its connection for about 16 ms.
+
+The sync is expensive on this machine. Appending one audit-sized line and
+syncing it 300 times took a mean of 3.47 ms (p95 4.16 ms) with `F_FULLFSYNC`,
+which is the call Rust's `File::sync_all` makes on macOS, against 0.25 ms with
+`F_BARRIERFSYNC` and 0.03 ms with `fsync(2)`. Two syncs account for about 7 ms
+of the 11 ms a request takes at low rates. These runs did not measure the sync
+cost of a Linux deployment disk, so the absolute figures are specific to this
+machine; the connection being held across both syncs is not.
+
+A one-off build with the pool raised to 16 connections, and nothing else
+changed, moved the ceiling. This is not a supported setting of the load-test
+environment: the pool size is fixed in the `bregctl dev` runtime configuration.
+Host load averages were higher, between 5.83 and 20.76, with unrelated system
+processes busy:
+
+| Offered operations/s | Completed operations/s | Dropped iterations | p50 (ms) | p95 (ms) | p99 (ms) | HTTP 504 | SLO thresholds |
+|---:|---:|---:|---:|---:|---:|---:|---|
+| 150 | 149.951 | 0 | 14.27 | 24.42 | 32.96 | 0 | pass |
+| 250 | 249.787 | 0 | 19.58 | 42.73 | 164.08 | 0 | pass |
+| 300 | 299.933 | 0 | 14.80 | 31.71 | 118.28 | 0 | pass |
+| 400 | 399.900 | 0 | 18.75 | 111.36 | 386.03 | 0 | fail |
+| 500 | 499.854 | 0 | 17.12 | 206.42 | 298.08 | 0 | fail |
+| 600 | 599.481 | 0 | 50.21 | 329.01 | 487.68 | 0 | fail |
+| 800 | 589.568 | 6,728 | 3,735.69 | 10,001.67 | 10,002.33 | 14,818 | fail |
+| 1,000 | 721.921 | 9,462 | 8,448.03 | 10,001.67 | 10,002.63 | 22,622 | fail |
+
+Two earlier runs in that series disagree with the table and are kept in the
+evidence. A first run at 300 operations/s completed 267.558 with 1,143 dropped
+iterations while the one-minute load average rose from 9.19 to 20.76, and a
+first run at 600 completed 581.456 with 370 dropped iterations. Sampled during
+the 600 run in the table, no backend was busy in 55 of 272 samples and three
+to seven of the 16 were busy in 158, and 101 backend samples were waiting on a
+row or transaction lock.
+
+Past the ceiling the service does not shed load. A request waits for a
+connection until the 10-second HTTP request deadline answers it with a 504; the
+pool's own wait timeout defaults to 30 seconds, so it never answers first. The
+requests that time out have usually just been given a connection: the 800 and
+1,000 operations/s runs returned 37,440 HTTP 504 responses and wrote 37,395
+`unfinished` audit entries, each for a request that had started its work.
+That work is discarded, so successful responses fall as the offered rate
+rises: 16,984, then 15,977, then 8,109 at 250, 300, and 400 operations/s on
+four connections, and 44,354, then 32,728, then 34,712 at 600, 800, and 1,000
+on 16.
+
+The read-only `burst` profile on four connections recovers from overload
+without a restart. With a 150 operations/s peak it passed with no dropped
+iteration and a peak p99 of 22.47 ms. With the default 250 operations/s peak,
+above the ceiling, it completed 213.381 operations/s at the peak with 325
+dropped iterations and a p99 of 2,091.21 ms, returned no HTTP error, and the
+recovery phase returned to 50.009 operations/s with a p99 of 15.65 ms.
 
 ## Verification
 
