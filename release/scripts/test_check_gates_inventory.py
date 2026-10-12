@@ -860,9 +860,9 @@ class GateInventoryTest(unittest.TestCase):
                 "Casework caller visibility suite",
             ),
             (
-                "cargo test --locked -p registry-casework --features postgres-test --test assignment_postgres --test routing_postgres",
-                "true # Casework assignment and routing suites disabled",
-                "Casework assignment and source routing suites",
+                "cargo test --locked -p registry-casework --features postgres-test --test assignment_postgres --test routing_postgres --test task_grant_invalidation",
+                "true # Casework assignment, routing, and task-grant suites disabled",
+                "Casework assignment, source routing, and task-grant invalidation suites",
             ),
             (
                 "-- --exact clocks::tests::source_clocks_survive_restart_and_preserve_subject_budget",

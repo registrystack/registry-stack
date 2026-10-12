@@ -836,7 +836,7 @@ The following operator-supplied variables select the maintained suites:
 | `CASEWORK_CLOCK_TEST_DATABASE_URL` | `--lib clocks::tests::source_clocks_survive_restart_and_preserve_subject_budget` | Its own: the test resets `public` |
 | `CASEWORK_REVIEW_TEST_DATABASE_URL` | `--test review_postgres --test review_http --test review_payment_fixture_postgres` | May be shared: each fixture creates a unique schema |
 | `CASEWORK_REVIEW_MIGRATION_TEST_DATABASE_URL` | `--test review_migration_postgres` | May be shared: the fixture creates a unique schema |
-| `CASEWORK_ASSIGNMENT_TEST_DATABASE_URL` | `--test assignment_postgres` | May be shared: the fixture creates a unique schema |
+| `CASEWORK_ASSIGNMENT_TEST_DATABASE_URL` | `--test assignment_postgres --test task_grant_invalidation` | May be shared: each fixture creates a unique schema |
 | `CASEWORK_ROUTING_TEST_DATABASE_URL` | `--test routing_postgres` | May be shared: the fixture creates a unique schema |
 | `CASEWORK_INBOX_TEST_DATABASE_URL` | `--test inbox_ordering_postgres` | May be shared: the fixture creates a unique schema |
 | `CASEWORK_ACTIVATION_TEST_DATABASE_URL` | `--test activation_postgres` | May be shared: each test creates a unique schema; the split-role tests also create and drop their own login roles, so the URL's role must be allowed to create roles |
@@ -870,7 +870,8 @@ cargo test -p registry-casework --features postgres-test --lib --locked \
   -- --exact clocks::tests::source_clocks_survive_restart_and_preserve_subject_budget
 cargo test -p registry-casework --features postgres-test --locked \
   --test review_postgres --test review_http --test review_payment_fixture_postgres \
-  --test review_migration_postgres --test assignment_postgres --test routing_postgres
+  --test review_migration_postgres --test assignment_postgres --test routing_postgres \
+  --test task_grant_invalidation
 cargo test -p registry-casework --features postgres-test --test inbox_ordering_postgres --locked
 cargo test -p registry-casework --features postgres-test --test activation_postgres --locked
 ```
