@@ -46,6 +46,21 @@ relevant product pages on this site rather than duplicating release notes.
     release/scripts/check-glibc-floor.sh;
     release/scripts/render-installer-libc-preflight.py, INSTALLERS. */}
 
+- The Base Registry Engine (BReg), Registry Casework, Registry Scheduling, and Evidence installers
+  start every Linux binary they verified before they select the release, as they already did on
+  macOS. An installer checks the glibc floor of the release it was published with, so an installer
+  asked for an earlier release could select binaries built for a newer glibc than the host carries;
+  those binaries then failed at first run. The installer now refuses that release, names the binary
+  that did not start, and leaves the installed toolset selected. See
+  [known limitations](../explanation/known-limitations/).
+
+{/* Evidence: crates/registry-breg/install.sh; crates/registry-casework/install.sh;
+    crates/registry-scheduling/install.sh; crates/registry-evidencectl/install.sh;
+    crates/registry-breg/tests/install_script.rs,
+    linux_binary_that_cannot_start_leaves_the_previous_toolset_selected;
+    release/scripts/test_nightly_release.py,
+    test_linux_binary_that_cannot_start_never_replaces_the_installed_toolset. */}
+
 ## v0.40.0 beta-52
 
 - BREAKING: v0.40.0 does not upgrade v0.39.0 configuration, packages, or databases in place, and
