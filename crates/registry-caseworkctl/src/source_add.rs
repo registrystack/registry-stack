@@ -2064,7 +2064,10 @@ fn apply_local_review_authority_candidate(
     match authorities.get(authority_id) {
         Some(existing)
             if existing != authority
-                && existing.get("endpoint") != authority.get("endpoint")
+                && without_endpoint(existing) == without_endpoint(authority)
+                && same_review_api_destination(existing, authority) => {}
+        Some(existing)
+            if existing != authority
                 && without_endpoint(existing) == without_endpoint(authority) =>
         {
             bail!(
@@ -2096,6 +2099,24 @@ fn without_endpoint(authority: &Value) -> Value {
         object.remove("endpoint");
     }
     authority
+}
+
+/// Whether two authored authority endpoints address the same Casework review
+/// API after applying the service-prefix joining used by the HTTP client.
+/// Parsing is deliberately local to this comparison: equivalent spelling is
+/// accepted, while the authored endpoint itself remains untouched.
+fn same_review_api_destination(left: &Value, right: &Value) -> bool {
+    fn review_requests_url(authority: &Value) -> Option<reqwest::Url> {
+        let endpoint = reqwest::Url::parse(authority.get("endpoint")?.as_str()?).ok()?;
+        registry_platform_httputil::client::ServiceBaseUrl::new(endpoint)
+            .ok()?
+            .join("v1/review-requests")
+            .ok()
+    }
+
+    review_requests_url(left)
+        .zip(review_requests_url(right))
+        .is_some_and(|(left, right)| left == right)
 }
 
 fn apply_local_review_executor_candidates(
@@ -2283,8 +2304,17 @@ fn apply_dev_clients_candidate(root: &mut Value, clients: &[Value]) -> Result<Va
     if existing.len() > MAX_BREG_DEV_CLIENTS {
         bail!("merged BReg dev-clients.yaml exceeds the local clients v1 32-client bound");
     }
-    let mut bound_profiles = BTreeSet::new();
-    for client in existing {
+    let mut profile_defaults = BTreeSet::new();
+    let mut test_bindings = BTreeSet::new();
+    for client in existing.iter() {
+        let bindings: &[Value] = match client.get("testBindings") {
+            Some(bindings) => bindings
+                .as_array()
+                .context("each BReg dev client testBindings must be an array")?
+                .as_slice(),
+            None => &[],
+        };
+        let mut client_profiles = BTreeSet::new();
         let profiles = client["accessProfiles"]
             .as_array()
             .context("each BReg dev client must declare accessProfiles as an array")?;
@@ -2292,8 +2322,24 @@ fn apply_dev_clients_candidate(root: &mut Value, clients: &[Value]) -> Result<Va
             let profile = profile
                 .as_str()
                 .context("each BReg dev client access profile must be a string")?;
-            if !bound_profiles.insert(profile) {
-                bail!("BReg access profile {profile} is bound to more than one local client");
+            if !client_profiles.insert(profile) {
+                bail!("BReg dev client access profile bindings must be unique per client");
+            }
+            if bindings.is_empty() && !profile_defaults.insert(profile) {
+                bail!("BReg access profile {profile} has more than one default local client; use exact testBindings for claim variants");
+            }
+        }
+        for binding in bindings {
+            let journey_id = binding
+                .get("journeyId")
+                .and_then(Value::as_str)
+                .context("each BReg dev client test binding needs a string journeyId")?;
+            let step_id = binding
+                .get("stepId")
+                .and_then(Value::as_str)
+                .context("each BReg dev client test binding needs a string stepId")?;
+            if !test_bindings.insert((journey_id, step_id)) {
+                bail!("BReg dev client testBindings need unique exact journeyId and stepId pairs");
             }
         }
     }
@@ -4509,7 +4555,57 @@ mod tests {
     }
 
     #[test]
-    fn dev_clients_plan_refuses_a_duplicate_breg_profile_binding() {
+    fn dev_clients_plan_preserves_an_exact_test_variant_for_the_generated_profile() {
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().join("project");
+        crate::project::init(&project, "professional-review").unwrap();
+        let registry = tempfile::tempdir().unwrap();
+        let original = "# retained negative authorization fixture\nversion: 1\nclients:\n  - id: reader-without-purpose\n    accessProfiles: [casework-reader]\n    scopes: [casework:source-reader]\n    claims:\n      registry_actor_kind: service\n      registry_principal: negative-reader\n    testBindings:\n      - {journeyId: source-authorization, stepId: missing-purpose-is-concealed}\n";
+        let path = registry.path().join("dev-clients.yaml");
+        fs::write(&path, original).unwrap();
+        let (authored, request) = reviewer_fixture();
+
+        let plan = plan_breg_dev_clients(
+            registry.path(),
+            &project,
+            &authored,
+            &[selected_request(&request)],
+            DEFAULT_CASEWORK_ENDPOINT,
+        )
+        .expect("one default and one exact test variant may share a profile");
+        let proposed = plan.write.unwrap().proposed;
+        assert!(
+            proposed.starts_with(original),
+            "the authored negative fixture must remain byte-for-byte intact"
+        );
+        let parsed: Value = serde_norway::from_str(&proposed).unwrap();
+        let variant = parsed["clients"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|client| client["id"] == "reader-without-purpose")
+            .unwrap();
+        assert_eq!(
+            variant["claims"],
+            json!({"registry_actor_kind":"service","registry_principal":"negative-reader"})
+        );
+        assert_eq!(
+            variant["testBindings"],
+            json!([{"journeyId":"source-authorization","stepId":"missing-purpose-is-concealed"}])
+        );
+        assert!(
+            parsed["clients"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|client| client["id"] == READER_CLIENT_ID
+                    && client.get("testBindings").is_none())
+        );
+        assert_eq!(fs::read_to_string(path).unwrap(), original);
+    }
+
+    #[test]
+    fn dev_clients_plan_refuses_a_duplicate_default_breg_profile_binding() {
         let root = tempfile::tempdir().unwrap();
         let project = root.path().join("project");
         crate::project::init(&project, "professional-review").unwrap();
@@ -4535,8 +4631,50 @@ mod tests {
             &[selected_request(&request)],
             DEFAULT_CASEWORK_ENDPOINT,
         )
-        .expect_err("one BReg access profile cannot bind two local clients");
+        .expect_err("one BReg access profile cannot have two default local clients");
         assert!(format!("{error:#}").contains(READER_CLIENT_ID));
+        assert_eq!(fs::read(path).unwrap(), original);
+    }
+
+    #[test]
+    fn dev_clients_plan_refuses_duplicate_exact_test_bindings_before_writing() {
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().join("project");
+        crate::project::init(&project, "professional-review").unwrap();
+        let registry = tempfile::tempdir().unwrap();
+        let original = serde_json::to_vec(&json!({
+            "version": 1,
+            "clients": [
+                {
+                    "id": "first-variant",
+                    "accessProfiles": ["first-profile"],
+                    "scopes": ["fixture:first"],
+                    "claims": {},
+                    "testBindings": [{"journeyId":"source-authorization","stepId":"missing-purpose-is-concealed"}]
+                },
+                {
+                    "id": "second-variant",
+                    "accessProfiles": ["second-profile"],
+                    "scopes": ["fixture:second"],
+                    "claims": {},
+                    "testBindings": [{"journeyId":"source-authorization","stepId":"missing-purpose-is-concealed"}]
+                }
+            ]
+        }))
+        .unwrap();
+        let path = registry.path().join("dev-clients.yaml");
+        fs::write(&path, &original).unwrap();
+        let (authored, request) = reviewer_fixture();
+
+        let error = plan_breg_dev_clients(
+            registry.path(),
+            &project,
+            &authored,
+            &[selected_request(&request)],
+            DEFAULT_CASEWORK_ENDPOINT,
+        )
+        .expect_err("one exact journey-step binding must select only one client");
+        assert!(format!("{error:#}").contains("unique exact"));
         assert_eq!(fs::read(path).unwrap(), original);
     }
 
@@ -4784,6 +4922,115 @@ mod tests {
                 "client":"integration-requester"
             })
         );
+    }
+
+    #[test]
+    fn dev_clients_preserves_equivalent_root_and_prefixed_endpoint_spellings() {
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().join("project");
+        crate::project::init(&project, "professional-review").unwrap();
+        let (authored, request) = reviewer_fixture();
+
+        for (existing_endpoint, requested_endpoint) in [
+            ("http://127.0.0.1:8092/", "http://127.0.0.1:8092"),
+            (
+                "http://127.0.0.1:8092/casework/",
+                "http://127.0.0.1:8092/casework",
+            ),
+        ] {
+            let registry = tempfile::tempdir().unwrap();
+            let original = format!(
+                "# operator-owned client file\nversion: 1\nclients: []\nreviewAuthorities:\n  # preserve this authority spelling and comment\n  casework:\n    endpoint: {existing_endpoint}\n    profile: integration-requester\n    producerId: registry-breg\n    recoveryDays: 7\n    client: integration-requester\n"
+            );
+            fs::write(registry.path().join("dev-clients.yaml"), &original).unwrap();
+
+            let plan = plan_breg_dev_clients(
+                registry.path(),
+                &project,
+                &authored,
+                &[selected_request(&request)],
+                requested_endpoint,
+            )
+            .expect("equivalent joined review API destinations must be accepted");
+            let proposed = plan.write.unwrap().proposed;
+            assert!(proposed.contains("# operator-owned client file"));
+            assert!(proposed.contains("# preserve this authority spelling and comment"));
+            assert!(proposed.contains(&format!("    endpoint: {existing_endpoint}\n")));
+            let proposed: Value = serde_norway::from_str(&proposed).unwrap();
+            assert_eq!(
+                proposed["reviewAuthorities"]["casework"]["endpoint"], existing_endpoint,
+                "the authored endpoint spelling must be preserved"
+            );
+        }
+    }
+
+    #[test]
+    fn dev_clients_refuses_a_meaningfully_different_endpoint_prefix() {
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().join("project");
+        crate::project::init(&project, "professional-review").unwrap();
+        let registry = tempfile::tempdir().unwrap();
+        let original = serde_json::to_vec(&json!({
+            "version": 1,
+            "clients": [],
+            "reviewAuthorities": {
+                "casework": {
+                    "endpoint": "http://127.0.0.1:8092/casework",
+                    "profile": "integration-requester",
+                    "producerId": "registry-breg",
+                    "recoveryDays": 7,
+                    "client": "integration-requester"
+                }
+            }
+        }))
+        .unwrap();
+        let path = registry.path().join("dev-clients.yaml");
+        fs::write(&path, &original).unwrap();
+        let (authored, request) = reviewer_fixture();
+
+        let error = plan_breg_dev_clients(
+            registry.path(),
+            &project,
+            &authored,
+            &[selected_request(&request)],
+            "http://127.0.0.1:8092/another-prefix",
+        )
+        .expect_err("different joined API prefixes must remain substantive");
+        assert!(format!("{error:#}").contains("--casework-endpoint"));
+        assert_eq!(fs::read(path).unwrap(), original);
+    }
+
+    #[test]
+    fn equivalent_endpoint_spelling_does_not_mask_authority_changes() {
+        let mut authored = json!({
+            "reviewAuthorities": {
+                "casework": {
+                    "endpoint": "http://127.0.0.1:8092/",
+                    "profile": "integration-requester",
+                    "producerId": "registry-breg",
+                    "recoveryDays": 7,
+                    "client": "integration-requester"
+                }
+            }
+        });
+        let original = authored.clone();
+        let mut changes = json!([]);
+        let error = apply_local_review_authority_candidate(
+            &mut authored,
+            "casework",
+            &json!({
+                "endpoint": "http://127.0.0.1:8092",
+                "profile": "another-profile",
+                "producerId": "registry-breg",
+                "recoveryDays": 7,
+                "client": "integration-requester"
+            }),
+            &mut changes,
+        )
+        .expect_err("equivalent endpoints cannot relax the producer admission binding");
+        assert!(format!("{error:#}").contains("different content"));
+        assert_eq!(authored, original);
+        assert_eq!(changes, json!([]));
     }
 
     #[test]

@@ -52,6 +52,8 @@ test('registry metadata retains statistical datasets without entity authority', 
     assert.deepEqual((await client.registryContract('reader')).statisticalDatasets, []);
     metadata.statisticalDatasets = datasets;
     datasets[0].unexpected = true;
+    assert.deepEqual((await client.registryContract('reader')).statisticalDatasets, datasets);
+    datasets[0].periodKind = 'future-period-kind';
     await assert.rejects(client.registryContract('reader'), error => error.kind === 'protocol');
   } finally {
     await new Promise(resolve => server.close(resolve));

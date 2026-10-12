@@ -153,6 +153,10 @@ class StatisticsTests(unittest.TestCase):
         self.assertEqual(self.client.registry_contract("reader").statistical_datasets, [])
         self.metadata_document["statisticalDatasets"] = datasets
         datasets[0]["unexpected"] = True
+        self.assertEqual(
+            self.client.registry_contract("reader").statistical_datasets, datasets
+        )
+        datasets[0]["periodKind"] = "future-period-kind"
         with self.assertRaises(BaseRegistryClientError) as malformed:
             self.client.registry_contract("reader")
         self.assertEqual(malformed.exception.kind, "protocol")

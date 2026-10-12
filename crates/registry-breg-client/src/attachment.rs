@@ -301,7 +301,6 @@ impl BRegAttachmentSlot {
     ) -> Result<Self, BRegAttachmentError> {
         let refuse = || BRegAttachmentError::InvalidSlotValue;
         let descriptor = descriptor.as_object().ok_or_else(refuse)?;
-        let mut seen = 5;
         let required_for_submit = descriptor
             .get("requiredForSubmit")
             .and_then(Value::as_bool)
@@ -345,11 +344,10 @@ impl BRegAttachmentSlot {
             "{}/{{record_id}}/attachments/{slot_identifier}",
             source.collection_path
         );
-        let mut capability = |member: &str, method: &str| -> Result<bool, BRegAttachmentError> {
+        let capability = |member: &str, method: &str| -> Result<bool, BRegAttachmentError> {
             let Some(value) = descriptor.get(member) else {
                 return Ok(false);
             };
-            seen += 1;
             exact_attachment_request(value, method, &template, &source.access_profile)?;
             Ok(true)
         };
@@ -357,7 +355,7 @@ impl BRegAttachmentSlot {
         let upload = capability("upload", "PATCH")?;
         let remove = capability("remove", "DELETE")?;
         // The engine grants the removal route with the upload route or not at all.
-        if upload != remove || descriptor.len() != seen {
+        if upload != remove {
             return Err(refuse());
         }
 
@@ -683,12 +681,13 @@ pub fn valid_attachment_content_type(value: &str) -> bool {
 }
 
 fn exact_verification_policy(value: &Value) -> Result<(), BRegAttachmentError> {
-    let expected = serde_json::json!({
-        "statusField": "verificationStatus",
-        "allowedStatuses": ["notRequired", "approved"],
-        "pendingOrRejectedBlocks": ["download", "submit"]
-    });
-    if value == &expected {
+    let Some(value) = value.as_object() else {
+        return Err(BRegAttachmentError::InvalidSlotValue);
+    };
+    if value.get("statusField") == Some(&Value::from("verificationStatus"))
+        && value.get("allowedStatuses") == Some(&Value::from(vec!["notRequired", "approved"]))
+        && value.get("pendingOrRejectedBlocks") == Some(&Value::from(vec!["download", "submit"]))
+    {
         return Ok(());
     }
     Err(BRegAttachmentError::InvalidSlotValue)
@@ -729,7 +728,13 @@ fn exact_attachment_request(
     } else {
         expected.insert("requiredState".to_owned(), Value::from("draft"));
     }
-    if value == &Value::Object(expected) {
+    let Some(value) = value.as_object() else {
+        return Err(BRegAttachmentError::InvalidSlotValue);
+    };
+    if expected
+        .iter()
+        .all(|(member, expected)| value.get(member) == Some(expected))
+    {
         return Ok(());
     }
     Err(BRegAttachmentError::InvalidSlotValue)

@@ -182,6 +182,15 @@ A client must ignore response members it does not recognize, and must not fail o
 it does not recognize; it handles that problem by its HTTP status. That rule is what lets a minor
 release add members and codes.
 
+For Base Registry Engine metadata, `requiredCapabilities` is the must-understand gate. An engine
+addition that changes how an existing member must be interpreted or executed must add a new
+`requiredCapabilities` value; every other additive member is ignorable. A client disables only the
+operation that names a capability it does not understand. The engine still authorizes every request
+at execution time.
+
+{/* Evidence: crates/registry-breg-client/src/metadata.rs,
+    operation_capabilities_are_understood and BRegMetadata::select_immediate_action. */}
+
 Servers stay strict on requests and configuration: an unknown request member or configuration key
 is refused, not ignored. A configuration file that uses a key a later release introduced fails to
 load on an earlier binary, so pin configuration to the release you deploy.

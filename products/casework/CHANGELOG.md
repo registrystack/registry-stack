@@ -29,6 +29,15 @@
   any malformed cursor. A source with one request entity resumed from one
   before. Every cursor v0.40.0 stored names its entity. Migration: none for a
   database v0.40.0 created.
+- `caseworkctl source add` preserves exact `testBindings` claim variants when
+  adding a default BReg local client for the same profile. Automatic executor
+  inference selects only the default service client; explicit executor bindings
+  may still name a test-bound variant. Duplicate defaults and duplicate
+  journey-step bindings are refused before any file is written.
+- Source pairing accepts authority endpoint spellings that join to the same
+  Casework review API, including equivalent trailing slashes, while preserving
+  the authored spelling. Different destinations and authority bindings still
+  require explicit correction.
 
 ## v0.40.0 - 2026-10-11
 

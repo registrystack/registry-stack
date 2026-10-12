@@ -1145,6 +1145,95 @@ fn actions_contract_refuses_a_snake_case_handler_constant() {
     );
 }
 
+/// This product fixture uses only existing entity grants to keep the reference
+/// that identifies a dossier out of every patch contract. The successful
+/// fixture journey covers create and descriptive correction; these assertions
+/// pin the caller-visible metadata that makes a retargeting patch unavailable.
+#[test]
+fn immutable_identity_example_exposes_create_and_correction_without_retargeting() {
+    let fixture = fixture_path("products/breg/fixtures/immutable-identity-corrections");
+    let fixture_argument = fixture.to_str().expect("fixture path is UTF-8");
+    let check = bregctl(&["check", fixture_argument, "--production"]);
+    assert!(
+        check.status.success(),
+        "immutable identity fixture and journeys check in production: {check:?}"
+    );
+
+    let access = explain("access", &fixture);
+    let dossier = access["entities"]
+        .as_array()
+        .expect("access entities")
+        .iter()
+        .find(|entity| entity["entity"] == "dossier")
+        .expect("dossier access explanation");
+    let profiles = dossier["profiles"].as_array().expect("dossier profiles");
+    let registrar = profiles
+        .iter()
+        .find(|profile| profile["id"] == "dossier-registrar")
+        .expect("registrar profile");
+    assert_eq!(registrar["operations"], json!(["create", "get"]));
+    assert_eq!(
+        registrar["writableFields"],
+        json!(["description", "subject"])
+    );
+    let corrector = profiles
+        .iter()
+        .find(|profile| profile["id"] == "dossier-corrector")
+        .expect("corrector profile");
+    assert_eq!(corrector["operations"], json!(["get", "patch"]));
+    assert_eq!(corrector["writableFields"], json!(["description"]));
+
+    let routes = explain("routes", &fixture);
+    let dossier_patch = routes["routes"]
+        .as_array()
+        .expect("routes array")
+        .iter()
+        .find(|route| route["id"] == "records.dossier.patch")
+        .expect("dossier patch route");
+    assert_eq!(dossier_patch["method"], "PATCH");
+    assert_eq!(
+        dossier_patch["accessProfiles"],
+        json!(["dossier-corrector"])
+    );
+
+    let refused = tempfile::tempdir().expect("temporary retarget fixture directory");
+    std::fs::copy(
+        fixture.join("registry.yaml"),
+        refused.path().join("registry.yaml"),
+    )
+    .expect("copy fixture project");
+    std::fs::create_dir(refused.path().join("tests")).expect("create fixture tests directory");
+    let journeys = std::fs::read_to_string(fixture.join("tests/journeys.yaml"))
+        .expect("read fixture journeys");
+    let retarget = journeys.replace(
+        "- {field: description, value: Corrected description}",
+        "- {field: subject, value: {recordCapture: subject}}",
+    );
+    assert_ne!(retarget, journeys, "retarget journey mutation applies");
+    std::fs::write(refused.path().join("tests/journeys.yaml"), retarget)
+        .expect("write retarget fixture journey");
+    let refused_path = refused
+        .path()
+        .canonicalize()
+        .expect("temporary project path resolves physically");
+    let refused_argument = refused_path.to_str().expect("temporary path is UTF-8");
+    let retarget_check = bregctl(&["check", refused_argument, "--production"]);
+    assert!(
+        !retarget_check.status.success(),
+        "fixture validation must refuse identity retargeting"
+    );
+    let diagnostic = format!(
+        "{}{}",
+        String::from_utf8_lossy(&retarget_check.stdout),
+        String::from_utf8_lossy(&retarget_check.stderr)
+    );
+    assert!(
+        diagnostic
+            .contains("the request writes a field the access profile grant does not make writable"),
+        "retarget refusal names the missing field authority: {diagnostic}"
+    );
+}
+
 /// A queries explanation names each bound of an operation `maximum<Thing>`,
 /// and the contract refuses the `max<Thing>` spelling of every one.
 #[test]
