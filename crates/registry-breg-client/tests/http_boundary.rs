@@ -57,8 +57,27 @@ enum Mode {
     TraceUppercase,
     TraceDuplicate,
     BadProblem,
+    UnknownProblem(u16, Option<ProblemChange>),
     Redirect,
     ConcealedNotFound,
+    HugeBody,
+}
+
+#[derive(Clone, Copy)]
+enum ProblemChange {
+    Status,
+    Trace,
+    Type,
+    CodeType,
+    KnownCode,
+    FieldPath,
+    RefusalCode,
+    DuplicateCode,
+    DuplicateExtension,
+    OpaqueExtensions,
+    KnownExtraMember,
+    LongTitle,
+    LongDetail,
     HugeBody,
 }
 
@@ -83,6 +102,7 @@ async fn handler(State(state): State<TestState>, request: Request<Body>) -> Resp
     match state.mode {
         Mode::Redirect => redirect_response(),
         Mode::BadProblem => malformed_problem(),
+        Mode::UnknownProblem(status, change) => unknown_problem(status, change),
         Mode::ConcealedNotFound => registered_problem(BRegProblemCode::ResourceNotFound),
         Mode::TraceMissing => response(
             StatusCode::OK,
@@ -310,12 +330,75 @@ fn malformed_problem() -> Response<Body> {
     let mut response = response(
         StatusCode::NOT_FOUND,
         "application/problem+json",
-        br#"{"type":"https://id.registrystack.org/problems/registry-breg/resource/not_found","title":"Not Found","status":404,"detail":"The requested resource was not found.","code":"resource.not_found","traceId":"4bf92f3577b34da6a3ce929d0e0e4736","extra":true}"#,
+        br#"{"type":"https://id.registrystack.org/problems/registry-breg/resource/not_found","title":"Wrong known title","status":404,"detail":"The requested resource was not found.","code":"resource.not_found","traceId":"4bf92f3577b34da6a3ce929d0e0e4736"}"#,
         Some(TRACEPARENT),
     );
     response
         .headers_mut()
         .insert("cache-control", "no-store".parse().expect("cache policy"));
+    response
+}
+
+fn unknown_problem(status: u16, change: Option<ProblemChange>) -> Response<Body> {
+    let mut document = json!({
+        "type": "https://id.registrystack.org/problems/registry-breg/future/refused",
+        "title": "Future refusal",
+        "status": status,
+        "detail": "canary future detail",
+        "code": "future.refused",
+        "traceId": TRACE_ID,
+    });
+    match change {
+        Some(ProblemChange::Status) => document["status"] = json!(409),
+        Some(ProblemChange::Trace) => {
+            document["traceId"] = json!("11111111111111111111111111111111")
+        }
+        Some(ProblemChange::Type) => document["type"] = json!("https://example.test/other"),
+        Some(ProblemChange::CodeType) => document["code"] = json!(42),
+        Some(ProblemChange::KnownCode) => {
+            document["code"] = json!("action.refused");
+            document["type"] =
+                json!("https://id.registrystack.org/problems/registry-breg/action/refused");
+            document["refusalCode"] = json!("declared-refusal");
+        }
+        Some(ProblemChange::FieldPath) => document["fieldPath"] = json!("/input/name"),
+        Some(ProblemChange::RefusalCode) => document["refusalCode"] = json!("declared-refusal"),
+        Some(ProblemChange::OpaqueExtensions) => {
+            document["fieldPath"] = json!({"future": true});
+            document["refusalCode"] = json!(null);
+            document["reasonCode"] = json!(["future"]);
+            document["entityId"] = json!(42);
+            document["future"] = json!({"annotation": true});
+        }
+        Some(ProblemChange::KnownExtraMember) => {
+            document["type"] =
+                json!("https://id.registrystack.org/problems/registry-breg/resource/not_found");
+            document["title"] = json!("Not Found");
+            document["detail"] = json!("The requested resource was not found.");
+            document["code"] = json!("resource.not_found");
+            document["future"] = json!({"annotation": true});
+        }
+        Some(ProblemChange::LongTitle) => document["title"] = json!("x".repeat(129)),
+        Some(ProblemChange::LongDetail) => document["detail"] = json!("x".repeat(257)),
+        Some(ProblemChange::HugeBody) => document["detail"] = json!("x".repeat(5000)),
+        _ => {}
+    }
+    let mut body = serde_json::to_string(&document).unwrap();
+    if matches!(change, Some(ProblemChange::DuplicateCode)) {
+        body.insert_str(1, "\"code\":\"future.other\",");
+    }
+    if matches!(change, Some(ProblemChange::DuplicateExtension)) {
+        body.insert_str(1, "\"future\":{\"flag\":true,\"flag\":false},");
+    }
+    let mut response = response(
+        StatusCode::from_u16(status).unwrap(),
+        "application/problem+json",
+        body.as_bytes(),
+        Some(TRACEPARENT),
+    );
+    response
+        .headers_mut()
+        .insert("cache-control", "no-store".parse().unwrap());
     response
 }
 
@@ -755,6 +838,111 @@ async fn trace_and_problem_contracts_are_exact_and_concealment_has_no_fallback()
     let rendered = format!("{error:?} {error}");
     assert!(!rendered.contains(RECORD_ID));
     assert!(!rendered.contains("companies"));
+}
+
+#[tokio::test]
+async fn unknown_problem_codes_fall_back_to_http_status_without_retaining_service_values() {
+    for status in [400, 404, 422, 429, 500, 503] {
+        let (client, captured) = test_client(Mode::UnknownProblem(status, None), None, 8192).await;
+        let error = client
+            .health()
+            .await
+            .expect_err("unknown code is still an HTTP error");
+        assert_eq!(error.status(), Some(status));
+        assert_eq!(error.kind(), "problem");
+        assert_eq!(error.problem_code(), None);
+        assert_eq!(error.trace_id().unwrap().as_str(), TRACE_ID);
+        assert!(error.field_path().is_none());
+        assert!(error.refusal_code().is_none());
+        assert!(error.reason_code().is_none());
+        assert_eq!(error.is_outcome_unknown(), status >= 500);
+        assert_eq!(captured.lock().unwrap().len(), 1);
+        let rendered = format!("{error:?} {error}");
+        for value in [
+            "future.refused",
+            "Future refusal",
+            "canary future detail",
+            "https://",
+        ] {
+            assert!(!rendered.contains(value));
+        }
+    }
+}
+
+#[tokio::test]
+async fn problem_extensions_are_ignored_without_inventing_unknown_code_semantics() {
+    for change in [
+        ProblemChange::FieldPath,
+        ProblemChange::RefusalCode,
+        ProblemChange::OpaqueExtensions,
+    ] {
+        let (client, _) = test_client(Mode::UnknownProblem(422, Some(change)), None, 8192).await;
+        let error = client
+            .health()
+            .await
+            .expect_err("unknown code stays an error");
+        assert_eq!(error.kind(), "problem");
+        assert_eq!(error.status(), Some(422));
+        assert!(error.problem_code().is_none());
+        assert!(error.field_path().is_none());
+        assert!(error.refusal_code().is_none());
+        assert!(error.reason_code().is_none());
+    }
+    let (client, _) = test_client(
+        Mode::UnknownProblem(404, Some(ProblemChange::KnownExtraMember)),
+        None,
+        8192,
+    )
+    .await;
+    let error = client
+        .health()
+        .await
+        .expect_err("known code stays an error");
+    assert_eq!(error.kind(), "not-found");
+    assert_eq!(
+        error.problem_code(),
+        Some(BRegProblemCode::ResourceNotFound)
+    );
+}
+
+#[tokio::test]
+async fn unknown_problem_fallback_preserves_envelope_and_known_code_validation() {
+    for change in [
+        ProblemChange::Status,
+        ProblemChange::Trace,
+        ProblemChange::Type,
+        ProblemChange::CodeType,
+        ProblemChange::KnownCode,
+        ProblemChange::DuplicateCode,
+        ProblemChange::DuplicateExtension,
+        ProblemChange::LongTitle,
+        ProblemChange::LongDetail,
+    ] {
+        let (client, _) = test_client(Mode::UnknownProblem(422, Some(change)), None, 8192).await;
+        let error = client
+            .health()
+            .await
+            .expect_err("invalid Problem remains a protocol error");
+        assert!(matches!(
+            error,
+            BaseRegistryClientError::Protocol {
+                failure: BRegProtocolFailure::Problem,
+                ..
+            }
+        ));
+    }
+    let (client, _) = test_client(
+        Mode::UnknownProblem(422, Some(ProblemChange::HugeBody)),
+        None,
+        8192,
+    )
+    .await;
+    assert!(matches!(
+        client.health().await,
+        Err(BaseRegistryClientError::Transport {
+            kind: TransportKind::ResponseTooLarge
+        })
+    ));
 }
 
 #[tokio::test]

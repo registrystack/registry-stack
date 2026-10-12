@@ -182,6 +182,12 @@ A client must ignore response members it does not recognize, and must not fail o
 it does not recognize; it handles that problem by its HTTP status. That rule is what lets a minor
 release add members and codes.
 
+{/* Evidence: crates/registry-breg-client/src/client.rs, breg_problem and valid_unrecognized_problem;
+    crates/registry-breg-client/tests/http_boundary.rs,
+    unknown_problem_codes_fall_back_to_http_status_without_retaining_service_values;
+    crates/registry-breg-client-node/__test__/binding.test.js;
+    crates/registry-breg-client-py/tests/python/test_errors.py. */}
+
 For Base Registry Engine metadata, `requiredCapabilities` is the must-understand gate. An engine
 addition that changes how an existing member must be interpreted or executed must add a new
 `requiredCapabilities` value; every other additive member is ignorable. A client disables only the

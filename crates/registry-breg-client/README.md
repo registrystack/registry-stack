@@ -244,12 +244,23 @@ and contains no access token or record fields.
 
 Before returning a body, the client enforces bounded headers and body, exactly
 one canonical lower-case W3C Trace Context v0 `traceparent`, BReg's exact
-response media type, and the closed BReg Problem vocabulary. Registry Metadata
+response media type, and a strict BReg Problem envelope. Registry Metadata
 and lifecycle JSON are decoded with strict duplicate-member rejection. Storage-pattern
 conflicts preserve the `MutationConflict` classification; their optional paired
 `entityId` and `fieldId` members are bounded, validated and discarded. An
 optional `fieldPath` is retained only after it matches BReg's closed grammar and
-the problem code that permits that location. Other extensions remain refused.
+the known problem code that permits that location. Unknown object members are
+ignored after duplicate rejection; recognized extensions on known codes retain
+their existing validation.
+
+A valid unrecognized Problem code returns `UnrecognizedProblem` with only its
+HTTP status and trace identifier. Node.js and Python expose kind `problem` with
+no code or typed extensions, including for an unknown `404`. Known
+`resource.not_found` still exposes `not-found`. Unknown `4xx` outcomes are known
+refusals; unknown `5xx` outcomes may have committed and use the existing bounded
+same-key retry rules. Malformed envelopes and mismatched status, trace, or BReg
+type/code URI still fail as protocol errors. Malformed known codes cannot fall
+back to unknown-code handling.
 
 Errors retain fixed local reasons, public status or problem codes, validated
 trace identifiers, bounded problem locations, and bounded retry guidance. They
@@ -299,7 +310,6 @@ revision-list continuation. `get_record_revision` retrieves one retained revisio
 as inert JSON bytes. Proposal history has a separate pagination contract: read
 `request.history.nextAfterProposalVersion`, then pass it to record-get options
 as `request_history_after_proposal_version` until the returned cursor is null.
-
 
 `BRegMetadataOperation::query()` retains typed caller-filtered query capabilities,
 including the request workflow filter fields advertised by the runtime. Field

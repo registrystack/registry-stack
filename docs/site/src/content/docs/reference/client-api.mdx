@@ -958,16 +958,24 @@ within the receipt horizon described under [Writes](#writes).
 
 ### BReg error contract
 
-`BaseRegistryClientError` exposes only the fixed error kind, status, registered BReg Problem code,
+`BaseRegistryClientError` exposes only the fixed error kind, status, a registered BReg Problem code
+when known,
 validated trace identifier, bounded
 transport or token category, the validated field path an accepted Problem names, and the bounded
 refusal code a declared immediate-action refusal names.
 
-A Problem is accepted only when its closed members, code, status, title, detail, type URI, and header
-and body trace match. A Problem code the client does not register, and any malformed response, fails
-closed as `BRegProtocolFailure`. `idempotency.expired` is registered, so its `410` arrives as kind
-`problem` with a known outcome, not as a protocol failure. Request, metadata, ETag, idempotency-key,
-and lifecycle validation errors do not retain response-controlled values.
+A known Problem code requires its exact status, title, detail, type URI, and validated extensions.
+Unknown object members are ignored after duplicate rejection.
+An unrecognized code requires the six bounded common members, matching HTTP/body status and
+header/body trace, and the matching BReg type/code URI. Rust returns `UnrecognizedProblem`;
+Node.js and Python report kind `problem`, status and trace, with no code or typed extensions.
+Use HTTP status when no known code is present. An unknown `404` stays `problem`; only known
+`resource.not_found` is `not-found`. Unknown `4xx` outcomes are known refusals; unknown `5xx`
+outcomes may have committed and use the existing bounded same-key retry rules.
+Malformed known codes and malformed envelopes fail closed as `BRegProtocolFailure`.
+`idempotency.expired` is registered, so its `410` arrives as kind `problem` with a known outcome.
+Request, metadata, ETag, idempotency-key, and lifecycle validation errors do not retain
+response-controlled values.
 
 Python raises `breg.BaseRegistryClientError`, an `Exception` whose message is `str(error)` and whose
 attributes are `kind`, `code`, `plan_refusal`, `refusal_code`, `field_path`, `status`, `trace_id`,
@@ -984,7 +992,7 @@ and the optional `code`, `planRefusal`, `refusalCode`, `fieldPath`, `status`, `t
 | `invalid-request` | An input was refused before any exchange | none |
 | `token` | The private-key JWT provider could not supply a bearer | `token_kind`, plus `transport_kind`, `code`, or `status` depending on how the token endpoint failed |
 | `transport` | The exchange failed below HTTP | `transport_kind` |
-| `problem` | The registry answered with an accepted Problem | `status`, `code`, `trace_id`, `field_path` when the Problem names a validated location, `plan_refusal` when the code is a request-plan refusal, and `refusal_code` when the code is an immediate-action refusal |
+| `problem` | The registry answered with an accepted Problem | `status`, `trace_id`; a known code also sets `code` and any applicable validated `field_path`, `plan_refusal`, or `refusal_code` |
 | `protocol` | The response violated the contract | `status`, `code` (`header-bounds`, `trace-context`, `media-type`, `body`, `problem`, `entity-tag`, `profile-link`, `location`, `cache-policy`, `status`, or `protocol`), and `trace_id` when one was validated |
 | `metadata-selection` | A binding could not be selected from the metadata | `code` |
 | `lifecycle-promotion` | The authority did not conform, or an action was not bound to it and the record | `code` (`authority` or `binding`) |
@@ -995,6 +1003,8 @@ and the optional `code`, `planRefusal`, `refusalCode`, `fieldPath`, `status`, `t
     crates/registry-breg-client-py/src/lib.rs, crates/registry-breg-client-node/src/lib.rs,
     crates/registry-breg-client-node/client.js, crates/registry-breg-client/src/error.rs,
     crates/registry-breg-client-node/client.d.ts, JsonOutcome, valueJson, bodyJson,
+    crates/registry-breg-client/tests/http_boundary.rs,
+    unknown_problem_codes_fall_back_to_http_status_without_retaining_service_values,
     crates/registry-breg-client-node/README.md,
     crates/registry-breg-client-node/__test__/exact-json.test.js,
     crates/registry-breg-client/tests/exact_json.rs, crates/registry-breg-client/src/lib.rs,

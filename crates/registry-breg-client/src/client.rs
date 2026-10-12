@@ -2774,6 +2774,12 @@ async fn breg_problem(response: Response, transport: &Transport) -> BaseRegistry
         Ok(value) => value,
         Err(_) => return problem_failure(status, trace_id),
     };
+    if !(400..=599).contains(&document.status)
+        || document.status != status.as_u16()
+        || document.trace_id != trace_id
+    {
+        return problem_failure(status, trace_id);
+    }
     let code = BRegProblemCode::ALL.into_iter().find(|candidate| {
         document.code == candidate.code()
             && document.status == candidate.status()
@@ -2782,11 +2788,21 @@ async fn breg_problem(response: Response, transport: &Transport) -> BaseRegistry
             && document.type_uri == candidate.type_uri()
     });
     let Some(code) = code else {
-        return problem_failure(status, trace_id);
+        // A malformed known code must never escape its catalog validation by
+        // falling back to the semantics of an unrecognized code.
+        if BRegProblemCode::ALL
+            .into_iter()
+            .any(|candidate| document.code == candidate.code())
+            || !valid_unrecognized_problem(&document)
+        {
+            return problem_failure(status, trace_id);
+        }
+        return BaseRegistryClientError::UnrecognizedProblem {
+            status: status.as_u16(),
+            trace_id,
+        };
     };
-    if code.status() != status.as_u16()
-        || document.trace_id != trace_id
-        || (extensions.declared_field && code != BRegProblemCode::MutationConflict)
+    if (extensions.declared_field && code != BRegProblemCode::MutationConflict)
         || extensions
             .field_path
             .as_ref()
@@ -2818,6 +2834,23 @@ async fn breg_problem(response: Response, transport: &Transport) -> BaseRegistry
         field_path: extensions.field_path.map(|(_, path)| path),
         refusal_code: extensions.refusal_code.or(extensions.reason_code),
     }
+}
+
+fn valid_unrecognized_problem(document: &ProblemDocument) -> bool {
+    let bounded_text = |text: &str, maximum| {
+        text.chars().count() <= maximum && !text.chars().any(char::is_control)
+    };
+    !document.code.is_empty()
+        && bounded_text(&document.code, 128)
+        && bounded_text(&document.title, 128)
+        && bounded_text(&document.detail, 256)
+        && bounded_text(&document.type_uri, 256)
+        && document.type_uri
+            == format!(
+                "https://id.registrystack.org/problems/registry-breg/{}",
+                document.code.replace('.', "/")
+            )
+        && url::Url::parse(&document.type_uri).is_ok_and(|uri| uri.as_str() == document.type_uri)
 }
 
 fn valid_statistics_refusal_code(value: &str) -> bool {
@@ -2884,7 +2917,9 @@ struct BRegProblemExtensions {
 /// BReg owns paired field locations, problem locations, and the declared code an
 /// immediate-action refusal names. The platform parser owns the six required
 /// common members and bounded optional `fieldPath`; BReg pins each retained
-/// location to its closed product grammar and compatible problem code.
+/// location to its closed product grammar and compatible problem code. Future
+/// object members are ignored, and an unrecognized code retains no extension
+/// semantics. Duplicate keys are refused before either projection.
 fn parse_breg_problem(body: &[u8]) -> Result<(ProblemDocument, BRegProblemExtensions), ()> {
     if body.is_empty() || body.len() > MAXIMUM_PROBLEM_BYTES {
         return Err(());
@@ -2892,6 +2927,22 @@ fn parse_breg_problem(body: &[u8]) -> Result<(ProblemDocument, BRegProblemExtens
     let serde_json::Value::Object(mut object) = crate::strict_json::from_slice(body)? else {
         return Err(());
     };
+    let known_code = object
+        .get("code")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|code| {
+            BRegProblemCode::ALL
+                .into_iter()
+                .any(|candidate| code == candidate.code())
+        });
+    if !known_code {
+        object.retain(|key, _| {
+            matches!(
+                key.as_str(),
+                "type" | "title" | "status" | "detail" | "code" | "traceId"
+            )
+        });
+    }
     let declared_field = match (object.remove("entityId"), object.remove("fieldId")) {
         (None, None) => false,
         (Some(serde_json::Value::String(entity)), Some(serde_json::Value::String(field)))
@@ -2913,6 +2964,12 @@ fn parse_breg_problem(body: &[u8]) -> Result<(ProblemDocument, BRegProblemExtens
         Some(serde_json::Value::String(code)) => Some(BRegRefusalCode::parse(&code).ok_or(())?),
         _ => return Err(()),
     };
+    object.retain(|key, _| {
+        matches!(
+            key.as_str(),
+            "type" | "title" | "status" | "detail" | "code" | "traceId" | "fieldPath"
+        )
+    });
     let common = serde_json::to_vec(&object).map_err(|_| ())?;
     let (document, common_field_path) =
         ProblemDocument::parse_with_field_path(&common, MAXIMUM_PROBLEM_BYTES).map_err(|_| ())?;

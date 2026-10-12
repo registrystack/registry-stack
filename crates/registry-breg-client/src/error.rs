@@ -470,6 +470,11 @@ pub enum BaseRegistryClientError {
         field_path: Option<BRegProblemFieldPath>,
         refusal_code: Option<BRegRefusalCode>,
     },
+    /// A valid Problem whose code is newer than this client. Only HTTP status
+    /// and the validated trace identifier carry semantics; service text and
+    /// extensions are discarded.
+    #[error("Base Registry Engine refused or failed the request: status {status}, unrecognized problem code")]
+    UnrecognizedProblem { status: u16, trace_id: TraceId },
     #[error("the Base Registry Engine response did not satisfy its wire contract: status {status}, {failure}")]
     Protocol {
         status: u16,
@@ -528,7 +533,9 @@ impl BaseRegistryClientError {
     #[must_use]
     pub fn trace_id(&self) -> Option<&TraceId> {
         match self {
-            Self::Problem { trace_id, .. } => Some(trace_id),
+            Self::Problem { trace_id, .. } | Self::UnrecognizedProblem { trace_id, .. } => {
+                Some(trace_id)
+            }
             Self::Protocol { trace_id, .. } => trace_id.as_ref(),
             _ => None,
         }
@@ -556,7 +563,7 @@ impl BaseRegistryClientError {
                 code: BRegProblemCode::ResourceNotFound,
                 ..
             } => "not-found",
-            Self::Problem { .. } => "problem",
+            Self::Problem { .. } | Self::UnrecognizedProblem { .. } => "problem",
             Self::Protocol { .. } => "protocol",
         }
     }
@@ -564,7 +571,9 @@ impl BaseRegistryClientError {
     #[must_use]
     pub fn status(&self) -> Option<u16> {
         match self {
-            Self::Problem { status, .. } | Self::Protocol { status, .. } => Some(*status),
+            Self::Problem { status, .. }
+            | Self::UnrecognizedProblem { status, .. }
+            | Self::Protocol { status, .. } => Some(*status),
             _ => None,
         }
     }
@@ -620,7 +629,8 @@ impl BaseRegistryClientError {
     /// oversized or unparseable answer, and a 5xx answer: a 5xx may follow a
     /// commit. False for a configuration or request defect, a credential the
     /// token provider could not supply, a connection that was never
-    /// established, every typed 4xx refusal, and the two typed 5xx failures
+    /// established, every valid 4xx Problem (including an unrecognized code),
+    /// and the two typed 5xx failures
     /// the engine returns only with the attempt rolled back,
     /// `action.handler_failed` and `statistical_dataset.domain_violation`.
     /// When it is true, the safe recovery for an idempotency-keyed mutation is
@@ -644,6 +654,7 @@ impl BaseRegistryClientError {
             Self::Configuration { .. } | Self::InvalidRequest { .. } | Self::Token(_) => false,
             Self::Transport { kind } => !matches!(kind, TransportKind::Connect),
             Self::Problem { status, code, .. } => *status >= 500 && !code.fails_before_commit(),
+            Self::UnrecognizedProblem { status, .. } => *status >= 500,
             Self::Protocol { .. } => true,
         }
     }
@@ -659,6 +670,7 @@ impl BaseRegistryClientError {
                 matches!(kind, TransportKind::Timeout | TransportKind::Exchange)
             }
             Self::Problem { status, code, .. } => *status >= 500 && !code.fails_before_commit(),
+            Self::UnrecognizedProblem { status, .. } => *status >= 500,
             Self::Protocol { status, .. } => *status >= 500,
             Self::Configuration { .. } | Self::InvalidRequest { .. } | Self::Token(_) => false,
         }
@@ -822,6 +834,25 @@ mod tests {
                 .expect("a canonical trace identifier"),
             field_path: None,
             refusal_code: None,
+        }
+    }
+
+    #[test]
+    fn unrecognized_problems_use_only_status_for_outcome_and_resend() {
+        for status in [400, 404, 422, 429, 500, 503] {
+            let error = BaseRegistryClientError::UnrecognizedProblem {
+                status,
+                trace_id: TraceId::parse("0123456789abcdef0123456789abcdef").unwrap(),
+            };
+            assert_eq!(error.kind(), "problem");
+            assert_eq!(error.status(), Some(status));
+            assert!(error.trace_id().is_some());
+            assert!(error.problem_code().is_none());
+            assert!(error.field_path().is_none());
+            assert!(error.refusal_code().is_none());
+            assert!(error.reason_code().is_none());
+            assert_eq!(error.is_outcome_unknown(), status >= 500);
+            assert_eq!(error.resend_may_settle(), status >= 500);
         }
     }
 
