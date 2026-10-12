@@ -56,7 +56,11 @@ Registry Render.
   unsupported operating systems and architectures before downloading.
 - Standalone Linux binaries, including CLI tools, link the GNU C library dynamically and require
   glibc 2.34 or newer. Installers reject detected musl hosts, including Alpine, and glibc versions
-  below 2.34. Python client wheels are `manylinux_2_17`; no `musllinux` wheel is published.
+  below 2.34. That floor is the one of the release an installer was published with. A release's
+  Linux binaries need the glibc that release was built for, so each installer also starts every
+  Linux binary it verified before it selects the release. A release whose binary does not start on
+  the host is refused, and the installed toolset stays selected. Python client wheels are
+  `manylinux_2_17`; no `musllinux` wheel is published.
 - Each container image is `linux/amd64`; no multi-architecture image index is published. An arm64
   container host therefore needs amd64 emulation.
 - Published macOS executables use arm64 bundles that include the executable, its shared
@@ -66,7 +70,8 @@ Registry Render.
 {/* Evidence: release/scripts/release_candidate.py, _release_payload_inventory and _candidate_image_names;
     release/scripts/release_roster.py; release/glibc-floor.env;
     crates/registry-breg/install.sh; crates/registry-casework/install.sh;
-    crates/registry-evidencectl/install.sh; release/scripts/macos_fips_packaging.py;
+    crates/registry-evidencectl/install.sh; crates/registry-scheduling/install.sh;
+    release/scripts/macos_fips_packaging.py;
     crates/registry-stack-client-node/npm/linux-arm64-gnu/package.json. */}
 
 ## Base Registry Engine (BReg) limits
