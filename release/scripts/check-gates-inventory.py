@@ -320,8 +320,8 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         "cargo test --locked -p registry-casework --features postgres-test --test service_visibility",
     ),
     (
-        "Casework assignment and source routing suites",
-        "cargo test --locked -p registry-casework --features postgres-test --test assignment_postgres --test routing_postgres",
+        "Casework assignment, source routing, and task-grant invalidation suites",
+        "cargo test --locked -p registry-casework --features postgres-test --test assignment_postgres --test routing_postgres --test task_grant_invalidation",
     ),
     (
         "Casework persisted source clock selection",

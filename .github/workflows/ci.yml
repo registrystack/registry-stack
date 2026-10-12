@@ -849,11 +849,11 @@ jobs:
           docker exec "$POSTGRES_CONTAINER_ID" createdb -U casework casework_source_retention
           docker exec "$POSTGRES_CONTAINER_ID" createdb -U casework casework_review
           docker exec "$POSTGRES_CONTAINER_ID" createdb -U casework casework_review_migration
-      - name: Verify assignment and source routing
+      - name: Verify assignment, source routing, and task-grant invalidation
         env:
           CASEWORK_ASSIGNMENT_TEST_DATABASE_URL: postgresql://casework:casework_test@localhost:${{ job.services.postgres.ports['5432'] }}/casework_review
           CASEWORK_ROUTING_TEST_DATABASE_URL: postgresql://casework:casework_test@localhost:${{ job.services.postgres.ports['5432'] }}/casework_review
-        run: cargo test --locked -p registry-casework --features postgres-test --test assignment_postgres --test routing_postgres
+        run: cargo test --locked -p registry-casework --features postgres-test --test assignment_postgres --test routing_postgres --test task_grant_invalidation
       - name: Verify persisted source clocks, restart, and recompute
         # An inexact name filter that selects nothing still exits 0, so the
         # step names the test exactly and fails unless it reports one pass.
