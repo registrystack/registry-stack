@@ -760,6 +760,21 @@ class GateInventoryTest(unittest.TestCase):
                 "BReg client contract consistency",
             ),
             (
+                "--features runtime,tooling,schema --lib --test action_evidence_compiler",
+                "--lib",
+                "Base Registry Engine schema-gated tests",
+            ),
+            (
+                "run: python3 .github/scripts/check_breg_gated_tests.py",
+                "run: true # Base Registry Engine gated test selection disabled",
+                "Base Registry Engine gated test selection",
+            ),
+            (
+                "run: python3 .github/scripts/test_check_breg_gated_tests.py",
+                "run: true # Base Registry Engine gated test selection tests disabled",
+                "Base Registry Engine gated test selection tests",
+            ),
+            (
                 "run: products/breg/scripts/check-mcp-gateway-boundary.sh",
                 "run: true # citizen gateway boundary disabled",
                 "Enforce the citizen gateway's delegated-agent boundary",

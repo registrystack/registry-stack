@@ -134,6 +134,12 @@ jobs:
       - name: Test nightly coverage planning
         run: python3 .github/scripts/test_nightly_rust_coverage.py
 
+      - name: Test Base Registry Engine gated test selection gate
+        run: python3 .github/scripts/test_check_breg_gated_tests.py
+
+      - name: Check feature-gated Base Registry Engine tests are selected
+        run: python3 .github/scripts/check_breg_gated_tests.py
+
       - name: Test platform fuzz runner
         run: uv run --no-project --with PyYAML==6.0.2 python -m unittest products/platform/scripts/test_run_fuzz_smoke.py
 
@@ -1254,6 +1260,13 @@ jobs:
       - name: Base Registry Engine contract consistency
         if: matrix.lane == 'contracts'
         run: uv run --no-project --with PyYAML==6.0.2 products/breg/scripts/check-contracts.sh
+
+      # No shard enables `schema` on registry-breg, so its schema-gated tests
+      # run here, where check-contracts.sh has already built the dependencies
+      # of this feature set.
+      - name: Base Registry Engine schema-gated tests
+        if: matrix.lane == 'contracts'
+        run: cargo test --locked -p registry-breg --features runtime,tooling,schema --lib --test action_evidence_compiler
 
       - name: BReg client contract consistency
         if: matrix.lane == 'contracts'
