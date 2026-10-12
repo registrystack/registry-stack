@@ -1484,7 +1484,7 @@ jobs:
           mkdir -p extracted dist
           tar -xzf "${bundle}" -C extracted
           for platform in manylinux_2_17_x86_64.manylinux2014_x86_64 manylinux_2_17_aarch64.manylinux2014_aarch64 macosx_11_0_arm64; do
-            cp "extracted/registry_${client}_client-${version}-cp310-abi3-${platform}.whl" dist/
+            cp "extracted/registry_${client}_client-${version}-cp311-abi3-${platform}.whl" dist/
           done
           state="$(python3 release/scripts/client_registry.py pypi-state \
             --directory dist --version "${version}" --client "${client}")"

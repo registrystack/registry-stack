@@ -48,7 +48,7 @@ def metadata(version: str) -> bytes:
         f"Version: {version}\n"
         "Summary: Unified Python client for Registry Stack products.\n"
         "License-Expression: Apache-2.0\n"
-        "Requires-Python: >=3.10\n"
+        "Requires-Python: >=3.11\n"
         "Project-URL: Documentation, https://docs.registrystack.org/\n"
         "Project-URL: Issues, https://github.com/registrystack/registry-stack/issues\n"
         "Project-URL: Repository, https://github.com/registrystack/registry-stack\n"

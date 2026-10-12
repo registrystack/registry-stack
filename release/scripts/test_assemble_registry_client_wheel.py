@@ -18,7 +18,7 @@ from unittest import TestCase, main, mock
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "release/scripts/assemble-registry-client-wheel.py"
 PRODUCTS = ("discovery", "evidence", "breg", "casework", "messaging", "scheduling")
-TAG = "cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64"
+TAG = "cp311-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64"
 
 
 def load_module():

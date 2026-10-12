@@ -280,8 +280,9 @@ def npm_tarballs(directory: Path, version: str, client: str) -> list[Path]:
 
 def wheel_paths(directory: Path, version: str, client: str) -> list[Path]:
     definition = client_definition(client)
+    abi_tag = release_roster.python_wheel_abi_tag(release_version(version))
     return [
-        directory / f"{definition.wheel_stem}-{version}-cp310-abi3-{platform}.whl"
+        directory / f"{definition.wheel_stem}-{version}-{abi_tag}-{platform}.whl"
         for platform in WHEEL_PLATFORMS
     ]
 

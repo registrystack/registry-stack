@@ -795,20 +795,20 @@ jobs:
           - runner: ubuntu-24.04
             asset: linux-amd64-glibc
             target: x86_64-unknown-linux-gnu
-            wheel_tag: cp310-abi3-linux_x86_64
-            registry_wheel_tag: cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64
+            wheel_tag: cp311-abi3-linux_x86_64
+            registry_wheel_tag: cp311-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64
             napi_platform: linux-x64-gnu
           - runner: ubuntu-24.04-arm
             asset: linux-arm64-glibc
             target: aarch64-unknown-linux-gnu
-            wheel_tag: cp310-abi3-linux_aarch64
-            registry_wheel_tag: cp310-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64
+            wheel_tag: cp311-abi3-linux_aarch64
+            registry_wheel_tag: cp311-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64
             napi_platform: linux-arm64-gnu
           - runner: macos-26
             asset: macos-arm64
             target: aarch64-apple-darwin
-            wheel_tag: cp310-abi3-macosx_11_0_arm64
-            registry_wheel_tag: cp310-abi3-macosx_11_0_arm64
+            wheel_tag: cp311-abi3-macosx_11_0_arm64
+            registry_wheel_tag: cp311-abi3-macosx_11_0_arm64
             napi_platform: darwin-arm64
     steps:
       - name: Checkout exact candidate source
@@ -1733,7 +1733,7 @@ jobs:
                 manylinux_2_17_x86_64.manylinux2014_x86_64 \
                 manylinux_2_17_aarch64.manylinux2014_aarch64 \
                 macosx_11_0_arm64; do
-                echo "registry_stack_client-${version}-cp310-abi3-${wheel_platform}.whl"
+                echo "registry_stack_client-${version}-cp311-abi3-${wheel_platform}.whl"
               done
             else
               for platform in linux-amd64-glibc linux-arm64-glibc macos-arm64; do
@@ -1744,7 +1744,7 @@ jobs:
                 wheel_platforms=(manylinux_2_17_x86_64.manylinux2014_x86_64 manylinux_2_17_aarch64.manylinux2014_aarch64 macosx_11_0_arm64)
               fi
               for wheel_platform in "${wheel_platforms[@]}"; do
-                echo "registry_evidence_client-${{ needs.validate.outputs.version }}-cp310-abi3-${wheel_platform}.whl"
+                echo "registry_evidence_client-${{ needs.validate.outputs.version }}-cp311-abi3-${wheel_platform}.whl"
               done
             if [[ "${include_registry_packages}" -eq 1 ]]; then
               echo "registrystack-evidence-client-${version}.tgz"
@@ -1757,7 +1757,7 @@ jobs:
                 echo "discovery-client-node-${{ needs.validate.outputs.tag }}-${platform}.tgz"
               done
               for wheel_platform in "${wheel_platforms[@]}"; do
-                echo "registry_discovery_client-${{ needs.validate.outputs.version }}-cp310-abi3-${wheel_platform}.whl"
+                echo "registry_discovery_client-${{ needs.validate.outputs.version }}-cp311-abi3-${wheel_platform}.whl"
               done
               if [[ "${include_registry_packages}" -eq 1 ]]; then
                 echo "registrystack-discovery-client-${version}.tgz"

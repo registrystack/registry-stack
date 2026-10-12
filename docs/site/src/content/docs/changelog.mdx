@@ -18,6 +18,24 @@ relevant product pages on this site rather than duplicating release notes.
 
 ## Unreleased
 
+- BREAKING: the published `registry-stack-client` Python package requires Python 3.11 or later:
+  its `Requires-Python` is `>=3.11` (was `>=3.10`), its wheels are built against the Python 3.11
+  stable ABI and named `cp311-abi3` (was `cp310-abi3`), and Python 3.10 is no longer supported.
+  The floor moves because Python 3.10 reached end of life on 2026-10-01, so it no longer has the
+  more than six months of upstream support that release preparation requires of a dependency
+  pinned to a long-term-support line. Migration: run your application on Python 3.11 or later
+  before you upgrade the client package, and name the `cp311-abi3` file where an install command
+  names a wheel from the GitHub Release. The [client API reference](../reference/client-api/)
+  gives the runtime and platform requirements of the package.
+
+{/* Evidence: crates/registry-stack-client-py/pyproject.toml, requires-python;
+    release/scripts/assemble-registry-client-wheel.py, metadata;
+    Cargo.toml, the pyo3 abi3-py311 feature under workspace dependencies;
+    release/scripts/release_roster.py, PYTHON_311_ABI_FIRST_RELEASE;
+    release/OPERATIONS.md, the long-term-support rule under release preparation;
+    the Python release cycle in the Python Developer's Guide, for the end-of-life date;
+    release/scripts/test_release_workflow_structure.py, PythonClientFloorStructureTest. */}
+
 - BREAKING: the published `@registrystack/client` Node.js package and its platform packages
   `@registrystack/client-darwin-arm64`, `@registrystack/client-linux-arm64-gnu`, and
   `@registrystack/client-linux-x64-gnu` require Node.js 24.11.0 or later: their `engines.node` is
