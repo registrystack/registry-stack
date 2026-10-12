@@ -1753,6 +1753,26 @@ fn retained_database_inspection_accepts_only_verified_image_aliases() {
     }
 }
 
+/// An egress allowlist is written from the start help, so the help names the
+/// exact reference the supervisor pulls.
+#[test]
+fn dev_start_help_names_the_image_reference_it_pulls() {
+    let cli = <crate::Cli as clap::CommandFactory>::command();
+    let help = cli
+        .get_subcommands()
+        .find(|command| command.get_name() == "dev")
+        .expect("caseworkctl publishes dev")
+        .get_subcommands()
+        .find(|command| command.get_name() == "start")
+        .and_then(|command| command.get_long_about())
+        .expect("dev start describes its own supervision")
+        .to_string();
+    assert!(
+        help.contains(IMAGE),
+        "caseworkctl dev start help omits {IMAGE}"
+    );
+}
+
 #[test]
 fn a_volume_without_the_owner_label_is_never_removed() {
     let root = crate::canonical_tempdir();

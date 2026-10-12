@@ -2391,8 +2391,9 @@ fn generated_postgres_leaf_verifies_against_its_distinct_ca() {
 }
 
 /// The pinned image and the two deadlines are facts an operator checks before
-/// a first start. Hold the owning document, the command's own help text and
-/// the supervisor's canonical identity equal so they cannot drift apart.
+/// a first start, and an egress allowlist is written from the image reference.
+/// Hold the owning document, the command's own help text and the reference the
+/// supervisor pulls equal so they cannot drift apart.
 #[test]
 fn the_documented_image_and_deadlines_are_the_supervisors_own() {
     let document = fs::read_to_string(
@@ -2418,7 +2419,7 @@ fn the_documented_image_and_deadlines_are_the_supervisors_own() {
         "the owning document names the pull source"
     );
     for fact in [
-        CANONICAL_IMAGE.to_owned(),
+        IMAGE.to_owned(),
         SPATIAL_IMAGE.to_owned(),
         format!("{} seconds", CHILD_DEADLINE.as_secs()),
         format!("{} seconds", READY_DEADLINE.as_secs()),

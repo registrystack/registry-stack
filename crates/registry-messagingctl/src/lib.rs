@@ -121,6 +121,14 @@ enum Command {
     Retention(RetentionCommand),
     /// Run an authoring project locally with PostgreSQL, Mailpit, and a mock HTTP
     /// gateway in Docker, until Ctrl-C.
+    ///
+    /// The session pulls and runs the pinned images
+    /// public.ecr.aws/docker/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675
+    /// and
+    /// ghcr.io/axllent/mailpit:v1.31.2@sha256:74d609a42ec279aa63c6b4622a6fa9b5408d1ad5b1d76a1c4be40a265ce0863d,
+    /// the Docker Official Images and upstream GHCR mirrors of postgres:17.11 and
+    /// axllent/mailpit:v1.31.2 at those digests. Each publishes on 127.0.0.1
+    /// only, and the session removes both when it stops.
     Dev(dev::DevArgs),
 }
 

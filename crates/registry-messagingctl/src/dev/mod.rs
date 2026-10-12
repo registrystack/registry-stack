@@ -88,10 +88,8 @@ struct TokenArgs {
 /// Start a session in the foreground and stop it on Ctrl-C or SIGTERM.
 ///
 /// The session needs Docker. It pulls and runs the pinned images
-/// postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675
-/// and
-/// axllent/mailpit:v1.31.2@sha256:74d609a42ec279aa63c6b4622a6fa9b5408d1ad5b1d76a1c4be40a265ce0863d,
-/// each publishing on 127.0.0.1 only, and removes both when it stops.
+/// `docker::POSTGRES_IMAGE` and `docker::MAILPIT_IMAGE`, each publishing on
+/// 127.0.0.1 only, and removes both when it stops.
 #[derive(Debug, Args)]
 struct StartArgs {
     /// The package directory to run, as `messagingctl init` writes it.

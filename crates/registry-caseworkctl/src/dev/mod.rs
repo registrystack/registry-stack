@@ -160,7 +160,8 @@ enum DevAction {
     /// Casework child. Standalone sessions also own a pinned issuer container;
     /// --source-project sessions use the running Base Registry Engine (BReg) session's stock issuer. The database runs the pinned
     /// image
-    /// postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675,
+    /// public.ecr.aws/docker/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675,
+    /// the Docker Official Images mirror of postgres:17.11 at that digest,
     /// which the supervisor pulls on the first start. Each supervised
     /// prerequisite command may run for 120 seconds, and the database and each
     /// started service have 45 seconds to answer as ready. A start that passes
