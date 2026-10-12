@@ -123,7 +123,7 @@ class NightlyWorkflowTest(unittest.TestCase):
                 "'release/docker/Dockerfile.builder', " + toolchain_inputs
             ),
             "arm64": (
-                "nightly-arm64-"
+                "nightly-arm64-go-1.27.2-"
                 "${{ hashFiles('rust-toolchain.toml', "
                 "'release/scripts/build-nightly-linux-arm64.sh', " + toolchain_inputs
             ),

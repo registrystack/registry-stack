@@ -2379,15 +2379,36 @@ class SupportingWorkflowStructureTest(unittest.TestCase):
         for path in sorted(WORKFLOWS.glob("*.yml")):
             text, document = workflow(path.name)
             for job_name, job in document["jobs"].items():
-                for step in job.get("steps", ()):
-                    if not step.get("uses", "").startswith("actions/setup-go@"):
-                        continue
-                    setup_go_jobs.add((path.name, job_name))
+                steps = job.get("steps", ())
+                setup_go_steps = [
+                    step
+                    for step in steps
+                    if step.get("uses", "").startswith("actions/setup-go@")
+                ]
+                if not setup_go_steps:
+                    continue
+                setup_go_jobs.add((path.name, job_name))
+                for step in setup_go_steps:
                     with self.subTest(workflow=path.name, job=job_name):
                         self.assertEqual(step["uses"], SETUP_GO_ACTION)
                         self.assertEqual(
                             step["with"], {"go-version": GO_VERSION, "cache": False}
                         )
+                # Cargo does not track the Go release as a build input, so a
+                # restored target directory keeps AWS-LC-FIPS objects built by
+                # whichever Go produced them. The key has to name the release.
+                for step in steps:
+                    if not step.get("uses", "").startswith(
+                        ("actions/cache@", "Swatinem/rust-cache@")
+                    ):
+                        continue
+                    keys = [step["with"]["key"]]
+                    keys += step["with"].get("restore-keys", "").splitlines()
+                    with self.subTest(
+                        workflow=path.name, job=job_name, cache=step.get("name")
+                    ):
+                        for key in keys:
+                            self.assertIn(f"go-{GO_VERSION}", key)
             with self.subTest(workflow=path.name, check="cache identity"):
                 self.assertLessEqual(
                     set(GO_CACHE_TOKEN_RE.findall(text)), {GO_VERSION}
