@@ -163,4 +163,49 @@ if "caseworkctl source add BREG_PROJECT" not in diagnostic["suggestedAction"]:
     sys.exit(f"stale pin refusal names no repin: {diagnostic}")
 PY
 
+# The citizen self-registration acceptance project carries a Casework template
+# and the source description `source add` wrote from its registry. The
+# template, with its example development clients materialized as written,
+# passes the offline check and its fixtures. Regenerating the description the
+# way the template's README does, against a Casework copy that holds only
+# `casework.yaml`, reproduces the committed bytes and leaves the registry as
+# written. A registry or `source add` change that moves the description fails
+# here until the description is regenerated and committed.
+citizen_registration="$repo_root/products/breg/acceptance/citizen-self-registration"
+citizen_casework="$work/citizen-registration-casework"
+mkdir -p "$citizen_casework"
+cp "$citizen_registration/casework/casework.yaml" "$citizen_casework/casework.yaml"
+cp "$citizen_registration/casework/dev-clients.example.yaml" \
+  "$citizen_casework/dev-clients.yaml"
+cp -R "$citizen_registration/casework/fixtures" "$citizen_registration/casework/sources" \
+  "$citizen_casework/"
+"$caseworkctl_bin" check "$citizen_casework" --deny-warnings >/dev/null
+"$caseworkctl_bin" test "$citizen_casework" >/dev/null
+citizen_registry="$work/citizen-registration-registry"
+mkdir -p "$citizen_registry/tests"
+cp "$citizen_registration/registry.yaml" "$citizen_registration/dev-clients.yaml" \
+  "$citizen_registry/"
+cp -R "$citizen_registration/scripts" "$citizen_registry/"
+cp "$citizen_registration/tests/journeys.yaml" "$citizen_registry/tests/journeys.yaml"
+citizen_registry=$(CDPATH= cd -- "$citizen_registry" && pwd -P)
+citizen_source_add="$work/citizen-registration-source-add"
+mkdir -p "$citizen_source_add"
+cp "$citizen_registration/casework/casework.yaml" "$citizen_source_add/casework.yaml"
+"$caseworkctl_bin" source add "$citizen_registry" \
+  --project "$citizen_source_add" --source-id citizen-self-registration \
+  --casework-endpoint http://127.0.0.1:8096 --apply \
+  --bregctl-bin "$bregctl_bin" >/dev/null
+if ! cmp -s "$citizen_source_add/sources/citizen-self-registration.json" \
+  "$citizen_registration/casework/sources/citizen-self-registration.json"; then
+  echo "the citizen self-registration Casework source description is stale;" \
+    "regenerate it with the source add command in" \
+    "products/breg/acceptance/citizen-self-registration/casework/README.md" >&2
+  exit 1
+fi
+if ! cmp -s "$citizen_registry/registry.yaml" "$citizen_registration/registry.yaml"; then
+  echo "source add rewrote the citizen self-registration registry; its stock" \
+    "casework-reader profile or lifecycle hook no longer matches what source add writes" >&2
+  exit 1
+fi
+
 echo "Casework product contracts and offline authoring journey passed."
