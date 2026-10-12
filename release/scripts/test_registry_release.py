@@ -113,8 +113,10 @@ def candidate_verification_plan(registry_release):
 IDENTIFIER_PUBLISHER_PIN_READ = [
     "gh",
     "api",
-    "repos/registrystack/registrystack-id/contents/src/upstream/source.json"
-    "?ref=refs/heads/main",
+    (
+        "repos/registrystack/registrystack-id/contents/src/upstream/source.json"
+        "?ref=refs/heads/main"
+    ),
     "--header",
     "Accept: application/vnd.github.raw+json",
 ]
