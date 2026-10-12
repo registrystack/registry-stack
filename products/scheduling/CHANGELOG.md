@@ -20,7 +20,9 @@
     holds `scheduling.package.json` is refused at startup like any other
     file `SHA256SUMS` does not list, as `scheduling.package.invalid` at
     `/package/root` naming the extra file, or as
-    `scheduling.package.unexpected-contents` when `SHA256SUMS` lists it.
+    `scheduling.package.unexpected-contents` when `SHA256SUMS` lists it. A
+    `package.expectedDigest` that pins another digest is checked before the
+    contents and is reported first, as `scheduling.package.digest-mismatch`.
     Migration: rebuild the package with `schedulingctl package`.
   - `schedulingctl.activation.earlier-release` is removed. `schedulingctl
     plan`, `apply`, and `records apply` do not read a retained policy whose

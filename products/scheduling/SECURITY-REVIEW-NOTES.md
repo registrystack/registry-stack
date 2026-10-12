@@ -1047,7 +1047,9 @@ recognizing it.
   (`scheduling.package.invalid`), and one it does list is refused because
   the package must hold exactly `scheduling.yaml`
   (`scheduling.package.unexpected-contents`). Both name
-  `schedulingctl package` (SCHEDULING-SEC-15).
+  `schedulingctl package` (SCHEDULING-SEC-15). The `package.expectedDigest`
+  pin is compared before the contents, so a listed file under a pin that
+  names another digest is refused as `scheduling.package.digest-mismatch`.
 - `serve` is the runtime's only command. Any other name is the argument
   parser's usage error, exit 2, raised before the runtime file is read, so
   no command line makes the runtime migrate, adopt, or publish
