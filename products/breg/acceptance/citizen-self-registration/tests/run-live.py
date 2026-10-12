@@ -282,6 +282,7 @@ def main() -> int:
             if excerpt:
                 (root / "issuer-errors.log").write_text(excerpt + "\n")
         except (OSError, ValueError, subprocess.TimeoutExpired):
+            # Optional issuer diagnostics must not mask the failed checkpoint or stop cleanup.
             pass
         print(f"Acceptance run failed. Private diagnostics: {root}", file=sys.stderr)
     finally:
