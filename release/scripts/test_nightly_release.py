@@ -1115,6 +1115,76 @@ cp "$source" "$destination"
                     self.assertIn("The installed toolset is unchanged.", result.stderr)
                     self.assertEqual(before, installed(destination, binaries))
 
+    def test_linux_start_check_does_not_read_the_installing_shell_environment(self):
+        output = self.assembled()
+        commands = self.root / "commands-environment"
+        commands.mkdir()
+        scripts = {
+            "uname": '#!/bin/sh\ncase "$1" in -s) echo Linux;; -m) echo x86_64;; *) exit 1;; esac\n',
+            "getconf": '#!/bin/sh\necho "glibc 2.34"\n',
+            "ldd": '#!/bin/sh\necho "ldd (GNU libc) 2.34"\n',
+            # Emulate GNU mv's atomic replacement on macOS as well as Linux.
+            "mv": "#!/usr/bin/env python3\nimport os,sys\nos.replace(sys.argv[-2], sys.argv[-1])\n",
+        }
+        for name, script in scripts.items():
+            (commands / name).write_text(script)
+            (commands / name).chmod(0o755)
+        toolsets = {
+            "breg": ("breg", "bregctl"),
+            "evidencectl": ("evidence", "evidencectl", "evidence-oid4vci"),
+            "casework": ("casework", "caseworkctl"),
+            "scheduling": ("scheduling", "schedulingctl"),
+        }
+        self.assertEqual(set(toolsets), set(nightly.INSTALLERS))
+
+        for product, binaries in toolsets.items():
+            with self.subTest(product=product):
+                # A runtime reads its configuration from the environment before
+                # it reads its arguments, so one left in the installing shell
+                # can make a binary that starts here exit before `--version`.
+                assets = self.root / f"environment-{product}"
+                assets.mkdir()
+                sums = []
+                for binary in binaries:
+                    name = f"{binary}-{TAG}-linux-amd64"
+                    (assets / name).write_text(
+                        "#!/bin/sh\n"
+                        'if [ -n "${REGISTRY_RUNTIME_SETTING+x}" ]; then\n'
+                        '\techo "$0: REGISTRY_RUNTIME_SETTING is not supported" >&2\n'
+                        "\texit 2\n"
+                        "fi\n"
+                        f'echo "{binary} {TAG[1:]}"\n'
+                    )
+                    digest = hashlib.sha256((assets / name).read_bytes())
+                    sums.append(f"{digest.hexdigest()}  {name}\n")
+                (assets / "SHA256SUMS").write_text("".join(sums))
+                destination = self.root / f"installed-{product}-environment"
+                prefix = nightly.INSTALLERS[product][1]
+                environment = os.environ | {
+                    "PATH": str(commands) + os.pathsep + os.environ["PATH"],
+                    f"{prefix}_ASSET_DIR": str(assets),
+                    f"{prefix}_INSTALL_DIR": str(destination),
+                    "REGISTRY_RUNTIME_SETTING": "left in the installing shell",
+                }
+                environment.pop(f"{prefix}_VERSION", None)
+
+                result = subprocess.run(
+                    ["bash", str(output / f"{product}-{TAG}-install.sh")],
+                    env=environment,
+                    text=True,
+                    capture_output=True,
+                )
+
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(
+                    sorted(
+                        path.name
+                        for path in destination.iterdir()
+                        if not path.name.startswith(".")
+                    ),
+                    sorted(binaries),
+                )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -168,11 +168,9 @@ fn glibc_below_the_floor_refuses_before_installing() {
 fn glibc_at_the_floor_installs_both_commands() {
     let (major, minor) = glibc_floor();
     let fixture = InstallerFixture::linux();
-    let start_log = fixture.root.join("started");
+    let start_log = fixture.start_log();
     let mut command = fixture.command();
-    command
-        .env("FAKE_GLIBC", format!("{major}.{minor}"))
-        .env("FIXTURE_START_LOG", &start_log);
+    command.env("FAKE_GLIBC", format!("{major}.{minor}"));
     let output = command.output().unwrap();
     assert!(
         output.status.success(),
@@ -371,7 +369,7 @@ exec /bin/mv "$@"
             if self.macos_bundle {
                 self.write_macos_bundle(binary, &stem, &path);
             } else {
-                write_fixture_binary(&path, binary);
+                write_fixture_binary(&path, binary, &self.start_log());
             }
             sums.push_str(&format!("{}  {asset}\n", sha256(&path)));
         }
@@ -381,7 +379,7 @@ exec /bin/mv "$@"
     fn write_macos_bundle(&self, binary: &str, stem: &str, archive: &Path) {
         let source_dir = self.root.join("bundle-sources").join(binary);
         fs::create_dir_all(&source_dir).unwrap();
-        write_fixture_binary(&source_dir.join(stem), binary);
+        write_fixture_binary(&source_dir.join(stem), binary, &self.start_log());
         let library = "libaws_lc_fips_0_14_2_crypto.dylib";
         write_executable(
             &source_dir.join(library),
@@ -547,6 +545,13 @@ exec "$REAL_MV" "$@"
         );
     }
 
+    /// Where each release asset this fixture writes records that it was
+    /// started. The path is written into the asset, because the installer
+    /// starts a staged binary with an empty environment.
+    fn start_log(&self) -> PathBuf {
+        self.root.join("started")
+    }
+
     fn assert_release_toolset_active(&self) {
         for binary in BINARIES {
             let output = Command::new(self.install_dir.join(binary))
@@ -636,22 +641,21 @@ fn write_executable(path: &Path, body: &str) {
     fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
 }
 
-fn write_fixture_binary(path: &Path, binary: &str) {
+fn write_fixture_binary(path: &Path, binary: &str, start_log: &Path) {
     write_executable(
         path,
         &format!(
             r#"#!/usr/bin/env bash
 set -euo pipefail
 if [[ "${{1:-}}" == --version ]]; then
-  if [[ -n "${{FIXTURE_START_LOG:-}}" ]]; then
-    printf '%s\n' '{binary}' >> "$FIXTURE_START_LOG"
-  fi
+  printf '%s\n' '{binary}' >> '{start_log}'
   printf '%s\n' '{binary} {version}'
 else
   printf '%s\n' '{binary} release binary'
 fi
 "#,
-            version = &TEST_VERSION[1..]
+            version = &TEST_VERSION[1..],
+            start_log = start_log.display()
         ),
     );
 }
