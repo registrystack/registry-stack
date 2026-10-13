@@ -69,11 +69,14 @@ The 5 seconds are fixed, with no configuration key.
 The writer also bounds the entries waiting behind the one it is writing: a request that finds that
 queue full is refused at once, with no stall logged and with the writer still able to report
 ready, so readiness alone does not show it.
+A collector that reads slowly without stopping has the same effect: a request whose entry waits 5
+seconds behind earlier entries is refused and its entry is not written, although the writer held
+no single entry for 5 seconds, logs no stall, and still reports ready.
 A write the stream refuses is a different fault: it stops the writer until a restart, as a failed
 file write does.
 
 {/* Evidence: crates/registry-platform-audit/src/writer.rs, STREAM_WRITE_DEADLINE,
-    STREAM_QUEUE_LINES, AuditUnavailableReason::Stalled,
+    STREAM_QUEUE_LINES, AuditUnavailableReason::Stalled, LineStream::append, StreamState::run,
     a_stalled_stream_refuses_the_append_at_the_deadline_and_later_ones_at_once,
     readiness_follows_a_stall_and_returns_once_the_stream_drains,
     a_full_stream_queue_refuses_a_line_instead_of_growing, and
