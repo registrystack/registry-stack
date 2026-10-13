@@ -165,8 +165,8 @@ of the change:
   just before the end. The two reports are made outside the stream's lock,
   so a destination that takes its line at the instant a caller first sees
   the stall can log the end ahead of the start. A full queue refuses lines
-  without turning `ready()` false and without a report. A destination that
-  never takes its line keeps one thread until the process exits, and
+  without turning `ready()` false and without a stall report. A destination
+  that never takes its line keeps one thread until the process exits, and
   unfinished response entries queued behind it when the writer is dropped
   are not written, which is reported once. An operator who
   sets a request timeout under 5 seconds still sees a timed-out request
