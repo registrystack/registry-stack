@@ -6,6 +6,10 @@
   `issuer.clientResources` assigns to that client. Previously, startup requested
   every token for the owner BReg audience, so an owner that registered a client
   for another local product refused its token and could not start.
+- `bregctl dev` accepts a development issuer's RS256 verification key only
+  when the published key declares `use: sig`, lists `verify` alone if it lists
+  `key_ops`, and carries no private member. The pinned ThunderID 1.0.1 issuer
+  publishes such keys, so an existing local session starts as before.
 
 ## 0.41.0 - 2026-10-13
 
