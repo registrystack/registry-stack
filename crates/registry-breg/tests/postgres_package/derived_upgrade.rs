@@ -415,7 +415,7 @@ fn legacy_derived_view_sql(current: &str) -> String {
     )
 }
 
-async fn assert_startup(
+pub(super) async fn assert_startup(
     database: &TestDatabase,
     package_root: &TempRoot,
     package: &registry_breg::package::VerifiedPackage,
