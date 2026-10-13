@@ -863,9 +863,13 @@ A `stdout` destination whose collector stops reading stalls instead, and a stall
 restart.
 Once the writer has held one entry for 5 seconds, the call waiting on that entry fails with
 `service.unavailable`, later audited calls are refused at once, and `/ready` answers `503`.
-The runtime log carries `audit stream has held one entry past the write deadline`.
-When the collector takes the entry, the log carries `audit stream took the entry it was holding`
-and the writer accepts entries again.
+When the collector takes the entry, the writer accepts entries again.
+The runtime log does not name a stall, so `/ready` and the refused calls are the signal.
+That log shares standard output with a `stdout` audit destination.
+A refused call and `/ready` write no log record, so their answers do not wait on the stream.
+A record the runtime does write while the collector is not reading, such as a background pass that
+did not complete, waits with no deadline and holds a runtime thread until the collector reads
+again, so set a timeout on the `/ready` probe and treat a probe that gets no answer as failed.
 
 A maintenance pass runs every two seconds and a source reconciliation pass per bound source at that
 binding's
@@ -902,11 +906,11 @@ is among the items it reads.
     serve_until_worker_stops(), supervise(), operational_log_level(), and open_audit();
     crates/registry-casework/src/audit.rs, CASEWORK_AUDIT_SCHEMA and AuditOperation::commit();
     crates/registry-platform-audit/src/writer.rs, AuditWriter::ready(), STREAM_WRITE_DEADLINE,
-    AuditUnavailableReason::Stalled, StreamEvent::StallStarted, StreamEvent::StallEnded, and
+    AuditUnavailableReason::Stalled, and
     readiness_follows_a_stall_and_returns_once_the_stream_drains;
     crates/registry-casework/src/main.rs, initialize_logging();
     crates/registry-casework/src/store.rs, migrate();
-    crates/registry-casework/src/http.rs, health() and ready();
+    crates/registry-casework/src/http.rs, health(), ready(), and StoreError::AuditUnavailable;
     crates/registry-casework/src/service.rs, ready() and assemble_caller_visible_item();
     crates/registry-casework/src/assignment.rs, assignment_visible_item_for_origin();
     crates/registry-casework/src/task_grants.rs, preview_tasks(), approve_task(), and list_tasks();
@@ -1073,7 +1077,7 @@ bound to the actor and selected profile for 15 minutes; an expired preview retur
 | `the Casework audit destination could not be opened: another process holds the single-writer lock beside the audit file` | Another `casework` process writes this file. Stop it, or give this process its own `audit.path`. |
 | `the Casework audit destination could not be opened: the audit file could not be opened: ...` | The rest of the message names the rule the audit file or its directory broke and the fix, for example `chown it to the service user and chmod it 0700`, or `archive it and restart with a fresh path` for a file whose last entry is incomplete. Apply it and start again. |
 | `caseworkctl doctor` stops at `the Casework audit destination is not writable by this user` | Run `doctor` as the runtime user, and fix the audit directory's owner and mode, or the audit file's, as the message names. |
-| `GET /ready` returns `503` while `GET /health` returns `200` | The audit writer stopped, PostgreSQL is failing, or a source's reconciliation is failing. Run `caseworkctl doctor`, which names the check, then read the runtime log for `audit file write failed` or the reconciliation entry, and check the audit file, its lock, the free space, and the database. When the log carries `audit stream has held one entry past the write deadline`, restore the `stdout` collector; the writer resumes with no restart. |
+| `GET /ready` returns `503` while `GET /health` returns `200` | The audit writer stopped, PostgreSQL is failing, or a source's reconciliation is failing. Run `caseworkctl doctor`, which names the check, then read the runtime log for `audit file write failed` or the reconciliation entry, and check the audit file, its lock, the free space, and the database. With a `stdout` audit destination, also check that its collector is reading the stream: a stalled writer resumes with no restart once it is. |
 | `doctor` refuses at `doctor:/checks/reconciliation` | The named source's last passes failed. `source-unavailable` means the source did not answer; `source-refused` means it answered with a refusal or a response Casework cannot use; `store` and `configuration` point at the database and the binding. Repair the cause; the next pass that succeeds restores readiness. |
 | `doctor` refuses at `doctor:/checks/pinnedWork`, or `caseworkctl apply` refuses with `would strand work pinned under an earlier package` | The package removes a queue, profile, review producer, or source that in-flight work still needs, edits a pinned review kind without a new version, or changes what a source read discloses. Keep the earlier package until that work finishes, or set `package.acknowledgeStrandedWork` to the digest the refusal names. |
 | `BReg source ID runs engine version X and this Casework runs Y`, or `BReg source ID does not report its engine version` | Casework and that BReg source are on different releases, or a proxy removes the `Registry-Engine-Version` header. Upgrade the one that is behind as [the lock-step upgrade](#upgrade-casework-and-breg-in-lock-step) describes, or let the header through; source reads resume on the next matching read. |
