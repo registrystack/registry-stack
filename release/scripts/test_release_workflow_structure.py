@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-from unittest.mock import patch as roster_patch
-
 import json
 import importlib.util
 import os
@@ -15,6 +13,13 @@ from unittest import mock
 from pathlib import Path
 
 import yaml
+
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+import release_roster  # noqa: E402
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -351,7 +356,7 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         for job in ("build-platforms", "build-macos-platforms", "clients"):
             assert_pinned_go(self, document, job)
 
-    @roster_patch("release_roster.COORDINATOR_FIRST_RELEASE", (0, 42, 0))
+    @mock.patch.object(release_roster, "COORDINATOR_FIRST_RELEASE", (0, 42, 0))
     def test_current_release_pipeline_has_no_pre_v0_19_surface(self) -> None:
         paths = (
             WORKFLOWS / "release-candidate.yml",
@@ -661,7 +666,7 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         )
         self.assertIn("release/scripts/build-release-binaries.sh", canonical)
 
-    @roster_patch("release_roster.COORDINATOR_FIRST_RELEASE", (0, 42, 0))
+    @mock.patch.object(release_roster, "COORDINATOR_FIRST_RELEASE", (0, 42, 0))
     def test_canonical_binary_shards_are_exact_source_inputs_to_one_consumer(
         self,
     ) -> None:
@@ -961,7 +966,7 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
             self.assertNotIn(retired, assemble)
         self.assertIn("crates/registry-evidencectl/install.sh", assemble)
 
-    @roster_patch("release_roster.COORDINATOR_FIRST_RELEASE", (0, 42, 0))
+    @mock.patch.object(release_roster, "COORDINATOR_FIRST_RELEASE", (0, 42, 0))
     def test_builds_and_smokes_stable_native_client_packages(self) -> None:
         text, document = workflow("release-candidate.yml")
         clients = document["jobs"]["clients"]
@@ -1401,7 +1406,7 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         for forbidden in ("npm publish", "maturin publish", "twine upload"):
             self.assertNotIn(forbidden, text)
 
-    @roster_patch("release_roster.COORDINATOR_FIRST_RELEASE", (0, 42, 0))
+    @mock.patch.object(release_roster, "COORDINATOR_FIRST_RELEASE", (0, 42, 0))
     def test_candidate_client_smoke_counts_and_internal_wheel_names(self) -> None:
         _, document = workflow("release-candidate.yml")
         node = step_run(document, "clients", "Smoke Node client packages")
@@ -1658,7 +1663,7 @@ class MessagingClientWorkflowStructureTest(unittest.TestCase):
                 self.assertIn("--issued-at 2026-01-01T00:00:00Z", smoke)
                 self.assertIn('--strict --out "${RUNNER_TEMP}/release-render-letter.pdf"', smoke)
 
-    @roster_patch("release_roster.COORDINATOR_FIRST_RELEASE", (0, 42, 0))
+    @mock.patch.object(release_roster, "COORDINATOR_FIRST_RELEASE", (0, 42, 0))
     def test_coordinator_smokes_follow_the_shared_release_roster(self) -> None:
         for name, job in (
             ("release-candidate.yml", "build-canonical"),
@@ -1698,7 +1703,7 @@ class MessagingClientWorkflowStructureTest(unittest.TestCase):
         node = step_run(candidate, "clients", "Build Node client packages")
         self.assertIn('platform_clients+=(messaging)', node)
 
-    @roster_patch("release_roster.COORDINATOR_FIRST_RELEASE", (0, 42, 0))
+    @mock.patch.object(release_roster, "COORDINATOR_FIRST_RELEASE", (0, 42, 0))
     def test_release_client_jobs_select_coordinator_from_the_shared_roster_alone(self) -> None:
         for name, job, steps in (
             ("release-candidate.yml", "clients", ("Build Python client wheels", "Build Node client packages")),
