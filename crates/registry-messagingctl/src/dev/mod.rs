@@ -13,6 +13,7 @@
 //! replaces. `dev token` signs a short-lived bearer token for a client an
 //! access profile names, with the key the running session trusts.
 
+mod borrowed;
 mod config;
 mod docker;
 mod gateway;
@@ -36,6 +37,8 @@ use registry_messaging::package::{
 };
 use registry_messaging::runtime::{apply_activation, operational_log_level, serve_from_path};
 use registry_messaging_core::READY_PATH;
+use registry_platform_yaml::{Diagnostic, Report, Severity, Source};
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use zeroize::Zeroizing;
 
@@ -71,7 +74,7 @@ pub(crate) struct DevArgs {
 #[derive(Debug, Subcommand)]
 enum DevAction {
     /// Write a bearer header file for a client an access profile names,
-    /// signed with the running session's key and valid for one hour.
+    /// using the running session's local key or borrowed issuer.
     Token(TokenArgs),
 }
 
@@ -104,6 +107,14 @@ struct StartArgs {
     /// How long the mock gateway takes to answer each send, in milliseconds.
     #[arg(long, value_name = "MILLISECONDS", default_value_t = 200)]
     mock_latency_ms: u64,
+    /// Borrow pre-registered clients from this BReg development project.
+    #[arg(long, value_name = "PROJECT", requires = "resource")]
+    issuer_project: Option<PathBuf>,
+    /// The exact Messaging audience registered at the borrowed issuer.
+    #[arg(long, value_name = "URI", requires = "issuer_project")]
+    resource: Option<String>,
+    #[arg(long, hide = true, default_value = "bregctl")]
+    bregctl_bin: PathBuf,
     #[arg(long, hide = true, default_value = "docker")]
     docker_bin: PathBuf,
 }
@@ -146,7 +157,7 @@ fn interrupted() -> DevFailure {
 }
 
 impl DevFailure {
-    fn outcome(&self) -> Outcome {
+    pub(super) fn outcome(&self) -> Outcome {
         Outcome::refused(self.exit, self.code, "/", self.message.clone())
     }
 }
@@ -238,14 +249,25 @@ fn token(args: &TokenArgs) -> DevResult<Outcome> {
             "the running session package is unavailable ({error}); start messagingctl dev again"
         ))
     })?;
-    let signed = config::token(&root, &loaded, &args.client)?;
+    let record = read_session(&root)?;
+    let (signed, expires) = if let Some(binding) = &record.borrowed_issuer {
+        if record.state != "ready" {
+            return Err(refused(
+                "the borrowed development session is not ready; start messagingctl dev again"
+                    .to_owned(),
+            ));
+        }
+        borrowed::refresh(&root, &loaded, binding, &args.client)?
+    } else {
+        (config::token(&root, &loaded, &args.client)?, 3600)
+    };
     let header = config::header_file(&root, &args.client, &signed)?;
     Ok(Outcome::new(
         json!({
             "ok": true,
             "client": args.client,
             "headerFile": header,
-            "expiresInSeconds": 3600,
+            "expiresInSeconds": expires,
         }),
         View::DevToken,
     ))
@@ -257,6 +279,150 @@ struct Session {
     root: PathBuf,
     owner: String,
     containers: Vec<String>,
+    borrowed: Option<borrowed::Binding>,
+}
+
+pub(crate) const DEV_STATE_API_VERSION: &str =
+    "id.registrystack.org/formats/messaging/dev-state/v1alpha1";
+pub(crate) const DEV_STATE_KIND: &str = "MessagingDevState";
+const DEV_STATE_FORMAT: registry_platform_yaml::FormatSpec<'static> =
+    registry_platform_yaml::FormatSpec {
+        kind: DEV_STATE_KIND,
+        envelope: registry_platform_yaml::EnvelopeRule::ApiVersionKind {
+            api_versions: &[registry_platform_yaml::ApiVersion::current(
+                DEV_STATE_API_VERSION,
+            )],
+            retired_api_versions: &[],
+        },
+        removed_keys: &[],
+    };
+
+/// Private read-back state. Keys and tokens are files, never record members.
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SessionRecord {
+    api_version: String,
+    kind: String,
+    owner: String,
+    state: String,
+    containers: Vec<String>,
+    detail: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    borrowed_issuer: Option<borrowed::Binding>,
+}
+
+fn read_session(root: &Path) -> DevResult<SessionRecord> {
+    let file = root.join("session.json");
+    let bytes = private::read(&file, MAXIMUM_SESSION_BYTES).map_err(|_| {
+        refused(
+            "the development session record is unavailable; start messagingctl dev again"
+                .to_owned(),
+        )
+    })?;
+    decode_session(&file.display().to_string(), &bytes)
+        .map(|(record, _)| record)
+        .map_err(|_| refused("the development session record is invalid; preserve it for inspection and restart with the messagingctl version that wrote it".to_owned()))
+}
+
+fn decode_session(file: &str, bytes: &[u8]) -> Result<(SessionRecord, Report), Report> {
+    let decoded = registry_platform_yaml::Reader::new(file).decode::<SessionRecord>(
+        bytes,
+        &registry_platform_yaml::Expect::one(&DEV_STATE_FORMAT),
+    )?;
+    let mut report = decoded.document.warnings();
+    if uuid::Uuid::parse_str(&decoded.value.owner).is_err() {
+        report.push(decoded.document.diagnostic_at_value(
+            Severity::Error,
+            "messaging.dev-state.invalid-owner",
+            "/owner",
+            "the session owner is not an identifier messagingctl writes",
+            "Preserve the file for inspection, remove the development session directory after stopping its containers, and start messagingctl dev again.",
+        ));
+    }
+    if !matches!(
+        decoded.value.state.as_str(),
+        "starting" | "ready" | "stopped" | "stop-failed"
+    ) {
+        report.push(decoded.document.diagnostic_at_value(
+            Severity::Error,
+            "messaging.dev-state.invalid-state",
+            "/state",
+            "the session state is not one messagingctl writes",
+            "Preserve the file for inspection and start messagingctl dev again.",
+        ));
+    }
+    if decoded
+        .value
+        .borrowed_issuer
+        .as_ref()
+        .is_some_and(|binding| binding.check().is_err())
+    {
+        report.push(decoded.document.diagnostic_at_value(
+            Severity::Error,
+            "messaging.dev-state.invalid-borrowed-issuer",
+            "/borrowedIssuer",
+            "the borrowed issuer binding is not one messagingctl writes",
+            "Preserve the file for inspection and start messagingctl dev again with the intended issuer project and resource.",
+        ));
+    }
+    if report.has_errors() {
+        Err(report)
+    } else {
+        Ok((decoded.value, report))
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct SessionCheckFailure {
+    pub(crate) exit: u8,
+    pub(crate) report: Report,
+}
+
+fn file_report(path: &Path, code: &str, message: &str, suggested_action: &str) -> Report {
+    let mut diagnostic = Diagnostic::error(code, "", message, suggested_action);
+    diagnostic.artifact = Some(DEV_STATE_KIND.to_owned());
+    diagnostic.source = Some(Source {
+        file: path.display().to_string(),
+        line: None,
+        column: None,
+    });
+    let mut report = Report::new(vec![diagnostic]);
+    report.set_files_checked(1);
+    report
+}
+
+/// Validate generated read-back state without accessing secrets or services.
+pub(crate) fn check_session_file(path: &Path) -> Result<Report, SessionCheckFailure> {
+    use std::io::Read as _;
+    let mut bytes = Vec::new();
+    fs::File::open(path)
+        .and_then(|file| file.take(MAXIMUM_SESSION_BYTES + 1).read_to_end(&mut bytes))
+        .map_err(|_| SessionCheckFailure {
+            exit: OPERATIONAL_FAILURE_EXIT,
+            report: file_report(
+                path,
+                "messaging.dev-state.file-unreadable",
+                "the development session file could not be read",
+                "Name an existing development session file that this user may read.",
+            ),
+        })?;
+    if bytes.len() as u64 > MAXIMUM_SESSION_BYTES {
+        return Err(SessionCheckFailure {
+            exit: DOMAIN_REFUSAL_EXIT,
+            report: file_report(
+                path,
+                "messaging.dev-state.too-large",
+                "the development session file exceeds its size limit",
+                "Check a session file written by messagingctl whose size is at most 65536 bytes.",
+            ),
+        });
+    }
+    decode_session(&path.display().to_string(), &bytes)
+        .map(|(_, report)| report)
+        .map_err(|report| SessionCheckFailure {
+            exit: DOMAIN_REFUSAL_EXIT,
+            report,
+        })
 }
 
 impl Session {
@@ -266,15 +432,18 @@ impl Session {
     }
 
     fn write(&self, state: &str, detail: &Value) -> DevResult<()> {
-        let record = json!({
-            "owner": self.owner,
-            "state": state,
-            "containers": self.containers,
-            "detail": detail,
-        });
+        let record = SessionRecord {
+            api_version: DEV_STATE_API_VERSION.to_owned(),
+            kind: DEV_STATE_KIND.to_owned(),
+            owner: self.owner.clone(),
+            state: state.to_owned(),
+            containers: self.containers.clone(),
+            detail: detail.clone(),
+            borrowed_issuer: self.borrowed.clone(),
+        };
         private::replace(
             &self.root.join("session.json"),
-            record.to_string().as_bytes(),
+            &serde_json::to_vec(&record).expect("session state serializes"),
         )
         .map_err(|error| failed(format!("the session record could not be written: {error}")))
     }
@@ -299,10 +468,7 @@ fn clear_previous(root: &Path, docker: &docker::Docker) -> DevResult<()> {
                 "the previous session record is unreadable: {error}"
             ))
         })?;
-        let owner = serde_json::from_slice::<Value>(&bytes)
-            .ok()
-            .and_then(|value| value["owner"].as_str().map(str::to_owned))
-            .ok_or_else(|| failed("the previous session record names no owner".to_owned()))?;
+        let owner = previous_owner(&record, &bytes)?;
         docker.remove(&docker.owned(&owner)?)?;
     }
     fs::remove_dir_all(root).map_err(|error| {
@@ -310,6 +476,35 @@ fn clear_previous(root: &Path, docker: &docker::Docker) -> DevResult<()> {
             "the previous session could not be removed: {error}"
         ))
     })
+}
+
+/// Read only a validated owner for cleanup. An enveloped record always goes
+/// through the current typed reader. The fallback is limited to the exact
+/// pre-envelope distinction, and its owner still has to be a UUID before it
+/// can select Docker resources.
+fn previous_owner(file: &Path, bytes: &[u8]) -> DevResult<String> {
+    let invalid = || {
+        failed(
+            "the previous session record is invalid; preserve it for inspection and remove its containers manually"
+                .to_owned(),
+        )
+    };
+    let value: Value = serde_json::from_slice(bytes).map_err(|_| invalid())?;
+    let object = value.as_object().ok_or_else(&invalid)?;
+    let owner = if object.contains_key("apiVersion") || object.contains_key("kind") {
+        decode_session(&file.display().to_string(), bytes)
+            .map_err(|_| invalid())?
+            .0
+            .owner
+    } else {
+        object
+            .get("owner")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .ok_or_else(&invalid)?
+    };
+    uuid::Uuid::parse_str(&owner).map_err(|_| invalid())?;
+    Ok(owner)
 }
 
 fn fresh_session(project: &Path, docker: &docker::Docker) -> DevResult<(private::Lock, PathBuf)> {
@@ -369,6 +564,21 @@ fn start(
         Err(failure) => return finish(&failure.outcome(), "dev", format, stdout, stderr),
     };
     let (project, _) = project;
+    if let Some(resource) = &args.resource {
+        if !registry_platform_httputil::valid_resource_uri(resource) {
+            return finish(
+                &refused(
+                    "--resource must be an absolute resource URI without credentials or fragment"
+                        .to_owned(),
+                )
+                .outcome(),
+                "dev",
+                format,
+                stdout,
+                stderr,
+            );
+        }
+    }
     let (_lock, root) = match fresh_session(&project, &docker) {
         Ok(session) => session,
         Err(failure) => return finish(&failure.outcome(), "dev", format, stdout, stderr),
@@ -388,6 +598,7 @@ fn start(
         root: root.clone(),
         owner: uuid::Uuid::new_v4().simple().to_string(),
         containers: Vec::new(),
+        borrowed: None,
     };
     let served = run_session(
         args,
@@ -464,7 +675,20 @@ fn run_session(
 ) -> DevResult<()> {
     let root = session.root.clone();
     session.write("starting", &json!({}))?;
-    let passwords = config::generate(&root)?;
+    // Issuer preflight precedes owned containers and leaves the owner's
+    // lifecycle entirely with bregctl.
+    if let Some(project) = &args.issuer_project {
+        session.borrowed = Some(borrowed::capture(
+            &root,
+            loaded,
+            project,
+            args.resource.as_deref().expect("paired options"),
+            &args.bregctl_bin,
+            stop,
+        )?);
+        session.write("starting", &json!({}))?;
+    }
+    let passwords = config::generate(&root, session.borrowed.is_none())?;
     let owner = session.owner.clone();
     let short = &owner[..12];
     let database_port = docker::postgres(
@@ -530,8 +754,14 @@ fn run_session(
             gateway_port: gateway_address.port(),
         };
         let runtime_config = root.join("runtime.yaml");
-        let document = config::runtime_document(&root.join("package"), &root, loaded, &endpoints)
-            .map_err(|error| {
+        let document = config::runtime_document_with_issuer(
+            &root.join("package"),
+            &root,
+            loaded,
+            &endpoints,
+            session.borrowed.as_ref(),
+        )
+        .map_err(|error| {
             failed(format!(
                 "the runtime configuration could not be written: {error}"
             ))
@@ -680,5 +910,7 @@ fn initialize_logging(path: &Path) -> DevResult<()> {
         .map_err(|error| failed(format!("the session log could not be installed: {error}")))
 }
 
+#[cfg(test)]
+mod state_tests;
 #[cfg(test)]
 mod tests;

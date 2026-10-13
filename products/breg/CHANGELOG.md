@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- `bregctl dev` requests local client tokens for the resource that
+  `issuer.clientResources` assigns to that client. Previously, startup requested
+  every token for the owner BReg audience, so an owner that registered a client
+  for another local product refused its token and could not start.
+
 ## 0.41.0 - 2026-10-13
 
 - BREAKING: the published `registry-stack-client` Python package, which carries

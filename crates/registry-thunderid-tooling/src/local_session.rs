@@ -15,6 +15,8 @@ use crate::ToolingError;
 
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(120);
 const READY_TIMEOUT: Duration = Duration::from_secs(120);
+const PUBLIC_HTTP_TIMEOUT: Duration = Duration::from_secs(5);
+const PUBLIC_CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 const MAX_PUBLIC_RESPONSE: usize = 256 * 1024;
 
 fn cancelled_error() -> ToolingError {
@@ -263,32 +265,13 @@ fn start_inner(
         ],
     )?;
     session.start(&mut runner)?;
-    let issuer = format!("http://127.0.0.1:{}", session.port);
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|_| ToolingError::Unreachable {
-            step: "local HTTP runtime could not start",
-        })?;
-    let http = reqwest::Client::builder()
-        .no_proxy()
-        .redirect(reqwest::redirect::Policy::none())
-        .timeout(Duration::from_secs(5))
-        .connect_timeout(Duration::from_secs(2))
-        .build()
-        .map_err(|_| ToolingError::Unreachable {
-            step: "local HTTP client could not start",
-        })?;
     let deadline = Instant::now() + READY_TIMEOUT;
     loop {
         if (runner.cancelled)() {
             return Err(cancelled_error());
         }
-        if let Ok(discovery) = runtime.block_on(public_json(
-            &http,
-            &format!("{issuer}/.well-known/openid-configuration"),
-        )) {
-            return runtime.block_on(snapshot(&http, &issuer, &discovery));
+        if let Some(snapshot) = blocking_ready_snapshot(session.port)? {
+            return Ok(snapshot);
         }
         if Instant::now() >= deadline {
             return Err(ToolingError::Unreachable {
@@ -327,7 +310,71 @@ async fn public_json(http: &reqwest::Client, url: &str) -> Result<Value, Tooling
     serde_json::from_slice(&bytes).map_err(|_| refusal())
 }
 
-async fn snapshot(
+fn public_http_client() -> Result<reqwest::Client, ToolingError> {
+    reqwest::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(PUBLIC_HTTP_TIMEOUT)
+        .connect_timeout(PUBLIC_CONNECT_TIMEOUT)
+        .build()
+        .map_err(|_| ToolingError::Unreachable {
+            step: "local HTTP client could not start",
+        })
+}
+
+/// Read the bounded public RS256 verification-key snapshot from an existing
+/// local issuer. The numeric loopback origin and both endpoint paths are fixed
+/// here; this operation starts, stops, and otherwise changes no lifecycle.
+pub async fn snapshot(port: u16) -> Result<serde_json::Value, ToolingError> {
+    let issuer = local_issuer(port)?;
+    let http = public_http_client()?;
+    let discovery =
+        public_json(&http, &format!("{issuer}/.well-known/openid-configuration")).await?;
+    snapshot_from_discovery(&http, &issuer, &discovery).await
+}
+
+fn local_issuer(port: u16) -> Result<String, ToolingError> {
+    if port == 0 {
+        return Err(ToolingError::Unreachable {
+            step: "the local issuer port must be nonzero",
+        });
+    }
+    Ok(format!("http://127.0.0.1:{port}"))
+}
+
+async fn ready_snapshot(port: u16) -> Result<Option<Value>, ToolingError> {
+    let issuer = local_issuer(port)?;
+    let http = public_http_client()?;
+    let discovery =
+        match public_json(&http, &format!("{issuer}/.well-known/openid-configuration")).await {
+            Ok(discovery) => discovery,
+            Err(_) => return Ok(None),
+        };
+    snapshot_from_discovery(&http, &issuer, &discovery)
+        .await
+        .map(Some)
+}
+
+/// Run one asynchronous snapshot attempt on its own runtime thread. `start`
+/// is synchronous and is called both outside and inside Tokio executors, so it
+/// must not construct and enter a nested runtime on its caller's thread.
+fn blocking_ready_snapshot(port: u16) -> Result<Option<Value>, ToolingError> {
+    std::thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|_| ToolingError::Unreachable {
+                step: "local HTTP runtime could not start",
+            })?;
+        runtime.block_on(ready_snapshot(port))
+    })
+    .join()
+    .map_err(|_| ToolingError::Unreachable {
+        step: "local HTTP snapshot worker failed",
+    })?
+}
+
+async fn snapshot_from_discovery(
     http: &reqwest::Client,
     issuer: &str,
     discovery: &Value,
@@ -357,12 +404,21 @@ fn public_rsa_keys(jwks: &Value) -> Result<Value, ToolingError> {
             .as_str()
             .filter(|kid| !kid.is_empty() && kid.len() <= 256)
             .ok_or_else(refusal)?;
-        if !ids.insert(kid) || key["kty"] != "RSA" || key.get("d").is_some() {
+        let verification_operations = match key.get("key_ops") {
+            None => true,
+            Some(Value::Array(operations)) => operations.len() == 1 && operations[0] == "verify",
+            Some(_) => false,
+        };
+        if !ids.insert(kid)
+            || key["kty"] != "RSA"
+            || key["use"] != "sig"
+            || !verification_operations
+        {
             return Err(refusal());
         }
+        registry_platform_crypto::PublicJwk::parse(&key.to_string()).map_err(|_| refusal())?;
         let public =
             json!({"kty":"RSA","kid":kid,"alg":"RS256","use":"sig","n":key["n"],"e":key["e"]});
-        registry_platform_crypto::PublicJwk::parse(&public.to_string()).map_err(|_| refusal())?;
         keys.push(public);
     }
     if keys.is_empty() || keys.len() > 16 {
@@ -374,6 +430,59 @@ fn public_rsa_keys(jwks: &Value) -> Result<Value, ToolingError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    const RSA_MODULUS: &str = "0vx7agoebGcQSuuPiLJXZptN9nndrQmbXEps2aiAFbWhM78LhWx4cbbfAAtVT86zwu1RK7aPFFxuhDR1L6tSoc_BJECPebWKRXjBZCiFV4n3oknjhMstn64tZ_2W-5JsGY4Hc5n9yBXArwl93lqt7_RN5w6Cf0h4QyQ5v-65YGjQR0_FDW2QvzqY368QQMicAtaSqzs8KJZgnYb9c7d0zgdAZHzu6qMQvRL5hajrn1n91CbOpbISD08qNLyrdkt-bFTWhAI4vMQFh6WeZu0fM4lFd2NcRwr3XPksINHaQ-G_xBniIqbw0Ls1jF44-csFCur-kEgU8awapJzKnqDKgw";
+
+    fn response(status: &str, headers: &str, body: &[u8]) -> Vec<u8> {
+        let mut response = format!(
+            "HTTP/1.1 {status}\r\nConnection: close\r\nContent-Length: {}\r\n{headers}\r\n",
+            body.len()
+        )
+        .into_bytes();
+        response.extend_from_slice(body);
+        response
+    }
+
+    fn serve(responses: Vec<Vec<u8>>) -> (u16, std::thread::JoinHandle<Vec<String>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let worker = std::thread::spawn(move || {
+            responses
+                .into_iter()
+                .map(|response| {
+                    let (mut stream, _) = listener.accept().unwrap();
+                    stream
+                        .set_read_timeout(Some(Duration::from_secs(5)))
+                        .unwrap();
+                    let mut request = Vec::new();
+                    let mut byte = [0u8; 1];
+                    while !request.ends_with(b"\r\n\r\n") {
+                        assert!(request.len() < 32 * 1024);
+                        stream.read_exact(&mut byte).unwrap();
+                        request.push(byte[0]);
+                    }
+                    stream.write_all(&response).unwrap();
+                    String::from_utf8(request).unwrap()
+                })
+                .collect()
+        });
+        (port, worker)
+    }
+
+    fn rsa_key() -> Value {
+        json!({
+            "kty":"RSA",
+            "kid":"issuer-signing",
+            "alg":"RS256",
+            "use":"sig",
+            "n":RSA_MODULUS,
+            "e":"AQAB",
+            "x5c":["not-returned"]
+        })
+    }
+
     #[test]
     fn a_cancelled_runner_never_executes_the_engine() {
         let mut runner = DockerRunner {
@@ -417,5 +526,215 @@ mod tests {
             &json!({"keys":[{"alg":"RS256","kid":"one","kty":"RSA","d":"forbidden"}]})
         )
         .is_err());
+    }
+
+    #[test]
+    fn jwks_refuses_non_signing_use_and_incompatible_key_operations() {
+        let mut encryption = rsa_key();
+        encryption["use"] = json!("enc");
+        assert!(public_rsa_keys(&json!({"keys":[encryption]})).is_err());
+
+        for operations in [
+            json!(["sign"]),
+            json!(["verify", "sign"]),
+            json!(["encrypt"]),
+            json!("verify"),
+        ] {
+            let mut incompatible = rsa_key();
+            incompatible["key_ops"] = operations;
+            assert!(public_rsa_keys(&json!({"keys":[incompatible]})).is_err());
+        }
+
+        let mut verification = rsa_key();
+        verification["key_ops"] = json!(["verify"]);
+        assert!(public_rsa_keys(&json!({"keys":[verification]})).is_ok());
+    }
+
+    #[tokio::test]
+    async fn snapshot_reads_only_the_exact_loopback_public_rs256_key_set() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let issuer = format!("http://127.0.0.1:{port}");
+        let discovery = serde_json::to_vec(&json!({
+            "issuer": issuer,
+            "jwks_uri": format!("{issuer}/oauth2/jwks"),
+        }))
+        .unwrap();
+        let jwks = serde_json::to_vec(&json!({
+            "keys": [
+                rsa_key(),
+                {"kty":"EC","kid":"ignored","alg":"ES256","d":"ignored-private"}
+            ]
+        }))
+        .unwrap();
+        let worker = std::thread::spawn(move || {
+            [discovery, jwks]
+                .into_iter()
+                .map(|body| {
+                    let (mut stream, _) = listener.accept().unwrap();
+                    let mut request = Vec::new();
+                    let mut byte = [0u8; 1];
+                    while !request.ends_with(b"\r\n\r\n") {
+                        stream.read_exact(&mut byte).unwrap();
+                        request.push(byte[0]);
+                    }
+                    stream
+                        .write_all(&response(
+                            "200 OK",
+                            "Content-Type: application/json\r\n",
+                            &body,
+                        ))
+                        .unwrap();
+                    String::from_utf8(request).unwrap()
+                })
+                .collect::<Vec<_>>()
+        });
+
+        let keys = snapshot(port).await.unwrap();
+        assert_eq!(
+            keys,
+            json!({"keys":[{
+                "kty":"RSA",
+                "kid":"issuer-signing",
+                "alg":"RS256",
+                "use":"sig",
+                "n":RSA_MODULUS,
+                "e":"AQAB"
+            }]})
+        );
+        let requests = worker.join().unwrap();
+        assert!(requests[0].starts_with("GET /.well-known/openid-configuration HTTP/1.1"));
+        assert!(requests[1].starts_with("GET /oauth2/jwks HTTP/1.1"));
+    }
+
+    #[tokio::test]
+    async fn snapshot_refuses_discovery_for_another_issuer_or_jwks_path() {
+        let wrong_issuer = serde_json::to_vec(&json!({
+            "issuer":"http://127.0.0.1:1",
+            "jwks_uri":"http://127.0.0.1:1/oauth2/jwks"
+        }))
+        .unwrap();
+        let (port, worker) = serve(vec![response(
+            "200 OK",
+            "Content-Type: application/json\r\n",
+            &wrong_issuer,
+        )]);
+        assert!(snapshot(port).await.is_err());
+        worker.join().unwrap();
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let issuer = format!("http://127.0.0.1:{port}");
+        let wrong_path = serde_json::to_vec(&json!({
+            "issuer": issuer,
+            "jwks_uri": format!("{issuer}/another/path")
+        }))
+        .unwrap();
+        let worker = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0u8; 4096];
+            let _ = stream.read(&mut request).unwrap();
+            stream
+                .write_all(&response(
+                    "200 OK",
+                    "Content-Type: application/json\r\n",
+                    &wrong_path,
+                ))
+                .unwrap();
+        });
+        assert!(snapshot(port).await.is_err());
+        worker.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn snapshot_does_not_follow_redirects() {
+        let (port, worker) = serve(vec![response(
+            "302 Found",
+            "Location: /oauth2/jwks\r\n",
+            b"",
+        )]);
+        assert!(snapshot(port).await.is_err());
+        let requests = worker.join().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert!(requests[0].starts_with("GET /.well-known/openid-configuration HTTP/1.1"));
+    }
+
+    #[tokio::test]
+    async fn snapshot_refuses_private_rs256_keys_and_oversized_public_json() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let issuer = format!("http://127.0.0.1:{port}");
+        let discovery = serde_json::to_vec(&json!({
+            "issuer": issuer,
+            "jwks_uri": format!("{issuer}/oauth2/jwks")
+        }))
+        .unwrap();
+        let mut private = rsa_key();
+        private["d"] = json!("forbidden");
+        let jwks = serde_json::to_vec(&json!({"keys":[private]})).unwrap();
+        let worker = std::thread::spawn(move || {
+            for body in [discovery, jwks] {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut request = [0u8; 4096];
+                let _ = stream.read(&mut request).unwrap();
+                stream
+                    .write_all(&response(
+                        "200 OK",
+                        "Content-Type: application/json\r\n",
+                        &body,
+                    ))
+                    .unwrap();
+            }
+        });
+        assert!(snapshot(port).await.is_err());
+        worker.join().unwrap();
+
+        let oversized = vec![b' '; MAX_PUBLIC_RESPONSE + 1];
+        let (port, worker) = serve(vec![response(
+            "200 OK",
+            "Content-Type: application/json\r\n",
+            &oversized,
+        )]);
+        assert!(snapshot(port).await.is_err());
+        worker.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn snapshot_refuses_port_zero_without_making_a_request() {
+        assert!(matches!(
+            snapshot(0).await,
+            Err(ToolingError::Unreachable {
+                step: "the local issuer port must be nonzero"
+            })
+        ));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn blocking_snapshot_is_safe_inside_a_current_thread_runtime() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let issuer = format!("http://127.0.0.1:{port}");
+        let discovery = serde_json::to_vec(&json!({
+            "issuer": issuer,
+            "jwks_uri": format!("{issuer}/oauth2/jwks")
+        }))
+        .unwrap();
+        let jwks = serde_json::to_vec(&json!({"keys":[rsa_key()]})).unwrap();
+        let worker = std::thread::spawn(move || {
+            for body in [discovery, jwks] {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut request = [0u8; 4096];
+                let _ = stream.read(&mut request).unwrap();
+                stream
+                    .write_all(&response(
+                        "200 OK",
+                        "Content-Type: application/json\r\n",
+                        &body,
+                    ))
+                    .unwrap();
+            }
+        });
+        assert!(blocking_ready_snapshot(port).is_ok_and(|keys| keys.is_some()));
+        worker.join().unwrap();
     }
 }
