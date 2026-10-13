@@ -364,6 +364,34 @@ authority under the successor to continue a load, as
     crates/registry-breg/src/postgres/context.rs, begin_record_transaction();
     crates/registry-breg/tests/postgres_migration.rs. */}
 
+### The first successor after an engine upgrade
+
+A `bregctl` release can generate other views or indexes for the same project than the release that
+built the active package. The successor it builds over that package then also carries the
+statements that bring the generated schema up to date, even when you changed nothing in the
+project: it replaces the source view of every entity, and it drops and rebuilds every index you
+declared under `entities[].indexes`. A successor built with this release over a v0.41.0 package is
+one. `apply` runs these statements with the successor's other statements.
+
+Dropping an index takes an `ACCESS EXCLUSIVE` lock on its entity table, and rebuilding it reads
+the table once. A successor without a reviewed migration runs all its statements in one
+transaction, so the locks last until that transaction commits, and a failure rolls all of them
+back. `operationalTimeouts.migrationStatementMilliseconds`, 60,000 milliseconds by default, bounds
+each statement: set it long enough to build the index of your largest entity table, and time the
+apply on a restored copy when a table is large. A statement that runs past the bound fails the
+apply and pins the target, as the caution in this section describes; raise the bound and retry
+the same target.
+
+The next successor you build with the same release carries none of these statements.
+
+{/* Evidence: crates/registry-breg/src/package.rs, CompiledRegistryMigrationBaseline and
+    additive_migration_plan();
+    crates/registry-breg/src/postgres/interlock.rs, execute_successor_package_ddl();
+    crates/registry-breg/src/runtime_config.rs, DEFAULT_MIGRATION_STATEMENT_MILLISECONDS;
+    crates/registry-breg/tests/package_change_plan.rs,
+    unchanged_rebuild_is_empty_over_a_same_compiler_predecessor_and_not_over_an_earlier_one;
+    crates/registry-breg/tests/postgres_package/compiler_upgrade.rs. */}
+
 ## Recover a failed activation
 
 `migration reconcile` assesses a pinned registry and changes nothing without `--execute`:
@@ -603,7 +631,7 @@ columns in a different order. The runtime verifies a package under that fingerpr
 | `apply` reports `apply.migration.failed` | The apply failed after maintenance began. Read the report, fix the cause, and retry the same target. If that is not available, run `migration reconcile` to assess the pinned target, execute the transition it names, and restore the pre-activation backup only when it reports `unresolvable`. |
 | `apply` or `plan` reports `apply.database.unavailable` | The migration database could not be reached before maintenance began. Check that the database is reachable and accepts the migration role, then retry the same apply. Nothing was changed, so there is nothing to reconcile. |
 | `apply` or `plan` reports `apply.database.in-progress` | Another session held the migration lock past the lock timeout before maintenance began: an apply, an adoption, or a `migration reconcile` is running. Wait for it to finish, then retry the same apply. Nothing was changed, so there is nothing to reconcile. |
-| `apply` reports `apply.package.empty-plan` | The successor has nothing to apply: its plan has no schema statement and no reviewed migration, and it is not an access or disclosure change alone, for example a successor built from unchanged sources. Keep the active package until the model changes, then build the successor from that change. Nothing was changed. |
+| `apply` reports `apply.package.empty-plan` | The successor has nothing to apply: its plan has no schema statement and no reviewed migration, and it is not an access or disclosure change alone, for example a successor built from unchanged sources by the `bregctl` release that built the active package. Keep the active package until the model changes, then build the successor from that change. Nothing was changed. |
 | `breg` refuses to start with `the Registry package carries the retired apiVersion`, `check --package` reports `config.retired-api-version`, or another command reports `<command>.package.retired-api-version` or `diff.baseline.retired-api-version` | An earlier `bregctl` built the package under the retired package apiVersion `registry.registrystack.org/package/v2`. This release refuses that package wherever a package is read, as the active package and as `--baseline-package`. Rebuild the package from the migrated project with this release's `test` and `package`, and apply it to a new database with `apply --initial`. |
 | `apply` reports `apply.package.already-active` | The database already runs this package under the configured roles, so there is nothing to activate and nothing was changed. `bregctl status` shows the active package. A deploy job runs `plan` first and applies only when it reports `pending: true`. |
 | `apply` or `plan` reports `apply.package.refused` with `does not follow the active package` | The package's `migrationPlan.fromPackageDigest` is not the active package digest, or the package belongs to another registry: it was built against another baseline, it is older than the active package, or it skips a successor this database has not activated yet. Rebuild the successor with `--baseline-package` naming the active package directory. To go back, roll forward or restore, as [roll back by rolling forward](#roll-back-by-rolling-forward) describes. |
