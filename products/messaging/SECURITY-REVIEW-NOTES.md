@@ -989,7 +989,14 @@ while one runs.
 Residual risk: the audit journal and log of the last session stay in
 `.messaging/dev` until the next start. Neither carries a payload value
 (MESSAGING-SEC-08). A session killed with SIGKILL leaves its containers
-running until the next start in the same project removes them.
+running until the next start in the same project removes them. A borrowed
+session keeps each exported client assertion key in the owner-only
+`.messaging/dev/credentials/<client>/assertion-key.jwk` after it stops, and
+after a start refused once the export ran, until the next start in the
+project replaces the session directory; a `dev token` killed before it
+returns can leave a second owner-only copy under
+`.messaging/dev/.client-check-*` for the same time. These are development
+client keys for the borrowed loopback issuer.
 
 Tests: the `dev` unit tests in `crates/registry-messagingctl/src/dev/`,
 `products/messaging/scripts/test-dev.sh`, and
