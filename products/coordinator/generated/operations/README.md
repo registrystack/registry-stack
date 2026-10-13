@@ -95,7 +95,7 @@ Input ([`read-availability.input.schema.json`](read-availability.input.schema.js
 | `end` | string (date-time) | yes |
 | `grant` | `GrantReference` or null | no |
 | `limit` | integer | yes |
-| `offering` | string | yes |
+| `offering` | `LocalId` | yes |
 | `start` | string (date-time) | yes |
 
 No other members are accepted.

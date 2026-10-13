@@ -1326,7 +1326,16 @@ impl Store {
     pub async fn retry_same(&self, run: Uuid, binding_digest: &str) -> Result<()> {
         let mut client = self.client().await.map_err(unavailable)?;
         let tx = client.transaction().await.map_err(unavailable)?;
-        let status = self.status(run).await?;
+        self.verify_transaction(&tx).await.map_err(unavailable)?;
+        let status_row = tx
+            .query_opt(
+                &format!("{} WHERE r.run_id=$1", self.status_select()),
+                &[&run],
+            )
+            .await
+            .map_err(unavailable)?
+            .ok_or_else(|| refused("run-absent", "run was not found"))?;
+        let status = self.status_from_row(&status_row)?;
         if status.binding_digest != binding_digest {
             return Err(refused(
                 "binding-conflict",
@@ -1366,6 +1375,7 @@ impl Store {
         }
         let generation: i64 = row.get(1);
         tx.commit().await.map_err(unavailable)?;
+        drop(client);
         let mut replay_store = self.clone();
         replay_store.replay_binding = Some(binding_digest.to_owned());
         replay_store

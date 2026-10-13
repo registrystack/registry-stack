@@ -692,6 +692,14 @@ mod tests {
     }
 
     #[cfg(feature = "schema")]
+    fn availability_selector_accepts(input: &Value) -> bool {
+        input
+            .get("offering")
+            .and_then(Value::as_str)
+            .is_some_and(registry_scheduling_core::valid_identifier)
+    }
+
+    #[cfg(feature = "schema")]
     fn assert_parity(
         schema: &JSONSchema,
         input: &Value,
@@ -847,6 +855,62 @@ mod tests {
             "grant": grant,
             "appointment": {"admission": admission, "hold": "held-allocation"},
         })));
+    }
+
+    #[cfg(feature = "schema")]
+    #[tokio::test]
+    async fn availability_offering_matches_the_maintained_scheduling_selector() {
+        use registry_scheduling_client::{
+            BearerToken, SchedulingAuth, SchedulingClient, SchedulingClientConfig,
+            SchedulingClientError,
+        };
+
+        let schema = generated_input(Operation::ReadAvailability);
+        let request = |offering: &str| {
+            json!({
+                "offering": offering,
+                "start": "2026-10-11T09:00:00Z",
+                "end": "2026-10-11T17:00:00Z",
+                "limit": 10,
+            })
+        };
+
+        for offering in ["intake", "registry-update-30", "registry_update"] {
+            let input = request(offering);
+            assert_parity(&schema, &input, true, availability_selector_accepts);
+        }
+        let client = SchedulingClient::new(SchedulingClientConfig::new(
+            "https://scheduling.example.invalid/"
+                .parse()
+                .expect("fixture service URL"),
+        ))
+        .expect("fixture client");
+        let token = BearerToken::new("fixture-token").expect("fixture token");
+        for offering in [
+            "",
+            "Intake",
+            "30-minute-update",
+            "registry.update",
+            "registry/update",
+            "registry update",
+            &"x".repeat(65),
+        ] {
+            let input = request(offering);
+            assert_parity(&schema, &input, false, availability_selector_accepts);
+            assert!(matches!(
+                client
+                    .availability(
+                        SchedulingAuth::new(&token),
+                        offering,
+                        None,
+                        None,
+                        None,
+                        Some(10),
+                    )
+                    .await,
+                Err(SchedulingClientError::InvalidRequest { .. })
+            ));
+        }
     }
 
     #[cfg(feature = "schema")]

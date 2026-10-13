@@ -291,6 +291,8 @@ impl Store {
             let mut client = self.client().await.map_err(unavailable)?;
             let tx = client.transaction().await.map_err(unavailable)?;
             self.authorize_run(&tx, run, actor).await?;
+            tx.commit().await.map_err(unavailable)?;
+            drop(client);
             self.inspect(run, binding).await
         })
         .await
@@ -305,6 +307,8 @@ impl Store {
             let mut client = self.client().await.map_err(unavailable)?;
             let tx = client.transaction().await.map_err(unavailable)?;
             self.authorize_run(&tx, run, actor).await?;
+            tx.commit().await.map_err(unavailable)?;
+            drop(client);
             self.inspect_runtime(run, runtime).await
         })
         .await
@@ -322,6 +326,8 @@ impl Store {
             let mut client = self.client().await.map_err(unavailable)?;
             let tx = client.transaction().await.map_err(unavailable)?;
             self.authorize_run(&tx, run, actor).await?;
+            tx.commit().await.map_err(unavailable)?;
+            drop(client);
             let mut owned = self.clone();
             owned.replay_actor = Some(actor.clone());
             owned.retry_same(run, binding).await
@@ -342,6 +348,7 @@ impl Store {
             let step:String=row.get(0);let state:String=row.get(1);
             if row.get::<_,bool>(6) {
                 tx.commit().await.map_err(unavailable)?;
+                drop(client);
                 return self.status(run).await;
             }
             let snapshot:Option<Value>=row.get(5);
@@ -357,6 +364,7 @@ impl Store {
                     self.route_authored_cancel(&tx,run,&step,definition,true).await.map_err(unavailable)?;
                 }
                 tx.commit().await.map_err(unavailable)?;
+                drop(client);
                 return self.status(run).await;
             }
             let settled_failure=row.get::<_,String>(3)=="failed" && state=="delivered" && !row.get::<_,bool>(2) && !row.get::<_,bool>(4);
@@ -368,6 +376,7 @@ impl Store {
             }
             self.end_waits(&tx,run,&step,false).await.map_err(unavailable)?;
             tx.commit().await.map_err(unavailable)?;
+            drop(client);
             // A pending step is cancelled by Dispatch below, which counts it.
             if cancelled { self.metrics.record_run_finished(RunOutcome::Cancelled); }
             if state=="pending" && !row.get::<_,bool>(4) { let _outcome=self.dispatcher()?.cancel(&JobKey::new(run,step).map_err(unavailable)?).await.map_err(unavailable)?; }
@@ -398,9 +407,11 @@ impl Store {
             let definition=self.definition(&snapshot)?;
             let outputs:BTreeMap<String,Value>=self.open_value(run,"outputs","",&row.get::<_,Value>(5))?;
             tx.commit().await.map_err(unavailable)?;
+            drop(client);
             let observation=tokio::time::timeout(Duration::from_secs(10),adapters.reconcile(command.request(),outputs.get(&step))).await;
             if let Ok(ReconciliationOutcome::Confirmed(value))=observation {
                 crate::functions::check_value(&value)?;
+                let mut client=self.client().await.map_err(unavailable)?;
                 let tx=client.transaction().await.map_err(unavailable)?;
                 self.authorize_run(&tx,run,actor).await?;
                 // An expired lease may still be persisted in recovery-only mode.
@@ -422,6 +433,7 @@ impl Store {
                     tx.execute(&format!("UPDATE {}.runs SET restore_review_required=false WHERE run_id=$1",self.namespace),&[&run]).await.map_err(unavailable)?;
                 }
                 tx.commit().await.map_err(unavailable)?;
+                drop(client);
                 if let Some(outcome)=RunOutcome::from_state(written) { self.metrics.record_run_finished(outcome); }
             }
             // Missing, expired or unavailable receipts never prove no effect.
@@ -893,9 +905,11 @@ impl Store {
     ) -> Result<u64> {
         Self::operator(actor)?;
         self.audited("retention",actor,None, None,async {
-            if !(1..=100).contains(&limit)||before>Utc::now(){return Err(refused("retention-invalid","choose a past cutoff and a limit between 1 and 100"));}
+            if !(1..=100).contains(&limit){return Err(refused("retention-invalid","choose a past cutoff and a limit between 1 and 100"));}
             let mut client=self.client().await.map_err(unavailable)?;let tx=client.transaction().await.map_err(unavailable)?;
             self.verify_transaction(&tx).await.map_err(unavailable)?;
+            let database_now:DateTime<Utc>=tx.query_one("SELECT transaction_timestamp()",&[]).await.map_err(unavailable)?.get(0);
+            if before>database_now{return Err(refused("retention-invalid","choose a past cutoff and a limit between 1 and 100"));}
             let rows=tx.query(&format!("SELECT r.run_id FROM {}.runs r WHERE r.completed_at<$1 AND {} AND r.payload_erased_at IS NULL AND NOT r.restore_review_required ORDER BY r.completed_at,r.run_id LIMIT $2",self.namespace,self.terminal_retention_predicate()),&[&before,&i64::from(limit)]).await.map_err(unavailable)?;
             let mut erased=0;
             for row in &rows {
