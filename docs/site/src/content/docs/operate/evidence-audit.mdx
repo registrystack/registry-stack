@@ -113,6 +113,12 @@ the writer accepts entries with no restart.
 The first record is logged at `error` and the second at `warn`, both under the
 `registry_platform_audit` target, so an `EVIDENCE_LOG` filter that leaves out that target or those
 levels hides them.
+Keep standard error read as well.
+Evidence Gateway writes both records to standard error from the request, readiness check, or
+writer that noticed the change, and that write waits when standard error is full.
+A collector that stops reading both streams can therefore leave a request or a readiness check
+waiting rather than refused, until standard error is read again, so give callers and probes their
+own deadlines.
 The stream still receives the entry the collector was holding, so it can carry an entry for a
 request that was refused.
 Restore the collector rather than restarting Evidence Gateway: a process that exits during a stall
