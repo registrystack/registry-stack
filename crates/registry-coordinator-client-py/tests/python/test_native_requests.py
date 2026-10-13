@@ -344,8 +344,25 @@ class NativeRequestTests(unittest.TestCase):
         self.assertEqual(raised.exception.kind, "transport")
         self.assertIsInstance(raised.exception.transport_kind, str)
 
+    def test_uuid_spellings_share_the_canonical_run_routes(self) -> None:
+        for run in (RUN.upper(), RUN.replace("-", ""), f"{{{RUN}}}", f"urn:uuid:{RUN}"):
+            for method, suffix, response in (
+                ("status", "", STATUS),
+                ("inspect", "/inspect", INSPECTION),
+                ("reconcile", "/reconcile", INSPECTION),
+                ("retry_same", "/retry-same", RETRY_SCHEDULED),
+                ("cancel", "/cancel", STATUS),
+            ):
+                with self.subTest(run=run, method=method):
+                    self.service.script(ok(response))
+                    args = ("reason",) if method in ("reconcile", "retry_same", "cancel") else ()
+                    outcome = getattr(self.client, method)("token", run, *args)
+                    self.assertEqual(outcome, {"kind": "complete", "value": response})
+                    (observed,) = self.observed()
+                    self.assertEqual(observed["path"], f"/deployment/v1/runs/{RUN}{suffix}")
+
     def test_invalid_run_ids_are_refused_before_io(self) -> None:
-        for run in ("", "../ready", RUN.upper(), RUN.replace("-", ""), f"{{{RUN}}}", RUN + "/inspect"):
+        for run in ("", "../ready", "not-a-uuid", RUN + "/inspect", f"urn:uuid:{RUN}/inspect"):
             with self.subTest(run=run):
                 for call in (
                     lambda: self.client.status("token", run),

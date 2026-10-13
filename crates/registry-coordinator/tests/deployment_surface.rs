@@ -7,6 +7,7 @@ use registry_coordinator::{
     deployment, project,
     runtime::RuntimeConfig,
 };
+use registry_platform_audit::FileDestination;
 use registry_platform_httputil::FetchUrlPolicy;
 use registry_platform_oidc::{
     access_token_typ_set, JwksFetcher, JwksFetcherConfig, TokenVerifierConfig,
@@ -155,6 +156,49 @@ fn packaged_config(path: &std::path::Path, digest: &str) -> deployment::Deployme
     fs::write(runtime_file.path(), template).unwrap();
     let config = RuntimeConfig::load(&runtime_file.path().canonicalize().unwrap()).unwrap();
     deployment::config(&config).unwrap().clone()
+}
+
+#[test]
+fn audit_file_offline_validation_matches_the_writer_path_contract() {
+    let runtime_file = tempfile::NamedTempFile::new().unwrap();
+    fs::write(
+        runtime_file.path(),
+        include_str!("../../../products/coordinator/examples/single-flow-runtime.yaml"),
+    )
+    .unwrap();
+    let runtime = RuntimeConfig::load(&runtime_file.path().canonicalize().unwrap()).unwrap();
+    let mut deployment = deployment::config(&runtime).unwrap().clone();
+
+    for path in [
+        "/var/lib/registry-coordinator/events.lock".into(),
+        "/var/lib/registry-coordinator/events.seq".into(),
+        "/var/lib/registry-coordinator/events.seq.tmp".into(),
+        "/var/lib/registry-coordinator/events.torn".into(),
+        "/var/lib/registry-coordinator/events.00000001".into(),
+        format!("/var/lib/registry-coordinator/{}", "a".repeat(247)),
+    ] {
+        assert!(
+            FileDestination::new(&path).is_err(),
+            "writer accepted {path}"
+        );
+        deployment.audit_path = path.into();
+        let error = deployment
+            .validate(&runtime.secret_providers)
+            .expect_err("offline validation must refuse every path the writer refuses");
+        assert_eq!(error.field.as_deref(), Some("/deployment/auditFile"));
+    }
+
+    for path in [
+        "/var/lib/registry-coordinator/events.jsonl",
+        "/var/lib/registry-coordinator/events.locks",
+        "/var/lib/registry-coordinator/.lock.jsonl",
+    ] {
+        FileDestination::new(path).expect("writer accepts ordinary file name");
+        deployment.audit_path = path.into();
+        deployment
+            .validate(&runtime.secret_providers)
+            .expect("offline validation accepts every permitted example");
+    }
 }
 
 #[test]

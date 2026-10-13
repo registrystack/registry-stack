@@ -81,24 +81,17 @@
       "description": "The request behind `POST /v1/appointments`: confirm a held allocation, or\ncreate an appointment directly.",
       "properties": {
         "admission": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/AdmissionRequest"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "The direct-create admission request. Mutually exclusive with `hold`."
+          "$ref": "#/$defs/AdmissionRequest",
+          "description": "The direct-create admission request."
         },
         "hold": {
-          "description": "The hold being confirmed. Mutually exclusive with `admission`.",
-          "type": [
-            "string",
-            "null"
-          ]
+          "description": "Hold confirmation is not offered by Coordinator.",
+          "type": "null"
         }
       },
+      "required": [
+        "admission"
+      ],
       "type": "object"
     },
     "ExternalReference": {

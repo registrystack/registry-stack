@@ -181,17 +181,10 @@ impl DeploymentConfig {
                 "name the lowercase runtime PostgreSQL role within 63 bytes",
             ));
         }
-        if !self.audit_path.is_absolute()
-            || self.audit_path.components().any(|c| {
-                matches!(
-                    c,
-                    std::path::Component::ParentDir | std::path::Component::CurDir
-                )
-            })
-        {
+        if FileDestination::new(&self.audit_path).is_err() {
             errors.push(config_fail(
                 "deployment.auditFile",
-                "use an absolute audit file path without . or .. components",
+                "use an absolute audit file path without . or .. components whose file name is short enough to rotate and is not reserved for an audit companion or segment",
             ));
         }
         if self.active_state_key == 0
@@ -841,6 +834,7 @@ pub async fn plan(
     remove: &[String],
 ) -> Result<serde_json::Value> {
     let d = config(runtime)?;
+    flows.validate(runtime)?;
     let client = store
         .client()
         .await

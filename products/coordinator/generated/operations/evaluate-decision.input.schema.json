@@ -7,6 +7,7 @@
           "additionalProperties": false,
           "properties": {
             "instructions": {
+              "pattern": "\\S",
               "type": "string"
             },
             "type": {
@@ -25,14 +26,18 @@
           "properties": {
             "criteria": {
               "additionalProperties": false,
+              "maxProperties": 32,
+              "minProperties": 2,
               "patternProperties": {
                 "^[a-z][a-z0-9_-]{0,63}$": {
+                  "pattern": "\\S",
                   "type": "string"
                 }
               },
               "type": "object"
             },
             "instructions": {
+              "pattern": "\\S",
               "type": "string"
             },
             "type": {
@@ -52,11 +57,15 @@
           "properties": {
             "criteria": {
               "items": {
+                "pattern": "\\S",
                 "type": "string"
               },
+              "maxItems": 10,
+              "minItems": 2,
               "type": "array"
             },
             "instructions": {
+              "pattern": "\\S",
               "type": "string"
             },
             "type": {
@@ -79,6 +88,8 @@
   "properties": {
     "questions": {
       "additionalProperties": false,
+      "maxProperties": 32,
+      "minProperties": 1,
       "patternProperties": {
         "^[a-z][a-z0-9_-]{0,63}$": {
           "$ref": "#/$defs/Question"
@@ -87,7 +98,12 @@
       "type": "object"
     },
     "state": {
-      "description": "The evaluated state: any JSON object, string or array."
+      "description": "The evaluated state: any JSON object, string or array.",
+      "type": [
+        "object",
+        "string",
+        "array"
+      ]
     }
   },
   "required": [

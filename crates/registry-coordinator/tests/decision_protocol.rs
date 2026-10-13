@@ -148,6 +148,47 @@ async fn system_one_preserves_prefix_exact_preparation_and_native_statistics() {
 }
 
 #[tokio::test]
+async fn system_one_requires_both_usage_counters_as_unsigned_integers() {
+    let server = MockServer::start().await;
+    let client = connection(&config(&server.uri(), "system-one"));
+    let input = input();
+    let prepared = client.prepare(&input).unwrap_or_else(|_| panic!("prepare"));
+
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(system_reply()))
+        .expect(1)
+        .mount(&server)
+        .await;
+    success(client.call_prepared(&input, &prepared).await);
+    server.verify().await;
+    server.reset().await;
+
+    let mut cases = Vec::new();
+    for member in ["input_tokens", "output_tokens"] {
+        let mut missing = system_reply();
+        missing["usage"].as_object_mut().unwrap().remove(member);
+        cases.push(missing);
+    }
+    for (member, value) in [("input_tokens", json!(-1)), ("output_tokens", json!("4"))] {
+        let mut malformed = system_reply();
+        malformed["usage"][member] = value;
+        cases.push(malformed);
+    }
+    for response in cases {
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(response))
+            .expect(1)
+            .mount(&server)
+            .await;
+        assert!(
+            matches!(client.call_prepared(&input, &prepared).await, CallOutcome::Uncertain { code } if code == "decision-invalid-response")
+        );
+        server.verify().await;
+        server.reset().await;
+    }
+}
+
+#[tokio::test]
 async fn openai_matches_names_instead_of_positions_and_preserves_refusal() {
     let server = MockServer::start().await;
     let client = connection(&config(&server.uri(), "openai-decisions"));

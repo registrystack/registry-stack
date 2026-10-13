@@ -150,13 +150,10 @@ fn bearer(py: Python<'_>, value: &str) -> PyResult<BearerToken> {
         .map_err(|_| binding_error(py, "invalid-request", "the bearer token is invalid"))
 }
 
-/// A run identifier in its lowercase hyphenated form, the only spelling the
-/// runtime routes.
+/// Accept the UUID text forms supported by the runtime and the Rust client.
 fn run_id(py: Python<'_>, value: &str) -> PyResult<Uuid> {
     Uuid::parse_str(value)
-        .ok()
-        .filter(|run| run.to_string() == value)
-        .ok_or_else(|| binding_error(py, "invalid-request", "the run identifier is invalid"))
+        .map_err(|_| binding_error(py, "invalid-request", "the run identifier is invalid"))
 }
 
 fn invalid_configuration(py: Python<'_>) -> PyErr {

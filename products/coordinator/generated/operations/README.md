@@ -188,7 +188,7 @@ Input ([`evaluate-decision.input.schema.json`](evaluate-decision.input.schema.js
 | Member | Type | Required |
 |---|---|---|
 | `questions` | object | yes |
-| `state` | any | yes |
+| `state` | object or string or array | yes |
 
 No other members are accepted.
 

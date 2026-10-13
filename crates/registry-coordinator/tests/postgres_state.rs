@@ -22,7 +22,7 @@ const MESSAGE: &str = r#"fn message(record) { #{ senderProfile: "reminders", to:
 fn command(kind: &str) -> &'static str {
     match kind {
         "appointment" => {
-            r#"#{ appointment: #{ hold: "synthetic-hold" }, grant: #{ id: "00000000-0000-4000-8000-000000000000", expiresAt: 1 } }"#
+            r#"#{ appointment: #{ admission: #{ offering: "synthetic-offering", start: "2026-10-11T09:00:00Z", party: #{ recipients: 1, attendees: 1 }, policyRevision: 1, capabilities: [], prerequisites: [] } }, grant: #{ id: "00000000-0000-4000-8000-000000000000", expiresAt: 1 } }"#
         }
         "action" => {
             r#"#{ action: "send-reminder", input: #{ destination: "synthetic@example.invalid" } }"#

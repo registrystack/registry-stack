@@ -2811,6 +2811,45 @@ async fn serve_runtime(
 }
 
 #[tokio::test]
+async fn plan_refuses_missing_and_wrong_product_bindings_before_reporting_installability() {
+    use registry_coordinator::runtime::Product;
+
+    let f = TwoFlowFixture::start().await;
+    let delayed = f.pin(&f.delayed_project, "plan-binding-delayed");
+    let (_, runtime, flows) = f.runtime("plan-binding.yaml", json!([delayed]));
+    let migration = deployment::open_ctl(&runtime, true).await.unwrap();
+    deployment::apply(&migration, &runtime, &flows, &[])
+        .await
+        .unwrap();
+    deployment::plan(&migration, &runtime, &flows, &[])
+        .await
+        .expect("a plan with its declared binding remains usable");
+
+    let mut wrong_product = runtime.as_ref().clone();
+    wrong_product
+        .connections
+        .get_mut("notices")
+        .unwrap()
+        .product = Product::Breg;
+    let wrong = deployment::plan(&migration, &wrong_product, &flows, &[])
+        .await
+        .expect_err("plan must validate the product bound to each logical connection");
+    assert_eq!(wrong.code, "workflow-binding");
+    assert_eq!(wrong.field.as_deref(), Some("connections.notices"));
+
+    let mut missing = runtime.as_ref().clone();
+    missing.connections.remove("notices");
+    let missing = deployment::plan(&migration, &missing, &flows, &[])
+        .await
+        .expect_err("plan must validate that every logical connection is configured");
+    assert_eq!(missing.code, "workflow-binding");
+    assert_eq!(missing.field.as_deref(), Some("connections.notices"));
+
+    drop(migration);
+    f.stop().await;
+}
+
+#[tokio::test]
 async fn two_flows_upgrade_roll_back_and_remove_without_touching_each_other() {
     let f = TwoFlowFixture::start().await;
     let delayed_v1 = f.pin(&f.delayed_project, "delayed-v1");
