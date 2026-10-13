@@ -4145,6 +4145,52 @@ fn refusals(failure: &CompileFailure) -> Vec<(&str, &str)> {
         .collect()
 }
 
+fn project_with_authored_index_fields(count: usize) -> Vec<u8> {
+    let mut source: Value =
+        serde_json::from_slice(MULTI_DATASET_PROJECT).expect("multi-dataset source is JSON");
+    let ids = (0..count)
+        .map(|index| format!("key-{index}"))
+        .collect::<Vec<_>>();
+    let person = &mut source["entities"][0];
+    person["fields"]
+        .as_array_mut()
+        .expect("the entity declares fields")
+        .extend(ids.iter().map(|id| {
+            json!({"id": id, "type": "string", "maximumLength": 8, "classification": "restricted"})
+        }));
+    person["indexes"] = json!([{"id": "wide", "fields": ids}]);
+    serde_json::to_vec(&source).expect("project source serializes")
+}
+
+#[test]
+fn an_authored_index_declares_at_most_31_fields() {
+    let widest = compile_json(&project_with_authored_index_fields(31))
+        .expect("31 fields leave the last index key column to the record identifier");
+    let statement = widest
+        .ddl()
+        .statements
+        .iter()
+        .find(|statement| statement.id == "entity.person.index.wide")
+        .expect("the authored index compiles to a statement");
+    let (_, columns) = statement
+        .sql
+        .split_once(" (")
+        .expect("the index statement lists its key columns");
+    assert_eq!(columns.split(", ").count(), 32);
+    assert!(columns.ends_with(", record_id)"));
+
+    let failure = compile_json(&project_with_authored_index_fields(32))
+        .expect_err("a 32-field index leaves no key column for the record identifier");
+    assert_eq!(
+        refusals(&failure),
+        vec![("breg.index.fields-too-many", "entities[].indexes[].fields")]
+    );
+    assert_eq!(
+        failure.diagnostics()[0].message,
+        "an index may declare at most 31 fields; the record identifier takes the last of the 32 key columns PostgreSQL allows in an index"
+    );
+}
+
 #[test]
 fn provenance_fields_are_read_as_a_set_in_a_project_and_a_module() {
     parse_module_yaml(&module_with_profile_member(

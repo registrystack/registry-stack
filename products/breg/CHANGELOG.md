@@ -16,6 +16,11 @@
   fingerprint, changes. This release does not upgrade v0.41.0 state in
   place: rebuild the package with this release and apply it to a new
   database.
+- BREAKING: an authored index declares at most 31 fields. The compiler
+  refuses a longer one with `breg.index.fields-too-many`, because the
+  record id it appends takes the last of the 32 key columns PostgreSQL
+  allows in an index. An index of exactly 32 fields, which compiled and
+  applied before, must drop a field.
 - `bregctl dev` requests local client tokens for the resource that
   `issuer.clientResources` assigns to that client. Previously, startup requested
   every token for the owner BReg audience, so an owner that registered a client

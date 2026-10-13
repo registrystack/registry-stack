@@ -3243,6 +3243,7 @@ pub struct IndexSource {
     #[serde(deserialize_with = "local_id")]
     #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
+    #[cfg_attr(feature = "schema", schemars(length(max = 31)))]
     pub fields: Vec<String>,
 }
 
