@@ -13,7 +13,8 @@ use std::collections::BTreeSet;
 
 use registry_stack_client::coordinator::{
     BearerToken, CoordinatorClient, CoordinatorClientConfig, CoordinatorClientError,
-    CoordinatorComplete, RetryScheduled, RunInspection, RunList, RunStatus, StartRunRequest, Uuid,
+    CoordinatorComplete, RetryScheduled, RunInspection, RunList, RunListQuery, RunListState,
+    RunStatus, StartRunRequest, Uuid,
 };
 
 /// The client's public surface, read from the crate that publishes it.
@@ -30,6 +31,7 @@ async fn every_coordinator_method_names_its_types(
     idempotency_key: &str,
     run: Uuid,
     request: &StartRunRequest,
+    list_query: &RunListQuery,
 ) -> Result<(), CoordinatorClientError> {
     let client: CoordinatorClient = CoordinatorClient::new(config)?;
     let _: CoordinatorComplete<RunStatus> = client.start(token, idempotency_key, request).await?;
@@ -39,6 +41,8 @@ async fn every_coordinator_method_names_its_types(
         .reconcile(token, run, "operator reviewed the original receipt")
         .await?;
     let _: CoordinatorComplete<RunList> = client.list(token, 20).await?;
+    let _: CoordinatorComplete<RunList> = client.list_page(token, list_query).await?;
+    let _: Option<RunListState> = list_query.state;
     let _: CoordinatorComplete<RetryScheduled> = client
         .retry_same(token, run, "operator reviewed the inspection")
         .await?;
