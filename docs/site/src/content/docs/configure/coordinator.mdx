@@ -14,7 +14,7 @@ standards_referenced:
 
 You know which product calls your flow makes and in what order, and now you want to write it as a
 Registry Coordinator project. This page takes one flow from an empty directory to a package: write
-the steps, check and test them offline, and hand the package and its digest to the operator who
+the steps, check and test them offline, and hand the package, digest, and connection requirements to the operator who
 serves it. Endpoints, credentials, caller policies, and keys never enter the package;
 [Deploy Registry Coordinator](../../operate/coordinator/) covers them.
 
@@ -187,7 +187,16 @@ Once a workflow version has admitted runs, give a changed definition a new `proj
 
 ## Hand over the package
 
-Give the operator the package directory and its package digest. The operator installs the
+Give the operator the package directory and its package digest, plus a sanitized `runtime.yaml`
+template. List each logical connection's product, required access profile or review kind, OAuth
+client scopes and resource, completion destination, and Messaging template and provider. The
+operator supplies endpoint addresses, registered identities, private JWKs and other secret files,
+and checks those contracts in the receiving products. Share secret references, never secret values.
+
+The [reviewed-notice tutorial](../../tutorials/review-an-application-and-send-a-notice/) provides a
+complete development workspace for this handoff across BReg, Casework, Coordinator and Messaging.
+
+The operator installs the
 directory read-only and pins it as one entry of `deployment.packages`, with its `root` and the
 digest as `expectedDigest`. One deployment serves up to sixteen flows, one package each, and each
 flow is applied, upgraded, and rolled back on its own. Runs already admitted keep the definition

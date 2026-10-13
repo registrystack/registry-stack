@@ -24,7 +24,15 @@ CASEWORK_PRINCIPALS = {
     "review-producer": "synthetic-coordinator-review-producer",
 }
 REQUEST_FIELDS = ["tenant", "record", "proposed-email", "reason"]
-APPLICATION_FIELDS = ["tenant", "email", "notice-allowed", "appointment-allowed"]
+APPLICATION_FIELDS = [
+    "tenant",
+    "applicant-name",
+    "benefit-program",
+    "requested-amount",
+    "email",
+    "notice-allowed",
+    "appointment-allowed",
+]
 BOUNDARY = [{"field": "tenant", "claim": "tenant_claim", "operator": "equals"}]
 
 
@@ -95,6 +103,12 @@ def write_breg(root, urls):
         "fields": [
             {"id": "tenant", "type": "string", "minimumLength": 1, "maximumLength": 64,
              "required": True, "classification": "internal"},
+            {"id": "applicant-name", "type": "string", "minimumLength": 1, "maximumLength": 200,
+             "required": True, "classification": "internal"},
+            {"id": "benefit-program", "type": "string", "minimumLength": 1, "maximumLength": 64,
+             "required": True, "classification": "internal"},
+            {"id": "requested-amount", "type": "int64", "required": True,
+             "classification": "internal"},
             {"id": "email", "type": "string", "minimumLength": 1, "maximumLength": 254,
              "required": True, "classification": "internal"},
             {"id": "notice-allowed", "type": "boolean", "required": True,
@@ -125,12 +139,40 @@ def write_breg(root, urls):
             "review": {"type": "none"},
         },
     }
+    def direct_change(identifier, route, value_field, value_type, target_field):
+        fields = [
+            {"id": "tenant", "type": "string", "minimumLength": 1, "maximumLength": 64,
+             "required": True, "classification": "internal"},
+            {"id": "record", "type": "reference", "target": "application",
+             "required": True, "classification": "internal"},
+            {"id": value_field, "type": value_type, "required": True,
+             "classification": "internal"},
+            {"id": "reason", "type": "text", "maximumLength": 1000,
+             "required": True, "classification": "internal"},
+        ]
+        return {
+            "id": identifier, "primaryDataset": "synthetic-applications", "route": route,
+            "mutationMode": "mutable", "classification": "internal", "fields": fields,
+            "changeRequest": {
+                "effects": [{"target": {"fromField": "record"}, "operation": "patch",
+                             "set": {target_field: {"fromField": value_field}}}],
+                "review": {"type": "none"},
+            },
+        }
+    amount_change = direct_change("application-amount-change", "application-amount-changes",
+                                  "proposed-amount", "int64", "requested-amount")
+    notice_change = direct_change("application-notice-change", "application-notice-changes",
+                                  "proposed-notice-allowed", "boolean", "notice-allowed")
     profiles = [
         _profile("seeder", "service", "seed-client", [
             _permission("application", ["create", "get", "list"], APPLICATION_FIELDS,
                         writable=True),
             _permission("application-change", ["create", "get", "list", "submit-request"],
                         REQUEST_FIELDS, writable=True, request=True),
+            _permission("application-amount-change", ["create", "get", "list", "submit-request"],
+                        ["tenant", "record", "proposed-amount", "reason"], writable=True, request=True),
+            _permission("application-notice-change", ["create", "get", "list", "submit-request"],
+                        ["tenant", "record", "proposed-notice-allowed", "reason"], writable=True, request=True),
         ]),
         _profile("follow-up-reader", "service", "application-reader", [
             _permission("application", ["get"], APPLICATION_FIELDS),
@@ -153,13 +195,20 @@ def write_breg(root, urls):
                         request=True)
     apply["applyTargets"] = [{"entity": "application", "rowBoundaries": BOUNDARY}]
     profiles.append(_profile("applier", "service", "seed-client", [apply]))
+    for entity, fields in (
+        ("application-amount-change", ["tenant", "record", "proposed-amount", "reason"]),
+        ("application-notice-change", ["tenant", "record", "proposed-notice-allowed", "reason"]),
+    ):
+        permission = _permission(entity, ["get", "apply-request"], fields, request=True)
+        permission["applyTargets"] = [{"entity": "application", "rowBoundaries": BOUNDARY}]
+        profiles[-1]["permissions"]["entities"].append(permission)
     _write(root / "registry.yaml", {
         "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
         "kind": "BRegProject",
         "project": {"id": SOURCE, "version": "1", "defaultLanguage": "en",
                      "canonicalBaseIri": "https://synthetic.example.invalid/coordinator"},
         "package": {"sourceRevision": "coordinator-synthetic-1"},
-        "entities": [applications, request],
+        "entities": [applications, request, amount_change, notice_change],
         "accessProfiles": profiles,
     })
     clients = [
@@ -226,7 +275,9 @@ def write_breg(root, urls):
     claims = {"principal": "$localClientSubject", "scopes": ["records:get"],
               "purpose": "review", "actorKind": "service", "requesterClient": "seed-client",
               "directClaims": {"tenant_claim": "tenant-a"}}
-    data = {"tenant": "tenant-a", "email": "journey@example.invalid", "notice-allowed": True,
+    data = {"tenant": "tenant-a", "applicant-name": "Amina Example",
+            "benefit-program": "housing-support", "requested-amount": 1200,
+            "email": "journey@example.invalid", "notice-allowed": True,
             "appointment-allowed": True}
     _write(root / "tests/journeys.yaml", {
         "apiVersion": "id.registrystack.org/formats/breg/journeys/v1",
@@ -436,9 +487,12 @@ def write_review_casework(root, urls):
                           "settlement": "rejected", "reasonRequired": False}],
             "retention": {"terminalDays": 30, "accountabilityDays": 90},
             "displaySchema": {"type": "object", "additionalProperties": False,
-                              "required": ["applicationId", "applicationVersion"],
-                              "properties": {"applicationId": {"type": "string", "maxLength": 64},
-                                             "applicationVersion": {"type": "string", "maxLength": 64}}},
+                              "required": ["applicantName", "benefitProgram", "requestedAmount"],
+                              "properties": {
+                                  "applicantName": {"type": "string", "minLength": 1, "maxLength": 200},
+                                  "benefitProgram": {"type": "string", "minLength": 1, "maxLength": 64},
+                                  "requestedAmount": {"type": "integer", "minimum": 0, "maximum": 1000000},
+                              }},
         }],
         "reviewProducers": [{
             "id": "coordinator", "profile": "coordinator-producer", "issuer": urls["issuer"],

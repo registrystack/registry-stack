@@ -60,6 +60,16 @@ step. Casework may supersede a request still under review when the same
 producer submits another for the same subject record and kind; the waiting
 run then reads the result `superseded`.
 
+An optional `onCancel` edge takes a durable authored forward path when an authorized
+caller cancels a parked review wait. An active read records intent and routes it
+when it settles or its lease expires, before applying that read's result.
+The path can withdraw the accepted request with `cancel-review-request`, subject
+to the run's original deadline and current producer authority. Repeated cancellation
+preserves cleanup; public `authoredCancelRequested` records that intent separately
+from ordinary stop cancellation. The intent applies to the original wait only.
+A wait without the edge, or a run that already advanced past the wait, uses ordinary
+cancellation. No cancellation reverses an accepted product effect.
+
 Casework's completion event for a request reaches `POST /v1/review-completions`
 on the service listener with a configured bearer token and recipient binding.
 The event is a wake-up only: it brings forward the next result read of a run
@@ -170,8 +180,10 @@ only. Deployment-wide operator actions reach every served flow, including flows
 added later, and require `operator: true` instead of a flow list.
 `GET /v1/runs` returns at most 100 of the caller's most recently admitted runs,
 newest first, from the flows its policy lists; an operator policy lists every
-owner's runs in those flows. `limit` takes 1 to 100 and defaults to 20. The list
-has no paging cursor and no state filter. Applications use
+owner's runs in those flows. `limit` takes 1 to 100 and defaults to 20. The list supports `state` and `attention` filters and returns `nextCursor` when there
+may be another page. `attention=true` selects effective states `attention` and `failed`;
+`attention=false` excludes both. Continue with the same filters and cursor; each page
+reapplies the caller's current authority. Applications use
 the authenticated HTTP API, through the maintained Coordinator client where one
 fits: `registry_stack_client::coordinator` in Rust or the `coordinator`
 namespace of the unified Node.js and Python clients.

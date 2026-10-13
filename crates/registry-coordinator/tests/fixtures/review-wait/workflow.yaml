@@ -134,4 +134,3 @@ outcomes:
     properties:
       status: {type: string}
       resultId: {type: string, format: uuid}
-

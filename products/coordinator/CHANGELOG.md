@@ -24,5 +24,15 @@ First release of Registry Coordinator.
 - `submit-review-request` and `cancel-review-request` hand work to Casework
   human review as a review producer, and a `wait-for` step on a
   `review-result` event waits for the reviewer's result.
-- Add Linux amd64 `coordinator` and `coordinatorctl` binaries and a Docker
-  image that carries both, from v0.41.0.
+- Coordinator joins the unified clients from v0.42.0. Runtime binary and image
+  publication remain held until package permissions and Coordinator-specific
+  advisory evidence are ready; source builds are available meanwhile.
+- The reviewed-notice example and runnable tutorial coordinate a BReg record,
+  Casework review and one Messaging notice, with fresh revision and permission
+  checks before delivery and a recipient read from BReg.
+- Review waits can author `onCancel` cleanup. Cancellation records durable intent
+  and lets that path withdraw the original review across worker restarts; repeated
+  cancellation preserves the cleanup. Protected state schema version 2 refuses
+  earlier pilot namespaces rather than silently adopting an incompatible layout.
+- Run discovery supports bounded cursor pagination, effective-state filters and
+  an attention filter through HTTP, CLI and the Rust, Node.js and Python clients.

@@ -34,6 +34,10 @@ schema = ["dep:schemars", "registry-platform-config/schema", "registry-platform-
 name = "problem-catalog"
 
 [[example]]
+name = "reviewed-notice-input"
+path = "../../products/coordinator/examples/reviewed-notice/starter.rs"
+
+[[example]]
 name = "runtime-schema"
 required-features = ["schema"]
 

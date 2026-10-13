@@ -32,4 +32,3 @@ fn notice_request(input, result) {
         data: #{ applicationReference: input.applicationId, reviewResult: result.resultId }
     }
 }
-

@@ -365,7 +365,8 @@ await-review:
   event: {type: review-result, request: submit-review}
   timeoutSeconds: 1209600
   next: decide
-  onTimeout: withdraw
+  onTimeout: withdraw-timeout
+  onCancel: withdraw-operator
 ```
 
 `timeoutSeconds` accepts 1 to 31,536,000 and must be shorter than `deadlineSeconds`.
@@ -375,6 +376,13 @@ A settled result continues at `next` as the step's output; a `choose` reads its 
 A result for another request, subject, policy or submission digest fails the run with `invalid-response`.
 An unknown request fails it with `review-request-unknown` and an expired result with `review-result-expired`.
 The timeout continues at `onTimeout`, or fails the run with `wait-timed-out`; a result found by the read at the timeout wins.
+An optional `onCancel` edge takes a durable authored path when an authorized caller cancels a
+parked review wait. If a read is leased, its completion or lease expiry routes that intent before
+advancing its result. The target can call `cancel-review-request` with the original acceptance.
+`authoredCancelRequested` distinguishes this intent from ordinary `cancelRequested` stop semantics;
+repeating cancellation leaves the cleanup runnable. A review already decided yields
+`already-terminal`, so branch on the withdrawal call's outcome. The original run deadline and
+current producer authority still bound cleanup. A wait without `onCancel` uses ordinary cancellation.
 A deadline that comes first ends the run `expired` with `deadline-reached`.
 
 Casework supersedes a request still under review when the same producer submits another for the same subject record, of any version, and the same kind.
@@ -422,7 +430,10 @@ A deployment serves each listed flow from its own active package; a start names 
 Plan and apply change one flow's package without touching another flow's package or runs.
 A flow leaves the deployment only through `--remove-flow`, which is refused while that flow has runs that are not terminal.
 `GET /v1/runs` returns at most 100 of the caller's most recently admitted runs, newest first, from the flows its policy lists; an operator policy lists every owner's runs in those flows.
-`limit` takes 1 to 100 and defaults to 20, and the list has no paging cursor and no state filter.
+`limit` takes 1 to 100 and defaults to 20. Optional `state` filters one effective state;
+`attention=true` selects effective states `attention` and `failed`, and `attention=false` excludes
+both. Filters compose. `nextCursor`, when present, continues the admission-time order through
+`cursor` with unchanged filters. Each page rechecks current owner and flow permissions.
 The maintained Coordinator client reaches these routes as `registry_stack_client::coordinator` in Rust and the `coordinator` namespace of the unified Node.js and Python clients; published client packages carry it from the release that admits the Coordinator.
 Applications compose through the authenticated HTTP API and the owning Casework, BReg and optional Messaging APIs.
 
