@@ -1760,6 +1760,16 @@ class CommittedCorpusTest(unittest.TestCase):
         self.assertLessEqual(set(expected.unreached), formats)
         self.assertLessEqual(set(expected.inapplicable), ids)
 
+    def test_committed_unreached_formats_match_the_runner_classification(self) -> None:
+        expected = runner.load_expected_failures(self.corpus / "expected-failures.yaml")
+        _, skipped = runner.partition_formats(self.registry)
+        unreached = {
+            format_id: reason
+            for format_id, reason in skipped.items()
+            if reason != "no check command"
+        }
+        self.assertEqual(expected.unreached, unreached)
+
     def test_the_committed_expected_failures_carry_the_header_the_runner_writes(self) -> None:
         committed = (self.corpus / "expected-failures.yaml").read_text(encoding="utf-8")
         self.assertTrue(committed.startswith(runner.EXPECTED_HEADER + "\n"))
