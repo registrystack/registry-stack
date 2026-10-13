@@ -452,7 +452,7 @@ fn borrowed_token_requires_ready_session() {
             panic!("a stopped session cannot issue a token");
         };
         assert!(error.message.contains("not ready"));
-        assert!(!root.join("headers/case-system").exists());
+        assert!(!root.join("tokens/case-system.header").exists());
     }
 }
 
