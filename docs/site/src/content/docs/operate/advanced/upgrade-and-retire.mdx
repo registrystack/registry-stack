@@ -120,7 +120,7 @@ toolset, so a binary that cannot run leaves the installed toolset selected.
    signed token does not identify its original grant mode. It admits any grant with at most 900
    seconds remaining without checking revocation, including the final 900 seconds of a deferred
    grant. Use it only when the deployment accepts that stale-authority window.
-   Run `schedulingctl check --runtime-config FILE`, then stop the v0.40.0 runtime or keep its
+   Run `schedulingctl check PROJECT --runtime-config FILE`, then stop the v0.40.0 runtime or keep its
    destination bindings until hook deliveries drain. Run `schedulingctl plan --runtime-config
    FILE` and `schedulingctl apply --runtime-config FILE` against the v0.40.0 database. Start
    `scheduling`, then use `schedulingctl status --runtime-config FILE` to confirm the activation.
@@ -155,6 +155,7 @@ toolset, so a binary that cannot run leaves the installed toolset selected.
     products/casework/CHANGELOG.md, v0.41.0 - 2026-10-13 entries and migration 0022;
     products/evidence/CHANGELOG.md, v0.41.0 - 2026-10-13 entries;
     products/scheduling/CHANGELOG.md, v0.41.0 - 2026-10-13 entries;
+    crates/registry-schedulingctl/src/lib.rs, CheckArgs, ActivationArgs, and ApplyArgs;
     products/messaging/CHANGELOG.md, v0.41.0 - 2026-10-13 entries;
     docs/site/src/content/docs/operate/messaging.mdx, "Plan, apply, inspect, and serve";
     crates/registry-messaging/src/runtime.rs, shutdown_signal() and Listeners::serve_until();
