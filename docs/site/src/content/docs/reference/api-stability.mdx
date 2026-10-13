@@ -287,7 +287,7 @@ The promise is machine-checked where a checker exists:
   upgrades with the binaries built from the pull request, and fails when captured domain data or
   stored revisions change, other captured views differ, retained tables lose rows, or an audit file
   loses entries. It starts from the newest published release at or below the workspace version, so
-  it rehearses the immediate predecessor, and it refuses to start from a release before `v0.40.0`.
+  it rehearses the immediate predecessor, and it refuses to start from a release before `v0.41.0`.
   While no release from that floor onward is published, the rehearsal uses the binaries under test
   on both sides and reports that it has no published predecessor. This exercises the scenarios with
   the same build; it does not demonstrate compatibility between releases. Once a release on the

@@ -22,7 +22,7 @@ extension-module = ["pyo3/extension-module"]
 chrono.workspace = true
 pyo3.workspace = true
 # Keep the SDK name distinct from this extension's Python module name.
-scheduling-client-sdk = { package = "registry-scheduling-client", path = "../registry-scheduling-client", version = "0.41.0" }
+scheduling-client-sdk = { package = "registry-scheduling-client", path = "../registry-scheduling-client", version = "0.42.0" }
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
