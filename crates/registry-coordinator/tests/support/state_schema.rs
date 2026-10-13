@@ -51,20 +51,22 @@ async fn a_second_migration_changes_no_schema_object_or_protected_row() {
     assert_eq!(catalog(&h).await, before, "the second migration ran DDL");
     assert_eq!(restored_current_job(&h, run).await, job);
     assert_eq!(restored_lease_identity(&h, run).await, identity);
-    assert_eq!(h.store.doctor().await.unwrap().schema_version, 1);
+    assert_eq!(h.store.doctor().await.unwrap().schema_version, 2);
 }
 
 #[tokio::test]
-async fn a_namespace_at_another_schema_version_is_refused_unchanged() {
+async fn a_prior_schema_without_authored_cancellation_state_is_refused_unchanged() {
     let h = harness().await;
     h.sql(
         "ALTER TABLE {schema}.control DROP CONSTRAINT control_schema_version_check;
-         UPDATE {schema}.control SET schema_version=2",
+         UPDATE {schema}.control SET schema_version=1;
+         ALTER TABLE {schema}.runs DROP COLUMN authored_cancel_pending_step;
+         ALTER TABLE {schema}.runs DROP COLUMN authored_cancel_requested",
     )
     .await;
     let before = catalog(&h).await;
     assert_eq!(
-        h.store.migrate().await.expect_err("unknown version").code,
+        h.store.migrate().await.expect_err("prior version").code,
         "schema-version"
     );
     assert!(

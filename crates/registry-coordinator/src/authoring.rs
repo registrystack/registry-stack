@@ -369,8 +369,9 @@ enum AuthoredStep {
         next: LocalId,
     },
     /// Waits for an event another product delivers, then continues with the
-    /// event's value as its output, or takes `onTimeout` when the event does
-    /// not arrive in time.
+    /// event's value as its output, takes `onTimeout` when the event does not
+    /// arrive in time, or takes `onCancel` when an authorized caller cancels
+    /// the run while it is durably waiting.
     WaitFor {
         /// The event to wait for.
         event: AuthoredEvent,
@@ -384,6 +385,11 @@ enum AuthoredStep {
         /// route. Omit it to fail the run with `wait-timed-out`.
         #[serde(default)]
         on_timeout: Option<LocalId>,
+        /// The step that follows an authorized cancellation while this wait
+        /// is durably parked. Omit it to stop the run with the ordinary
+        /// cancellation behavior.
+        #[serde(default)]
+        on_cancel: Option<LocalId>,
     },
     /// Calls one operation through a connection, then continues with its
     /// output available to later steps.
@@ -489,6 +495,7 @@ impl TryFrom<AuthoredStep> for Step {
                 timeout_seconds,
                 next,
                 on_timeout,
+                on_cancel,
             } => Self::WaitFor {
                 wait_for: match event {
                     AuthoredEvent::ReviewResult { request } => {
@@ -500,6 +507,7 @@ impl TryFrom<AuthoredStep> for Step {
                 timeout_seconds: timeout_seconds.get(),
                 next: next.into_string(),
                 on_timeout: on_timeout.map(LocalId::into_string),
+                on_cancel: on_cancel.map(LocalId::into_string),
             },
             AuthoredStep::Call {
                 connection,

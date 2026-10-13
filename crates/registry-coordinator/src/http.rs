@@ -7,7 +7,7 @@ use crate::{
     problem::{for_error, type_uri, ProblemCode},
     protocol::AdapterSet,
     runtime::RuntimeConfig,
-    store::{RunStatus, Store},
+    store::{RunListState, RunStatus, Store},
     CoordinatorError, Result,
 };
 use axum::{
@@ -82,6 +82,9 @@ struct Reason {
 struct List {
     #[serde(default = "limit")]
     limit: u32,
+    cursor: Option<String>,
+    state: Option<RunListState>,
+    attention: Option<bool>,
 }
 fn limit() -> u32 {
     20
@@ -724,14 +727,18 @@ mod list_query_tests {
     use super::*;
 
     #[test]
-    fn the_run_list_query_defaults_to_twenty_and_takes_no_cursor_or_state_filter() {
+    fn the_run_list_query_defaults_to_twenty_and_accepts_cursor_and_closed_state() {
         let parse = |uri: &str| Query::<List>::try_from_uri(&uri.parse().unwrap());
         assert_eq!(parse("/v1/runs").unwrap().limit, 20);
         assert_eq!(parse("/v1/runs?limit=100").unwrap().limit, 100);
+        let query = parse("/v1/runs?limit=20&cursor=next&state=attention&attention=true").unwrap();
+        assert_eq!(query.cursor.as_deref(), Some("next"));
+        assert_eq!(query.state, Some(RunListState::Attention));
+        assert_eq!(query.attention, Some(true));
         for refused in [
-            "/v1/runs?cursor=next",
-            "/v1/runs?state=running",
-            "/v1/runs?limit=20&state=finished",
+            "/v1/runs?state=waiting",
+            "/v1/runs?state=ATTENTION",
+            "/v1/runs?attention=maybe",
         ] {
             assert!(parse(refused).is_err(), "{refused}");
         }
@@ -898,8 +905,18 @@ async fn list(
                     "limit must be between 1 and 100",
                 ));
             }
-            let runs = s.store.list_owned(q.limit, &c.actor, flows).await?;
-            encode(json!({"runs": runs}))
+            encode(
+                s.store
+                    .list_owned_page(
+                        q.limit,
+                        q.cursor.as_deref(),
+                        q.state,
+                        q.attention,
+                        &c.actor,
+                        flows,
+                    )
+                    .await?,
+            )
         }
         .await,
     )
@@ -1200,7 +1217,7 @@ fn summary(operation_id: &str) -> &'static str {
         "live" => "Liveness",
         "ready" => "Readiness",
         "startRun" => "Start a run of a served flow",
-        "listRuns" => "List the caller's recent runs",
+        "listRuns" => "List a page of caller-visible runs",
         "runStatus" => "Read one run's status",
         "inspectRun" => "Inspect a run's steps and recovery options",
         "retrySame" => "Retry a held step with the same command",
@@ -1406,7 +1423,15 @@ pub fn openapi() -> Value {
             op["parameters"] = json!([run_param.clone()]);
         }
         if id == "listRuns" {
-            op["parameters"] = json!([{"name":"limit","in":"query","schema":{"type":"integer","minimum":1,"maximum":100,"default":20}}]);
+            op["parameters"] = json!([
+                {"name":"limit","in":"query","schema":{"type":"integer","minimum":1,"maximum":100,"default":20}},
+                {"name":"cursor","in":"query","description":"Opaque nextCursor from the previous page. Keep state and attention filters unchanged; the current caller is authorized again on each page.","schema":{"type":"string","minLength":1,"maxLength":4096}},
+                {"name":"state","in":"query","schema":{"type":"string","enum":["running","finished","failed","cancelled","cancelled-after-effect","expired","attention","cancel-requested"]}},
+                {"name":"attention","in":"query","description":"True selects effective states attention and failed; false excludes both. Composes with state.","schema":{"type":"boolean"}}
+            ]);
+        }
+        if id == "cancelRun" {
+            op["description"] = json!("An authorized cancellation of a parked review wait with onCancel records durable intent and takes that authored path. A leased result read settles or expires before cleanup advances. Repeating cancellation preserves cleanup, reported by authoredCancelRequested. Other cancellation stops future calls where possible; it never reverses an accepted product effect.");
         }
         if id == "startRun" {
             op["parameters"] = json!([{"name":"Idempotency-Key","in":"header","required":true,"schema":{"type":"string","minLength":1,"maxLength":256}}]);
@@ -1458,7 +1483,7 @@ pub fn openapi() -> Value {
         .iter()
         .map(|operation| operation.id)
         .collect();
-    let status = json!({"type":"object","required":["runId","workflowId","workflowVersion","definitionDigest","bindingDigest","step","state","admittedAt","deadlineAt","uncertain","cancelRequested","restoreReviewRequired"],"properties":{"runId":{"type":"string","format":"uuid"},"workflowId":{"type":"string"},"workflowVersion":{"type":"string"},"definitionDigest":{"type":"string"},"bindingDigest":{"type":"string"},"step":{"type":"string"},"state":{"type":"string"},"outcome":nullable_text,"output":{},"failureCode":nullable_text,"failurePath":nullable_text,"admittedAt":date,"deadlineAt":date,"nextDueAt":{"type":["string","null"],"format":"date-time"},"uncertain":{"type":"boolean"},"cancelRequested":{"type":"boolean","description":"Cancellation is irreversible and prevents later workflow effects; an uncertain evaluation may still have run at its provider."},"restoreReviewRequired":{"type":"boolean"}}});
+    let status = json!({"type":"object","required":["runId","workflowId","workflowVersion","definitionDigest","bindingDigest","step","state","admittedAt","deadlineAt","uncertain","cancelRequested","authoredCancelRequested","restoreReviewRequired"],"properties":{"runId":{"type":"string","format":"uuid"},"workflowId":{"type":"string"},"workflowVersion":{"type":"string"},"definitionDigest":{"type":"string"},"bindingDigest":{"type":"string"},"step":{"type":"string"},"state":{"type":"string"},"outcome":nullable_text,"output":{},"failureCode":nullable_text,"failurePath":nullable_text,"admittedAt":date,"deadlineAt":date,"nextDueAt":{"type":["string","null"],"format":"date-time"},"uncertain":{"type":"boolean"},"cancelRequested":{"type":"boolean","description":"Ordinary cancellation is irreversible and prevents later workflow effects; an uncertain evaluation may still have run at its provider."},"authoredCancelRequested":{"type":"boolean","description":"An authorized cancellation took a parked wait's authored onCancel path; cleanup on that path remains runnable."},"restoreReviewRequired":{"type":"boolean"}}});
     let schemas = json!({
       "Start":{"type":"object","additionalProperties":false,"required":["flow","input"],"properties":{"flow":{"type":"string","minLength":1,"maxLength":128},"input":{}}},
       "Reason":{"type":"object","additionalProperties":false,"required":["reason"],"properties":{"reason":{"type":"string","minLength":1,"maxLength":256}}},
@@ -1467,7 +1492,7 @@ pub fn openapi() -> Value {
       "AdmissionRelease":{"type":"object","additionalProperties":false,"required":["recoveryReference","admissionHistoryComplete","priorDeploymentFenced"],"properties":{"recoveryReference":{"type":"string","minLength":1,"maxLength":256},"admissionHistoryComplete":{"type":"boolean"},"priorDeploymentFenced":{"type":"boolean"}}},
       "AdmissionHold":{"type":"object","required":["admissionsHold"],"properties":{"admissionsHold":{"type":"boolean"}}},
       "Retention":{"type":"object","additionalProperties":false,"required":["before","limit"],"properties":{"before":{"type":"string","format":"date-time"},"limit":{"type":"integer","minimum":1,"maximum":100}}},
-      "RunStatus":status,"RunList":{"type":"object","required":["runs"],"properties":{"runs":{"type":"array","maxItems":100,"items":{"$ref":"#/components/schemas/RunStatus"}}}},
+      "RunStatus":status,"RunList":{"type":"object","required":["runs"],"properties":{"runs":{"type":"array","maxItems":100,"items":{"$ref":"#/components/schemas/RunStatus"}},"nextCursor":{"type":"string","description":"Present when another page may exist; continue with the same filters."}}},
       "StepStatus":{"type":"object","required":["step","state","generation","attempt","commandPrepared","uncertain","receiptExpired"],"properties":{"step":{"type":"string"},"state":{"type":"string"},"generation":{"type":"integer"},"attempt":{"type":"integer"},"nextDueAt":{"type":["string","null"],"format":"date-time"},"leaseExpiresAt":{"type":["string","null"],"format":"date-time"},"commandPrepared":{"type":"boolean"},"uncertain":{"type":"boolean"},"receiptExpired":{"type":"boolean"},"failureCode":{"type":["string","null"]},"failurePath":{"type":["string","null"]}}},
       "OperationIdentity":{"type":"object","additionalProperties":false,"description":"Pinned public operation contract; does not establish current authority or receipt availability.","required":["id","version","product","effect","keyRequirement","requiresPreparation","recovery","readReceipt"],"properties":{"id":{"type":"string","enum":operation_ids},"version":{"type":"integer","minimum":1},"product":{"type":"string"},"effect":{"type":"string","enum":["read","mutation","evaluation"]},"keyRequirement":{"type":"string","enum":["none","required"]},"requiresPreparation":{"type":"boolean"},"recovery":{"type":"string","enum":["read-again","same-command-and-receipt","same-command","hold-after-dispatch"]},"readReceipt":{"type":"boolean"}}},
       "RunInspection":{"type":"object","required":["run","steps","recovery"],"properties":{"run":{"$ref":"#/components/schemas/RunStatus"},"steps":{"type":"array","items":{"$ref":"#/components/schemas/StepStatus"}},"recovery":{"type":"object","required":["retryAllowed"],"properties":{"retryAllowed":{"type":"boolean"},"reason":{"type":["string","null"]},"operation":{"$ref":"#/components/schemas/OperationIdentity"}}}}},

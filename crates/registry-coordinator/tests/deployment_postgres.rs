@@ -509,8 +509,8 @@ async fn assert_reapply_preserves_schema_and_work(
         .get(0);
     assert!(!before["runs"].as_array().unwrap().is_empty());
     assert!(!before["jobs"].as_array().unwrap().is_empty());
-    assert_eq!(before["ledger"], json!([1]));
-    assert_eq!(before["schemaVersion"], 1);
+    assert_eq!(before["ledger"], json!([2]));
+    assert_eq!(before["schemaVersion"], 2);
     for _ in 0..2 {
         deployment::apply(migration, runtime, flows, &[])
             .await
@@ -805,7 +805,7 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
     assert_eq!(checked["databaseId"], "router-test");
     assert_eq!(checked["flowsDigest"], flows_digest);
     assert_eq!(checked["flows"], json!({"delayed-follow-up": digest}));
-    assert_eq!(checked["schemaVersion"], 1);
+    assert_eq!(checked["schemaVersion"], 2);
     assert_eq!(checked["runtimeRole"], role);
     assert_eq!(checked["active"]["roleMode"], "split");
     status_doc["deployment"]["runtimeRole"] = json!("wrong_runtime_role");
@@ -916,12 +916,35 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
     );
     status_doc["deployment"]["packages"] = doc["deployment"]["packages"].clone();
     fs::write(&status_path, serde_norway::to_string(&status_doc).unwrap()).unwrap();
+    // A prior protected-state schema is refused by the Store gate before
+    // deployment inspection can use that layout. Plan can still report its
+    // read-only observation through the migration role.
+    admin
+        .batch_execute(&format!(
+            "ALTER TABLE {namespace}.control DROP CONSTRAINT control_schema_version_check;
+             UPDATE {namespace}.control SET schema_version=1"
+        ))
+        .await
+        .unwrap();
+    local_cli(&status_path, "plan", true);
+    assert_eq!(
+        local_cli(&status_path, "deployment-status", false)["diagnostics"][0]["code"],
+        "coordinator.command.store-unavailable"
+    );
+    admin
+        .batch_execute(&format!(
+            "UPDATE {namespace}.control SET schema_version=2;
+             ALTER TABLE {namespace}.control ADD CONSTRAINT control_schema_version_check CHECK(schema_version=2)"
+        ))
+        .await
+        .unwrap();
+    local_cli(&status_path, "deployment-status", true);
     // A newer ledger, stale effective table grants, and forbidden control
     // write authority all refuse status while plan still reports observation.
     for (damage, repair) in [
         (
-            format!("INSERT INTO {namespace}.coordinator_migrations VALUES(2)"),
-            format!("DELETE FROM {namespace}.coordinator_migrations WHERE version=2"),
+            format!("INSERT INTO {namespace}.coordinator_migrations VALUES(3)"),
+            format!("DELETE FROM {namespace}.coordinator_migrations WHERE version=3"),
         ),
         (
             format!("REVOKE SELECT ON {namespace}.jobs FROM {role}"),
@@ -2933,6 +2956,88 @@ async fn two_flows_upgrade_roll_back_and_remove_without_touching_each_other() {
     );
     assert_eq!(list_flows(&http, &origin, &operator_a).await, [DELAYED]);
     assert_eq!(list_flows(&http, &origin, &producer_b).await, [GOVERNED]);
+
+    // Paging preserves the caller and flow policy, and both the exact state
+    // filter and the attention grouping are applied before the page limit.
+    let delayed_run_id = Uuid::parse_str(&delayed_run).unwrap();
+    let governed_run_id = Uuid::parse_str(&governed_run).unwrap();
+    f.admin
+        .execute(
+            &format!(
+                "UPDATE {}.runs SET restore_review_required=true WHERE run_id IN ($1,$2)",
+                f.namespace
+            ),
+            &[&delayed_run_id, &governed_run_id],
+        )
+        .await
+        .unwrap();
+    for (credential, expected_run) in [
+        (&producer_a, delayed_run.as_str()),
+        (&producer_b, governed_run.as_str()),
+    ] {
+        let response = http
+            .get(format!("{origin}/v1/runs?limit=10&attention=true"))
+            .bearer_auth(credential)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+        let page: Value = response.json().await.unwrap();
+        assert_eq!(page["runs"].as_array().unwrap().len(), 1);
+        assert_eq!(page["runs"][0]["runId"], expected_run);
+        assert_eq!(page["runs"][0]["state"], "attention");
+    }
+    let first_page: Value = http
+        .get(format!("{origin}/v1/runs?limit=1"))
+        .bearer_auth(&operator)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let cursor = first_page["nextCursor"].as_str().unwrap();
+    for request in [
+        http.get(format!("{origin}/v1/runs?limit=1&cursor={cursor}"))
+            .bearer_auth(&producer_b),
+        http.get(format!("{origin}/v1/runs?limit=1&cursor={cursor}"))
+            .bearer_auth(&operator_a),
+        http.get(format!(
+            "{origin}/v1/runs?limit=1&cursor={cursor}&state=attention"
+        ))
+        .bearer_auth(&operator),
+        http.get(format!(
+            "{origin}/v1/runs?limit=1&cursor={cursor}&attention=true"
+        ))
+        .bearer_auth(&operator),
+    ] {
+        let response = request.send().await.unwrap();
+        assert_eq!(response.status(), 400);
+        assert_eq!(
+            response.json::<Value>().await.unwrap()["code"],
+            "request.invalid"
+        );
+    }
+    let attention_page: Value = http
+        .get(format!("{origin}/v1/runs?limit=10&state=attention"))
+        .bearer_auth(&operator)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(attention_page["runs"].as_array().unwrap().len(), 2);
+    f.admin
+        .execute(
+            &format!(
+                "UPDATE {}.runs SET restore_review_required=false WHERE run_id IN ($1,$2)",
+                f.namespace
+            ),
+            &[&delayed_run_id, &governed_run_id],
+        )
+        .await
+        .unwrap();
     for (credential, run, expected) in [
         (&operator, &governed_run, 200),
         (&operator_a, &delayed_run, 200),

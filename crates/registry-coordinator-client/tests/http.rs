@@ -13,8 +13,8 @@ use axum::{
     Router,
 };
 use registry_coordinator_client::{
-    BearerToken, CoordinatorClient, CoordinatorClientConfig, CoordinatorClientError,
-    StartRunRequest, Uuid,
+    BearerToken, CoordinatorClient, CoordinatorClientConfig, CoordinatorClientError, RunListQuery,
+    RunListState, StartRunRequest, Uuid,
 };
 use serde_json::{json, Value};
 use tokio::task::JoinHandle;
@@ -26,7 +26,7 @@ const TRACE: &str = "4bf92f3577b34da6a3ce929d0e0e4736";
 const TRACEPARENT: &str = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
 
 fn status() -> Value {
-    json!({"runId":RUN,"workflowId":"nursing-notice","workflowVersion":"1","definitionDigest":"sha256:definition","bindingDigest":"sha256:binding","step":"notify","state":"pending","outcome":null,"output":null,"failureCode":null,"failurePath":null,"admittedAt":"2026-10-10T12:00:00Z","deadlineAt":"2026-10-10T12:05:00Z","nextDueAt":null,"uncertain":false,"restoreReviewRequired":false,"cancelRequested":false})
+    json!({"runId":RUN,"workflowId":"nursing-notice","workflowVersion":"1","definitionDigest":"sha256:definition","bindingDigest":"sha256:binding","step":"notify","state":"pending","outcome":null,"output":null,"failureCode":null,"failurePath":null,"admittedAt":"2026-10-10T12:00:00Z","deadlineAt":"2026-10-10T12:05:00Z","nextDueAt":null,"uncertain":false,"restoreReviewRequired":false,"cancelRequested":false,"authoredCancelRequested":false})
 }
 fn inspection() -> Value {
     json!({"run":status(),"steps":[{"step":"notify","state":"unknown","generation":1,"attempt":1,"nextDueAt":null,"leaseExpiresAt":null,"commandPrepared":true,"uncertain":true,"receiptExpired":false,"failureCode":"response-lost","failurePath":null}],"recovery":{"retryAllowed":true,"reason":null,"operation":{"id":"submit-message","version":1,"product":"messaging","effect":"mutation","keyRequirement":"required","requiresPreparation":false,"recovery":"same-command-and-receipt","readReceipt":true}}})
@@ -243,6 +243,50 @@ async fn listing_retry_and_cancellation_use_only_their_exact_routes() {
         seen.iter().all(|s| s.2.is_none()),
         "no key is ever invented"
     );
+}
+
+#[tokio::test]
+async fn a_list_page_carries_the_cursor_and_filters_without_interpreting_the_cursor() {
+    let server = Server::new(json!({"runs":[status()],"nextCursor":"cursor-next"})).await;
+    let client = server.client();
+    let mut query = RunListQuery::new(1);
+    query.cursor = Some("cursor-before".into());
+    query.state = Some(RunListState::Attention);
+    query.attention = Some(true);
+
+    let page = client.list_page(&token(), &query).await.unwrap().value;
+
+    assert_eq!(page.next_cursor.as_deref(), Some("cursor-next"));
+    let seen = server.fixture.seen.lock().unwrap();
+    assert_eq!(
+        seen[0].1,
+        "/deployment/v1/runs?limit=1&cursor=cursor-before&state=attention&attention=true"
+    );
+}
+
+#[tokio::test]
+async fn invalid_list_cursors_are_refused_on_both_sides_of_the_wire() {
+    let server = Server::new(json!({"runs":[]})).await;
+    let client = server.client();
+    for cursor in ["", "line\nbreak", &"x".repeat(4097)] {
+        let mut query = RunListQuery::new(20);
+        query.cursor = Some(cursor.into());
+        assert!(matches!(
+            client.list_page(&token(), &query).await,
+            Err(CoordinatorClientError::InvalidRequest { .. })
+        ));
+    }
+    assert_eq!(server.count(), 0);
+
+    server.answer(
+        200,
+        "application/json",
+        &json!({"runs":[status()],"nextCursor":"line\nbreak"}).to_string(),
+    );
+    assert!(matches!(
+        client.list_page(&token(), &RunListQuery::new(1)).await,
+        Err(CoordinatorClientError::Protocol { .. })
+    ));
 }
 
 #[tokio::test]
@@ -787,7 +831,10 @@ fn dto_contract_tracks_the_runtime_generated_schema() {
     for (name, value) in [
         ("RunStatus", status()),
         ("RunInspection", inspection()),
-        ("RunList", json!({"runs":[status()]})),
+        (
+            "RunList",
+            json!({"runs":[status()],"nextCursor":"opaque-next"}),
+        ),
         ("RetryScheduled", retry_scheduled()),
     ] {
         for field in schemas[name]["required"].as_array().unwrap() {
@@ -826,7 +873,10 @@ fn dto_contract_tracks_the_runtime_generated_schema() {
             &schemas["OperationIdentity"],
             inspection()["recovery"]["operation"].clone(),
         ),
-        (&schemas["RunList"], json!({"runs":[status()]})),
+        (
+            &schemas["RunList"],
+            json!({"runs":[status()],"nextCursor":"opaque-next"}),
+        ),
         (&schemas["RetryScheduled"], retry_scheduled()),
         (
             &schemas["Problem"],

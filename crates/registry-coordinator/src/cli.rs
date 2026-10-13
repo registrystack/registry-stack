@@ -46,6 +46,31 @@ enum Format {
     Human,
     Json,
 }
+#[derive(Clone, Copy, ValueEnum)]
+enum ListState {
+    Running,
+    Finished,
+    Failed,
+    Cancelled,
+    CancelledAfterEffect,
+    Expired,
+    Attention,
+    CancelRequested,
+}
+impl ListState {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Running => "running",
+            Self::Finished => "finished",
+            Self::Failed => "failed",
+            Self::Cancelled => "cancelled",
+            Self::CancelledAfterEffect => "cancelled-after-effect",
+            Self::Expired => "expired",
+            Self::Attention => "attention",
+            Self::CancelRequested => "cancel-requested",
+        }
+    }
+}
 #[derive(Subcommand)]
 enum Command {
     /// Create a reviewed four-file starter and its .gitignore in a new or empty directory.
@@ -134,11 +159,20 @@ enum Command {
         #[command(flatten)]
         service: Service,
     },
-    /// List the most recently admitted runs the current caller policy permits, newest first; at most 100, with no paging cursor and no state filter.
+    /// List the runs the current caller policy permits, newest admission first.
     List {
         #[arg(long,default_value_t=20,value_parser=clap::value_parser!(u32).range(1..=100))]
         /// Number of most recent runs to return, from 1 through 100.
         limit: u32,
+        #[arg(long, value_parser = bounded_list_cursor)]
+        /// Opaque continuation returned as nextCursor by the preceding page.
+        cursor: Option<String>,
+        #[arg(long, value_enum)]
+        /// Return only runs in this effective state.
+        state: Option<ListState>,
+        #[arg(long)]
+        /// True returns attention or failed runs; false excludes both.
+        attention: Option<bool>,
         #[command(flatten)]
         service: Service,
     },
@@ -680,11 +714,30 @@ async fn execute(cli: &Cli) -> Result<Value> {
             )
             .await
         }
-        Command::List { limit, service } => {
+        Command::List {
+            limit,
+            cursor,
+            state,
+            attention,
+            service,
+        } => {
+            let mut query = format!("/v1/runs?limit={limit}");
+            if let Some(cursor) = cursor {
+                query.push_str("&cursor=");
+                query.push_str(cursor);
+            }
+            if let Some(state) = state {
+                query.push_str("&state=");
+                query.push_str(state.as_str());
+            }
+            if let Some(attention) = attention {
+                query.push_str("&attention=");
+                query.push_str(if *attention { "true" } else { "false" });
+            }
             remote(
                 service,
                 reqwest::Method::GET,
-                &format!("/v1/runs?limit={limit}"),
+                &query,
                 None,
                 None,
             )
@@ -745,6 +798,18 @@ async fn execute(cli: &Cli) -> Result<Value> {
             .await
         }
     }
+}
+
+fn bounded_list_cursor(value: &str) -> std::result::Result<String, String> {
+    if value.is_empty()
+        || value.len() > 4096
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        return Err("cursor must be the bounded opaque value returned by the service".into());
+    }
+    Ok(value.to_owned())
 }
 /// The arguments only the commands that call the service take.
 const SERVICE_ARGUMENTS: [&str; 2] = ["--url", "--token-file"];
@@ -1007,7 +1072,7 @@ fn render_explain(value: &Value) -> String {
         let line = match step["kind"].as_str().unwrap_or_default() {
             "wait-until" => format!("wait until {}, then {next}", mapping(&step["mapping"])),
             "wait-for" => format!(
-                "wait for the {} of {}, at most {} seconds, then {}; on timeout {}",
+                "wait for the {} of {}, at most {} seconds, then {}; on timeout {}; on cancel {}",
                 text(&step["event"]),
                 text(&step["request"]),
                 step["timeoutSeconds"],
@@ -1015,7 +1080,11 @@ fn render_explain(value: &Value) -> String {
                 match step["onTimeout"].as_str() {
                     Some(target) => target.to_owned(),
                     None => "the run fails with wait-timed-out".to_owned(),
-                }
+                },
+                match step["onCancel"].as_str() {
+                    Some(target) => target.to_owned(),
+                    None => "the run stops with ordinary cancellation".to_owned(),
+                },
             ),
             "call" => format!(
                 "call {} {} ({} {}, recovery {}) with {}, then {next}",

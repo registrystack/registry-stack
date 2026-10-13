@@ -17,13 +17,14 @@ use serde_json::json;
 
 use crate::{
     BearerToken, CoordinatorClientConfig, CoordinatorClientError as Error,
-    CoordinatorProtocolFailure as Failure, RetryScheduled, RunInspection, RunList, RunStatus,
-    StartRunRequest, Uuid,
+    CoordinatorProtocolFailure as Failure, RetryScheduled, RunInspection, RunList, RunListQuery,
+    RunStatus, StartRunRequest, Uuid,
 };
 
 const MAXIMUM_REQUEST_BYTES: usize = 65_536;
 const MAXIMUM_PROBLEM_BYTES: u64 = 8192;
 const MAXIMUM_LIST_LIMIT: u32 = 100;
+const MAXIMUM_LIST_CURSOR_BYTES: usize = 4096;
 const JSON_MEDIA_TYPE: &str = "application/json";
 const PROBLEM_MEDIA_TYPE: &str = "application/problem+json";
 /// The problem type namespace the runtime pins: a problem's `type` is its
@@ -145,21 +146,53 @@ impl CoordinatorClient {
         Ok(CoordinatorComplete { value })
     }
 
-    /// The latest runs the caller may read, newest admission first. `limit`
-    /// is 1 to 100 and is checked before sending; there is no cursor.
+    /// The first page of runs the caller may read, newest admission first.
+    /// `limit` is 1 to 100 and is checked before sending.
     pub async fn list(
         &self,
         token: &BearerToken,
         limit: u32,
     ) -> Result<CoordinatorComplete<RunList>, Error> {
-        if !(1..=MAXIMUM_LIST_LIMIT).contains(&limit) {
-            return Err(Error::invalid_request("the list limit is outside 1..=100"));
+        self.list_page(token, &RunListQuery::new(limit)).await
+    }
+
+    /// One stable page of caller-visible runs under an optional state or
+    /// attention filter. Pass `next_cursor` back unchanged with the same
+    /// filters and caller.
+    pub async fn list_page(
+        &self,
+        token: &BearerToken,
+        query: &RunListQuery,
+    ) -> Result<CoordinatorComplete<RunList>, Error> {
+        if !(1..=MAXIMUM_LIST_LIMIT).contains(&query.limit)
+            || query
+                .cursor
+                .as_deref()
+                .is_some_and(|cursor| !valid_cursor(cursor))
+        {
+            return Err(Error::invalid_request("the run list query is invalid"));
+        }
+        let mut parameters = vec![("limit", query.limit.to_string())];
+        if let Some(cursor) = &query.cursor {
+            parameters.push(("cursor", cursor.clone()));
+        }
+        if let Some(state) = query.state {
+            parameters.push(("state", state.as_str().to_owned()));
+        }
+        if let Some(attention) = query.attention {
+            parameters.push(("attention", attention.to_string()));
         }
         let request = self
             .prepare(token, Method::GET, "v1/runs", None, None)?
-            .query(&[("limit", limit)]);
+            .query(&parameters);
         let value: RunList = self.answer(self.send(request).await?).await?;
-        if value.runs.len() > limit as usize {
+        if value.runs.len() > query.limit as usize
+            || value.next_cursor.as_deref().is_some_and(|cursor| {
+                !valid_cursor(cursor)
+                    || value.runs.len() != query.limit as usize
+                    || query.cursor.as_deref() == Some(cursor)
+            })
+        {
             return Err(protocol(200, Failure::Body));
         }
         Ok(CoordinatorComplete { value })
@@ -399,6 +432,12 @@ fn exact_media_type(headers: &HeaderMap, expected: &str) -> bool {
         (values.next(), values.next()),
         (Some(value), None) if value.as_bytes() == expected.as_bytes()
     )
+}
+
+fn valid_cursor(cursor: &str) -> bool {
+    !cursor.is_empty()
+        && cursor.len() <= MAXIMUM_LIST_CURSOR_BYTES
+        && !cursor.chars().any(char::is_control)
 }
 
 fn request_bytes(value: &impl Serialize) -> Result<Vec<u8>, Error> {

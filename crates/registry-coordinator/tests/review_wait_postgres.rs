@@ -64,7 +64,7 @@ fn notice_request(input, result) {
 
 /// The reviewed-notice workflow. Without `on_timeout` the wait has no
 /// timeout route, so a timeout fails the run.
-fn workflow(on_timeout: bool) -> String {
+fn workflow_with_cancel(on_timeout: bool, on_cancel: bool, cleanup_wait: bool) -> String {
     let mut workflow = String::from(
         r#"apiVersion: id.registrystack.org/formats/coordinator/project/v1alpha1
 kind: CoordinatorProject
@@ -102,6 +102,9 @@ steps:
     );
     if on_timeout {
         workflow.push_str("    onTimeout: withdraw\n");
+    }
+    if on_cancel {
+        workflow.push_str("    onCancel: withdraw\n");
     }
     workflow.push_str(
         r#"  decide:
@@ -145,6 +148,11 @@ steps:
 "#,
     );
     if on_timeout {
+        let withdraw_next = if cleanup_wait {
+            "cleanup-wait"
+        } else {
+            "withdrawn"
+        };
         workflow.push_str(
             r#"  withdraw:
     type: call
@@ -155,8 +163,24 @@ steps:
       fields:
         request: {type: step, step: submit-review}
         reason: {type: literal, value: "No decision within fourteen days."}
+    next: WITHDRAW_NEXT
+"#
+            .replace("WITHDRAW_NEXT", withdraw_next)
+            .as_str(),
+        );
+        if cleanup_wait {
+            workflow.push_str(
+                r#"  cleanup-wait:
+    type: wait-for
+    event: {type: review-result, request: submit-review}
+    timeoutSeconds: 1209600
     next: withdrawn
-  withdrawn:
+    onCancel: withdrawn
+"#,
+            );
+        }
+        workflow.push_str(
+            r#"  withdrawn:
     type: finish
     outcome: withdrawn
     output:
@@ -238,6 +262,7 @@ fn result(status: &str) -> Value {
 
 struct Fake {
     reads: Mutex<VecDeque<ReviewRead>>,
+    cancel_results: Mutex<VecDeque<CallOutcome>>,
     read_count: AtomicUsize,
     calls: Mutex<Vec<CallRequest>>,
     malformed_acceptance: bool,
@@ -247,16 +272,22 @@ struct Fake {
 
 impl Fake {
     fn new(reads: Vec<ReviewRead>) -> Arc<Self> {
-        Arc::new(Self::with(reads, false, None))
+        Arc::new(Self::with(reads, vec![], false, None))
+    }
+
+    fn with_cancel(reads: Vec<ReviewRead>, cancel_results: Vec<CallOutcome>) -> Arc<Self> {
+        Arc::new(Self::with(reads, cancel_results, false, None))
     }
 
     fn with(
         reads: Vec<ReviewRead>,
+        cancel_results: Vec<CallOutcome>,
         malformed_acceptance: bool,
         release: Option<Semaphore>,
     ) -> Self {
         Self {
             reads: Mutex::new(reads.into()),
+            cancel_results: Mutex::new(cancel_results.into()),
             read_count: AtomicUsize::new(0),
             calls: Mutex::new(vec![]),
             malformed_acceptance,
@@ -277,6 +308,10 @@ impl Fake {
             .map(|call| call.operation)
             .collect()
     }
+
+    fn requests(&self) -> Vec<CallRequest> {
+        self.calls.lock().unwrap().clone()
+    }
 }
 
 #[async_trait]
@@ -294,7 +329,15 @@ impl AdapterSet for Fake {
             Operation::SubmitReviewRequest => CallOutcome::Success(accepted()),
             Operation::CancelReviewRequest => {
                 assert_eq!(request.input["request"], accepted());
-                CallOutcome::Success(json!({"outcome": "cancelled", "result": result("cancelled")}))
+                self.cancel_results
+                    .lock()
+                    .unwrap()
+                    .pop_front()
+                    .unwrap_or_else(|| {
+                        CallOutcome::Success(
+                            json!({"outcome": "cancelled", "result": result("cancelled")}),
+                        )
+                    })
             }
             Operation::SubmitMessage => CallOutcome::Success(json!({"id": MESSAGE})),
             operation => panic!("unexpected operation {}", operation.as_str()),
@@ -335,6 +378,14 @@ struct Harness {
 }
 
 async fn harness(on_timeout: bool) -> Harness {
+    harness_with_cancel(on_timeout, false).await
+}
+
+async fn harness_with_cancel(on_timeout: bool, on_cancel: bool) -> Harness {
+    harness_with_options(on_timeout, on_cancel, false).await
+}
+
+async fn harness_with_options(on_timeout: bool, on_cancel: bool, cleanup_wait: bool) -> Harness {
     let url = std::env::var("COORDINATOR_TEST_DATABASE_URL").expect(
         "COORDINATOR_TEST_DATABASE_URL must name a disposable synthetic PostgreSQL 17+ database",
     );
@@ -346,7 +397,11 @@ async fn harness(on_timeout: bool) -> Harness {
     );
     store.migrate().await.expect("isolated migration");
     let project = tempfile::tempdir().expect("project");
-    std::fs::write(project.path().join("workflow.yaml"), workflow(on_timeout)).expect("workflow");
+    std::fs::write(
+        project.path().join("workflow.yaml"),
+        workflow_with_cancel(on_timeout, on_cancel, cleanup_wait),
+    )
+    .expect("workflow");
     std::fs::write(project.path().join("functions.rhai"), FUNCTIONS).expect("functions");
     let definition = Definition::load(project.path()).expect("valid synthetic definition");
     Harness {
@@ -628,7 +683,7 @@ async fn a_burst_of_events_reads_at_most_once_in_thirty_seconds() {
 #[tokio::test]
 async fn an_event_during_a_read_schedules_one_more_read_thirty_seconds_later() {
     let h = harness(true).await;
-    let fake = Arc::new(Fake::with(vec![], false, Some(Semaphore::new(0))));
+    let fake = Arc::new(Fake::with(vec![], vec![], false, Some(Semaphore::new(0))));
     let worker = Arc::new(Worker::new(h.store.clone(), fake.clone()));
     let run = h.admit().await;
     assert!(worker.tick().await.unwrap(), "submit the review request");
@@ -994,6 +1049,221 @@ async fn cancelling_a_waiting_run_ends_its_row() {
 }
 
 #[tokio::test]
+async fn authored_cancellation_advances_cleanup_once_and_repeated_cancel_does_not_stop_it() {
+    let h = harness_with_cancel(true, true).await;
+    let fake = Fake::new(vec![]);
+    let worker = Worker::new(h.store.clone(), fake.clone());
+    let run = h.admit().await;
+    h.drain(&worker).await;
+    assert!(h.wait_row(run).await.is_some());
+
+    let routed = h
+        .store
+        .cancel_owned(run, &operator(), "synthetic-authored-withdrawal")
+        .await
+        .unwrap();
+    assert_eq!(routed.step, "withdraw");
+    assert!(!routed.cancel_requested);
+    assert!(routed.authored_cancel_requested);
+    assert!(h.wait_row(run).await.is_none());
+
+    let repeated = h
+        .store
+        .cancel_owned(run, &operator(), "synthetic-repeat")
+        .await
+        .unwrap();
+    assert_eq!(repeated.step, "withdraw");
+    assert!(!repeated.cancel_requested);
+    assert!(repeated.authored_cancel_requested);
+
+    h.drain(&worker).await;
+    let finished = h.store.status(run).await.unwrap();
+    assert_eq!(finished.state, "finished");
+    assert_eq!(finished.outcome.as_deref(), Some("withdrawn"));
+    assert!(!finished.cancel_requested);
+    assert!(finished.authored_cancel_requested);
+    assert_eq!(
+        fake.operations(),
+        [
+            Operation::SubmitReviewRequest,
+            Operation::CancelReviewRequest
+        ]
+    );
+}
+
+#[tokio::test]
+async fn historical_authored_cancellation_does_not_apply_to_a_later_wait() {
+    let h = harness_with_options(true, true, true).await;
+    let fake = Fake::new(vec![]);
+    let worker = Worker::new(h.store.clone(), fake.clone());
+    let run = h.admit().await;
+    h.drain(&worker).await;
+
+    h.store
+        .cancel_owned(run, &operator(), "synthetic-authored-withdrawal")
+        .await
+        .unwrap();
+    h.drain(&worker).await;
+
+    let waiting = h.store.status(run).await.unwrap();
+    assert_eq!(waiting.step, "cleanup-wait");
+    assert_eq!(waiting.state, "running");
+    assert!(waiting.authored_cancel_requested);
+    assert!(!waiting.cancel_requested);
+    assert!(h.wait_row(run).await.is_some());
+    assert_eq!(fake.reads(), 2, "both distinct waits performed one read");
+
+    let repeated = h
+        .store
+        .cancel_owned(run, &operator(), "synthetic-repeat")
+        .await
+        .unwrap();
+    assert_eq!(repeated.step, "cleanup-wait");
+    assert_eq!(repeated.state, "running");
+    assert!(!repeated.cancel_requested);
+}
+
+#[tokio::test]
+async fn authored_wait_cancellation_refuses_a_corrupted_snapshot_without_stopping_the_run() {
+    let h = harness_with_cancel(true, true).await;
+    let fake = Fake::new(vec![]);
+    let worker = Worker::new(h.store.clone(), fake);
+    let run = h.admit().await;
+    h.drain(&worker).await;
+    h.client()
+        .await
+        .execute(
+            &format!(
+                "UPDATE {}.runs SET snapshot='{{}}'::jsonb WHERE run_id=$1",
+                h.namespace
+            ),
+            &[&run],
+        )
+        .await
+        .unwrap();
+
+    let failure = h
+        .store
+        .cancel_owned(run, &operator(), "synthetic-corrupt-snapshot")
+        .await
+        .expect_err("snapshot corruption must not silently select ordinary cancellation");
+    assert_eq!(failure.code, "store-unavailable");
+    let status = h.store.status(run).await.unwrap();
+    assert_eq!(status.step, "await-review");
+    assert_eq!(status.state, "running");
+    assert!(!status.cancel_requested);
+    assert!(!status.authored_cancel_requested);
+    assert!(h.wait_row(run).await.is_some());
+}
+
+#[tokio::test]
+async fn authored_cancellation_fences_an_inflight_result_read() {
+    let h = harness_with_cancel(true, true).await;
+    let fake = Arc::new(Fake::with(
+        vec![ReviewRead::Settled(result("approved"))],
+        vec![],
+        false,
+        Some(Semaphore::new(0)),
+    ));
+    let worker = Arc::new(Worker::new(h.store.clone(), fake.clone()));
+    let run = h.admit().await;
+    assert!(worker.tick().await.unwrap(), "submit the review request");
+    let reading = tokio::spawn({
+        let worker = worker.clone();
+        async move { worker.tick().await }
+    });
+    fake.entered.notified().await;
+    let routed = h
+        .store
+        .cancel_owned(run, &operator(), "synthetic-read-race")
+        .await
+        .unwrap();
+    assert!(routed.authored_cancel_requested);
+    assert!(!routed.cancel_requested);
+    fake.release.as_ref().unwrap().add_permits(1);
+    assert!(reading.await.unwrap().unwrap());
+    h.drain(worker.as_ref()).await;
+    let finished = h.store.status(run).await.unwrap();
+    assert_eq!(finished.outcome.as_deref(), Some("withdrawn"));
+    assert_eq!(
+        fake.operations(),
+        [
+            Operation::SubmitReviewRequest,
+            Operation::CancelReviewRequest
+        ],
+        "the settled result cannot advance notify after cancellation won the fence"
+    );
+}
+
+#[tokio::test]
+async fn a_result_that_advances_first_keeps_the_truthful_non_wait_cancellation_semantics() {
+    let h = harness_with_cancel(true, true).await;
+    let fake = Fake::new(vec![ReviewRead::Settled(result("approved"))]);
+    let worker = Worker::new(h.store.clone(), fake.clone());
+    let run = h.admit().await;
+    assert!(worker.tick().await.unwrap(), "submit the review request");
+    assert!(worker.tick().await.unwrap(), "settle the review wait");
+    assert_eq!(h.store.status(run).await.unwrap().step, "decide");
+
+    let cancelled = h
+        .store
+        .cancel_owned(run, &operator(), "synthetic-result-won")
+        .await
+        .unwrap();
+    assert!(cancelled.cancel_requested);
+    assert!(!cancelled.authored_cancel_requested);
+    assert_eq!(cancelled.state, "cancelled");
+    assert_eq!(fake.operations(), [Operation::SubmitReviewRequest]);
+}
+
+#[tokio::test]
+async fn authored_cleanup_survives_restart_lost_reply_retry_and_repeated_cancel() {
+    let h = harness_with_cancel(true, true).await;
+    let fake = Fake::with_cancel(
+        vec![],
+        vec![CallOutcome::Uncertain {
+            code: "synthetic-lost-reply".into(),
+        }],
+    );
+    let first_worker = Worker::new(h.store.clone(), fake.clone());
+    let run = h.admit().await;
+    h.drain(&first_worker).await;
+    h.store
+        .cancel_owned(run, &operator(), "synthetic-restart")
+        .await
+        .unwrap();
+    drop(first_worker);
+
+    let restarted_worker = Worker::new(h.store.clone(), fake.clone());
+    h.drain(&restarted_worker).await;
+    let held = h.store.status(run).await.unwrap();
+    assert_eq!(held.state, "attention");
+    assert!(held.authored_cancel_requested);
+    assert!(!held.cancel_requested);
+    h.store
+        .cancel_owned(run, &operator(), "synthetic-repeat-while-held")
+        .await
+        .unwrap();
+    assert!(!h.store.status(run).await.unwrap().cancel_requested);
+
+    h.store.retry_same(run, "binding-a").await.unwrap();
+    h.drain(&restarted_worker).await;
+    let finished = h.store.status(run).await.unwrap();
+    assert_eq!(finished.outcome.as_deref(), Some("withdrawn"));
+    let cancellations = fake
+        .requests()
+        .into_iter()
+        .filter(|request| request.operation == Operation::CancelReviewRequest)
+        .collect::<Vec<_>>();
+    assert_eq!(cancellations.len(), 2);
+    assert_eq!(cancellations[0].input, cancellations[1].input);
+    assert_eq!(
+        cancellations[0].idempotency_key, cancellations[1].idempotency_key,
+        "same-command recovery preserves the authored cleanup identity"
+    );
+}
+
+#[tokio::test]
 async fn cancelling_a_held_wait_ends_its_row() {
     let h = harness(true).await;
     let fake = Fake::new(vec![ReviewRead::Failed(CallOutcome::Refused {
@@ -1016,7 +1286,7 @@ async fn cancelling_a_held_wait_ends_its_row() {
 #[tokio::test]
 async fn cancelling_during_a_read_ends_the_row_and_schedules_nothing() {
     let h = harness(true).await;
-    let fake = Arc::new(Fake::with(vec![], false, Some(Semaphore::new(0))));
+    let fake = Arc::new(Fake::with(vec![], vec![], false, Some(Semaphore::new(0))));
     let worker = Arc::new(Worker::new(h.store.clone(), fake.clone()));
     let run = h.admit().await;
     assert!(worker.tick().await.unwrap());
@@ -1131,7 +1401,7 @@ async fn attested_recovery_holds_a_waiting_run_and_ends_its_row_once_the_deadlin
 #[tokio::test]
 async fn an_acceptance_that_cannot_be_correlated_fails_the_run_before_any_wait() {
     let h = harness(true).await;
-    let fake = Arc::new(Fake::with(vec![], true, None));
+    let fake = Arc::new(Fake::with(vec![], vec![], true, None));
     let worker = Worker::new(h.store.clone(), fake.clone());
     let run = h.admit().await;
     h.drain(&worker).await;

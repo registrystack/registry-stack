@@ -44,6 +44,7 @@ export interface RunStatus {
   uncertain: boolean
   restoreReviewRequired: boolean
   cancelRequested: boolean
+  authoredCancelRequested: boolean
 }
 
 export interface StepStatus {
@@ -104,8 +105,18 @@ export interface RunInspection {
   recovery: RecoveryStatus
 }
 
-/** The latest runs the caller may read, newest admission first, at most the requested limit. */
-export interface RunList { runs: ReadonlyArray<RunStatus> }
+export type RunListState =
+  | 'running'
+  | 'finished'
+  | 'failed'
+  | 'cancelled'
+  | 'cancelled-after-effect'
+  | 'expired'
+  | 'attention'
+  | 'cancel-requested'
+
+/** One stable page of runs the caller may read, newest admission first. */
+export interface RunList { runs: ReadonlyArray<RunStatus>; nextCursor?: string }
 
 /** The runtime accepted a same-command retry; the worker has not run it yet. */
 export interface RetryScheduled { runId: RunId; status: 'retry-scheduled' }
@@ -151,8 +162,12 @@ export class CoordinatorClient {
   inspect(token: string, runId: RunId): Promise<CoordinatorOutcome<RunInspection>>
   /** Read the original operation's receipt and update recovery state. Never resubmits the operation. */
   reconcile(token: string, runId: RunId, reason: string): Promise<CoordinatorOutcome<RunInspection>>
-  /** Read the latest runs the caller may read. `limit` is a whole number from 1 to 100, checked before sending. */
-  list(token: string, limit: SafeInteger): Promise<CoordinatorOutcome<RunList>>
+  /**
+   * Read one stable page of caller-visible runs. Pass `nextCursor` unchanged
+   * with the same caller, `state`, and `attention` values. `attention: true`
+   * selects the effective states `attention` and `failed`.
+   */
+  list(token: string, limit: SafeInteger, cursor?: string | null, state?: RunListState | null, attention?: boolean | null): Promise<CoordinatorOutcome<RunList>>
   /**
    * Schedule the run's saved command again, unchanged, when its inspection
    * allows a retry. Takes no idempotency key, so it is sent exactly once. `reason` is

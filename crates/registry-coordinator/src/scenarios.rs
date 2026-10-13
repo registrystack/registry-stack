@@ -155,6 +155,10 @@ enum AuthoredWait {
     /// step has none. A deadline that passes first stops the run as
     /// `deadline-exceeded`.
     Timeout {},
+    /// An authorized caller cancels the run while this wait is durably
+    /// parked. The run continues at `onCancel`, or stops as `cancelled` when
+    /// the step has none.
+    Cancel {},
 }
 registry_platform_yaml::tagged_union!(AuthoredWait);
 
@@ -183,7 +187,8 @@ struct AuthoredExpectation {
 }
 
 /// A state a scenario run stops in: `completed` (a finish step ran),
-/// `refused`, `retryable`, `uncertain`, `timed-out` (a wait's timeout passed
+/// `refused`, `retryable`, `uncertain`, `cancelled` (a waiting run was
+/// cancelled), `timed-out` (a wait's timeout passed
 /// and the wait has no `onTimeout`), or `deadline-exceeded` (the workflow
 /// deadline passed first).
 #[derive(Deserialize)]
@@ -194,6 +199,7 @@ enum ExpectedState {
     Refused,
     Retryable,
     Uncertain,
+    Cancelled,
     TimedOut,
     DeadlineExceeded,
 }
@@ -205,6 +211,7 @@ impl ExpectedState {
             Self::Refused => "refused",
             Self::Retryable => "retryable",
             Self::Uncertain => "uncertain",
+            Self::Cancelled => "cancelled",
             Self::TimedOut => "timed-out",
             Self::DeadlineExceeded => "deadline-exceeded",
         }
@@ -292,6 +299,7 @@ pub enum Reply {
 pub enum Wait {
     Event { value: Value },
     Timeout,
+    Cancel,
 }
 
 #[derive(Deserialize)]
@@ -498,6 +506,7 @@ impl CoordinatorScenarios {
                                     value: value.into_value(),
                                 },
                                 AuthoredWait::Timeout {} => Wait::Timeout,
+                                AuthoredWait::Cancel {} => Wait::Cancel,
                             },
                         )
                     })
@@ -712,6 +721,7 @@ fn execute(definition: &Definition, scenario: &Scenario) -> Result<ScenarioRepor
                 timeout_seconds,
                 next,
                 on_timeout,
+                on_cancel,
             } => {
                 // A case without waits is refused at the case itself.
                 let at = if scenario.waits.is_empty() {
@@ -749,6 +759,13 @@ fn execute(definition: &Definition, scenario: &Scenario) -> Result<ScenarioRepor
                             }
                         }
                     }
+                    Wait::Cancel => match on_cancel {
+                        Some(route) => step = route.clone(),
+                        None => {
+                            report.state = "cancelled".into();
+                            break;
+                        }
+                    },
                 }
             }
             Step::Choose { cases, .. } => {

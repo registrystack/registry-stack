@@ -34,6 +34,7 @@ pub struct RunStatus {
     pub uncertain: bool,
     pub restore_review_required: bool,
     pub cancel_requested: bool,
+    pub authored_cancel_requested: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -119,12 +120,64 @@ pub struct RunInspection {
     pub recovery: RecoveryStatus,
 }
 
-/// The latest runs the caller may read, newest admission first, at most the
-/// requested limit. There is no pagination cursor.
+/// The closed effective states accepted by the run-list filter.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum RunListState {
+    Running,
+    Finished,
+    Failed,
+    Cancelled,
+    CancelledAfterEffect,
+    Expired,
+    Attention,
+    CancelRequested,
+}
+
+impl RunListState {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Running => "running",
+            Self::Finished => "finished",
+            Self::Failed => "failed",
+            Self::Cancelled => "cancelled",
+            Self::CancelledAfterEffect => "cancelled-after-effect",
+            Self::Expired => "expired",
+            Self::Attention => "attention",
+            Self::CancelRequested => "cancel-requested",
+        }
+    }
+}
+
+/// One caller-controlled page request. A continuation must preserve its state
+/// and attention filters.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RunListQuery {
+    pub limit: u32,
+    pub cursor: Option<String>,
+    pub state: Option<RunListState>,
+    pub attention: Option<bool>,
+}
+
+impl RunListQuery {
+    #[must_use]
+    pub fn new(limit: u32) -> Self {
+        Self {
+            limit,
+            cursor: None,
+            state: None,
+            attention: None,
+        }
+    }
+}
+
+/// One stable page of runs the caller may read, newest admission first.
 #[derive(Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RunList {
     pub runs: Vec<RunStatus>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
 }
 
 /// The runtime accepted a same-command retry; the worker has not run it yet.

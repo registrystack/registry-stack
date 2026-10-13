@@ -29,6 +29,7 @@ STATUS = {
     "uncertain": False,
     "restoreReviewRequired": False,
     "cancelRequested": False,
+    "authoredCancelRequested": False,
 }
 INSPECTION = {
     "run": STATUS,

@@ -33,6 +33,9 @@ const reconciled: Promise<CoordinatorOutcome<RunInspection>> = client.reconcile(
   'operator reviewed the original receipt',
 )
 const listed: Promise<CoordinatorOutcome<RunList>> = client.list('header.payload.signature', 20)
+const attention: Promise<CoordinatorOutcome<RunList>> = client.list(
+  'header.payload.signature', 20, 'opaque', 'attention', true,
+)
 const retried: Promise<CoordinatorOutcome<RetryScheduled>> = client.retrySame(
   'header.payload.signature',
   '0f8c2a51-6d3e-4b7a-9c10-2e5f7a8b9c0d',
@@ -43,7 +46,7 @@ const cancelled: Promise<CoordinatorOutcome<RunStatus>> = client.cancel(
   '0f8c2a51-6d3e-4b7a-9c10-2e5f7a8b9c0d',
   'caller withdrew the request',
 )
-void [started, status, inspected, reconciled, listed, retried, cancelled]
+void [started, status, inspected, reconciled, listed, attention, retried, cancelled]
 
 declare const run: RunStatus
 declare const step: StepStatus

@@ -8,7 +8,7 @@ use std::time::Duration;
 use coordinator_client_sdk::{
     BearerToken, CoordinatorClient as RustClient, CoordinatorClientConfig,
     CoordinatorClientError as RustClientError, CoordinatorComplete, CoordinatorProtocolFailure,
-    StartRunRequest, Uuid,
+    RunListQuery, RunListState, StartRunRequest, Uuid,
 };
 use pyo3::{
     exceptions::{PyException, PyRuntimeError},
@@ -187,6 +187,20 @@ fn list_limit(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<u32> {
     value.extract::<u32>().map_err(|_| invalid_arguments(py))
 }
 
+fn list_state(py: Python<'_>, value: &str) -> PyResult<RunListState> {
+    match value {
+        "running" => Ok(RunListState::Running),
+        "finished" => Ok(RunListState::Finished),
+        "failed" => Ok(RunListState::Failed),
+        "cancelled" => Ok(RunListState::Cancelled),
+        "cancelled-after-effect" => Ok(RunListState::CancelledAfterEffect),
+        "expired" => Ok(RunListState::Expired),
+        "attention" => Ok(RunListState::Attention),
+        "cancel-requested" => Ok(RunListState::CancelRequested),
+        _ => Err(invalid_arguments(py)),
+    }
+}
+
 /// A timeout as a Python number of seconds. Only a finite non-negative `int`
 /// or `float` reaches the client, which refuses zero; a `bool` is not a
 /// duration.
@@ -358,17 +372,33 @@ impl CoordinatorClient {
         )
     }
 
+    #[pyo3(signature = (token, limit, cursor=None, state=None, attention=None))]
     fn list<'py>(
         &self,
         py: Python<'py>,
         token: &str,
         limit: &Bound<'_, PyAny>,
+        cursor: Option<&str>,
+        state: Option<&str>,
+        attention: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let token = bearer(py, token)?;
         let limit = list_limit(py, limit)?;
+        let mut query = RunListQuery::new(limit);
+        query.cursor = cursor.map(str::to_owned);
+        query.state = state.map(|value| list_state(py, value)).transpose()?;
+        query.attention = attention
+            .map(|value| {
+                if value.is_instance_of::<PyBool>() {
+                    value.extract::<bool>()
+                } else {
+                    Err(invalid_arguments(py))
+                }
+            })
+            .transpose()?;
         complete(
             py,
-            py.detach(|| self.runtime.block_on(self.inner.list(&token, limit))),
+            py.detach(|| self.runtime.block_on(self.inner.list_page(&token, &query))),
         )
     }
 

@@ -35,6 +35,7 @@ class RunStatus(TypedDict):
     uncertain: bool
     restoreReviewRequired: bool
     cancelRequested: bool
+    authoredCancelRequested: bool
 
 class StepStatus(TypedDict):
     step: str
@@ -94,8 +95,22 @@ class RunInspection(TypedDict):
     steps: list[StepStatus]
     recovery: RecoveryStatus
 
-class RunList(TypedDict):
-    """The latest runs the caller may read, newest admission first, at most the requested limit."""
+RunListState: TypeAlias = Literal[
+    "running",
+    "finished",
+    "failed",
+    "cancelled",
+    "cancelled-after-effect",
+    "expired",
+    "attention",
+    "cancel-requested",
+]
+
+class _RunListOptional(TypedDict, total=False):
+    nextCursor: str
+
+class RunList(_RunListOptional):
+    """One stable page of runs the caller may read, newest admission first."""
 
     runs: list[RunStatus]
 
@@ -154,9 +169,10 @@ class CoordinatorClient:
     # Stop further progression; never undoes a product effect. Takes no key,
     # so it is sent exactly once. `reason` is bounded as for `retry_same`.
     def cancel(self, token: str, run_id: RunId, reason: str) -> Complete[RunStatus]: ...
-    # The latest runs the caller may read. `limit` is an `int` from 1 to 100,
-    # checked before sending. Declared last: mypy reads `list` in any later
-    # annotation in this class as this method.
-    def list(self, token: str, limit: int) -> Complete[RunList]: ...
+    # One stable page of caller-visible runs. Pass nextCursor unchanged with
+    # the same caller, state, and attention values. attention=True selects
+    # the effective states attention and failed. Declared last: mypy reads
+    # `list` in any later annotation in this class as this method.
+    def list(self, token: str, limit: int, cursor: str | None = None, state: RunListState | None = None, attention: bool | None = None) -> Complete[RunList]: ...
 
 __version__: str

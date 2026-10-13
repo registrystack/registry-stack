@@ -17,10 +17,17 @@ run_id = started["value"]["runId"]
 status = client.status(token, run_id)
 inspection = client.inspect(token, run_id)
 recovered = client.reconcile(token, run_id, "operator-ticket-4821")
-latest = client.list(token, 20)
+latest = client.list(token, 20, None, "attention", True)
+cursor = latest["value"].get("nextCursor")
+next_page = client.list(token, 20, cursor, "attention", True) if cursor else None
 retried = client.retry_same(token, run_id, "operator-ticket-4822")
 cancelled = client.cancel(token, run_id, "operator-ticket-4823")
 ```
+
+Pass `nextCursor` unchanged with the same caller and filter values. The state
+argument accepts one of the eight closed run states. `attention=True` selects
+effective state `attention` or `failed`; it can be combined with an exact
+state when that is useful.
 
 The client keeps service configuration, but never a bearer token. Supply it
 explicitly on each call. The binding never acquires a token and never invents

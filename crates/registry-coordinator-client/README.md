@@ -26,8 +26,12 @@ issuer/subject can create another run. `list`, `status`, `inspect`,
 `reconcile`, `retry_same` and `cancel` send exactly once. `retry_same` and
 `cancel` take no idempotency key, so the client never resends them: after an
 error that leaves the outcome unknown, read the run before asking again.
-`list` takes a limit from 1 to 100, refused before sending, and returns the
-latest runs the caller may read, newest admission first, without a cursor.
+`list` takes a limit from 1 to 100 and returns the first page of runs the
+caller may read, newest admission first. `list_page` also accepts the opaque
+cursor returned as `next_cursor`, an exact state, and an attention filter.
+Pass a cursor unchanged with the same caller and filters. Attention means the
+effective states `attention` and `failed`; the state filter exposes all eight
+closed runtime states individually.
 
 Status is protected by current Coordinator policy and ownership. A run started
 by a backend is owned by that backend, even when its input mentions a citizen's

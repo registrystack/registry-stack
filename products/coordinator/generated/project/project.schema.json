@@ -198,7 +198,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "Waits for an event another product delivers, then continues with the\nevent's value as its output, or takes `onTimeout` when the event does\nnot arrive in time.",
+          "description": "Waits for an event another product delivers, then continues with the\nevent's value as its output, takes `onTimeout` when the event does not\narrive in time, or takes `onCancel` when an authorized caller cancels\nthe run while it is durably waiting.",
           "properties": {
             "event": {
               "$ref": "#/$defs/AuthoredEvent",
@@ -207,6 +207,10 @@
             "next": {
               "$ref": "#/$defs/LocalId",
               "description": "The step that follows the event, with the event's value as this\nstep's output."
+            },
+            "onCancel": {
+              "$ref": "#/$defs/LocalId",
+              "description": "The step that follows an authorized cancellation while this wait\nis durably parked. Omit it to stop the run with the ordinary\ncancellation behavior."
             },
             "onTimeout": {
               "$ref": "#/$defs/LocalId",

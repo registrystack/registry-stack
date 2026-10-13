@@ -18,6 +18,11 @@ take no idempotency key, so after an unknown outcome read the run before
 asking again. Operator routes are not part of this binding; `coordinatorctl`
 owns them.
 
+`list(token, limit, cursor?, state?, attention?)` preserves a returned opaque
+cursor and its filters exactly. `attention: true` selects runs whose effective
+state is `attention` or `failed`; `state` accepts any one of the eight closed
+run states. Invalid cursors and filters fail before I/O.
+
 Configuration, request documents, UUIDs, and JavaScript integer bounds are
 checked before I/O. Errors expose a fixed safe message and the closed failure
 category. A refusal is a `problem` error only when the service answered an

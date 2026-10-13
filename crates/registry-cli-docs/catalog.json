@@ -7604,7 +7604,7 @@
         {
           "name": "list",
           "invocation": "coordinatorctl list",
-          "about": "List the most recently admitted runs the current caller policy permits, newest first; at most 100, with no paging cursor and no state filter",
+          "about": "List the runs the current caller policy permits, newest admission first",
           "long_about": null,
           "usage": "coordinatorctl list [OPTIONS]",
           "arguments": [],
@@ -7618,6 +7618,45 @@
                 "20"
               ],
               "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--cursor <CURSOR>",
+              "description": "Opaque continuation returned as nextCursor by the preceding page",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--state <STATE>",
+              "description": "Return only runs in this effective state",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [
+                "running",
+                "finished",
+                "failed",
+                "cancelled",
+                "cancelled-after-effect",
+                "expired",
+                "attention",
+                "cancel-requested"
+              ],
+              "environment": null
+            },
+            {
+              "display": "--attention <ATTENTION>",
+              "description": "True returns attention or failed runs; false excludes both",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [
+                "true",
+                "false"
+              ],
               "environment": null
             },
             {

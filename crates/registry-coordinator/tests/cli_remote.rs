@@ -58,6 +58,60 @@ async fn receiver(server: &MockServer, response: ResponseTemplate) {
 }
 
 #[tokio::test]
+async fn list_forwards_the_opaque_cursor_and_state_and_attention_filters() {
+    let server = MockServer::start().await;
+    let root = tempfile::tempdir().unwrap();
+    let token = root.path().join("token");
+    fs::write(&token, TOKEN).unwrap();
+    Mock::given(method("GET"))
+        .and(path("/v1/runs"))
+        .and(header("authorization", format!("Bearer {TOKEN}")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"runs":[]})))
+        .expect(2)
+        .mount(&server)
+        .await;
+    for attention in ["true", "false"] {
+        let origin = server.uri();
+        let token = token.clone();
+        let output = tokio::task::spawn_blocking(move || {
+            Command::new(env!("CARGO_BIN_EXE_coordinatorctl"))
+                .args([
+                    "--format",
+                    "json",
+                    "list",
+                    "--limit",
+                    "1",
+                    "--cursor",
+                    "opaque_cursor",
+                    "--state",
+                    "attention",
+                    "--attention",
+                    attention,
+                    "--url",
+                    &origin,
+                    "--token-file",
+                ])
+                .arg(token)
+                .output()
+                .unwrap()
+        })
+        .await
+        .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+    }
+    let requests = server.received_requests().await.unwrap();
+    for (request, attention) in requests.iter().zip(["true", "false"]) {
+        let expected =
+            format!("limit=1&cursor=opaque_cursor&state=attention&attention={attention}");
+        assert_eq!(request.url.query(), Some(expected.as_str()));
+    }
+}
+
+#[tokio::test]
 async fn remote_admission_reports_outages_separately_without_repeating_the_request() {
     let server = MockServer::start().await;
     let root = tempfile::tempdir().unwrap();
