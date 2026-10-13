@@ -66,8 +66,9 @@
 - BREAKING: a runtime file without `taskGrantStatus` is refused at startup
   with `scheduling.runtime.missing-task-grant-status`. v0.40.0 had no such
   member and accepted every unexpired task grant. A Casework immediate grant
-  never lasts longer than fifteen minutes, so the offline path refuses only a
-  deferred grant or a longer grant from another authority. After it acquires
+  never lasts longer than fifteen minutes. The offline path checks remaining
+  lifetime alone, so it also admits the final 900 seconds of a deferred grant
+  without checking revocation. After it acquires
   its locks, the capacity transaction rechecks the execution token's expiry
   as well as the grant's, on either path. Migration: list the task
   authorities under `taskGrantStatus`, or write
