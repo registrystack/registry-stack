@@ -866,7 +866,8 @@ Once the writer has held one entry for 5 seconds, the call waiting on that entry
 When the collector takes the entry, the writer accepts entries again.
 The runtime log does not name a stall, so `/ready` and the refused calls are the signal.
 That log shares standard output with a `stdout` audit destination.
-A refused call and `/ready` write no log record, so their answers do not wait on the stream.
+A call refused before its work starts and `/ready` write no log record, so their answers do not
+wait on the stream.
 A record the runtime does write while the collector is not reading, such as a background pass that
 did not complete, waits with no deadline and holds a runtime thread until the collector reads
 again, so set a timeout on the `/ready` probe and treat a probe that gets no answer as failed.
