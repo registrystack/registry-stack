@@ -9,7 +9,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 
 use registry_messaging::auth::MessagingAuthenticator;
@@ -29,6 +29,8 @@ use super::{config, failed, interrupted, private, refused, DevResult};
 
 const EXPORT_LIMIT: usize = 64 * 1024;
 const EXPORT_TIMEOUT: Duration = Duration::from_secs(120);
+/// How long the report of a `bregctl` that already exited may take to end.
+const REPORT_DRAIN: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -132,10 +134,15 @@ fn executable(path: &Path) -> DevResult<PathBuf> {
 
 /// Bound captured output and discard stderr. Neither an upstream refusal nor
 /// a misbehaving executable may put a key or bearer into our report.
+///
+/// The report is read on a detached thread and awaited for at most `drain`
+/// after the command exits, so a process that inherited the pipe and holds it
+/// open cannot keep this call waiting.
 fn public_command(
     command: &mut Command,
     stop: &AtomicBool,
     timeout: Duration,
+    drain: Duration,
 ) -> DevResult<Vec<u8>> {
     if stop.load(Ordering::SeqCst) {
         return Err(interrupted());
@@ -152,13 +159,14 @@ fn public_command(
             )
         })?;
     let mut stdout = child.stdout.take().expect("stdout piped");
-    let output = std::thread::spawn(move || {
+    let (report, output) = mpsc::channel();
+    std::thread::spawn(move || {
         let mut bytes = Vec::new();
         let mut buffer = [0u8; 4096];
         let mut overflow = false;
-        loop {
+        let bytes = loop {
             match stdout.read(&mut buffer) {
-                Ok(0) => return (!overflow).then_some(bytes),
+                Ok(0) => break (!overflow).then_some(bytes),
                 Ok(count) if !overflow && bytes.len() + count <= EXPORT_LIMIT => {
                     bytes.extend_from_slice(&buffer[..count]);
                 }
@@ -166,9 +174,11 @@ fn public_command(
                     bytes.clear();
                     overflow = true;
                 }
-                Err(_) => return None,
+                Err(_) => break None,
             }
-        }
+        };
+        // The receiver is gone once the caller stopped waiting.
+        let _ = report.send(bytes);
     });
     let deadline = Instant::now() + timeout;
     let result = loop {
@@ -186,14 +196,13 @@ fn public_command(
         let _ = child.kill();
         let _ = child.wait();
     }
-    let bytes = output.join().ok().flatten();
     if stop.load(Ordering::SeqCst) {
         return Err(interrupted());
     }
     if !result {
         return Err(refused("bregctl credential export failed or timed out; check the owner project and registered client, then restart messagingctl dev".to_owned()));
     }
-    bytes.ok_or_else(|| {
+    output.recv_timeout(drain).ok().flatten().ok_or_else(|| {
         refused("bregctl returned an oversized or unreadable public report".to_owned())
     })
 }
@@ -217,6 +226,7 @@ fn export(
             .arg(&key),
         stop,
         EXPORT_TIMEOUT,
+        REPORT_DRAIN,
     )?;
     let report: Value = serde_json::from_slice(&bytes)
         .map_err(|_| refused("bregctl returned no usable public credential report".to_owned()))?;

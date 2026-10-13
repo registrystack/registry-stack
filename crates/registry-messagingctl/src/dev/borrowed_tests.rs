@@ -203,10 +203,14 @@ fn assert_refused(failure: &DevFailure, expected: &str) {
     assert!(failure.message.contains(expected), "{}", failure.message);
 }
 
+/// The process a stand-in recorded in `file`.
+fn recorded(file: &Path) -> rustix::process::Pid {
+    rustix::process::Pid::from_raw(fs::read_to_string(file).unwrap().parse().unwrap()).unwrap()
+}
+
 /// Whether the process a stand-in recorded in `file` still exists.
 fn alive(file: &Path) -> bool {
-    let pid = fs::read_to_string(file).unwrap().parse().unwrap();
-    rustix::process::test_kill_process(rustix::process::Pid::from_raw(pid).unwrap()).is_ok()
+    rustix::process::test_kill_process(recorded(file)).is_ok()
 }
 
 #[test]
@@ -313,6 +317,7 @@ fn a_bregctl_that_outlives_its_timeout_is_refused() {
         &mut Command::new(slow),
         &AtomicBool::new(false),
         Duration::from_millis(200),
+        REPORT_DRAIN,
     )
     .unwrap_err();
     assert_refused(&failure, "bregctl credential export failed or timed out");
@@ -327,6 +332,7 @@ fn a_report_is_accepted_up_to_its_size_bound_and_refused_beyond_it() {
         &mut Command::new(exact),
         &AtomicBool::new(false),
         EXPORT_TIMEOUT,
+        REPORT_DRAIN,
     )
     .unwrap();
     assert_eq!(bytes.len(), EXPORT_LIMIT);
@@ -335,9 +341,38 @@ fn a_report_is_accepted_up_to_its_size_bound_and_refused_beyond_it() {
         &mut Command::new(oversized),
         &AtomicBool::new(false),
         EXPORT_TIMEOUT,
+        REPORT_DRAIN,
     )
     .unwrap_err();
     assert_refused(&failure, "oversized or unreadable public report");
+}
+
+#[test]
+fn a_report_held_open_after_bregctl_exits_is_refused_without_waiting_for_it() {
+    let fixture = fixture();
+    let holder = fixture.owner.join("holder");
+    // A background process inherits the report pipe and outlives bregctl.
+    for (exit, expected) in [
+        (0, "oversized or unreadable public report"),
+        (3, "bregctl credential export failed or timed out"),
+    ] {
+        let bregctl = fixture.script(&format!(
+            "#!/bin/sh\nsleep 60 &\nprintf '%s' \"$!\" > '{}'\nprintf '{{}}\\n'\nexit {exit}\n",
+            holder.display()
+        ));
+        let started = Instant::now();
+        let failure = public_command(
+            &mut Command::new(bregctl),
+            &AtomicBool::new(false),
+            EXPORT_TIMEOUT,
+            Duration::from_millis(200),
+        )
+        .unwrap_err();
+        assert_refused(&failure, expected);
+        assert!(started.elapsed() < Duration::from_secs(30));
+        assert!(alive(&holder));
+        rustix::process::kill_process(recorded(&holder), rustix::process::Signal::KILL).unwrap();
+    }
 }
 
 #[test]
