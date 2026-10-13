@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from unittest.mock import patch as roster_patch
+
 import contextlib
 import datetime as dt
 import hashlib
@@ -327,11 +329,12 @@ class NightlyTest(unittest.TestCase):
                 with self.assertRaisesRegex(nightly.NightlyError, "frozen profile"):
                     nightly.read_manifest(path)
 
+    @roster_patch("release_roster.COORDINATOR_FIRST_RELEASE", (0, 42, 0))
     def test_coordinator_joins_the_nightly_roster_under_profile_v2_1(self):
         tag_40 = f"v0.40.0-nightly.20261012.{SHA}"
-        tag_41 = f"v0.41.0-nightly.20261012.{SHA}"
+        tag_41 = f"v0.42.0-nightly.20261012.{SHA}"
         before = nightly.current_roster("0.40.0", tag_40)
-        after = nightly.current_roster("0.41.0", tag_41)
+        after = nightly.current_roster("0.42.0", tag_41)
         self.assertEqual("registry-stack.nightly-roster.v2.0", before["profile"])
         self.assertEqual("registry-stack.nightly-roster.v2.1", after["profile"])
         self.assertNotIn("coordinator", before["images"])
@@ -347,17 +350,18 @@ class NightlyTest(unittest.TestCase):
         )
         self.assertEqual(after, nightly.validate_v2_roster(after, tag_41))
 
+    @roster_patch("release_roster.COORDINATOR_FIRST_RELEASE", (0, 42, 0))
     def test_published_roster_profiles_keep_their_meaning(self):
         path = self.root / "nightly.json"
-        tag_41 = f"v0.41.0-nightly.20261012.{SHA}"
-        v2_1 = nightly.current_roster("0.41.0", tag_41)
+        tag_41 = f"v0.42.0-nightly.20261012.{SHA}"
+        v2_1 = nightly.current_roster("0.42.0", tag_41)
         with patch.object(nightly.release_roster, "COORDINATOR_FIRST_RELEASE", None):
-            v2_0 = nightly.current_roster("0.41.0", tag_41)
+            v2_0 = nightly.current_roster("0.42.0", tag_41)
         self.assertEqual("registry-stack.nightly-roster.v2.0", v2_0["profile"])
-        # A v0.41.0 nightly published before Coordinator joined stays readable,
+        # A v0.42.0 nightly published before Coordinator joined stays readable,
         # and so does a v2.1 one after its first release is withdrawn.
         for name, roster, first_release in (
-            ("v2.0 at v0.41.0", v2_0, (0, 41, 0)),
+            ("v2.0 at v0.42.0", v2_0, (0, 42, 0)),
             ("v2.1 without a first release", v2_1, None),
         ):
             with self.subTest(name=name), patch.object(
@@ -381,8 +385,9 @@ class NightlyTest(unittest.TestCase):
                 with self.assertRaisesRegex(nightly.NightlyError, "frozen profile"):
                     nightly.read_manifest(path)
 
-    def test_v0_41_nightly_publishes_coordinator(self):
-        base = "0.41.0"
+    @roster_patch("release_roster.COORDINATOR_FIRST_RELEASE", (0, 42, 0))
+    def test_v0_42_nightly_publishes_coordinator(self):
+        base = "0.42.0"
         tag = f"v{base}-nightly.20261012.{SHA}"
         record = {
             **self.record,

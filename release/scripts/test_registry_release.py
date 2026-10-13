@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+from unittest.mock import patch as roster_patch
+
 import importlib.util
 import hashlib
 import io
@@ -2272,6 +2274,7 @@ class RegistryReleaseTest(TestCase):
                     step["run"],
                 )
 
+    @roster_patch("release_roster.COORDINATOR_FIRST_RELEASE", (0, 42, 0))
     def test_required_rust_context_aggregates_path_gated_shards(self) -> None:
         workflow = yaml.safe_load(
             (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
@@ -2959,6 +2962,7 @@ class RegistryReleaseTest(TestCase):
 
 
 
+    @roster_patch("release_roster.COORDINATOR_FIRST_RELEASE", (0, 42, 0))
     def test_release_packaging_uses_retained_artifact_identities(self) -> None:
         binary_recipe = (ROOT / "release/scripts/build-release-binaries.sh").read_text(
             encoding="utf-8"
@@ -3423,6 +3427,7 @@ class RegistryReleaseTest(TestCase):
         self.assertIn('"schedulingctl-${tag}-linux-amd64"', recipe)
         self.assertIn("image_bin_binaries+=(schedulingctl)", recipe)
 
+    @roster_patch("release_roster.COORDINATOR_FIRST_RELEASE", (0, 42, 0))
     def test_messaging_release_surface_begins_at_its_first_release(self) -> None:
         module = load_registry_release()
         previous = {
@@ -3523,6 +3528,7 @@ class RegistryReleaseTest(TestCase):
         self.assertIn('"messagingctl-${tag}-linux-amd64"', recipe)
         self.assertIn("image_bin_binaries+=(messaging)", recipe)
 
+    @roster_patch("release_roster.COORDINATOR_FIRST_RELEASE", (0, 42, 0))
     def test_coordinator_release_surface_begins_at_its_first_release(self) -> None:
         module = load_registry_release()
         published = {
@@ -3581,23 +3587,23 @@ class RegistryReleaseTest(TestCase):
             ),
         )
 
-        current = released("0.41.0")
-        self.assertEqual("0.41.0", current["coordinator"])
-        self.assertEqual("0.41.0", current["coordinatorctl"])
-        self.assertEqual([], module.artifact_inventory_errors("0.41.0", current))
+        current = released("0.42.0")
+        self.assertEqual("0.42.0", current["coordinator"])
+        self.assertEqual("0.42.0", current["coordinatorctl"])
+        self.assertEqual([], module.artifact_inventory_errors("0.42.0", current))
         for missing in ("coordinator", "coordinatorctl"):
             with self.subTest(missing=missing):
                 incomplete = dict(current)
                 del incomplete[missing]
                 self.assertNotEqual(
-                    [], module.artifact_inventory_errors("0.41.0", incomplete)
+                    [], module.artifact_inventory_errors("0.42.0", incomplete)
                 )
 
         # No version ships Coordinator while the roster names no first release.
         with mock.patch.object(
             module.release_roster, "COORDINATOR_FIRST_RELEASE", None
         ):
-            for version in ("0.41.0", "1.0.0"):
+            for version in ("0.42.0", "1.0.0"):
                 with self.subTest(version=version, roster=None):
                     held = released(version)
                     self.assertNotIn("coordinator", held)
@@ -3654,6 +3660,7 @@ class RegistryReleaseTest(TestCase):
         )
         self.assertIn('check --package "${messaging_project}-installed"', smoke)
 
+    @roster_patch("release_roster.COORDINATOR_FIRST_RELEASE", (0, 42, 0))
     def test_breg_services_release_surface_begins_at_their_first_release(
         self,
     ) -> None:

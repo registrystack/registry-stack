@@ -162,7 +162,7 @@ registry_prepare_cargo_runtime "$PWD" --locked -p registry-<product>-client-node
 In checkouts containing the unified Node.js and Python packages, those packages
 are generated from the BReg, Casework, Coordinator, Discovery, Evidence,
 Messaging, and Scheduling bindings. Published packages include Messaging from
-v0.38.0, Scheduling from v0.40.0, and Coordinator from v0.41.0; earlier
+v0.38.0, Scheduling from v0.40.0, and Coordinator from v0.42.0; earlier
 release assembly preserves its version-selected inventory. Source CI uses the
 explicit local `--include-messaging`, `--include-scheduling`, and
 `--include-coordinator` overrides when assembling the current seven bindings.

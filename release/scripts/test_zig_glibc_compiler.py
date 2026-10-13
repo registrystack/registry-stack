@@ -569,6 +569,12 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
         self.assertIn("evidence-oid4vci", current_images)
 
     def test_core_stages_coordinator_only_from_its_first_release(self) -> None:
+        # Enable only the copied test recipe's roster, including its child processes.
+        roster = self.scripts / "release_roster.py"
+        roster.write_text(roster.read_text().replace(
+            "COORDINATOR_FIRST_RELEASE: tuple[int, int, int] | None = None",
+            "COORDINATOR_FIRST_RELEASE: tuple[int, int, int] | None = (0, 42, 0)",
+        ))
         result, historical_calls = self.run_payload(version="0.40.0", group="core")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse(
@@ -581,7 +587,7 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
         self.assertNotIn("coordinator", historical_images)
         self.assertNotIn("coordinatorctl", historical_images)
 
-        result, current_calls = self.run_payload(version="0.41.0", group="core")
+        result, current_calls = self.run_payload(version="0.42.0", group="core")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn(
             [
@@ -598,8 +604,8 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
             [call["args"] for call in current_calls],
         )
         current_bin, current_images = self.staged()
-        self.assertIn("coordinator-v0.41.0-linux-amd64", current_bin)
-        self.assertIn("coordinatorctl-v0.41.0-linux-amd64", current_bin)
+        self.assertIn("coordinator-v0.42.0-linux-amd64", current_bin)
+        self.assertIn("coordinatorctl-v0.42.0-linux-amd64", current_bin)
         self.assertIn("coordinator", current_images)
         self.assertIn("coordinatorctl", current_images)
 
@@ -948,14 +954,20 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
             (self.root / "merge-0.39.0/merged-groups/image-bin/messaging").is_file()
         )
 
-    def test_v0_41_merged_groups_stage_coordinator_in_the_core_shard(self) -> None:
+    def test_v0_42_merged_groups_stage_coordinator_in_the_core_shard(self) -> None:
+        # Enable only the copied test recipe's roster, including its child processes.
+        roster = self.scripts / "release_roster.py"
+        roster.write_text(roster.read_text().replace(
+            "COORDINATOR_FIRST_RELEASE: tuple[int, int, int] | None = None",
+            "COORDINATOR_FIRST_RELEASE: tuple[int, int, int] | None = (0, 42, 0)",
+        ))
         self.assert_merged_groups_equivalent_to_all(
-            "0.41.0", ("core", "breg", "casework", "scheduling", "messaging")
+            "0.42.0", ("core", "breg", "casework", "scheduling", "messaging")
         )
-        merged = self.root / "merge-0.41.0/merged-groups"
+        merged = self.root / "merge-0.42.0/merged-groups"
         sums = (merged / "bin/SHA256SUMS").read_text()
-        self.assertIn("coordinator-v0.41.0-linux-amd64", sums)
-        self.assertIn("coordinatorctl-v0.41.0-linux-amd64", sums)
+        self.assertIn("coordinator-v0.42.0-linux-amd64", sums)
+        self.assertIn("coordinatorctl-v0.42.0-linux-amd64", sums)
         self.assertEqual(
             ["registry-render", "coordinator", "coordinatorctl"],
             [

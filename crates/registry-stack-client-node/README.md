@@ -133,7 +133,7 @@ The `scheduling` namespace is part of the unified package beginning with
 Registry Stack v0.40.0.
 
 The `coordinator` namespace is part of the unified package beginning with
-Registry Stack v0.41.0.
+Registry Stack v0.42.0.
 
 ## Casework notes
 
