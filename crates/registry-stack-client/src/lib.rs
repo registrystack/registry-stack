@@ -75,7 +75,8 @@ pub mod coordinator {
         BearerToken, CoordinatorClient, CoordinatorClientConfig, CoordinatorClientError,
         CoordinatorComplete, CoordinatorProtocolFailure, EffectKind, KeyRequirement,
         OperationIdentity, RecoverySemantics, RecoveryStatus, RetryBlockReason, RetryScheduled,
-        RunInspection, RunList, RunStatus, StartRunRequest, StepStatus, TransportKind, Uuid,
+        RunInspection, RunList, RunListQuery, RunListState, RunStatus, StartRunRequest, StepStatus,
+        TransportKind, Uuid,
     };
 }
 
