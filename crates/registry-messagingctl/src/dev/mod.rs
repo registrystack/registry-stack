@@ -352,18 +352,18 @@ fn decode_session(file: &str, bytes: &[u8]) -> Result<(SessionRecord, Report), R
             "Preserve the file for inspection and start messagingctl dev again.",
         ));
     }
-    if decoded
+    for invalid in decoded
         .value
         .borrowed_issuer
-        .as_ref()
-        .is_some_and(|binding| binding.check().is_err())
+        .iter()
+        .flat_map(borrowed::Binding::invalid_members)
     {
         report.push(decoded.document.diagnostic_at_value(
             Severity::Error,
             "messaging.dev-state.invalid-borrowed-issuer",
-            "/borrowedIssuer",
-            "the borrowed issuer binding is not one messagingctl writes",
-            "Preserve the file for inspection and start messagingctl dev again with the intended issuer project and resource.",
+            &format!("/borrowedIssuer/{}", invalid.member),
+            invalid.message,
+            invalid.suggested_action,
         ));
     }
     if report.has_errors() {

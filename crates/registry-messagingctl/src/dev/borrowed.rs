@@ -43,26 +43,72 @@ pub(super) struct Binding {
     pub clients: BTreeMap<String, CallerPin>,
 }
 
+/// One member of a retained binding that is not a value `messagingctl`
+/// writes: what is wrong with it and what to do. Neither sentence repeats the
+/// value (CFG-SEC-3).
+pub(super) struct InvalidMember {
+    pub member: &'static str,
+    pub message: &'static str,
+    pub suggested_action: &'static str,
+}
+
 impl Binding {
-    pub(super) fn check(&self) -> DevResult<()> {
-        let port = self
+    /// Every member `messagingctl` would not have written, in declaration
+    /// order. The token endpoint is judged against the issuer as recorded, so
+    /// an invalid issuer alone does not make its own endpoint invalid.
+    pub(super) fn invalid_members(&self) -> Vec<InvalidMember> {
+        let loopback = self
             .issuer
             .strip_prefix("http://127.0.0.1:")
             .and_then(|port| port.parse::<u16>().ok())
-            .filter(|port| *port != 0);
-        if port.is_none_or(|port| self.issuer != format!("http://127.0.0.1:{port}"))
-            || self.token_endpoint != format!("{}/oauth2/token", self.issuer)
-            || !registry_platform_httputil::valid_resource_uri(&self.resource)
-            || !self.project.is_absolute()
-            || !self.bregctl.is_absolute()
-            || self.clients.is_empty()
-            || self.clients.keys().any(|client| !config::file_safe(client))
-        {
-            return Err(refused(
-                "the borrowed issuer binding is invalid; restart messagingctl dev".to_owned(),
-            ));
-        }
-        Ok(())
+            .filter(|port| *port != 0)
+            .is_some_and(|port| self.issuer == format!("http://127.0.0.1:{port}"));
+        let clients = if self.clients.is_empty() {
+            Some("the borrowed issuer binding names no client")
+        } else if self.clients.keys().any(|client| !config::file_safe(client)) {
+            Some("a borrowed client name is not a bounded identifier of letters, digits, hyphens, underscores or dots")
+        } else {
+            None
+        };
+        [
+            (!self.project.is_absolute()).then_some(InvalidMember {
+                member: "project",
+                message: "the borrowed issuer project is not an absolute path",
+                suggested_action: "Preserve the file for inspection and start messagingctl dev again with --issuer-project naming the existing BReg development project.",
+            }),
+            (!self.bregctl.is_absolute()).then_some(InvalidMember {
+                member: "bregctl",
+                message: "the borrowed bregctl executable is not an absolute path",
+                suggested_action: "Preserve the file for inspection, put the bregctl of this Registry Stack release on PATH, and start messagingctl dev again.",
+            }),
+            (!loopback).then_some(InvalidMember {
+                member: "issuer",
+                message: "the borrowed issuer is not one loopback origin of the form http://127.0.0.1:<port>",
+                suggested_action: "Preserve the file for inspection, start the BReg development session that owns the issuer, and start messagingctl dev again to record its issuer.",
+            }),
+            (self.token_endpoint != format!("{}/oauth2/token", self.issuer)).then_some(
+                InvalidMember {
+                    member: "tokenEndpoint",
+                    message: "the borrowed token endpoint is not /oauth2/token at the recorded issuer",
+                    suggested_action: "Preserve the file for inspection, start the BReg development session that owns the issuer, and start messagingctl dev again to record its token endpoint.",
+                },
+            ),
+            (!registry_platform_httputil::valid_resource_uri(&self.resource)).then_some(
+                InvalidMember {
+                    member: "resource",
+                    message: "the borrowed resource is not an absolute resource URI without credentials or fragment",
+                    suggested_action: "Preserve the file for inspection and start messagingctl dev again with --resource naming the Messaging audience registered at the issuer.",
+                },
+            ),
+            clients.map(|message| InvalidMember {
+                member: "clients",
+                message,
+                suggested_action: "Preserve the file for inspection and start messagingctl dev again to record the requester clients of the Messaging access profiles.",
+            }),
+        ]
+        .into_iter()
+        .flatten()
+        .collect()
     }
 }
 
