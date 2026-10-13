@@ -405,7 +405,8 @@ enum AuthoredStep {
         next: LocalId,
         /// The step that follows a product-declared, no-effect business
         /// refusal. Only operations whose reference declares this capability
-        /// accept the member; other refusals still stop the run.
+        /// accept the member; other refusals still stop the run. Omit it to
+        /// fail the run with `product-refused` on a declared refusal too.
         #[serde(default)]
         on_declared_refusal: Option<LocalId>,
     },

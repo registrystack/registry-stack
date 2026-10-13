@@ -624,7 +624,7 @@
             },
             "onDeclaredRefusal": {
               "$ref": "#/$defs/LocalId",
-              "description": "The step that follows a product-declared, no-effect business\nrefusal. Only operations whose reference declares this capability\naccept the member; other refusals still stop the run."
+              "description": "The step that follows a product-declared, no-effect business\nrefusal. Only operations whose reference declares this capability\naccept the member; other refusals still stop the run. Omit it to\nfail the run with `product-refused` on a declared refusal too."
             },
             "operation": {
               "$ref": "#/$defs/Operation",
