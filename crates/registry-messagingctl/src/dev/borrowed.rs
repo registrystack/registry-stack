@@ -132,7 +132,11 @@ fn executable(path: &Path) -> DevResult<PathBuf> {
 
 /// Bound captured output and discard stderr. Neither an upstream refusal nor
 /// a misbehaving executable may put a key or bearer into our report.
-fn public_command(command: &mut Command, stop: &AtomicBool) -> DevResult<Vec<u8>> {
+fn public_command(
+    command: &mut Command,
+    stop: &AtomicBool,
+    timeout: Duration,
+) -> DevResult<Vec<u8>> {
     if stop.load(Ordering::SeqCst) {
         return Err(interrupted());
     }
@@ -166,7 +170,7 @@ fn public_command(command: &mut Command, stop: &AtomicBool) -> DevResult<Vec<u8>
             }
         }
     });
-    let deadline = Instant::now() + EXPORT_TIMEOUT;
+    let deadline = Instant::now() + timeout;
     let result = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status.success(),
@@ -212,6 +216,7 @@ fn export(
             .arg("--assertion-key-file")
             .arg(&key),
         stop,
+        EXPORT_TIMEOUT,
     )?;
     let report: Value = serde_json::from_slice(&bytes)
         .map_err(|_| refused("bregctl returned no usable public credential report".to_owned()))?;
@@ -482,3 +487,7 @@ pub(super) fn refresh(
     same_caller(expected, &caller)?;
     Ok((signed, expires))
 }
+
+#[cfg(test)]
+#[path = "borrowed_tests.rs"]
+mod tests;
