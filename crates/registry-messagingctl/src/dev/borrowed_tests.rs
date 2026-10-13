@@ -519,6 +519,27 @@ fn an_issuer_project_that_cannot_be_read_is_refused_before_bregctl_runs() {
 }
 
 #[test]
+fn a_resolved_path_that_is_not_utf8_is_refused_without_being_echoed() {
+    use std::os::unix::ffi::OsStringExt as _;
+
+    let spelled = PathBuf::from("/owner/project");
+    assert_eq!(
+        retainable(spelled.clone(), "issuer project").unwrap(),
+        spelled
+    );
+    for what in ["issuer project", "bregctl executable"] {
+        let path = PathBuf::from(std::ffi::OsString::from_vec(vec![0x2f, 0xff]));
+        let failure = retainable(path, what).expect_err("the path is refused");
+        assert_refused(
+            &failure,
+            &format!("the {what} resolves to a path that is not valid UTF-8"),
+        );
+        assert_refused(&failure, &format!("move the {what} to a UTF-8 path"));
+        assert!(!failure.message.contains('\u{fffd}'), "{}", failure.message);
+    }
+}
+
+#[test]
 fn a_refused_borrow_records_no_issuer_and_starts_no_container() {
     let fixture = fixture();
     let bregctl = fixture.stand_in(&format!("issuer=http://192.0.2.1:18095\n{HONEST}"));

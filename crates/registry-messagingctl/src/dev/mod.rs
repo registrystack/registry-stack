@@ -433,11 +433,10 @@ impl Session {
             detail: detail.clone(),
             borrowed_issuer: self.borrowed.clone(),
         };
-        private::replace(
-            &self.root.join("session.json"),
-            &serde_json::to_vec(&record).expect("session state serializes"),
-        )
-        .map_err(|error| failed(format!("the session record could not be written: {error}")))
+        let bytes = serde_json::to_vec(&record)
+            .map_err(|error| failed(format!("the session record could not be written: {error}")))?;
+        private::replace(&self.root.join("session.json"), &bytes)
+            .map_err(|error| failed(format!("the session record could not be written: {error}")))
     }
 }
 
