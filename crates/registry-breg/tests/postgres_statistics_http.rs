@@ -2499,7 +2499,7 @@ async fn computation_statement_obeys_the_request_deadline_and_persists_nothing()
              SET search_path = pg_catalog
              AS 'SELECT true FROM pg_catalog.pg_sleep(1)';
              CREATE OR REPLACE VIEW registry_source.{source_view}
-             WITH (security_invoker=true, security_barrier=true)
+             WITH (security_invoker=true)
              AS SELECT {source_columns}
                   FROM registry_data.{table}
                  WHERE record_lifecycle = 'active'
