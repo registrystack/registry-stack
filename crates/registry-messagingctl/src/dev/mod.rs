@@ -53,8 +53,9 @@ const RUNTIME_ROLE: &str = "messaging_dev_runtime";
 /// The project's private state directory and the session directory in it.
 const STATE_DIRECTORY: &str = ".messaging";
 const SESSION_DIRECTORY: &str = "dev";
-/// The largest session record a start reads back.
-const MAXIMUM_SESSION_BYTES: u64 = 64 * 1024;
+/// The largest session record a start reads back: the bound every
+/// configuration file shares (CFG-YAML-6).
+const MAXIMUM_SESSION_BYTES: u64 = registry_platform_yaml::MAXIMUM_DOCUMENT_BYTES as u64;
 /// How long Mailpit and then the runtime have to answer as ready.
 const READY_DEADLINE: Duration = Duration::from_secs(45);
 /// How long after accepting a send the mock gateway reports it delivered.
@@ -395,6 +396,8 @@ fn file_report(path: &Path, code: &str, message: &str, suggested_action: &str) -
 pub(crate) fn check_session_file(path: &Path) -> Result<Report, SessionCheckFailure> {
     use std::io::Read as _;
     let mut bytes = Vec::new();
+    // One byte past the bound is enough for the shared reader to refuse the
+    // file as `yaml.too-large`.
     fs::File::open(path)
         .and_then(|file| file.take(MAXIMUM_SESSION_BYTES + 1).read_to_end(&mut bytes))
         .map_err(|_| SessionCheckFailure {
@@ -406,17 +409,6 @@ pub(crate) fn check_session_file(path: &Path) -> Result<Report, SessionCheckFail
                 "Name an existing development session file that this user may read.",
             ),
         })?;
-    if bytes.len() as u64 > MAXIMUM_SESSION_BYTES {
-        return Err(SessionCheckFailure {
-            exit: DOMAIN_REFUSAL_EXIT,
-            report: file_report(
-                path,
-                "messaging.dev-state.too-large",
-                "the development session file exceeds its size limit",
-                "Check a session file written by messagingctl whose size is at most 65536 bytes.",
-            ),
-        });
-    }
     decode_session(&path.display().to_string(), &bytes)
         .map(|(_, report)| report)
         .map_err(|report| SessionCheckFailure {

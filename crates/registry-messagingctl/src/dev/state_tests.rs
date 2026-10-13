@@ -100,3 +100,67 @@ fn cleanup_accepts_only_typed_current_or_uuid_legacy_owners() {
     let invalid_legacy = serde_json::to_vec(&json!({"owner": "not-a-uuid"})).unwrap();
     assert!(previous_owner(&file, &invalid_legacy).is_err());
 }
+
+/// A session record `messagingctl` would write, padded with trailing
+/// whitespace to exactly `length` bytes.
+fn padded(length: usize) -> Vec<u8> {
+    let owner = uuid::Uuid::new_v4().simple().to_string();
+    let mut value: Value =
+        serde_json::from_slice(&current(&owner, "stopped", Value::Null)).unwrap();
+    value.as_object_mut().unwrap().remove("borrowedIssuer");
+    let mut bytes = serde_json::to_vec(&value).unwrap();
+    assert!(bytes.len() <= length);
+    bytes.resize(length, b' ');
+    bytes
+}
+
+#[test]
+fn offline_state_check_accepts_a_file_of_exactly_the_shared_bound() {
+    let temporary = tempfile::tempdir().unwrap();
+    let path = temporary.path().join("session.json");
+    fs::write(
+        &path,
+        padded(registry_platform_yaml::MAXIMUM_DOCUMENT_BYTES),
+    )
+    .unwrap();
+
+    let report = check_session_file(&path).unwrap();
+    assert!(!report.has_errors());
+}
+
+#[test]
+fn offline_state_check_refuses_a_file_above_the_shared_bound_with_the_shared_code() {
+    let temporary = tempfile::tempdir().unwrap();
+    let path = temporary.path().join("session.json");
+    fs::write(
+        &path,
+        padded(registry_platform_yaml::MAXIMUM_DOCUMENT_BYTES + 1),
+    )
+    .unwrap();
+
+    let refusal = check_session_file(&path).unwrap_err();
+    assert_eq!(refusal.exit, DOMAIN_REFUSAL_EXIT);
+    assert_eq!(
+        refusal
+            .report
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| diagnostic.code.as_str())
+            .collect::<Vec<_>>(),
+        ["yaml.too-large"]
+    );
+}
+
+#[test]
+fn a_start_reads_back_a_session_record_of_exactly_the_shared_bound() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path().join("dev");
+    private::directory(&root).unwrap();
+    private::create(
+        &root.join("session.json"),
+        &padded(registry_platform_yaml::MAXIMUM_DOCUMENT_BYTES),
+    )
+    .unwrap();
+
+    assert_eq!(read_session(&root).unwrap().state, "stopped");
+}
