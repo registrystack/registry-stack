@@ -179,6 +179,35 @@ impl Store {
         })
         .await
     }
+    /// Read one owned run only when its flow remains in the caller's current
+    /// action policy. The filter is part of the status query so a denied flow
+    /// cannot materialize protected status before the refusal is returned.
+    pub(crate) async fn status_owned_for_flows(
+        &self,
+        run: Uuid,
+        actor: &Actor,
+        allowed_flows: &[String],
+    ) -> Result<RunStatus> {
+        let flows = Self::run_list_flows(allowed_flows)?;
+        self.audited("status", actor, Some(run), None, async {
+            let mut client = self.client().await.map_err(unavailable)?;
+            let tx = client.transaction().await.map_err(unavailable)?;
+            self.verify_transaction(&tx).await.map_err(unavailable)?;
+            let row = tx
+                .query_opt(
+                    &format!(
+                        "{} WHERE r.run_id=$1 AND (r.owner_hash=$2 OR $3) AND r.workflow_id=ANY($4)",
+                        self.status_select()
+                    ),
+                    &[&run, &self.owner(actor)?, &actor.operator, &flows],
+                )
+                .await
+                .map_err(unavailable)?
+                .ok_or_else(|| refused("run-absent", "run was not found"))?;
+            self.status_from_row(&row)
+        })
+        .await
+    }
     pub async fn definition_owned(&self, run: Uuid, actor: &Actor) -> Result<Arc<Definition>> {
         self.audited("definition-read", actor, Some(run), None, async {
             let mut client = self.client().await.map_err(unavailable)?;

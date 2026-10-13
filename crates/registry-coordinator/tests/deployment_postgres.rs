@@ -105,6 +105,58 @@ async fn assert_status_audit(
     }
     assert_eq!(entries[1]["record"]["outcome"], expected_outcome);
 }
+async fn assert_run_flow_refused(
+    http: &reqwest::Client,
+    origin: &str,
+    credential: &str,
+    run: &str,
+    audit_path: &std::path::Path,
+) {
+    for (method, suffix) in [
+        (reqwest::Method::GET, ""),
+        (reqwest::Method::GET, "/inspect"),
+        (reqwest::Method::POST, "/retry-same"),
+        (reqwest::Method::POST, "/cancel"),
+        (reqwest::Method::POST, "/reconcile"),
+    ] {
+        let before = fs::read_to_string(audit_path).unwrap().lines().count();
+        let mut request = http
+            .request(method.clone(), format!("{origin}/v1/runs/{run}{suffix}"))
+            .bearer_auth(credential);
+        if method == reqwest::Method::POST {
+            request = request.json(&json!({"reason":"denied-flow-regression"}));
+        }
+        let response = request.send().await.unwrap();
+        assert_eq!(response.status(), 404, "{method} {suffix}");
+        assert_eq!(response.headers()["cache-control"], "no-store");
+        assert_eq!(
+            response.headers()["content-type"],
+            "application/problem+json"
+        );
+        let body: Value = response.json().await.unwrap();
+        assert_eq!(body["code"], "run.not-visible");
+        assert_eq!(body["status"], 404);
+        assert!(body.get("runId").is_none());
+        let rendered = body.to_string();
+        assert!(!rendered.contains(run));
+        assert!(!rendered.contains("delayed-follow-up"));
+
+        let entries = fs::read_to_string(audit_path)
+            .unwrap()
+            .lines()
+            .skip(before)
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(entries.len(), 2, "{method} {suffix} has one audit pair");
+        assert_eq!(entries[0]["phase"], "request");
+        assert_eq!(entries[1]["phase"], "response");
+        assert_eq!(entries[0]["correlation"], entries[1]["correlation"]);
+        for entry in &entries {
+            assert_eq!(entry["record"]["action"], "status");
+        }
+        assert_eq!(entries[1]["record"]["outcome"], "unknown");
+    }
+}
 async fn assert_authenticated_run_validation(
     http: &reqwest::Client,
     origin: &str,
@@ -1450,13 +1502,22 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
         .await;
     }
     let mut denied_flow_runtime = (*recovery_runtime).clone();
-    denied_flow_runtime
+    let policies = &mut denied_flow_runtime
         .deployment
         .as_mut()
         .unwrap()
         .authentication
-        .policies[0]
-        .flows = vec!["other-flow".into()];
+        .policies;
+    let run_actions = policies[1]
+        .actions
+        .iter()
+        .copied()
+        .filter(|action| !action.is_deployment_wide())
+        .collect();
+    policies[0].actions = run_actions;
+    for policy in policies {
+        policy.flows = vec!["other-flow".into()];
+    }
     let denied_flow_authenticator = Arc::new(
         denied_flow_runtime
             .deployment
@@ -1476,7 +1537,26 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
         adapters: recovery_adapters.clone(),
     })
     .await;
-    assert_status_audit(&http, &denied_origin, &a, id, &audit_path, 404, "accepted").await;
+    admin
+        .execute(
+            &format!("UPDATE {namespace}.runs SET terminal_output=$2 WHERE run_id=$1"),
+            &[
+                &Uuid::parse_str(id).unwrap(),
+                &json!({"invalid":"protected-state"}),
+            ],
+        )
+        .await
+        .unwrap();
+    for credential in [&a, &op] {
+        assert_run_flow_refused(&http, &denied_origin, credential, id, &audit_path).await;
+    }
+    admin
+        .execute(
+            &format!("UPDATE {namespace}.runs SET terminal_output=NULL WHERE run_id=$1"),
+            &[&Uuid::parse_str(id).unwrap()],
+        )
+        .await
+        .unwrap();
     denied_task.abort();
     let _ = denied_task.await;
     // Authorization precedes semantic reason/retention validation. Each invalid
