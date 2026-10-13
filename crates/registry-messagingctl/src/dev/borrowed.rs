@@ -128,7 +128,7 @@ fn executable(path: &Path) -> DevResult<PathBuf> {
         })
     };
     resolved.ok_or_else(|| {
-        refused("bregctl is unavailable; install it on PATH or select --bregctl-bin".to_owned())
+        refused("bregctl is unavailable; put the bregctl of this Registry Stack release on PATH and restart messagingctl dev".to_owned())
     })
 }
 
