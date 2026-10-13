@@ -10,8 +10,10 @@
   field is one row comparison the index can seek. Reference, unique
   constraint, and spatial indexes are unchanged, and so are row-level
   security policies, cursors, and page order. An index declared as the
-  fields a list filters by followed by the field it sorts by now returns
-  each page of that list, first or deep, without ordering the filtered set.
+  fields a list compares with `eq` followed by the field it sorts by now
+  returns each page of that list, first or deep, without ordering the
+  filtered set. A range or `in` filter on a leading field is still ordered
+  for each page.
   The generated DDL, and with it every package revision and managed schema
   fingerprint, changes, so this release's `breg` refuses a v0.41.0 package
   with `the package compiler derivation failed` until a successor is active.
