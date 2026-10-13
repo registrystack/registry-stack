@@ -843,7 +843,7 @@ async fn run_caller(
     action: Action,
 ) -> Result<(Caller, RunStatus)> {
     let c = caller(s, headers).await?;
-    c.authorize(action, None)?;
+    let flows = c.authorized_flows(action)?;
     let Path(run) = run.map_err(|_| {
         CoordinatorError::new("request.invalid", "supply a bounded UUID run identifier")
     })?;
@@ -858,9 +858,7 @@ async fn run_caller(
     .ok_or_else(|| {
         CoordinatorError::new("request.invalid", "supply a bounded UUID run identifier")
     })?;
-    let status = s.store.status_owned(run, &c.actor).await?;
-    c.authorize(action, Some(&status.workflow_id))
-        .map_err(|_| CoordinatorError::new("run-absent", "run was not found"))?;
+    let status = s.store.status_owned_for_flows(run, &c.actor, flows).await?;
     Ok((c, status))
 }
 fn answer(result: Result<Value>) -> Response {

@@ -272,9 +272,9 @@ pub fn contract(operation: Operation) -> &'static OperationContract {
 #[cfg(feature = "schema")]
 pub fn generate() -> Result<BTreeMap<String, String>, serde_json::Error> {
     use crate::{
-        adapters::{AppointmentRequest, AvailabilityRequest, ReadRequest, SchedulingReadRequest},
+        adapters::{AvailabilityRequest, ReadRequest, SchedulingReadRequest},
         breg_action::ActionInput,
-        decision::{DecisionResult, Evaluation},
+        decision::DecisionResult,
         external_http::{ExternalResponse, GetRequest},
         review::CancelReviewInput,
     };
@@ -282,7 +282,7 @@ pub fn generate() -> Result<BTreeMap<String, String>, serde_json::Error> {
     use registry_casework_client::{
         ReviewCancelResponse, ReviewCreateRequest, ReviewRequestAccepted,
     };
-    use registry_messaging_core::{MessageReceipt, SubmitMessageRequest};
+    use registry_messaging_core::MessageReceipt;
     use registry_scheduling_core::{
         AppointmentDocument, AvailabilityEntry, PageDocument, SchedulingServiceDocument,
     };
@@ -298,7 +298,7 @@ pub fn generate() -> Result<BTreeMap<String, String>, serde_json::Error> {
     );
     add(
         Operation::SubmitMessage,
-        derived::input::<SubmitMessageRequest>(),
+        derived::submit_message_input(),
         derived::output::<MessageReceipt>(),
     );
     add(
@@ -313,7 +313,7 @@ pub fn generate() -> Result<BTreeMap<String, String>, serde_json::Error> {
     );
     add(
         Operation::CreateAppointment,
-        derived::input::<AppointmentRequest>(),
+        derived::create_appointment_input(),
         derived::output::<AppointmentDocument>(),
     );
     add(
@@ -328,7 +328,7 @@ pub fn generate() -> Result<BTreeMap<String, String>, serde_json::Error> {
     );
     add(
         Operation::EvaluateDecision,
-        derived::input::<Evaluation>(),
+        derived::evaluation_input(),
         derived::output::<DecisionResult>(),
     );
     add(
@@ -404,6 +404,109 @@ mod derived {
             .for_serialize()
             .into_generator();
         generator.into_root_schema_for::<T>().to_value()
+    }
+
+    /// Coordinator books directly under reviewed task authority. Scheduling's
+    /// shared wire type also represents hold confirmation, which this adapter
+    /// deliberately does not offer.
+    pub(super) fn create_appointment_input() -> Value {
+        let mut schema = input::<crate::adapters::AppointmentRequest>();
+        let request = schema
+            .pointer_mut("/$defs/CreateAppointmentRequest")
+            .expect("the appointment input contains its maintained wire request");
+        let required = request
+            .as_object_mut()
+            .expect("the maintained appointment request is an object")
+            .entry("required")
+            .or_insert_with(|| json!([]))
+            .as_array_mut()
+            .expect("the maintained appointment requirements are an array");
+        if !required.iter().any(|member| member == "admission") {
+            required.push(json!("admission"));
+        }
+        request["properties"]["admission"] = json!({
+            "$ref": "#/$defs/AdmissionRequest",
+            "description": "The direct-create admission request."
+        });
+        request["properties"]["hold"] = json!({
+            "description": "Hold confirmation is not offered by Coordinator.",
+            "type": "null"
+        });
+        schema
+    }
+
+    /// Evaluation has value-level bounds in `Evaluation::parse` that the
+    /// maintained DTO's derived schema cannot express on its own.
+    pub(super) fn evaluation_input() -> Value {
+        let mut schema = input::<crate::decision::Evaluation>();
+        schema["properties"]["state"]["type"] = json!(["object", "string", "array"]);
+        let questions = &mut schema["properties"]["questions"];
+        questions["minProperties"] = json!(1);
+        questions["maxProperties"] = json!(32);
+
+        let variants = schema["$defs"]["Question"]["oneOf"]
+            .as_array_mut()
+            .expect("the maintained question type is a tagged union");
+        for variant in variants {
+            let properties = variant["properties"]
+                .as_object_mut()
+                .expect("each question variant is an object");
+            properties
+                .get_mut("instructions")
+                .expect("each question has instructions")["pattern"] = json!(r"\S");
+            match properties["type"]["const"].as_str() {
+                Some("predicate") => {}
+                Some("choice") => {
+                    let criteria = properties
+                        .get_mut("criteria")
+                        .expect("a choice question has criteria");
+                    criteria["minProperties"] = json!(2);
+                    criteria["maxProperties"] = json!(32);
+                    let values = criteria["patternProperties"]
+                        .as_object_mut()
+                        .and_then(|patterns| patterns.values_mut().next())
+                        .expect("choice criteria use the maintained local-id pattern");
+                    values["pattern"] = json!(r"\S");
+                }
+                Some("score") => {
+                    let criteria = properties
+                        .get_mut("criteria")
+                        .expect("a score question has criteria");
+                    criteria["minItems"] = json!(2);
+                    criteria["maxItems"] = json!(10);
+                    criteria["items"]["pattern"] = json!(r"\S");
+                }
+                _ => panic!("the maintained question type has an unknown variant"),
+            }
+        }
+        schema
+    }
+
+    /// Messaging's request DTO represents optional wire members; its
+    /// `content` method owns which combinations form one submission.
+    pub(super) fn submit_message_input() -> Value {
+        let mut schema = input::<registry_messaging_core::SubmitMessageRequest>();
+        schema["oneOf"] = json!([
+            {
+                "required": ["template", "locale", "data"],
+                "properties": {
+                    "template": {"$ref": "#/$defs/TemplateReference"},
+                    "locale": {"type": "string"},
+                    "data": {"not": {"type": "null"}},
+                    "content": {"type": "null"}
+                }
+            },
+            {
+                "required": ["content"],
+                "properties": {
+                    "template": {"type": "null"},
+                    "locale": {"type": "null"},
+                    "data": {"type": "null"},
+                    "content": {"$ref": "#/$defs/DirectContent"}
+                }
+            }
+        ]);
+        schema
     }
 
     /// Coordinator asserts formats and knows no numeric format names, so each
@@ -605,6 +708,60 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    #[cfg(feature = "schema")]
+    fn generated_input(operation: Operation) -> JSONSchema {
+        let files = generate().unwrap();
+        let schema =
+            serde_json::from_str(&files[&format!("{}.input.schema.json", operation.as_str())])
+                .unwrap();
+        crate::definition::compile_schema(&schema).unwrap()
+    }
+
+    #[cfg(feature = "schema")]
+    fn decision_runtime_accepts(input: &Value) -> bool {
+        use registry_platform_config::{SecretProvider, SecretResolver};
+
+        let config = serde_json::from_value(json!({
+            "protocol": "system-one",
+            "baseUrl": "http://127.0.0.1:9",
+            "model": "contract-parity",
+            "authorization": {"local": {}},
+        }))
+        .unwrap();
+        crate::decision::DecisionConnection::new(
+            &config,
+            std::sync::Arc::new(SecretResolver::new([SecretProvider::Environment], "").unwrap()),
+        )
+        .unwrap()
+        .prepare(input)
+        .is_ok()
+    }
+
+    #[cfg(feature = "schema")]
+    fn message_content_runtime_accepts(input: &Value) -> bool {
+        serde_json::from_value::<registry_messaging_core::SubmitMessageRequest>(input.clone())
+            .is_ok_and(|request| request.content().is_ok())
+    }
+
+    #[cfg(feature = "schema")]
+    fn availability_selector_accepts(input: &Value) -> bool {
+        input
+            .get("offering")
+            .and_then(Value::as_str)
+            .is_some_and(registry_scheduling_core::valid_identifier)
+    }
+
+    #[cfg(feature = "schema")]
+    fn assert_parity(
+        schema: &JSONSchema,
+        input: &Value,
+        expected: bool,
+        runtime_accepts: fn(&Value) -> bool,
+    ) {
+        assert_eq!(schema.is_valid(input), expected, "generated schema");
+        assert_eq!(runtime_accepts(input), expected, "owning runtime validator");
+    }
+
     #[test]
     fn every_catalog_operation_has_a_compilable_contract() {
         assert_eq!(EMBEDDED.len(), crate::operations::descriptors().len());
@@ -724,7 +881,14 @@ mod tests {
         let appointment = contract(Operation::CreateAppointment);
         let nested = appointment
             .check_input(&json!({
-                "appointment": {"hold": "h-1"},
+                "appointment": {"admission": {
+                    "offering": "intake",
+                    "start": "2026-10-11T09:00:00Z",
+                    "party": {"recipients": 1, "attendees": 1},
+                    "policyRevision": 1,
+                    "capabilities": [],
+                    "prerequisites": [],
+                }},
                 "grant": {"id": "00000000-0000-4000-8000-000000000000", "expiresAt": 1,
                     "private-canary": 1},
             }))
@@ -735,6 +899,324 @@ mod tests {
             .check_input(&json!({"collection": 7, "recordId": "r"}))
             .unwrap_err();
         assert_eq!(typed.declared_path(), "/collection");
+    }
+
+    #[cfg(feature = "schema")]
+    #[test]
+    fn appointment_contract_offers_direct_admission_only() {
+        let schema = generated_input(Operation::CreateAppointment);
+        let grant = json!({
+            "id": "00000000-0000-4000-8000-000000000000",
+            "expiresAt": 1,
+        });
+        let admission = json!({
+            "offering": "intake",
+            "start": "2026-10-11T09:00:00Z",
+            "party": {"recipients": 1, "attendees": 1},
+            "policyRevision": 1,
+            "capabilities": [],
+            "prerequisites": [],
+        });
+        assert!(schema.is_valid(&json!({
+            "grant": grant,
+            "appointment": {"admission": admission},
+        })));
+        assert!(schema.is_valid(&json!({
+            "grant": grant,
+            "appointment": {"admission": admission, "hold": null},
+        })));
+        assert!(!schema.is_valid(&json!({
+            "grant": grant,
+            "appointment": {"hold": "held-allocation"},
+        })));
+        assert!(!schema.is_valid(&json!({
+            "grant": grant,
+            "appointment": {},
+        })));
+        assert!(!schema.is_valid(&json!({
+            "grant": grant,
+            "appointment": {"admission": admission, "hold": "held-allocation"},
+        })));
+    }
+
+    #[cfg(feature = "schema")]
+    #[tokio::test]
+    async fn availability_offering_matches_the_maintained_scheduling_selector() {
+        use registry_scheduling_client::{
+            BearerToken, SchedulingAuth, SchedulingClient, SchedulingClientConfig,
+            SchedulingClientError,
+        };
+
+        let schema = generated_input(Operation::ReadAvailability);
+        let request = |offering: &str| {
+            json!({
+                "offering": offering,
+                "start": "2026-10-11T09:00:00Z",
+                "end": "2026-10-11T17:00:00Z",
+                "limit": 10,
+            })
+        };
+
+        for offering in ["intake", "registry-update-30", "registry_update"] {
+            let input = request(offering);
+            assert_parity(&schema, &input, true, availability_selector_accepts);
+        }
+        let client = SchedulingClient::new(SchedulingClientConfig::new(
+            "https://scheduling.example.invalid/"
+                .parse()
+                .expect("fixture service URL"),
+        ))
+        .expect("fixture client");
+        let token = BearerToken::new("fixture-token").expect("fixture token");
+        for offering in [
+            "",
+            "Intake",
+            "30-minute-update",
+            "registry.update",
+            "registry/update",
+            "registry update",
+            &"x".repeat(65),
+        ] {
+            let input = request(offering);
+            assert_parity(&schema, &input, false, availability_selector_accepts);
+            assert!(matches!(
+                client
+                    .availability(
+                        SchedulingAuth::new(&token),
+                        offering,
+                        None,
+                        None,
+                        None,
+                        Some(10),
+                    )
+                    .await,
+                Err(SchedulingClientError::InvalidRequest { .. })
+            ));
+        }
+    }
+
+    #[cfg(feature = "schema")]
+    #[test]
+    fn evaluation_contract_matches_the_runtime_state_and_question_bounds() {
+        let schema = generated_input(Operation::EvaluateDecision);
+        let predicate = json!({"type": "predicate", "instructions": "Decide eligibility"});
+        for state in [json!({}), json!("summary"), json!([])] {
+            assert_parity(
+                &schema,
+                &json!({
+                "state": state,
+                "questions": {"eligible": predicate},
+                }),
+                true,
+                decision_runtime_accepts,
+            );
+        }
+        for state in [Value::Null, json!(true), json!(1)] {
+            assert_parity(
+                &schema,
+                &json!({
+                "state": state,
+                "questions": {"eligible": predicate},
+                }),
+                false,
+                decision_runtime_accepts,
+            );
+        }
+        for (input, expected) in [
+            (json!({"state": {}, "questions": {}}), false),
+            (
+                json!({
+                    "state": {},
+                    "questions": {"eligible": {
+                        "type": "predicate",
+                        "instructions": "  ",
+                    }},
+                }),
+                false,
+            ),
+            (
+                json!({
+                    "state": {},
+                    "questions": {"route": {
+                        "type": "choice",
+                        "instructions": "Choose a route",
+                        "criteria": {"accept": "Accept"},
+                    }},
+                }),
+                false,
+            ),
+            (
+                json!({
+                    "state": {},
+                    "questions": {"route": {
+                        "type": "choice",
+                        "instructions": "Choose a route",
+                        "criteria": {"accept": "Accept", "review": "Review"},
+                    }},
+                }),
+                true,
+            ),
+            (
+                json!({
+                    "state": {},
+                    "questions": {"route": {
+                        "type": "choice",
+                        "instructions": "Choose a route",
+                        "criteria": {"accept": "Accept", "review": "  "},
+                    }},
+                }),
+                false,
+            ),
+            (
+                json!({
+                    "state": {},
+                    "questions": {"score": {
+                        "type": "score",
+                        "instructions": "Score the request",
+                        "criteria": ["Only one"],
+                    }},
+                }),
+                false,
+            ),
+            (
+                json!({
+                    "state": {},
+                    "questions": {"score": {
+                        "type": "score",
+                        "instructions": "Score the request",
+                        "criteria": ["Complete", "Consistent"],
+                    }},
+                }),
+                true,
+            ),
+            (
+                json!({
+                    "state": {},
+                    "questions": {"score": {
+                        "type": "score",
+                        "instructions": "Score the request",
+                        "criteria": ["Complete", "  "],
+                    }},
+                }),
+                false,
+            ),
+        ] {
+            assert_parity(&schema, &input, expected, decision_runtime_accepts);
+        }
+
+        let choice_criteria = (0..33)
+            .map(|index| (format!("criterion_{index}"), json!("Criterion")))
+            .collect::<serde_json::Map<_, _>>();
+        assert_parity(
+            &schema,
+            &json!({
+                "state": {},
+                "questions": {"route": {
+                    "type": "choice",
+                    "instructions": "Choose a route",
+                    "criteria": choice_criteria,
+                }},
+            }),
+            false,
+            decision_runtime_accepts,
+        );
+        assert_parity(
+            &schema,
+            &json!({
+                "state": {},
+                "questions": {"score": {
+                    "type": "score",
+                    "instructions": "Score the request",
+                    "criteria": vec!["Criterion"; 11],
+                }},
+            }),
+            false,
+            decision_runtime_accepts,
+        );
+
+        let questions = (0..33)
+            .map(|index| {
+                (
+                    format!("question_{index}"),
+                    json!({"type": "predicate", "instructions": "Decide"}),
+                )
+            })
+            .collect::<serde_json::Map<_, _>>();
+        assert_parity(
+            &schema,
+            &json!({"state": {}, "questions": questions}),
+            false,
+            decision_runtime_accepts,
+        );
+    }
+
+    #[cfg(feature = "schema")]
+    #[test]
+    fn message_contract_requires_one_complete_content_selection() {
+        let schema = generated_input(Operation::SubmitMessage);
+        let base = json!({
+            "senderProfile": "notices",
+            "to": {"email": "person@example.org"},
+        });
+        let mut template = base.clone();
+        template["template"] = json!({"id": "approved", "version": "v1"});
+        template["locale"] = json!("en");
+        template["data"] = json!({"firstName": "Ada"});
+        assert_parity(&schema, &template, true, message_content_runtime_accepts);
+        let mut template_with_null_content = template.clone();
+        template_with_null_content["content"] = Value::Null;
+        assert_parity(
+            &schema,
+            &template_with_null_content,
+            true,
+            message_content_runtime_accepts,
+        );
+
+        let mut template_with_null_data = template.clone();
+        template_with_null_data["data"] = Value::Null;
+        assert_parity(
+            &schema,
+            &template_with_null_data,
+            false,
+            message_content_runtime_accepts,
+        );
+
+        let mut direct = base.clone();
+        direct["content"] = json!({"subject": "Decision", "text": "Approved"});
+        assert_parity(&schema, &direct, true, message_content_runtime_accepts);
+        let mut direct_with_null_template_members = direct.clone();
+        direct_with_null_template_members["template"] = Value::Null;
+        direct_with_null_template_members["locale"] = Value::Null;
+        direct_with_null_template_members["data"] = Value::Null;
+        assert_parity(
+            &schema,
+            &direct_with_null_template_members,
+            true,
+            message_content_runtime_accepts,
+        );
+        assert_parity(&schema, &base, false, message_content_runtime_accepts);
+
+        let mut both = template.clone();
+        both["content"] = json!({"text": "Approved"});
+        assert_parity(&schema, &both, false, message_content_runtime_accepts);
+
+        let mut incomplete_template = base.clone();
+        incomplete_template["template"] = json!({"id": "approved", "version": "v1"});
+        assert_parity(
+            &schema,
+            &incomplete_template,
+            false,
+            message_content_runtime_accepts,
+        );
+
+        let mut decorated_direct = direct.clone();
+        decorated_direct["locale"] = json!("en");
+        assert_parity(
+            &schema,
+            &decorated_direct,
+            false,
+            message_content_runtime_accepts,
+        );
     }
 
     #[cfg(feature = "schema")]

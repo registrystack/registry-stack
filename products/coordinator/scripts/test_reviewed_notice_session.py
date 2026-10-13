@@ -7,8 +7,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 from types import SimpleNamespace
-import unittest
-from unittest import mock
+import unittest.mock
 
 
 REPO = Path(__file__).resolve().parents[3]
@@ -32,7 +31,7 @@ class ReviewedNoticeSessionCleanupTests(unittest.TestCase):
                 "ownedBinDir": str(root / "bin"), "ownedContainers": [], "ownedSessions": [],
             })
             args = SimpleNamespace(session_dir=root, command_timeout=1)
-            with mock.patch.object(session, "alive", return_value=False):
+            with unittest.mock.patch.object(session, "alive", return_value=False):
                 session.signal_command(args, "stop")
             state = json.loads((root / session.STATE).read_text(encoding="utf-8"))
             self.assertEqual(state["cleanupStatus"], "complete")
@@ -48,8 +47,8 @@ class ReviewedNoticeSessionCleanupTests(unittest.TestCase):
             }
             session.write_private(root / session.STATE, state)
             args = SimpleNamespace(session_dir=root, command_timeout=1)
-            with mock.patch.object(session, "alive", side_effect=[True, False]), \
-                    mock.patch.object(session, "retry_cleanup") as retry:
+            with unittest.mock.patch.object(session, "alive", side_effect=[True, False]), \
+                    unittest.mock.patch.object(session, "retry_cleanup") as retry:
                 session.signal_command(args, "stop")
             retry.assert_called_once()
             self.assertEqual(retry.call_args.args[1]["cleanupStatus"], "failed")
@@ -65,7 +64,7 @@ class ReviewedNoticeSessionCleanupTests(unittest.TestCase):
             }
             session.write_private(root / session.STATE, state)
             inspected = subprocess.CompletedProcess([], 0, "another-owner\n", "")
-            with mock.patch.object(session.subprocess, "run", return_value=inspected) as run:
+            with unittest.mock.patch.object(session.subprocess, "run", return_value=inspected) as run:
                 with self.assertRaises(SystemExit):
                     session.retry_cleanup(root, state)
             self.assertEqual(run.call_count, 1, "an unowned container must never reach docker rm")

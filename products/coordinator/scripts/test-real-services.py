@@ -927,6 +927,7 @@ class Journey:
                     if response.status == 200:
                         break
             except (OSError, urllib.error.URLError):
+                # Connection failures are expected while the owned container starts.
                 pass
             assert time.monotonic() < deadline, "Mailpit did not become ready"
             time.sleep(0.2)

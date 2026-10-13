@@ -599,13 +599,13 @@ fn normalize(
         return None;
     }
     // Usage remains provider metadata, not an invented common cost or token
-    // contract. OpenAI documents these counters as required members of Usage.
+    // contract. Both provider contracts document these counters as required.
     let usage = response.get("usage")?;
     if !usage.is_object()
         || match protocol {
             DecisionProtocol::SystemOne => ["input_tokens", "output_tokens"]
                 .iter()
-                .any(|key| usage.get(key).is_some_and(|value| value.as_u64().is_none())),
+                .any(|key| usage.get(key).and_then(Value::as_u64).is_none()),
             DecisionProtocol::OpenaiDecisions => [
                 "/input_tokens",
                 "/input_tokens_details/cache_write_tokens",

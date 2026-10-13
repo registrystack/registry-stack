@@ -18,11 +18,12 @@ use tokio::sync::{Notify, Semaphore};
 use uuid::Uuid;
 
 const MESSAGE: &str = r#"fn message(record) { #{ senderProfile: "reminders", to: #{ email: record.contact }, content: #{ text: "Synthetic appointment reminder" } } }"#;
+static POOL_SATURATION_TEST: Semaphore = Semaphore::const_new(1);
 /// A fixed input each mutating operation's contract accepts.
 fn command(kind: &str) -> &'static str {
     match kind {
         "appointment" => {
-            r#"#{ appointment: #{ hold: "synthetic-hold" }, grant: #{ id: "00000000-0000-4000-8000-000000000000", expiresAt: 1 } }"#
+            r#"#{ appointment: #{ admission: #{ offering: "synthetic-offering", start: "2026-10-11T09:00:00Z", party: #{ recipients: 1, attendees: 1 }, policyRevision: 1, capabilities: [], prerequisites: [] } }, grant: #{ id: "00000000-0000-4000-8000-000000000000", expiresAt: 1 } }"#
         }
         "action" => {
             r#"#{ action: "send-reminder", input: #{ destination: "synthetic@example.invalid" } }"#
@@ -4612,6 +4613,190 @@ async fn store_operations_reuse_pooled_sessions_and_replace_an_ended_one() {
     let replaced = sessions().await;
     assert!(!replaced.is_empty());
     assert!(replaced.iter().all(|pid| !open.contains(pid)));
+}
+
+async fn assert_all_pool_sessions_reach_the_nested_store_call(
+    h: &Harness,
+    mut spawn: impl FnMut() -> tokio::task::JoinHandle<registry_coordinator::Result<()>>,
+) {
+    let _serial = POOL_SATURATION_TEST.acquire().await.unwrap();
+    let (mut blocker, connection) = tokio_postgres::connect(&h.url, tokio_postgres::NoTls)
+        .await
+        .unwrap();
+    tokio::spawn(async move {
+        connection.await.unwrap();
+    });
+    let lock = blocker.transaction().await.unwrap();
+    lock.batch_execute(&format!(
+        "LOCK TABLE {}.runs IN ACCESS EXCLUSIVE MODE",
+        h.namespace
+    ))
+    .await
+    .unwrap();
+
+    let mut calls = Vec::new();
+    for _ in 0..32 {
+        calls.push(spawn());
+    }
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        loop {
+            let waiting: i64 = lock
+                .query_one(
+                    "SELECT count(*) FROM pg_locks WHERE relation=to_regclass($1) AND NOT granted",
+                    &[&format!("{}.runs", h.namespace)],
+                )
+                .await
+                .unwrap()
+                .get(0);
+            if waiting == 32 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("every pooled session reaches the authorization read");
+    lock.commit().await.unwrap();
+
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        for call in calls {
+            if let Err(error) = call.await.unwrap() {
+                assert_ne!(error.code, "store-unavailable");
+            }
+        }
+    })
+    .await
+    .expect("nested store calls complete after the first session is released");
+}
+
+#[tokio::test]
+async fn pool_saturation_owned_inspection_releases_authorization_before_nested_store_work() {
+    let h = harness().await;
+    let owner = actor("owner", false);
+    let run = h
+        .store
+        .admit_owned(
+            &h.definition,
+            input(Utc::now() - Duration::seconds(1)),
+            &owner,
+            "pool-saturation",
+            "binding-a",
+        )
+        .await
+        .unwrap();
+    assert_all_pool_sessions_reach_the_nested_store_call(&h, || {
+        let store = h.store.clone();
+        let owner = owner.clone();
+        tokio::spawn(async move {
+            let inspection = store.inspect_owned(run, "binding-a", &owner).await?;
+            assert_eq!(inspection.run.run_id, run);
+            Ok(())
+        })
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn pool_saturation_owned_runtime_inspection_releases_authorization_before_nested_store_work()
+{
+    let h = harness().await;
+    let owner = actor("owner", false);
+    let run = h
+        .store
+        .admit_owned(
+            &h.definition,
+            input(Utc::now() - Duration::seconds(1)),
+            &owner,
+            "runtime-pool-saturation",
+            "binding-a",
+        )
+        .await
+        .unwrap();
+    let document =
+        include_str!("../../../products/coordinator/examples/delayed-follow-up/runtime.yaml")
+            .replace("  applications:", "  source:")
+            .replace("  notices:", "  messages:");
+    let path = h
+        .project
+        .path()
+        .canonicalize()
+        .unwrap()
+        .join("runtime.yaml");
+    std::fs::write(&path, document).unwrap();
+    let runtime = Arc::new(registry_coordinator::runtime::RuntimeConfig::load(&path).unwrap());
+    assert_all_pool_sessions_reach_the_nested_store_call(&h, || {
+        let store = h.store.clone();
+        let owner = owner.clone();
+        let runtime = runtime.clone();
+        tokio::spawn(async move {
+            let inspection = store.inspect_runtime_owned(run, &runtime, &owner).await?;
+            assert_eq!(inspection.run.run_id, run);
+            Ok(())
+        })
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn pool_saturation_owned_retry_releases_authorization_before_nested_store_work() {
+    let h = harness().await;
+    let owner = actor("owner", false);
+    let run = h
+        .store
+        .admit_owned(
+            &h.definition,
+            input(Utc::now() - Duration::seconds(1)),
+            &owner,
+            "owned-retry-pool-saturation",
+            "binding-a",
+        )
+        .await
+        .unwrap();
+    assert_all_pool_sessions_reach_the_nested_store_call(&h, || {
+        let store = h.store.clone();
+        let owner = owner.clone();
+        tokio::spawn(async move {
+            store
+                .retry_same_owned(run, "binding-a", &owner, "recover")
+                .await
+        })
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn pool_saturation_same_command_retry_uses_one_session_before_dispatch_replay() {
+    let h = harness().await;
+    let run = h.admit().await;
+    assert_all_pool_sessions_reach_the_nested_store_call(&h, || {
+        let store = h.store.clone();
+        tokio::spawn(async move { store.retry_same(run, "binding-a").await })
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn retention_rejects_a_cutoff_after_database_transaction_time() {
+    let h = harness().await;
+    let (client, connection) = tokio_postgres::connect(&h.url, tokio_postgres::NoTls)
+        .await
+        .unwrap();
+    tokio::spawn(async move {
+        connection.await.unwrap();
+    });
+    let database_future: chrono::DateTime<Utc> = client
+        .query_one("SELECT clock_timestamp()+interval '1 hour'", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        h.store
+            .retain_terminal(database_future, 100, &actor("operator", true))
+            .await
+            .unwrap_err()
+            .code,
+        "retention-invalid"
+    );
 }
 
 /// The value of one exposed series, by its full name and labels.

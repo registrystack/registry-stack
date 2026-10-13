@@ -69,6 +69,50 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "description": "The body of `POST /v1/messages`. Exactly one of `template` or `content`\nis present; `locale` and `data` accompany a template and nothing else.\nInstants are RFC 3339 strings the runtime parses.",
+  "oneOf": [
+    {
+      "properties": {
+        "content": {
+          "type": "null"
+        },
+        "data": {
+          "not": {
+            "type": "null"
+          }
+        },
+        "locale": {
+          "type": "string"
+        },
+        "template": {
+          "$ref": "#/$defs/TemplateReference"
+        }
+      },
+      "required": [
+        "template",
+        "locale",
+        "data"
+      ]
+    },
+    {
+      "properties": {
+        "content": {
+          "$ref": "#/$defs/DirectContent"
+        },
+        "data": {
+          "type": "null"
+        },
+        "locale": {
+          "type": "null"
+        },
+        "template": {
+          "type": "null"
+        }
+      },
+      "required": [
+        "content"
+      ]
+    }
+  ],
   "properties": {
     "content": {
       "anyOf": [
