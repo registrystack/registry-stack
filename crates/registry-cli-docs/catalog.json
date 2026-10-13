@@ -13665,7 +13665,7 @@
             },
             {
               "display": "--issuer-project <PROJECT>",
-              "description": "Borrow pre-registered clients from this BReg development project",
+              "description": "Borrow pre-registered clients from this Base Registry Engine (BReg) development project",
               "always_required": false,
               "repeatable": false,
               "default_values": [],

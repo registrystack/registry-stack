@@ -107,7 +107,7 @@ struct StartArgs {
     /// How long the mock gateway takes to answer each send, in milliseconds.
     #[arg(long, value_name = "MILLISECONDS", default_value_t = 200)]
     mock_latency_ms: u64,
-    /// Borrow pre-registered clients from this BReg development project.
+    /// Borrow pre-registered clients from this Base Registry Engine (BReg) development project.
     #[arg(long, value_name = "PROJECT", requires = "resource")]
     issuer_project: Option<PathBuf>,
     /// The exact Messaging audience registered at the borrowed issuer.
