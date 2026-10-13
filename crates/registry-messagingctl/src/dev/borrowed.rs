@@ -427,6 +427,18 @@ pub(super) async fn verify(
     Ok((expires, CallerPin::from(&caller)))
 }
 
+/// A resolved path the session record can hold. The record is JSON, which
+/// spells a path only as UTF-8, so any other path is refused. The refusal
+/// names `what` and never the path.
+fn retainable(path: PathBuf, what: &str) -> DevResult<PathBuf> {
+    if path.to_str().is_none() {
+        return Err(refused(format!(
+            "the {what} resolves to a path that is not valid UTF-8, which the session record cannot hold; move the {what} to a UTF-8 path and restart messagingctl dev"
+        )));
+    }
+    Ok(path)
+}
+
 pub(super) fn capture(
     root: &Path,
     loaded: &LoadedPackage,
@@ -441,7 +453,8 @@ pub(super) fn capture(
                 .to_owned(),
         )
     })?;
-    let bregctl = executable(bregctl)?;
+    let project = retainable(project, "issuer project")?;
+    let bregctl = retainable(executable(bregctl)?, "bregctl executable")?;
     private::directory(&root.join("credentials")).map_err(|_| refusal())?;
     let mut binding = Binding {
         project,

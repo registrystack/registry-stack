@@ -457,6 +457,37 @@ fn borrowed_token_requires_ready_session() {
 }
 
 #[test]
+fn a_session_record_that_cannot_be_serialized_fails_and_keeps_the_previous_record() {
+    use std::os::unix::ffi::OsStringExt as _;
+
+    let (_temporary, _project, root, _loaded) = session();
+    let mut session = Session {
+        root: root.clone(),
+        owner: uuid::Uuid::new_v4().to_string(),
+        containers: vec![],
+        borrowed: Some(borrowed_binding()),
+    };
+    session.write("starting", &json!({})).unwrap();
+    let before = fs::read(root.join("session.json")).unwrap();
+
+    // The record is JSON, which spells a path only as UTF-8.
+    session.borrowed.as_mut().unwrap().project =
+        PathBuf::from(std::ffi::OsString::from_vec(vec![0x2f, 0xff]));
+    let failure = session.write("ready", &json!({})).unwrap_err();
+    assert_eq!(failure.exit, OPERATIONAL_FAILURE_EXIT);
+    assert_eq!(failure.code, "dev.failed");
+    assert!(
+        failure
+            .message
+            .starts_with("the session record could not be written"),
+        "{}",
+        failure.message
+    );
+    assert!(!failure.message.contains('\u{fffd}'), "{}", failure.message);
+    assert_eq!(fs::read(root.join("session.json")).unwrap(), before);
+}
+
+#[test]
 fn borrowed_state_round_trips_a_profile_without_actor_kind() {
     let (_temporary, _project, root, _loaded) = session();
     let mut binding = borrowed_binding();
