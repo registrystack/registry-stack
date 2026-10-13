@@ -174,8 +174,10 @@ messagingctl dev ./notices \
 `--issuer-project` and `--resource` are accepted only together. The explicit
 resource binds this Messaging invocation to its intended audience; a real
 OAuth grant proves that each client can use it.
-Messaging invokes that public command for the clients named by its access
-profiles; it never reads the owner's private `.breg` state. It requests each
+Messaging invokes the public `bregctl dev export-client` command for the
+clients named by its access profiles, so the `bregctl` of the same Registry
+Stack release must be on `PATH`; it never reads the owner's private `.breg`
+state. It requests each
 profile's exact scopes for the explicit resource through the shared
 `PrivateKeyJwt` client, configures `scopeClaim: scope`, snapshots the ready
 issuer's bounded public RS256 keys through `local::snapshot`, and verifies an
