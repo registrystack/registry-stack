@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.41.0
+
+- Registry Manifest has no user-visible changes in this release.
+
 ## 0.40.0
 
 - BREAKING: Registry Manifest reads metadata manifests and profile descriptors

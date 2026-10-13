@@ -669,6 +669,7 @@ export default defineConfig({
           collapsed: true,
           items: [
             { label: 'Overview', slug: 'start/coordinator' },
+            { label: 'Review an application and send a notice', slug: 'tutorials/review-an-application-and-send-a-notice' },
             { label: 'Author a flow', slug: 'configure/coordinator' },
             { label: 'Deploy Coordinator', slug: 'operate/coordinator' },
             { label: 'Configuration reference', slug: 'reference/coordinator-configuration' },

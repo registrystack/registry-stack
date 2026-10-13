@@ -704,12 +704,22 @@
       "$ref": "#/$defs/SecretProvidersConfig"
     },
     "taskGrantStatus": {
-      "default": [],
-      "description": "Fresh Casework status endpoints keyed by the original grant issuer.\nAn empty list preserves the bounded offline path for grants with no\nmore than fifteen minutes left; any configured entry makes status\nmandatory for every commitment.",
-      "items": {
-        "$ref": "#/$defs/TaskGrantStatusConfig"
-      },
-      "type": "array"
+      "anyOf": [
+        {
+          "const": "unchecked-final-fifteen-minutes",
+          "description": "Accept only a grant with at most fifteen minutes left at request\nentry, with no revocation check.",
+          "type": "string"
+        },
+        {
+          "description": "Check fresh grant status with these task authorities for every\ncommitment and replay.",
+          "items": {
+            "$ref": "#/$defs/TaskGrantStatusConfig"
+          },
+          "minItems": 1,
+          "type": "array"
+        }
+      ],
+      "description": "How a task grant is checked before capacity work: a list of the task\nauthorities whose fresh grant status every commitment and replay\nchecks, or `unchecked-final-fifteen-minutes` to accept only a grant\nwith at most fifteen minutes left, without a revocation check."
     }
   },
   "required": [
@@ -721,6 +731,7 @@
     "secretProviders",
     "database",
     "authentication",
+    "taskGrantStatus",
     "audit",
     "retention"
   ],

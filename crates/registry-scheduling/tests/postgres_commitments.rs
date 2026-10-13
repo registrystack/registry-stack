@@ -4622,6 +4622,7 @@ fn sealed_deployment(
             "audience": AUDIENCE,
             "allowedClients": [CLIENT],
         }},
+        "taskGrantStatus": "unchecked-final-fifteen-minutes",
         "audit": {"path": root.join("audit.ndjson"), "hashKeyRef": "secret:env/UNUSED"},
         "destinations": {},
         "retention": {"attemptReceiptRetentionDays": 7},
@@ -7350,11 +7351,233 @@ async fn inactive_mismatched_and_unavailable_task_status_commit_no_capacity() {
     }
 }
 
-/// SEC-03. With no status authority configured, a grant with one second more
-/// than fifteen minutes left is refused and one with exactly fifteen minutes
-/// left books.
+/// Every transactional business effect of a commitment: the claims, their
+/// history, the outbox, and the successful attempt receipts. A refusal may add
+/// its own refused receipt, which this snapshot leaves out.
+const BUSINESS_STATE: &str = "SELECT jsonb_build_array( \
+    (SELECT jsonb_agg(to_jsonb(c) ORDER BY claim_id) FROM scheduling_claims c), \
+    (SELECT jsonb_agg(to_jsonb(h) ORDER BY event_id) FROM scheduling_history h), \
+    (SELECT jsonb_agg(to_jsonb(o) ORDER BY outbox_id) FROM scheduling_outbox o), \
+    (SELECT count(*) FROM scheduling_attempts WHERE status_code BETWEEN 200 AND 299))";
+
+const TASK_STATUS_PATH: &str = "/v1/task-grants/11111111-1111-4111-8111-111111111111/status";
+
+async fn task_status_calls(authority: &MockServer) -> usize {
+    authority
+        .received_requests()
+        .await
+        .expect("recorded authority calls")
+        .into_iter()
+        .filter(|request| request.url.path().ends_with("/status"))
+        .count()
+}
+
+/// SEC-03. Each capacity mutation asks the listed authority before its
+/// transaction opens: an inactive answer refuses it with
+/// `operation.not-authorized`, an unavailable authority with
+/// `service.unavailable`, and neither changes a claim, its history, the
+/// outbox, or a successful receipt.
 #[tokio::test]
-async fn unconfigured_status_accepts_at_most_fifteen_minutes_of_remaining_lifetime() {
+async fn inactive_and_unavailable_task_status_refuse_every_mutation_without_changing_capacity() {
+    for (answer, response, expected_status, expected_code) in [
+        (
+            "inactive",
+            ResponseTemplate::new(200).set_body_json(json!({"active": false})),
+            StatusCode::FORBIDDEN,
+            "operation.not-authorized",
+        ),
+        (
+            "unavailable",
+            ResponseTemplate::new(503),
+            StatusCode::SERVICE_UNAVAILABLE,
+            "service.unavailable",
+        ),
+    ] {
+        for operation in ["hold", "release", "confirm", "reschedule", "cancel"] {
+            let case = format!("{operation} with {answer} status");
+            let (authority, status) = activated_task_status(response.clone()).await;
+            // The commitment that sets the case up sees an active answer; the
+            // mutation under test sees the case's answer.
+            let setup_calls: usize = if operation == "hold" { 0 } else { 1 };
+            if setup_calls > 0 {
+                Mock::given(method("GET"))
+                    .and(path(TASK_STATUS_PATH))
+                    .respond_with(
+                        ResponseTemplate::new(200).set_body_json(
+                            json!({"active": true, "grant": exact_task_status_grant()}),
+                        ),
+                    )
+                    .up_to_n_times(1)
+                    .with_priority(1)
+                    .mount(&authority)
+                    .await;
+            }
+            let fx = fixture_with_task_status(status).await;
+            let slot = first_slot(&fx, OFFERING, 480, 620).await;
+            let (verb, uri, body) = match operation {
+                "hold" => (
+                    "POST",
+                    "/v1/holds".to_owned(),
+                    Some(admission(&fx, OFFERING, slot)),
+                ),
+                "confirm" | "release" => {
+                    let (created, hold) = fx
+                        .post(
+                            "/v1/holds",
+                            &fx.agent,
+                            "setup",
+                            admission(&fx, OFFERING, slot),
+                        )
+                        .await;
+                    assert_eq!(created, StatusCode::CREATED, "{case}: {hold}");
+                    let id = hold["holdId"].as_str().expect("a hold identifier");
+                    if operation == "confirm" {
+                        (
+                            "POST",
+                            "/v1/appointments".to_owned(),
+                            Some(json!({"hold": id, "admission": null})),
+                        )
+                    } else {
+                        ("DELETE", format!("/v1/holds/{id}"), None)
+                    }
+                }
+                "reschedule" | "cancel" => {
+                    let (id, revision) = booked(&fx, 300, 440, "setup").await;
+                    if operation == "reschedule" {
+                        (
+                            "POST",
+                            format!("/v1/appointments/{id}/reschedule"),
+                            Some(json!({
+                                "observedRevision": revision,
+                                "admission": admission(&fx, OFFERING, slot),
+                            })),
+                        )
+                    } else {
+                        (
+                            "POST",
+                            format!("/v1/appointments/{id}/cancel"),
+                            Some(json!({"observedRevision": revision, "reason": null})),
+                        )
+                    }
+                }
+                _ => unreachable!(),
+            };
+            let before: Value = fx
+                .admin
+                .query_one(BUSINESS_STATE, &[])
+                .await
+                .expect("snapshot before the mutation")
+                .get(0);
+            let (actual, problem) = fx
+                .request(verb, &uri, &fx.agent, Some("status-refused"), body)
+                .await;
+            assert_eq!(actual, expected_status, "{case}: {problem}");
+            assert_eq!(problem["code"], expected_code, "{case}");
+            assert_eq!(
+                task_status_calls(&authority).await,
+                setup_calls + 1,
+                "{case}: the mutation asked the authority once"
+            );
+            let after: Value = fx
+                .admin
+                .query_one(BUSINESS_STATE, &[])
+                .await
+                .expect("snapshot after the refusal")
+                .get(0);
+            assert_eq!(after, before, "{case} changes no capacity");
+        }
+    }
+}
+
+/// A grant signed by a source issuer the listed authorities do not name.
+fn agent_token_from_source(source_issuer: &str) -> String {
+    let mut grant = grant_claims();
+    grant["registry_grant_source_issuer"] = json!(source_issuer);
+    let mut claims = json!({
+        "sub": "principal-agent",
+        "azp": CLIENT,
+        "registry_scopes": "scheduling-read scheduling-explain",
+        "registry_actor_kind": "service",
+    });
+    claims
+        .as_object_mut()
+        .expect("claims are an object")
+        .extend(
+            grant
+                .as_object()
+                .expect("grant claims are an object")
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone())),
+        );
+    token(claims)
+}
+
+/// SEC-03. Listed authorities are authoritative for every source. A grant
+/// from a source none of them names is refused with
+/// `operation.not-authorized` without a status call, although its ten
+/// minutes left would pass the offline path, which books the same grant.
+#[tokio::test]
+async fn an_unlisted_source_is_refused_and_never_reaches_the_offline_path() {
+    let unlisted = agent_token_from_source("https://other-authority.test");
+    let (authority, status) = activated_task_status(
+        ResponseTemplate::new(200)
+            .set_body_json(json!({"active": true, "grant": exact_task_status_grant()})),
+    )
+    .await;
+    let fx = fixture_with_task_status(status).await;
+    let slot = first_slot(&fx, OFFERING, 90, 200).await;
+    let body = json!({"hold": null, "admission": admission(&fx, OFFERING, slot)});
+    let before: Value = fx
+        .admin
+        .query_one(BUSINESS_STATE, &[])
+        .await
+        .expect("snapshot before the commitment")
+        .get(0);
+    let (refused, problem) = fx
+        .post(
+            "/v1/appointments",
+            &unlisted,
+            "unlisted-source",
+            body.clone(),
+        )
+        .await;
+    assert_eq!(refused, StatusCode::FORBIDDEN, "{problem}");
+    assert_eq!(problem["code"], "operation.not-authorized");
+    assert_eq!(
+        task_status_calls(&authority).await,
+        0,
+        "an unlisted source never reaches an authority"
+    );
+    let after: Value = fx
+        .admin
+        .query_one(BUSINESS_STATE, &[])
+        .await
+        .expect("snapshot after the refusal")
+        .get(0);
+    assert_eq!(after, before, "the refusal changes no capacity");
+
+    let offline = fixture().await;
+    let slot = first_slot(&offline, OFFERING, 90, 200).await;
+    let (booked, appointment) = offline
+        .post(
+            "/v1/appointments",
+            &unlisted,
+            "unlisted-source-offline",
+            json!({"hold": null, "admission": admission(&offline, OFFERING, slot)}),
+        )
+        .await;
+    assert_eq!(
+        booked,
+        StatusCode::CREATED,
+        "the same grant books on the offline path: {appointment}"
+    );
+}
+
+/// SEC-03. On the offline path that `unchecked-final-fifteen-minutes`
+/// selects, a grant with one second more than fifteen minutes left is refused
+/// and one with exactly fifteen minutes left books.
+#[tokio::test]
+async fn the_offline_path_accepts_at_most_fifteen_minutes_of_remaining_lifetime() {
     let fx = fixture().await;
     let slot = first_slot(&fx, OFFERING, 90, 200).await;
     let past_the_cap = agent_token_with_grant_exp(pinned_now().timestamp() + 901);
@@ -7581,11 +7804,7 @@ async fn every_mutation_rechecks_expiry_after_its_writes() {
         };
         // Compare all transactional business effects, not just the status.
         // A refusal may add its own refused receipt.
-        let state = "SELECT jsonb_build_array( \
-            (SELECT jsonb_agg(to_jsonb(c) ORDER BY claim_id) FROM scheduling_claims c), \
-            (SELECT jsonb_agg(to_jsonb(h) ORDER BY event_id) FROM scheduling_history h), \
-            (SELECT jsonb_agg(to_jsonb(o) ORDER BY outbox_id) FROM scheduling_outbox o), \
-            (SELECT count(*) FROM scheduling_attempts WHERE status_code BETWEEN 200 AND 299))";
+        let state = BUSINESS_STATE;
         let before: Value = fx
             .admin
             .query_one(state, &[])
@@ -8731,6 +8950,116 @@ async fn original_appointment_receipt_is_readable_without_a_grant_and_never_crea
     assert_eq!(attempts, 1);
 }
 
+/// A confirmation from a hold is stored under that hold's own confirm scope,
+/// so its receipt is read back by naming the hold, and only the hold and the
+/// key that confirmed it resolve it.
+#[tokio::test]
+async fn original_hold_confirmation_receipt_is_read_by_its_hold_and_key() {
+    let fx = fixture().await;
+    let slot = first_slot(&fx, OFFERING, 300, 440).await;
+    let (status, hold) = fx
+        .post(
+            "/v1/holds",
+            &fx.agent,
+            "receipt-hold",
+            admission(&fx, OFFERING, slot),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{hold}");
+    let hold_id = hold["holdId"].as_str().expect("a hold identifier");
+    let body = json!({"hold": hold_id, "admission": null});
+    let key = "original-hold-confirmation";
+    let (status, original) = fx
+        .post("/v1/appointments", &fx.agent, key, body.clone())
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{original}");
+    let same_owner = token(json!({"sub":"principal-agent", "azp": CLIENT,
+        "registry_scopes":"scheduling-read", "registry_actor_kind":"service"}));
+    let before = claims_and_receipts(&fx).await;
+
+    let (status, observed) = fx
+        .post("/v1/appointments/receipt", &same_owner, key, body.clone())
+        .await;
+    assert_eq!(status, StatusCode::OK, "{observed}");
+    assert_eq!(observed, original);
+
+    let other_hold = json!({"hold": Uuid::new_v4().to_string(), "admission": null});
+    for (command_key, request) in [(key, other_hold), ("receipt-hold", body)] {
+        let (status, unresolved) = fx
+            .post(
+                "/v1/appointments/receipt",
+                &same_owner,
+                command_key,
+                request,
+            )
+            .await;
+        assert_eq!(status, StatusCode::CONFLICT, "{unresolved}");
+        assert_eq!(unresolved["code"], "receipt.unresolved");
+    }
+    assert_eq!(claims_and_receipts(&fx).await, before);
+}
+
+/// A refusal stores its receipt so a replay of the key answers the same, but
+/// that receipt is never an original appointment: the receipt read resolves
+/// only a completed attempt that answered 200 or 201.
+#[tokio::test]
+async fn a_refused_attempt_never_resolves_an_original_appointment_receipt() {
+    let fx = fixture().await;
+    let slot = first_slot(&fx, OFFERING, 300, 440).await;
+    let body = json!({"hold": null, "admission": admission(&fx, OFFERING, slot)});
+    let booked_key = "receipt-booked";
+    let (status, booked) = fx
+        .post("/v1/appointments", &fx.agent, booked_key, body.clone())
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{booked}");
+    let refused_key = "receipt-refused";
+    let (status, refused) = fx
+        .post("/v1/appointments", &fx.agent, refused_key, body.clone())
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refused}");
+    assert_eq!(refused["code"], "capacity.exhausted");
+    let stored: (String, i32) = fx
+        .admin
+        .query_one(
+            "SELECT state, status_code FROM scheduling_attempts WHERE idempotency_key=$1",
+            &[&refused_key],
+        )
+        .await
+        .map(|row| (row.get(0), row.get(1)))
+        .expect("the refusal stored its receipt");
+    assert_eq!(stored, ("refused".to_owned(), 409));
+    let same_owner = token(json!({"sub":"principal-agent", "azp": CLIENT,
+        "registry_scopes":"scheduling-read", "registry_actor_kind":"service"}));
+
+    let (status, unresolved) = fx
+        .post(
+            "/v1/appointments/receipt",
+            &same_owner,
+            refused_key,
+            body.clone(),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{unresolved}");
+    assert_eq!(unresolved["code"], "receipt.unresolved");
+
+    // No path completes an attempt with a refusal status, so the status
+    // filter is observed by giving the booked attempt one: its stored
+    // appointment would otherwise still be disclosed.
+    fx.admin
+        .execute(
+            "UPDATE scheduling_attempts SET status_code=409 WHERE idempotency_key=$1",
+            &[&booked_key],
+        )
+        .await
+        .expect("rewrite the booked attempt's status");
+    let (status, unresolved) = fx
+        .post("/v1/appointments/receipt", &same_owner, booked_key, body)
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{unresolved}");
+    assert_eq!(unresolved["code"], "receipt.unresolved");
+    assert_eq!(claims_and_receipts(&fx).await, (1, 2));
+}
+
 #[tokio::test]
 async fn original_appointment_receipt_disclosure_requires_both_audit_entries() {
     for accepted_writes in [0, 1] {
@@ -8859,10 +9188,10 @@ async fn original_appointment_receipt_authenticates_before_parsing_its_bounded_b
     assert_eq!(claims_and_receipts(&fx).await, (1, 1));
 }
 
-/// Rewrite the retained current policy document into the shape the previous
-/// release stored: the identity under a top-level `scheduling` member where
-/// this release stores `project`.
-async fn retain_predecessor_policy_document(fx: &Fixture) {
+/// Rewrite the retained current policy document so its identity sits under a
+/// top-level `scheduling` member, which the policy model does not define,
+/// leaving the required `project` block absent.
+async fn retain_policy_identity_under_scheduling(fx: &Fixture) {
     let mut document = serde_json::to_value(read_policy(POLICY).expect("the current policy"))
         .expect("the policy serializes");
     let object = document.as_object_mut().expect("a policy object");
@@ -8875,18 +9204,19 @@ async fn retain_predecessor_policy_document(fx: &Fixture) {
             &[&document],
         )
         .await
-        .expect("retain the predecessor's document shape");
+        .expect("retain the document without its project block");
     assert!(updated > 0, "a retained document was rewritten");
 }
 
-/// A database the previous release wrote retains its policy under a top-level
-/// `scheduling` member. Publication and the records swap name that cause and
-/// the way out, never a corrupt database, and repeat nothing the document
-/// holds.
+/// A retained policy whose identity sits under a `scheduling` member has no
+/// `project` block, and no release this one upgrades from stored that shape.
+/// Publication and the records swap refuse it as a corrupt database like any
+/// other document the policy model does not read, never as an activation
+/// refusal an operator could act on, and repeat nothing the document holds.
 #[tokio::test]
-async fn a_database_an_earlier_release_wrote_is_refused_by_name() {
+async fn a_retained_policy_without_a_project_identity_is_refused_as_corrupt() {
     let fx = fixture().await;
-    retain_predecessor_policy_document(&fx).await;
+    retain_policy_identity_under_scheduling(&fx).await;
 
     let mut replacement = read_policy(POLICY).expect("the current policy");
     replacement.project.version = "2".to_owned();
@@ -8903,7 +9233,7 @@ async fn a_database_an_earlier_release_wrote_is_refused_by_name() {
         .store
         .apply_policy(SCHEDULING_ID, &digest, &pool_ids, &replacement)
         .await
-        .expect_err("the predecessor's retained document is not read");
+        .expect_err("a retained document without a project block is not read");
     let records = fx
         .store
         .replace_facts(SCHEDULING_ID, &records_without(&[]))
@@ -8911,12 +9241,11 @@ async fn a_database_an_earlier_release_wrote_is_refused_by_name() {
         .expect_err("the records swap does not read it either");
     for refusal in [publication, records] {
         assert!(
-            matches!(refusal, StoreError::EarlierRelease),
-            "{refusal:?} is not the earlier-release refusal"
+            matches!(refusal, StoreError::Corrupt),
+            "{refusal:?} is not the corrupt-database refusal"
         );
+        assert!(!refusal.is_activation_refusal(), "{refusal:?}");
         let text = refusal.to_string();
-        assert!(text.contains("earlier release"), "{text}");
-        assert!(text.contains("new database"), "{text}");
         assert!(!text.contains("registry-updates"), "{text}");
     }
 }

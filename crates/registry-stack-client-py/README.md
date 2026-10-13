@@ -37,7 +37,7 @@ package beginning with Registry Stack v0.30.0.
 The `messaging` namespace is part of the unified package beginning with
 Registry Stack v0.38.0. The `scheduling` namespace is part of the unified
 package beginning with Registry Stack v0.40.0. The `coordinator` namespace is
-part of the unified package beginning with Registry Stack v0.41.0.
+part of the unified package beginning with Registry Stack v0.42.0.
 Existing standalone client packages remain available for earlier versions, but
 later releases use this unified entry point.
 

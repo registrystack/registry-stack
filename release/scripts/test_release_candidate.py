@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+from unittest.mock import patch as roster_patch
+
 import base64
 import copy
 import hashlib
@@ -134,6 +136,9 @@ def security_evidence_tar(
 
 class ReleaseCandidateTest(TestCase):
     def setUp(self) -> None:
+        enabled = roster_patch("release_roster.COORDINATOR_FIRST_RELEASE", (0, 42, 0))
+        enabled.start()
+        self.addCleanup(enabled.stop)
         self.module = load_module()
         self.now = datetime(2026, 7, 25, 12, 0, tzinfo=timezone.utc)
         self.temp = tempfile.TemporaryDirectory()
@@ -813,6 +818,26 @@ class ReleaseCandidateTest(TestCase):
             ],
         )
 
+    def test_unified_wheels_use_the_311_stable_abi_from_v0_41_0(self) -> None:
+        historical = self.module._release_payload_inventory("0.40.0")
+        current = self.module._release_payload_inventory("0.41.0")
+        platform = "manylinux_2_17_x86_64.manylinux2014_x86_64"
+
+        self.assertEqual(
+            "client-package",
+            historical[f"registry_stack_client-0.40.0-cp310-abi3-{platform}.whl"],
+        )
+        self.assertNotIn(
+            f"registry_stack_client-0.40.0-cp311-abi3-{platform}.whl", historical
+        )
+        self.assertEqual(
+            "client-package",
+            current[f"registry_stack_client-0.41.0-cp311-abi3-{platform}.whl"],
+        )
+        self.assertNotIn(
+            f"registry_stack_client-0.41.0-cp310-abi3-{platform}.whl", current
+        )
+
     def test_v2_security_evidence_members_follow_candidate_images(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -986,6 +1011,7 @@ class ReleaseCandidateTest(TestCase):
                     }.issubset(required)
                 )
 
+    @roster_patch("release_roster.COORDINATOR_FIRST_RELEASE", (0, 42, 0))
     def test_image_operator_tools_join_only_the_v0_36_images(self) -> None:
         for version in ("0.33.0", "0.35.0", "0.35.9"):
             with self.subTest(version=version):
@@ -1007,7 +1033,7 @@ class ReleaseCandidateTest(TestCase):
             self.module.image_operator_tools("0.37.99"),
         )
         # The Messaging image carries messagingctl only from its first release.
-        for version in ("0.38.0", "0.40.99"):
+        for version in ("0.38.0", "0.41.99"):
             with self.subTest(version=version):
                 self.assertEqual(
                     {
@@ -1019,7 +1045,7 @@ class ReleaseCandidateTest(TestCase):
                     self.module.image_operator_tools(version),
                 )
         # The Coordinator image carries coordinatorctl only from its first release.
-        for version in ("0.41.0", "1.0.0"):
+        for version in ("0.42.0", "1.0.0"):
             with self.subTest(version=version):
                 self.assertEqual(
                     {
@@ -1032,6 +1058,7 @@ class ReleaseCandidateTest(TestCase):
                     self.module.image_operator_tools(version),
                 )
 
+    @roster_patch("release_roster.COORDINATOR_FIRST_RELEASE", (0, 42, 0))
     def test_image_operator_tools_cli_emits_image_and_tool_pairs(self) -> None:
         for version, expected in (
             ("0.35.0", ""),
@@ -1049,7 +1076,7 @@ class ReleaseCandidateTest(TestCase):
                 "scheduling=schedulingctl\n",
             ),
             (
-                "0.41.0",
+                "0.42.0",
                 "breg=bregctl casework=caseworkctl coordinator=coordinatorctl "
                 "messaging=messagingctl scheduling=schedulingctl\n",
             ),
@@ -1090,6 +1117,7 @@ class ReleaseCandidateTest(TestCase):
             },
         )
 
+    @roster_patch("release_roster.COORDINATOR_FIRST_RELEASE", (0, 42, 0))
     def test_no_version_ships_messaging_until_the_roster_names_a_first_release(
         self,
     ) -> None:
@@ -1145,25 +1173,26 @@ class ReleaseCandidateTest(TestCase):
                     self.assertEqual(0, result)
                     self.assertNotIn("messagingctl", stdout.getvalue())
 
+    @roster_patch("release_roster.COORDINATOR_FIRST_RELEASE", (0, 42, 0))
     def test_coordinator_joins_only_the_rosters_from_its_first_release(self) -> None:
         self.assertEqual(
-            self.module._candidate_image_names("0.40.99") | {"coordinator"},
-            self.module._candidate_image_names("0.41.0"),
+            self.module._candidate_image_names("0.41.99") | {"coordinator"},
+            self.module._candidate_image_names("0.42.0"),
         )
-        self.assertNotIn("coordinator", self.module._candidate_image_names("0.40.0"))
+        self.assertNotIn("coordinator", self.module._candidate_image_names("0.41.0"))
         self.assertNotIn(
-            "coordinator", self.module.image_operator_tools("0.40.0")
+            "coordinator", self.module.image_operator_tools("0.41.0")
         )
         self.assertEqual(
-            "coordinatorctl", self.module.image_operator_tools("0.41.0")["coordinator"]
+            "coordinatorctl", self.module.image_operator_tools("0.42.0")["coordinator"]
         )
-        historical = self.module._release_payload_inventory("0.40.0")
+        historical = self.module._release_payload_inventory("0.41.0")
         self.assertFalse(any(name.startswith("coordinator") for name in historical))
-        current = self.module._release_payload_inventory("0.41.0")
+        current = self.module._release_payload_inventory("0.42.0")
         self.assertEqual(
             {
-                "coordinator-v0.41.0-linux-amd64": "binary",
-                "coordinatorctl-v0.41.0-linux-amd64": "binary",
+                "coordinator-v0.42.0-linux-amd64": "binary",
+                "coordinatorctl-v0.42.0-linux-amd64": "binary",
             },
             {
                 name: kind
@@ -1172,7 +1201,7 @@ class ReleaseCandidateTest(TestCase):
             },
         )
         self.assertEqual(
-            {name.replace("0.40.0", "0.41.0"): kind for name, kind in historical.items()},
+            {name.replace("0.41.0", "0.42.0"): kind for name, kind in historical.items()},
             {
                 name: kind
                 for name, kind in current.items()
@@ -1180,7 +1209,7 @@ class ReleaseCandidateTest(TestCase):
             },
         )
         required = self.module._security_evidence_required_files(
-            self.module._candidate_image_names("0.41.0")
+            self.module._candidate_image_names("0.42.0")
         )
         self.assertTrue(
             {
@@ -1203,7 +1232,7 @@ class ReleaseCandidateTest(TestCase):
         with mock.patch.object(
             self.module.release_roster, "COORDINATOR_FIRST_RELEASE", None
         ):
-            for version in ("0.41.0", "1.0.0"):
+            for version in ("0.42.0", "1.0.0"):
                 with self.subTest(version=version):
                     self.assertNotIn(
                         "coordinator", self.module._candidate_image_names(version)
@@ -1267,6 +1296,7 @@ class ReleaseCandidateTest(TestCase):
             self.assertNotIn(f"{service}-v0.38.0-install.sh", inventory)
             self.assertNotIn(f"{service}-v0.38.0-macos-arm64", inventory)
 
+    @roster_patch("release_roster.COORDINATOR_FIRST_RELEASE", (0, 42, 0))
     def test_no_version_ships_the_breg_services_until_the_roster_names_one(
         self,
     ) -> None:
@@ -1327,6 +1357,7 @@ class ReleaseCandidateTest(TestCase):
                 inventory = self.module._release_payload_inventory(version)
                 self.assertEqual(expected, f"mint-v{version}-linux-amd64" in inventory)
 
+    @roster_patch("release_roster.COORDINATOR_FIRST_RELEASE", (0, 42, 0))
     def test_image_names_cli_emits_the_version_appropriate_roster(self) -> None:
         cases = (
             ("0.20.2", "relay\n"),
@@ -1362,7 +1393,7 @@ class ReleaseCandidateTest(TestCase):
                 "evidence-oid4vci messaging registry-render scheduling\n",
             ),
             (
-                "0.41.0",
+                "0.42.0",
                 "breg breg-mcp breg-review casework coordinator discovery "
                 "evidence evidence-oid4vci messaging registry-render "
                 "scheduling\n",
@@ -1577,6 +1608,7 @@ class ReleaseCandidateTest(TestCase):
             ),
         )
 
+    @roster_patch("release_roster.COORDINATOR_FIRST_RELEASE", (0, 42, 0))
     def test_coordinator_onboarding_stays_closed_until_external_setup(self) -> None:
         root = self.onboarding_repository()
         shutil.copy2(
@@ -1587,13 +1619,13 @@ class ReleaseCandidateTest(TestCase):
             self.module.CandidateError,
             "coordinator advisory baseline is missing",
         ):
-            self.module.check_image_onboarding(root, "0.41.0")
+            self.module.check_image_onboarding(root, "0.42.0")
         with self.assertRaisesRegex(
             self.module.CandidateError,
             "CANDIDATE_PACKAGES must contain coordinator-candidate",
         ):
             self.module.check_image_onboarding(
-                root, "0.41.0", allow_missing_baseline=True
+                root, "0.42.0", allow_missing_baseline=True
             )
         cleanup = root / "release/scripts/cleanup-release-candidates.py"
         cleanup.write_text(
@@ -1604,9 +1636,9 @@ class ReleaseCandidateTest(TestCase):
             encoding="utf-8",
         )
         self.assertEqual(
-            self.module._candidate_image_names("0.41.0"),
+            self.module._candidate_image_names("0.42.0"),
             self.module.check_image_onboarding(
-                root, "0.41.0", allow_missing_baseline=True
+                root, "0.42.0", allow_missing_baseline=True
             ),
         )
         recipe = root / "release/scripts/build-release-binaries.sh"
@@ -1622,7 +1654,7 @@ class ReleaseCandidateTest(TestCase):
             "canonical binary recipe must stage dist/image-bin/coordinatorctl",
         ):
             self.module.check_image_onboarding(
-                root, "0.41.0", allow_missing_baseline=True
+                root, "0.42.0", allow_missing_baseline=True
             )
 
     def test_breg_services_onboarding_stays_closed_until_external_setup(

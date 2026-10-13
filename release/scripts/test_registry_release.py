@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+from unittest.mock import patch as roster_patch
+
 import importlib.util
 import hashlib
 import io
@@ -108,6 +110,46 @@ def candidate_verification_plan(registry_release):
             f"--ref main -f tag={tag}"
         ),
     }
+
+
+IDENTIFIER_PUBLISHER_PIN_READ = [
+    "gh",
+    "api",
+    (
+        "repos/registrystack/registrystack-id/contents/src/upstream/source.json"
+        "?ref=refs/heads/main"
+    ),
+    "--header",
+    "Accept: application/vnd.github.raw+json",
+]
+
+
+def identifier_catalog_source(root: Path) -> tuple[Path, str, str]:
+    """Create a repository whose one commit carries an identifier catalog.
+
+    Returns the repository, that commit, and the catalog's SHA-256.
+    """
+    repo = root / "source"
+    catalog = repo / "products/identifiers/generated/catalog.v1.json"
+    catalog.parent.mkdir(parents=True)
+    catalog_bytes = b'{"entries": []}\n'
+    catalog.write_bytes(catalog_bytes)
+    init_repo(repo)
+    git(repo, "add", "products")
+    git(repo, "commit", "-m", "add identifier catalog")
+    return repo, git(repo, "rev-parse", "HEAD"), hashlib.sha256(catalog_bytes).hexdigest()
+
+
+def identifier_publisher_pin(commit: str, catalog_sha256: str) -> str:
+    return json.dumps(
+        {
+            "version": 1,
+            "repository": "https://github.com/registrystack/registry-stack",
+            "commit": commit,
+            "catalog_path": "products/identifiers/generated/catalog.v1.json",
+            "catalog_sha256": catalog_sha256,
+        }
+    )
 
 
 class RegistryReleaseTest(TestCase):
@@ -971,6 +1013,10 @@ class RegistryReleaseTest(TestCase):
             ) as absent_images,
             mock.patch.object(
                 registry_release,
+                "verify_identifier_publisher_pin",
+            ) as publisher_pin,
+            mock.patch.object(
+                registry_release,
                 "ensure_candidate_tag",
                 return_value="pushed",
             ) as ensure_tag,
@@ -1008,6 +1054,11 @@ class RegistryReleaseTest(TestCase):
 
         self.assertEqual(0, result)
         absent_images.assert_called_once_with(manifest["images"])
+        publisher_pin.assert_called_once_with(
+            ROOT,
+            version="0.31.1",
+            source_sha=source_sha,
+        )
         ensure_tag.assert_called_once()
         dispatch.assert_called_once_with(
             "registrystack/registry-stack",
@@ -1081,6 +1132,10 @@ class RegistryReleaseTest(TestCase):
             ),
             mock.patch.object(
                 registry_release,
+                "verify_identifier_publisher_pin",
+            ) as publisher_pin,
+            mock.patch.object(
+                registry_release,
                 "ensure_candidate_tag",
                 return_value="existing",
             ),
@@ -1105,6 +1160,7 @@ class RegistryReleaseTest(TestCase):
             )
 
         self.assertEqual(0, result)
+        publisher_pin.assert_not_called()
         dispatch.assert_not_called()
         self.assertIn('"publication_run_id": 88', output.getvalue())
 
@@ -1367,6 +1423,386 @@ class RegistryReleaseTest(TestCase):
         dispatch_publication.assert_not_called()
         self.assertNotIn('"status": "complete"', output.getvalue())
         self.assertIn("gh run rerun 88 --failed", errors.getvalue())
+
+    def test_identifier_publisher_pin_accepts_the_exact_release_source(self) -> None:
+        registry_release = load_registry_release()
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, source_sha, catalog_sha256 = identifier_catalog_source(Path(tmp))
+            with mock.patch.object(
+                registry_release,
+                "run_checked",
+                return_value=identifier_publisher_pin(source_sha, catalog_sha256),
+            ) as run_checked:
+                registry_release.verify_identifier_publisher_pin(
+                    repo,
+                    version="0.31.1",
+                    source_sha=source_sha,
+                )
+
+        run_checked.assert_called_once_with(IDENTIFIER_PUBLISHER_PIN_READ)
+
+    def test_identifier_publisher_pin_refuses_another_source(self) -> None:
+        registry_release = load_registry_release()
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, source_sha, catalog_sha256 = identifier_catalog_source(Path(tmp))
+            cases = {
+                "another commit": ("f" * 40, catalog_sha256),
+                "another catalog digest": (source_sha, "0" * 64),
+            }
+            for label, (pinned_commit, pinned_digest) in cases.items():
+                with self.subTest(label):
+                    with (
+                        mock.patch.object(
+                            registry_release,
+                            "run_checked",
+                            return_value=identifier_publisher_pin(
+                                pinned_commit,
+                                pinned_digest,
+                            ),
+                        ),
+                        self.assertRaises(registry_release.ReleasePlanError) as raised,
+                    ):
+                        registry_release.verify_identifier_publisher_pin(
+                            repo,
+                            version="0.31.1",
+                            source_sha=source_sha,
+                        )
+
+                    message = str(raised.exception)
+                    self.assertIn("does not pin the v0.31.1 release source", message)
+                    self.assertIn(f"expected commit {source_sha}", message)
+                    self.assertIn(f"catalog_sha256 {catalog_sha256}", message)
+                    self.assertIn(f"found commit {pinned_commit!r}", message)
+                    self.assertIn(f"catalog_sha256 {pinned_digest!r}", message)
+                    self.assertIn("synchronization pull request", message)
+                    self.assertIn("sync-registry-stack.yml", message)
+                    self.assertIn("then run publish", message)
+                    self.assertIn('release/OPERATIONS.md, "Tag and publish"', message)
+
+    def test_identifier_publisher_pin_refuses_an_absent_pin(self) -> None:
+        registry_release = load_registry_release()
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, source_sha, _ = identifier_catalog_source(Path(tmp))
+            with (
+                mock.patch.object(
+                    registry_release,
+                    "run_checked",
+                    return_value=json.dumps({"version": 1}),
+                ),
+                self.assertRaises(registry_release.ReleasePlanError) as raised,
+            ):
+                registry_release.verify_identifier_publisher_pin(
+                    repo,
+                    version="0.31.1",
+                    source_sha=source_sha,
+                )
+
+        message = str(raised.exception)
+        self.assertIn("does not pin the v0.31.1 release source", message)
+        self.assertIn("found commit None and catalog_sha256 None", message)
+
+    def test_identifier_publisher_pin_refuses_when_it_cannot_be_read(self) -> None:
+        registry_release = load_registry_release()
+        unreadable = {
+            "read failure": {
+                "side_effect": registry_release.ReleasePlanError(
+                    "gh api failed: HTTP 404"
+                )
+            },
+            "invalid JSON": {"return_value": "not json"},
+            "not an object": {"return_value": "[]"},
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, source_sha, _ = identifier_catalog_source(Path(tmp))
+            for label, behavior in unreadable.items():
+                with self.subTest(label):
+                    with (
+                        mock.patch.object(registry_release, "run_checked", **behavior),
+                        self.assertRaises(registry_release.ReleasePlanError) as raised,
+                    ):
+                        registry_release.verify_identifier_publisher_pin(
+                            repo,
+                            version="0.31.1",
+                            source_sha=source_sha,
+                        )
+
+                    message = str(raised.exception)
+                    self.assertIn(
+                        "cannot read registrystack/registrystack-id main "
+                        "src/upstream/source.json",
+                        message,
+                    )
+                    self.assertIn("v0.31.1", message)
+
+    def test_identifier_publisher_pin_refuses_a_source_without_a_catalog(
+        self,
+    ) -> None:
+        registry_release = load_registry_release()
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = init_repo(Path(tmp))
+            source_sha = commit_file(repo, "README.md", "no catalog\n")
+            with (
+                mock.patch.object(registry_release, "run_checked") as run_checked,
+                self.assertRaises(registry_release.ReleasePlanError) as raised,
+            ):
+                registry_release.verify_identifier_publisher_pin(
+                    repo,
+                    version="0.31.1",
+                    source_sha=source_sha,
+                )
+
+        run_checked.assert_not_called()
+        self.assertIn(
+            "cannot read products/identifiers/generated/catalog.v1.json at "
+            f"release source {source_sha}",
+            str(raised.exception),
+        )
+
+    def test_identifier_publisher_pin_predates_the_identifier_catalog(self) -> None:
+        registry_release = load_registry_release()
+        with mock.patch.object(registry_release, "run_checked") as run_checked:
+            registry_release.verify_identifier_publisher_pin(
+                ROOT,
+                version="0.19.0",
+                source_sha="a" * 40,
+            )
+
+        run_checked.assert_not_called()
+
+    def publish_initial_release_with_identifier_pin(
+        self,
+        registry_release,
+        *,
+        repo: Path,
+        source_sha: str,
+        pin: str,
+    ) -> tuple[int, list[list[str]], list[str], str]:
+        """Run the first publication of a release against a fake publisher pin.
+
+        Returns the exit status, every command the release tool ran, the order
+        in which the pin was read and the tag was created, and standard error.
+        """
+        plan = candidate_verification_plan(registry_release)
+        plan["release"]["source_sha"] = source_sha
+        binding = registry_release.release_candidate.render_tag_binding(
+            77,
+            2,
+            "b" * 64,
+        )
+        publication_run = {
+            "id": 88,
+            "html_url": "https://github.com/registrystack/registry-stack/actions/runs/88",
+            "event": "workflow_dispatch",
+            "head_branch": "main",
+            "head_sha": source_sha,
+            "status": "queued",
+            "conclusion": None,
+            "display_title": registry_release.publication_run_title(
+                "v0.31.1",
+                "e" * 32,
+            ),
+        }
+        commands: list[list[str]] = []
+        events: list[str] = []
+
+        def run_checked(command: list[str], *, cwd: Path | None = None) -> str:
+            commands.append(command)
+            events.append("pin-read")
+            return pin
+
+        def ensure_candidate_tag(*args: object, **kwargs: object) -> str:
+            events.append("tag")
+            return "pushed"
+
+        with (
+            mock.patch.object(
+                registry_release,
+                "load_candidate_verification_plan",
+                return_value=plan,
+            ),
+            mock.patch.object(registry_release, "verify_origin_repository"),
+            mock.patch.object(
+                registry_release,
+                "refresh_protected_main",
+                return_value=source_sha,
+            ),
+            mock.patch.object(registry_release, "release_for_tag", return_value=None),
+            mock.patch.object(registry_release, "remote_candidate_tag", return_value=None),
+            mock.patch.object(
+                registry_release,
+                "verify_candidate_verification_plan",
+                return_value=({"images": []}, binding),
+            ),
+            mock.patch.object(registry_release, "verify_absent_image_destinations"),
+            mock.patch.object(registry_release, "run_checked", side_effect=run_checked),
+            mock.patch.object(
+                registry_release,
+                "ensure_candidate_tag",
+                side_effect=ensure_candidate_tag,
+            ),
+            mock.patch.object(
+                registry_release,
+                "publication_runs_for_tag",
+                return_value=[],
+            ),
+            mock.patch.object(
+                registry_release,
+                "dispatch_publication_run",
+                return_value=(publication_run, "e" * 32),
+            ) as dispatch,
+            mock.patch.object(registry_release, "validate_main_workflow_run"),
+            redirect_stdout(io.StringIO()),
+            redirect_stderr(io.StringIO()) as errors,
+        ):
+            result = registry_release.publish_candidate_plan(
+                repo,
+                plan_path=repo / "candidate-plan.json",
+                repository="registrystack/registry-stack",
+                wait=False,
+                verbose_wait=False,
+            )
+
+        if "tag" not in events:
+            dispatch.assert_not_called()
+        return result, commands, events, errors.getvalue()
+
+    def test_publish_refuses_to_tag_until_the_identifier_publisher_pins_the_source(
+        self,
+    ) -> None:
+        registry_release = load_registry_release()
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, source_sha, catalog_sha256 = identifier_catalog_source(Path(tmp))
+            pins = {
+                "another source": identifier_publisher_pin("f" * 40, catalog_sha256),
+                "absent": json.dumps({"version": 1}),
+                "unreadable": "not json",
+            }
+            for label, pin in pins.items():
+                with self.subTest(label):
+                    result, commands, events, errors = (
+                        self.publish_initial_release_with_identifier_pin(
+                            registry_release,
+                            repo=repo,
+                            source_sha=source_sha,
+                            pin=pin,
+                        )
+                    )
+
+                    self.assertEqual(1, result)
+                    self.assertEqual([IDENTIFIER_PUBLISHER_PIN_READ], commands)
+                    self.assertEqual(["pin-read"], events)
+                    self.assertIn("error: ", errors)
+                    self.assertIn("registrystack/registrystack-id main", errors)
+                    self.assertIn("v0.31.1", errors)
+            self.assertEqual("", git(repo, "tag", "--list"))
+
+    def test_publish_tags_after_the_identifier_publisher_pins_the_source(self) -> None:
+        registry_release = load_registry_release()
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, source_sha, catalog_sha256 = identifier_catalog_source(Path(tmp))
+            result, commands, events, errors = (
+                self.publish_initial_release_with_identifier_pin(
+                    registry_release,
+                    repo=repo,
+                    source_sha=source_sha,
+                    pin=identifier_publisher_pin(source_sha, catalog_sha256),
+                )
+            )
+
+        self.assertEqual(0, result, errors)
+        self.assertEqual([IDENTIFIER_PUBLISHER_PIN_READ], commands)
+        self.assertEqual(["pin-read", "tag"], events)
+
+    def test_verify_candidate_warns_when_the_identifier_publisher_pin_is_not_ready(
+        self,
+    ) -> None:
+        registry_release = load_registry_release()
+        source_sha = "a" * 40
+        binding = registry_release.release_candidate.render_tag_binding(
+            77,
+            2,
+            "b" * 64,
+        )
+        manifest = {
+            "release": {"source_sha": source_sha, "tag": "v0.31.1"},
+            "workflow": {"revision": "c" * 40, "run_id": 77, "run_attempt": 2},
+            "images": [],
+        }
+        outcomes = {
+            "not ready": registry_release.ReleasePlanError("the pin is elsewhere"),
+            "ready": None,
+        }
+        for label, outcome in outcomes.items():
+            with self.subTest(label):
+                with (
+                    tempfile.TemporaryDirectory() as tmp,
+                    mock.patch.object(
+                        registry_release,
+                        "prepare_release_context",
+                        return_value={
+                            "repo": ROOT,
+                            "selected": {"data": {"stack": {}}},
+                        },
+                    ),
+                    mock.patch.object(
+                        registry_release,
+                        "refresh_protected_main",
+                        return_value=source_sha,
+                    ),
+                    mock.patch.object(
+                        registry_release,
+                        "verify_candidate_run",
+                        return_value=(manifest, binding),
+                    ),
+                    mock.patch.object(
+                        registry_release,
+                        "resolve_commit",
+                        side_effect=lambda repo, revision, label: revision,
+                    ),
+                    mock.patch.object(registry_release, "validate_candidate_ancestry"),
+                    mock.patch.object(registry_release, "validate_candidate_source_commit"),
+                    mock.patch.object(registry_release, "verify_absent_tag_and_release"),
+                    mock.patch.object(registry_release, "verify_absent_image_destinations"),
+                    mock.patch.object(
+                        registry_release,
+                        "candidate_docs_sha256",
+                        return_value="d" * 64,
+                    ),
+                    mock.patch.object(
+                        registry_release,
+                        "verify_identifier_publisher_pin",
+                        side_effect=outcome,
+                    ) as publisher_pin,
+                    redirect_stdout(io.StringIO()),
+                    redirect_stderr(io.StringIO()) as errors,
+                ):
+                    plan_output = Path(tmp) / "candidate-plan.json"
+                    result = registry_release.verify_candidate_for_tag(
+                        ROOT,
+                        version="0.31.1",
+                        release_id="beta-44",
+                        candidate_run=77,
+                        default_branch="main",
+                        repository="registrystack/registry-stack",
+                        plan_output=plan_output,
+                    )
+                    plan = json.loads(plan_output.read_text(encoding="utf-8"))
+
+                self.assertEqual(0, result, errors.getvalue())
+                self.assertEqual("ready", plan["status"])
+                publisher_pin.assert_called_once_with(
+                    ROOT,
+                    version="0.31.1",
+                    source_sha=source_sha,
+                )
+                self.assertIn("Candidate verification passed", errors.getvalue())
+                warning = (
+                    "warning: publish will refuse to tag v0.31.1: the pin is elsewhere"
+                )
+                if outcome is None:
+                    self.assertNotIn("warning:", errors.getvalue())
+                else:
+                    self.assertIn(warning, errors.getvalue())
 
     def test_recovery_draft_must_keep_the_candidate_binding(self) -> None:
         registry_release = load_registry_release()
@@ -1838,6 +2274,7 @@ class RegistryReleaseTest(TestCase):
                     step["run"],
                 )
 
+    @roster_patch("release_roster.COORDINATOR_FIRST_RELEASE", (0, 42, 0))
     def test_required_rust_context_aggregates_path_gated_shards(self) -> None:
         workflow = yaml.safe_load(
             (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
@@ -2084,7 +2521,9 @@ class RegistryReleaseTest(TestCase):
             checksums = []
             for binary in ("breg", "bregctl"):
                 name = f"{binary}-v0.26.0-{platform_name}"
-                body = f"{binary} fixture\n".encode()
+                # The installer starts each staged Linux binary, so the fixture
+                # is a script that starts.
+                body = f"#!/bin/sh\necho '{binary} fixture'\n".encode()
                 (assets / name).write_bytes(body)
                 checksums.append(f"{hashlib.sha256(body).hexdigest()}  {name}\n")
             (assets / "SHA256SUMS").write_text("".join(checksums), encoding="utf-8")
@@ -2106,7 +2545,9 @@ class RegistryReleaseTest(TestCase):
             self.assertEqual(0, result.returncode, result.stderr)
             for binary in ("breg", "bregctl"):
                 installed = destination / binary
-                self.assertEqual(f"{binary} fixture\n", installed.read_text())
+                self.assertEqual(
+                    f"#!/bin/sh\necho '{binary} fixture'\n", installed.read_text()
+                )
                 self.assertTrue(installed.stat().st_mode & stat.S_IXUSR)
 
     def test_release_builds_installs_and_smokes_casework_from_v0_30(self) -> None:
@@ -2159,7 +2600,9 @@ class RegistryReleaseTest(TestCase):
             checksums = []
             for binary in ("casework", "caseworkctl"):
                 name = f"{binary}-v0.30.0-{platform_name}"
-                body = f"{binary} fixture\n".encode()
+                # The installer starts each staged Linux binary, so the fixture
+                # is a script that starts.
+                body = f"#!/bin/sh\necho '{binary} fixture'\n".encode()
                 (assets / name).write_bytes(body)
                 checksums.append(f"{hashlib.sha256(body).hexdigest()}  {name}\n")
             (assets / "SHA256SUMS").write_text("".join(checksums), encoding="utf-8")
@@ -2181,7 +2624,9 @@ class RegistryReleaseTest(TestCase):
             self.assertEqual(0, result.returncode, result.stderr)
             for binary in ("casework", "caseworkctl"):
                 installed = destination / binary
-                self.assertEqual(f"{binary} fixture\n", installed.read_text())
+                self.assertEqual(
+                    f"#!/bin/sh\necho '{binary} fixture'\n", installed.read_text()
+                )
                 self.assertTrue(installed.stat().st_mode & stat.S_IXUSR)
 
 
@@ -2517,6 +2962,7 @@ class RegistryReleaseTest(TestCase):
 
 
 
+    @roster_patch("release_roster.COORDINATOR_FIRST_RELEASE", (0, 42, 0))
     def test_release_packaging_uses_retained_artifact_identities(self) -> None:
         binary_recipe = (ROOT / "release/scripts/build-release-binaries.sh").read_text(
             encoding="utf-8"
@@ -2981,6 +3427,7 @@ class RegistryReleaseTest(TestCase):
         self.assertIn('"schedulingctl-${tag}-linux-amd64"', recipe)
         self.assertIn("image_bin_binaries+=(schedulingctl)", recipe)
 
+    @roster_patch("release_roster.COORDINATOR_FIRST_RELEASE", (0, 42, 0))
     def test_messaging_release_surface_begins_at_its_first_release(self) -> None:
         module = load_registry_release()
         previous = {
@@ -3081,6 +3528,7 @@ class RegistryReleaseTest(TestCase):
         self.assertIn('"messagingctl-${tag}-linux-amd64"', recipe)
         self.assertIn("image_bin_binaries+=(messaging)", recipe)
 
+    @roster_patch("release_roster.COORDINATOR_FIRST_RELEASE", (0, 42, 0))
     def test_coordinator_release_surface_begins_at_its_first_release(self) -> None:
         module = load_registry_release()
         published = {
@@ -3139,23 +3587,23 @@ class RegistryReleaseTest(TestCase):
             ),
         )
 
-        current = released("0.41.0")
-        self.assertEqual("0.41.0", current["coordinator"])
-        self.assertEqual("0.41.0", current["coordinatorctl"])
-        self.assertEqual([], module.artifact_inventory_errors("0.41.0", current))
+        current = released("0.42.0")
+        self.assertEqual("0.42.0", current["coordinator"])
+        self.assertEqual("0.42.0", current["coordinatorctl"])
+        self.assertEqual([], module.artifact_inventory_errors("0.42.0", current))
         for missing in ("coordinator", "coordinatorctl"):
             with self.subTest(missing=missing):
                 incomplete = dict(current)
                 del incomplete[missing]
                 self.assertNotEqual(
-                    [], module.artifact_inventory_errors("0.41.0", incomplete)
+                    [], module.artifact_inventory_errors("0.42.0", incomplete)
                 )
 
         # No version ships Coordinator while the roster names no first release.
         with mock.patch.object(
             module.release_roster, "COORDINATOR_FIRST_RELEASE", None
         ):
-            for version in ("0.41.0", "1.0.0"):
+            for version in ("0.42.0", "1.0.0"):
                 with self.subTest(version=version, roster=None):
                     held = released(version)
                     self.assertNotIn("coordinator", held)
@@ -3212,6 +3660,7 @@ class RegistryReleaseTest(TestCase):
         )
         self.assertIn('check --package "${messaging_project}-installed"', smoke)
 
+    @roster_patch("release_roster.COORDINATOR_FIRST_RELEASE", (0, 42, 0))
     def test_breg_services_release_surface_begins_at_their_first_release(
         self,
     ) -> None:

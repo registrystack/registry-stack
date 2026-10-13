@@ -225,6 +225,18 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         "run: products/breg/scripts/check-client-contract.sh",
     ),
     (
+        "Base Registry Engine schema-gated tests",
+        "run: cargo test --locked -p registry-breg --features runtime,tooling,schema --lib --test action_evidence_compiler",
+    ),
+    (
+        "Base Registry Engine gated test selection",
+        "run: python3 .github/scripts/check_breg_gated_tests.py",
+    ),
+    (
+        "Base Registry Engine gated test selection tests",
+        "run: python3 .github/scripts/test_check_breg_gated_tests.py",
+    ),
+    (
         "Enforce the citizen gateway's delegated-agent boundary",
         "run: products/breg/scripts/check-mcp-gateway-boundary.sh",
     ),
@@ -308,8 +320,8 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         "cargo test --locked -p registry-casework --features postgres-test --test service_visibility",
     ),
     (
-        "Casework assignment and source routing suites",
-        "cargo test --locked -p registry-casework --features postgres-test --test assignment_postgres --test routing_postgres",
+        "Casework assignment, source routing, and task-grant invalidation suites",
+        "cargo test --locked -p registry-casework --features postgres-test --test assignment_postgres --test routing_postgres --test task_grant_invalidation",
     ),
     (
         "Casework persisted source clock selection",

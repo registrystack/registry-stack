@@ -7,12 +7,11 @@ use registry_coordinator::definition::Definition;
 use serde_json::Value;
 use std::{fs, path::Path, process::Command};
 
-/// The maintained reviewed-notice example, which every test here varies.
-const WORKFLOW: &str =
-    include_str!("../../../products/coordinator/examples/reviewed-notice/workflow.yaml");
+/// A focused review-wait project, which every test here varies. The maintained
+/// example is free to evolve without changing these single-boundary cases.
+const WORKFLOW: &str = include_str!("fixtures/review-wait/workflow.yaml");
 
-const FUNCTIONS: &str =
-    include_str!("../../../products/coordinator/examples/reviewed-notice/functions.rhai");
+const FUNCTIONS: &str = include_str!("fixtures/review-wait/functions.rhai");
 
 fn cli(arguments: &[&str]) -> std::process::Output {
     Command::new(env!("CARGO_BIN_EXE_coordinatorctl"))
@@ -94,12 +93,13 @@ fn a_review_wait_checks_and_explains_its_request_timeout_and_routes() {
     assert_eq!(wait["request"], "submit-review");
     assert_eq!(wait["timeoutSeconds"], 1_209_600);
     assert_eq!(wait["onTimeout"], "withdraw");
+    assert!(wait["onCancel"].is_null());
     assert_eq!(wait["next"], serde_json::json!(["decide", "withdraw"]));
     let output = cli(&["explain", "--project", directory]);
     let text = String::from_utf8(output.stdout).unwrap();
     assert!(
         text.contains(
-            "await-review: wait for the review-result of submit-review, at most 1209600 seconds, then decide; on timeout withdraw"
+            "await-review: wait for the review-result of submit-review, at most 1209600 seconds, then decide; on timeout withdraw; on cancel the run stops with ordinary cancellation"
         ),
         "{text}"
     );
@@ -139,8 +139,43 @@ fn a_wait_without_on_timeout_explains_that_the_run_fails() {
     assert!(output.status.success(), "{text}");
     assert!(
         text.contains(
-            "await-review: wait for the review-result of submit-review, at most 1209600 seconds, then decide; on timeout the run fails with wait-timed-out"
+            "await-review: wait for the review-result of submit-review, at most 1209600 seconds, then decide; on timeout the run fails with wait-timed-out; on cancel the run stops with ordinary cancellation"
         ),
+        "{text}"
+    );
+}
+
+#[test]
+fn an_authored_cancel_route_checks_and_is_explained_separately() {
+    let root = tempfile::tempdir().unwrap();
+    project(
+        root.path(),
+        &[(
+            "    onTimeout: withdraw\n",
+            "    onTimeout: withdraw\n    onCancel: withdraw\n",
+        )],
+    );
+    let directory = root.path().to_str().unwrap();
+    let output = cli(&["--format", "json", "check", "--project", directory]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let output = cli(&["--format", "json", "explain", "--project", directory]);
+    let explained: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let wait = explained["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|step| step["id"] == "await-review")
+        .unwrap();
+    assert_eq!(wait["onTimeout"], "withdraw");
+    assert_eq!(wait["onCancel"], "withdraw");
+    let output = cli(&["explain", "--project", directory]);
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        text.contains("on timeout withdraw; on cancel withdraw"),
         "{text}"
     );
 }
@@ -261,6 +296,21 @@ fn a_timeout_naming_an_undeclared_step_is_refused_at_on_timeout() {
 }
 
 #[test]
+fn a_cancel_route_naming_an_undeclared_step_is_refused_at_on_cancel() {
+    let findings = checked(&[(
+        "    onTimeout: withdraw\n",
+        "    onTimeout: withdraw\n    onCancel: withdrew\n",
+    )]);
+    assert_eq!(findings.len(), 1, "{findings:#?}");
+    finding(
+        &findings,
+        "/steps/await-review/onCancel",
+        "coordinator.definition.target",
+        &["withdrew"],
+    );
+}
+
+#[test]
 fn a_choice_on_the_review_status_covers_every_status() {
     let findings = checked(&[("      superseded: not-decided\n", "")]);
     assert_eq!(findings.len(), 1, "{findings:#?}");
@@ -291,6 +341,28 @@ fn a_review_wait_survives_its_snapshot() {
     let definition = Definition::load(root.path()).unwrap();
     let snapshot = definition.snapshot().unwrap();
     assert!(snapshot.contains("\"waitFor\""), "{snapshot}");
+    assert!(
+        !snapshot.contains("\"onCancel\""),
+        "legacy snapshots omit the optional edge: {snapshot}"
+    );
+    let restored = Definition::from_snapshot(&snapshot).unwrap();
+    assert_eq!(restored.workflow, definition.workflow);
+    assert_eq!(restored.digest, definition.digest);
+}
+
+#[test]
+fn an_authored_cancel_route_survives_its_snapshot() {
+    let root = tempfile::tempdir().unwrap();
+    project(
+        root.path(),
+        &[(
+            "    onTimeout: withdraw\n",
+            "    onTimeout: withdraw\n    onCancel: withdraw\n",
+        )],
+    );
+    let definition = Definition::load(root.path()).unwrap();
+    let snapshot = definition.snapshot().unwrap();
+    assert!(snapshot.contains("\"onCancel\":\"withdraw\""), "{snapshot}");
     let restored = Definition::from_snapshot(&snapshot).unwrap();
     assert_eq!(restored.workflow, definition.workflow);
     assert_eq!(restored.digest, definition.digest);
@@ -476,6 +548,43 @@ fn a_scenario_states_the_review_result_each_route_receives() {
             ),
         ]
     );
+}
+
+#[test]
+fn a_scenario_exercises_authored_operator_cancellation_separately_from_timeout() {
+    let withdrawn = format!(
+        "    withdraw:\n    - {{type: success, value: {{outcome: cancelled, result: {}}}}}\n",
+        result("cancelled", "")
+    );
+    let (code, report, _) = tested(
+        &[(
+            "    onTimeout: withdraw\n",
+            "    onTimeout: withdraw\n    onCancel: withdraw\n",
+        )],
+        &case(
+            "operator-cancelled",
+            "{type: cancel}",
+            &withdrawn,
+            "    path: [submit-review, await-review, withdraw, confirm-withdrawal, withdrawn]\n    state: completed\n    outcome: {type: named, value: withdrawn}\n    output: {resultId: 00000000-0000-4000-8000-000000000011}\n    workflowElapsedSeconds: 0\n",
+        ),
+    );
+    assert_eq!(code, Some(0), "{report}");
+    assert_eq!(reached(&report)[0].2, "completed");
+}
+
+#[test]
+fn a_scenario_cancel_without_an_authored_route_stops_as_cancelled() {
+    let (code, report, _) = tested(
+        &[],
+        &case(
+            "ordinary-cancel",
+            "{type: cancel}",
+            "",
+            "    path: [submit-review, await-review]\n    state: cancelled\n    outcome: {type: none}\n    workflowElapsedSeconds: 0\n",
+        ),
+    );
+    assert_eq!(code, Some(0), "{report}");
+    assert_eq!(reached(&report)[0].2, "cancelled");
 }
 
 #[test]

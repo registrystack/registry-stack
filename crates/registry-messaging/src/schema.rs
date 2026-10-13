@@ -869,6 +869,18 @@ mod tests {
         assert!(message["responses"]["401"].is_object());
     }
 
+    /// Receipt observation charges no request budget, so the contract never
+    /// tells a client to wait and retry it.
+    #[test]
+    fn the_receipt_read_publishes_no_rate_limit_answer() {
+        let documents = openapi_documents().unwrap();
+        let document: Value = serde_json::from_str(&documents[OPENAPI_FILE]).unwrap();
+        let receipt = &document["paths"]["/v1/messages/receipt"]["post"];
+        assert_eq!(receipt["operationId"], "readMessageReceipt");
+        assert!(receipt["responses"]["409"].is_object());
+        assert!(receipt["responses"].get("429").is_none());
+    }
+
     #[test]
     fn the_runtime_schema_publishes_the_closed_callback_verifier_kinds() {
         let documents = runtime_documents().unwrap();

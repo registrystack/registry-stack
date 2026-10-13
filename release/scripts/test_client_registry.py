@@ -171,7 +171,7 @@ class ClientRegistryTest(unittest.TestCase):
         self.module.validate_distribution(self.directory, self.version, "relay")
 
     def test_validates_the_unified_distribution_with_all_native_bindings(self) -> None:
-        self.version = "0.41.0"
+        self.version = "0.42.0"
         self._write_distribution("stack")
         self.module.validate_distribution(self.directory, self.version, "stack")
         platform = self.module.npm_tarballs(
@@ -307,21 +307,21 @@ class ClientRegistryTest(unittest.TestCase):
                 self.directory, self.version, "stack"
             )
 
-    def test_coordinator_joins_the_unified_clients_at_v0_41(self) -> None:
+    def test_coordinator_joins_the_unified_clients_at_v0_42(self) -> None:
         self.assertNotIn(
             "coordinator-client",
-            self.module.native_binary_stems("stack", "0.40.99"),
+            self.module.native_binary_stems("stack", "0.41.99"),
         )
         self.assertNotIn(
-            "coordinator", self.module.stack_python_namespaces("0.40.99")
+            "coordinator", self.module.stack_python_namespaces("0.41.99")
         )
-        self.assertFalse(self.module.includes_coordinator("0.40.99"))
+        self.assertFalse(self.module.includes_coordinator("0.41.99"))
         self.assertIn(
             "coordinator-client",
-            self.module.native_binary_stems("stack", "0.41.0"),
+            self.module.native_binary_stems("stack", "0.42.0"),
         )
-        self.assertIn("coordinator", self.module.stack_python_namespaces("0.41.0"))
-        self.assertTrue(self.module.includes_coordinator("0.41.0"))
+        self.assertIn("coordinator", self.module.stack_python_namespaces("0.42.0"))
+        self.assertTrue(self.module.includes_coordinator("0.42.0"))
         self.assertIn(
             "coordinator-client",
             self.module.native_binary_stems(
@@ -613,8 +613,8 @@ class ClientRegistryTest(unittest.TestCase):
         ):
             self.module.validate_wheels(self.directory, self.version, "stack")
 
-    def test_rejects_a_v0_41_unified_wheel_without_coordinator(self) -> None:
-        self.version = "0.41.0"
+    def test_rejects_a_v0_42_unified_wheel_without_coordinator(self) -> None:
+        self.version = "0.42.0"
         self._write_distribution("stack")
         wheel = self.module.wheel_paths(self.directory, self.version, "stack")[0]
         write_wheel(
@@ -660,6 +660,22 @@ class ClientRegistryTest(unittest.TestCase):
             names,
         )
         self.assertFalse(any("abi3-linux_" in name for name in names))
+
+    def test_wheels_use_the_311_stable_abi_from_v0_41_0(self) -> None:
+        for version, expected in (("0.40.0", "cp310-abi3"), ("0.41.0", "cp311-abi3")):
+            with self.subTest(version=version):
+                self.assertEqual(
+                    [
+                        f"registry_stack_client-{version}-{expected}-{platform}.whl"
+                        for platform in self.module.WHEEL_PLATFORMS
+                    ],
+                    [
+                        path.name
+                        for path in self.module.wheel_paths(
+                            self.directory, version, "stack"
+                        )
+                    ],
+                )
 
     def test_rejects_root_package_with_a_native_binary(self) -> None:
         definition = self.module.client_definition(self.client)

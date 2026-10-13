@@ -185,6 +185,8 @@ pub enum Step {
         next: String,
         #[serde(rename = "onTimeout", default, skip_serializing_if = "Option::is_none")]
         on_timeout: Option<String>,
+        #[serde(rename = "onCancel", default, skip_serializing_if = "Option::is_none")]
+        on_cancel: Option<String>,
     },
     Call {
         call: Call,
@@ -225,9 +227,13 @@ impl Step {
                 )
                 .collect(),
             Self::WaitFor {
-                next, on_timeout, ..
+                next,
+                on_timeout,
+                on_cancel,
+                ..
             } => std::iter::once(("next", next.as_str()))
                 .chain(on_timeout.iter().map(|step| ("onTimeout", step.as_str())))
+                .chain(on_cancel.iter().map(|step| ("onCancel", step.as_str())))
                 .collect(),
             Self::Choose { cases, .. } => cases
                 .values()
@@ -559,12 +565,14 @@ impl Definition {
                         wait_for,
                         timeout_seconds,
                         on_timeout,
+                        on_cancel,
                         ..
                     } => {
                         item["event"] = serde_json::json!(wait_for.id());
                         item["request"] = serde_json::json!(wait_for.request());
                         item["timeoutSeconds"] = serde_json::json!(timeout_seconds);
                         item["onTimeout"] = serde_json::json!(on_timeout);
+                        item["onCancel"] = serde_json::json!(on_cancel);
                     }
                     Step::Choose { cases, .. } => item["cases"] = serde_json::json!(cases),
                     Step::Finish { finish, .. } => item["outcome"] = serde_json::json!(finish),

@@ -13,6 +13,16 @@ database:
   trustedRootCertificateRef: secret:file/postgres-root.pem
 namespace: coordinator_review
 connections:
+  applications:
+    product: breg
+    baseUrl: https://registry.example.org
+    profile: follow-up-reader
+    authorization:
+      tokenEndpoint: https://issuer.example.org/oauth/token
+      clientId: coordinator-application-reader
+      signingKeyRef: secret:file/application-reader-jwk
+      resource: urn:example:applications
+      scopes: [records:get]
   review:
     product: casework
     baseUrl: https://casework.example.org

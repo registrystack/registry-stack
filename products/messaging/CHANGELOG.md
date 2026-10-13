@@ -2,14 +2,37 @@
 
 ## Unreleased
 
+## 0.41.0 - 2026-10-13
+
+- BREAKING: the published `registry-stack-client` Python package, which carries
+  the Registry Messaging client, requires Python 3.11 or later: its
+  `Requires-Python` is `>=3.11` (was `>=3.10`), and its wheels are built
+  against the Python 3.11 stable ABI and named `cp311-abi3` (was `cp310-abi3`).
+  Python 3.10 is no longer supported. Migration: run Python 3.11 or later.
+
+- BREAKING: the published `@registrystack/client` Node.js package, which
+  carries the Registry Messaging client, requires Node.js 24.11.0 or later:
+  its `engines.node` is `>=24.11.0` (was `>=22.12.0`). Node.js 22 is no longer
+  supported. Migration: run Node.js 24.11.0 or later.
 - `POST /v1/messages/receipt` returns the retained original success receipt
   for the caller's verified issuer and configured principal, the original
   `Idempotency-Key`, and the original request body, under current ordinary
-  read authority. It never renders, submits, or sends. A missing, expired,
-  or changed receipt answers `receipt.unresolved` (409), which is not
-  evidence that no effect occurred. The Rust (`message_receipt`), Node.js
-  (`messageReceipt`), and Python (`message_receipt`) clients carry the
+  read authority. It never renders, submits, or sends, and it neither spends
+  nor requires the submission rate budget, so it never answers `429`. A
+  missing, expired, or changed receipt answers `receipt.unresolved` (409),
+  which is not evidence that no effect occurred. The Rust (`message_receipt`),
+  Node.js (`messageReceipt`), and Python (`message_receipt`) clients carry the
   route.
+- BREAKING (Rust API): `registry_messaging_core::ProblemCode`, which
+  `registry-messaging-client` re-exports and its errors carry, gains
+  `ReceiptUnresolved`. The enum is not `#[non_exhaustive]`, so an exhaustive
+  `match` on it no longer compiles. Only Rust code that matches on the enum
+  is affected. Migration: add a `ReceiptUnresolved` arm or a wildcard arm.
+- `messagingctl dev` pulls PostgreSQL from
+  `public.ecr.aws/docker/library/postgres` and Mailpit from
+  `ghcr.io/axllent/mailpit`, each at the digest it pinned before, and its
+  help names both references. An egress allowlist for local development must
+  admit `public.ecr.aws` and `ghcr.io`.
 
 ## v0.40.0 - 2026-10-11
 

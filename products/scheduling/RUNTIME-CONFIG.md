@@ -45,8 +45,7 @@ must be a package `schedulingctl package --output` wrote: a `SHA256SUMS` file
 listing exactly `scheduling.yaml`, whose bytes match the listed digest. A
 changed, missing, or extra file is refused by name, and so is a directory
 without `SHA256SUMS`, such as an authored project; each refusal names
-`schedulingctl package`. A directory that holds the retired
-`scheduling.package.json` is refused the same way.
+`schedulingctl package`.
 
 `package.expectedDigest` optionally pins the package the runtime must serve:
 `sha256:` followed by 64 lowercase hexadecimal digits, the `packageDigest`
@@ -69,8 +68,7 @@ reads the ledger with the runtime credential and writes no activation state:
 it refuses when no package has been applied, when the verified package at
 `package.root` is not the active one, and when the ledger belongs to another
 `identity.databaseId`. Each refusal names `schedulingctl plan --runtime-config
-FILE` then `schedulingctl apply --runtime-config FILE`. `scheduling migrate`
-is removed and exits 2 naming the same two commands.
+FILE` then `schedulingctl apply --runtime-config FILE`.
 
 `listener` is required. `listener.bind` is required and is one numeric
 socket address, including bracketed IPv6 forms. `listener.tlsTermination` is
@@ -183,8 +181,23 @@ of that client's declared authorities, so an assertion minted by an unrelated
 authority the issuer happens to federate cannot become a booking credential
 here.
 
-`taskGrantStatus` is an optional top-level list of Casework task authorities.
-Configure it for every deployment that accepts deferred grants:
+`taskGrantStatus` is a required top-level member that decides how Scheduling
+learns whether a task grant is still current. It takes one of two forms, and
+every runtime file states which; a file that omits it is refused at startup
+with `scheduling.runtime.missing-task-grant-status`, and an empty list is
+refused naming both choices.
+
+The keyword `unchecked-final-fifteen-minutes` selects the offline path. No
+task authority is asked and no revocation is observed: Scheduling accepts a
+grant only while it is unexpired with at most 900 seconds remaining at request
+entry, and refuses any grant with more time left as `operation.not-authorized`.
+
+```yaml
+taskGrantStatus: unchecked-final-fifteen-minutes
+```
+
+A list of Casework task authorities makes a fresh status answer mandatory.
+Write it for every deployment that accepts deferred grants:
 
 ```yaml
 taskGrantStatus:
@@ -198,7 +211,7 @@ taskGrantStatus:
     caBundleRef: secret:file/institution-root-ca
 ```
 
-Offline runtime checks require at most 32 entries with distinct absolute
+Offline runtime checks require one to 32 entries with distinct absolute
 `sourceIssuer` identifiers, safe service and token URLs, non-empty client and
 assertion audience, an absolute Casework resource, one status scope token, and
 a status path with one `{grantId}` segment. They validate secret
@@ -221,24 +234,25 @@ task authority that answers under another scope or route: `statusScope` is one
 scope token, and `statusPath` starts with `/` and holds exactly one whole
 `{grantId}` segment.
 
-Once the list contains any entry, a fresh exact status answer is mandatory for
-every capacity commitment and idempotent receipt replay. The authority must
-return the signed grant's exact identity and bounds and say it is active. An
-inactive, mismatched, unlisted, or incompletely bound grant answers
-`operation.not-authorized`; an authority or credential outage, including an
-unusable authority response, answers `service.unavailable`. Positive answers are not cached. The full attempt is
+With the list, a fresh exact status answer is mandatory for every capacity
+commitment and idempotent receipt replay, whatever time the grant has left.
+The authority must return the signed grant's exact identity and bounds and say
+it is active. An inactive, mismatched, unlisted, or incompletely bound grant
+answers `operation.not-authorized`; an authority or credential outage,
+including an unusable authority response, answers `service.unavailable`.
+Positive answers are not cached. The full attempt is
 limited to ten seconds and completes before the capacity transaction opens, so
 no PostgreSQL capacity lock is held during the outbound call. Duplicate source
 issuers or invalid endpoints, credentials, or secret references refuse startup.
 The positive answer is an observation rather than a distributed transaction:
 a withdrawal after the answer can race the in-flight Scheduling commit.
 
-When the list is absent or empty, Scheduling accepts only the bounded offline
-path: the grant must have no more than 900 seconds remaining at request entry.
-Because the signed token does not identify whether its grant was originally
-immediate or deferred, the final 15 minutes of a deferred grant can use that
-path on an unconfigured deployment. Any configured entry disables the fallback
-for every source. After any status answer, the capacity transaction checks the
+The list disables the offline path for every source: a grant from a source
+issuer no entry names is refused, even with less than 15 minutes left. Because
+the signed token does not identify whether its grant was originally immediate
+or deferred, a deployment that writes `unchecked-final-fifteen-minutes` lets
+the final 15 minutes of a deferred grant through without asking whether it was
+withdrawn. On either path, the capacity transaction checks the
 earlier of the verified access token deadline and the grant deadline again
 after lock waits and immediately before commit. That earlier deadline bounds
 the status-to-commit race; it does not make revocation atomic across products.

@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+from unittest.mock import patch as roster_patch
+
 import hashlib
 import importlib.util
 import json
@@ -710,10 +712,11 @@ class RegistryReleasePlanTest(unittest.TestCase):
             owner.artifact_inventory_errors("0.38.0", current["artifacts"]),
         )
 
-    def test_coordinator_artifacts_join_only_the_v0_41_manifest_inventory(self) -> None:
+    @roster_patch("release_roster.COORDINATOR_FIRST_RELEASE", (0, 42, 0))
+    def test_coordinator_artifacts_join_only_the_v0_42_manifest_inventory(self) -> None:
         owner = _load_registry_release()
         historical = manifest("0.40.0", "beta-fixture", "v0.40.0", "candidate")
-        current = manifest("0.41.0", "beta-fixture", "v0.41.0", "candidate")
+        current = manifest("0.42.0", "beta-fixture", "v0.42.0", "candidate")
         for name in ("coordinator", "coordinatorctl"):
             with self.subTest(name=name):
                 self.assertNotIn(name, historical["artifacts"])
@@ -724,7 +727,7 @@ class RegistryReleasePlanTest(unittest.TestCase):
         )
         self.assertEqual(
             [],
-            owner.artifact_inventory_errors("0.41.0", current["artifacts"]),
+            owner.artifact_inventory_errors("0.42.0", current["artifacts"]),
         )
 
     def setUp(self) -> None:
@@ -780,6 +783,7 @@ class RegistryReleasePlanTest(unittest.TestCase):
             result.stderr,
         )
 
+    @roster_patch("release_roster.COORDINATOR_FIRST_RELEASE", (0, 42, 0))
     def test_prepare_emits_stable_json_plan_without_mutating_repo(self) -> None:
         before = self.repo.snapshot()
         result = self.prepare()

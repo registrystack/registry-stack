@@ -9,7 +9,8 @@ use napi::{Error as NapiError, Result};
 use napi_derive::napi;
 use registry_coordinator_client::{
     BearerToken, CoordinatorClient as CoreClient, CoordinatorClientConfig as CoreConfig,
-    CoordinatorClientError, CoordinatorComplete, CoordinatorProtocolFailure, StartRunRequest,
+    CoordinatorClientError, CoordinatorComplete, CoordinatorProtocolFailure, RunListQuery,
+    RunListState, StartRunRequest,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -139,13 +140,24 @@ impl CoordinatorClient {
     }
 
     #[napi(
-        ts_args_type = "token: string, limit: number",
+        ts_args_type = "token: string, limit: number, cursor?: string | null, state?: import('./client').RunListState | null, attention?: boolean | null",
         ts_return_type = "Promise<import('./client').CoordinatorOutcome<import('./client').RunList>>"
     )]
-    pub async fn list(&self, token: String, limit: f64) -> Result<CoordinatorOutcome> {
+    pub async fn list(
+        &self,
+        token: String,
+        limit: f64,
+        cursor: Option<String>,
+        state: Option<String>,
+        attention: Option<bool>,
+    ) -> Result<CoordinatorOutcome> {
         let token = bearer(token)?;
         let limit = list_limit(limit)?;
-        outcome(self.inner.list(&token, limit).await)
+        let mut query = RunListQuery::new(limit);
+        query.cursor = cursor;
+        query.state = state.map(|state| list_state(&state)).transpose()?;
+        query.attention = attention;
+        outcome(self.inner.list_page(&token, &query).await)
     }
 
     #[napi(
@@ -340,6 +352,23 @@ fn list_limit(value: f64) -> Result<u32> {
             "invalid-request",
             "Coordinator client arguments are invalid",
         ))
+    }
+}
+
+fn list_state(value: &str) -> Result<RunListState> {
+    match value {
+        "running" => Ok(RunListState::Running),
+        "finished" => Ok(RunListState::Finished),
+        "failed" => Ok(RunListState::Failed),
+        "cancelled" => Ok(RunListState::Cancelled),
+        "cancelled-after-effect" => Ok(RunListState::CancelledAfterEffect),
+        "expired" => Ok(RunListState::Expired),
+        "attention" => Ok(RunListState::Attention),
+        "cancel-requested" => Ok(RunListState::CancelRequested),
+        _ => Err(binding_error(
+            "invalid-request",
+            "Coordinator client arguments are invalid",
+        )),
     }
 }
 

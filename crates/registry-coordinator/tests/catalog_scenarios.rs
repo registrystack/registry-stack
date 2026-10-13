@@ -243,15 +243,19 @@ fn reviewed_notice_example_settles_each_review_route_and_withdraws_at_timeout() 
             .find(|report| report.name == name)
             .unwrap_or_else(|| panic!("no case {name}"))
     };
-    let approved = report("approved-and-notice-sent");
+    let approved = report("approved-unchanged-and-notice-accepted");
     assert_eq!(
         approved.path,
         [
+            "read-for-review",
+            "verify-review-subject",
             "submit-review",
             "await-review",
             "decide",
+            "read-for-notice",
+            "verify-notice",
             "notify",
-            "notice-sent"
+            "notice-accepted"
         ]
     );
     assert_eq!(approved.state, "completed");
@@ -259,23 +263,32 @@ fn reviewed_notice_example_settles_each_review_route_and_withdraws_at_timeout() 
     let rejected = report("rejected-without-notice");
     assert_eq!(
         rejected.path,
-        ["submit-review", "await-review", "decide", "rejected"]
+        [
+            "read-for-review",
+            "verify-review-subject",
+            "submit-review",
+            "await-review",
+            "decide",
+            "review-rejected"
+        ]
     );
-    assert_eq!(rejected.outcome.as_deref(), Some("rejected"));
+    assert_eq!(rejected.outcome.as_deref(), Some("review-rejected"));
     assert!(!rejected.call_attempts.contains_key("notify"));
-    let changes = report("changes-requested-is-not-a-decision");
-    assert_eq!(changes.outcome.as_deref(), Some("not-decided"));
+    let changes = report("changes-requested-is-not-approval");
+    assert_eq!(changes.outcome.as_deref(), Some("review-not-approved"));
     assert_eq!(changes.output, Some(json!({"status": "changes-requested"})));
     // A wait that times out withdraws the request instead of failing the run.
     let withdrawn = report("no-decision-within-fourteen-days");
     assert_eq!(
         withdrawn.path,
         [
+            "read-for-review",
+            "verify-review-subject",
             "submit-review",
             "await-review",
-            "withdraw",
-            "confirm-withdrawal",
-            "withdrawn"
+            "withdraw-timeout",
+            "confirm-timeout-withdrawal",
+            "timeout-withdrawn"
         ]
     );
     assert_eq!(
@@ -286,14 +299,14 @@ fn reviewed_notice_example_settles_each_review_route_and_withdraws_at_timeout() 
     // A decision that lands between the last result check and the withdrawal
     // stays decided: Casework answers already-terminal and keeps the result,
     // and the run reports that decision without acting on it.
-    let raced = report("decided-just-before-withdrawal");
+    let raced = report("decided-just-before-timeout-withdrawal");
     assert_eq!(raced.outcome.as_deref(), Some("decided-late"));
     assert_eq!(
         raced.output,
         Some(json!({"status": "approved", "resultId": "00000000-0000-4000-8000-000000000011"}))
     );
     assert!(!raced.call_attempts.contains_key("notify"));
-    let refused = report("notice-refused-after-approval");
+    let refused = report("messaging-policy-refuses-approved-notice");
     assert_eq!(refused.state, "refused");
     assert_eq!(refused.outcome, None);
 }

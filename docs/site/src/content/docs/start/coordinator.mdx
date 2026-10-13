@@ -88,11 +88,11 @@ and no distributed rollback.
     crates/registry-coordinator/src/completion.rs, receive_review_completion;
     products/coordinator/DEPLOYMENT.md, Recover safely. */}
 
-The Coordinator is pre-1.0, so use the binaries and documentation of one release together. The
-[reviewed notice example](https://github.com/registrystack/registry-stack/tree/main/products/coordinator/examples/reviewed-notice)
-shows a whole flow: it submits a Casework review, waits up to fourteen days, sends a notice on
-approval, and withdraws the request on timeout. A tutorial is tracked in
-[issue #1997](https://github.com/registrystack/registry-stack/issues/1997).
+The Coordinator is pre-1.0, so use the binaries and documentation of one source version together.
+Start with [Review an application and send a notice](../../tutorials/review-an-application-and-send-a-notice/)
+to run BReg, Casework, Coordinator and Messaging as one development workflow. The example reads the
+recipient from the registry, waits for human review, checks that the reviewed record is still
+current, and sends one notice. It also demonstrates durable review withdrawal.
 
 {/* Evidence: products/coordinator/README.md;
     products/coordinator/examples/reviewed-notice/workflow.yaml. */}

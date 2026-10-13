@@ -1263,7 +1263,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_local_request_shorthand_keeps_numeric_identifiers_as_strings() {
+    fn local_request_shorthand_keeps_numeric_identifiers_as_strings() {
         let mut ready = selector_ready_state();
         ready.questions[0].subjects[0].selectors.truncate(1);
         let args = local_selector_args(vec!["code=00123"]);

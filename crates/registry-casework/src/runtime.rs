@@ -363,17 +363,6 @@ pub fn command() -> Command {
                 .required(true),
         )
         .subcommand_required(true)
-        .subcommand(
-            Command::new("migrate")
-                .hide(true)
-                .about("Removed; apply a package with caseworkctl plan and apply")
-                .arg(
-                    Arg::new("ignored")
-                        .num_args(0..)
-                        .trailing_var_arg(true)
-                        .allow_hyphen_values(true),
-                ),
-        )
         .subcommand(Command::new("serve").about("Run the Casework HTTP service"))
 }
 
@@ -391,39 +380,11 @@ pub fn operational_log_level(value: Option<&str>) -> Result<LevelFilter, Runtime
     }
 }
 
-/// The sentence a removed `casework` subcommand refuses with.
-pub const REMOVED_MIGRATE_MESSAGE: &str = "casework migrate was removed; database changes are applied with a package activation: run `caseworkctl plan --runtime-config FILE` then `caseworkctl apply --runtime-config FILE`";
-
-/// The refusal for a removed `casework` subcommand named in `args` (the
-/// arguments after the program name), found before the runtime
-/// configuration is read so it answers even without `--runtime-config`.
-#[must_use]
-pub fn removed_command_refusal<I, S>(args: I) -> Option<&'static str>
-where
-    I: IntoIterator<Item = S>,
-    S: AsRef<std::ffi::OsStr>,
-{
-    let mut args = args.into_iter();
-    while let Some(arg) = args.next() {
-        let arg = arg.as_ref();
-        if arg == "--runtime-config" {
-            args.next();
-            continue;
-        }
-        if arg.to_string_lossy().starts_with('-') {
-            continue;
-        }
-        return (arg == "migrate").then_some(REMOVED_MIGRATE_MESSAGE);
-    }
-    None
-}
-
 pub async fn run(matches: &clap::ArgMatches) -> Result<(), RuntimeError> {
     let path = matches
         .get_one::<String>("runtime-config")
         .ok_or(RuntimeError::Arguments)?;
     match matches.subcommand_name() {
-        Some("migrate") => Err(RuntimeError::RemovedCommand(REMOVED_MIGRATE_MESSAGE)),
         Some("serve") => serve_from_path(path).await,
         _ => Err(RuntimeError::Arguments),
     }
@@ -1413,37 +1374,13 @@ mod tests {
     }
 
     #[test]
-    fn the_removed_migrate_command_names_plan_then_apply() {
-        for args in [
-            &["migrate"][..],
-            &["--runtime-config", "/etc/casework/runtime.yaml", "migrate"],
-            &[
-                "--runtime-config=/etc/casework/runtime.yaml",
-                "migrate",
-                "--extra",
-            ],
-        ] {
-            let refusal = removed_command_refusal(args).expect("migrate is refused");
-            assert!(refusal.contains("caseworkctl plan --runtime-config FILE"));
-            assert!(refusal.contains("caseworkctl apply --runtime-config FILE"));
-            assert!(
-                refusal.find("caseworkctl plan") < refusal.find("caseworkctl apply"),
-                "plan is named before apply"
-            );
-        }
-        assert_eq!(
-            removed_command_refusal(["--runtime-config", "migrate", "serve"]),
-            None
-        );
-        assert_eq!(removed_command_refusal(["serve"]), None);
-        assert_eq!(removed_command_refusal(Vec::<&str>::new()), None);
-    }
-
-    #[test]
-    fn the_removed_migrate_command_is_hidden_from_help() {
-        let help = command().render_help().to_string();
-        assert!(help.contains("serve"));
-        assert!(!help.contains("migrate"), "{help}");
+    fn serve_is_the_only_subcommand() {
+        let command = command();
+        let names: Vec<&str> = command
+            .get_subcommands()
+            .map(clap::Command::get_name)
+            .collect();
+        assert_eq!(names, ["serve"]);
     }
 
     #[test]
@@ -1490,8 +1427,6 @@ pub enum RuntimeError {
     SecretConfiguration,
     #[error("the Casework source binding for source {0} is invalid")]
     SourceConfiguration(String),
-    #[error("{0}")]
-    RemovedCommand(&'static str),
     #[error(
         "no Casework package has been applied to this database; run `caseworkctl plan --runtime-config FILE` then `caseworkctl apply --runtime-config FILE`"
     )]

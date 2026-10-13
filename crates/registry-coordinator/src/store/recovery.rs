@@ -216,14 +216,40 @@ impl Store {
         actor: &Actor,
         allowed_flows: &[String],
     ) -> Result<Vec<RunStatus>> {
+        Ok(self
+            .list_owned_page(limit, None, None, None, actor, allowed_flows)
+            .await?
+            .runs)
+    }
+    pub async fn list_owned_page(
+        &self,
+        limit: u32,
+        cursor: Option<&str>,
+        state: Option<RunListState>,
+        attention: Option<bool>,
+        actor: &Actor,
+        allowed_flows: &[String],
+    ) -> Result<RunListPage> {
         self.audited("list",actor,None, None,async {
             if !(1..=100).contains(&limit){return Err(refused("list-limit-invalid","choose a run list limit between 1 and 100"));}
-            if allowed_flows.len()>64 || allowed_flows.iter().any(|flow|flow.is_empty() || flow.len()>128){return Err(refused("list-flow-invalid","choose at most 64 bounded nonempty workflow identities"));}
+            let flows=Self::run_list_flows(allowed_flows)?;
+            let anchor=self.run_list_anchor(cursor,actor,&flows,state,attention)?;
+            let after_admitted_at=anchor.as_ref().map(|(admitted_at,_)|admitted_at.to_owned());
+            let after_run_id=anchor.map(|(_,run_id)|run_id);
+            let state_value=state.map(RunListState::as_str);
             let mut client=self.client().await.map_err(unavailable)?;
             let tx=client.transaction().await.map_err(unavailable)?;
             self.verify_transaction(&tx).await.map_err(unavailable)?;
-            let rows=tx.query(&format!("{} WHERE (r.owner_hash=$1 OR $2) AND r.workflow_id=ANY($3) ORDER BY r.admitted_at DESC,r.run_id DESC LIMIT $4",self.status_select()),&[&self.owner(actor)?,&actor.operator,&allowed_flows,&i64::from(limit)]).await.map_err(unavailable)?;
-            rows.iter().map(|r|self.status_from_row(r)).collect()
+            let rows=tx.query(&format!("{} WHERE (r.owner_hash=$1 OR $2) AND r.workflow_id=ANY($3) AND ($4::text IS NULL OR {}=$4) AND ($5::boolean IS NULL OR ({} IN ('attention','failed'))=$5) AND ($6::timestamptz IS NULL OR (r.admitted_at,r.run_id)<($6,$7)) ORDER BY r.admitted_at DESC,r.run_id DESC LIMIT $8",self.status_select(),Self::status_state(),Self::status_state()),&[&self.owner(actor)?,&actor.operator,&flows,&state_value,&attention,&after_admitted_at,&after_run_id,&(i64::from(limit)+1)]).await.map_err(unavailable)?;
+            let mut runs=rows.iter().map(|r|self.status_from_row(r)).collect::<Result<Vec<_>>>()?;
+            let more=runs.len()>limit as usize;
+            runs.truncate(limit as usize);
+            let next_cursor=if more {
+                Some(self.run_list_cursor(runs.last().expect("a full nonempty page"),actor,&flows,state,attention)?)
+            } else {
+                None
+            };
+            Ok(RunListPage{runs,next_cursor})
         }).await
     }
     pub async fn inspect_owned(
@@ -283,8 +309,27 @@ impl Store {
             self.authorize_run(&tx,run,actor).await?;
             // Match Dispatch's job-then-run lock order. The product stop flag
             // fences every subsequent I/O check and next-step enqueue.
-            let row=tx.query_one(&format!("SELECT j.step,j.state,j.uncertain,r.state,r.restore_review_required FROM {}.jobs j JOIN {}.runs r ON r.run_id=j.run_id AND r.step=j.step WHERE j.run_id=$1 FOR UPDATE OF j,r",self.namespace,self.namespace),&[&run]).await.map_err(unavailable)?;
+            let row=tx.query_one(&format!("SELECT j.step,j.state,j.uncertain,r.state,r.restore_review_required,r.snapshot,r.authored_cancel_requested,EXISTS(SELECT 1 FROM {0}.review_waits w WHERE w.run_id=j.run_id AND w.step=j.step) FROM {0}.jobs j JOIN {0}.runs r ON r.run_id=j.run_id AND r.step=j.step WHERE j.run_id=$1 FOR UPDATE OF j,r",self.namespace),&[&run]).await.map_err(unavailable)?;
             let step:String=row.get(0);let state:String=row.get(1);
+            if row.get::<_,bool>(6) {
+                tx.commit().await.map_err(unavailable)?;
+                return self.status(run).await;
+            }
+            let snapshot:Option<Value>=row.get(5);
+            let authored=if row.get::<_,bool>(7) {
+                let sealed=snapshot.as_ref().ok_or_else(||unavailable("active wait has no snapshot"))?;
+                let snapshot=self.open_value::<String>(run,"snapshot","",sealed).map_err(unavailable)?;
+                Some(self.definition(&snapshot).map_err(unavailable)?)
+            } else { None };
+            if let Some(definition)=authored.as_ref().filter(|definition|matches!(definition.workflow.steps.get(&step),Some(Step::WaitFor{on_cancel:Some(_),..}))) {
+                if state=="leased" {
+                    tx.execute(&format!("UPDATE {}.runs SET authored_cancel_requested=true,authored_cancel_pending_step=$2 WHERE run_id=$1 AND step=$2",self.namespace),&[&run,&step]).await.map_err(unavailable)?;
+                } else {
+                    self.route_authored_cancel(&tx,run,&step,definition,true).await.map_err(unavailable)?;
+                }
+                tx.commit().await.map_err(unavailable)?;
+                return self.status(run).await;
+            }
             let settled_failure=row.get::<_,String>(3)=="failed" && state=="delivered" && !row.get::<_,bool>(2) && !row.get::<_,bool>(4);
             let mut cancelled=false;
             if !settled_failure && !matches!(row.get::<_,String>(3).as_str(),"finished"|"cancelled"|"cancelled-after-effect") {

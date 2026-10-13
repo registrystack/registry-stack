@@ -9,9 +9,11 @@ use crate::{
     CoordinatorError, Result,
 };
 use async_trait::async_trait;
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::{DateTime, Utc};
 use deadpool_postgres::{Hook, HookError, Manager, ManagerConfig, Pool, RecyclingMethod, Runtime};
 use registry_platform_audit::{AuditEntry, AuditProfile, AuditWriter};
+use registry_platform_crypto::domain_separated_sha256;
 use registry_platform_dispatch::postgres::{
     enqueue, AttemptAudit, ClaimRefusal, Decoded, DispatchConfig, DispatchConnection,
     DispatchEvent, DispatchSql, DispatchStore, Dispatcher, Disposition, ExpirySql, JobKey,
@@ -44,7 +46,7 @@ enum InspectionBinding<'a> {
 /// The protected state schema version. It is written once, when apply creates
 /// the namespace, to `control.schema_version` and to the activation migration
 /// ledger, and every state transaction fences on it.
-pub(crate) const SCHEMA_VERSION: i32 = 1;
+pub(crate) const SCHEMA_VERSION: i32 = 2;
 
 /// Identifies a namespace whose tables this runtime created and owns.
 const NAMESPACE_MARKER: &str = "registry-coordinator protected-state";
@@ -65,7 +67,7 @@ const POOL_TIMEOUT: Duration = Duration::from_secs(5);
 
 const JOIN: &str = "JOIN {schema}.runs AS run ON run.run_id = state.run_id JOIN {schema}.control AS control ON control.id";
 const SELECT: SelectSql = SelectSql {
-    columns: "run.snapshot, run.input, run.outputs, run.deadline_at, run.binding_digest, state.command, state.uncertain, state.receipt_expired, run.deadline_at > transaction_timestamp(), state.pure, run.start_identity, run.cancel_requested, control.restore_hold, run.owner_hash, run.restore_review_required",
+    columns: "run.snapshot, run.input, run.outputs, run.deadline_at, run.binding_digest, state.command, state.uncertain, state.receipt_expired, run.deadline_at > transaction_timestamp(), state.pure, run.start_identity, run.cancel_requested, control.restore_hold, run.owner_hash, run.restore_review_required, run.authored_cancel_requested, run.authored_cancel_pending_step",
     joins: JOIN, predicate: "true",
 };
 
@@ -146,6 +148,62 @@ pub struct RunStatus {
     pub uncertain: bool,
     pub restore_review_required: bool,
     pub cancel_requested: bool,
+    /// An authorized cancellation took a wait's authored `onCancel` path.
+    /// This does not stop dispatch of that cleanup path.
+    pub authored_cancel_requested: bool,
+}
+
+/// The closed progress states accepted by the run-list filter.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RunListState {
+    Running,
+    Finished,
+    Failed,
+    Cancelled,
+    CancelledAfterEffect,
+    Expired,
+    Attention,
+    CancelRequested,
+}
+
+impl RunListState {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Running => "running",
+            Self::Finished => "finished",
+            Self::Failed => "failed",
+            Self::Cancelled => "cancelled",
+            Self::CancelledAfterEffect => "cancelled-after-effect",
+            Self::Expired => "expired",
+            Self::Attention => "attention",
+            Self::CancelRequested => "cancel-requested",
+        }
+    }
+}
+
+/// One stable page of caller-visible runs.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunListPage {
+    pub runs: Vec<RunStatus>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
+}
+
+const MAX_RUN_LIST_CURSOR_BYTES: usize = 4096;
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RunListCursor {
+    version: u8,
+    admitted_at: DateTime<Utc>,
+    run_id: Uuid,
+    owner: String,
+    operator: bool,
+    flow_binding: String,
+    state: Option<RunListState>,
+    attention: Option<bool>,
 }
 
 /// Bounded durable step state from Dispatch, without prepared request contents.
@@ -219,6 +277,8 @@ pub struct Job {
     pub restore_hold: bool,
     pub owner_hash: String,
     pub restore_review_required: bool,
+    pub authored_cancel_requested: bool,
+    pub authored_cancel_pending_step: Option<String>,
 }
 
 pub(crate) struct Payload {
@@ -638,7 +698,9 @@ impl Store {
             snapshot jsonb, input jsonb, outputs jsonb,
             binding_digest text NOT NULL, step text NOT NULL, state text NOT NULL DEFAULT 'running',
             outcome text, terminal_output jsonb, failure_code text, failure_path text, admitted_at timestamptz NOT NULL, deadline_at timestamptz NOT NULL,
-            cancel_requested boolean NOT NULL DEFAULT false, restore_review_required boolean NOT NULL DEFAULT false, completed_at timestamptz, payload_erased_at timestamptz);
+            cancel_requested boolean NOT NULL DEFAULT false, authored_cancel_requested boolean NOT NULL DEFAULT false,
+            authored_cancel_pending_step text CHECK(authored_cancel_pending_step IS NULL OR authored_cancel_requested),
+            restore_review_required boolean NOT NULL DEFAULT false, completed_at timestamptz, payload_erased_at timestamptz);
             CREATE TABLE {0}.admission_lock (id boolean PRIMARY KEY CHECK(id));
             INSERT INTO {0}.admission_lock VALUES(true)", self.namespace, SCHEMA_VERSION)).await.map_err(unavailable)?;
         tx.execute(&format!("INSERT INTO {}.control(id,database_id,schema_version,admission_key_commitment,state_key_commitments) VALUES(true,$1,$2,$3,$4)",self.namespace), &[&self.security.database_id,&SCHEMA_VERSION,&self.admission_key_marker(),&self.security.keys.custody_markers(&self.security.database_id)]).await.map_err(unavailable)?;
@@ -978,8 +1040,15 @@ impl Store {
         Ok(())
     }
 
+    fn status_state() -> &'static str {
+        "CASE WHEN r.restore_review_required THEN 'attention' WHEN r.cancel_requested THEN r.state WHEN r.state='finished' THEN 'finished' WHEN j.state IN ('pending','leased') THEN 'running' WHEN j.state='unknown' THEN 'attention' WHEN j.state='expired' THEN 'expired' WHEN j.state='dead-lettered' THEN 'failed' ELSE r.state END"
+    }
+
     fn status_select(&self) -> String {
-        format!("SELECT r.workflow_id,r.workflow_version,r.definition_digest,r.binding_digest,r.step,CASE WHEN r.restore_review_required THEN 'attention' WHEN r.cancel_requested THEN r.state WHEN r.state='finished' THEN 'finished' WHEN j.state IN ('pending','leased') THEN 'running' WHEN j.state='unknown' THEN 'attention' WHEN j.state='expired' THEN 'expired' WHEN j.state='dead-lettered' THEN 'failed' ELSE r.state END,r.outcome,r.failure_code,r.admitted_at,r.deadline_at,j.next_attempt_at,j.uncertain,r.terminal_output,r.run_id,r.restore_review_required,r.cancel_requested,r.failure_path FROM {}.runs r JOIN {}.jobs j ON j.run_id=r.run_id AND j.step=r.step", self.namespace, self.namespace)
+        format!(
+            "SELECT r.workflow_id,r.workflow_version,r.definition_digest,r.binding_digest,r.step,{},r.outcome,r.failure_code,r.admitted_at,r.deadline_at,j.next_attempt_at,j.uncertain,r.terminal_output,r.run_id,r.restore_review_required,r.cancel_requested,r.failure_path,r.authored_cancel_requested FROM {}.runs r JOIN {}.jobs j ON j.run_id=r.run_id AND j.step=r.step",
+            Self::status_state(), self.namespace, self.namespace
+        )
     }
 
     pub async fn status(&self, run: Uuid) -> Result<RunStatus> {
@@ -1015,6 +1084,96 @@ impl Store {
             .await
             .map_err(unavailable)?;
         rows.iter().map(|row| self.status_from_row(row)).collect()
+    }
+
+    fn run_list_flows(allowed_flows: &[String]) -> Result<Vec<String>> {
+        if allowed_flows.len() > 64
+            || allowed_flows
+                .iter()
+                .any(|flow| flow.is_empty() || flow.len() > 128)
+        {
+            return Err(refused(
+                "list-flow-invalid",
+                "choose at most 64 bounded nonempty workflow identities",
+            ));
+        }
+        let mut flows = allowed_flows.to_vec();
+        flows.sort_unstable();
+        flows.dedup();
+        Ok(flows)
+    }
+
+    fn run_list_flow_binding(flows: &[String]) -> Result<String> {
+        let value = serde_json::to_value(flows)
+            .map_err(|_| unavailable("cannot bind the run-list flow policy"))?;
+        let canonical = registry_platform_canonical_json::canonicalize_json(&value)
+            .map_err(|_| unavailable("cannot bind the run-list flow policy"))?;
+        Ok(hex::encode(domain_separated_sha256(
+            b"registry-coordinator/run-list-flows/v1\0",
+            &canonical,
+        )))
+    }
+
+    fn run_list_anchor(
+        &self,
+        cursor: Option<&str>,
+        actor: &Actor,
+        flows: &[String],
+        state: Option<RunListState>,
+        attention: Option<bool>,
+    ) -> Result<Option<(DateTime<Utc>, Uuid)>> {
+        let Some(cursor) = cursor else {
+            return Ok(None);
+        };
+        let invalid = || {
+            refused(
+                "request.invalid",
+                "supply the cursor returned for this exact run list",
+            )
+        };
+        if cursor.is_empty() || cursor.len() > MAX_RUN_LIST_CURSOR_BYTES {
+            return Err(invalid());
+        }
+        let bytes = URL_SAFE_NO_PAD.decode(cursor).map_err(|_| invalid())?;
+        let value =
+            registry_platform_canonical_json::parse_json_strict(&bytes).map_err(|_| invalid())?;
+        let decoded: RunListCursor = serde_json::from_value(value).map_err(|_| invalid())?;
+        if decoded.version != 1
+            || decoded.owner != self.owner(actor)?
+            || decoded.operator != actor.operator
+            || decoded.flow_binding != Self::run_list_flow_binding(flows)?
+            || decoded.state != state
+            || decoded.attention != attention
+        {
+            return Err(invalid());
+        }
+        Ok(Some((decoded.admitted_at, decoded.run_id)))
+    }
+
+    fn run_list_cursor(
+        &self,
+        status: &RunStatus,
+        actor: &Actor,
+        flows: &[String],
+        state: Option<RunListState>,
+        attention: Option<bool>,
+    ) -> Result<String> {
+        let document = serde_json::to_vec(&RunListCursor {
+            version: 1,
+            admitted_at: status.admitted_at.to_owned(),
+            run_id: status.run_id,
+            owner: self.owner(actor)?,
+            operator: actor.operator,
+            flow_binding: Self::run_list_flow_binding(flows)?,
+            state,
+            attention,
+        })
+        .map_err(|_| unavailable("cannot encode the run-list cursor"))?;
+        let cursor = URL_SAFE_NO_PAD.encode(document);
+        if cursor.len() > MAX_RUN_LIST_CURSOR_BYTES {
+            return Err(unavailable("cannot encode the run-list cursor"));
+        }
+        Ok(cursor)
     }
 
     /// A consistent, read-only view of progress and whether same-command recovery
@@ -1441,6 +1600,69 @@ impl Store {
         Ok(state)
     }
 
+    /// Take a waiting step's authored cancellation edge while holding its
+    /// job and run locks. The run's separate marker keeps later cancellation
+    /// requests from setting the ordinary stop flag while cleanup dispatches.
+    async fn route_authored_cancel(
+        &self,
+        tx: &Transaction<'_>,
+        run: Uuid,
+        step: &str,
+        definition: &Definition,
+        settle_pending: bool,
+    ) -> std::result::Result<bool, DispatchError> {
+        let Some(Step::WaitFor {
+            on_cancel: Some(next),
+            ..
+        }) = definition.workflow.steps.get(step)
+        else {
+            return Ok(false);
+        };
+        let changed = tx
+            .execute(
+                &format!(
+                    "UPDATE {}.runs SET authored_cancel_requested=true,authored_cancel_pending_step=NULL,step=$3,state='running',outcome=NULL,terminal_output=NULL,failure_code=NULL,failure_path=NULL,completed_at=NULL WHERE run_id=$1 AND step=$2",
+                    self.namespace
+                ),
+                &[&run, &step, next],
+            )
+            .await?;
+        if changed != 1 {
+            return Ok(false);
+        }
+        if settle_pending {
+            tx.execute(
+                &format!(
+                    "UPDATE {}.jobs SET state='cancelled',next_attempt_at=NULL,updated_at=transaction_timestamp() WHERE run_id=$1 AND step=$2 AND state='pending'",
+                    self.namespace
+                ),
+                &[&run, &step],
+            )
+            .await?;
+        }
+        enqueue(
+            tx,
+            &self.table,
+            &JobKey::new(run, next.clone()).map_err(|_| DispatchError::Unavailable)?,
+            None,
+        )
+        .await?;
+        let pure = matches!(
+            definition.workflow.steps.get(next),
+            Some(Step::Choose { .. } | Step::Finish { .. })
+        );
+        tx.execute(
+            &format!(
+                "UPDATE {}.jobs SET pure=$3 WHERE run_id=$1 AND step=$2",
+                self.namespace
+            ),
+            &[&run, next, &pure],
+        )
+        .await?;
+        self.end_waits(tx, run, step, true).await?;
+        Ok(true)
+    }
+
     /// End the review waits a run no longer has: the named step's when
     /// `step_ended`, and every wait of a run that is settled or past its
     /// deadline. A failed run before its deadline keeps a wait an operator
@@ -1587,6 +1809,7 @@ impl Store {
             uncertain: row.get(11),
             restore_review_required: row.get(14),
             cancel_requested: row.get(15),
+            authored_cancel_requested: row.get(17),
             output: row
                 .get::<_, Option<Value>>(12)
                 .as_ref()
@@ -1614,6 +1837,8 @@ fn decode(row: &Row, first: usize) -> std::result::Result<Job, DispatchError> {
         restore_hold: row.try_get(first + 12)?,
         owner_hash: row.try_get(first + 13)?,
         restore_review_required: row.try_get(first + 14)?,
+        authored_cancel_requested: row.try_get(first + 15)?,
+        authored_cancel_pending_step: row.try_get(first + 16)?,
     })
 }
 /// The least time between two reads of one review wait, whatever wakes it.
@@ -1875,16 +2100,31 @@ impl DispatchStore for Store {
             Disposition::Expired => "expired",
             _ => "failed",
         };
-        let cancelled: bool = tx
+        let cancellation = tx
             .query_one(
                 &format!(
-                    "SELECT cancel_requested FROM {}.runs WHERE run_id=$1 FOR UPDATE",
+                    "SELECT cancel_requested,authored_cancel_pending_step FROM {}.runs WHERE run_id=$1 FOR UPDATE",
                     self.namespace
                 ),
                 &[&id],
             )
-            .await?
-            .get(0);
+            .await?;
+        let cancelled: bool = cancellation.get(0);
+        let authored_cancel_step: Option<String> = cancellation.get(1);
+        if authored_cancel_step.as_deref() == Some(step) {
+            let payload = self
+                .payload(id, step, &job.job)
+                .map_err(|_| DispatchError::Unavailable)?;
+            let definition = self
+                .definition(&payload.snapshot)
+                .map_err(|_| DispatchError::Unavailable)?;
+            if self
+                .route_authored_cancel(tx, id, step, &definition, false)
+                .await?
+            {
+                return Ok(());
+            }
+        }
         // A read that leaves the wait open schedules the next one: no sooner
         // than thirty seconds, and thirty seconds out when a completion event
         // arrived while this read was in flight, but never later than the
@@ -1988,6 +2228,20 @@ impl DispatchStore for Store {
         tx: &Transaction<'_>,
         audit: &TransitionAudit<Job>,
     ) -> std::result::Result<(), DispatchError> {
+        if audit.record.authored_cancel_pending_step.as_deref() == Some(audit.key.part()) {
+            let snapshot: String = self
+                .open_value(audit.key.id(), "snapshot", "", &audit.record.snapshot)
+                .map_err(|_| DispatchError::Unavailable)?;
+            let definition = self
+                .definition(&snapshot)
+                .map_err(|_| DispatchError::Unavailable)?;
+            if self
+                .route_authored_cancel(tx, audit.key.id(), audit.key.part(), &definition, false)
+                .await?
+            {
+                return Ok(());
+            }
+        }
         let uncertain = audit.record.uncertain;
         let state = if matches!(audit.transition, Transition::Cancelled)
             || audit.record.cancel_requested && !uncertain
@@ -2184,6 +2438,8 @@ mod tests {
             restore_hold: false,
             owner_hash: String::new(),
             restore_review_required: false,
+            authored_cancel_requested: false,
+            authored_cancel_pending_step: None,
         }
     }
 

@@ -141,13 +141,25 @@ Temporary source failure refuses the current request without permanent
 invalidation. A mutable source revision alone does not change frozen proposal
 identity.
 
+The approving officer's own source access is checked once, at approval, with
+that officer's credential. Later observations read the source with the
+configured service reader: they recheck the officer's Casework eligibility,
+the proposal, and the disclosed facts, but not whether the source still lets
+that officer read the record. A withdrawal of that source access alone leaves
+the grant active until its deadline: at most 900 seconds for an immediate
+grant, and up to the template's `lifetimeSeconds`, at most seven days, for a
+deferred one. When an officer loses source access, also revoke their live
+grants or remove their Casework eligibility, which ends each grant at its next
+observation, and keep deferred lifetimes no longer than the work needs.
+
 Offline reads may continue until the earlier access-token or grant deadline.
 BReg checks fresh status before new writes, later approval, and application.
 Scheduling deployments using deferred work configure `taskGrantStatus` and
 check fresh exact status before every capacity command and receipt replay.
-With no status registry, Scheduling permits only authorization with at most
-900 seconds remaining; the final fifteen minutes of a deferred grant can also
-use this offline path, with that bounded stale-authority window.
+A Scheduling deployment that instead writes
+`taskGrantStatus: unchecked-final-fifteen-minutes` permits only authorization
+with at most 900 seconds remaining; the final fifteen minutes of a deferred
+grant can also use this offline path, with that bounded stale-authority window.
 A configured registry never falls back when status is unavailable or inactive.
 There is no distributed transaction between a status observation and a resource
 commit. Scheduling also rechecks the earlier execution-token and grant expiry

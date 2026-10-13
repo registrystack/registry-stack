@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+## 0.41.0 - 2026-10-13
+
+- BREAKING: the published `registry-stack-client` Python package, which carries
+  the Evidence client, requires Python 3.11 or later: its `Requires-Python` is
+  `>=3.11` (was `>=3.10`), and its wheels are built against the Python 3.11
+  stable ABI and named `cp311-abi3` (was `cp310-abi3`). Python 3.10 is no
+  longer supported. Migration: run Python 3.11 or later. The
+  `registry_evidence_client` wheels of an Evidence development build carry the
+  same requirement and name, and `editors/README.md` names Python 3.11 or newer
+  for `editors/configure.py`.
+
+- BREAKING: the published `@registrystack/client` Node.js package, which
+  carries the Evidence client, requires Node.js 24.11.0 or later: its
+  `engines.node` is `>=24.11.0` (was `>=22.12.0`). Node.js 22 is no longer
+  supported. Migration: run Node.js 24.11.0 or later.
+  `editors/install.sh vscode` likewise needs Node.js 24 or later to package
+  the VS Code extension.
+- BREAKING: `evidencectl` drops two spellings it had stopped acting on. Each
+  is now refused as any unknown command or argument is, as the usage error
+  `evidencectl.usage` (exit status 2), before a project is read or written.
+  - `evidencectl build` is an unknown command, where it was refused as
+    `evidence.build.retired` (exit status 1). Run `evidencectl package` with
+    the project directory as its positional argument and the same `--target`
+    and `--output`.
+  - `evidencectl init` and `evidencectl new` no longer accept
+    `--generate-keys`, which was accepted beside `--openapi` and did nothing:
+    a local project always generates its disposable keys. Drop the flag.
+
 ## v0.40.0 - 2026-10-11
 
 - BREAKING: `evidence-oid4vci check`, `inspect`, and `serve` take

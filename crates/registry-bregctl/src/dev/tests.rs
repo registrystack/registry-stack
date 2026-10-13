@@ -46,6 +46,86 @@ fn rehearsal_token_provider_omits_empty_scopes_and_preserves_explicit_scopes() {
     );
 }
 
+#[test]
+fn dev_token_requests_each_clients_registered_resource_or_the_default() {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let requests = thread::spawn(move || {
+        (0..2)
+            .map(|_| {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+                let mut request = Vec::new();
+                let header_end = loop {
+                    let mut chunk = [0; 4096];
+                    let read = stream.read(&mut chunk).unwrap();
+                    assert!(read > 0, "token request ended before its headers");
+                    request.extend_from_slice(&chunk[..read]);
+                    if let Some(index) = request.windows(4).position(|part| part == b"\r\n\r\n") {
+                        break index + 4;
+                    }
+                };
+                let headers = String::from_utf8(request[..header_end].to_vec()).unwrap();
+                let length = headers
+                    .lines()
+                    .find_map(|line| {
+                        line.to_ascii_lowercase()
+                            .strip_prefix("content-length:")
+                            .map(str::trim)
+                            .map(str::parse::<usize>)
+                    })
+                    .unwrap()
+                    .unwrap();
+                while request.len() < header_end + length {
+                    let mut chunk = [0; 4096];
+                    let read = stream.read(&mut chunk).unwrap();
+                    assert!(read > 0, "token request ended before its body");
+                    request.extend_from_slice(&chunk[..read]);
+                }
+                let fields = url::form_urlencoded::parse(&request[header_end..header_end + length])
+                    .into_owned()
+                    .collect::<BTreeMap<_, _>>();
+                let body = br#"{"access_token":"e30.e30.signature","token_type":"Bearer","expires_in":300}"#;
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                )
+                .unwrap();
+                stream.write_all(body).unwrap();
+                fields
+            })
+            .collect::<Vec<_>>()
+    });
+    let (_temp, mut state, mut clients, files) = fixture();
+    state.issuer_port = port;
+    let resource = "urn:example:messaging";
+    clients
+        .clients
+        .iter_mut()
+        .find(|client| client.id == "source")
+        .unwrap()
+        .access_profiles
+        .clear();
+    clients.issuer.resources.push(config::IssuerResource {
+        audience: resource.into(),
+        scopes: vec!["registry:evidence:lookup".into()],
+    });
+    clients
+        .issuer
+        .client_resources
+        .insert("source".into(), resource.into());
+    initialize(&state.root(), &state, &clients, &files).unwrap();
+
+    token_with_scopes(&state, "source", vec!["registry:evidence:lookup".into()]).unwrap();
+    token_with_scopes(&state, "operator", vec!["registry:generic:operate".into()]).unwrap();
+    let requests = requests.join().unwrap();
+    assert_eq!(requests[0]["resource"], resource);
+    assert_eq!(requests[0]["scope"], "registry:evidence:lookup");
+    assert_eq!(requests[1]["resource"], state.audience());
+    assert_eq!(requests[1]["scope"], "registry:generic:operate");
+}
+
 pub(super) fn fixture() -> (tempfile::TempDir, State, Clients, BTreeMap<String, Vec<u8>>) {
     let temporary = tempfile::tempdir().expect("temporary");
     let project = fs::canonicalize(temporary.path()).expect("canonical");
@@ -178,6 +258,118 @@ fn initialization_keeps_distinct_keys_and_private_state_without_service_dependen
     .unwrap();
     assert_eq!(runtime["identity"]["environment"], "local");
     assert_eq!(runtime["database"]["roles"]["runtime"], RUNTIME_ROLE);
+    assert_eq!(
+        runtime["authentication"]["authorityClaims"]["principal"],
+        "registry_principal"
+    );
+    assert_eq!(
+        runtime["authentication"]["authorityClaims"]["purpose"],
+        "registry_purpose"
+    );
+}
+
+#[test]
+fn generated_runtime_infers_sub_as_the_common_principal_claim() {
+    let (_temp, state, clients, mut files) = fixture();
+    let registry = String::from_utf8(files.remove("registry.yaml").unwrap()).unwrap();
+    let registry = registry.replace("principalClaim: registry_principal", "principalClaim: sub");
+    assert!(!registry.contains("principalClaim: registry_principal"));
+    files.insert("registry.yaml".into(), registry.into_bytes());
+
+    initialize(&state.root(), &state, &clients, &files).expect("sub-principal initialization");
+    let runtime: Value = serde_norway::from_slice(
+        &private::read(&state.root().join("runtime-test.yaml"), MAX_BYTES).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        runtime["authentication"]["authorityClaims"]["principal"],
+        "sub"
+    );
+}
+
+#[test]
+fn access_free_runtime_preserves_the_legacy_registry_principal() {
+    let (_temp, state, clients, mut files) = fixture();
+    let mut registry: Value =
+        serde_norway::from_slice(files.get("registry.yaml").unwrap()).unwrap();
+    let profiles = registry["accessProfiles"].as_array_mut().unwrap();
+    assert!(!profiles.is_empty());
+    profiles.clear();
+    registry
+        .as_object_mut()
+        .unwrap()
+        .remove("manifestProjection");
+    files.insert(
+        "registry.yaml".into(),
+        serde_norway::to_string(&registry).unwrap().into_bytes(),
+    );
+
+    initialize(&state.root(), &state, &clients, &files)
+        .expect("access-free registry initialization");
+    let runtime: Value = serde_norway::from_slice(
+        &private::read(&state.root().join("runtime-test.yaml"), MAX_BYTES).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        runtime["authentication"]["authorityClaims"]["principal"],
+        "registry_principal"
+    );
+    assert!(runtime["authentication"]["authorityClaims"]
+        .get("purpose")
+        .is_none());
+}
+
+#[test]
+fn generated_runtime_refuses_principal_collisions_before_dev_state_is_published() {
+    for principal_claim in ["scope", "registry_purpose"] {
+        let (_temp, state, clients, mut files) = fixture();
+        let registry = String::from_utf8(files.remove("registry.yaml").unwrap()).unwrap();
+        let registry = registry.replace(
+            "principalClaim: registry_principal",
+            &format!("principalClaim: {principal_claim}"),
+        );
+        assert!(!registry.contains("principalClaim: registry_principal"));
+        files.insert("registry.yaml".into(), registry.into_bytes());
+
+        let error = initialize(&state.root(), &state, &clients, &files)
+            .expect_err("a principal claim cannot overlap another authentication claim role");
+        assert!(
+            error.to_string().contains("runtime authentication"),
+            "unexpected refusal for {principal_claim}: {error:#}"
+        );
+        assert!(
+            !state.root().exists(),
+            "a refused authentication preflight must not publish retained dev state"
+        );
+    }
+}
+
+#[test]
+fn mixed_principal_claims_are_refused_before_dev_state_is_published() {
+    let (_temp, state, clients, mut files) = fixture();
+    let registry = String::from_utf8(files.remove("registry.yaml").unwrap()).unwrap();
+    let registry = registry.replacen(
+        "principalClaim: registry_principal",
+        "principalClaim: sub",
+        1,
+    );
+    assert!(registry.contains("principalClaim: sub"));
+    assert!(registry.contains("principalClaim: registry_principal"));
+    files.insert("registry.yaml".into(), registry.into_bytes());
+
+    let error = initialize(&state.root(), &state, &clients, &files)
+        .expect_err("mixed principal claims must fail before startup");
+    let message = error.to_string();
+    assert!(
+        message.contains("requires one common principal claim")
+            && message.contains("registry_principal")
+            && message.contains("sub"),
+        "unexpected refusal: {message}"
+    );
+    assert!(
+        !state.root().exists(),
+        "a refused preflight must not publish retained dev state"
+    );
 }
 
 #[test]
@@ -245,37 +437,6 @@ fn local_principal_compiled(source: &Value) -> registry_breg::CompiledRegistry {
         registry_breg::compiler::CompileProfile::Production,
     )
     .unwrap()
-}
-
-#[test]
-fn local_principal_mapping_uses_the_unique_compiled_claim_and_refuses_mixed_claims() {
-    for claim in ["registry_principal", "sub", "institution_principal"] {
-        assert_eq!(
-            config::local_principal_claim(&local_principal_compiled(&local_principal_source(
-                claim
-            )))
-            .unwrap(),
-            claim
-        );
-    }
-    let mut source = local_principal_source("sub");
-    let mut other = source["accessProfiles"][0].clone();
-    other["id"] = json!("reader");
-    other["principalClaim"] = json!("registry_principal");
-    source["accessProfiles"].as_array_mut().unwrap().push(other);
-    assert!(
-        config::local_principal_claim(&local_principal_compiled(&source))
-            .unwrap_err()
-            .to_string()
-            .contains("mixed principal claims")
-    );
-    source["accessProfiles"] = json!([]);
-    source["entities"][0]["classification"] = json!("public");
-    source["entities"][0]["fields"][0]["classification"] = json!("public");
-    assert_eq!(
-        config::local_principal_claim(&local_principal_compiled(&source)).unwrap(),
-        "registry_principal"
-    );
 }
 
 #[test]
@@ -2310,8 +2471,9 @@ fn generated_postgres_leaf_verifies_against_its_distinct_ca() {
 }
 
 /// The pinned image and the two deadlines are facts an operator checks before
-/// a first start. Hold the owning document, the command's own help text and
-/// the supervisor's canonical identity equal so they cannot drift apart.
+/// a first start, and an egress allowlist is written from the image reference.
+/// Hold the owning document, the command's own help text and the reference the
+/// supervisor pulls equal so they cannot drift apart.
 #[test]
 fn the_documented_image_and_deadlines_are_the_supervisors_own() {
     let document = fs::read_to_string(
@@ -2337,7 +2499,7 @@ fn the_documented_image_and_deadlines_are_the_supervisors_own() {
         "the owning document names the pull source"
     );
     for fact in [
-        CANONICAL_IMAGE.to_owned(),
+        IMAGE.to_owned(),
         SPATIAL_IMAGE.to_owned(),
         format!("{} seconds", CHILD_DEADLINE.as_secs()),
         format!("{} seconds", READY_DEADLINE.as_secs()),
@@ -4204,22 +4366,6 @@ fn local_review_executor_uses_refreshing_service_identity_for_this_registry() {
     let project_file = project.join("registry.yaml");
     let mut definition: Value =
         serde_norway::from_slice(&fs::read(&project_file).unwrap()).unwrap();
-    // The runtime has one principal mapping, including its ordinary profiles.
-    for profile in definition["accessProfiles"].as_array_mut().unwrap() {
-        if profile.get("principalClaim").is_some() {
-            profile["principalClaim"] = json!("sub");
-        }
-    }
-    let journeys_path = project.join("tests/journeys.yaml");
-    let mut journeys: Value = serde_norway::from_slice(&fs::read(&journeys_path).unwrap()).unwrap();
-    for journey in journeys["journeys"].as_array_mut().unwrap() {
-        for step in journey["steps"].as_array_mut().unwrap() {
-            if step["claims"].get("principal").is_some() {
-                step["claims"]["principal"] = json!(LOCAL_SUBJECT_MARKER);
-            }
-        }
-    }
-    fs::write(&journeys_path, serde_norway::to_string(&journeys).unwrap()).unwrap();
     definition["entities"].as_array_mut().unwrap().push(json!({
         "id": "automatic-record",
         "primaryDataset": "generic-registry",
@@ -4278,7 +4424,7 @@ fn local_review_executor_uses_refreshing_service_identity_for_this_registry() {
             "id":"automatic-applier",
             "actorKind":"service",
             "requesterClients":["automatic-applier"],
-            "principalClaim":"sub",
+            "principalClaim":"registry_principal",
             "requiredScopes":["registry:generic:apply"],
             "requiredPurposes":["registry-application"],
             "permissions":{"entities":[{
@@ -4303,6 +4449,7 @@ fn local_review_executor_uses_refreshing_service_identity_for_this_registry() {
             "accessProfiles":["automatic-applier"],
             "scopes":["registry:generic:apply", "registry:unused"],
             "claims":{
+                "registry_principal":"automatic-applier",
                 "registry_purpose":"registry-application"
             }
         }));

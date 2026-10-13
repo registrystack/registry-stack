@@ -37,6 +37,8 @@ SOURCE = "coordinator-source"
 # this journey owns directly.
 POSTGRES_IMAGE = ("public.ecr.aws/docker/library/postgres:17.11"
                   "@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675")
+MAILPIT_IMAGE = ("ghcr.io/axllent/mailpit:v1.31.2"
+                 "@sha256:74d609a42ec279aa63c6b4622a6fa9b5408d1ad5b1d76a1c4be40a265ce0863d")
 # Synthetic server and root certificate extensions for that database. Casework
 # verifies the server by its IP address against the pinned root.
 DATABASE_TLS = """[req]
@@ -105,58 +107,6 @@ def subject(token):
     # Display data from our own dev fixture. Products still verify signatures.
     payload = token.split(".")[1]
     return json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))["sub"]
-
-
-def producer_token(exported, directory):
-    """Use the exported client and standard private_key_jwt at the stock issuer."""
-    def encode(value):
-        return base64.urlsafe_b64encode(value).decode().rstrip("=")
-    def decode(value):
-        return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
-    key = json.loads(Path(exported["assertionKeyFile"]).read_text())
-    assert key["kty"] == "EC" and key["crv"] == "P-256" and key["alg"] == "ES256"
-    scalar, x, y = (decode(key[field]) for field in ("d", "x", "y"))
-    assert len(scalar) == len(x) == len(y) == 32
-    # SEC1 ECPrivateKey with prime256v1 parameters and the registered public key.
-    members = bytes.fromhex("0201010420") + scalar + bytes.fromhex("a00a06082a8648ce3d030107a14403420004") + x + y
-    der = bytes([0x30, len(members)]) + members
-    key_file = directory / "assertion-key.der"
-    private(key_file, der)
-    client = Path(exported["clientIdFile"]).read_text().strip()
-    now = int(time.time())
-    header = {"alg": "ES256", "typ": "JWT"}
-    if key.get("kid"):
-        header["kid"] = key["kid"]
-    claims = {"iss": client, "sub": client, "aud": exported["clientAssertionAudience"],
-              "iat": now, "exp": now + 60, "jti": str(uuid.uuid4())}
-    signing_input = ".".join(encode(json.dumps(value, separators=(",", ":")).encode()) for value in (header, claims))
-    signature = subprocess.run(["openssl", "dgst", "-sha256", "-sign", str(key_file), "-keyform", "DER"],
-        input=signing_input.encode(), capture_output=True, timeout=10)
-    assert signature.returncode == 0, "private fixture assertion signing failed"
-    encoded = signature.stdout
-    assert len(encoded) <= 72 and encoded[:1] == b"\x30" and encoded[1] == len(encoded) - 2
-    offset = 2
-    integers = []
-    for _ in range(2):
-        assert encoded[offset] == 2
-        length = encoded[offset + 1]
-        value = encoded[offset + 2:offset + 2 + length]
-        integers.append(int.from_bytes(value, "big").to_bytes(32, "big"))
-        offset += 2 + length
-    assert offset == len(encoded)
-    assertion = signing_input + "." + encode(b"".join(integers))
-    body = urllib.parse.urlencode({"grant_type": "client_credentials", "client_id": client,
-        "client_assertion_type": "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
-        "client_assertion": assertion, "resource": exported["resource"], "scope": " ".join(exported["scopes"])}).encode()
-    request = urllib.request.Request(exported["tokenEndpoint"], data=body,
-        headers={"Content-Type": "application/x-www-form-urlencoded"}, method="POST")
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-    with opener.open(request, timeout=10) as response:
-        raw = response.read(65537)
-        assert len(raw) <= 65536
-        token = json.loads(raw)["access_token"]
-    assert len(token) <= 65536 and token.count(".") == 2
-    return token
 
 
 def database_environment(database, base):
@@ -271,7 +221,19 @@ def file_digest(path):
 
 def source_manifest():
     # Working bytes, including untracked source files, identify this build.
-    paths = subprocess.check_output(["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"], cwd=REPO).split(b"\0")
+    if (REPO / ".git").exists():
+        paths = subprocess.check_output(
+            ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+            cwd=REPO,
+        ).split(b"\0")
+    else:
+        # The docs reader deliberately copies source without Git metadata.
+        # Its checkout already excludes ignored build output, so enumerate the
+        # same bounded source roots directly.
+        candidates = [REPO / "Cargo.toml", REPO / "Cargo.lock"]
+        for root in (REPO / "crates", REPO / "products/coordinator"):
+            candidates.extend(root.rglob("*"))
+        paths = [os.fsencode(path.relative_to(REPO)) for path in sorted(candidates)]
     manifest = {}
     for encoded in paths:
         if not encoded:
@@ -289,7 +251,8 @@ def source_digest():
 
 
 class Journey:
-    def __init__(self, root, binaries, wait_seconds, build_manifest=None, authority_preflight=False):
+    def __init__(self, root, binaries, wait_seconds, build_manifest=None, authority_preflight=False,
+                 required_binaries=None):
         self.root = root
         self.started_at = stamp()
         self.source_at_start = source_digest()
@@ -302,6 +265,7 @@ class Journey:
         self.children = []
         self.sessions = []
         self.containers = []
+        self.mailpit_url = None
         self.env = os.environ.copy()
         self.bin = root / "bin"
         self.bin.mkdir(mode=0o700)
@@ -325,7 +289,11 @@ class Journey:
                     self.library_digests[library.name] = digest
             assert self.library_digests, "exact Cargo FIPS library evidence is required on macOS"
             dylibs = [str(library_dir)]
-        for name in ["breg", "bregctl", "casework", "caseworkctl", "messaging", "messagingctl", "scheduling", "schedulingctl", "coordinator", "coordinatorctl"]:
+        required_binaries = required_binaries or [
+            "breg", "bregctl", "casework", "caseworkctl", "messaging", "messagingctl",
+            "scheduling", "schedulingctl", "coordinator", "coordinatorctl",
+        ]
+        for name in required_binaries:
             binary = binaries / name
             assert binary.is_file(), f"build {name} before running this journey"
             self.binary_digests[name] = file_digest(binary)
@@ -337,6 +305,17 @@ class Journey:
             env = f"export DYLD_FALLBACK_LIBRARY_PATH={shlex.quote(':'.join(dylibs))}\n" if sys.platform == "darwin" and dylibs else ""
             private(wrapper, "#!/bin/sh\n" + env + f"exec {shlex.quote(str(frozen))} \"$@\"\n")
             wrapper.chmod(0o700)
+        starter = binaries / "reviewed-notice-input"
+        if not starter.is_file():
+            starter = binaries / "examples/reviewed-notice-input"
+        assert starter.is_file(), "build the reviewed-notice-input example before running this journey"
+        frozen = frozen_binaries / starter.name
+        shutil.copy2(starter, frozen)
+        frozen.chmod(0o500)
+        wrapper = self.bin / starter.name
+        private(wrapper, "#!/bin/sh\n" + env + f"exec {shlex.quote(str(frozen))} \"$@\"\n")
+        wrapper.chmod(0o700)
+        self.reviewed_notice_starter_digest = file_digest(frozen)
         if self.build_provenance:
             assert self.build_provenance["binarySha256"] == self.binary_digests, "native binaries differ from build evidence"
         self.env["PATH"] = str(self.bin) + os.pathsep + self.env.get("PATH", "")
@@ -391,7 +370,7 @@ class Journey:
             child.wait(timeout=15)
 
     def ready(self, child, url, path="/ready"):
-        for _ in range(100):
+        for _ in range(300):
             assert child.poll() is None, "fixture service exited; inspect private logs"
             try:
                 http("GET", url + path)
@@ -401,7 +380,53 @@ class Journey:
         raise AssertionError("fixture service failed readiness")
 
     def producer_request(self, owner, method, url, body=None, headers=None):
-        return http(method, url, producer_token(self.producer_identity, self.root / "producer-secrets"), body, headers)
+        return http(method, url, self.token("bregctl", owner, "coordinator-producer"), body, headers)
+
+    def reviewed_notice_input(self, owner, application):
+        """Use the maintained Rust client and protocol digest for one current application."""
+        report = self.ctl("bregctl", "dev", "token", "application-reader", owner)
+        output = self.root / "reviewed-notice-inputs" / f"{application}.json"
+        output.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        result = subprocess.run([
+            str(self.bin / "reviewed-notice-input"),
+            "--breg-url", self.urls["breg"],
+            "--record-id", application,
+            "--token-file", report["headerFile"],
+            "--output", output,
+        ], env=self.env, capture_output=True, timeout=30)
+        assert result.returncode == 0, "reviewed-notice input preparation failed"
+        prepared = json.loads(output.read_text())
+        assert set(prepared) == {"applicationId", "applicationRevision", "applicationDigest"}
+        return prepared
+
+    def patch_application(self, owner, application, field, value):
+        """Apply one exact no-review BReg change request and return the new record."""
+        token = self.token("bregctl", owner, "seed-client")
+        route, value_field = {
+            "requestedAmount": ("application-amount-changes", "proposedAmount"),
+            "noticeAllowed": ("application-notice-changes", "proposedNoticeAllowed"),
+        }[field]
+        created = http("POST", self.urls["breg"] + f"/v1/records/{route}?accessProfile=seeder", token,
+            {"data": {"tenant": "tenant-a", "record": application, value_field: value,
+                      "reason": "Exercise the reviewed-notice post-review guard"}},
+            {"Idempotency-Key": str(uuid.uuid4())}, (201,))
+        change = created["data"]["recordIdentifier"]
+        seeder_path = self.urls["breg"] + f"/v1/records/{route}/{change}?accessProfile=seeder"
+        record = http("GET", seeder_path, token)
+        submit = next(action for action in record["data"]["request"]["actions"]
+                      if action["operation"] == "submit-request")
+        http("POST", urllib.parse.urljoin(self.urls["breg"], submit["href"]), token, {},
+             {"Idempotency-Key": str(uuid.uuid4()), "If-Match": submit["ifMatch"]})
+        applier_path = self.urls["breg"] + f"/v1/records/{route}/{change}?accessProfile=applier"
+        record = http("GET", applier_path, token)
+        apply = next(action for action in record["data"]["request"]["actions"]
+                     if action["operation"] == "apply-request")
+        request = record["data"]["request"]
+        http("POST", urllib.parse.urljoin(self.urls["breg"], apply["href"]), token,
+             {"proposalVersion": request["proposalVersion"], "effectDigest": request["effectDigest"]},
+             {"Idempotency-Key": str(uuid.uuid4()), "If-Match": apply["ifMatch"]})
+        return http("GET", self.urls["breg"] +
+                    f"/v1/records/applications/{application}?accessProfile=seeder", token)
 
     def start(self, owner, url, label, data, flow="deferred-appointment"):
         body = {"flow": flow, "input": data}
@@ -487,7 +512,12 @@ class Journey:
             value = http("POST", self.urls["breg"] + f"/v1/records/{collection}?accessProfile=seeder", seed,
                          {"data":data}, {"Idempotency-Key":str(uuid.uuid4())}, (201,))
             return value["data"]["recordIdentifier"]
-        application = create("applications", {"tenant":"tenant-a","email":"synthetic@example.invalid","noticeAllowed":True,"appointmentAllowed":True})
+        application = create("applications", {
+            "tenant": "tenant-a", "applicantName": "Amina Example",
+            "benefitProgram": "housing-support", "requestedAmount": 1200,
+            "email": "synthetic@example.invalid", "noticeAllowed": True,
+            "appointmentAllowed": True,
+        })
         change = create("application-changes", {"tenant":"tenant-a","record":application,
                                                 "proposedEmail":"updated@example.invalid","reason":"Synthetic review"})
         path = self.urls["breg"] + f"/v1/records/application-changes/{change}?accessProfile=seeder"
@@ -578,14 +608,13 @@ class Journey:
             "retention": {"attemptReceiptRetentionDays": 7},
         })
         self.ctl("schedulingctl", "apply", "--runtime-config", runtime)
-        self.ctl("schedulingctl", "records", "apply", runtime, project / "records.yaml")
+        self.ctl("schedulingctl", "records", "apply", "--runtime-config", runtime,
+                 project / "records.yaml")
         child = self.spawn("scheduling", runtime, "scheduling")
         self.ready(child, url, "/readyz")
         return url, runtime
 
     def coordinator_deployment(self, owner, resource, agent, scheduling_url, messaging_url):
-        self.producer_identity = self.export(owner, "coordinator-producer", self.root / "producer-secrets")
-        assert self.producer_identity["resource"] == COORDINATOR_RESOURCE
         keys = self.root / "coordinator-secrets"
         reader = self.export(owner, "application-reader", keys)
         catalogue = self.export(owner, "scheduling-reader", keys)
@@ -605,11 +634,14 @@ class Journey:
                 "authorization": self.authorization(sender, sender["resource"], ["messaging:send"])},
         }, free_ports(1)[0], "coordinator-before-wait")
 
-    def coordinator_service(self, flow, keys, connections, port, label):
-        """Package one maintained example flow, apply it with a split role, and serve it."""
-        project = REPO / "products/coordinator/examples" / flow
-        package = self.root / f"coordinator-{flow}-package"
-        packaged = self.ctl("coordinatorctl", "package", "--project", project, "--output", package)
+    def coordinator_service(self, flow, keys, connections, port, label, additional_projects=()):
+        """Package maintained example flows, apply them with a split role, and serve them."""
+        projects = [(flow, REPO / "products/coordinator/examples" / flow), *additional_projects]
+        packages = []
+        for flow_id, project in projects:
+            package = self.root / f"coordinator-{flow_id}-package"
+            packaged = self.ctl("coordinatorctl", "package", "--project", project, "--output", package)
+            packages.append({"root": str(package), "expectedDigest": packaged["packageDigest"]})
         database = os.environ["COORDINATOR_TEST_DATABASE_URL"]
         role = "coordinator_native_" + uuid.uuid4().hex[:16]
         password = uuid.uuid4().hex + uuid.uuid4().hex
@@ -635,12 +667,13 @@ class Journey:
         config["deployment"] = {
             "databaseId": "coordinator-native-" + uuid.uuid4().hex,
             "runtimeRole": role,
-            "packages": [{"root": str(package), "expectedDigest": packaged["packageDigest"]}],
+            "packages": packages,
             "listener": {"bind": f"127.0.0.1:{port}", "tlsTermination": "development-loopback"},
             "authentication": {"issuer": self.urls["issuer"], "audience": COORDINATOR_RESOURCE,
                 "scopeClaim": "scope", "jwksSource": {"type": "static", "documentRef": "secret:file/jwks"},
                 "allowedClients": ["coordinator-producer"], "policies": [{"clientId": "coordinator-producer",
-                    "requiredScopes": ["coordinator:start", "coordinator:operate"], "flows": [flow],
+                    "requiredScopes": ["coordinator:start", "coordinator:operate"],
+                    "flows": [flow_id for flow_id, _ in projects],
                     "actions": ["start", "status", "inspect", "reconcile", "retry-same", "cancel", "doctor"], "operator": True}]},
             "auditFile": str(self.root / f"audit/coordinator-{flow}.ndjson"), "auditKeyRef": "secret:file/audit-key",
             "activeStateKey": 1, "stateKeys": {"1": {"keyRef": "secret:file/state-key"}}, "admissionKeyRef": "secret:file/admission-key",
@@ -650,7 +683,8 @@ class Journey:
         self.ctl("coordinatorctl", "--runtime-config", runtime, "plan")
         applied = self.ctl("coordinatorctl", "--runtime-config", runtime, "apply")
         assert applied["activation"]["roleMode"] == "split", "serving role must not migrate or activate"
-        assert [(item["flow"], item["change"]) for item in applied["flows"]] == [(flow, "install")]
+        assert [(item["flow"], item["change"]) for item in applied["flows"]] == [
+            (flow_id, "install") for flow_id, _ in projects]
         url = f"http://127.0.0.1:{port}"
         child = self.spawn("coordinator", runtime, label)
         self.ready(child, url)
@@ -811,7 +845,7 @@ class Journey:
         assert result.returncode == 0, f"docker {args[0]} failed; inspect private {log}"
         return result.stdout
 
-    def tls_database(self, name):
+    def tls_database(self, name, *, superuser=False):
         """Own one TLS PostgreSQL database for a runtime that refuses plaintext.
 
         Returns its URL and the root certificate that signed its server
@@ -836,8 +870,9 @@ class Journey:
                 "-set_serial", "0x" + secrets.token_hex(16), "-days", "2",
                 "-extfile", tls / "openssl.cnf", "-extensions", "server", "-out", tls / "server.pem")
         port, = free_ports(1)
+        postgres_password = secrets.token_hex(32)
         private(tls / "postgres.env", "POSTGRES_USER=postgres\nPOSTGRES_PASSWORD="
-                + secrets.token_hex(32) + "\nPOSTGRES_DB=postgres\n")
+                + postgres_password + "\nPOSTGRES_DB=postgres\n")
         self.docker("create", "--name", container, "--label", "org.registrystack.journey=coordinator-real-services",
                     "--publish", f"127.0.0.1:{port}:5432", "--env-file", tls / "postgres.env", POSTGRES_IMAGE)
         # Only a container this journey created is removed at cleanup.
@@ -869,7 +904,38 @@ class Journey:
         while self.docker("exec", container, "psql", "-X", "-A", "-t", "-U", "postgres", "-c", "SHOW ssl").strip() != b"on":
             assert time.monotonic() < deadline, "the journey database did not enable TLS"
             time.sleep(0.2)
-        return f"postgresql://{role}:{password}@127.0.0.1:{port}/casework", (tls / "root.pem").read_text()
+        username, credential = ("postgres", postgres_password) if superuser else (role, password)
+        return f"postgresql://{username}:{credential}@127.0.0.1:{port}/casework", (tls / "root.pem").read_text()
+
+    def mailpit(self):
+        """Start the pinned local SMTP sink and return its SMTP port and API."""
+        container = f"{self.root.name}-mailpit"
+        assert re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", container), \
+            "the work directory name must also form a Docker container name"
+        smtp_port, api_port = free_ports(2)
+        self.docker("create", "--name", container,
+                    "--label", "org.registrystack.journey=coordinator-real-services",
+                    "--publish", f"127.0.0.1:{smtp_port}:1025",
+                    "--publish", f"127.0.0.1:{api_port}:8025", MAILPIT_IMAGE)
+        self.containers.append(container)
+        self.docker("start", container)
+        api = f"http://127.0.0.1:{api_port}"
+        deadline = time.monotonic() + 60
+        while True:
+            try:
+                with urllib.request.urlopen(api + "/readyz", timeout=1) as response:
+                    if response.status == 200:
+                        break
+            except (OSError, urllib.error.URLError):
+                pass
+            assert time.monotonic() < deadline, "Mailpit did not become ready"
+            time.sleep(0.2)
+        return smtp_port, api
+
+    def mailpit_messages(self):
+        assert self.mailpit_url, "Mailpit must be started before its mailbox is read"
+        with urllib.request.urlopen(self.mailpit_url + "/api/v1/messages", timeout=10) as response:
+            return json.load(response)["messages"]
 
     def review_casework(self, owner, resource, port, completion_url, completion_token):
         """Serve a Casework whose review producer's completions reach the Coordinator."""
@@ -917,7 +983,7 @@ class Journey:
         return url
 
     def reviewed_notice(self, owner, resource, messaging_url, messaging_runtime):
-        """Hand two applications to real Casework review; only the approval sends its notice.
+        """Run the reviewed BReg to Casework to BReg to Messaging journey.
 
         The fallback result read is 900 seconds away, so a run that settles
         within the fixture deadline was woken by Casework's completion event.
@@ -929,23 +995,55 @@ class Journey:
         keys = self.root / "coordinator-review-secrets"
         reviewer = self.export(owner, "review-producer", keys)
         assert reviewer["resource"] == resource, "the review producer must request the Casework audience"
+        reader = self.export(owner, "application-reader", keys)
         sender = self.export(owner, "case-system", keys)
         private(keys / "review-completion-token", completion_token)
-        _, url, _ = self.coordinator_service("reviewed-notice", keys, {
+        production_project = REPO / "products/coordinator/examples/reviewed-notice"
+        short_timeout_project = self.root / "reviewed-notice-short-timeout"
+        shutil.copytree(production_project, short_timeout_project)
+        short_workflow = short_timeout_project / "workflow.yaml"
+        source = short_workflow.read_text()
+        assert source.count("  id: reviewed-notice\n") == 1
+        assert source.count("    timeoutSeconds: 1209600\n") == 1
+        private(short_workflow, source.replace("  id: reviewed-notice\n",
+            "  id: reviewed-notice-short-timeout\n").replace(
+            "    timeoutSeconds: 1209600\n", "    timeoutSeconds: 2\n"))
+        short_scenarios = short_timeout_project / "scenarios.yaml"
+        scenarios = short_scenarios.read_text()
+        assert scenarios.count("workflowElapsedSeconds: 1209600") == 2
+        private(short_scenarios, scenarios.replace(
+            "workflowElapsedSeconds: 1209600", "workflowElapsedSeconds: 2"))
+        runtime, url, worker = self.coordinator_service("reviewed-notice", keys, {
+            "applications": {"product": "breg", "baseUrl": self.urls["breg"],
+                "profile": "follow-up-reader",
+                "authorization": self.authorization(reader, resource, ["records:get"])},
             "review": {"product": "casework", "baseUrl": casework_url, "profile": "coordinator-producer",
                 "producer": "coordinator", "authorization": self.authorization(reviewer, resource, ["casework:review"]),
                 "completion": {"recipientBinding": "coordinator-v1", "bearerTokenRef": "secret:file/review-completion-token"},
                 "resultCheckSeconds": 900},
             "notices": {"product": "messaging", "baseUrl": messaging_url,
                 "authorization": self.authorization(sender, sender["resource"], ["messaging:send"])},
-        }, coordinator_port, "coordinator-reviewed-notice")
+        }, coordinator_port, "coordinator-reviewed-notice",
+            [("reviewed-notice-short-timeout", short_timeout_project)])
         sent_before = {item["id"] for item in self.ctl("messagingctl", "messages", "list", "--runtime-config", messaging_runtime)["messages"]}
+        mailbox_before = {item["ID"] for item in self.mailpit_messages()}
+
+        seed = self.token("bregctl", owner, "seed-client")
+        def create_application(label):
+            response = http("POST", self.urls["breg"] + "/v1/records/applications?accessProfile=seeder", seed, {
+                "data": {"tenant": "tenant-a", "applicantName": f"{label.title()} Applicant",
+                    "benefitProgram": "housing-support", "requestedAmount": 1200,
+                    "email": f"{label}@example.invalid", "noticeAllowed": True,
+                    "appointmentAllowed": True}},
+                {"Idempotency-Key": str(uuid.uuid4())}, (201,))
+            return response["data"]["recordIdentifier"]
+
         runs = {}
-        for decision in ("approve", "reject"):
-            application = str(uuid.uuid4())
-            data = {"applicationId": application, "applicationVersion": "1",
-                    "applicationDigest": "sha256:" + secrets.token_hex(32), "email": "synthetic@example.invalid"}
-            runs[decision] = (application, self.start(owner, url, "native-reviewed-notice-" + decision, data, "reviewed-notice"))
+        for outcome in ("approve", "reject", "changed", "permission-gone", "operator-cancel"):
+            application = create_application(outcome)
+            data = self.reviewed_notice_input(owner, application)
+            runs[outcome] = (application, self.start(
+                owner, url, "native-reviewed-notice-" + outcome, data, "reviewed-notice"))
         deadline = time.monotonic() + 60
         for _, run in runs.values():
             while (status := self.inspect(owner, url, run)["run"])["step"] != "await-review":
@@ -953,41 +1051,102 @@ class Journey:
                 assert time.monotonic() < deadline, "a reviewed-notice run never reached its wait"
                 time.sleep(0.2)
             assert status["state"] == "running"
-        print("Both reviewed-notice runs submitted their review and wait for its result.", flush=True)
+        print("Reviewed-notice runs submitted current BReg applications and wait for review.", flush=True)
+
+        # The test-owned copy shortens only this one wait. The maintained
+        # package above retains the production fourteen-day deadline.
+        timeout_application = create_application("timeout")
+        timeout_data = self.reviewed_notice_input(owner, timeout_application)
+        timeout_run = self.start(owner, url, "native-reviewed-notice-timeout",
+                                 timeout_data, "reviewed-notice-short-timeout")
+        deadline = time.monotonic() + 30
+        while (timeout_status := self.inspect(owner, url, timeout_run)["run"])["step"] != "await-review":
+            assert timeout_status["state"] == "running"
+            assert time.monotonic() < deadline, "the short-timeout run never reached its review wait"
+            time.sleep(0.05)
+        timeout_started = time.monotonic()
+        timeout_status, _ = self.drive(owner, url, timeout_run)
+        timeout_elapsed = time.monotonic() - timeout_started
+        assert timeout_status["run"]["outcome"] == "review-timeout-withdrawn"
+        assert timeout_elapsed >= 1.5, "the short-timeout package did not wait on the actual clock"
+        runs["timeout"] = (timeout_application, timeout_run)
+
+        # Current BReg state changes after the reviewed snapshot. Approval must
+        # reread it and suppress both notices.
+        self.patch_application(owner, runs["changed"][0], "requestedAmount", 1400)
+        self.patch_application(owner, runs["permission-gone"][0], "noticeAllowed", False)
+
+        # Operator cancellation owns a separate withdrawal route. Once it
+        # settles, Casework must not retain an open review for that run.
+        operator_run = runs["operator-cancel"][1]
+        self.producer_request(owner, "POST", url + f"/v1/runs/{operator_run}/cancel",
+                              {"reason": "Synthetic operator cancellation"})
+        operator_status, _ = self.drive(owner, url, operator_run)
+        assert operator_status["run"]["outcome"] == "review-operator-withdrawn"
+
+        # Restart after the waits are durable. The later completion events wake
+        # the new worker, which still performs the authoritative result reads.
+        self.stop(worker)
+        worker = self.spawn("coordinator", runtime, "coordinator-reviewed-notice-restarted")
+        self.ready(worker, url)
+
         staff = self.token("bregctl", owner, "staff")
         headers = {"Registry-Casework-Profile": "staff"}
         page = http("GET", casework_url + "/v1/review-tasks?queue=applications&limit=25", staff, headers=headers)
         tasks = [item for item in page["items"] if item["state"] == "open"]
-        assert len(tasks) == len(runs), "Casework must hold one open review task per run"
+        assert len(tasks) == len(runs) - 2, "timeout and operator cancellation must close their reviews"
         decided_at = time.monotonic()
         for item in tasks:
             task_url = casework_url + "/v1/review-tasks/" + item["taskId"]
             http("POST", task_url + "/claim", staff, headers={**headers, "If-Match": f'"{item["revision"]}"',
                  "Idempotency-Key": str(uuid.uuid4())})
             context = http("GET", task_url + "/context", staff, headers=headers)
-            decision = next(name for name, (application, _) in runs.items()
-                            if application == context["requesterReference"])
-            body = ({"decision": {"type": "approve"}} if decision == "approve"
-                    else {"decision": {"type": "reject", "outcome": "missing-evidence"}})
+            outcome = next(name for name, (application, _) in runs.items()
+                           if application == context["requesterReference"])
+            assert set(context["context"]["snapshot"]) == {
+                "applicantName", "benefitProgram", "requestedAmount"}
+            body = ({"decision": {"type": "reject", "outcome": "missing-evidence"}}
+                    if outcome == "reject" else {"decision": {"type": "approve"}})
             current = http("GET", task_url, staff, headers=headers)
             http("POST", task_url + "/decisions", staff, body, {**headers, "If-Match": f'"{current["revision"]}"',
                  "Idempotency-Key": str(uuid.uuid4())}, (204,))
-        settled = {}
+        settled = {"operator-cancel": operator_status["run"], "timeout": timeout_status["run"]}
         deadline = time.monotonic() + 120
         while len(settled) < len(runs):
             assert time.monotonic() < deadline, "a completion event did not wake its run before the fallback read"
-            for decision, (_, run) in runs.items():
+            for outcome, (_, run) in runs.items():
                 status = self.inspect(owner, url, run)["run"]
-                if decision not in settled and status["state"] != "running":
-                    settled[decision] = status
+                if outcome not in settled and status["state"] != "running":
+                    settled[outcome] = status
             time.sleep(0.25)
         elapsed = int(time.monotonic() - decided_at)
-        approved, rejected = settled["approve"], settled["reject"]
-        assert (approved["state"], approved["outcome"]) == ("finished", "notice-sent"), "the approval must send its notice"
-        assert (rejected["state"], rejected["outcome"]) == ("finished", "rejected"), "the rejection must finish without a notice"
+        expected = {
+            "approve": "notice-accepted",
+            "reject": "review-rejected",
+            "changed": "application-changed",
+            "permission-gone": "notice-permission-gone",
+            "operator-cancel": "review-operator-withdrawn",
+            "timeout": "review-timeout-withdrawn",
+        }
+        for outcome, name in expected.items():
+            assert (settled[outcome]["state"], settled[outcome]["outcome"]) == ("finished", name)
+        approved = settled["approve"]
         sent = [item["id"] for item in self.ctl("messagingctl", "messages", "list", "--runtime-config", messaging_runtime)["messages"]
                 if item["id"] not in sent_before]
         assert sent == [approved["output"]["messageId"]], "only the approved review may send a notice"
+        deadline = time.monotonic() + 30
+        delivered = []
+        while not delivered:
+            delivered = [item for item in self.mailpit_messages() if item["ID"] not in mailbox_before]
+            assert len(delivered) <= 1, "suppressed review outcomes must not deliver mail"
+            assert time.monotonic() < deadline, "the accepted notice did not reach local Mailpit"
+            if not delivered:
+                time.sleep(0.2)
+        assert delivered[0]["To"][0]["Address"] == "approve@example.invalid"
+        assert delivered[0]["Subject"] == "Application approved"
+        open_after = http("GET", casework_url + "/v1/review-tasks?queue=applications&limit=25",
+                          staff, headers=headers)
+        assert not [item for item in open_after["items"] if item["state"] == "open"]
         # The live receiver refuses an inauthentic event and acknowledges an
         # authentic one for a request it does not know, so the answer reveals
         # nothing about which requests exist.
@@ -1002,15 +1161,21 @@ class Journey:
                  "idempotency-key": event["eventId"]}, (expected,))
             refusals[label] = expected
         private(self.root / "native-reviewed-notice-proof.json", {
-            "proofBoundary": "native_casework_completion_and_messaging",
-            "runs": {decision: {key: status[key] for key in ("state", "step", "outcome", "failureCode")}
-                     for decision, status in settled.items()},
+            "proofBoundary": "native_breg_casework_breg_and_messaging",
+            "runs": {outcome: {key: status[key] for key in ("state", "step", "outcome", "failureCode")}
+                     for outcome, status in settled.items()},
             "decisionToSettledSeconds": elapsed, "resultCheckSeconds": 900,
-            "receiver": refusals, "acceptedNotices": len(sent), "deliveryProven": False,
+            "workerRestartWhileWaiting": True,
+            "productionTimeoutSeconds": 1209600,
+            "testTimeoutSeconds": 2,
+            "actualTimeoutElapsedSeconds": timeout_elapsed,
+            "reviewedNoticeStarterSha256": self.reviewed_notice_starter_digest,
+            "receiver": refusals, "acceptedNotices": len(sent), "localMailboxNotices": len(delivered),
+            "deliveryProven": True,
         })
-        print(f"Casework completion events woke both runs within {elapsed}s; only the approval sent its notice.", flush=True)
+        print(f"Casework completion events woke the restarted worker within {elapsed}s; only the unchanged approval sent its notice.", flush=True)
 
-    def messaging_service(self, owner):
+    def messaging_service(self, owner, test_only_plaintext=True, trusted_root_certificate=None):
         project = write_messaging(self.root / "messaging")
         package = self.root / "messaging-package"
         self.ctl("messagingctl", "package", project, "--output", package)
@@ -1042,20 +1207,30 @@ class Journey:
         assert result.returncode == 0, "disposable Messaging schema creation failed"
         query.append(("options", "-csearch_path=" + schema))
         private(secret / "database", urllib.parse.urlunsplit(parts._replace(query=urllib.parse.urlencode(query))))
+        if trusted_root_certificate is not None:
+            private(secret / "database-root.pem", trusted_root_certificate)
         private(secret / "audit-key", uuid.uuid4().hex + uuid.uuid4().hex)
         private(secret / "jwks", http("GET", self.urls["issuer"] + "/oauth2/jwks"))
+        smtp_port, self.mailpit_url = self.mailpit()
         listener = socket.socket()
         listener.bind(("127.0.0.1",0))
         port = listener.getsockname()[1]
         listener.close()
         runtime = self.root / "messaging-runtime.yaml"
+        database_config = {"runtimeUrlRef":"secret:file/database","migrationUrlRef":"secret:file/database"}
+        if test_only_plaintext:
+            database_config["testOnlyPlaintext"] = True
+        if trusted_root_certificate is not None:
+            database_config["trustedRootCertificateRef"] = "secret:file/database-root.pem"
         private(runtime, {"apiVersion":"id.registrystack.org/formats/messaging/runtime/v1alpha1","kind":"MessagingRuntimeConfig",
             "identity":{"databaseId":"coordinator-messaging"},"package":{"root":str(package)},
             "listener":{"bind":f"127.0.0.1:{port}","tlsTermination":"development-loopback"},
             "secretProviders":{"file":{"root":str(secret)}},
-            "database":{"runtimeUrlRef":"secret:file/database","migrationUrlRef":"secret:file/database","testOnlyPlaintext":True},
+            "database": database_config,
             "authentication":{"oidc":{"issuer":self.urls["issuer"],"audience":"urn:example:messaging",
                 "scopeClaim":"scope","allowedClients":["case-system"],"jwksSource":{"type":"static","documentRef":"secret:file/jwks"}}},
+            "providers":{"mail-relay":{"type":"smtp","host":"127.0.0.1","port":smtp_port,
+                "tls":"development-loopback"}},
             "audit":{"destination":"file","path":str(self.root / "audit/messaging.ndjson"),"hashKeyRef":"secret:file/audit-key"}})
         self.ctl("messagingctl", "apply", "--runtime-config", runtime)
         with open(self.root / "logs/messaging.log", "wb") as log:

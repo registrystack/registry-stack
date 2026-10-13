@@ -205,33 +205,33 @@ class AssembleClientPackagesTest(unittest.TestCase):
         )
         self.assertIn(
             "--breg-wheel /work/product-wheels/"
-            "registry_breg_client_native-9.9.9-cp310-abi3-macosx_11_0_arm64.whl",
+            "registry_breg_client_native-9.9.9-cp311-abi3-macosx_11_0_arm64.whl",
             assemble,
         )
         for product in ("discovery", "evidence"):
             self.assertIn(
                 f"--{product}-wheel /work/product-wheels/"
-                f"registry_{product}_client-9.9.9-cp310-abi3-macosx_11_0_arm64.whl",
+                f"registry_{product}_client-9.9.9-cp311-abi3-macosx_11_0_arm64.whl",
                 assemble,
             )
         self.assertIn(
             "--casework-wheel /work/product-wheels/"
-            "registry_casework_client_native-9.9.9-cp310-abi3-macosx_11_0_arm64.whl",
+            "registry_casework_client_native-9.9.9-cp311-abi3-macosx_11_0_arm64.whl",
             assemble,
         )
         self.assertIn(
             "--messaging-wheel /work/product-wheels/"
-            "registry_messaging_client_native-9.9.9-cp310-abi3-macosx_11_0_arm64.whl",
+            "registry_messaging_client_native-9.9.9-cp311-abi3-macosx_11_0_arm64.whl",
             assemble,
         )
         self.assertIn(
             "--scheduling-wheel /work/product-wheels/"
-            "registry_scheduling_client_native-9.9.9-cp310-abi3-macosx_11_0_arm64.whl",
+            "registry_scheduling_client_native-9.9.9-cp311-abi3-macosx_11_0_arm64.whl",
             assemble,
         )
         self.assertIn(
             "--coordinator-wheel /work/product-wheels/"
-            "registry_coordinator_client_native-9.9.9-cp310-abi3-macosx_11_0_arm64.whl",
+            "registry_coordinator_client_native-9.9.9-cp311-abi3-macosx_11_0_arm64.whl",
             assemble,
         )
         self.assertIn(f"--macos-library-root {ROOT / 'target'}", assemble)
@@ -308,7 +308,7 @@ class AssembleClientPackagesTest(unittest.TestCase):
     def test_cli_ci_profile_is_explicit_and_rejects_unknown_profiles(self) -> None:
         command = [
             sys.executable, str(SCRIPT), "--output-dir", "/out",
-            "--version", "0.41.0",
+            "--version", "0.42.0",
             "--napi-platform", "linux-x64-gnu", "--artifacts", "python", "--dry-run",
             "--include-casework", "--zig-python", "/maturin/python",
             "--maturin", "/maturin/maturin",
@@ -400,7 +400,7 @@ class AssembleClientPackagesTest(unittest.TestCase):
                 "--output-dir",
                 "/out",
                 "--version",
-                "0.41.0",
+                "0.42.0",
                 "--napi-platform",
                 "darwin-arm64",
                 "--include-casework",
@@ -460,8 +460,8 @@ class AssembleClientPackagesTest(unittest.TestCase):
                     Path("/out"),
                 )
 
-    def test_pre_0_41_versions_require_explicit_coordinator_selection(self) -> None:
-        for version in ("0.40.0", "0.40.99"):
+    def test_pre_0_42_versions_require_explicit_coordinator_selection(self) -> None:
+        for version in ("0.40.0", "0.41.99"):
             with self.subTest(version=version), self.assertRaisesRegex(
                 ValueError, "Coordinator client"
             ):

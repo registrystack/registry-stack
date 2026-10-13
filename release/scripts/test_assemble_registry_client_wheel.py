@@ -20,7 +20,7 @@ SCRIPT = ROOT / "release/scripts/assemble-registry-client-wheel.py"
 PRODUCTS = (
     "discovery", "evidence", "breg", "casework", "messaging", "scheduling", "coordinator"
 )
-TAG = "cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64"
+TAG = "cp311-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64"
 
 
 def load_module():
@@ -40,7 +40,7 @@ class AssembleRegistryClientWheelTest(TestCase):
         self.temporary_directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary_directory.cleanup)
         self.directory = Path(self.temporary_directory.name)
-        self.version = "0.41.0"
+        self.version = "0.42.0"
         self.facade = self.directory / "registry-stack-client-py"
         shutil.copytree(ROOT / "crates/registry-stack-client-py", self.facade)
         pyproject = self.facade / "pyproject.toml"
@@ -246,7 +246,7 @@ class AssembleRegistryClientWheelTest(TestCase):
     def test_local_messaging_override_assembles_without_admitting_a_release(self) -> None:
         module = load_module()
         with mock.patch.object(
-            module.client_registry.release_roster, "MESSAGING_FIRST_RELEASE", (0, 42, 0)
+            module.client_registry.release_roster, "MESSAGING_FIRST_RELEASE", (0, 43, 0)
         ):
             refused = self.run_assembler()
             self.assertEqual(2, refused.returncode)
@@ -261,7 +261,7 @@ class AssembleRegistryClientWheelTest(TestCase):
         with mock.patch.object(
             module.client_registry.release_roster,
             "SCHEDULING_CLIENT_FIRST_RELEASE",
-            (0, 42, 0),
+            (0, 43, 0),
         ):
             refused = self.run_assembler()
             self.assertEqual(2, refused.returncode)
@@ -276,7 +276,7 @@ class AssembleRegistryClientWheelTest(TestCase):
         with mock.patch.object(
             module.client_registry.release_roster,
             "COORDINATOR_CLIENT_FIRST_RELEASE",
-            (0, 42, 0),
+            (0, 43, 0),
         ):
             refused = self.run_assembler()
             self.assertEqual(2, refused.returncode)

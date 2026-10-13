@@ -162,10 +162,12 @@ default; `--format json` supplies structured reports.
   model for a typed decision over an application summary, applies an explicit
   confidence threshold, and invokes a governed BReg action only when both allow
   it; otherwise it finishes with `no-action` or `needs-review`.
-- [Reviewed notice](examples/reviewed-notice/README.md) submits an application
-  to Casework review as a review producer, waits for the result, sends a
-  Messaging notice when the review approves it and withdraws the request when
-  no decision arrives within fourteen days.
+- [Reviewed notice](examples/reviewed-notice/README.md) reads a BReg application,
+  submits its bounded facts to Casework review, and waits for the result. Approval
+  rereads the registry and sends a Messaging notice only for the reviewed revision
+  with current notice permission, using the registry's recipient. Timeout and
+  operator cancellation withdraw the request through authored paths. Its runnable
+  public tutorial starts all four services and observes the email in Mailpit.
 - [External directory](examples/external-directory/README.md) reads a configured
   directory over HTTP GET and chooses an outcome from the validated response.
 - [Bounded poll](examples/bounded-poll/README.md) reads a BReg application at
@@ -348,7 +350,13 @@ with `invalid-response`. A request Casework does not know fails the run with
 `review-result-expired`. When the timeout passes without a result, the run
 continues at `onTimeout`, or fails with `wait-timed-out` when the step has
 none. A step reached through `onTimeout` cannot read the wait's output, and a
-result found by the read at the timeout wins over the timeout.
+result found by the read at the timeout wins over the timeout. An optional
+`onCancel` takes a durable authored forward path when an authorized caller cancels
+this parked wait. A read already in flight records the intent and routes it when
+the lease settles or expires. Status reports `authoredCancelRequested`, and repeat
+cancellation preserves cleanup. Author a `cancel-review-request` step on that path
+when the accepted review should be withdrawn. No edge means ordinary stop semantics;
+a step reached by `onCancel` cannot read the cancelled wait's result.
 
 Casework supersedes a review request still under review when the same producer
 submits another one for the same subject record, of any version, and the same
@@ -442,9 +450,11 @@ A start names its flow and is admitted under that flow's active definition.
 Previously admitted versions remain available for their existing runs.
 `GET /v1/runs` returns at most 100 of the caller's most recently admitted runs,
 newest first, from the flows its policy lists; an operator policy lists every
-owner's runs in those flows. `limit` takes 1 to 100 and defaults to 20. The list
-has no paging cursor and no state filter, so keep the run ID a start returns to
-read an older run with `GET /v1/runs/{run}`. Institutional applications compose
+owner's runs in those flows. `limit` takes 1 to 100 and defaults to 20. The list supports an optional `state` filter and `attention=true` for effective states
+`attention` and `failed` (`attention=false` excludes both). When `nextCursor` is present,
+pass it as `cursor` with the same filters to continue. Pages are ordered by admission time
+and run ID, newest first, and reapply current caller and flow permissions. Keep the run ID
+a start returns for direct lookup with `GET /v1/runs/{run}`. Institutional applications compose
 through its authenticated HTTP API and the owning Casework, BReg and optional
 Messaging APIs. The maintained Coordinator client covers the caller routes
 `start`, `list`, `status`, `inspect`, `reconcile`, `retry_same` and `cancel` as
@@ -611,11 +621,15 @@ fresh credentials bounded by the original deferred approval, original-receipt
 recovery after lost booking and notice replies, and refusal of expired, unknown
 or mismatched approvals without additional effects. Waits shorter than 901
 seconds are smoke checks and do not establish the long-wait boundary.
-The journey also runs the reviewed-notice flow against a real Casework review
-producer: two runs submit their review, a reviewer approves one and rejects the
-other, and Casework delivers each completion to the Coordinator's
-`/v1/review-completions` route. Both runs settle well before their 900-second
-fallback read, only the approval sends its notice, and the live receiver
-refuses a wrong token or recipient binding while acknowledging an authentic
-event for an unknown request. The timeout route is proven by scenarios only.
+The journey also runs the reviewed-notice flow against real BReg applications
+and a Casework review producer. It restarts Coordinator while the reviews wait,
+then proves that completion events wake the new worker before the 900-second
+fallback read. Only approval of an unchanged application with current notice
+permission produces an accepted notice and one addressed email in local Mailpit.
+Rejection, a changed revision and revoked permission produce explicit no-message
+outcomes. Separate timeout and operator-withdrawal routes close their open
+reviews. A test-owned package shortens the review timeout to two seconds and
+uses the real clock; the maintained example retains fourteen days. The live
+receiver refuses a wrong token or recipient binding while acknowledging an
+authentic event for an unknown request.
 The helper is an explicit contributor check, not a CI gate.

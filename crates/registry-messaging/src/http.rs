@@ -255,7 +255,7 @@ pub const OPERATIONS: &[Operation] = &[
         response_body: Some("MessageReceipt"),
         problems: &[
             ProblemCode::AuthenticationRefused, ProblemCode::ProfileNotAuthorized,
-            ProblemCode::ReceiptUnresolved, ProblemCode::RateLimitExceeded,
+            ProblemCode::ReceiptUnresolved,
             ProblemCode::RequestInvalid, ProblemCode::RequestUnprocessable,
             ProblemCode::RequestBodyTooLarge, ProblemCode::RequestUnsupportedMediaType,
             ProblemCode::RequestMethodNotAllowed, ProblemCode::ServiceUnavailable,

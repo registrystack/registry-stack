@@ -43,19 +43,19 @@ Beta release prerequisite.
 
 ### Linux Node compatibility smoke
 
-The candidate and read-only rehearsal use the same immutable UBI 8 Node 22
+The candidate and read-only rehearsal use the same immutable UBI 8 Node 24
 image in `NODE_RUNTIME_SMOKE_IMAGE`. The current multi-architecture pin runs
-Node 22.23.2 with glibc 2.28 on both amd64 and arm64. It exercises the installed
+Node 24.21.0 with glibc 2.28 on both amd64 and arm64. It exercises the installed
 npm package, optional platform dependency, native loading, CommonJS, and ESM
 without network access. UBI 8 receives public updates under the RHEL lifecycle;
-the tighter support limit is the Node 22 stream, which retires in April 2027.
+the tighter support limit is the Node 24 stream, which retires in April 2028.
 Recheck both lifecycles before each release.
 
-Both jobs retain a separate Node 22.12 executable before installing the newer
+Both jobs retain a separate Node 24.11 executable before installing the newer
 build runtime required by napi-rs. Every installed-package smoke also runs
 through that minimum executable on the supported build host. The minimum-Node
 check and the older-glibc container check cover separate runtime combinations;
-the UBI image does not claim to run Node 22.12.
+the UBI image does not claim to run Node 24.11.
 
 This runtime smoke is separate from the addon's ABI floor.
 `build-linux-node-client` targets glibc 2.17 and refuses newer ELF symbol
@@ -63,7 +63,7 @@ requirements. The installed Node executable may require a newer system glibc.
 Moving the smoke from Debian 11 glibc 2.31 to UBI 8 glibc 2.28 retains testing
 on an older runtime without changing that addon target. It does not establish
 dynamic execution on glibc 2.17 or promise support for a particular Linux
-distribution. The standalone product binaries retain their separate glibc 2.35
+distribution. The standalone product binaries retain their separate glibc 2.34
 floor in `release/glibc-floor.env`.
 
 Support sources: [UBI updates](https://access.redhat.com/support/policy/updates/ubi),
@@ -87,9 +87,9 @@ Complete new-image onboarding outside the release clock, in this order:
    token on the command line:
 
 ```sh
-package="${PACKAGE:?set PACKAGE to evidence, discovery, breg, breg-mcp, breg-review, casework, scheduling, messaging, registry-render, evidence-oid4vci, or coordinator}"
+package="${PACKAGE:?set PACKAGE to evidence, discovery, breg, breg-mcp, breg-review, casework, scheduling, messaging, registry-render, or evidence-oid4vci}"
 case "${package}" in
-  evidence|discovery|breg|breg-mcp|breg-review|casework|scheduling|messaging|registry-render|evidence-oid4vci|coordinator) ;;
+  evidence|discovery|breg|breg-mcp|breg-review|casework|scheduling|messaging|registry-render|evidence-oid4vci) ;;
   *) echo "unsupported release image package: ${package}" >&2; exit 1 ;;
 esac
 
@@ -149,12 +149,10 @@ Starting with `v0.21.0`, the release requires public `relay`, `evidence`, and
 supporting services, Registry Messaging, Registry Render, and the separate
 `evidence-oid4vci` image join from `v0.38.0`.
 Registry Relay's final numbered release is `v0.38.0`; releases from `v0.39.0`
-exclude its image, binaries, installers, and client namespace. Registry
-Coordinator joins from `v0.41.0`.
+exclude its image, binaries, installers, and client namespace.
 `BREG_SERVICES_FIRST_RELEASE`, `MESSAGING_FIRST_RELEASE`,
-`RENDER_FIRST_RELEASE`, `EVIDENCE_OID4VCI_IMAGE_FIRST_RELEASE`, and
-`COORDINATOR_FIRST_RELEASE` in `release/scripts/release_roster.py` own those
-boundaries. The existing
+`RENDER_FIRST_RELEASE`, and `EVIDENCE_OID4VCI_IMAGE_FIRST_RELEASE` in
+`release/scripts/release_roster.py` own those boundaries. The existing
 OID4VCI binary stays in earlier inventories. v0.38.0 also adds the Linux amd64
 `discoveryctl` asset beside the existing Discovery runtime asset, completing
 the released authoring and runtime pair. Earlier releases require operators to
@@ -274,29 +272,6 @@ have the visibility and Actions access documented above, and require the
 reviewed `release/security/messaging-advisory-baseline.json` before requesting
 a candidate at or after that release.
 
-Registry Coordinator joins from `v0.41.0`. `COORDINATOR_FIRST_RELEASE` in
-`release/scripts/release_roster.py` is the single place that decides the first
-release that ships the `coordinator` and `coordinatorctl` Linux amd64 binaries
-and the `coordinator` image, and every release script and workflow reads it.
-From `v0.41.0`, both checks include Coordinator. The release source deny-lists
-the public `coordinator` package. Complete the onboarding steps above before
-the first candidate: provision both identities, add `coordinator-candidate` to
-scheduled cleanup only after its bootstrap creates the private package, and
-author `release/security/coordinator-advisory-baseline.json` from the
-baseline-bootstrap rehearsal's evidence. Until then, the image-onboarding check
-refuses a `v0.41.0` or later candidate.
-
-The Coordinator image runs as the Distroless `nonroot` user (UID and GID 65532)
-and starts the runtime with the runtime configuration at
-`/etc/registry-coordinator/runtime.yaml`, which the operator mounts along with
-the flow packages and secrets the configuration references. Run state and
-prepared commands live in the Coordinator's PostgreSQL database; only the audit
-journal needs local storage. Point `deployment.auditFile` under the working
-directory `/var/lib/registry-coordinator` and mount a persistent volume there
-that keeps the image's ownership and `0700` mode. The image carries
-`coordinatorctl` at `/usr/local/bin/coordinatorctl` for the operator commands
-in `products/coordinator/DEPLOYMENT.md`; run it by overriding the entrypoint.
-
 The daily cleanup tolerates one delete failure: GitHub's 400 stating that
 publicly visible package versions with more than 5000 downloads cannot be
 deleted, a limit no caller can clear. The run records that version in its
@@ -348,9 +323,10 @@ published through `public.ecr.aws/docker/library/postgres`. Debian recipe roots
 use `public.ecr.aws/docker/library/debian`, and Mailpit uses its upstream
 `ghcr.io/axllent/mailpit` mirror. Each reference retains the exact upstream
 manifest digest; the registry endpoint changes, not the selected image bytes.
-Public CLI help retains the canonical `postgres:17.11@sha256:…` and
-`axllent/mailpit:v1.31.2@sha256:…` identities; the implementations pull the
-corresponding mirror URI at the same full digest.
+The `dev start` help of `bregctl` and `caseworkctl` and the `dev` help of
+`messagingctl` name the exact mirror references they pull. A `bregctl`
+session whose schema requires PostGIS still pulls `postgis/postgis` from
+Docker Hub.
 
 [Docker Official Images on ECR Public](https://aws.amazon.com/blogs/containers/docker-official-images-now-available-on-amazon-elastic-container-registry-public/)
 and [Mailpit's Docker installation guide](https://mailpit.axllent.org/docs/install/docker/)
@@ -367,9 +343,8 @@ supported release history. Starting with v0.26.1, a release promotes only the
 unified user-facing clients: `@registrystack/client` on npm and
 `registry-stack-client` on PyPI. Their product namespaces carry the
 version-selected APIs: `discovery`, `evidence`, and `breg` from v0.26.1,
-`casework` from v0.30.0, `messaging` from v0.38.0, `scheduling` from v0.40.0,
-and `coordinator` from v0.41.0. Releases through v0.38.0 also carry a `relay`
-namespace; v0.39.0 removes it. The
+`casework` from v0.30.0, and `messaging` from v0.38.0. Releases through
+v0.38.0 also carry a `relay` namespace; v0.39.0 removes it. The
 product-specific native bindings are build inputs, not additional public
 projects.
 
@@ -503,7 +478,7 @@ Conflicting existing candidate metadata
 or changes to a frozen archive stop preparation.
 
 The command builds a committed-source clone in Ubuntu 24.04 on Linux AMD64,
-with Node 22.12.0 and `npm ci` but no Rust toolchain: the CLI reference
+with Node 24.11.0 and `npm ci` but no Rust toolchain: the CLI reference
 renders the committed command catalog, so no step compiles Rust. It excludes
 local dependencies, uncommitted files, and ignored generated assets. It runs
 `npm test`, draft-link checks, and evidence-anchor checks before building the
@@ -719,8 +694,7 @@ Every entry marked `review_required` needs a reviewer's judgement, such as a
 wrapper that forwards a runtime name.
 
 From v0.36.0 the BReg, Casework, and Scheduling images also carry their
-operator tool at `/usr/local/bin/<name>ctl`; Messaging joins from v0.38.0 and
-Coordinator from v0.41.0. The
+operator tool at `/usr/local/bin/<name>ctl`; Messaging joins from v0.38.0. The
 `exposure/<name>.<name>ctl.json` report records the same facts for it. The tool
 is not the Entrypoint, so an exception's whole-image fingerprint `files` do not name
 it, and renewal moves the application layer that holds it without reading
@@ -963,7 +937,7 @@ evidence with the scanner versions pinned in the candidate workflow:
 ```sh
 run_id=<failed-run-id>
 run_attempt=<failed-run-attempt>
-name=evidence # or discovery, breg, breg-mcp, breg-review, casework, scheduling, messaging, registry-render, evidence-oid4vci, or coordinator
+name=evidence # or discovery, breg, breg-mcp, breg-review, casework, scheduling, messaging, registry-render, or evidence-oid4vci
 candidate_tag="ghcr.io/registrystack/${name}-candidate:candidate-${run_id}-${run_attempt}"
 digest="$(crane digest "${candidate_tag}")"
 candidate_ref="ghcr.io/registrystack/${name}-candidate@${digest}"
@@ -1105,7 +1079,10 @@ request for this exact release source commit and identifier catalog digest.
 That commit exists only once the release PR above has merged, so this step
 cannot happen earlier. Publication dispatches `registrystack-id` with the
 released tag, source commit, and catalog digest, and fails closed if the
-committed bundle differs.
+committed bundle differs. That dispatch runs after the tag is pushed, so
+`publish` refuses to create the tag until the pin is in place.
+`verify-candidate` makes the same read and prints a warning, without failing,
+while `registrystack-id` `main` does not yet pin this release source.
 
 ## Tag and publish
 
@@ -1120,7 +1097,13 @@ release/scripts/registry-release publish \
 ```
 
 The command re-verifies the plan against the exact candidate, protected-main
-ancestry, source commit policy, and current public destinations. It creates and
+ancestry, source commit policy, and current public destinations. Before it
+creates or pushes the tag of an initial publication, it reads
+`src/upstream/source.json` from `registrystack-id` `main` and refuses unless
+`commit` is the plan's source commit and `catalog_sha256` is the SHA-256 of
+`products/identifiers/generated/catalog.v1.json` at that commit. A pin it cannot
+read is a refusal too. The refusal names the expected and found values; merge
+the reviewed synchronization pull request, then rerun. It creates and
 inspects the exact annotated candidate tag, pushes only that tag ref, dispatches
 publication with a unique correlation ID, follows only the correlated run, runs
 the public verifier, and waits for the correlated documentation and identifier
@@ -1144,7 +1127,9 @@ public state. Add `--verbose-wait` only when raw job output is useful.
 
 For break-glass manual operation, omitting `--plan-output` from
 `verify-candidate` still prints the three low-level tag, push, and dispatch
-commands. The reviewed-plan path is the maintained default.
+commands. The reviewed-plan path is the maintained default. The low-level
+commands do not check the `registrystack-id` pin; resolve the `verify-candidate`
+warning before running them.
 
 The publication workflow runs from protected `main`, while the candidate and
 tag remain bound to the release source commit. This separation permits a
@@ -1320,6 +1305,7 @@ published release before it is promoted.
 | Candidate infrastructure failure before sealing | Rerun the candidate workflow |
 | Candidate byte, recipe, scan, or advisory decision changes | Build and verify a new candidate |
 | Candidate expires before the tag is pushed | Request and verify a new candidate |
+| `publish` refuses because `registrystack-id` `main` does not pin the release source, or the pin cannot be read | The tag has not been pushed. Merge the reviewed `registrystack-id` synchronization pull request for the exact release source commit and identifier catalog digest, or restore read access to the pin, then rerun `registry-release publish --plan <candidate-plan.json> --wait` |
 | Bound draft or publication step fails while the candidate remains valid | Fix the workflow on protected `main` if needed, then rerun `registry-release publish --plan <candidate-plan.json> --wait` |
 | Documentation dispatch or deployment fails after publication | Rerun `registry-release publish --plan <candidate-plan.json> --wait`; it verifies the immutable release and safely dispatches a new exact docs request when no healthy correlated run remains |
 | Identifier dispatch, deployment, or live smoke fails after publication | The identifier catalog is published by the same bound `release.yml` run as the images and tag, not by a separate closeout dispatch. Recover that run directly with `gh run rerun <run> --failed`, then rerun `registry-release publish --plan <candidate-plan.json> --wait` to verify; it reports the bound run's exact conclusion and refuses to report completion while it is failed. If the publisher bundle does not match, merge the reviewed synchronization for that exact released source before retrying. If it reports conflicting immutable bytes, stop and fix forward with a new release |

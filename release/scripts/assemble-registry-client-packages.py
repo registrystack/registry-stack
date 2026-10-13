@@ -91,15 +91,15 @@ WHEEL_STEMS = {
 # The platform, wheel tag, and maturin flags each release matrix entry uses.
 PLATFORMS = {
     "darwin-arm64": {
-        "wheel_tag": "cp310-abi3-macosx_11_0_arm64",
+        "wheel_tag": "cp311-abi3-macosx_11_0_arm64",
         "rust_target": "aarch64-apple-darwin",
     },
     "linux-x64-gnu": {
-        "wheel_tag": "cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64",
+        "wheel_tag": "cp311-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64",
         "rust_target": "x86_64-unknown-linux-gnu",
     },
     "linux-arm64-gnu": {
-        "wheel_tag": "cp310-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64",
+        "wheel_tag": "cp311-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64",
         "rust_target": "aarch64-unknown-linux-gnu",
     },
 }

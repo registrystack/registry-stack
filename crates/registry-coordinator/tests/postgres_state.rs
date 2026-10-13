@@ -3005,6 +3005,155 @@ async fn the_run_list_returns_the_most_recently_admitted_runs_newest_first_up_to
     }
 }
 
+#[tokio::test]
+async fn paged_run_listing_finds_old_attention_and_binds_authorization_and_filters() {
+    use registry_coordinator::store::RunListState;
+
+    let h = harness().await;
+    let owner = actor("owner", false);
+    let mut flows = vec![h.definition.workflow.id.clone()];
+    for index in 0..63 {
+        let prefix = format!("authorized-flow-{index:02}-");
+        flows.push(format!("{prefix}{}", "x".repeat(64 - prefix.len())));
+    }
+    assert_eq!(flows.len(), 64);
+    assert!(flows.iter().all(|flow| flow.len() <= 64));
+    let held = h
+        .store
+        .admit_owned(
+            &h.definition,
+            input(Utc::now()),
+            &owner,
+            "held-before-new-runs",
+            "binding-a",
+        )
+        .await
+        .unwrap();
+    h.sql(&format!(
+        "UPDATE {{schema}}.runs SET admitted_at=clock_timestamp()-interval '10 days',restore_review_required=true WHERE run_id='{held}'"
+    ))
+    .await;
+
+    let mut failed = None;
+    for index in 0..101 {
+        let run = h
+            .store
+            .admit_owned(
+                &h.definition,
+                input(Utc::now()),
+                &owner,
+                &format!("new-{index}"),
+                "binding-a",
+            )
+            .await
+            .unwrap();
+        if index == 0 {
+            failed = Some(run);
+        }
+    }
+    let failed = failed.unwrap();
+    h.sql(&format!(
+        "UPDATE {{schema}}.jobs SET state='dead-lettered',attempt=1,next_attempt_at=NULL,\
+         attempt_started_at=NULL,lease_expires_at=NULL,lease_token=NULL,delivered_at=NULL,\
+         dead_lettered_at=transaction_timestamp(),expired_at=NULL WHERE run_id='{failed}'"
+    ))
+    .await;
+
+    let first = h
+        .store
+        .list_owned_page(100, None, None, None, &owner, &flows)
+        .await
+        .unwrap();
+    assert_eq!(first.runs.len(), 100);
+    assert!(first.runs.iter().all(|run| run.run_id != held));
+    let cursor = first.next_cursor.expect("the older runs continue");
+    assert!(cursor.len() <= 4096);
+
+    let admitted_between_pages = h
+        .store
+        .admit_owned(
+            &h.definition,
+            input(Utc::now()),
+            &owner,
+            "admitted-between-pages",
+            "binding-a",
+        )
+        .await
+        .unwrap();
+    let second = h
+        .store
+        .list_owned_page(100, Some(&cursor), None, None, &owner, &flows)
+        .await
+        .unwrap();
+    assert!(second.next_cursor.is_none());
+    assert!(second.runs.iter().any(|run| run.run_id == held));
+    assert!(second
+        .runs
+        .iter()
+        .all(|run| run.run_id != admitted_between_pages));
+
+    let attention = h
+        .store
+        .list_owned_page(10, None, None, Some(true), &owner, &flows)
+        .await
+        .unwrap();
+    assert_eq!(
+        attention
+            .runs
+            .iter()
+            .map(|run| run.run_id)
+            .collect::<std::collections::BTreeSet<_>>(),
+        [held, failed].into_iter().collect()
+    );
+    let held_only = h
+        .store
+        .list_owned_page(
+            10,
+            None,
+            Some(RunListState::Attention),
+            None,
+            &owner,
+            &flows,
+        )
+        .await
+        .unwrap();
+    assert_eq!(held_only.runs.len(), 1);
+    assert_eq!(held_only.runs[0].run_id, held);
+
+    let mut changed_flows = flows.clone();
+    changed_flows[63] = "changed-authorized-flow".to_owned();
+    for refused in [
+        h.store
+            .list_owned_page(
+                100,
+                Some(&cursor),
+                None,
+                None,
+                &actor("other", false),
+                &flows,
+            )
+            .await,
+        h.store
+            .list_owned_page(100, Some(&cursor), None, None, &owner, &changed_flows)
+            .await,
+        h.store
+            .list_owned_page(
+                100,
+                Some(&cursor),
+                Some(RunListState::Running),
+                None,
+                &owner,
+                &flows,
+            )
+            .await,
+        h.store
+            .list_owned_page(100, Some(&cursor), None, Some(true), &owner, &flows)
+            .await,
+    ] {
+        assert_eq!(refused.unwrap_err().code, "request.invalid");
+    }
+}
+
 async fn invalid_following_wait(prior: &str, body: &str) -> Harness {
     let mut h = harness().await;
     let (start, steps) = match prior {

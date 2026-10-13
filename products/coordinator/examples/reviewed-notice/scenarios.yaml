@@ -3,45 +3,105 @@
 apiVersion: id.registrystack.org/formats/coordinator/scenarios/v1alpha1
 kind: CoordinatorScenarios
 cases:
-- id: approved-and-notice-sent
+- id: approved-unchanged-and-notice-accepted
   admittedAt: '2026-10-12T09:00:00Z'
   input:
     applicationId: 00000000-0000-4000-8000-000000000001
-    applicationVersion: '3'
-    applicationDigest: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
-    email: person@example.invalid
+    applicationRevision: '3'
+    applicationDigest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
   replies:
+    read-for-review:
+    - type: success
+      value:
+        "@context": https://id.registrystack.org/contexts/registry-record/v1
+        data:
+          recordIdentifier: 00000000-0000-4000-8000-000000000001
+          revisionIdentifier: '3'
+          domainData:
+            applicantName: Amina Example
+            benefitProgram: housing-support
+            requestedAmount: 1200
+            email: person@example.invalid
+            noticeAllowed: true
+        meta:
+          registryIdentifier: coordinator-source
+          datasetIdentifier: synthetic-applications
+          entityTypeIdentifier: application
     submit-review:
     - type: success
       value:
         requestId: 00000000-0000-4000-8000-000000000010
-        subject: {source: applications, type: application, id: 00000000-0000-4000-8000-000000000001, version: '3', digest: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'}
-        policy: {id: application-review, version: '1', digest: 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'}
-        submissionDigest: 'sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'
+        subject:
+          source: applications
+          type: application
+          id: 00000000-0000-4000-8000-000000000001
+          version: '3'
+          digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        policy:
+          id: application-review
+          version: '1'
+          digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+        submissionDigest: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+    read-for-notice:
+    - type: success
+      value:
+        "@context": https://id.registrystack.org/contexts/registry-record/v1
+        data:
+          recordIdentifier: 00000000-0000-4000-8000-000000000001
+          revisionIdentifier: '3'
+          domainData:
+            applicantName: Amina Example
+            benefitProgram: housing-support
+            requestedAmount: 1200
+            email: person@example.invalid
+            noticeAllowed: true
+        meta:
+          registryIdentifier: coordinator-source
+          datasetIdentifier: synthetic-applications
+          entityTypeIdentifier: application
     notify:
     - type: success
       value:
         id: 00000000-0000-4000-8000-000000000020
         status: queued
         links:
-          self: /v1/messages/00000000-0000-4000-8000-000000000020
-          cancel: /v1/messages/00000000-0000-4000-8000-000000000020/cancel
+          self: "/v1/messages/00000000-0000-4000-8000-000000000020"
+          cancel: "/v1/messages/00000000-0000-4000-8000-000000000020/cancel"
   waits:
     await-review:
       type: event
       value:
         resultId: 00000000-0000-4000-8000-000000000011
         requestId: 00000000-0000-4000-8000-000000000010
-        subject: {source: applications, type: application, id: 00000000-0000-4000-8000-000000000001, version: '3', digest: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'}
-        policy: {id: application-review, version: '1', digest: 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'}
-        submissionDigest: 'sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'
+        subject:
+          source: applications
+          type: application
+          id: 00000000-0000-4000-8000-000000000001
+          version: '3'
+          digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        policy:
+          id: application-review
+          version: '1'
+          digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+        submissionDigest: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
         status: approved
         completedAt: '2026-10-13T09:00:00Z'
         availableUntil: '2026-11-13T09:00:00Z'
   expect:
-    path: [submit-review, await-review, decide, notify, notice-sent]
+    path:
+    - read-for-review
+    - verify-review-subject
+    - submit-review
+    - await-review
+    - decide
+    - read-for-notice
+    - verify-notice
+    - notify
+    - notice-accepted
     state: completed
-    outcome: {type: named, value: notice-sent}
+    outcome:
+      type: named
+      value: notice-accepted
     output:
       messageId: 00000000-0000-4000-8000-000000000020
       resultId: 00000000-0000-4000-8000-000000000011
@@ -49,155 +109,656 @@ cases:
   admittedAt: '2026-10-12T09:00:00Z'
   input:
     applicationId: 00000000-0000-4000-8000-000000000001
-    applicationVersion: '3'
-    applicationDigest: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
-    email: person@example.invalid
+    applicationRevision: '3'
+    applicationDigest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
   replies:
+    read-for-review:
+    - type: success
+      value:
+        "@context": https://id.registrystack.org/contexts/registry-record/v1
+        data:
+          recordIdentifier: 00000000-0000-4000-8000-000000000001
+          revisionIdentifier: '3'
+          domainData:
+            applicantName: Amina Example
+            benefitProgram: housing-support
+            requestedAmount: 1200
+            email: person@example.invalid
+            noticeAllowed: true
+        meta:
+          registryIdentifier: coordinator-source
+          datasetIdentifier: synthetic-applications
+          entityTypeIdentifier: application
     submit-review:
     - type: success
       value:
         requestId: 00000000-0000-4000-8000-000000000010
-        subject: {source: applications, type: application, id: 00000000-0000-4000-8000-000000000001, version: '3', digest: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'}
-        policy: {id: application-review, version: '1', digest: 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'}
-        submissionDigest: 'sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'
+        subject:
+          source: applications
+          type: application
+          id: 00000000-0000-4000-8000-000000000001
+          version: '3'
+          digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        policy:
+          id: application-review
+          version: '1'
+          digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+        submissionDigest: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
   waits:
     await-review:
       type: event
       value:
         resultId: 00000000-0000-4000-8000-000000000011
         requestId: 00000000-0000-4000-8000-000000000010
-        subject: {source: applications, type: application, id: 00000000-0000-4000-8000-000000000001, version: '3', digest: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'}
-        policy: {id: application-review, version: '1', digest: 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'}
-        submissionDigest: 'sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'
+        subject:
+          source: applications
+          type: application
+          id: 00000000-0000-4000-8000-000000000001
+          version: '3'
+          digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        policy:
+          id: application-review
+          version: '1'
+          digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+        submissionDigest: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
         status: rejected
-        outcome: missing-evidence
         completedAt: '2026-10-13T09:00:00Z'
         availableUntil: '2026-11-13T09:00:00Z'
+        outcome: missing-evidence
   expect:
-    path: [submit-review, await-review, decide, rejected]
+    path:
+    - read-for-review
+    - verify-review-subject
+    - submit-review
+    - await-review
+    - decide
+    - review-rejected
     state: completed
-    outcome: {type: named, value: rejected}
-    output: {resultId: 00000000-0000-4000-8000-000000000011}
-- id: changes-requested-is-not-a-decision
+    outcome:
+      type: named
+      value: review-rejected
+    output:
+      resultId: 00000000-0000-4000-8000-000000000011
+- id: changes-requested-is-not-approval
   admittedAt: '2026-10-12T09:00:00Z'
   input:
     applicationId: 00000000-0000-4000-8000-000000000001
-    applicationVersion: '3'
-    applicationDigest: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
-    email: person@example.invalid
+    applicationRevision: '3'
+    applicationDigest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
   replies:
+    read-for-review:
+    - type: success
+      value:
+        "@context": https://id.registrystack.org/contexts/registry-record/v1
+        data:
+          recordIdentifier: 00000000-0000-4000-8000-000000000001
+          revisionIdentifier: '3'
+          domainData:
+            applicantName: Amina Example
+            benefitProgram: housing-support
+            requestedAmount: 1200
+            email: person@example.invalid
+            noticeAllowed: true
+        meta:
+          registryIdentifier: coordinator-source
+          datasetIdentifier: synthetic-applications
+          entityTypeIdentifier: application
     submit-review:
     - type: success
       value:
         requestId: 00000000-0000-4000-8000-000000000010
-        subject: {source: applications, type: application, id: 00000000-0000-4000-8000-000000000001, version: '3', digest: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'}
-        policy: {id: application-review, version: '1', digest: 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'}
-        submissionDigest: 'sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'
+        subject:
+          source: applications
+          type: application
+          id: 00000000-0000-4000-8000-000000000001
+          version: '3'
+          digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        policy:
+          id: application-review
+          version: '1'
+          digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+        submissionDigest: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
   waits:
     await-review:
       type: event
       value:
         resultId: 00000000-0000-4000-8000-000000000011
         requestId: 00000000-0000-4000-8000-000000000010
-        subject: {source: applications, type: application, id: 00000000-0000-4000-8000-000000000001, version: '3', digest: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'}
-        policy: {id: application-review, version: '1', digest: 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'}
-        submissionDigest: 'sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'
+        subject:
+          source: applications
+          type: application
+          id: 00000000-0000-4000-8000-000000000001
+          version: '3'
+          digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        policy:
+          id: application-review
+          version: '1'
+          digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+        submissionDigest: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
         status: changes-requested
+        completedAt: '2026-10-13T09:00:00Z'
+        availableUntil: '2026-11-13T09:00:00Z'
         outcome: proof-of-address
+  expect:
+    path:
+    - read-for-review
+    - verify-review-subject
+    - submit-review
+    - await-review
+    - decide
+    - review-not-approved
+    state: completed
+    outcome:
+      type: named
+      value: review-not-approved
+    output:
+      status: changes-requested
+- id: changed-before-review
+  admittedAt: '2026-10-12T09:00:00Z'
+  input:
+    applicationId: 00000000-0000-4000-8000-000000000001
+    applicationRevision: '2'
+    applicationDigest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  replies:
+    read-for-review:
+    - type: success
+      value:
+        "@context": https://id.registrystack.org/contexts/registry-record/v1
+        data:
+          recordIdentifier: 00000000-0000-4000-8000-000000000001
+          revisionIdentifier: '3'
+          domainData:
+            applicantName: Amina Example
+            benefitProgram: housing-support
+            requestedAmount: 1200
+            email: person@example.invalid
+            noticeAllowed: true
+        meta:
+          registryIdentifier: coordinator-source
+          datasetIdentifier: synthetic-applications
+          entityTypeIdentifier: application
+  expect:
+    path:
+    - read-for-review
+    - verify-review-subject
+    - changed-before-review
+    state: completed
+    outcome:
+      type: named
+      value: application-changed
+- id: changed-after-approval
+  admittedAt: '2026-10-12T09:00:00Z'
+  input:
+    applicationId: 00000000-0000-4000-8000-000000000001
+    applicationRevision: '3'
+    applicationDigest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  replies:
+    read-for-review:
+    - type: success
+      value:
+        "@context": https://id.registrystack.org/contexts/registry-record/v1
+        data:
+          recordIdentifier: 00000000-0000-4000-8000-000000000001
+          revisionIdentifier: '3'
+          domainData:
+            applicantName: Amina Example
+            benefitProgram: housing-support
+            requestedAmount: 1200
+            email: person@example.invalid
+            noticeAllowed: true
+        meta:
+          registryIdentifier: coordinator-source
+          datasetIdentifier: synthetic-applications
+          entityTypeIdentifier: application
+    submit-review:
+    - type: success
+      value:
+        requestId: 00000000-0000-4000-8000-000000000010
+        subject:
+          source: applications
+          type: application
+          id: 00000000-0000-4000-8000-000000000001
+          version: '3'
+          digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        policy:
+          id: application-review
+          version: '1'
+          digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+        submissionDigest: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+    read-for-notice:
+    - type: success
+      value:
+        "@context": https://id.registrystack.org/contexts/registry-record/v1
+        data:
+          recordIdentifier: 00000000-0000-4000-8000-000000000001
+          revisionIdentifier: '4'
+          domainData:
+            applicantName: Amina Example
+            benefitProgram: housing-support
+            requestedAmount: 1400
+            email: person@example.invalid
+            noticeAllowed: true
+        meta:
+          registryIdentifier: coordinator-source
+          datasetIdentifier: synthetic-applications
+          entityTypeIdentifier: application
+  waits:
+    await-review:
+      type: event
+      value:
+        resultId: 00000000-0000-4000-8000-000000000011
+        requestId: 00000000-0000-4000-8000-000000000010
+        subject:
+          source: applications
+          type: application
+          id: 00000000-0000-4000-8000-000000000001
+          version: '3'
+          digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        policy:
+          id: application-review
+          version: '1'
+          digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+        submissionDigest: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+        status: approved
         completedAt: '2026-10-13T09:00:00Z'
         availableUntil: '2026-11-13T09:00:00Z'
   expect:
-    path: [submit-review, await-review, decide, not-decided]
+    path:
+    - read-for-review
+    - verify-review-subject
+    - submit-review
+    - await-review
+    - decide
+    - read-for-notice
+    - verify-notice
+    - changed-after-review
     state: completed
-    outcome: {type: named, value: not-decided}
-    output: {status: changes-requested}
+    outcome:
+      type: named
+      value: application-changed
+- id: consent-revoked-after-approval
+  admittedAt: '2026-10-12T09:00:00Z'
+  input:
+    applicationId: 00000000-0000-4000-8000-000000000001
+    applicationRevision: '3'
+    applicationDigest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  replies:
+    read-for-review:
+    - type: success
+      value:
+        "@context": https://id.registrystack.org/contexts/registry-record/v1
+        data:
+          recordIdentifier: 00000000-0000-4000-8000-000000000001
+          revisionIdentifier: '3'
+          domainData:
+            applicantName: Amina Example
+            benefitProgram: housing-support
+            requestedAmount: 1200
+            email: person@example.invalid
+            noticeAllowed: true
+        meta:
+          registryIdentifier: coordinator-source
+          datasetIdentifier: synthetic-applications
+          entityTypeIdentifier: application
+    submit-review:
+    - type: success
+      value:
+        requestId: 00000000-0000-4000-8000-000000000010
+        subject:
+          source: applications
+          type: application
+          id: 00000000-0000-4000-8000-000000000001
+          version: '3'
+          digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        policy:
+          id: application-review
+          version: '1'
+          digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+        submissionDigest: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+    read-for-notice:
+    - type: success
+      value:
+        "@context": https://id.registrystack.org/contexts/registry-record/v1
+        data:
+          recordIdentifier: 00000000-0000-4000-8000-000000000001
+          revisionIdentifier: '4'
+          domainData:
+            applicantName: Amina Example
+            benefitProgram: housing-support
+            requestedAmount: 1200
+            email: person@example.invalid
+            noticeAllowed: false
+        meta:
+          registryIdentifier: coordinator-source
+          datasetIdentifier: synthetic-applications
+          entityTypeIdentifier: application
+  waits:
+    await-review:
+      type: event
+      value:
+        resultId: 00000000-0000-4000-8000-000000000011
+        requestId: 00000000-0000-4000-8000-000000000010
+        subject:
+          source: applications
+          type: application
+          id: 00000000-0000-4000-8000-000000000001
+          version: '3'
+          digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        policy:
+          id: application-review
+          version: '1'
+          digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+        submissionDigest: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+        status: approved
+        completedAt: '2026-10-13T09:00:00Z'
+        availableUntil: '2026-11-13T09:00:00Z'
+  expect:
+    path:
+    - read-for-review
+    - verify-review-subject
+    - submit-review
+    - await-review
+    - decide
+    - read-for-notice
+    - verify-notice
+    - notice-permission-gone
+    state: completed
+    outcome:
+      type: named
+      value: notice-permission-gone
 - id: no-decision-within-fourteen-days
   admittedAt: '2026-10-12T09:00:00Z'
   input:
     applicationId: 00000000-0000-4000-8000-000000000001
-    applicationVersion: '3'
-    applicationDigest: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
-    email: person@example.invalid
+    applicationRevision: '3'
+    applicationDigest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
   replies:
+    read-for-review:
+    - type: success
+      value:
+        "@context": https://id.registrystack.org/contexts/registry-record/v1
+        data:
+          recordIdentifier: 00000000-0000-4000-8000-000000000001
+          revisionIdentifier: '3'
+          domainData:
+            applicantName: Amina Example
+            benefitProgram: housing-support
+            requestedAmount: 1200
+            email: person@example.invalid
+            noticeAllowed: true
+        meta:
+          registryIdentifier: coordinator-source
+          datasetIdentifier: synthetic-applications
+          entityTypeIdentifier: application
     submit-review:
     - type: success
       value:
         requestId: 00000000-0000-4000-8000-000000000010
-        subject: {source: applications, type: application, id: 00000000-0000-4000-8000-000000000001, version: '3', digest: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'}
-        policy: {id: application-review, version: '1', digest: 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'}
-        submissionDigest: 'sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'
-    withdraw:
+        subject:
+          source: applications
+          type: application
+          id: 00000000-0000-4000-8000-000000000001
+          version: '3'
+          digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        policy:
+          id: application-review
+          version: '1'
+          digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+        submissionDigest: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+    withdraw-timeout:
     - type: success
       value:
         outcome: cancelled
         result:
           resultId: 00000000-0000-4000-8000-000000000011
           requestId: 00000000-0000-4000-8000-000000000010
-          subject: {source: applications, type: application, id: 00000000-0000-4000-8000-000000000001, version: '3', digest: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'}
-          policy: {id: application-review, version: '1', digest: 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'}
-          submissionDigest: 'sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'
+          subject:
+            source: applications
+            type: application
+            id: 00000000-0000-4000-8000-000000000001
+            version: '3'
+            digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+          policy:
+            id: application-review
+            version: '1'
+            digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+          submissionDigest: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
           status: cancelled
           completedAt: '2026-10-26T09:00:00Z'
           availableUntil: '2026-11-25T09:00:00Z'
   waits:
-    await-review: {type: timeout}
+    await-review:
+      type: timeout
   expect:
-    path: [submit-review, await-review, withdraw, confirm-withdrawal, withdrawn]
+    path:
+    - read-for-review
+    - verify-review-subject
+    - submit-review
+    - await-review
+    - withdraw-timeout
+    - confirm-timeout-withdrawal
+    - timeout-withdrawn
     state: completed
-    outcome: {type: named, value: withdrawn}
-    output: {resultId: 00000000-0000-4000-8000-000000000011}
+    outcome:
+      type: named
+      value: review-timeout-withdrawn
+    output:
+      resultId: 00000000-0000-4000-8000-000000000011
     workflowElapsedSeconds: 1209600
-- id: decided-just-before-withdrawal
+- id: operator-cancels-open-review
   admittedAt: '2026-10-12T09:00:00Z'
   input:
     applicationId: 00000000-0000-4000-8000-000000000001
-    applicationVersion: '3'
-    applicationDigest: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
-    email: person@example.invalid
+    applicationRevision: '3'
+    applicationDigest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
   replies:
+    read-for-review:
+    - type: success
+      value:
+        "@context": https://id.registrystack.org/contexts/registry-record/v1
+        data:
+          recordIdentifier: 00000000-0000-4000-8000-000000000001
+          revisionIdentifier: '3'
+          domainData:
+            applicantName: Amina Example
+            benefitProgram: housing-support
+            requestedAmount: 1200
+            email: person@example.invalid
+            noticeAllowed: true
+        meta:
+          registryIdentifier: coordinator-source
+          datasetIdentifier: synthetic-applications
+          entityTypeIdentifier: application
     submit-review:
     - type: success
       value:
         requestId: 00000000-0000-4000-8000-000000000010
-        subject: {source: applications, type: application, id: 00000000-0000-4000-8000-000000000001, version: '3', digest: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'}
-        policy: {id: application-review, version: '1', digest: 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'}
-        submissionDigest: 'sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'
-    withdraw:
+        subject:
+          source: applications
+          type: application
+          id: 00000000-0000-4000-8000-000000000001
+          version: '3'
+          digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        policy:
+          id: application-review
+          version: '1'
+          digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+        submissionDigest: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+    withdraw-operator:
+    - type: success
+      value:
+        outcome: cancelled
+        result:
+          resultId: 00000000-0000-4000-8000-000000000011
+          requestId: 00000000-0000-4000-8000-000000000010
+          subject:
+            source: applications
+            type: application
+            id: 00000000-0000-4000-8000-000000000001
+            version: '3'
+            digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+          policy:
+            id: application-review
+            version: '1'
+            digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+          submissionDigest: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+          status: cancelled
+          completedAt: '2026-10-26T09:00:00Z'
+          availableUntil: '2026-11-25T09:00:00Z'
+  waits:
+    await-review:
+      type: cancel
+  expect:
+    path:
+    - read-for-review
+    - verify-review-subject
+    - submit-review
+    - await-review
+    - withdraw-operator
+    - confirm-operator-withdrawal
+    - operator-withdrawn
+    state: completed
+    outcome:
+      type: named
+      value: review-operator-withdrawn
+    output:
+      resultId: 00000000-0000-4000-8000-000000000011
+- id: decided-just-before-timeout-withdrawal
+  admittedAt: '2026-10-12T09:00:00Z'
+  input:
+    applicationId: 00000000-0000-4000-8000-000000000001
+    applicationRevision: '3'
+    applicationDigest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  replies:
+    read-for-review:
+    - type: success
+      value:
+        "@context": https://id.registrystack.org/contexts/registry-record/v1
+        data:
+          recordIdentifier: 00000000-0000-4000-8000-000000000001
+          revisionIdentifier: '3'
+          domainData:
+            applicantName: Amina Example
+            benefitProgram: housing-support
+            requestedAmount: 1200
+            email: person@example.invalid
+            noticeAllowed: true
+        meta:
+          registryIdentifier: coordinator-source
+          datasetIdentifier: synthetic-applications
+          entityTypeIdentifier: application
+    submit-review:
+    - type: success
+      value:
+        requestId: 00000000-0000-4000-8000-000000000010
+        subject:
+          source: applications
+          type: application
+          id: 00000000-0000-4000-8000-000000000001
+          version: '3'
+          digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        policy:
+          id: application-review
+          version: '1'
+          digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+        submissionDigest: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+    withdraw-timeout:
     - type: success
       value:
         outcome: already-terminal
         result:
           resultId: 00000000-0000-4000-8000-000000000011
           requestId: 00000000-0000-4000-8000-000000000010
-          subject: {source: applications, type: application, id: 00000000-0000-4000-8000-000000000001, version: '3', digest: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'}
-          policy: {id: application-review, version: '1', digest: 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'}
-          submissionDigest: 'sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'
+          subject:
+            source: applications
+            type: application
+            id: 00000000-0000-4000-8000-000000000001
+            version: '3'
+            digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+          policy:
+            id: application-review
+            version: '1'
+            digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+          submissionDigest: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
           status: approved
           completedAt: '2026-10-26T08:59:45Z'
           availableUntil: '2026-11-25T08:59:45Z'
   waits:
-    await-review: {type: timeout}
+    await-review:
+      type: timeout
   expect:
-    path: [submit-review, await-review, withdraw, confirm-withdrawal, decided-late]
+    path:
+    - read-for-review
+    - verify-review-subject
+    - submit-review
+    - await-review
+    - withdraw-timeout
+    - confirm-timeout-withdrawal
+    - timeout-decided-late
     state: completed
-    outcome: {type: named, value: decided-late}
-    output: {status: approved, resultId: 00000000-0000-4000-8000-000000000011}
+    outcome:
+      type: named
+      value: decided-late
+    output:
+      status: approved
+      resultId: 00000000-0000-4000-8000-000000000011
     workflowElapsedSeconds: 1209600
-- id: notice-refused-after-approval
+- id: messaging-policy-refuses-approved-notice
   admittedAt: '2026-10-12T09:00:00Z'
   input:
     applicationId: 00000000-0000-4000-8000-000000000001
-    applicationVersion: '3'
-    applicationDigest: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
-    email: person@example.invalid
+    applicationRevision: '3'
+    applicationDigest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
   replies:
+    read-for-review:
+    - type: success
+      value:
+        "@context": https://id.registrystack.org/contexts/registry-record/v1
+        data:
+          recordIdentifier: 00000000-0000-4000-8000-000000000001
+          revisionIdentifier: '3'
+          domainData:
+            applicantName: Amina Example
+            benefitProgram: housing-support
+            requestedAmount: 1200
+            email: person@example.invalid
+            noticeAllowed: true
+        meta:
+          registryIdentifier: coordinator-source
+          datasetIdentifier: synthetic-applications
+          entityTypeIdentifier: application
     submit-review:
     - type: success
       value:
         requestId: 00000000-0000-4000-8000-000000000010
-        subject: {source: applications, type: application, id: 00000000-0000-4000-8000-000000000001, version: '3', digest: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'}
-        policy: {id: application-review, version: '1', digest: 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'}
-        submissionDigest: 'sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'
+        subject:
+          source: applications
+          type: application
+          id: 00000000-0000-4000-8000-000000000001
+          version: '3'
+          digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        policy:
+          id: application-review
+          version: '1'
+          digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+        submissionDigest: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+    read-for-notice:
+    - type: success
+      value:
+        "@context": https://id.registrystack.org/contexts/registry-record/v1
+        data:
+          recordIdentifier: 00000000-0000-4000-8000-000000000001
+          revisionIdentifier: '3'
+          domainData:
+            applicantName: Amina Example
+            benefitProgram: housing-support
+            requestedAmount: 1200
+            email: person@example.invalid
+            noticeAllowed: true
+        meta:
+          registryIdentifier: coordinator-source
+          datasetIdentifier: synthetic-applications
+          entityTypeIdentifier: application
     notify:
     - type: refused
       code: product-forbidden
@@ -207,13 +768,30 @@ cases:
       value:
         resultId: 00000000-0000-4000-8000-000000000011
         requestId: 00000000-0000-4000-8000-000000000010
-        subject: {source: applications, type: application, id: 00000000-0000-4000-8000-000000000001, version: '3', digest: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'}
-        policy: {id: application-review, version: '1', digest: 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'}
-        submissionDigest: 'sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'
+        subject:
+          source: applications
+          type: application
+          id: 00000000-0000-4000-8000-000000000001
+          version: '3'
+          digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        policy:
+          id: application-review
+          version: '1'
+          digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+        submissionDigest: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
         status: approved
         completedAt: '2026-10-13T09:00:00Z'
         availableUntil: '2026-11-13T09:00:00Z'
   expect:
-    path: [submit-review, await-review, decide, notify]
+    path:
+    - read-for-review
+    - verify-review-subject
+    - submit-review
+    - await-review
+    - decide
+    - read-for-notice
+    - verify-notice
+    - notify
     state: refused
-    outcome: {type: none}
+    outcome:
+      type: none

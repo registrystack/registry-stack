@@ -72,9 +72,6 @@ enum Command {
     Apply(ApplyArgs),
     /// Report the active package, every activation, and the runtime role mode.
     Status(ActivationArgs),
-    /// Removed: refuses and names `caseworkctl plan` then `caseworkctl apply`.
-    #[command(hide = true)]
-    Db(RemovedCommandArgs),
     /// Preview or erase retained local payload copies for one source request.
     Retention(RetentionArgs),
     /// Preview or record an operator decision about one source attempt whose lease has expired.
@@ -251,18 +248,6 @@ fn parse_backup_reference(value: &str) -> Result<String, String> {
 fn parse_attempt_id(value: &str) -> Result<Uuid, String> {
     Uuid::parse_str(value).map_err(|_| "--attempt-id must be a UUID".to_owned())
 }
-
-/// A removed command keeps its name only to refuse it and name the
-/// replacement; whatever followed it is ignored.
-#[derive(Debug, Args)]
-struct RemovedCommandArgs {
-    #[arg(trailing_var_arg = true, allow_hyphen_values = true, hide = true)]
-    arguments: Vec<OsString>,
-}
-
-const REMOVED_DB_MIGRATE_MESSAGE: &str = "caseworkctl db migrate was removed; database changes \
-     are applied with a package activation: run `caseworkctl plan --runtime-config FILE` then \
-     `caseworkctl apply --runtime-config FILE`";
 
 #[derive(Debug, Args)]
 struct RetentionArgs {
@@ -566,15 +551,10 @@ fn write_usage_report(
     );
 }
 
-/// A usage refusal clap cannot express: a removed command, or a repeatable
-/// flag given more often than its bound.
+/// A usage refusal clap cannot express: a repeatable flag given more often
+/// than its bound.
 fn usage_refusal(command: &Command) -> Option<(&'static str, String, &'static str)> {
     match command {
-        Command::Db(_) => Some((
-            "usage.removed-command",
-            REMOVED_DB_MIGRATE_MESSAGE.to_owned(),
-            "Run caseworkctl plan --runtime-config FILE, then caseworkctl apply --runtime-config FILE.",
-        )),
         Command::Apply(args) if args.backups.len() > registry_casework::MAX_BACKUP_REFERENCES => {
             Some((
                 "usage.invalid",
@@ -670,7 +650,6 @@ fn cli_report_kind(command: &Command) -> &'static str {
         Command::Plan(_) => "CaseworkPlanReport",
         Command::Apply(_) => "CaseworkApplyReport",
         Command::Status(_) => "CaseworkStatusReport",
-        Command::Db(_) => "CaseworkUsageReport",
         Command::Doctor(_) => "CaseworkDoctorReport",
         Command::Explain(_) => "CaseworkExplainReport",
         Command::Init(_) => "CaseworkInitReport",
@@ -1329,7 +1308,6 @@ fn run(cli: Cli) -> Result<Value> {
             args.backups,
         ),
         Command::Status(args) => project::status(&args.runtime_config),
-        Command::Db(_) => unreachable!("the removed command is refused before run"),
         Command::Retention(args) => match args.command {
             RetentionCommand::Erase(args) => project::retention_erase(
                 &args.operator.project,
@@ -2575,8 +2553,12 @@ mod tests {
         )
     }
 
+    /// Database changes are applied by `plan` and `apply` only: `db` is no
+    /// command, so the argument parser refuses it as it refuses any word it
+    /// does not know.
     #[test]
-    fn the_removed_db_migrate_command_refuses_as_usage_naming_plan_then_apply() {
+    fn db_is_refused_as_an_unrecognized_command() {
+        let (_, _, unknown) = run_args(&["not-a-command"]);
         for arguments in [
             &["db", "migrate", "."][..],
             &["db", "migrate", ".", "--runtime-config", "runtime.yaml"][..],
@@ -2586,12 +2568,10 @@ mod tests {
             assert_eq!(exit, ExitCode::from(2), "{arguments:?}: {stderr}");
             assert!(stdout.is_empty(), "{stdout}");
             assert!(
-                stderr.contains(
-                    "run `caseworkctl plan --runtime-config FILE` then \
-                     `caseworkctl apply --runtime-config FILE`"
-                ),
+                stderr.starts_with("error: unrecognized subcommand\n"),
                 "{stderr}"
             );
+            assert_eq!(stderr, unknown, "{arguments:?}");
         }
 
         let (exit, stdout, stderr) = run_args(&["--format", "json", "db", "migrate", "."]);
@@ -2600,21 +2580,12 @@ mod tests {
         let report: Value = serde_json::from_str(&stdout).unwrap();
         assert_eq!(report["kind"], "CaseworkUsageReport");
         assert_eq!(report["ok"], false);
-        assert_eq!(report["diagnostics"][0]["code"], "usage.removed-command");
+        assert_eq!(report["diagnostics"][0]["code"], "usage.invalid");
         assert_eq!(report["diagnostics"][0]["path"], "arguments");
-        assert!(report["diagnostics"][0]["message"]
-            .as_str()
-            .unwrap()
-            .starts_with("caseworkctl db migrate was removed"));
-    }
-
-    #[test]
-    fn the_removed_db_command_is_hidden_from_help() {
-        let help = Cli::command().render_help().to_string();
-        assert!(!help.contains("\n  db "), "{help}");
-        for command in ["plan", "apply", "status"] {
-            assert!(help.contains(&format!("\n  {command} ")), "{help}");
-        }
+        assert_eq!(
+            report["diagnostics"][0]["message"],
+            "unrecognized subcommand"
+        );
     }
 
     #[test]

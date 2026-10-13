@@ -2,27 +2,79 @@
 
 ## Unreleased
 
-- The runtime file takes an optional top-level `taskGrantStatus` list of at
-  most 32 Casework task authorities, each named by the exact `sourceIssuer`
-  its grants carry. Once the list holds an entry, every capacity commitment
-  and idempotent replay first obtains a fresh exact status answer from the
-  grant's authority, with no fallback: an inactive, mismatched, unlisted, or
-  incompletely bound grant answers `operation.not-authorized`, and an
-  authority or credential outage answers `service.unavailable`. The whole
-  check is bounded at ten seconds and ends before the capacity transaction
-  opens. `statusScope` and `statusPath` are optional and default to
-  Casework's `casework:grants:status` scope and
-  `/v1/task-grants/{grantId}/status` route. See
-  `products/scheduling/RUNTIME-CONFIG.md`.
-- BREAKING: a deployment with no `taskGrantStatus` entry accepts a task
-  grant only while it has at most 900 seconds left at request entry; a grant
+## 0.41.0 - 2026-10-13
+
+- BREAKING: the published `registry-stack-client` Python package, which carries
+  the Registry Scheduling client, requires Python 3.11 or later: its
+  `Requires-Python` is `>=3.11` (was `>=3.10`), and its wheels are built
+  against the Python 3.11 stable ABI and named `cp311-abi3` (was `cp310-abi3`).
+  Python 3.10 is no longer supported. Migration: run Python 3.11 or later.
+
+- BREAKING: the published `@registrystack/client` Node.js package, which
+  carries the Registry Scheduling client, requires Node.js 24.11.0 or later:
+  its `engines.node` is `>=24.11.0` (was `>=22.12.0`). Node.js 22 is no longer
+  supported. Migration: run Node.js 24.11.0 or later.
+- BREAKING: three refusals that named input only releases before v0.40.0
+  wrote or accepted are removed. v0.40.0 refused each of them too, so nothing
+  v0.40.0 wrote or accepted changes, and each input is still refused, without
+  a name of its own:
+  - `scheduling migrate` is no longer a command. It was hidden and only
+    exited 2 naming `schedulingctl plan` then `schedulingctl apply`. It now
+    fails as any unknown command does, with the usage error `unrecognized
+    subcommand 'migrate'` and exit 2. Migration: activate with `schedulingctl
+    plan --runtime-config FILE` then `schedulingctl apply --runtime-config
+    FILE`, and start the runtime with `scheduling serve`.
+  - `scheduling.package.retired-manifest` is removed. A `package.root` that
+    holds `scheduling.package.json` is refused at startup like any other
+    file `SHA256SUMS` does not list, as `scheduling.package.invalid` at
+    `/package/root` naming the extra file, or as
+    `scheduling.package.unexpected-contents` when `SHA256SUMS` lists it. A
+    `package.expectedDigest` that pins another digest is checked before the
+    contents and is reported first, as `scheduling.package.digest-mismatch`.
+    Migration: rebuild the package with `schedulingctl package`.
+  - `schedulingctl.activation.earlier-release` is removed. `schedulingctl
+    plan`, `apply`, and `records apply` do not read a retained policy whose
+    identity sits under `scheduling` where `project` is required, and now
+    fail on it as on any database that is not in the state the release
+    expects: `schedulingctl.store-unavailable`, exit 3. Migration: start from
+    a new database, then run `schedulingctl apply --runtime-config FILE` and
+    `schedulingctl records apply --runtime-config FILE RECORDS`.
+
+  The `registry-scheduling` crate loses `RuntimeError::RemovedCommand`,
+  `RuntimeError::exit_code`, `runtime::removed_command_refusal`,
+  `RuntimeConfigError::RetiredPackageManifest`,
+  `config::RETIRED_PACKAGE_MANIFEST_FILE`, and `StoreError::EarlierRelease`.
+  `schedulingctl plan` runs its read-only publication check only when no
+  schema version is pending; a database v0.40.0 activated has none.
+- The runtime file must state a top-level `taskGrantStatus`, which decides
+  how Scheduling learns whether a task grant is still current. A list of one
+  to 32 Casework task authorities, each named by the exact `sourceIssuer` its
+  grants carry, makes every capacity commitment and idempotent replay first
+  obtain a fresh exact status answer from the grant's authority, with no
+  fallback: an inactive, mismatched, unlisted, or incompletely bound grant
+  answers `operation.not-authorized` (403), even with less than fifteen
+  minutes left, and an authority or credential outage answers
+  `service.unavailable`. The whole check is bounded at ten seconds and ends
+  before the capacity transaction opens. `statusScope` and `statusPath` are
+  optional and default to Casework's `casework:grants:status` scope and
+  `/v1/task-grants/{grantId}/status` route. The keyword
+  `unchecked-final-fifteen-minutes` instead accepts only a grant with at most
+  900 seconds left at request entry and performs no revocation check; a grant
   with more answers `operation.not-authorized` (403) and is audited as
-  refused, where every unexpired grant was accepted. A Casework immediate
-  grant never lasts longer, so the refusal meets only a deferred grant or a
-  longer grant from another authority. After it acquires its locks, the
-  capacity transaction now rechecks the execution token's expiry as well as
-  the grant's. Migration: configure `taskGrantStatus` for every task
-  authority whose grants outlive fifteen minutes.
+  refused. An empty list is refused, naming both choices. See
+  `products/scheduling/RUNTIME-CONFIG.md`.
+- BREAKING: a runtime file without `taskGrantStatus` is refused at startup
+  with `scheduling.runtime.missing-task-grant-status`. v0.40.0 had no such
+  member and accepted every unexpired task grant. A Casework immediate grant
+  never lasts longer than fifteen minutes. The offline path checks remaining
+  lifetime alone, so it also admits the final 900 seconds of a deferred grant
+  without checking revocation. After it acquires
+  its locks, the capacity transaction rechecks the execution token's expiry
+  as well as the grant's, on either path. Migration: list the task
+  authorities under `taskGrantStatus`, or write
+  `taskGrantStatus: unchecked-final-fifteen-minutes`, which accepts only a
+  grant with at most 900 seconds left at request entry and performs no
+  revocation check.
 - `POST /v1/appointments/receipt` returns the retained original success
   receipt for the caller's verified issuer and subject, the original
   `Idempotency-Key`, and the original request body, under ordinary read
@@ -32,6 +84,11 @@
   evidence that no effect occurred. The Rust (`appointment_receipt`),
   Node.js (`appointmentReceipt`), and Python (`appointment_receipt`) clients
   carry the route.
+- BREAKING (Rust API): `registry_scheduling_core::ProblemCode`, which
+  `registry-scheduling-client` errors carry, gains `ReceiptUnresolved`. The
+  enum is not `#[non_exhaustive]`, so an exhaustive `match` on it no longer
+  compiles. Only Rust code that matches on the enum is affected. Migration:
+  add a `ReceiptUnresolved` arm or a wildcard arm.
 
 ## v0.40.0 - 2026-10-11
 

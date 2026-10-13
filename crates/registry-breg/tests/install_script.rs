@@ -168,6 +168,7 @@ fn glibc_below_the_floor_refuses_before_installing() {
 fn glibc_at_the_floor_installs_both_commands() {
     let (major, minor) = glibc_floor();
     let fixture = InstallerFixture::linux();
+    let start_log = fixture.start_log();
     let mut command = fixture.command();
     command.env("FAKE_GLIBC", format!("{major}.{minor}"));
     let output = command.output().unwrap();
@@ -176,7 +177,45 @@ fn glibc_at_the_floor_installs_both_commands() {
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+    assert_eq!(
+        fs::read_to_string(&start_log).unwrap(),
+        "breg\nbregctl\n",
+        "every staged binary must be started before the toolset is selected"
+    );
     fixture.assert_release_toolset_active();
+}
+
+#[test]
+fn linux_binary_that_cannot_start_leaves_the_previous_toolset_selected() {
+    for failing in BINARIES {
+        let fixture = InstallerFixture::linux();
+        fixture.preinstall_runnable_pointer_toolset();
+        fixture.make_release_binary_unstartable(failing);
+
+        let output = fixture.command().output().unwrap();
+
+        assert!(
+            !output.status.success(),
+            "a release whose {failing} cannot start must be refused"
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(&format!(
+                "The staged {failing} {TEST_VERSION} did not start on this system, \
+                 so this release cannot run here."
+            )),
+            "stderr: {stderr}"
+        );
+        assert!(
+            stderr.contains("need the GNU libc that release was built for"),
+            "stderr: {stderr}"
+        );
+        assert!(
+            stderr.contains("The installed toolset is unchanged."),
+            "stderr: {stderr}"
+        );
+        fixture.assert_previous_pointer_toolset_selected();
+    }
 }
 
 #[test]
@@ -330,7 +369,7 @@ exec /bin/mv "$@"
             if self.macos_bundle {
                 self.write_macos_bundle(binary, &stem, &path);
             } else {
-                write_fixture_binary(&path, binary);
+                write_fixture_binary(&path, binary, &self.start_log());
             }
             sums.push_str(&format!("{}  {asset}\n", sha256(&path)));
         }
@@ -340,7 +379,7 @@ exec /bin/mv "$@"
     fn write_macos_bundle(&self, binary: &str, stem: &str, archive: &Path) {
         let source_dir = self.root.join("bundle-sources").join(binary);
         fs::create_dir_all(&source_dir).unwrap();
-        write_fixture_binary(&source_dir.join(stem), binary);
+        write_fixture_binary(&source_dir.join(stem), binary, &self.start_log());
         let library = "libaws_lc_fips_0_14_2_crypto.dylib";
         write_executable(
             &source_dir.join(library),
@@ -394,6 +433,52 @@ exec /bin/mv "$@"
             "bregctl previous binary\n",
         )
         .unwrap();
+    }
+
+    /// A machine an earlier release installed in full through the pointer,
+    /// with commands that run.
+    fn preinstall_runnable_pointer_toolset(&self) {
+        let toolset = self.install_dir.join(".breg-toolset.earlier");
+        fs::create_dir_all(&toolset).unwrap();
+        for binary in BINARIES {
+            write_executable(
+                &toolset.join(binary),
+                &format!("#!/usr/bin/env bash\nprintf '%s\\n' '{binary} previous binary'\n"),
+            );
+            std::os::unix::fs::symlink(
+                format!(".breg-current/{binary}"),
+                self.install_dir.join(binary),
+            )
+            .unwrap();
+        }
+        std::os::unix::fs::symlink(
+            ".breg-toolset.earlier",
+            self.install_dir.join(".breg-current"),
+        )
+        .unwrap();
+    }
+
+    /// Replaces one Linux release asset with a binary that cannot start, the
+    /// way a binary built for a newer GNU libc cannot, and rewrites the
+    /// checksums so the asset still passes integrity verification.
+    fn make_release_binary_unstartable(&self, failing: &str) {
+        let suffix = &self.asset_suffix;
+        let mut sums = String::new();
+        for binary in BINARIES {
+            let asset = format!("{binary}-{TEST_VERSION}-{suffix}");
+            let path = self.release_dir.join(&asset);
+            if binary == failing {
+                write_executable(
+                    &path,
+                    r#"#!/usr/bin/env bash
+printf '%s\n' "$0: /lib/x86_64-linux-gnu/libc.so.6: version 'GLIBC_9.99' not found" >&2
+exit 1
+"#,
+                );
+            }
+            sums.push_str(&format!("{}  {asset}\n", sha256(&path)));
+        }
+        fs::write(self.release_dir.join("SHA256SUMS"), sums).unwrap();
     }
 
     fn command(&self) -> Command {
@@ -460,6 +545,13 @@ exec "$REAL_MV" "$@"
         );
     }
 
+    /// Where each release asset this fixture writes records that it was
+    /// started. The path is written into the asset, because the installer
+    /// starts a staged binary with an empty environment.
+    fn start_log(&self) -> PathBuf {
+        self.root.join("started")
+    }
+
     fn assert_release_toolset_active(&self) {
         for binary in BINARIES {
             let output = Command::new(self.install_dir.join(binary))
@@ -475,6 +567,38 @@ exec "$REAL_MV" "$@"
                 format!("{binary} release binary\n")
             );
         }
+    }
+
+    fn assert_previous_pointer_toolset_selected(&self) {
+        assert_eq!(
+            fs::read_link(self.install_dir.join(".breg-current")).unwrap(),
+            PathBuf::from(".breg-toolset.earlier"),
+            "the toolset pointer must not move"
+        );
+        for binary in BINARIES {
+            let output = Command::new(self.install_dir.join(binary))
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{binary} stderr: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(
+                String::from_utf8(output.stdout).unwrap(),
+                format!("{binary} previous binary\n")
+            );
+        }
+        let mut entries: Vec<String> = fs::read_dir(&self.install_dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .collect();
+        entries.sort();
+        assert_eq!(
+            entries,
+            [".breg-current", ".breg-toolset.earlier", "breg", "bregctl"],
+            "the refused release must leave nothing staged behind"
+        );
     }
 
     fn assert_macos_bundle_members_installed(&self) {
@@ -517,19 +641,21 @@ fn write_executable(path: &Path, body: &str) {
     fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
 }
 
-fn write_fixture_binary(path: &Path, binary: &str) {
+fn write_fixture_binary(path: &Path, binary: &str, start_log: &Path) {
     write_executable(
         path,
         &format!(
             r#"#!/usr/bin/env bash
 set -euo pipefail
 if [[ "${{1:-}}" == --version ]]; then
+  printf '%s\n' '{binary}' >> '{start_log}'
   printf '%s\n' '{binary} {version}'
 else
   printf '%s\n' '{binary} release binary'
 fi
 "#,
-            version = &TEST_VERSION[1..]
+            version = &TEST_VERSION[1..],
+            start_log = start_log.display()
         ),
     );
 }

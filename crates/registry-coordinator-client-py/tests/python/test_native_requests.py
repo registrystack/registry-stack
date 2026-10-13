@@ -139,6 +139,31 @@ class NativeRequestTests(unittest.TestCase):
         self.assertEqual(observed["idempotency_key"], "")
         self.assertEqual(observed["body"], "")
 
+    def test_list_preserves_the_opaque_cursor_and_filters(self) -> None:
+        self.service.script(ok({"runs": [STATUS], "nextCursor": "cursor-next"}))
+
+        outcome = self.client.list("list-token", 1, "cursor-before", "attention", True)
+
+        self.assertEqual(
+            outcome,
+            {"kind": "complete", "value": {"runs": [STATUS], "nextCursor": "cursor-next"}},
+        )
+        (observed,) = self.observed()
+        self.assertEqual(
+            observed["path"],
+            "/deployment/v1/runs?limit=1&cursor=cursor-before&state=attention&attention=true",
+        )
+        for arguments in (
+            ("token", 20, None, "waiting", None),
+            ("token", 20, "line\nbreak", None, None),
+            ("token", 20, None, None, 1),
+        ):
+            with self.subTest(arguments=arguments):
+                with self.assertRaises(CoordinatorClientError) as raised:
+                    self.client.list(*arguments)
+                self.assertEqual(raised.exception.kind, "invalid-request")
+        self.assertEqual(len(self.observed()), 1)
+
     def test_retry_same_posts_the_reason_only_and_no_key(self) -> None:
         self.service.script(ok(RETRY_SCHEDULED))
 

@@ -24,6 +24,7 @@ const STATUS = {
   uncertain: false,
   restoreReviewRequired: false,
   cancelRequested: false,
+  authoredCancelRequested: false,
 };
 const INSPECTION = {
   run: STATUS,
@@ -224,6 +225,29 @@ test('a list limit outside one to one hundred fails before I/O', async (context)
   assert.deepEqual(await client.list('secret', 1), { kind: 'complete', value: { runs: [] } });
   assert.deepEqual(await client.list('secret', 100), { kind: 'complete', value: { runs: [] } });
   assert.equal(requests.length, 2);
+});
+
+test('list preserves the opaque cursor and state and attention filters', async (context) => {
+  const { baseUrl, requests } = await serve(context, () => ({
+    status: 200,
+    document: { runs: [STATUS], nextCursor: 'cursor-next' },
+  }));
+  const { CoordinatorClient } = require('../client');
+  const client = new CoordinatorClient({ baseUrl });
+
+  assert.deepEqual(
+    await client.list('secret', 1, 'cursor-before', 'attention', true),
+    { kind: 'complete', value: { runs: [STATUS], nextCursor: 'cursor-next' } },
+  );
+  assert.equal(
+    requests[0].path,
+    '/v1/runs?limit=1&cursor=cursor-before&state=attention&attention=true',
+  );
+  await assert.rejects(
+    async () => client.list('secret', 20, null, 'waiting'),
+    (error) => error.kind === 'invalid-request',
+  );
+  assert.equal(requests.length, 1);
 });
 
 test('an invalid retry or cancellation reason fails before I/O', async (context) => {

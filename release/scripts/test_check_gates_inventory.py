@@ -760,6 +760,21 @@ class GateInventoryTest(unittest.TestCase):
                 "BReg client contract consistency",
             ),
             (
+                "--features runtime,tooling,schema --lib --test action_evidence_compiler",
+                "--lib",
+                "Base Registry Engine schema-gated tests",
+            ),
+            (
+                "run: python3 .github/scripts/check_breg_gated_tests.py",
+                "run: true # Base Registry Engine gated test selection disabled",
+                "Base Registry Engine gated test selection",
+            ),
+            (
+                "run: python3 .github/scripts/test_check_breg_gated_tests.py",
+                "run: true # Base Registry Engine gated test selection tests disabled",
+                "Base Registry Engine gated test selection tests",
+            ),
+            (
                 "run: products/breg/scripts/check-mcp-gateway-boundary.sh",
                 "run: true # citizen gateway boundary disabled",
                 "Enforce the citizen gateway's delegated-agent boundary",
@@ -845,9 +860,9 @@ class GateInventoryTest(unittest.TestCase):
                 "Casework caller visibility suite",
             ),
             (
-                "cargo test --locked -p registry-casework --features postgres-test --test assignment_postgres --test routing_postgres",
-                "true # Casework assignment and routing suites disabled",
-                "Casework assignment and source routing suites",
+                "cargo test --locked -p registry-casework --features postgres-test --test assignment_postgres --test routing_postgres --test task_grant_invalidation",
+                "true # Casework assignment, routing, and task-grant suites disabled",
+                "Casework assignment, source routing, and task-grant invalidation suites",
             ),
             (
                 "-- --exact clocks::tests::source_clocks_survive_restart_and_preserve_subject_budget",
@@ -1189,7 +1204,7 @@ class GateInventoryTest(unittest.TestCase):
         setup_node = next(
             step for step in job["steps"] if step.get("name") == "Setup Node"
         )
-        self.assertEqual("22.20.0", setup_node["with"]["node-version"])
+        self.assertEqual("24.21.0", setup_node["with"]["node-version"])
         setup_go = next(
             step
             for step in job["steps"]
@@ -1197,7 +1212,7 @@ class GateInventoryTest(unittest.TestCase):
         )
         self.assertEqual(setup_go["uses"], SETUP_GO_ACTION)
         self.assertEqual(
-            {"go-version": "1.24.4", "cache": False}, setup_go["with"]
+            {"go-version": "1.27.2", "cache": False}, setup_go["with"]
         )
         install = next(
             step["run"]

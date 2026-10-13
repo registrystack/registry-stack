@@ -1254,39 +1254,6 @@
             },
             "description": "A problem: request.unprocessable."
           },
-          "429": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "allOf": [
-                    {
-                      "$ref": "#/components/schemas/Problem"
-                    },
-                    {
-                      "properties": {
-                        "code": {
-                          "enum": [
-                            "rate-limit.exceeded"
-                          ]
-                        }
-                      }
-                    }
-                  ]
-                }
-              }
-            },
-            "description": "A problem: rate-limit.exceeded.",
-            "headers": {
-              "Retry-After": {
-                "description": "Whole seconds to wait before trying again.",
-                "required": true,
-                "schema": {
-                  "minimum": 1,
-                  "type": "integer"
-                }
-              }
-            }
-          },
           "503": {
             "content": {
               "application/problem+json": {

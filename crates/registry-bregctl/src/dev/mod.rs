@@ -125,8 +125,9 @@ enum DevAction {
     /// A resident supervisor owns this project's PostgreSQL and ThunderID
     /// containers plus its Base Registry Engine (BReg) child. The database runs
     /// the pinned image
-    /// postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675,
-    /// or, when the compiled schema requires PostGIS,
+    /// public.ecr.aws/docker/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675,
+    /// the Docker Official Images mirror of postgres:17.11 at that digest, or,
+    /// when the compiled schema requires PostGIS, the Docker Hub image
     /// postgis/postgis@sha256:01a6a70e41e6c4467c8f55f6063555ed72db2d6662cd0d571040d42eadaeb6f6,
     /// which the supervisor pulls on the first start. Each supervised
     /// prerequisite command may run for 120 seconds, and the database and each
@@ -2540,6 +2541,11 @@ fn token_with_scopes(state: &State, id: &str, scopes: Vec<String>) -> Result<()>
     runtime.block_on(token_async_with_claims(state, id, id, scopes, id))
 }
 
+fn token_resource(state: &State, id: &str) -> Result<String> {
+    let clients = retained_clients(&state.root())?;
+    Ok(config::client_resource(state, &clients, id))
+}
+
 async fn token_async(state: &State, id: &str) -> Result<()> {
     let client = retained_clients(&state.root())?;
     let scopes = client
@@ -2562,6 +2568,7 @@ async fn token_async_with_claims(
     use registry_platform_httputil::TokenProvider;
 
     let root = state.root();
+    let resource = token_resource(state, credential_id)?;
     let issuer = state.issuer_origin();
     let endpoint: url::Url = format!("{issuer}/oauth2/token")
         .parse()
@@ -2582,7 +2589,7 @@ async fn token_async_with_claims(
         token_client_id.to_owned(),
         key,
         &issuer,
-        &state.audience(),
+        &resource,
         scopes,
     )
     .map_err(|error| anyhow::anyhow!("the dev token provider is unusable: {error}"))?;

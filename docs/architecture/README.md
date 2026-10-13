@@ -12,7 +12,7 @@ default durable file destination; stdout is best-effort.
 
 ## Open the explorer
 
-You need Node.js 22.22.3 or newer and npm. From this directory:
+You need Node.js 24.11.0 or newer and npm. From this directory:
 
 ```sh
 npm ci

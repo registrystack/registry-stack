@@ -1563,8 +1563,11 @@ impl MutationCoordinator {
                 continue;
             }
             if let crate::model::CompiledActionTargetUseSource::Input { input } = &target.source {
-                let record_id = Uuid::parse_str(&input_record_id(input_values, input)?)
-                    .map_err(|_| MutationError::InvalidRequest)?;
+                let Some(record_id) = link_input_record_id(action, input_values, input)? else {
+                    continue;
+                };
+                let record_id =
+                    Uuid::parse_str(&record_id).map_err(|_| MutationError::InvalidRequest)?;
                 targets
                     .entry((target.entity_id.as_str(), record_id))
                     .or_insert(Role::Link(input));
@@ -1863,7 +1866,9 @@ impl MutationCoordinator {
                 if let crate::model::CompiledActionTargetUseSource::Input { input } =
                     &target_use.source
                 {
-                    let record_id = input_record_id(input_values, input)?;
+                    let Some(record_id) = link_input_record_id(action, input_values, input)? else {
+                        continue;
+                    };
                     refs.push((target_use.entity_id.clone(), record_id, input, target_use));
                 }
             }
@@ -2172,6 +2177,26 @@ fn input_record_id(input_values: &ActionInputs, input_id: &str) -> Result<String
         return Err(MutationError::InvalidRequest);
     }
     Ok(id.to_owned())
+}
+
+fn link_input_record_id(
+    action: &CompiledAction,
+    input_values: &ActionInputs,
+    input_id: &str,
+) -> Result<Option<String>, MutationError> {
+    let input = action
+        .inputs
+        .iter()
+        .find(|input| input.id == input_id)
+        .ok_or(MutationError::InvalidRequest)?;
+    if !input_values.contains_key(input_id) {
+        return if input.required {
+            Err(MutationError::InvalidRequest)
+        } else {
+            Ok(None)
+        };
+    }
+    input_record_id(input_values, input_id).map(Some)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -3296,7 +3321,10 @@ mod tests {
         let create = actions.iter().find(|a| a.id == "create-entry").unwrap();
         let update = actions.iter().find(|a| a.id == "update-entry").unwrap();
 
-        let create_input = Map::from_iter([("label".to_owned(), json!("A label"))]);
+        let create_input = Map::from_iter([
+            ("label".to_owned(), json!("A label")),
+            ("jurisdiction".to_owned(), json!("zone-a")),
+        ]);
         let create_input = validate_action_input(create, create_input).unwrap();
         assert_eq!(
             action_effect_document(
@@ -3308,8 +3336,11 @@ mod tests {
                 None
             )
             .unwrap(),
-            Map::from_iter([("label".to_owned(), json!("A label"))]),
-            "an absent optional input takes the field's ordinary absent value on create"
+            Map::from_iter([
+                ("jurisdiction".to_owned(), json!("zone-a")),
+                ("label".to_owned(), json!("A label")),
+            ]),
+            "absent optional scalar and reference inputs take their fields' ordinary absent values on create"
         );
 
         let update_input = Map::from_iter([

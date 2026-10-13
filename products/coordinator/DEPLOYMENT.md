@@ -230,11 +230,25 @@ role's URL and `database.migrationUrlRef` the migration role's URL; only
 `apply` resolves the migration URL. Institutional connections use
 `sslmode=require`:
 
+Enter each URL at a hidden prompt, so its password stays out of shell history. Use a
+URL such as `postgresql://coordinator_runtime:...@db.example.org:5432/coordinator?sslmode=require`.
+This writes new owner-only files and refuses to overwrite existing secrets:
+
 ```sh
-(umask 077 && printf '%s' 'postgresql://coordinator_runtime:<runtime-password>@db.example.org:5432/coordinator?sslmode=require' \
-  > /run/registry-coordinator/secrets/runtime-database-url)
-(umask 077 && printf '%s' 'postgresql://coordinator_migration:<migration-password>@db.example.org:5432/coordinator?sslmode=require' \
-  > /run/registry-coordinator/secrets/migration-database-url)
+python3 - <<'PYTHON'
+import getpass
+import os
+from pathlib import Path
+
+root = Path('/run/registry-coordinator/secrets')
+for name in ('runtime-database-url', 'migration-database-url'):
+    value = getpass.getpass(f'{name}: ')
+    if not value:
+        raise SystemExit('A database URL is required')
+    fd = os.open(root / name, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, 'w') as secret:
+        secret.write(value)
+PYTHON
 ```
 
 ```yaml
@@ -578,6 +592,15 @@ admissions while old runs keep their encrypted snapshots and command identities.
 Adding an unrelated logical connection does not change a workflow binding digest.
 Reusing an idempotency key returns the original run rather than creating new work.
 
+This source version creates protected state schema version 2. A namespace created
+by an earlier pilot with schema version 1 is refused: apply reports `schema-version`,
+and runtime state access (including `deployment-status`) fails closed as
+`store-unavailable`. Apply does not silently adopt or rewrite it. Settle and retain the old pilot's work under
+its matching binary, then create a fresh namespace and database identity for this
+version. Keep its original keys, package and audit history until retention permits
+erasure. Runtime publication remains held, so this is a pilot source compatibility
+boundary rather than an in-place released migration.
+
 Startup does not migrate or activate. The service reads its runtime file from
 an absolute path; `coordinatorctl` also accepts a path relative to the current
 directory.
@@ -739,9 +762,11 @@ is refused with HTTP 403 `operation.not-authorized`; an allowed flow this
 deployment does not serve is refused with HTTP 404 `flow.not-served`. `GET /v1/runs` returns at
 most 100 of the caller's most recently admitted runs, newest first, from the
 flows its policy lists; an operator policy lists every owner's runs in those
-flows. `limit` takes 1 to 100 and defaults to 20. The list has no paging cursor
-and no state filter, so keep the run ID a start returns to read an older run
-with `GET /v1/runs/{run}`. Use the
+flows. `limit` takes 1 to 100 and defaults to 20. Use `state` to filter by effective state, or `attention=true` for effective states
+`attention` and `failed` (`attention=false` excludes both). Pass `nextCursor` as
+`cursor` with the same filters to continue; each page rechecks current caller and flow
+permissions. The order is admission time and run ID, newest first. Keep the run ID a
+start returns for direct lookup with `GET /v1/runs/{run}`. Use the
 authenticated HTTP API for application integration, through the maintained
 Coordinator client where one fits: `registry_stack_client::coordinator` in
 Rust, or the `coordinator` namespace of the unified Node.js and Python
@@ -840,9 +865,17 @@ read Casework refuses fails the run with its code. A run that failed this way
 before its deadline keeps its wait, and `retry-same` resumes the reads under
 the original timeout. `wait-timed-out`, `review-request-unknown` and `review-result-expired`
 end the wait, as do the run deadline, cancellation and retention, and
-`retry-same` cannot resume an ended wait. Cancelling a waiting run leaves its
-review request open in Casework: withdraw it through a `cancel-review-request`
-step, or in Casework, when no one should act on it.
+`retry-same` cannot resume an ended wait. An optional `onCancel` edge on a review
+wait takes an authored forward path instead of ordinary stop cancellation. A parked
+wait switches to that path durably; a read already leased records the intent and
+switches when the lease settles or expires. The path can call `cancel-review-request`
+with the original accepted request. Status reports `authoredCancelRequested: true`,
+and repeating `cancel` does not interrupt this cleanup or issue a second withdrawal.
+The Casework call still uses current producer authority, the original command key,
+and the run deadline. Route on its `outcome`: a result already decided is
+`already-terminal`, never a successful withdrawal. Without `onCancel`, or after
+the result has advanced the wait, ordinary cancellation stops future calls where it
+can and leaves an open Casework request for explicit withdrawal there.
 
 If a product call succeeds but the following wait mapping is invalid, the run
 reports `failed` with `mapping-invalid` while retaining that call's successful

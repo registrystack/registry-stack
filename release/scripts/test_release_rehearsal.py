@@ -244,6 +244,7 @@ class ReleaseRehearsalTest(unittest.TestCase):
             "'release/requirements/ziglang-0.12.1.txt'",
             "'release/glibc-floor.env'",
             "'release/scripts/zig-glibc-compiler'",
+            "'release/scripts/zig-glibc-toolchain.sh'",
         ):
             self.assertIn(recipe_input, prefix)
         canonical_build = next(
@@ -358,16 +359,16 @@ class ReleaseRehearsalTest(unittest.TestCase):
         build_node = next(
             step for step in clients["steps"] if step.get("name") == "Setup Node"
         )
-        self.assertEqual(minimum_node["with"]["node-version"], "22.12.0")
+        self.assertEqual(minimum_node["with"]["node-version"], "24.11.0")
         self.assertFalse(minimum_node["with"]["package-manager-cache"])
-        self.assertEqual(build_node["with"]["node-version"], "22.20.0")
+        self.assertEqual(build_node["with"]["node-version"], "24.21.0")
         retain_minimum = next(
             step["run"] for step in clients["steps"]
             if step.get("name") == "Retain minimum Node runtime for package smokes"
         )
         self.assertIn('minimum_node_bin="$(command -v node)"', retain_minimum)
         self.assertIn('[[ "${minimum_node_bin}" == /* ]]', retain_minimum)
-        self.assertIn('test "$("${minimum_node_bin}" --version)" = v22.12.0', retain_minimum)
+        self.assertIn('test "$("${minimum_node_bin}" --version)" = v24.11.0', retain_minimum)
         self.assertIn("MINIMUM_NODE_BIN=%s\\n", retain_minimum)
         self.assertIn('"${GITHUB_ENV}"', retain_minimum)
         step_names = [step.get("name") for step in clients["steps"]]
@@ -386,7 +387,7 @@ class ReleaseRehearsalTest(unittest.TestCase):
         )
         self.assertEqual(setup_go["uses"], SETUP_GO_ACTION)
         self.assertEqual(
-            {"go-version": "1.24.4", "cache": False}, setup_go["with"]
+            {"go-version": "1.27.2", "cache": False}, setup_go["with"]
         )
         self.assertFalse(
             any("upload-artifact@" in str(step) for step in clients["steps"])
@@ -458,7 +459,7 @@ class ReleaseRehearsalTest(unittest.TestCase):
         self.assertIn('"${NODE_RUNTIME_SMOKE_IMAGE}"', build)
         self.assertRegex(
             clients["env"]["NODE_RUNTIME_SMOKE_IMAGE"],
-            r"^registry\.access\.redhat\.com/ubi8/nodejs-22-minimal:1-[0-9]+@sha256:[0-9a-f]{64}$",
+            r"^registry\.access\.redhat\.com/ubi8/nodejs-24-minimal:1-[0-9]+@sha256:[0-9a-f]{64}$",
         )
         candidate = yaml.safe_load(
             (ROOT / ".github/workflows/release-candidate.yml").read_text(

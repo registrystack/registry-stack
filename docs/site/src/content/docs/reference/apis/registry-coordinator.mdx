@@ -83,8 +83,9 @@ A start is refused before admission when:
 
 `GET /v1/runs/{run}` answers the run's `RunStatus`: its workflow ID and version, its
 `definitionDigest` and `bindingDigest`, its current step and state, when it was admitted and when
-its deadline falls, whether an effect is `uncertain`, whether cancellation was requested, and
-whether it needs restore review. A finished run adds its `outcome` and the reviewed `output` its
+its deadline falls, whether an effect is `uncertain`, and whether it needs restore review.
+`cancelRequested` records ordinary stop cancellation; `authoredCancelRequested` records cancellation
+that took a review wait's authored cleanup path. A finished run adds its `outcome` and the reviewed `output` its
 flow declares. A failed run adds its `failureCode`, and `failurePath` when the failure concerns a
 call input: an RFC 6901 pointer into that input, never the value.
 
@@ -98,8 +99,13 @@ in the flows it lists.
 
 `GET /v1/runs` answers at most 100 of the most recently admitted runs the caller may see, newest
 first. `limit` takes 1 to 100 and defaults to 20; any other value answers
-`400 request.limit-out-of-range`. The list has no paging cursor and no state filter, so a client
-keeps the run ID a start returns to read an older run.
+`400 request.limit-out-of-range`. Optional `state` accepts `running`, `finished`, `failed`,
+`cancelled`, `cancelled-after-effect`, `expired`, `attention`, or `cancel-requested`.
+`attention=true` selects effective states `attention` and `failed`; `attention=false` excludes both.
+Filters compose. Results are ordered by admission time and run ID, newest first. When the response
+includes `nextCursor`, pass it as `cursor` with the same filters to continue. Every page reapplies
+current caller and flow permissions. An invalid cursor or one from a different caller or filter
+answers `400 request.invalid`. Keep the run ID a start returns for direct status lookup.
 
 `GET /v1/runs/{run}/inspect` answers the run, one entry per step with its state, attempt count,
 whether its command is prepared, whether its effect is uncertain, and whether its receipt expired,
@@ -130,6 +136,11 @@ Every recovery and operator `POST` carries a JSON body:
 
 The attestations are audited operator statements, not automated proof. A cancel answers the run's
 status, a reconcile its inspection, and a retry-same the run ID and its scheduled status.
+An authorized cancellation of a parked review wait with `onCancel` takes that authored path
+durably. A leased result read settles or expires before the path advances. Repeating cancellation
+preserves the cleanup, which can withdraw the original Casework request under current producer
+authority and the original deadline. Without that edge, or after the wait advanced, ordinary
+cancellation stops future calls where possible. It never reverses a product effect already accepted.
 
 {/* Evidence: products/coordinator/generated/openapi/coordinator.openapi.json, Reason, Retention,
     AdmissionRelease, ExecutionRecovery; products/coordinator/DEPLOYMENT.md, Admit and inspect

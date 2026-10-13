@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.41.0 - 2026-10-13
+
 - `registry-platform-oidc` gains a `task_grant` module holding the exact
   task-grant status transport the Base Registry Engine and Scheduling share:
   `TaskGrantStatusEndpoint`, `TaskGrantStatusRegistry` (with an offline

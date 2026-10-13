@@ -18,7 +18,7 @@ its runs, erase settled payloads, rotate its keys, and restore it from a backup.
 
 Writing, checking, and packaging a flow stay with its author;
 [Author a Coordinator flow](../../configure/coordinator/) covers that side. This page starts from
-the package directories.
+the package directories and the author's sanitized runtime template and connection requirements.
 
 ## What you provide
 
@@ -32,7 +32,11 @@ the package directories.
 - **Secret files** for three keys, the two database URLs, and each connection credential, owned by
   the service user.
 - **Durable storage for the audit file**, at an absolute path the service user can write.
-- **The package directory and package digest of each flow**, up to sixteen flows in one deployment.
+- **The package directory and package digest of each flow**, up to sixteen flows in one deployment,
+  plus its sanitized runtime template and connection requirements.
+- **Configured downstream contracts:** the Base Registry Engine (BReg) access profiles, Casework producer and review kind,
+  and Messaging templates and provider that the flow names. Register each connection identity and
+  its least-privilege scopes with the issuer and receiving product before applying the flow.
 
 {/* Evidence: products/coordinator/DEPLOYMENT.md, Create the keys and secrets, Create the database
     and roles, and Configure the deployment; crates/registry-coordinator/src/access.rs,
@@ -79,15 +83,39 @@ database backups.
 
 The database URLs are secrets too. Institutional connections use `sslmode=require`:
 
+Enter each URL at a hidden prompt, so its password stays out of shell history. Use a
+URL such as `postgresql://coordinator_runtime:...@db.example.org:5432/coordinator?sslmode=require`.
+This writes new owner-only files and refuses to overwrite existing secrets:
+
 ```sh
-(umask 077 && printf '%s' 'postgresql://coordinator_runtime:<runtime-password>@db.example.org:5432/coordinator?sslmode=require' \
-  > /run/registry-coordinator/secrets/runtime-database-url)
-(umask 077 && printf '%s' 'postgresql://coordinator_migration:<migration-password>@db.example.org:5432/coordinator?sslmode=require' \
-  > /run/registry-coordinator/secrets/migration-database-url)
+python3 - <<'PYTHON'
+import getpass
+import os
+from pathlib import Path
+
+root = Path('/run/registry-coordinator/secrets')
+for name in ('runtime-database-url', 'migration-database-url'):
+    value = getpass.getpass(f'{name}: ')
+    if not value:
+        raise SystemExit('A database URL is required')
+    fd = os.open(root / name, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, 'w') as secret:
+        secret.write(value)
+PYTHON
 ```
 
-Write each connection credential the same way, such as the signing key a connection's
-`authorization.signingKeyRef` names. A Casework connection that receives completion events also
+A connection's `authorization.signingKeyRef` resolves to a **private JWK**, not raw random bytes
+or a PEM file. Register its public half with the connection's OAuth client at the issuer. Reuse
+the platform key generator through `evidencectl`, choosing an algorithm the issuer accepts:
+
+```sh
+evidencectl keygen client-assertion --algorithm es384 \
+  --output-dir /run/registry-coordinator/secrets --private-name reader-jwk
+```
+
+Point `signingKeyRef` at `secret:file/reader-jwk`; `reader-jwk-public.jwk.json` is its public half.
+Use a separate client and key for each downstream authority. Keep private keys in secret custody.
+ A Casework connection that receives completion events also
 names a bearer token that Casework presents to the Coordinator. Generate it as visible ASCII and
 give Casework the same value under its own secret reference:
 
@@ -332,6 +360,12 @@ until environment values are supplied.
 {/* Evidence: crates/registry-coordinator/src/cli.rs, Check;
     products/coordinator/DEPLOYMENT.md, Configure the deployment. */}
 
+This version creates protected state schema version 2. Earlier pilot namespaces
+using schema version 1 are refused: apply reports `schema-version`, while
+`deployment-status` refuses state access as `coordinator.command.store-unavailable`.
+Settle their work with the matching source binary, then use a fresh namespace and database identity; apply
+never silently rewrites an earlier pilot layout.
+
 ## Apply and start
 
 ```sh
@@ -487,9 +521,20 @@ HTTP 404 `flow.not-served`. A start that reuses a key returns the original run.
 `inspect` shows bounded step state, never inputs, raw product responses, or prepared commands. Its
 `recovery.operation` describes the current call's recovery and whether the product offers a
 read-only receipt. `retryAllowed` and `reason` describe scheduling eligibility only; neither proves
-that the product would still authorize the call. `coordinatorctl list --limit <n>` returns the most
-recent runs, newest first, 20 by default and at most 100, with no paging cursor and no state
-filter.
+that the product would still authorize the call. `coordinatorctl list --limit <n>` returns a page of runs, newest first, 20 by default and at most
+100. Pass `--state failed` for one effective state, or `--attention true` for runs whose effective
+state is `attention` or `failed`. `--attention false` excludes both. Filters compose.
+
+```sh
+coordinatorctl list --attention true --limit 20 \
+  --url https://coordinator.example.org --token-file /run/operator-token
+coordinatorctl list --attention true --limit 20 --cursor '<nextCursor>' \
+  --url https://coordinator.example.org --token-file /run/operator-token
+```
+
+When the result includes `nextCursor`, pass it on the next request with the same filters. Each
+page checks the current caller and flow permissions again. Keep each start's run ID for direct
+status lookup; the list is ordered by admission time, rather than by the last state change.
 
 `retry-same`, `cancel`, `reconcile`, `restore-hold`, and `release-restore-hold` take a `--reason`:
 a bounded investigation reference such as `incident-2026-10-12` that holds no personal data. The
@@ -524,8 +569,11 @@ Inspect before you act, then choose:
   recovery contract and the original deadline permit it. A BReg action checks current metadata and
   fresh authority first, and stops on a changed contract, denied authority, or stale condition.
   Casework answers a repeated key with its stored response while it keeps one.
-- **`cancel`** stops future calls where it can. It does not roll back an appointment, action, or
-  message a product already accepted.
+- **`cancel`** takes a parked review wait's authored `onCancel` path when one exists. This lets
+  the flow withdraw the accepted Casework request durably under its original producer authority.
+  Status reports `authoredCancelRequested: true`; repeat cancellations leave that cleanup runnable.
+  Without that edge, or after the wait has advanced, cancellation stops future calls where it can.
+  It does not roll back an appointment, action, or message a product already accepted.
 
 ```sh
 coordinatorctl reconcile --run <run-id> --reason incident-2026-10-12 \
@@ -545,9 +593,10 @@ Some failures need a change, not a retry:
 - **`wait-for`** reads change nothing in Casework, so an outage shorter than the timeout leaves the
   wait open and never fails the run. A read Casework refuses fails the run with its code, and
   `retry-same` resumes the reads under the original timeout. `wait-timed-out`,
-  `review-request-unknown`, and `review-result-expired` end the wait for good. Cancelling a waiting
-  run leaves its review request open in Casework, so withdraw it in Casework when no one needs to
-  act on it.
+  `review-request-unknown`, and `review-result-expired` end the wait for good. Author `onTimeout`
+  and `onCancel` paths that call `cancel-review-request` when the review should be withdrawn.
+  Route on that call's `outcome`: `already-terminal` means a reviewer decided first. A wait with
+  no `onCancel` edge leaves its Casework review open when the run is cancelled.
 - **`mapping-invalid`** means a call succeeded but the mapping after it did not. The run keeps that
   call's output, and `retry-same` cannot repeat the accepted call. Inspect the existing effect
   before you start a new run under a corrected workflow version.

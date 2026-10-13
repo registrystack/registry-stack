@@ -553,6 +553,12 @@ fn client_error(error: BaseRegistryClientError) -> NapiError {
             "traceId": trace_id.as_str(),
             "message": "Base Registry Engine refused the request",
         }),
+        BaseRegistryClientError::UnrecognizedProblem { status, trace_id } => json!({
+            "kind": "problem",
+            "status": status,
+            "traceId": trace_id.as_str(),
+            "message": "Base Registry Engine refused or failed the request with an unrecognized problem code",
+        }),
         BaseRegistryClientError::Protocol {
             status,
             failure,

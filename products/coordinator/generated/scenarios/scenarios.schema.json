@@ -257,6 +257,20 @@
             "type"
           ],
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "An authorized caller cancels the run while this wait is durably\nparked. The run continues at `onCancel`, or stops as `cancelled` when\nthe step has none.",
+          "properties": {
+            "type": {
+              "const": "cancel",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
         }
       ]
     },
@@ -304,12 +318,13 @@
       ]
     },
     "ExpectedState": {
-      "description": "A state a scenario run stops in: `completed` (a finish step ran),\n`refused`, `retryable`, `uncertain`, `timed-out` (a wait's timeout passed\nand the wait has no `onTimeout`), or `deadline-exceeded` (the workflow\ndeadline passed first).",
+      "description": "A state a scenario run stops in: `completed` (a finish step ran),\n`refused`, `retryable`, `uncertain`, `cancelled` (a waiting run was\ncancelled), `timed-out` (a wait's timeout passed\nand the wait has no `onTimeout`), or `deadline-exceeded` (the workflow\ndeadline passed first).",
       "enum": [
         "completed",
         "refused",
         "retryable",
         "uncertain",
+        "cancelled",
         "timed-out",
         "deadline-exceeded"
       ],

@@ -3042,3 +3042,150 @@ changes, because no request path changes.
   `crates/registry-breg/tests/frozen_rhai_package.rs` shows the same load
   path refusing a sealed package whose project source the current reader
   refuses.
+
+## Action revision provenance and access-log storage no predecessor left behind
+
+Before 1.0 a release reads only the state its immediate predecessor wrote or
+accepted. The change removes two tolerances for state only releases before
+v0.39.0 could leave behind: the revision reader's acceptance of an immediate
+action's effect identifier as a revision's journal operation, and the managed
+catalog alternative that verified and served a database without the subject
+access-log storage. It touches audit integrity (which journal provenance the
+revision reader accepts, BREG-SEC-142) and deployment defaults (which managed
+catalog startup, `bregctl`, and an apply verify).
+
+### Threat
+
+1. A revision journaled under an identifier that is not its entity's
+   canonical record operation passes as action provenance. The removed
+   tolerance accepted an effect identifier when a stored action result named
+   that record, revision, effect, and mutation kind under an action the active
+   package still declared. Removing it must not turn any other identifier
+   into accepted provenance, and must not make a revision an action writes
+   today unreadable (BREG-SEC-142).
+2. A database whose managed catalog lacks an object every apply installs is
+   verified and served. The removed alternative admitted a catalog without
+   `registry_internal.registry_subject_access_log` and its expiry function
+   for a package declaring no `accessLog`. Removing it must leave every such
+   database refused, and must not move the recorded schema fingerprint of a
+   database that holds the storage.
+
+### Why v0.40.0 cannot leave either state
+
+- Every revision v0.40.0 journals for a create, patch, or tombstone carries
+  the entity's canonical operation identifier or, on a request lifecycle
+  revision, a request journal operation. `MutationCoordinator` builds an
+  action effect's operation as `records.<entity>.<kind>` before it calls
+  `insert_revision`, direct writes pass the route's canonical identifier, and
+  the history migration writes the `migration` kind under its own reference.
+  v0.38.0 was the last release whose action path passed the effect
+  identifier; v0.39.0 journals the canonical one.
+- Every apply runs `install_mutation_schema`, which calls
+  `subject_access_log::install` unconditionally, on the initial activation,
+  a successor, a role change, and the rehearsal that computes a package's
+  fingerprint. No statement in the product drops the table or the function.
+  v0.38.0 introduced the storage, so only a database last applied by an
+  earlier release lacks it.
+- v0.40.0 does not serve or apply over a database an earlier release
+  activated. It refuses a package under the retired package `apiVersion`
+  (`PackageError::RetiredApiVersion`), startup refuses a database whose
+  active package is not the one loaded (`StartupError::ActivePackageMismatch`),
+  and a successor apply must bind the active package's digest. Every database
+  v0.40.0 serves therefore took its initial activation from v0.40.0, which
+  installed the storage and has journaled only the identifiers above.
+
+### Enforcement and defaults
+
+- `valid_revision_provenance` in
+  `crates/registry-breg/src/postgres/revision_read.rs` accepts, for a create,
+  patch, or tombstone revision, only `records.<entity>.<kind>` for the read
+  entity and the stored mutation kind, or a request journal operation on a
+  request lifecycle patch revision of an entity that declares change
+  requests. Every other operation identifier is
+  `ReadServiceError::Unavailable`: the detail read of that revision and any
+  list page that includes it answer `503 source.unavailable`, and the problem
+  names no stored value. An effect identifier is refused whether or not the
+  active package declares it, the action that wrote the revision included.
+- The revision reader no longer reads stored immediate-action results, so
+  what the journal says about a revision's origin is decided from the journal
+  row and the compiled entity alone.
+- `ExpectedManagedCatalog::compiled` is the one catalog a compiled Registry
+  admits. `verify_managed_catalog`, `runtime_grants_missing`, and
+  `managed_schema_fingerprint` compare the database with it directly, and
+  startup no longer selects a catalog from what the database holds. A
+  database without the access-log table or its expiry function fails catalog
+  verification with
+  `PostgresKernelError::CatalogInvariant("managed object ownership differs
+  from the closed catalog")`. Startup refuses it before binding a listener
+  and writes nothing: `StartupError::RuntimeGrantsMissing` when a separate
+  runtime role serves, because the runtime role's grants on the storage are
+  missing with it, and `StartupError::DatabaseUnready` when one role serves.
+- The catalog a database holding the storage is measured against is the one
+  it was measured against before, so its recorded schema fingerprint does not
+  move and no package needs rebuilding.
+- The access-log retention worker starts for every verified database. It
+  already did for every database holding the storage, whether or not the
+  active package declares `accessLog`.
+
+### Tests
+
+`crates/registry-breg/tests/postgres_immediate_actions.rs`:
+`action_written_revisions_are_readable_through_revision_history` is the named
+negative for BREG-SEC-142. It reads the revisions an action writes through
+the list and detail routes, then rewrites journal rows as the database
+administrator and requires `503 source.unavailable` for a declared patch
+effect identifier, the create effect identifier the writing action declares,
+an undeclared effect, an effect declared against another entity, a declared
+effect with another mutation kind, an action identifier, another entity's
+record operation, and a request lifecycle revision journaled under an effect
+identifier. It requires the same refusal from the list route, and a detail
+read that succeeds again once the journal names the canonical identifier.
+
+`crates/registry-breg/tests/postgres_migration.rs`:
+`a_catalog_without_subject_access_log_storage_is_refused` drops the table and
+function from an activated database and requires the catalog invariant
+refusal for a package that declares no `accessLog` and for one that does,
+then applies the active package again with separate roles and requires the
+storage back under the same recorded fingerprint.
+`subject_access_log_storage_survives_disabled_collection` holds that an
+activation of a package declaring no `accessLog` installs the storage and
+that disabling collection later keeps its rows and expiry authority.
+
+`crates/registry-breg/tests/postgres_startup.rs`:
+`startup_refuses_a_database_without_subject_access_log_storage_and_writes_nothing`
+runs the real startup path against a database with the storage dropped,
+first with separate roles and then with one role, and requires the two
+refusals above with an unchanged managed-database snapshot.
+
+### Accepted residuals
+
+- A database that does hold a revision journaled under an effect identifier
+  no longer reads it under any package: the record's affected history reads
+  answer `503 source.unavailable` until the row is gone. No migration
+  rewrites such rows, as none did before. Reaching that state takes a
+  database v0.38.0 or earlier wrote, which v0.40.0 already refuses at the
+  package level, or a write to the journal made outside the product.
+- The tests reach the missing-storage state by dropping the storage from a
+  database whose recorded fingerprint includes it. A database whose recorded
+  fingerprint predates the storage cannot be built with current tooling, and
+  the test hook that emulated one is removed with the tolerance, so its
+  outcome is derived from the code and not executed: the same catalog
+  refusal at startup, and, with separate roles, an apply of the active
+  package that installs the storage and then fails the recorded-fingerprint
+  comparison, which rolls the activation back and reports
+  `MigrationError::ApplyFailed`.
+- Applying the active package again reinstalls the storage only when it is an
+  activation, which with unchanged roles means separate roles whose runtime
+  grants are missing. With one role it answers
+  `MigrationError::AlreadyActive` and repairs nothing. That holds for any
+  managed object removed outside the product and is unchanged here.
+- The index `registry_immediate_action_results_target_idx`, which served the
+  removed lookup of a stored result by the revision it wrote, stays installed
+  for every Registry that declares an immediate action. The schema
+  fingerprint measures it, so removing it would move the fingerprint of every
+  such package; no query reads it now.
+- The package-level refusals rest on the manifest a supported tool wrote. A
+  hand-edited manifest that presents an earlier release's database as a
+  v0.40.0 one is outside the promise; such a database is still refused or
+  read as unavailable by the checks above, never read under the removed
+  tolerances.

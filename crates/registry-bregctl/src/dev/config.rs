@@ -2049,22 +2049,12 @@ pub(super) fn assertion_issuers(
     Ok(authorities)
 }
 
-pub(super) fn local_principal_claim(compiled: &registry_breg::CompiledRegistry) -> Result<String> {
-    let inventory = registry_breg::authority::authority_inventory(compiled)
-        .context("local authority inventory is invalid")?;
-    match inventory.principal_claims.len() {
-        0 => Ok("registry_principal".to_owned()),
-        1 => Ok(inventory.principal_claims.into_iter().next().expect("one principal claim")),
-        _ => bail!("local access profiles must use one principal claim; mixed principal claims cannot share a runtime authority mapping"),
-    }
-}
-
 pub(super) fn runtime(root: &Path, state: &State, clients: &Clients, test: bool) -> Result<()> {
     let final_root = state.root();
     let prefix = if test { "test-" } else { "" };
     let compiled = crate::compile(&root.join("project"), crate::ProfileArg::Production, "dev")
         .map_err(|_| anyhow::anyhow!("captured local project no longer compiles"))?;
-    let principal = local_principal_claim(&compiled)?;
+    let authority_claims = local_authority_claims(&compiled)?;
     let journeys_path = root.join("project/tests/journeys.yaml");
     if journeys_path.exists() {
         let mut journeys = Reader::new(journeys_path.display().to_string())
@@ -2145,7 +2135,7 @@ pub(super) fn runtime(root: &Path, state: &State, clients: &Clients, test: bool)
         "secretProviders":{"file":{"root":final_root.join("secrets")}},
         "database":{"runtimeUrlRef":format!("secret:file/{runtime_url}"),"migrationUrlRef":format!("secret:file/{prefix}migration-database-url"),"pool":{"maximumConnections":4},"roles":{"migration":MIGRATION_ROLE,"runtime":runtime_role}},
         "package":{"root":final_root.join(if test {"empty-package"}else{"build/package"})},
-        "authentication":{"oidc":{"issuer":state.issuer_origin(),"audience":state.audience(),"allowedAlgorithm":"RS256","accessTokenType":"at+jwt","scopeClaim":"scope","scopeSeparator":" ","allowedClients":allowed_clients,"assertionIssuers":&assertion_issuers,"maximumTokenLifetimeSeconds":300,"leewayMilliseconds":30000,"jwksSource":{"type":"static","documentRef":"secret:file/issuer-jwks"}},"authorityClaims":{"principal":principal,"purpose":"registry_purpose"}},
+        "authentication":{"oidc":{"issuer":state.issuer_origin(),"audience":state.audience(),"allowedAlgorithm":"RS256","accessTokenType":"at+jwt","scopeClaim":"scope","scopeSeparator":" ","allowedClients":allowed_clients,"assertionIssuers":&assertion_issuers,"maximumTokenLifetimeSeconds":300,"leewayMilliseconds":30000,"jwksSource":{"type":"static","documentRef":"secret:file/issuer-jwks"}},"authorityClaims":authority_claims},
         "audit":{"hashKeyRef":"secret:file/audit-key","destination":"file","path":final_root.join("audit").join(format!("{prefix}audit.jsonl"))},"cursor":{"secretRef":"secret:file/cursor-key"},"eventDestinations":destinations,
         "evidenceProviders":clients.evidence_providers.iter().map(|(id, provider)| (id.clone(), json!({
             "baseUrl":provider.base_url,
@@ -2177,6 +2167,15 @@ pub(super) fn runtime(root: &Path, state: &State, clients: &Clients, test: bool)
             .expect("the runtime document carries an oidc object")
             .remove("assertionIssuers");
     }
+    let rendered = serde_norway::to_string(&runtime)?;
+    let generated =
+        registry_breg::runtime_config::parse_runtime_config(&rendered).map_err(|error| {
+            anyhow::anyhow!("generated local runtime authentication is invalid: {error}")
+        })?;
+    generated
+        .authentication()
+        .check_against(&compiled)
+        .context("generated local runtime authentication does not match the compiled registry")?;
     write_yaml(
         &root.join(if test {
             "runtime-test.yaml"
@@ -2185,6 +2184,28 @@ pub(super) fn runtime(root: &Path, state: &State, clients: &Clients, test: bool)
         }),
         &runtime,
     )
+}
+
+fn local_authority_claims(compiled: &registry_breg::CompiledRegistry) -> Result<Value> {
+    let inventory = registry_breg::authority::authority_inventory(compiled)
+        .context("cannot inspect the compiled registry's authority claims")?;
+    let principal = match inventory
+        .principal_claims
+        .into_iter()
+        .collect::<Vec<_>>()
+        .as_slice()
+    {
+        [claim] => claim.clone(),
+        [] => "registry_principal".to_owned(),
+        claims => bail!(
+            "local development requires one common principal claim across compiled authenticated grants; the compiled registry declares multiple: {}",
+            claims.join(", ")
+        ),
+    };
+    Ok(json!({
+        "principal": principal,
+        "purpose": inventory.purpose_required.then_some("registry_purpose")
+    }))
 }
 
 fn omit_null_members(value: &mut Value) {

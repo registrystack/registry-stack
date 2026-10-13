@@ -1,0 +1,242 @@
+{
+  "apiVersion": "id.registrystack.org/formats/casework/breg-source-description/v1alpha1",
+  "authority": "none",
+  "kind": "CaseworkBregSourceDescription",
+  "origin": "bregctl explain change-requests",
+  "requests": [
+    {
+      "actions": [
+        {
+          "method": "POST",
+          "operation": "submit-request",
+          "preconditions": [
+            "Idempotency-Key",
+            "If-Match"
+          ],
+          "routeId": "records.registration-application.request.submit"
+        },
+        {
+          "method": "POST",
+          "operation": "revise-request",
+          "preconditions": [
+            "Idempotency-Key",
+            "If-Match"
+          ],
+          "routeId": "records.registration-application.request.revise"
+        },
+        {
+          "method": "POST",
+          "operation": "cancel-request",
+          "preconditions": [
+            "Idempotency-Key",
+            "If-Match"
+          ],
+          "routeId": "records.registration-application.request.cancel"
+        },
+        {
+          "method": "POST",
+          "operation": "apply-request",
+          "preconditions": [
+            "Idempotency-Key",
+            "If-Match",
+            "proposalVersion",
+            "effectDigest"
+          ],
+          "routeId": "records.registration-application.request.apply"
+        }
+      ],
+      "application": {},
+      "applyPermissions": [
+        {
+          "profile": "registration-applier",
+          "rowBoundaries": [],
+          "targetEntity": "person"
+        },
+        {
+          "profile": "registration-applier",
+          "rowBoundaries": [],
+          "targetEntity": "program-enrollment"
+        },
+        {
+          "profile": "registration-applier",
+          "rowBoundaries": [],
+          "targetEntity": "self-service-link"
+        }
+      ],
+      "bounds": {
+        "maximumFieldMutations": 128,
+        "maximumSnapshotBytes": 2097152,
+        "maximumTargets": 16
+      },
+      "contractFingerprint": "sha256:e503766a75cdc135a7405d86a28e362e336c0d59bf3d18db8581ecacb3d1bcab",
+      "effects": [],
+      "fields": [
+        {
+          "apiName": "owner",
+          "field": "owner",
+          "schema": {
+            "maxLength": 128,
+            "minLength": 0,
+            "type": "string"
+          }
+        },
+        {
+          "apiName": "givenName",
+          "field": "given-name",
+          "schema": {
+            "maxLength": 120,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        {
+          "apiName": "familyName",
+          "field": "family-name",
+          "schema": {
+            "maxLength": 120,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        {
+          "apiName": "dateOfBirth",
+          "field": "date-of-birth",
+          "schema": {
+            "format": "date",
+            "type": "string"
+          }
+        },
+        {
+          "apiName": "programCode",
+          "field": "program-code",
+          "schema": {
+            "enum": [
+              "synthetic-citizen-program"
+            ],
+            "type": "string",
+            "x-registry-vocabulary": "registration-program"
+          }
+        }
+      ],
+      "onApproved": {
+        "executor": "registration-applier",
+        "mode": "automatic"
+      },
+      "planner": {
+        "abi": "registry.change-request-plan/v1",
+        "declaringOrigin": {
+          "type": "project"
+        },
+        "limits": {
+          "maximumArrayItems": 256,
+          "maximumCallDepth": 32,
+          "maximumExpressionDepth": 64,
+          "maximumFieldMutations": 128,
+          "maximumMapEntries": 256,
+          "maximumModules": 0,
+          "maximumOperations": 100000,
+          "maximumSnapshotBytes": 2097152,
+          "maximumSourceBytes": 65536,
+          "maximumStringBytes": 16384,
+          "maximumTargets": 16
+        },
+        "possibleWrites": [
+          {
+            "fields": [
+              {
+                "apiName": "dateOfBirth",
+                "field": "date-of-birth"
+              },
+              {
+                "apiName": "familyName",
+                "field": "family-name"
+              },
+              {
+                "apiName": "givenName",
+                "field": "given-name"
+              }
+            ],
+            "operation": "create",
+            "target": {
+              "entity": "person",
+              "type": "reserved-create"
+            }
+          },
+          {
+            "fields": [
+              {
+                "apiName": "person",
+                "field": "person"
+              },
+              {
+                "apiName": "programCode",
+                "field": "program-code"
+              }
+            ],
+            "operation": "create",
+            "target": {
+              "entity": "program-enrollment",
+              "type": "reserved-create"
+            }
+          },
+          {
+            "fields": [
+              {
+                "apiName": "active",
+                "field": "active"
+              },
+              {
+                "apiName": "person",
+                "field": "person"
+              },
+              {
+                "apiName": "principal",
+                "field": "principal"
+              }
+            ],
+            "operation": "create",
+            "target": {
+              "entity": "self-service-link",
+              "type": "reserved-create"
+            }
+          }
+        ],
+        "requestFields": [
+          {
+            "apiName": "owner",
+            "field": "owner"
+          },
+          {
+            "apiName": "givenName",
+            "field": "given-name"
+          },
+          {
+            "apiName": "familyName",
+            "field": "family-name"
+          },
+          {
+            "apiName": "dateOfBirth",
+            "field": "date-of-birth"
+          },
+          {
+            "apiName": "programCode",
+            "field": "program-code"
+          }
+        ],
+        "rhaiVersion": "1.25.1",
+        "scriptSha256": "sha256:cac14ece58490cfa975b0db0a699cc41e4261499b55634d31a0238dfab9eaa3f",
+        "type": "rhai"
+      },
+      "presencePermissions": [],
+      "requestEntity": "registration-application",
+      "requestRoute": "registration-applications",
+      "review": {
+        "authority": "casework",
+        "policyId": "citizen-registration",
+        "type": "required"
+      }
+    }
+  ],
+  "sourceId": "citizen-self-registration",
+  "sourceRevision": "sha256:8874d684369fe2561af84ce6b814d628ed5b2258d821a995747a865c9afc5ee9"
+}

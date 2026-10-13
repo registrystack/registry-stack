@@ -38,8 +38,8 @@ pub use config::CoordinatorClientConfig;
 pub use error::{CoordinatorClientError, CoordinatorProtocolFailure};
 pub use model::{
     EffectKind, KeyRequirement, OperationIdentity, RecoverySemantics, RecoveryStatus,
-    RetryBlockReason, RetryScheduled, RunInspection, RunList, RunStatus, StartRunRequest,
-    StepStatus,
+    RetryBlockReason, RetryScheduled, RunInspection, RunList, RunListQuery, RunListState,
+    RunStatus, StartRunRequest, StepStatus,
 };
 pub use registry_platform_httputil::client::{BearerToken, TransportKind};
 pub use uuid::Uuid;

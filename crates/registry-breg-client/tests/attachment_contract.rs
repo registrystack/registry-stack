@@ -345,9 +345,6 @@ fn selection_refuses_every_deviation_from_the_served_slot_contract() {
         ("a duplicated content type", &|value: &mut Value| {
             value["contentTypes"] = json!(["application/pdf", "application/pdf"])
         }),
-        ("an unknown capability member", &|value: &mut Value| {
-            value["retentionDays"] = json!(30)
-        }),
         (
             "a classification outside the served set",
             &|value: &mut Value| value["classification"] = json!("secret"),
@@ -373,6 +370,22 @@ fn selection_refuses_every_deviation_from_the_served_slot_contract() {
 }
 
 #[test]
+fn unknown_slot_descriptor_members_do_not_change_the_known_contract() {
+    let mut descriptor = descriptor();
+    descriptor["futureDescription"] = json!({"retentionDays": 30});
+    descriptor["verification"]["futureDescription"] = json!("reviewed");
+    descriptor["upload"]["futureExecutionMember"] = json!({"ignored": true});
+    let mut value = fixture_with(descriptor);
+    value["operations"][1]["fields"][1]["schema"]["x-registry-attachment"]["futureDescription"] =
+        json!({"retentionDays": 60});
+    let slot = parse(&value)
+        .select_attachments("company", "company-writer")
+        .expect("different unknown members do not make known slot contracts disagree")
+        .remove(0);
+    assert!(slot.can_download() && slot.can_upload() && slot.can_remove());
+}
+
+#[test]
 fn selection_refuses_capabilities_that_disagree_across_surfaces() {
     let mut value = fixture_with(descriptor());
     value["operations"][2]["fields"][1]["schema"]["x-registry-attachment"]["maximumBytes"] =
@@ -383,6 +396,29 @@ fn selection_refuses_capabilities_that_disagree_across_surfaces() {
             .unwrap_err()
             .kind(),
         BRegMetadataSelectionErrorKind::ContractMismatch
+    );
+}
+
+#[test]
+fn unsupported_operation_capabilities_disable_only_their_attachment_surface() {
+    let mut value = fixture_with(descriptor());
+    value["operations"][0]["requiredCapabilities"] = json!(["future_slot_protocol"]);
+    value["operations"][0]["fields"][1]["schema"]["x-registry-attachment"]["maximumBytes"] =
+        json!(2048);
+    let slots = parse(&value)
+        .select_attachments("company", "company-writer")
+        .expect("supported sibling operations still carry the slot");
+    assert_eq!(slots.len(), 1);
+
+    for operation in value["operations"].as_array_mut().unwrap() {
+        operation["requiredCapabilities"] = json!(["future_slot_protocol"]);
+    }
+    assert_eq!(
+        parse(&value)
+            .select_attachments("company", "company-writer")
+            .unwrap_err()
+            .kind(),
+        BRegMetadataSelectionErrorKind::RequiredCapability
     );
 }
 

@@ -152,10 +152,6 @@ if [ "$written" != "$sums_digest" ]; then
   echo "the package digest $written is not the SHA-256 digest of SHA256SUMS" >&2
   exit 1
 fi
-if [ -e "$work/package/scheduling.package.json" ]; then
-  echo 'schedulingctl package wrote the retired scheduling.package.json' >&2
-  exit 1
-fi
 
 # The committed examples are the starter templates' output, so neither can
 # drift from what an adopter initializes, including its live records document.

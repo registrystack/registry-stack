@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+## 0.41.0 - 2026-10-13
+
+- BREAKING: the published `registry-stack-client` Python package, which carries
+  the Registry Discovery client, requires Python 3.11 or later: its
+  `Requires-Python` is `>=3.11` (was `>=3.10`), and its wheels are built
+  against the Python 3.11 stable ABI and named `cp311-abi3` (was `cp310-abi3`).
+  Python 3.10 is no longer supported. Migration: run Python 3.11 or later.
+
+- BREAKING: the published `@registrystack/client` Node.js package, which
+  carries the Registry Discovery client, requires Node.js 24.11.0 or later:
+  its `engines.node` is `>=24.11.0` (was `>=22.12.0`). Node.js 22 is no longer
+  supported. Migration: run Node.js 24.11.0 or later.
+
 ## v0.40.0 - 2026-10-11
 
 - Runtime file flags use the help text "Runtime configuration file" and

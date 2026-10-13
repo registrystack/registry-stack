@@ -20,6 +20,14 @@ const {
 const TRACE_ID = '4bf92f3577b34da6a3ce929d0e0e4736';
 const TRACEPARENT = `00-${TRACE_ID}-00f067aa0ba902b7-01`;
 const MISSING_RECORD_ID = '00000000-0000-4000-8000-000000000001';
+const EXTENDED_UNKNOWN_PROBLEM_ID = '00000000-0000-4000-8000-000000000003';
+const UNKNOWN_PROBLEM_STATUSES = new Map([
+  ['00000000-0000-4000-8000-000000000422', 422],
+  ['00000000-0000-4000-8000-000000000404', 404],
+  ['00000000-0000-4000-8000-000000000503', 503],
+  [EXTENDED_UNKNOWN_PROBLEM_ID, 422],
+]);
+const MALFORMED_PROBLEM_ID = '00000000-0000-4000-8000-000000000002';
 let server;
 let baseUrl;
 
@@ -67,7 +75,30 @@ before(async () => {
         traceId: TRACE_ID,
       }));
     }
-    else { response.statusCode = 404; response.end('{}'); }
+    else {
+      const recordId = request.url.split('/').at(-1);
+      const status = UNKNOWN_PROBLEM_STATUSES.get(recordId);
+      if (status !== undefined || recordId === MALFORMED_PROBLEM_ID) {
+        response.statusCode = status ?? 422;
+        response.setHeader('content-type', 'application/problem+json');
+        response.setHeader('cache-control', 'no-store');
+        response.end(JSON.stringify({
+          type: 'https://id.registrystack.org/problems/registry-breg/future/refused',
+          title: 'Future refusal',
+          status: status ?? 503,
+          detail: 'canary response detail',
+          code: 'future.refused',
+          traceId: TRACE_ID,
+          ...(recordId === EXTENDED_UNKNOWN_PROBLEM_ID ? {
+            fieldPath: '/input/futureField',
+            refusalCode: 'future-refusal',
+            reasonCode: 'future-reason',
+            future: { disposition: 'opaque' },
+          } : {}),
+        }));
+      }
+      else { response.statusCode = 404; response.end('{}'); }
+    }
   });
   await new Promise((resolve, reject) => {
     server.once('error', reject);
@@ -184,6 +215,44 @@ test('a missing record fails with its own not-found kind', async () => {
       && error.kind === 'not-found'
       && error.status === 404,
   );
+});
+
+test('unknown problem codes fall back to HTTP status semantics', async () => {
+  const client = new BaseRegistryClient({ baseUrl });
+  for (const [recordId, status] of UNKNOWN_PROBLEM_STATUSES) {
+    await assert.rejects(client.getRecord('companies', recordId), (error) => {
+      assert.ok(error instanceof BaseRegistryClientError);
+      assert.equal(error.kind, 'problem');
+      assert.equal(error.status, status);
+      assert.equal(error.traceId, TRACE_ID);
+      assert.equal(error.code, undefined);
+      assert.equal(error.planRefusal, undefined);
+      assert.equal(error.refusalCode, undefined);
+      assert.equal(error.reasonCode, undefined);
+      assert.equal(error.fieldPath, undefined);
+      assert.equal(error.future, undefined);
+      assert.equal(error.outcomeUnknown, status >= 500);
+      assert.equal(String(error).includes('future.refused'), false);
+      assert.equal(String(error).includes('canary response detail'), false);
+      assert.equal(String(error).includes('future-refusal'), false);
+      assert.equal(String(error).includes('opaque'), false);
+      return true;
+    });
+  }
+});
+
+test('an unknown problem with a mismatched body status fails closed', async () => {
+  const client = new BaseRegistryClient({ baseUrl });
+  await assert.rejects(client.getRecord('companies', MALFORMED_PROBLEM_ID), (error) => {
+    assert.ok(error instanceof BaseRegistryClientError);
+    assert.equal(error.kind, 'protocol');
+    assert.equal(error.status, 422);
+    assert.equal(error.code, 'problem');
+    assert.equal(error.traceId, TRACE_ID);
+    assert.equal(String(error).includes('future.refused'), false);
+    assert.equal(String(error).includes('canary response detail'), false);
+    return true;
+  });
 });
 
 test('metadata selection failures use the public error envelope', async () => {

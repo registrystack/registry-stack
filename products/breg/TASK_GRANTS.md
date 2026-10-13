@@ -159,7 +159,7 @@ permissions. These actions do not require the old submitter grant to remain
 active. Read cursors and representation ETags do not incorporate grant IDs.
 
 The bounded status check uses the shared platform exact-status transport and
-runs while the proposal is locked. Its total ten-second bound includes obtaining
+runs while the proposal is locked. Its total five-second bound includes obtaining
 the status service credential; positive status is never cached. BReg keeps its
 own persisted binding and BReg-only bounds validation. Deferred Casework grants
 use the same status contract and original deadline, without changing BReg's

@@ -897,6 +897,7 @@ test('keeps the Coordinator journey in one product lane', () => {
   const slugs = [...coordinator.matchAll(/slug: '([^']+)'/g)].map((match) => match[1]);
   assert.deepEqual(slugs, [
     'start/coordinator',
+    'tutorials/review-an-application-and-send-a-notice',
     'configure/coordinator',
     'operate/coordinator',
     'reference/coordinator-configuration',

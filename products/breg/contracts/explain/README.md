@@ -55,6 +55,15 @@ statistical dataset, the access profiles that hold `read-live`, the one that
 holds `publish`, and every profile that reads its releases. The list is empty
 when the project declares no dataset.
 
+The `v1alpha4` schema also pins an existing part of the authority-inventory
+wire shape for the Casework `source add` consumer. A successful
+`AccessExplanation.claimContract` has a unique, possibly empty
+`principalClaims` array of nonempty strings and a null `claimContractError`.
+An inventory failure has a null `claimContract` and one pinned
+`claimContractError` value. Every other member of the authority inventory
+remains opaque. This guarantee changes no serialized key or value, so it does
+not require another format version.
+
 The release that gave each format its own `apiVersion` also respells pinned
 keys and values, under the same `v1alpha4`: the value a consumer compares
 already changed in that release, so no further version marks these.
@@ -194,7 +203,7 @@ wherever it appears (`queries[].operations[].apiFields[].fieldType`,
 even though it sits inside otherwise fully pinned `queries` and `actions`
 payloads.
 
-Four keys are pinned despite being technically passthroughs of primitive or
+Several keys are pinned despite being technically passthroughs of primitive or
 small values, because they are read by adopters today and are unlikely to
 grow internal structure that would make a passthrough opaque in practice:
 `model.registryId`, `model.version`, `model.moduleOrder`, and
@@ -204,6 +213,14 @@ grow internal structure that would make a passthrough opaque in practice:
 fields of `AccessExplanation`'s and `AccessPreview`'s own top level, because
 both are small, hand-authored structs whose fields are named directly in
 `registry-breg`.
+
+`AccessExplanation.claimContract` is a partial exception to the normal
+passthrough rule. Casework `source add` reads `principalClaims` to bind its
+source-reader profile to the registry's compiled principal claim. The schema
+therefore pins that one array and the mutually exclusive success/error
+relationship with `claimContractError`. The containing inventory object stays
+open, so `purposeRequired`, `directClaims`, and any later inventory members
+remain opaque passthrough data.
 
 `AccessExplanation.consent` is pinned in full on the same ground as
 `LifecycleExplanation`, described next: it is a passthrough of
@@ -225,7 +242,8 @@ Opaque nodes, in full:
 - `model.entities`, `model.physicalNames`, `model.package`,
   `model.manifestProjection`
 - `access.routes.entries[].*` other than `entityId`, `access.entities`,
-  `access.actions`, `access.rowReach`, `access.claimContract`
+  `access.actions`, `access.rowReach`, and every `access.claimContract` member
+  other than `principalClaims`
 - `AccessPreview.effectiveProfile`
 - `RoutesExplanation`'s entity-route half of `routes[]` (every field other
   than the injected `type`)
@@ -258,11 +276,13 @@ not part of the pinned contract to begin with.
 Read that second half as a warning, not as a permission. A stable
 `apiVersion` is not a promise that the opaque nodes have not moved, and for a
 consumer reading the compiled model, the event deliveries, the entity routes,
-or a `fieldType`, the opaque nodes are most of what it consumes. Assert each
-of those shapes where you read it, because drift inside an opaque node does
-not fail loudly: a key that is renamed or removed reads as absent, which is
-indistinguishable from a project that never declared it, so a consumer
-returns a confident wrong answer instead of an error.
+an unpinned claim-contract member, or a `fieldType`, the opaque nodes are most
+of what it consumes. `claimContract.principalClaims` and its relationship with
+`claimContractError` are the supported exception. Assert every other opaque
+shape where you read it, because drift inside an opaque node does not fail
+loudly: a key that is renamed or removed reads as absent, which is
+indistinguishable from a project that never declared it, so a consumer returns
+a confident wrong answer instead of an error.
 
 ## Unexercised branches
 

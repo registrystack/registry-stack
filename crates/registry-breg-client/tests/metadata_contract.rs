@@ -293,7 +293,7 @@ fn runtime_v1_accepts_statistical_datasets_without_adding_entity_authority() {
 }
 
 #[test]
-fn statistical_dataset_metadata_is_closed_and_validates_domains_and_periods() {
+fn statistical_dataset_metadata_validates_known_domains_and_periods() {
     type MetadataMutation = fn(&mut Value);
     let cases: &[(&str, BRegMetadataErrorKind, MetadataMutation)] = &[
         (
@@ -306,13 +306,6 @@ fn statistical_dataset_metadata_is_closed_and_validates_domains_and_periods() {
         ("null datasets", BRegMetadataErrorKind::Shape, |value| {
             value["statisticalDatasets"] = Value::Null;
         }),
-        (
-            "unknown dataset member",
-            BRegMetadataErrorKind::Shape,
-            |value| {
-                value["statisticalDatasets"][0]["unexpected"] = json!(true);
-            },
-        ),
         (
             "offline profile projection",
             BRegMetadataErrorKind::Shape,
@@ -339,20 +332,6 @@ fn statistical_dataset_metadata_is_closed_and_validates_domains_and_periods() {
                     .as_array_mut()
                     .unwrap()
                     .push(statistical_dataset());
-            },
-        ),
-        (
-            "unknown period kind",
-            BRegMetadataErrorKind::Shape,
-            |value| {
-                value["statisticalDatasets"][0]["periodKind"] = json!("unknown");
-            },
-        ),
-        (
-            "unknown granularity",
-            BRegMetadataErrorKind::Shape,
-            |value| {
-                value["statisticalDatasets"][0]["granularity"] = json!("week");
             },
         ),
         (
@@ -390,13 +369,6 @@ fn statistical_dataset_metadata_is_closed_and_validates_domains_and_periods() {
             },
         ),
         (
-            "unknown dimension member",
-            BRegMetadataErrorKind::Shape,
-            |value| {
-                value["statisticalDatasets"][0]["dimensions"][0]["unexpected"] = json!(true);
-            },
-        ),
-        (
             "duplicate code",
             BRegMetadataErrorKind::DuplicateIdentifier,
             |value| {
@@ -410,13 +382,6 @@ fn statistical_dataset_metadata_is_closed_and_validates_domains_and_periods() {
                 value["statisticalDatasets"][0]["dimensions"][0]["codes"] = json!(["other"]);
             },
         ),
-        (
-            "unknown reserved code",
-            BRegMetadataErrorKind::Shape,
-            |value| {
-                value["statisticalDatasets"][0]["dimensions"][0]["codes"] = json!(["_X", "_T"]);
-            },
-        ),
         ("empty operations", BRegMetadataErrorKind::Shape, |value| {
             value["statisticalDatasets"][0]["operations"] = json!([]);
         }),
@@ -427,9 +392,6 @@ fn statistical_dataset_metadata_is_closed_and_validates_domains_and_periods() {
                 value["statisticalDatasets"][0]["operations"] = json!(["read-live", "read-live"]);
             },
         ),
-        ("unknown operation", BRegMetadataErrorKind::Shape, |value| {
-            value["statisticalDatasets"][0]["operations"] = json!(["unrestricted"]);
-        }),
     ];
     for (name, kind, change) in cases {
         let mut value = fixture();
@@ -458,6 +420,43 @@ fn statistical_dataset_metadata_is_closed_and_validates_domains_and_periods() {
         dataset["operations"] = json!(["read-live"]);
         value["statisticalDatasets"] = json!([dataset]);
         parse(&value);
+    }
+}
+
+#[test]
+fn unsupported_statistical_vocabulary_omits_only_the_affected_dataset() {
+    type DatasetMutation = fn(&mut Value);
+    let cases: &[(&str, DatasetMutation)] = &[
+        ("period kind", |dataset| {
+            dataset["periodKind"] = json!("future-period-kind");
+        }),
+        ("granularity", |dataset| {
+            dataset["granularity"] = json!("week");
+        }),
+        ("reserved dimension code", |dataset| {
+            dataset["dimensions"][0]["codes"] = json!(["_X", "_T"]);
+        }),
+        ("operation", |dataset| {
+            dataset["operations"] = json!(["future-statistical-operation"]);
+        }),
+    ];
+
+    for (name, change) in cases {
+        let supported = statistical_dataset();
+        let mut unsupported = statistical_dataset();
+        unsupported["id"] = json!("future-dataset");
+        change(&mut unsupported);
+        let mut value = fixture();
+        value["statisticalDatasets"] = json!([unsupported, supported.clone()]);
+        let metadata = parse(&value);
+        assert_eq!(
+            metadata.statistical_datasets(),
+            Some(&json!([supported])),
+            "{name}"
+        );
+        assert!(metadata
+            .select_direct_write("records.company.create", "company-writer")
+            .is_ok());
     }
 }
 
@@ -723,16 +722,6 @@ fn change_request_capability_is_strict_typed_and_never_creates_authority() {
     for malformed in [
         {
             let mut malformed = capability.clone();
-            malformed["planner"]["source"] = json!("scripts/private.rhai");
-            malformed
-        },
-        {
-            let mut malformed = capability.clone();
-            malformed["review"]["type"] = json!("external");
-            malformed
-        },
-        {
-            let mut malformed = capability.clone();
             malformed.as_object_mut().unwrap().remove("effects");
             malformed
         },
@@ -777,16 +766,6 @@ fn change_request_capability_is_strict_typed_and_never_creates_authority() {
         },
         {
             let mut malformed = capability.clone();
-            malformed["effects"][0]["permission"] = json!("company-writer");
-            malformed
-        },
-        {
-            let mut malformed = capability.clone();
-            malformed["effects"][0]["operation"] = json!("delete");
-            malformed
-        },
-        {
-            let mut malformed = capability.clone();
             malformed["effects"][0]["target"]["entity"] = json!("Company");
             malformed
         },
@@ -803,14 +782,60 @@ fn change_request_capability_is_strict_typed_and_never_creates_authority() {
             malformed["onApproved"]["mode"] = json!("manual");
             malformed
         },
-        {
-            let mut malformed = capability;
-            malformed["application"]["privateGrant"] = json!("writers");
-            malformed
-        },
     ] {
         let value = change_request_fixture(&malformed);
         assert!(BRegMetadata::from_slice(&serde_json::to_vec(&value).unwrap()).is_err());
+    }
+
+    let mut extended = capability.clone();
+    extended["planner"]["futureSourceHint"] = json!("scripts/private.rhai");
+    extended["effects"][0]["futurePermissionHint"] = json!("company-writer");
+    extended["application"]["futureGrantHint"] = json!("writers");
+    let metadata = parse(&change_request_fixture(&extended));
+    assert!(metadata.change_request_capability("company").is_some());
+
+    for unsupported in [
+        {
+            let mut unsupported = capability.clone();
+            unsupported["review"]["type"] = json!("future-review");
+            unsupported
+        },
+        {
+            let mut unsupported = capability.clone();
+            unsupported["onApproved"]["mode"] = json!("future-approval");
+            unsupported
+        },
+        {
+            let mut unsupported = capability.clone();
+            unsupported["planner"]["kind"] = json!("future-planner");
+            unsupported
+        },
+        {
+            let mut unsupported = capability.clone();
+            unsupported["planner"]["abi"] = json!("registry.change-request-plan/v2");
+            unsupported
+        },
+        {
+            let mut unsupported = capability.clone();
+            unsupported["planner"]["possibleWriteOperations"] = json!(["future-write"]);
+            unsupported
+        },
+        {
+            let mut unsupported = capability.clone();
+            unsupported["planner"]["writes"][0]["operation"] = json!("future-write");
+            unsupported
+        },
+        {
+            let mut unsupported = capability.clone();
+            unsupported["effects"][0]["operation"] = json!("future-effect");
+            unsupported
+        },
+    ] {
+        let metadata = parse(&change_request_fixture(&unsupported));
+        assert!(metadata.change_request_capability("company").is_none());
+        assert!(metadata
+            .select_direct_write("records.company.patch", "company-writer")
+            .is_ok());
     }
 
     // A source naming an effect the document does not list, an entity it
@@ -919,6 +944,9 @@ fn unknown_capability_and_kind_remain_discoverable_but_inert() {
             .kind(),
         BRegMetadataSelectionErrorKind::RequiredCapability
     );
+    assert!(metadata
+        .select_direct_write("records.company.patch", "company-writer")
+        .is_ok());
 
     let mut unknown = fixture();
     unknown["operations"][0]["operation"] = json!("future_mutation");
@@ -985,6 +1013,33 @@ fn lifecycle_authority_requires_exact_profile_capability_schema_and_routes() {
             .kind(),
         BRegMetadataSelectionErrorKind::ContractMismatch
     );
+
+    let mut extended_schema = lifecycle_fixture();
+    extended_schema["operations"][3]["request"]["schema"]["futureAnnotation"] =
+        json!({"description": "ignored"});
+    extended_schema["operations"][4]["request"]["schema"]["properties"]["effectDigest"]
+        ["futureAnnotation"] = json!("ignored");
+    let authority = parse(&extended_schema)
+        .select_lifecycle("company", "company-writer")
+        .expect("schema object extensions do not change the known lifecycle contract");
+    assert!(format!("{authority:?}").contains("operation_count: 2"));
+
+    let mut partly_unsupported = lifecycle_fixture();
+    partly_unsupported["operations"][3]["requiredCapabilities"] =
+        json!(["change_request_lifecycle", "future_review_protocol"]);
+    let authority = parse(&partly_unsupported)
+        .select_lifecycle("company", "company-writer")
+        .expect("the understood lifecycle operation remains selectable");
+    assert!(format!("{authority:?}").contains("operation_count: 1"));
+
+    partly_unsupported["operations"][4]["requiredCapabilities"] = json!(["future_review_protocol"]);
+    assert_eq!(
+        parse(&partly_unsupported)
+            .select_lifecycle("company", "company-writer")
+            .unwrap_err()
+            .kind(),
+        BRegMetadataSelectionErrorKind::RequiredCapability
+    );
 }
 
 #[test]
@@ -999,15 +1054,6 @@ fn malformed_bindings_and_cross_field_references_fail_closed() {
             .unwrap_err()
             .kind(),
         BRegMetadataErrorKind::DuplicateIdentifier
-    );
-
-    let mut unknown_root = fixture();
-    unknown_root["futureAuthority"] = json!({"operation": "create"});
-    assert_eq!(
-        BRegMetadata::from_slice(&serde_json::to_vec(&unknown_root).unwrap())
-            .unwrap_err()
-            .kind(),
-        BRegMetadataErrorKind::Shape
     );
 
     let mut mismatch = fixture();
@@ -1037,6 +1083,70 @@ fn malformed_bindings_and_cross_field_references_fail_closed() {
             .unwrap_err()
             .kind(),
         BRegMetadataErrorKind::DuplicateIdentifier
+    );
+}
+
+#[test]
+fn unknown_members_are_ignored_without_changing_known_selection_contracts() {
+    let mut value = fixture();
+    value["futureDescription"] = json!({"label": "Future registry description"});
+    value["entities"][0]["futureDescription"] = json!("Future entity description");
+    value["entities"][0]["operations"][2]["futureDescription"] = json!(true);
+    value["operations"][2]["futureDescription"] = json!({"group": "search"});
+    value["operations"][2]["identifier"]["futureDescription"] = json!(true);
+    value["operations"][2]["fields"][0]["futureDescription"] = json!("hint");
+    value["operations"][2]["request"]["futureExecutionMember"] = json!({"ignored": true});
+    value["operations"][0]["futureExecutionMember"] = json!({"ignored": true});
+    value["operations"][0]["request"]["futureExecutionMember"] = json!(true);
+    value["statisticalDatasets"] = json!([statistical_dataset()]);
+    value["statisticalDatasets"][0]["futureDescription"] = json!("hint");
+    value["statisticalDatasets"][0]["dimensions"][0]["futureDescription"] = json!("hint");
+
+    let metadata = parse(&value);
+    let selected_read = metadata
+        .operation("records.company.get")
+        .expect("the known read operation remains available");
+    assert_eq!(selected_read.kind(), &BRegOperationKind::Get);
+    assert!(metadata
+        .select_direct_write("records.company.create", "company-writer")
+        .is_ok());
+}
+
+#[test]
+fn known_members_keep_their_types_when_unknown_members_are_tolerated() {
+    for mut malformed in [
+        {
+            let mut value = fixture();
+            value["metadataVersion"] = json!(1);
+            value
+        },
+        {
+            let mut value = fixture();
+            value["entities"][0]["readableFields"] = json!({});
+            value
+        },
+        {
+            let mut value = fixture();
+            value["operations"][0]["request"]["queryParameters"] = json!({});
+            value
+        },
+    ] {
+        malformed["unknown"] = json!(true);
+        assert_eq!(
+            BRegMetadata::from_slice(&serde_json::to_vec(&malformed).unwrap())
+                .unwrap_err()
+                .kind(),
+            BRegMetadataErrorKind::Shape
+        );
+    }
+
+    let mut oversized_unknown = fixture();
+    oversized_unknown["futureDescription"] = json!("x".repeat(65_537));
+    assert_eq!(
+        BRegMetadata::from_slice(&serde_json::to_vec(&oversized_unknown).unwrap())
+            .unwrap_err()
+            .kind(),
+        BRegMetadataErrorKind::Bound
     );
 }
 
@@ -1142,6 +1252,126 @@ fn list_query_and_presentation_descriptors_are_retained_without_authority() {
     assert!(
         BRegMetadata::from_slice(&serde_json::to_vec(&beyond_exact).unwrap()).is_err(),
         "a limit the JavaScript number boundary cannot carry exactly must be refused"
+    );
+}
+
+#[test]
+fn unsupported_selector_is_omitted_and_unsupported_temporal_mode_stays_visible() {
+    let mut value = fixture();
+    value["operations"][2]["selectors"] = json!([
+        {
+            "id": "by-name", "label": "By name", "valueOrigin": "request",
+            "fields": [{"id": "legal-name", "apiName": "legalName", "label": "Legal name",
+                "schema": {"type": "string"}, "required": true}],
+            "requestFields": ["legalName"]
+        },
+        {
+            "id": "future-selector", "label": "Future selector", "valueOrigin": "future-origin",
+            "fields": [{"id": "legal-name", "apiName": "legalName", "label": "Legal name",
+                "schema": {"type": "string"}, "required": true}],
+            "requestFields": []
+        }
+    ]);
+    value["operations"][2]["query"] = json!({
+        "kind": "odata",
+        "selectableFields": [{"id": "legal-name", "apiName": "legalName"}],
+        "filterableFields": [], "sortableFields": [], "allowCount": false,
+        "defaultPageSize": 25, "maximumPageSize": 100,
+        "maximumFilterClauses": 5, "maximumInValues": 10,
+        "pagination": {"parameter": "$skiptoken", "responsePath": "pageInfo.nextCursor", "exclusive": true},
+        "temporal": {"mode": "future-temporal-mode", "futureParameter": "at"}
+    });
+
+    let metadata = parse(&value);
+    let get = metadata.operation("records.company.get").unwrap();
+    assert_eq!(get.selectors().len(), 1);
+    assert_eq!(get.selectors()[0].identifier(), "by-name");
+    // Null already means the collection is not temporal, so a mode this
+    // client does not understand must reach the caller as served.
+    let query = get.query().unwrap();
+    assert_eq!(
+        query.temporal,
+        Some(json!({"mode": "future-temporal-mode", "futureParameter": "at"}))
+    );
+    assert_eq!(query.selectable_fields[0].api_name, "legalName");
+    assert_eq!(query.maximum_page_size, 100);
+    assert!(metadata
+        .select_direct_write("records.company.create", "company-writer")
+        .is_ok());
+
+    let mut malformed_selector = value.clone();
+    malformed_selector["operations"][2]["selectors"][0]["requestFields"] = json!([]);
+    assert_eq!(
+        BRegMetadata::from_slice(&serde_json::to_vec(&malformed_selector).unwrap())
+            .unwrap_err()
+            .kind(),
+        BRegMetadataErrorKind::Shape
+    );
+
+    let mut malformed_temporal = value;
+    malformed_temporal["operations"][2]["query"]["temporal"] = json!({"mode": "as-of"});
+    assert_eq!(
+        BRegMetadata::from_slice(&serde_json::to_vec(&malformed_temporal).unwrap())
+            .unwrap_err()
+            .kind(),
+        BRegMetadataErrorKind::Shape
+    );
+}
+
+#[test]
+fn unsupported_spatial_vocabulary_omits_only_the_spatial_capability() {
+    let mut value = fixture();
+    value["operations"][2]["query"] = json!({
+        "kind": "list",
+        "selectableFields": [{"id": "legal-name", "apiName": "legalName"}],
+        "filterableFields": [], "sortableFields": [], "allowCount": false,
+        "defaultPageSize": 25, "maximumPageSize": 100,
+        "maximumFilterClauses": 5, "maximumInValues": 10,
+        "pagination": {"parameter": "$skiptoken", "responsePath": "pageInfo.nextCursor", "exclusive": true},
+        "temporal": null,
+        "spatialQueries": {"bbox": {"geometryProperty": "legalName",
+            "maximumLongitudeSpanDegrees": 0.5, "maximumLatitudeSpanDegrees": 0.25,
+            "coordinateReferenceSystem": "CRS84", "semantics": "inclusive_2d_non_crossing"}}
+    });
+
+    for (member, unsupported_value) in [
+        ("coordinateReferenceSystem", "FUTURE_CRS"),
+        ("semantics", "future_bbox_semantics"),
+    ] {
+        let mut unsupported = value.clone();
+        unsupported["operations"][2]["query"]["spatialQueries"]["bbox"][member] =
+            json!(unsupported_value);
+        let metadata = parse(&unsupported);
+        let query = metadata
+            .operation("records.company.get")
+            .unwrap()
+            .query()
+            .unwrap();
+        assert_eq!(query.maximum_page_size, 100);
+        assert!(query.spatial_queries.is_none());
+        assert!(metadata
+            .select_direct_write("records.company.create", "company-writer")
+            .is_ok());
+    }
+
+    let mut malformed_bounds = value.clone();
+    malformed_bounds["operations"][2]["query"]["spatialQueries"]["bbox"]
+        ["maximumLongitudeSpanDegrees"] = json!(0);
+    assert_eq!(
+        BRegMetadata::from_slice(&serde_json::to_vec(&malformed_bounds).unwrap())
+            .unwrap_err()
+            .kind(),
+        BRegMetadataErrorKind::Shape
+    );
+
+    let mut malformed_crs = value;
+    malformed_crs["operations"][2]["query"]["spatialQueries"]["bbox"]
+        ["coordinateReferenceSystem"] = json!(true);
+    assert_eq!(
+        BRegMetadata::from_slice(&serde_json::to_vec(&malformed_crs).unwrap())
+            .unwrap_err()
+            .kind(),
+        BRegMetadataErrorKind::Shape
     );
 }
 
@@ -1358,12 +1588,97 @@ fn exact_tombstone_batch_and_immediate_action_contracts_promote() {
     assert_eq!(batch.maximum_items(), 20);
     assert!(batch.allows_create());
     assert!(!batch.allows_patch());
+
+    let mut unsupported_tombstone = value.clone();
+    unsupported_tombstone["operations"][3]["requiredCapabilities"] =
+        json!(["future_tombstone_protocol"]);
+    assert_eq!(
+        parse(&unsupported_tombstone)
+            .select_tombstone("company", "company-writer")
+            .unwrap_err()
+            .kind(),
+        BRegMetadataSelectionErrorKind::RequiredCapability
+    );
+    let mut unsupported_batch = value.clone();
+    unsupported_batch["operations"][4]["requiredCapabilities"] = json!(["future_batch_protocol"]);
+    let metadata = parse(&unsupported_batch);
+    assert_eq!(
+        metadata
+            .select_batch("company", "company-writer")
+            .unwrap_err()
+            .kind(),
+        BRegMetadataSelectionErrorKind::RequiredCapability
+    );
+    assert!(metadata
+        .select_direct_write("records.company.create", "company-writer")
+        .is_ok());
+
     let action = metadata
         .select_immediate_action("register-company", "company-writer")
         .unwrap();
     assert_eq!(action.invoke_path(), "/v1/actions/register-company");
     assert!(!action.is_handler());
     assert!(!action.inputs()[0].nullable());
+
+    let mut unsupported_input_mode = value.clone();
+    unsupported_input_mode["actions"][0]["inputMode"] = json!("future-input-mode");
+    let metadata = parse(&unsupported_input_mode);
+    assert_eq!(metadata.immediate_actions().len(), 1);
+    assert_eq!(
+        metadata.immediate_actions()[0].input_mode(),
+        Some("future-input-mode")
+    );
+    assert_eq!(
+        metadata
+            .select_immediate_action("register-company", "company-writer")
+            .unwrap_err()
+            .kind(),
+        BRegMetadataSelectionErrorKind::ContractMismatch
+    );
+    assert!(metadata
+        .select_direct_write("records.company.create", "company-writer")
+        .is_ok());
+
+    let mut malformed_input_mode = value.clone();
+    malformed_input_mode["actions"][0]["inputMode"] = json!(true);
+    assert_eq!(
+        BRegMetadata::from_slice(&serde_json::to_vec(&malformed_input_mode).unwrap())
+            .unwrap_err()
+            .kind(),
+        BRegMetadataErrorKind::Shape
+    );
+
+    let mut unsupported_action = value.clone();
+    unsupported_action["actions"][0]["requiredCapabilities"] = json!(["future_action_protocol"]);
+    let metadata = parse(&unsupported_action);
+    assert_eq!(metadata.immediate_actions().len(), 1);
+    assert_eq!(
+        metadata
+            .select_immediate_action("register-company", "company-writer")
+            .unwrap_err()
+            .kind(),
+        BRegMetadataSelectionErrorKind::RequiredCapability
+    );
+    assert!(metadata
+        .select_direct_write("records.company.create", "company-writer")
+        .is_ok());
+
+    let mut malformed_capabilities = value.clone();
+    malformed_capabilities["actions"][0]["requiredCapabilities"] = json!(true);
+    assert_eq!(
+        BRegMetadata::from_slice(&serde_json::to_vec(&malformed_capabilities).unwrap())
+            .unwrap_err()
+            .kind(),
+        BRegMetadataErrorKind::Shape
+    );
+    malformed_capabilities["actions"][0]["requiredCapabilities"] =
+        json!(["future_action_protocol", "future_action_protocol"]);
+    assert_eq!(
+        BRegMetadata::from_slice(&serde_json::to_vec(&malformed_capabilities).unwrap())
+            .unwrap_err()
+            .kind(),
+        BRegMetadataErrorKind::DuplicateIdentifier
+    );
 
     let mut unsupported_bounds = value.clone();
     unsupported_bounds["actions"][0]["bounds"]["maximumTargets"] = json!(17);

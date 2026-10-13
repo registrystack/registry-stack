@@ -12,6 +12,14 @@ Prepare the project with `bregctl init ./registry`. The generated
 access profiles, journey fixtures and local clients before the first start.
 A later dedicated Evidence source can be prepared explicitly on a stopped session.
 
+The generated local runtime uses the compiled registry's one common principal
+claim. A project whose authenticated grants all use `principalClaim: sub`
+therefore uses the issuer's verified subject, including native citizen accounts.
+Projects with multiple principal claims are refused before local services start.
+An access-free project keeps the existing `registry_principal` local default.
+An operated runtime still explicitly sets `authentication.authorityClaims.principal`
+to match its governed grants.
+
 ```sh
 bregctl dev ./registry
 bregctl dev stop ./registry
@@ -31,11 +39,13 @@ original ports and clients-file location. Conflicting ports are refused.
 The database runs the pinned image
 `public.ecr.aws/docker/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675`,
 or `postgis/postgis@sha256:01a6a70e41e6c4467c8f55f6063555ed72db2d6662cd0d571040d42eadaeb6f6`
-when the compiled schema requires PostGIS. Public help names the canonical
-`postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675`
-identity; the implementation pulls the byte-identical Docker Official Images
-ECR mirror above. Retained owned containers accept either exact PostgreSQL
-reference at that digest. The selection is retained with the
+when the compiled schema requires PostGIS. The first is the Docker Official
+Images mirror of
+`postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675`,
+byte-identical at that digest; the PostGIS image comes from Docker Hub. The
+`dev start` help names both references, so an egress allowlist can admit
+`public.ecr.aws` and, for spatial schemas, Docker Hub. Retained owned
+containers accept either exact PostgreSQL reference at that digest. The selection is retained with the
 owned database. Spatial setup grants the migration role permission to SET the
 no-login bbox owner; the runtime role never receives that membership.
 Each supervised
@@ -264,10 +274,6 @@ use another client for the same profile by naming that exact step with
 profile-mismatched, duplicate, or ambiguous bindings are refused before any
 service starts.
 
-The generated runtime derives its principal claim from the compiled access
-profiles. All authenticated profiles must use the same claim; mixed claims
-refuse. Existing `registry_principal` projects keep their mapping, and `sub`
-projects use the issuer's subject without adding or overriding token claims.
 For a native journey using a `sub` profile, declare
 `claims: {principal: "$localClientSubject", ...}`. This explicit fixture marker
 resolves to the selected local client's registered subject only in the private
