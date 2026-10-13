@@ -15,7 +15,7 @@ use serde_json::{Map, Value};
 
 use crate::{
     adapters::{refused, retryable, token_failure},
-    protocol::{CallOutcome, CallRequest, Operation},
+    protocol::{CallOutcome, CallRequest, DeclaredRefusal, Operation},
 };
 
 #[derive(Deserialize)]
@@ -40,6 +40,22 @@ fn input(request: &CallRequest) -> Result<(ActionInput, BRegIdempotencyKey), Cal
     Ok((input, key))
 }
 
+fn declared_refusal(
+    mutation: bool,
+    status: Option<u16>,
+    problem: Option<BRegProblemCode>,
+    refusal_code: Option<&str>,
+    outcome_unknown: bool,
+) -> Option<DeclaredRefusal> {
+    (mutation
+        && !outcome_unknown
+        && status == Some(422)
+        && problem == Some(BRegProblemCode::ActionRefused))
+    .then_some(refusal_code)
+    .flatten()
+    .and_then(DeclaredRefusal::new)
+}
+
 fn failure(error: BaseRegistryClientError, mutation: bool) -> CallOutcome {
     if mutation && error.problem_code() == Some(BRegProblemCode::IdempotencyExpired) {
         return CallOutcome::ReceiptExpired;
@@ -48,6 +64,15 @@ fn failure(error: BaseRegistryClientError, mutation: bool) -> CallOutcome {
         return CallOutcome::Uncertain {
             code: "transport-uncertain".into(),
         };
+    }
+    if let Some(refusal) = declared_refusal(
+        mutation,
+        error.status(),
+        error.problem_code(),
+        error.refusal_code().map(|code| code.as_str()),
+        false,
+    ) {
+        return CallOutcome::DeclaredRefusal(refusal);
     }
     match error {
         BaseRegistryClientError::Token(error) => token_failure(&error),
@@ -163,5 +188,82 @@ pub async fn execute(
             },
         },
         Err(error) => failure(error, true),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::declared_refusal;
+    use registry_breg_client::BRegProblemCode;
+
+    #[test]
+    fn declared_refusal_classification_requires_every_typed_execution_guard() {
+        let classify = |mutation, status, problem, code, unknown| {
+            declared_refusal(mutation, status, problem, code, unknown)
+                .map(|refusal| refusal.refusal_code().to_owned())
+        };
+        assert_eq!(
+            classify(
+                true,
+                Some(422),
+                Some(BRegProblemCode::ActionRefused),
+                Some("not-eligible"),
+                false,
+            ),
+            Some("not-eligible".to_owned())
+        );
+        for refusal in [
+            classify(
+                false,
+                Some(422),
+                Some(BRegProblemCode::ActionRefused),
+                Some("not-eligible"),
+                false,
+            ),
+            classify(
+                true,
+                Some(409),
+                Some(BRegProblemCode::ActionRefused),
+                Some("not-eligible"),
+                false,
+            ),
+            classify(
+                true,
+                Some(422),
+                Some(BRegProblemCode::PreconditionFailed),
+                Some("not-eligible"),
+                false,
+            ),
+            classify(
+                true,
+                Some(422),
+                Some(BRegProblemCode::ActionRefused),
+                None,
+                false,
+            ),
+            classify(
+                true,
+                Some(422),
+                Some(BRegProblemCode::ActionRefused),
+                Some("line\nbreak"),
+                false,
+            ),
+            classify(
+                true,
+                Some(422),
+                Some(BRegProblemCode::ActionRefused),
+                Some(&"x".repeat(129)),
+                false,
+            ),
+            classify(
+                true,
+                Some(422),
+                Some(BRegProblemCode::ActionRefused),
+                Some("not-eligible"),
+                true,
+            ),
+        ] {
+            assert_eq!(refusal, None);
+        }
     }
 }

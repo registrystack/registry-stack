@@ -30,6 +30,7 @@ fn authored_scenarios_decode_tagged_replies_and_preserve_foreign_nulls() {
     for reply in [
         "{type: retryable, code: transport-unavailable}",
         "{type: refused, code: credential-refused}",
+        "{type: declared-refusal, refusalCode: eligibility-not-met}",
         "{type: uncertain, code: transport-uncertain}",
         "{type: receipt-expired}",
     ] {
@@ -38,6 +39,52 @@ fn authored_scenarios_decode_tagged_replies_and_preserve_foreign_nulls() {
             "scenarios.yaml",
         )
         .unwrap();
+    }
+
+    let document = scenarios::decode(
+        &source(
+            "{type: declared-refusal, refusalCode: eligibility-not-met}",
+            "",
+        ),
+        "scenarios.yaml",
+    )
+    .unwrap();
+    assert!(matches!(
+        &document.cases[0].replies["call-one"][0],
+        Reply::DeclaredRefusal { declared_refusal }
+            if declared_refusal == "eligibility-not-met"
+    ));
+}
+
+#[test]
+fn declared_refusal_codes_are_nonempty_bounded_and_free_of_controls() {
+    for (reply, code) in [
+        (
+            "{type: declared-refusal, refusalCode: ''}".to_owned(),
+            "config.invalid-value",
+        ),
+        (
+            format!(
+                "{{type: declared-refusal, refusalCode: {}}}",
+                "x".repeat(129)
+            ),
+            "config.invalid-value",
+        ),
+        (
+            r#"{type: declared-refusal, refusalCode: "bad\u007fcode"}"#.to_owned(),
+            "yaml.control-character",
+        ),
+    ] {
+        let error = scenarios::decode(&source(&reply, ""), "scenarios.yaml")
+            .err()
+            .expect("must refuse an invalid declared refusal code");
+        let finding = error
+            .diagnostics
+            .iter()
+            .find(|finding| finding.code == code)
+            .unwrap_or_else(|| panic!("{error}"));
+        assert_eq!(finding.path, "/cases/0/replies/call-one/0/refusalCode");
+        assert!(!error.to_string().contains(&reply));
     }
 }
 
@@ -204,6 +251,18 @@ fn scenario_schema_keeps_foreign_payloads_and_closed_tagged_forms() {
         schema["$defs"]["AuthoredWait"]["oneOf"][0]["properties"]["value"]["x-registry-foreign"],
         "json"
     );
+    assert_eq!(schema["$defs"]["DeclaredRefusalCode"]["minLength"], 1);
+    assert_eq!(schema["$defs"]["DeclaredRefusalCode"]["maxLength"], 128);
+    assert_eq!(
+        schema["$defs"]["DeclaredRefusalCode"]["pattern"],
+        "^[^\\u0000-\\u001F\\u007F-\\u009F]+$"
+    );
+    let refusal_code = jsonschema::JSONSchema::options()
+        .with_draft(jsonschema::Draft::Draft202012)
+        .compile(&schema["$defs"]["DeclaredRefusalCode"])
+        .unwrap();
+    assert!(refusal_code.is_valid(&json!("eligibility-not-met")));
+    assert!(!refusal_code.is_valid(&json!("bad\u{85}code")));
     for tagged in ["AuthoredReply", "AuthoredWait"] {
         assert!(schema["$defs"][tagged]["oneOf"]
             .as_array()

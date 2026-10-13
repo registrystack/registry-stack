@@ -102,6 +102,25 @@
         },
         {
           "additionalProperties": false,
+          "description": "The product returned a package-declared, no-effect business refusal.\nA supported call takes its `onDeclaredRefusal` edge when it has one;\notherwise the run stops as refused.",
+          "properties": {
+            "refusalCode": {
+              "$ref": "#/$defs/DeclaredRefusalCode",
+              "description": "The validated refusal code the package declares."
+            },
+            "type": {
+              "const": "declared-refusal",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "refusalCode"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
           "description": "The call's effect is unknown; the run stops as uncertain unless a\nrecovery consumes another reply.",
           "properties": {
             "code": {
@@ -240,6 +259,12 @@
           "type": "object"
         }
       ]
+    },
+    "DeclaredRefusalCode": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
+      "type": "string"
     },
     "ExpectedOutcome": {
       "oneOf": [

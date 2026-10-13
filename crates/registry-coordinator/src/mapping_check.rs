@@ -14,7 +14,10 @@ use serde_json::{Map, Value};
 
 use crate::{
     contracts::{contract, event_contract, first_violation, Violation},
-    definition::{authored, compile_schema, parse_timestamp, Mapping, Reference, Step, Workflow},
+    definition::{
+        authored, compile_schema, output_routes, parse_timestamp, AvailableOutputs, Mapping,
+        OutputRoute, Reference, Step, Workflow,
+    },
     CoordinatorError, Result,
 };
 
@@ -29,21 +32,37 @@ fn budget() -> usize {
 /// Check every step's mapping, in step-name order, and report the first
 /// mismatch in each step.
 pub(crate) fn check(workflow: &Workflow) -> Vec<CoordinatorError> {
+    let routes = output_routes(workflow);
     workflow
         .steps
         .iter()
-        .filter_map(|(name, step)| check_step(workflow, name, step).err())
+        .filter_map(|(name, step)| {
+            check_step(
+                workflow,
+                name,
+                step,
+                routes
+                    .get(name)
+                    .expect("a checked workflow reaches every step"),
+            )
+            .err()
+        })
         .collect()
 }
 
-fn check_step(workflow: &Workflow, name: &str, step: &Step) -> Result<()> {
+fn check_step(
+    workflow: &Workflow,
+    name: &str,
+    step: &Step,
+    available: &AvailableOutputs,
+) -> Result<()> {
     let Some(mapping) = step.mapping() else {
         return Ok(());
     };
     let base = format!("steps.{name}.{}", step.role());
     let mut read = BTreeMap::new();
     for (member, reference) in mapping.references() {
-        if let Some(schema) = source(workflow, reference, &format!("{base}{member}"))? {
+        if let Some(schema) = source(workflow, available, reference, &format!("{base}{member}"))? {
             read.insert(member, schema);
         }
     }
@@ -83,6 +102,7 @@ struct Read<'a> {
 /// Resolve an input or step reference's path in its producer's schema.
 fn source<'a>(
     workflow: &'a Workflow,
+    available: &AvailableOutputs,
     reference: &Reference,
     field: &str,
 ) -> Result<Option<Read<'a>>> {
@@ -93,11 +113,25 @@ fn source<'a>(
             path,
         ),
         Reference::Step { step, path } => match workflow.steps.get(step) {
-            Some(Step::Call { call, .. }) => (
-                &contract(call.operation).output,
-                format!("the {} output of step {step}", call.operation.as_str()),
-                path,
-            ),
+            Some(Step::Call { call, .. }) => match available.get(step) {
+                Some(OutputRoute::CallSuccess) => (
+                    &contract(call.operation).output,
+                    format!("the {} output of step {step}", call.operation.as_str()),
+                    path,
+                ),
+                Some(OutputRoute::DeclaredRefusal) => (
+                    contract(call.operation)
+                        .declared_refusal
+                        .as_ref()
+                        .expect("a declared-refusal route has a committed contract"),
+                    format!(
+                        "the {} declared-refusal output of step {step}",
+                        call.operation.as_str()
+                    ),
+                    path,
+                ),
+                _ => return Ok(None),
+            },
             Some(Step::WaitFor { wait_for, .. }) => (
                 &event_contract(wait_for).output,
                 format!("the {} event of step {step}", wait_for.id()),

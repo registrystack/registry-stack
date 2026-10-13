@@ -282,6 +282,9 @@ pub struct Detail {
     pub failure_path: Option<String>,
     pub uncertain: bool,
     pub receipt_expired: bool,
+    /// A delivered mutating call whose typed result proves no product effect
+    /// occurred. This matters only when cancellation raced with completion.
+    pub completed_without_effect: bool,
     /// Seconds until a waiting step reads its result again; set only while
     /// the wait goes on.
     pub recheck_seconds: Option<u32>,
@@ -296,6 +299,7 @@ impl Detail {
             failure_path: None,
             uncertain,
             receipt_expired: false,
+            completed_without_effect: false,
             recheck_seconds: None,
         }
     }
@@ -1376,7 +1380,7 @@ impl Store {
         } else {
             detail.next.as_deref().unwrap_or(step)
         };
-        let state = if cancelled && dispatch_risk {
+        let state = if cancelled && dispatch_risk && !detail.completed_without_effect {
             "cancelled-after-effect"
         } else if cancelled {
             "cancelled"

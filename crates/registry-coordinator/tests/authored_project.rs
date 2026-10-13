@@ -15,6 +15,30 @@ fn project() -> Value {
     })
 }
 
+fn declared_refusal_project() -> Value {
+    json!({
+        "apiVersion": authoring::API_VERSION, "kind": authoring::KIND,
+        "project": {"id":"declared-refusal", "version":"1"},
+        "input": {}, "connections": {"registry":"breg"},
+        "functionsFile":"functions.rhai", "deadlineSeconds":60,
+        "start":"act",
+        "steps": {
+            "act": {"type":"call", "connection":"registry", "operation":"invoke-breg-action",
+                "input":{"type":"function", "function":"command", "arguments":[{"type":"input"}]},
+                "next":"accepted", "onDeclaredRefusal":"refused"},
+            "accepted": {"type":"finish", "outcome":"accepted"},
+            "refused": {"type":"finish", "outcome":"refused", "output":{
+                "type":"fields", "fields":{"refusalCode":{"type":"step", "step":"act", "path":"/refusalCode"}}
+            }}
+        },
+        "outcomes": {
+            "accepted":{"type":"null"},
+            "refused":{"type":"object", "required":["refusalCode"],
+                "properties":{"refusalCode":{"type":"string"}}, "additionalProperties":false}
+        }
+    })
+}
+
 fn write_project(root: &Path, project: &Value, source: &str) {
     fs::write(
         root.join("workflow.yaml"),
@@ -52,6 +76,117 @@ fn authored_project_converts_to_the_versioned_snapshot_abi() {
             .unwrap(),
         json!({"optional":null})
     );
+}
+
+#[test]
+fn declared_refusal_opt_in_uses_v2_and_restores_only_with_its_shape() {
+    let root = tempfile::tempdir().unwrap();
+    let project = declared_refusal_project();
+    write_project(root.path(), &project, "fn command(input) { input }");
+    let definition = Definition::load(root.path()).unwrap();
+    let snapshot = definition.snapshot().unwrap();
+    let frozen: Value = serde_json::from_str(&snapshot).unwrap();
+    assert_eq!(frozen["adapterAbi"], "coordinator/product-operations/v2");
+    assert_eq!(
+        frozen["workflow"]["steps"]["act"]["onDeclaredRefusal"],
+        "refused"
+    );
+    let explained = definition.explain().unwrap();
+    let act = explained["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|step| step["id"] == "act")
+        .unwrap();
+    assert_eq!(act["onDeclaredRefusal"], "refused");
+    assert_eq!(
+        Definition::from_snapshot(&snapshot)
+            .unwrap()
+            .snapshot()
+            .unwrap(),
+        snapshot
+    );
+
+    for changed in [
+        {
+            let mut changed = frozen.clone();
+            changed["adapterAbi"] = json!("coordinator/product-operations/v1");
+            changed
+        },
+        {
+            let mut changed = frozen.clone();
+            changed["workflow"]["steps"]["act"]
+                .as_object_mut()
+                .unwrap()
+                .remove("onDeclaredRefusal");
+            changed
+        },
+    ] {
+        let error = Definition::from_snapshot(&changed.to_string())
+            .err()
+            .expect("ABI and feature shape must agree");
+        assert_eq!(error.code, "definition.abi");
+    }
+}
+
+#[test]
+fn declared_refusal_is_available_only_on_its_edge_and_not_after_a_mixed_join() {
+    let root = tempfile::tempdir().unwrap();
+    let source = "fn command(input) { input } fn identity(value) { value }";
+    let project = declared_refusal_project();
+    write_project(root.path(), &project, source);
+    Definition::load(root.path()).expect("the refusal edge reads its declared output");
+
+    let mut success_reads_refusal = project.clone();
+    success_reads_refusal["steps"]["accepted"]["output"] = json!({
+        "type":"fields", "fields":{"refusalCode":{
+            "type":"step", "step":"act", "path":"/refusalCode"
+        }}
+    });
+    success_reads_refusal["outcomes"]["accepted"] =
+        success_reads_refusal["outcomes"]["refused"].clone();
+    write_project(root.path(), &success_reads_refusal, source);
+    assert_eq!(
+        Definition::load(root.path()).err().unwrap().code,
+        "coordinator.mapping.path"
+    );
+
+    let mut refusal_reads_success = project.clone();
+    refusal_reads_success["steps"]["refused"]["output"]["fields"]["refusalCode"]["path"] =
+        json!("/applicationId");
+    write_project(root.path(), &refusal_reads_success, source);
+    assert_eq!(
+        Definition::load(root.path()).err().unwrap().code,
+        "coordinator.mapping.path"
+    );
+
+    let mut joined = project;
+    joined["steps"]["act"]["next"] = json!("joined");
+    joined["steps"]["act"]["onDeclaredRefusal"] = json!("joined");
+    joined["steps"].as_object_mut().unwrap().remove("accepted");
+    joined["steps"].as_object_mut().unwrap().remove("refused");
+    joined["steps"]["joined"] = json!({
+        "type":"finish", "outcome":"joined", "output":{
+            "type":"function", "function":"identity", "arguments":[{"type":"step", "step":"act"}]
+        }
+    });
+    joined["outcomes"] = json!({"joined":{}});
+    write_project(root.path(), &joined, source);
+    assert_eq!(
+        Definition::load(root.path()).err().unwrap().code,
+        "coordinator.mapping.dominance"
+    );
+}
+
+#[test]
+fn operations_without_a_declared_refusal_contract_reject_the_edge() {
+    let root = tempfile::tempdir().unwrap();
+    let mut project = declared_refusal_project();
+    project["steps"]["act"]["operation"] = json!("read-record");
+    write_project(root.path(), &project, "fn command(input) { input }");
+    let error = Definition::load(root.path()).err().unwrap();
+    assert_eq!(error.code, "coordinator.definition.operation");
+    assert_eq!(error.field.as_deref(), Some("/steps/act/onDeclaredRefusal"));
 }
 
 #[test]
@@ -423,6 +558,18 @@ fn project_schema_holds_each_fields_mapping_to_its_operation_input_members() {
         .map(|descriptor| descriptor.id)
         .collect();
     assert_eq!(constrained, catalog);
+
+    let function =
+        json!({"type": "function", "function": "identity", "arguments": [{"type": "input"}]});
+    let mut supported = call_project("invoke-breg-action", function.clone());
+    supported["steps"]["call"]["onDeclaredRefusal"] = json!("done");
+    assert!(validator.is_valid(&supported));
+    let mut unsupported = call_project("read-record", function);
+    unsupported["steps"]["call"]["onDeclaredRefusal"] = json!("done");
+    assert!(!validator.is_valid(&unsupported));
+    assert!(call["properties"]["onDeclaredRefusal"]
+        .get("default")
+        .is_none());
 }
 
 #[cfg(feature = "schema")]

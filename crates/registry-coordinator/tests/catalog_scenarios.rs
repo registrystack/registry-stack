@@ -77,7 +77,7 @@ fn fixture(name: &str) -> (Definition, ScenarioDocument) {
 fn governed_action_example_covers_refusal_unknown_and_exact_command_recovery() {
     let (definition, document) = fixture("governed-action-follow-up");
     let reports = scenarios::check(&definition, &document).unwrap();
-    assert_eq!(reports.len(), 6);
+    assert_eq!(reports.len(), 8);
     assert!(matches!(
         &definition.workflow.steps["request-information"],
         registry_coordinator::definition::Step::Call {call, ..}
@@ -98,6 +98,27 @@ fn governed_action_example_covers_refusal_unknown_and_exact_command_recovery() {
     assert_eq!(stopped.call_attempts["request-information"], 1);
     assert_eq!(stopped.call_attempts["notify"], 1);
     assert_eq!(stopped.frozen_commands, 2);
+    let declared = reports
+        .iter()
+        .find(|report| report.name == "action-declared-refusal")
+        .unwrap();
+    assert_eq!(declared.state, "completed");
+    assert_eq!(
+        declared.outcome.as_deref(),
+        Some("information-request-refused")
+    );
+    assert_eq!(
+        declared.output,
+        Some(json!({"refusalCode": "already-requested"}))
+    );
+    assert!(!declared.call_attempts.contains_key("notify"));
+    let still_unknown = reports
+        .iter()
+        .find(|report| report.name == "action-response-loss-then-declared-refusal-stays-unknown")
+        .unwrap();
+    assert_eq!(still_unknown.state, "uncertain");
+    assert_eq!(still_unknown.call_attempts["request-information"], 2);
+    assert!(!still_unknown.call_attempts.contains_key("notify"));
 
     let output = json!({"data":{"domainData":{"missingField":"proof of address"}}});
     let arguments = std::collections::BTreeMap::from([("read-application".into(), output)]);
@@ -111,6 +132,54 @@ fn governed_action_example_covers_refusal_unknown_and_exact_command_recovery() {
     );
     assert!(request.get("profile").is_none());
     assert!(request.get("idempotencyKey").is_none());
+}
+
+#[test]
+fn declared_refusal_without_an_authored_edge_preserves_refused_behavior() {
+    let source = example("governed-action-follow-up");
+    let root = tempfile::tempdir().unwrap();
+    let workflow = std::fs::read_to_string(source.join("workflow.yaml")).unwrap();
+    let workflow = workflow.replace("    onDeclaredRefusal: action-refused\n", "");
+    let workflow = workflow.replace(
+        "  action-refused:\n    type: finish\n    outcome: information-request-refused\n    output:\n      type: fields\n      fields:\n        refusalCode: {type: step, step: request-information, path: /refusalCode}\n",
+        "",
+    );
+    let workflow = workflow.replace(
+        "  information-request-refused:\n    type: object\n    additionalProperties: false\n    required: [refusalCode]\n    properties:\n      refusalCode: {type: string, minLength: 1, maxLength: 128}\n",
+        "",
+    );
+    assert!(!workflow.contains("onDeclaredRefusal"));
+    assert!(!workflow.contains("information-request-refused"));
+    std::fs::write(root.path().join("workflow.yaml"), workflow).unwrap();
+    std::fs::copy(
+        source.join("functions.rhai"),
+        root.path().join("functions.rhai"),
+    )
+    .unwrap();
+    let definition = Definition::load(root.path()).unwrap();
+    assert_eq!(
+        definition.explain().unwrap()["adapterAbi"],
+        "coordinator/product-operations/v1"
+    );
+    let mut document = scenarios::load(&source.join("scenarios.yaml")).unwrap();
+    let scenario = document
+        .cases
+        .iter_mut()
+        .find(|scenario| scenario.name == "action-declared-refusal")
+        .unwrap();
+    scenario.expect.path = vec![
+        "read-application".into(),
+        "needs-information".into(),
+        "request-information".into(),
+    ];
+    scenario.expect.state = "refused".into();
+    scenario.expect.outcome = None;
+    scenario.expect.skip_outcome_check = false;
+    scenario.expect.output = None;
+
+    let report = scenarios::run(&definition, scenario).unwrap();
+    assert_eq!(report.state, "refused");
+    assert_eq!(report.outcome, None);
 }
 
 #[test]

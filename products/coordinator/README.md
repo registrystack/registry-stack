@@ -53,6 +53,14 @@ its form with `type`. A call `input` or a finish `output` is either
 `type: function`, a pure function with up to 16 reference `arguments`.
 `waitUntil` and `choose` take one reference or `type: function`.
 
+Every call uses `next` for its successful operation output. An
+`invoke-breg-action` call may also name `onDeclaredRefusal`. That edge receives
+only `{refusalCode}` from a validated, package-declared, no-effect action
+refusal. A step reached only through `next` can read the action receipt, and a
+step reached only through `onDeclaredRefusal` can read the refusal code. At a
+join reachable through both edges, the call has no single output shape, so its
+output is unavailable to mappings at or beyond the join.
+
 ```yaml
 read-application:
   type: call
@@ -207,6 +215,26 @@ command recovery. Preparation is nonmutating; its exact request and idempotency
 key are saved before dispatch. Later attempts check current metadata and acquire
 fresh credentials without refreshing the saved conditions or key. A changed
 contract, denied authority or stale condition stops the action safely.
+
+A workflow may route a BReg action refusal only from BReg's typed
+`422 action.refused` response. BReg validates the code against the active
+package's declared refusal catalogue and guarantees that the refusal had no
+action effect. The maintained adapter validates the exact problem class and
+bounded code. The refusal edge receives that code only, not an HTTP problem,
+detail, field path or submitted value. Authentication,
+authorization, transport, protocol and command-preparation failures remain
+ordinary call failures. Omitting `onDeclaredRefusal` preserves that behavior
+for every refusal.
+
+The worker checkpoints a declared refusal's output and target together, as it
+does a successful call result. A refusal received after an earlier uncertain
+attempt cannot settle the original command, so the run remains uncertain and
+does not branch. The saved command keeps its original deadline; this route does
+not renew it. Once a call result is checkpointed, the existing pure-step rules
+allow its following `choose` or `finish` to complete, while a later call or wait
+still observes expiry. If cancellation wins before the refusal completion is
+checkpointed, the no-effect completion is acknowledged and the run remains
+cancelled.
 
 `external-get` binds through `runtime.externalHttpConnections`, separately from
 product connections. Operators configure the base URL, exact permitted paths,

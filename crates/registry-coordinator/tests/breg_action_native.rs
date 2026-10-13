@@ -10,6 +10,7 @@ use registry_breg_client::{
 };
 use registry_coordinator::{
     adapters::HttpAdapters,
+    breg_action,
     protocol::{AdapterSet, CallOutcome, CallRequest, Operation, ReconciliationOutcome},
 };
 use serde_json::{json, Value};
@@ -103,6 +104,34 @@ async fn real_breg_action_recovers_exactly_once_and_rechecks_current_authority()
         .await
         .unwrap();
     let record = seed.value.data.record_identifier;
+    let refused_request = CallRequest {
+        connection: "applications".into(),
+        operation: Operation::InvokeBregAction,
+        input: json!({"action":"update-item", "input":{"targetId":record, "label":"Refuse"}}),
+        idempotency_key: Some("coordinator-native-refusal".into()),
+    };
+    let refused_prepared = breg_action::prepare(&client, "writer", &refused_request)
+        .await
+        .unwrap_or_else(|_| panic!("native refusal preparation"));
+    let refusal =
+        match breg_action::execute(&client, "writer", &refused_request, &refused_prepared).await {
+            CallOutcome::DeclaredRefusal(refusal) => refusal,
+            _ => panic!("native declared business refusal"),
+        };
+    assert_eq!(refusal.refusal_code(), "label-not-eligible");
+    assert_eq!(
+        serde_json::to_value(&refusal).unwrap(),
+        json!({"refusalCode":"label-not-eligible"})
+    );
+    let read_options = BRegRecordOptions::default()
+        .access_profile("writer")
+        .unwrap();
+    let unchanged = client
+        .get_record("items", &record, &read_options)
+        .await
+        .unwrap();
+    assert_eq!(unchanged.value.data.domain_data["label"], "Before");
+    assert_eq!(unchanged.value.data.revision_identifier, "1");
     let mut proxy = LostResponse::start(&service.base_url);
     let root = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
     let mut runtime = support::config(root.path(), &issuer, &proxy.base_url, "http://127.0.0.1:1");
@@ -148,9 +177,6 @@ async fn real_breg_action_recovers_exactly_once_and_rechecks_current_authority()
         CallOutcome::Uncertain { code } => assert_eq!(code, "transport-uncertain"),
         _ => panic!("a dropped committed response stays uncertain"),
     }
-    let read_options = BRegRecordOptions::default()
-        .access_profile("writer")
-        .unwrap();
     let committed = client
         .get_record("items", &record, &read_options)
         .await

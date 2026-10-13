@@ -37,6 +37,7 @@ steps:
     operation: invoke-breg-action
     input: {type: function, function: action_request, arguments: [{type: input}, {type: step, step: read-application}]}
     next: notify
+    onDeclaredRefusal: action-refused
   notify:
     type: call
     connection: notices
@@ -54,6 +55,13 @@ steps:
   skipped:
     type: finish
     outcome: no-information-request-needed
+  action-refused:
+    type: finish
+    outcome: information-request-refused
+    output:
+      type: fields
+      fields:
+        refusalCode: {type: step, step: request-information, path: /refusalCode}
 outcomes:
   action-and-notice-accepted:
     type: object
@@ -63,3 +71,9 @@ outcomes:
       actionApplicationId: {type: string, format: uuid}
       messageId: {type: string, format: uuid}
   no-information-request-needed: {type: "null"}
+  information-request-refused:
+    type: object
+    additionalProperties: false
+    required: [refusalCode]
+    properties:
+      refusalCode: {type: string, minLength: 1, maxLength: 128}

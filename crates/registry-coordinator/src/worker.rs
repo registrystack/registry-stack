@@ -87,11 +87,17 @@ fn advance(next: String, output: Option<Value>) -> Detail {
         failure_path: None,
         uncertain: false,
         receipt_expired: false,
+        completed_without_effect: false,
         recheck_seconds: None,
     }
 }
 
-fn call_result(result: CallOutcome, next: &str, uncertain: bool) -> Sent<Detail> {
+fn call_result(
+    result: CallOutcome,
+    next: &str,
+    on_declared_refusal: Option<&str>,
+    uncertain: bool,
+) -> Sent<Detail> {
     match result {
         CallOutcome::Success(value) => accepted(advance(next.to_owned(), Some(value))),
         CallOutcome::Retryable { code, retry_after } if !uncertain => Sent {
@@ -100,6 +106,18 @@ fn call_result(result: CallOutcome, next: &str, uncertain: bool) -> Sent<Detail>
         },
         CallOutcome::Retryable { code, .. } => failed(safe_code(&code, "remote-retryable"), true),
         CallOutcome::Refused { code } => failed(safe_code(&code, "remote-refused"), uncertain),
+        CallOutcome::DeclaredRefusal(refusal) if !uncertain => {
+            let Some(step) = on_declared_refusal else {
+                return failed("product-refused", false);
+            };
+            let Ok(output) = serde_json::to_value(refusal) else {
+                return failed("invalid-response", false);
+            };
+            let mut detail = advance(step.to_owned(), Some(output));
+            detail.completed_without_effect = true;
+            accepted(detail)
+        }
+        CallOutcome::DeclaredRefusal(_) => failed("product-refused", true),
         CallOutcome::Uncertain { code } => failed(safe_code(&code, "remote-uncertain"), true),
         CallOutcome::ReceiptExpired => {
             let mut sent = failed("receipt-expired", true);
@@ -155,9 +173,9 @@ fn wait_result(
         Some(ReviewRead::Failed(
             CallOutcome::Refused { code } | CallOutcome::Uncertain { code },
         )) => failed(safe_code(&code, "remote-refused"), false),
-        Some(ReviewRead::Failed(CallOutcome::Success(_) | CallOutcome::ReceiptExpired)) => {
-            failed("invalid-response", false)
-        }
+        Some(ReviewRead::Failed(
+            CallOutcome::Success(_) | CallOutcome::DeclaredRefusal(_) | CallOutcome::ReceiptExpired,
+        )) => failed("invalid-response", false),
         _ if timed_out => match on_timeout {
             Some(step) => accepted(advance(step.to_owned(), None)),
             None => failed("wait-timed-out", false),
@@ -170,6 +188,7 @@ fn wait_result(
             failure_path: None,
             uncertain: false,
             receipt_expired: false,
+            completed_without_effect: false,
             recheck_seconds: Some(recheck_seconds),
         }),
         Some(ReviewRead::Failed(CallOutcome::Retryable { code, retry_after })) => {
@@ -287,10 +306,16 @@ impl Worker {
                     failure_path: None,
                     uncertain: false,
                     receipt_expired: false,
+                    completed_without_effect: false,
                     recheck_seconds: None,
                 }))
             }
-            Step::Call { call, next, .. } => {
+            Step::Call {
+                call,
+                next,
+                on_declared_refusal,
+                ..
+            } => {
                 // A recovery race or stale queue state cannot turn unknown
                 // inference completion into a second provider evaluation.
                 if job.job.uncertain && !call.operation.can_retry_after_unknown() {
@@ -349,7 +374,7 @@ impl Worker {
                                     return Ok(failed("preparation-invalid", job.job.uncertain));
                                 }
                                 Ok(Err(outcome)) => {
-                                    return Ok(call_result(outcome, next, job.job.uncertain))
+                                    return Ok(call_result(outcome, next, None, job.job.uncertain))
                                 }
                                 Err(_) => {
                                     return Ok(call_result(
@@ -358,6 +383,7 @@ impl Worker {
                                             retry_after: None,
                                         },
                                         next,
+                                        None,
                                         job.job.uncertain,
                                     ))
                                 }
@@ -411,7 +437,12 @@ impl Worker {
                         retry_after: None,
                     },
                 };
-                Ok(call_result(result, next, job.job.uncertain))
+                Ok(call_result(
+                    result,
+                    next,
+                    on_declared_refusal.as_deref(),
+                    job.job.uncertain,
+                ))
             }
         }
     }
@@ -457,7 +488,7 @@ mod tests {
     use crate::{
         definition::WaitEvent,
         metrics::StepAttempt,
-        protocol::{CallOutcome, ReviewRead},
+        protocol::{CallOutcome, DeclaredRefusal, ReviewRead},
     };
     use registry_platform_dispatch::SendOutcome;
     use serde_json::{json, Value};
@@ -667,19 +698,56 @@ mod tests {
             retry_after,
         };
         let hint = Some(Duration::from_secs(30));
-        let sent = call_result(rate_limited(hint), "next", false);
+        let sent = call_result(rate_limited(hint), "next", None, false);
         assert_eq!(sent.outcome, SendOutcome::Transient { retry_after: hint });
         assert_eq!(sent.detail.failure_code, Some("rate-limited"));
         assert_eq!(
-            call_result(rate_limited(None), "next", false).outcome,
+            call_result(rate_limited(None), "next", None, false).outcome,
             SendOutcome::Transient { retry_after: None }
         );
         // An attempt after an unknown outcome stays held: a hint never turns
         // it into an automatic resend.
         assert_eq!(
-            call_result(rate_limited(hint), "next", true).outcome,
+            call_result(rate_limited(hint), "next", None, true).outcome,
             SendOutcome::MaybeSent
         );
+    }
+
+    #[test]
+    fn declared_refusal_routes_only_with_opt_in_and_no_prior_uncertainty() {
+        let refusal =
+            || CallOutcome::DeclaredRefusal(DeclaredRefusal::new("label-not-eligible").unwrap());
+        let routed = call_result(refusal(), "success", Some("not-eligible"), false);
+        assert!(matches!(routed.outcome, SendOutcome::Accepted { .. }));
+        assert_eq!(routed.detail.next.as_deref(), Some("not-eligible"));
+        assert_eq!(
+            routed.detail.output,
+            Some(json!({"refusalCode":"label-not-eligible"}))
+        );
+        assert!(routed.detail.completed_without_effect);
+
+        for prior_uncertainty in [false, true] {
+            let refused = call_result(refusal(), "success", None, prior_uncertainty);
+            assert_eq!(refused.detail.failure_code, Some("product-refused"));
+            assert_eq!(refused.detail.next, None);
+            assert_eq!(refused.detail.output, None);
+            assert_eq!(
+                refused.outcome,
+                if prior_uncertainty {
+                    SendOutcome::MaybeSent
+                } else {
+                    SendOutcome::Permanent {
+                        code: registry_platform_dispatch::FailureCode::new("product-refused")
+                            .unwrap(),
+                    }
+                }
+            );
+        }
+        let held = call_result(refusal(), "success", Some("not-eligible"), true);
+        assert_eq!(held.outcome, SendOutcome::MaybeSent);
+        assert_eq!(held.detail.next, None);
+        assert_eq!(held.detail.failure_code, Some("product-refused"));
+        assert!(!held.detail.completed_without_effect);
     }
 
     #[test]

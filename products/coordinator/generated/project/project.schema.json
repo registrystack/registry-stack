@@ -247,6 +247,11 @@
                 ]
               },
               "then": {
+                "not": {
+                  "required": [
+                    "onDeclaredRefusal"
+                  ]
+                },
                 "properties": {
                   "input": {
                     "properties": {
@@ -279,6 +284,11 @@
                 ]
               },
               "then": {
+                "not": {
+                  "required": [
+                    "onDeclaredRefusal"
+                  ]
+                },
                 "properties": {
                   "input": {
                     "properties": {
@@ -317,6 +327,11 @@
                 ]
               },
               "then": {
+                "not": {
+                  "required": [
+                    "onDeclaredRefusal"
+                  ]
+                },
                 "properties": {
                   "input": {
                     "properties": {
@@ -343,6 +358,11 @@
                 ]
               },
               "then": {
+                "not": {
+                  "required": [
+                    "onDeclaredRefusal"
+                  ]
+                },
                 "properties": {
                   "input": {
                     "properties": {
@@ -379,6 +399,11 @@
                 ]
               },
               "then": {
+                "not": {
+                  "required": [
+                    "onDeclaredRefusal"
+                  ]
+                },
                 "properties": {
                   "input": {
                     "properties": {
@@ -441,6 +466,11 @@
                 ]
               },
               "then": {
+                "not": {
+                  "required": [
+                    "onDeclaredRefusal"
+                  ]
+                },
                 "properties": {
                   "input": {
                     "properties": {
@@ -471,6 +501,11 @@
                 ]
               },
               "then": {
+                "not": {
+                  "required": [
+                    "onDeclaredRefusal"
+                  ]
+                },
                 "properties": {
                   "input": {
                     "properties": {
@@ -502,6 +537,11 @@
                 ]
               },
               "then": {
+                "not": {
+                  "required": [
+                    "onDeclaredRefusal"
+                  ]
+                },
                 "properties": {
                   "input": {
                     "properties": {
@@ -539,6 +579,11 @@
                 ]
               },
               "then": {
+                "not": {
+                  "required": [
+                    "onDeclaredRefusal"
+                  ]
+                },
                 "properties": {
                   "input": {
                     "properties": {
@@ -559,7 +604,7 @@
               }
             }
           ],
-          "description": "Calls one operation through a connection, then continues with its\noutput available to later steps.",
+          "description": "Calls one operation through a connection, then continues with its\nsuccessful output available to later steps.",
           "properties": {
             "connection": {
               "$ref": "#/$defs/LocalId",
@@ -572,6 +617,10 @@
             "next": {
               "$ref": "#/$defs/LocalId",
               "description": "The step that follows a completed call."
+            },
+            "onDeclaredRefusal": {
+              "$ref": "#/$defs/LocalId",
+              "description": "The step that follows a product-declared, no-effect business\nrefusal. Only operations whose reference declares this capability\naccept the member; other refusals still stop the run."
             },
             "operation": {
               "$ref": "#/$defs/Operation",

@@ -320,6 +320,54 @@ async fn invalid_action_inputs_refuse_before_fetching_conditions() {
 }
 
 #[tokio::test]
+async fn typed_action_refused_problem_exposes_only_its_bounded_code() {
+    let server = MockServer::start().await;
+    authority(&server).await;
+    Mock::given(method("POST"))
+        .and(path("/tenant/base/v1/actions/update-item"))
+        .respond_with(
+            ResponseTemplate::new(422)
+                .insert_header("traceparent", TRACE)
+                .insert_header("cache-control", "no-store")
+                .set_body_raw(
+                    json!({
+                        "type":"https://id.registrystack.org/problems/registry-breg/action/refused",
+                        "title":"Unprocessable Entity",
+                        "status":422,
+                        "code":"action.refused",
+                        "detail":"Synthetic private label that must not cross the adapter.",
+                        "traceId":"4bf92f3577b34da6a3ce929d0e0e4736",
+                        "fieldPath":"/input/label",
+                        "refusalCode":"label-not-eligible"
+                    })
+                    .to_string(),
+                    "application/problem+json",
+                ),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let client = client(&server, Arc::new(CountingToken::default()));
+    let command = request();
+    let prepared = prepare(&client, "writer", &command)
+        .await
+        .unwrap_or_else(|_| panic!("valid preparation"));
+    let refusal = match execute(&client, "writer", &command, &prepared).await {
+        CallOutcome::DeclaredRefusal(refusal) => refusal,
+        _ => panic!("validated action refusal must keep its distinct class"),
+    };
+    assert_eq!(refusal.refusal_code(), "label-not-eligible");
+    assert_eq!(
+        serde_json::to_value(&refusal).unwrap(),
+        json!({"refusalCode":"label-not-eligible"})
+    );
+    let debug = format!("{refusal:?}");
+    assert!(!debug.contains("label-not-eligible"));
+    assert!(!debug.contains("private label"));
+    assert!(!debug.contains("/input/label"));
+}
+
+#[tokio::test]
 async fn expired_receipt_and_known_rollbacks_remain_distinct_from_unknown_effects() {
     for code in [
         BRegProblemCode::IdempotencyExpired,

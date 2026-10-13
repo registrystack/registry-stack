@@ -21,8 +21,10 @@ pub enum KeyRequirement {
     Required,
 }
 
-/// Binding behavior is versioned independently of the workflow. Changing a
-/// descriptor changes its identity and must not silently alter an admitted run.
+/// Binding behavior is versioned independently of the workflow. The fields
+/// copied into [`OperationIdentity`] must not silently change for an admitted
+/// run; authoring capabilities outside that identity are pinned by their
+/// workflow ABI.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct OperationDescriptor {
     pub id: &'static str,
@@ -33,6 +35,12 @@ pub struct OperationDescriptor {
     pub requires_preparation: bool,
     pub recovery: RecoverySemantics,
     pub read_receipt: bool,
+    /// Whether an adapter ABI v2 workflow may route a product-declared,
+    /// no-effect business refusal through `onDeclaredRefusal`.
+    ///
+    /// This capability is pinned by the workflow's adapter ABI rather than by
+    /// [`OperationIdentity`], so adding it does not invalidate v1 snapshots.
+    pub declared_refusal: bool,
 }
 
 /// Exact nonsecret binding semantics retained in the immutable snapshot.
@@ -80,6 +88,7 @@ const fn read(id: &'static str, product: &'static str) -> OperationDescriptor {
         requires_preparation: false,
         recovery: RecoverySemantics::ReadAgain,
         read_receipt: false,
+        declared_refusal: false,
     }
 }
 
@@ -102,6 +111,7 @@ const fn mutation(
             RecoverySemantics::SameCommand
         },
         read_receipt,
+        declared_refusal: false,
     }
 }
 
@@ -111,7 +121,10 @@ static CATALOG: &[OperationDescriptor] = &[
     read("read-scheduling", "scheduling"),
     read("read-availability", "scheduling"),
     mutation("create-appointment", "scheduling", true, false),
-    mutation("invoke-breg-action", "breg", false, true),
+    OperationDescriptor {
+        declared_refusal: true,
+        ..mutation("invoke-breg-action", "breg", false, true)
+    },
     read("external-get", "external-http"),
     OperationDescriptor {
         id: "evaluate-decision",
@@ -122,6 +135,7 @@ static CATALOG: &[OperationDescriptor] = &[
         requires_preparation: true,
         recovery: RecoverySemantics::HoldAfterDispatch,
         read_receipt: false,
+        declared_refusal: false,
     },
     mutation("submit-review-request", "casework", false, false),
     mutation("cancel-review-request", "casework", false, false),

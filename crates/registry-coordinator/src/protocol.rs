@@ -142,6 +142,50 @@ pub struct CallRequest {
     pub idempotency_key: Option<String>,
 }
 
+/// One package-declared business refusal from a validated product response.
+///
+/// The code is deliberately absent from `Debug`; callers must opt in to reading
+/// or serializing it for an authored refusal branch.
+#[derive(Clone, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", schemars(deny_unknown_fields))]
+pub struct DeclaredRefusal {
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            length(min = 1, max = 128),
+            regex(pattern = r"^[^\x00-\x1F\x7F-\x9F]+$")
+        )
+    )]
+    refusal_code: String,
+}
+
+impl DeclaredRefusal {
+    /// Retain only the same bounded code shape the maintained product client
+    /// accepts from its wire contract.
+    #[must_use]
+    pub fn new(refusal_code: &str) -> Option<Self> {
+        (!refusal_code.is_empty()
+            && refusal_code.chars().count() <= 128
+            && !refusal_code.chars().any(char::is_control))
+        .then(|| Self {
+            refusal_code: refusal_code.to_owned(),
+        })
+    }
+
+    #[must_use]
+    pub fn refusal_code(&self) -> &str {
+        self.refusal_code.as_str()
+    }
+}
+
+impl std::fmt::Debug for DeclaredRefusal {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("DeclaredRefusal(<undisclosed>)")
+    }
+}
+
 /// Bounded categories. Never carry a remote error body or credential here.
 pub enum CallOutcome {
     Success(Value),
@@ -157,10 +201,34 @@ pub enum CallOutcome {
     Refused {
         code: String,
     },
+    /// A validated business refusal explicitly declared by the called product.
+    /// This distinct class is eligible for an authored branch at execution time.
+    DeclaredRefusal(DeclaredRefusal),
     Uncertain {
         code: String,
     },
     ReceiptExpired,
+}
+
+#[cfg(test)]
+mod declared_refusal_tests {
+    use super::DeclaredRefusal;
+    use serde_json::json;
+
+    #[test]
+    fn declared_refusal_is_bounded_serializable_and_redacted() {
+        let refusal = DeclaredRefusal::new("eligibility-not-met").unwrap();
+        assert_eq!(refusal.refusal_code(), "eligibility-not-met");
+        assert_eq!(
+            serde_json::to_value(&refusal).unwrap(),
+            json!({"refusalCode":"eligibility-not-met"})
+        );
+        assert_eq!(format!("{refusal:?}"), "DeclaredRefusal(<undisclosed>)");
+        assert!(DeclaredRefusal::new("").is_none());
+        assert!(DeclaredRefusal::new("line\nbreak").is_none());
+        assert!(DeclaredRefusal::new(&"x".repeat(129)).is_none());
+        assert!(DeclaredRefusal::new(&"é".repeat(128)).is_some());
+    }
 }
 
 /// One read of a review result for a waiting step. A read never changes the

@@ -52,6 +52,15 @@ fn case(id: &str, application: Value, reply: Value) -> Value {
     })
 }
 
+fn declared_refusal_case(id: &str) -> Value {
+    json!({
+        "id": id, "admittedAt": "2026-10-09T09:00:00Z",
+        "input": {"applicationId": "a-1"},
+        "replies": {"read": [{"type": "declared-refusal", "refusalCode": "not-eligible"}]},
+        "expect": {"path": ["read"], "state": "refused", "outcome": {"type": "none"}}
+    })
+}
+
 fn scenarios(cases: Vec<Value>) -> String {
     // A YAML document per line keeps each case at a stable source line.
     let mut text = format!(
@@ -173,6 +182,19 @@ fn every_synthetic_success_is_checked_even_when_the_run_stops_first() {
         .err()
         .unwrap();
     assert_eq!(error.code, "scenario.reply-output");
+}
+
+#[test]
+fn a_declared_refusal_reply_is_rejected_for_an_operation_without_that_contract() {
+    let error = tested(vec![declared_refusal_case("unsupported")])
+        .err()
+        .unwrap();
+    assert_eq!(error.code, "scenario.reply");
+    assert_eq!(error.field.as_deref(), Some("/cases/0/replies/read/0"));
+    assert_eq!(
+        error.message,
+        "step read calls read-record, which cannot return a package-declared business refusal"
+    );
 }
 
 #[test]

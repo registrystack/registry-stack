@@ -25,7 +25,8 @@ use crate::{
 /// The compiled snapshot format, carried by its workflow.
 pub(crate) const API_VERSION: &str =
     "id.registrystack.org/formats/coordinator/definition-snapshot/v1alpha1";
-const ADAPTER_ABI: &str = "coordinator/product-operations/v1";
+const ADAPTER_ABI_V1: &str = "coordinator/product-operations/v1";
+const ADAPTER_ABI_V2: &str = "coordinator/product-operations/v2";
 const SCHEMA_ABI: &str = "coordinator/jsonschema-0.18/draft202012/formats-asserted+uuid/v1";
 const MAX_DOCUMENT_BYTES: usize = 1_048_576;
 /// Maximum canonical snapshot size, shared by authoring, restore and packaging.
@@ -189,6 +190,12 @@ pub enum Step {
         call: Call,
         input: Mapping,
         next: String,
+        #[serde(
+            rename = "onDeclaredRefusal",
+            default,
+            skip_serializing_if = "Option::is_none"
+        )]
+        on_declared_refusal: Option<String>,
     },
     Choose {
         choose: Mapping,
@@ -205,7 +212,18 @@ impl Step {
     /// Each transition with the authored member that holds it.
     pub(crate) fn edges(&self) -> Vec<(&'static str, &str)> {
         match self {
-            Self::WaitUntil { next, .. } | Self::Call { next, .. } => vec![("next", next)],
+            Self::WaitUntil { next, .. } => vec![("next", next)],
+            Self::Call {
+                next,
+                on_declared_refusal,
+                ..
+            } => std::iter::once(("next", next.as_str()))
+                .chain(
+                    on_declared_refusal
+                        .iter()
+                        .map(|step| ("onDeclaredRefusal", step.as_str())),
+                )
+                .collect(),
             Self::WaitFor {
                 next, on_timeout, ..
             } => std::iter::once(("next", next.as_str()))
@@ -265,6 +283,25 @@ fn operation_identities(workflow: &Workflow) -> Vec<OperationIdentity> {
     identities.sort_by(|a, b| a.id.cmp(&b.id));
     identities.dedup();
     identities
+}
+
+/// Workflows that do not opt into declared-refusal routing retain the exact v1
+/// adapter ABI. The v2 ABI pins both the classification and the branch output
+/// shape for workflows that use `onDeclaredRefusal`.
+fn adapter_abi(workflow: &Workflow) -> &'static str {
+    if workflow.steps.values().any(|step| {
+        matches!(
+            step,
+            Step::Call {
+                on_declared_refusal: Some(_),
+                ..
+            }
+        )
+    }) {
+        ADAPTER_ABI_V2
+    } else {
+        ADAPTER_ABI_V1
+    }
 }
 
 /// Compiled definitions keyed by the digest of their snapshot text, so one
@@ -354,11 +391,12 @@ impl Definition {
             let exit = error.exit_code;
             crate::authoring::positioned(&document, error.at(&path, "functions")).with_exit(exit)
         })?;
+        let adapter_abi = adapter_abi(&workflow).into();
         let definition = Self::restore_checked(Snapshot {
             operation_identities: operation_identities(&workflow),
             workflow,
             source,
-            adapter_abi: ADAPTER_ABI.into(),
+            adapter_abi,
             interpreter_abi: INTERPRETER_ABI.into(),
             schema_abi: SCHEMA_ABI.into(),
         })
@@ -400,7 +438,7 @@ impl Definition {
                 .iter()
                 .all(OperationIdentity::matches_registered);
         if !operations_match
-            || frozen.adapter_abi != ADAPTER_ABI
+            || frozen.adapter_abi != adapter_abi(&frozen.workflow)
             || frozen.interpreter_abi != INTERPRETER_ABI
             || frozen.schema_abi != SCHEMA_ABI
         {
@@ -502,13 +540,20 @@ impl Definition {
                     }
                 }
                 match step {
-                    Step::Call { call, .. } => {
+                    Step::Call {
+                        call,
+                        on_declared_refusal,
+                        ..
+                    } => {
                         item["connection"] = serde_json::json!(call.connection);
                         item["operation"] = serde_json::json!(call.operation);
                         item["product"] = serde_json::json!(call.operation.product());
                         item["mutating"] = serde_json::json!(call.operation.is_mutating());
                         item["effect"] = serde_json::json!(call.operation.descriptor().effect);
                         item["recovery"] = serde_json::json!(call.operation.recovery());
+                        if let Some(target) = on_declared_refusal {
+                            item["onDeclaredRefusal"] = serde_json::json!(target);
+                        }
                     }
                     Step::WaitFor {
                         wait_for,
@@ -940,36 +985,53 @@ fn workflow_findings(flow: &Workflow) -> Vec<CoordinatorError> {
                 timeout_seconds,
                 ..
             } => findings.extend(wait_findings(flow, name, wait_for, *timeout_seconds)),
-            Step::Call { call, .. } => match flow.connections.get(&call.connection) {
-                None => findings.push(authored(
-                    "definition.connection",
-                    &format!("steps.{name}.call.connection"),
-                    &format!(
-                        "connection {} is not declared; the declared connections are {connections}",
-                        call.connection
-                    ),
-                    &format!(
-                        "Name one of the declared connections, or declare {} under connections.",
-                        call.connection
-                    ),
-                )),
-                Some(kind) if kind != call.operation.product() => findings.push(authored(
-                    "definition.operation",
-                    &format!("steps.{name}.call.operation"),
-                    &format!(
-                        "operation {} belongs to {}, but connection {} is a {kind} connection, which offers {}",
-                        call.operation.as_str(),
-                        call.operation.product(),
-                        call.connection,
-                        offered(kind)
-                    ),
-                    &format!(
-                        "Name an operation {kind} offers, or call a {} connection.",
-                        call.operation.product()
-                    ),
-                )),
-                Some(_) => {}
-            },
+            Step::Call {
+                call,
+                on_declared_refusal,
+                ..
+            } => {
+                match flow.connections.get(&call.connection) {
+                    None => findings.push(authored(
+                        "definition.connection",
+                        &format!("steps.{name}.call.connection"),
+                        &format!(
+                            "connection {} is not declared; the declared connections are {connections}",
+                            call.connection
+                        ),
+                        &format!(
+                            "Name one of the declared connections, or declare {} under connections.",
+                            call.connection
+                        ),
+                    )),
+                    Some(kind) if kind != call.operation.product() => findings.push(authored(
+                        "definition.operation",
+                        &format!("steps.{name}.call.operation"),
+                        &format!(
+                            "operation {} belongs to {}, but connection {} is a {kind} connection, which offers {}",
+                            call.operation.as_str(),
+                            call.operation.product(),
+                            call.connection,
+                            offered(kind)
+                        ),
+                        &format!(
+                            "Name an operation {kind} offers, or call a {} connection.",
+                            call.operation.product()
+                        ),
+                    )),
+                    Some(_) => {}
+                }
+                if on_declared_refusal.is_some() && !call.operation.descriptor().declared_refusal {
+                    findings.push(authored(
+                        "definition.operation",
+                        &format!("steps.{name}.onDeclaredRefusal"),
+                        &format!(
+                            "operation {} does not declare a routable business refusal",
+                            call.operation.as_str()
+                        ),
+                        "Remove onDeclaredRefusal, or use it on an invoke-breg-action call.",
+                    ));
+                }
+            }
             Step::Choose { cases, .. }
                 if cases.is_empty() || cases.len() > 32 || !cases.keys().all(|k| valid_name(k)) =>
             {
@@ -1137,8 +1199,16 @@ fn graph_order(flow: &Workflow) -> Vec<&str> {
     order
 }
 
-fn graph_findings<'a>(flow: &'a Workflow, incoming: &Incoming<'a>) -> Vec<CoordinatorError> {
-    let mut findings = Vec::new();
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum OutputRoute {
+    CallSuccess,
+    DeclaredRefusal,
+    WaitEvent,
+}
+
+pub(crate) type AvailableOutputs = BTreeMap<String, OutputRoute>;
+
+fn reachable_steps(flow: &Workflow) -> BTreeSet<&str> {
     let mut reachable = BTreeSet::from([flow.start.as_str()]);
     let mut frontier = vec![flow.start.as_str()];
     while let Some(name) = frontier.pop() {
@@ -1148,25 +1218,23 @@ fn graph_findings<'a>(flow: &'a Workflow, incoming: &Incoming<'a>) -> Vec<Coordi
             }
         }
     }
-    for name in flow.steps.keys() {
-        if !reachable.contains(name.as_str()) {
-            findings.push(authored(
-                "definition.unreachable",
-                &format!("steps.{name}"),
-                &format!(
-                    "step {name} is not reachable from start step {}",
-                    flow.start
-                ),
-                &format!("Point a transition at {name}, or remove the step if no route needs it."),
-            ));
-        }
+    reachable
+}
+
+fn edge_output(step: &Step, member: &str) -> Option<OutputRoute> {
+    match (step, member) {
+        (Step::Call { .. }, "next") => Some(OutputRoute::CallSuccess),
+        (Step::Call { .. }, "onDeclaredRefusal") => Some(OutputRoute::DeclaredRefusal),
+        (Step::WaitFor { .. }, "next") => Some(OutputRoute::WaitEvent),
+        _ => None,
     }
-    // Topological traversal proves finiteness. The outputs available at a
-    // step are those every incoming transition carries: what was available at
-    // its source, plus the source's own output unless the transition is a
-    // wait's timeout, which leaves the wait without one. A reference therefore
-    // exists on every route. Only reachable predecessors take part: no route
-    // arrives from the others.
+}
+
+fn propagated_outputs<'a>(
+    flow: &'a Workflow,
+    incoming: &Incoming<'a>,
+    reachable: &BTreeSet<&'a str>,
+) -> BTreeMap<&'a str, AvailableOutputs> {
     let predecessors = |name: &str| {
         incoming[name]
             .iter()
@@ -1183,26 +1251,88 @@ fn graph_findings<'a>(flow: &'a Workflow, incoming: &Incoming<'a>) -> Vec<Coordi
     } else {
         vec![]
     };
-    let mut available: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
+    let mut available: BTreeMap<&str, AvailableOutputs> = BTreeMap::new();
     while let Some(name) = ready.pop() {
         let outputs = predecessors(name)
             .into_iter()
             .map(|(source, member)| {
                 let mut carried = available[source].clone();
-                if member != "onTimeout" {
-                    carried.insert(source);
+                if let Some(route) = edge_output(&flow.steps[source], member) {
+                    carried.insert(source.to_owned(), route);
                 }
                 carried
             })
-            .reduce(|left, right| left.intersection(&right).copied().collect())
+            .reduce(|mut common, incoming| {
+                // A producer stays available only when every incoming route
+                // carries the same output shape. Authors consume or normalize
+                // success and declared-refusal values before their paths join.
+                common.retain(|producer, route| incoming.get(producer) == Some(route));
+                common
+            })
             .unwrap_or_default();
-        if let Some(mapping) = flow.steps[name].mapping() {
-            if let Err(error) = validate_mapping(flow, name, mapping, &outputs) {
+        available.insert(name, outputs);
+        for next in flow.steps[name].targets() {
+            if let Some(count) = pending.get_mut(next) {
+                *count -= 1;
+                if *count == 0 {
+                    ready.push(next);
+                }
+            }
+        }
+    }
+    available
+}
+
+/// The output shape each producer has on every route to each consumer. The
+/// workflow has already passed structural graph checks when the mapping checker
+/// calls this helper.
+pub(crate) fn output_routes(flow: &Workflow) -> BTreeMap<String, AvailableOutputs> {
+    let mut incoming: Incoming = flow
+        .steps
+        .keys()
+        .map(|name| (name.as_str(), vec![]))
+        .collect();
+    for (name, step) in &flow.steps {
+        for (member, target) in step.edges() {
+            if let Some(sources) = incoming.get_mut(target) {
+                sources.push((name, member));
+            }
+        }
+    }
+    let reachable = reachable_steps(flow);
+    propagated_outputs(flow, &incoming, &reachable)
+        .into_iter()
+        .map(|(name, outputs)| (name.to_owned(), outputs))
+        .collect()
+}
+
+fn graph_findings<'a>(flow: &'a Workflow, incoming: &Incoming<'a>) -> Vec<CoordinatorError> {
+    let mut findings = Vec::new();
+    let reachable = reachable_steps(flow);
+    for name in flow.steps.keys() {
+        if !reachable.contains(name.as_str()) {
+            findings.push(authored(
+                "definition.unreachable",
+                &format!("steps.{name}"),
+                &format!(
+                    "step {name} is not reachable from start step {}",
+                    flow.start
+                ),
+                &format!("Point a transition at {name}, or remove the step if no route needs it."),
+            ));
+        }
+    }
+    let available = propagated_outputs(flow, incoming, &reachable);
+    for (name, outputs) in &available {
+        if let Some(mapping) = flow.steps[*name].mapping() {
+            if let Err(error) = validate_mapping(flow, name, mapping, outputs) {
                 findings.push(error);
             }
         }
-        if let Step::WaitFor { wait_for, .. } = &flow.steps[name] {
-            if correlates(flow, wait_for) && !outputs.contains(wait_for.request()) {
+        if let Step::WaitFor { wait_for, .. } = &flow.steps[*name] {
+            if correlates(flow, wait_for)
+                && outputs.get(wait_for.request()) != Some(&OutputRoute::CallSuccess)
+            {
                 findings.push(authored(
                     "definition.wait",
                     &format!("steps.{name}.waitFor.request"),
@@ -1212,15 +1342,6 @@ fn graph_findings<'a>(flow: &'a Workflow, incoming: &Incoming<'a>) -> Vec<Coordi
                     ),
                     "Move the submitting call before the branch, so every route to the wait submits the request it waits for.",
                 ));
-            }
-        }
-        available.insert(name, outputs);
-        for next in flow.steps[name].targets() {
-            if let Some(count) = pending.get_mut(next) {
-                *count -= 1;
-                if *count == 0 {
-                    ready.push(next);
-                }
             }
         }
     }
@@ -1270,7 +1391,7 @@ fn validate_mapping(
     flow: &Workflow,
     name: &str,
     mapping: &Mapping,
-    available: &BTreeSet<&str>,
+    available: &AvailableOutputs,
 ) -> Result<()> {
     let step = &flow.steps[name];
     let base = format!("steps.{name}.{}", step.role());
@@ -1332,7 +1453,7 @@ fn validate_mapping(
             ));
         }
         if let Some(prior) = step {
-            if !available.contains(prior.as_str())
+            if !available.contains_key(prior.as_str())
                 || !matches!(
                     flow.steps.get(prior),
                     Some(Step::Call { .. } | Step::WaitFor { .. })

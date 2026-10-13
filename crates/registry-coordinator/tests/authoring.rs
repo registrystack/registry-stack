@@ -189,6 +189,31 @@ fn snapshot_restores_exact_functions_after_project_changes_or_removal() {
 }
 
 #[test]
+fn legacy_v1_snapshot_restores_with_exact_bytes_digest_and_operation_identities() {
+    const SNAPSHOT: &str = include_str!("fixtures/legacy-definition-v1.json");
+    let definition = Definition::from_snapshot(SNAPSHOT).unwrap();
+    assert_eq!(definition.snapshot().unwrap(), SNAPSHOT);
+    assert_eq!(
+        definition.digest,
+        "sha256:7298d1fa649b7e0630cd9131564ef0e9ee0c24598a7670a5c8dcd55c5946fdcc"
+    );
+    let frozen: Value = serde_json::from_str(SNAPSHOT).unwrap();
+    assert_eq!(frozen["adapterAbi"], "coordinator/product-operations/v1");
+    assert!(SNAPSHOT.contains("\"operationIdentities\""));
+    assert!(!SNAPSHOT.contains("onDeclaredRefusal"));
+    assert!(frozen["operationIdentities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|identity| identity.get("declaredRefusal").is_none()));
+    assert!(definition.explain().unwrap()["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|step| step.get("onDeclaredRefusal").is_none()));
+}
+
+#[test]
 fn definition_cache_compiles_each_snapshot_once_within_its_bound() {
     use registry_coordinator::definition::DefinitionCache;
     use std::sync::Arc;

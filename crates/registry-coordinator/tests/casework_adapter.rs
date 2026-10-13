@@ -100,6 +100,7 @@ fn describe(outcome: &CallOutcome) -> String {
         CallOutcome::Success(_) => "success".into(),
         CallOutcome::Retryable { code, .. } => format!("retryable {code}"),
         CallOutcome::Refused { code } => format!("refused {code}"),
+        CallOutcome::DeclaredRefusal(_) => "declared-refusal".into(),
         CallOutcome::Uncertain { code } => format!("uncertain {code}"),
         CallOutcome::ReceiptExpired => "receipt-expired".into(),
     }

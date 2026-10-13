@@ -61,6 +61,43 @@ cases:
     path: [read-application, needs-information, request-information]
     state: refused
     outcome: {type: none}
+- id: action-declared-refusal
+  admittedAt: '2026-10-10T09:00:00Z'
+  input: {applicationId: 00000000-0000-4000-8000-000000000001}
+  replies:
+    read-application:
+    - type: success
+      value:
+        meta: {registryIdentifier: applications-registry, datasetIdentifier: applications, entityTypeIdentifier: application}
+        data: {recordIdentifier: 00000000-0000-4000-8000-000000000001, revisionIdentifier: revision-1, domainData: {complete: false, missingField: proof of address}}
+    request-information:
+    - type: declared-refusal
+      refusalCode: already-requested
+  expect:
+    path: [read-application, needs-information, request-information, action-refused]
+    state: completed
+    outcome: {type: named, value: information-request-refused}
+    output: {refusalCode: already-requested}
+- id: action-response-loss-then-declared-refusal-stays-unknown
+  admittedAt: '2026-10-10T09:00:00Z'
+  input: {applicationId: 00000000-0000-4000-8000-000000000001}
+  replies:
+    read-application:
+    - type: success
+      value:
+        meta: {registryIdentifier: applications-registry, datasetIdentifier: applications, entityTypeIdentifier: application}
+        data: {recordIdentifier: 00000000-0000-4000-8000-000000000001, revisionIdentifier: revision-1, domainData: {complete: false, missingField: proof of address}}
+    request-information:
+    - type: uncertain
+      code: transport-uncertain
+    - type: declared-refusal
+      refusalCode: already-requested
+  recovery:
+    request-information: retry-same
+  expect:
+    path: [read-application, needs-information, request-information]
+    state: uncertain
+    outcome: {type: none}
 - id: action-response-loss-keeps-unknown
   admittedAt: '2026-10-10T09:00:00Z'
   input: {applicationId: 00000000-0000-4000-8000-000000000001}

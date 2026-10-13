@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use chrono::{Duration, Utc};
 use registry_coordinator::{
     definition::Definition,
-    protocol::{AdapterSet, CallOutcome, CallRequest, Operation},
+    protocol::{AdapterSet, CallOutcome, CallRequest, DeclaredRefusal, Operation},
     store::{RetryBlockReason, Store},
     worker::Worker,
 };
@@ -38,6 +38,70 @@ fn record(input) { #{ collection: "people", recordId: input.id } }
 fn permission(record) { if record.allowed { "yes" } else { "no" } }
 fn message(record) { #{ senderProfile: "reminders", to: #{ email: record.contact }, content: #{ text: "Synthetic appointment reminder" } } }
 fn receipt(message) { #{ messageId: message.messageId } }
+"#;
+
+const DECLARED_REFUSAL_WORKFLOW: &str = r#"
+apiVersion: id.registrystack.org/formats/coordinator/project/v1alpha1
+kind: CoordinatorProject
+project: {id: synthetic-declared-refusal, version: v1}
+input: {type: object}
+connections: {source: breg}
+functionsFile: functions.rhai
+deadlineSeconds: 3600
+start: action
+steps:
+  action:
+    type: call
+    connection: source
+    operation: invoke-breg-action
+    input: {type: function, function: action, arguments: [{type: input}]}
+    next: applied
+    onDeclaredRefusal: refused
+  applied: {type: finish, outcome: applied}
+  refused:
+    type: finish
+    outcome: refused
+    output: {type: function, function: keep, arguments: [{type: step, step: action}]}
+outcomes:
+  applied: {type: 'null'}
+  refused:
+    type: object
+    additionalProperties: false
+    required: [refusalCode]
+    properties: {refusalCode: {type: string, minLength: 1, maxLength: 128}}
+"#;
+
+const DECLARED_REFUSAL_FUNCTIONS: &str = r#"
+fn action(input) { #{action: "synthetic-action", input: #{subject: input.id}} }
+fn keep(value) { value }
+"#;
+
+const DECLARED_REFUSAL_THEN_CALL_WORKFLOW: &str = r#"
+apiVersion: id.registrystack.org/formats/coordinator/project/v1alpha1
+kind: CoordinatorProject
+project: {id: synthetic-declared-refusal-deadline, version: v1}
+input: {type: object}
+connections: {source: breg}
+functionsFile: functions.rhai
+deadlineSeconds: 3600
+start: action
+steps:
+  action:
+    type: call
+    connection: source
+    operation: invoke-breg-action
+    input: {type: function, function: action, arguments: [{type: input}]}
+    next: applied
+    onDeclaredRefusal: later
+  later:
+    type: call
+    connection: source
+    operation: invoke-breg-action
+    input: {type: function, function: action, arguments: [{type: input}]}
+    next: applied
+  applied: {type: finish, outcome: applied}
+outcomes:
+  applied: {type: 'null'}
 "#;
 const WORKFLOW: &str = r#"
 apiVersion: id.registrystack.org/formats/coordinator/project/v1alpha1
@@ -115,6 +179,22 @@ async fn harness() -> Harness {
         project,
     }
 }
+
+async fn declared_refusal_harness() -> Harness {
+    declared_refusal_harness_with(DECLARED_REFUSAL_WORKFLOW).await
+}
+
+async fn declared_refusal_harness_with(workflow: &str) -> Harness {
+    let mut h = harness().await;
+    std::fs::write(h.project.path().join("workflow.yaml"), workflow).unwrap();
+    std::fs::write(
+        h.project.path().join("functions.rhai"),
+        DECLARED_REFUSAL_FUNCTIONS,
+    )
+    .unwrap();
+    h.definition = Definition::load(h.project.path()).expect("valid declared-refusal workflow");
+    h
+}
 fn input(at: chrono::DateTime<Utc>) -> Value {
     json!({"at":at.to_rfc3339(), "id":"synthetic-contact-canary"})
 }
@@ -152,6 +232,26 @@ impl Harness {
             connection.await.expect("test connection finishes");
         });
         database_clock::retention_cutoff(&client).await
+    }
+
+    async fn durable_rows(&self, run: Uuid) -> String {
+        let (client, connection) = tokio_postgres::connect(&self.url, tokio_postgres::NoTls)
+            .await
+            .unwrap();
+        tokio::spawn(async move {
+            connection.await.unwrap();
+        });
+        let row = client
+            .query_one(
+                &format!(
+                    "SELECT row_to_json(r)::text,row_to_json(j)::text FROM {}.runs r JOIN {}.jobs j ON j.run_id=r.run_id WHERE r.run_id=$1 AND j.step=r.step",
+                    self.namespace, self.namespace
+                ),
+                &[&run],
+            )
+            .await
+            .unwrap();
+        format!("{}{}", row.get::<_, String>(0), row.get::<_, String>(1))
     }
 }
 impl Harness {
@@ -255,6 +355,12 @@ fn uncertain() -> CallOutcome {
     }
 }
 
+fn declared_refusal() -> CallOutcome {
+    CallOutcome::DeclaredRefusal(
+        DeclaredRefusal::new("synthetic-not-eligible").expect("bounded synthetic refusal"),
+    )
+}
+
 struct PreparedFake {
     preparations: std::sync::atomic::AtomicUsize,
     calls: Mutex<Vec<(CallRequest, Vec<u8>)>>,
@@ -304,6 +410,179 @@ impl AdapterSet for PreparedFake {
             CallOutcome::Success(json!({"messageId":"original-action-receipt"}))
         }
     }
+}
+
+struct DeclaredRefusalFake {
+    outcomes: Mutex<VecDeque<CallOutcome>>,
+    calls: Mutex<Vec<CallRequest>>,
+    entered: Notify,
+    release: Option<Semaphore>,
+}
+
+impl DeclaredRefusalFake {
+    fn new(outcomes: Vec<CallOutcome>) -> Arc<Self> {
+        Arc::new(Self {
+            outcomes: Mutex::new(outcomes.into()),
+            calls: Mutex::new(Vec::new()),
+            entered: Notify::new(),
+            release: None,
+        })
+    }
+
+    fn blocked(outcome: CallOutcome) -> Arc<Self> {
+        Arc::new(Self {
+            outcomes: Mutex::new(VecDeque::from([outcome])),
+            calls: Mutex::new(Vec::new()),
+            entered: Notify::new(),
+            release: Some(Semaphore::new(0)),
+        })
+    }
+}
+
+#[async_trait]
+impl AdapterSet for DeclaredRefusalFake {
+    fn binding_digest(&self) -> &str {
+        "binding-a"
+    }
+
+    async fn prepare(&self, _: &CallRequest) -> Result<Option<Vec<u8>>, CallOutcome> {
+        Ok(Some(b"synthetic-prepared-action".to_vec()))
+    }
+
+    async fn call(&self, _: &CallRequest) -> CallOutcome {
+        panic!("the BReg action must execute with its frozen preparation")
+    }
+
+    async fn call_prepared(&self, request: &CallRequest, _: Option<&[u8]>) -> CallOutcome {
+        self.calls.lock().unwrap().push(request.clone());
+        if let Some(release) = &self.release {
+            self.entered.notify_one();
+            let permit = release.acquire().await.unwrap();
+            permit.forget();
+        }
+        self.outcomes.lock().unwrap().pop_front().unwrap()
+    }
+}
+
+#[tokio::test]
+async fn declared_refusal_is_checkpointed_and_prior_uncertainty_cannot_take_its_branch() {
+    let h = declared_refusal_harness().await;
+    let run = h.admit().await;
+    let fake = DeclaredRefusalFake::new(vec![declared_refusal()]);
+    let worker = Worker::new(h.store.clone(), fake.clone());
+    assert!(
+        worker.tick().await.unwrap(),
+        "the action refusal is handled"
+    );
+    let routed = h.store.status(run).await.unwrap();
+    assert_eq!(routed.state, "running");
+    assert_eq!(routed.step, "refused");
+    assert!(!routed.uncertain);
+    assert_eq!(
+        h.output_values(run).await["action"],
+        json!({"refusalCode":"synthetic-not-eligible"})
+    );
+    assert!(
+        !h.durable_rows(run).await.contains("synthetic-not-eligible"),
+        "the branch code is sealed at rest"
+    );
+    h.sql("UPDATE {schema}.runs SET deadline_at=clock_timestamp()-interval '1 second'")
+        .await;
+    drop(worker);
+    let reopened = Arc::new(Store::connect(&h.url, &h.namespace).await.unwrap());
+    let restarted = Worker::new(reopened.clone(), fake.clone());
+    assert!(
+        restarted.tick().await.unwrap(),
+        "the refusal outcome finishes after reconstruction"
+    );
+    let finished = reopened.status(run).await.unwrap();
+    assert_eq!(finished.state, "finished");
+    assert_eq!(finished.outcome.as_deref(), Some("refused"));
+    assert_eq!(
+        finished.output,
+        Some(json!({"refusalCode":"synthetic-not-eligible"}))
+    );
+    assert_eq!(fake.calls.lock().unwrap().len(), 1);
+
+    let held = declared_refusal_harness().await;
+    let held_run = held.admit().await;
+    let held_fake = DeclaredRefusalFake::new(vec![uncertain(), declared_refusal()]);
+    let held_worker = Worker::new(held.store.clone(), held_fake.clone());
+    assert!(
+        held_worker.tick().await.unwrap(),
+        "the first response is unknown"
+    );
+    assert_eq!(
+        held.store.status(held_run).await.unwrap().state,
+        "attention"
+    );
+    held.store.retry_same(held_run, "binding-a").await.unwrap();
+    assert!(
+        held_worker.tick().await.unwrap(),
+        "a later business refusal settles no prior uncertainty"
+    );
+    let status = held.store.status(held_run).await.unwrap();
+    assert_eq!(status.state, "attention");
+    assert!(status.uncertain);
+    assert_eq!(status.step, "action");
+    assert_eq!(status.failure_code.as_deref(), Some("product-refused"));
+    assert!(held.output_values(held_run).await.is_empty());
+    assert_eq!(held_fake.calls.lock().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn declared_refusal_checkpoint_cannot_start_a_later_call_after_deadline() {
+    let h = declared_refusal_harness_with(DECLARED_REFUSAL_THEN_CALL_WORKFLOW).await;
+    let run = h.admit().await;
+    let fake = DeclaredRefusalFake::new(vec![declared_refusal()]);
+    let worker = Worker::new(h.store.clone(), fake.clone());
+    assert!(worker.tick().await.unwrap(), "the refusal is checkpointed");
+    assert_eq!(h.store.status(run).await.unwrap().step, "later");
+    h.sql("UPDATE {schema}.runs SET deadline_at=clock_timestamp()-interval '1 second'")
+        .await;
+    worker.tick().await.expect("the due call expires");
+    let status = h.store.status(run).await.unwrap();
+    assert_eq!(status.state, "expired");
+    assert_eq!(status.failure_code.as_deref(), Some("deadline-reached"));
+    assert_eq!(fake.calls.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn cancellation_racing_a_declared_refusal_records_no_external_effect() {
+    let h = declared_refusal_harness().await;
+    let run = h.admit().await;
+    let fake = DeclaredRefusalFake::blocked(declared_refusal());
+    let worker = Worker::new(h.store.clone(), fake.clone());
+    let completion = tokio::spawn(async move { worker.tick().await });
+    tokio::time::timeout(std::time::Duration::from_secs(3), fake.entered.notified())
+        .await
+        .expect("the action attempt reaches its adapter");
+    h.store
+        .cancel_owned(
+            run,
+            &actor("operator", true),
+            "withdraw-during-declared-refusal",
+        )
+        .await
+        .unwrap();
+    fake.release.as_ref().unwrap().add_permits(1);
+    assert!(completion.await.unwrap().unwrap());
+    let status = h.store.status(run).await.unwrap();
+    assert_eq!(status.state, "cancelled");
+    assert!(!status.uncertain);
+    assert_eq!(status.step, "action");
+    assert_eq!(
+        h.output_values(run).await["action"],
+        json!({"refusalCode":"synthetic-not-eligible"})
+    );
+    assert!(
+        !Worker::new(h.store.clone(), fake.clone())
+            .tick()
+            .await
+            .unwrap(),
+        "cancellation queues no refusal successor"
+    );
+    assert_eq!(fake.calls.lock().unwrap().len(), 1);
 }
 
 impl Harness {

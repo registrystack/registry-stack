@@ -5,14 +5,14 @@ use crate::{
     authoring,
     contracts::{contract, event_contract, Violation},
     definition::{class, parse_timestamp, Definition, Step, WaitEvent},
-    protocol::CallRequest,
+    protocol::{CallRequest, DeclaredRefusal},
     CoordinatorError, Result,
 };
 use chrono::{DateTime, Utc};
 use registry_platform_config::AuthoredExpressions;
 use registry_platform_yaml::{
     ApiVersion, BoundedU32, Diagnostic, Document, EnvelopeRule, Expect, ForeignValue, FormatSpec,
-    Identified, LocalId, Reader, Severity, UniqueIdList, UniqueList,
+    Identified, Invalid, LocalId, Reader, Severity, UniqueIdList, UniqueList,
 };
 use registry_review_protocol::{ReviewRequestAccepted, ReviewResult};
 use serde::{Deserialize, Serialize};
@@ -118,6 +118,13 @@ enum AuthoredReply {
         /// The code the reply carries, such as product-not-found.
         code: LocalId,
     },
+    /// The product returned a package-declared, no-effect business refusal.
+    /// A supported call takes its `onDeclaredRefusal` edge when it has one;
+    /// otherwise the run stops as refused.
+    DeclaredRefusal {
+        /// The validated refusal code the package declares.
+        refusal_code: RefusalCode,
+    },
     /// The call's effect is unknown; the run stops as uncertain unless a
     /// recovery consumes another reply.
     Uncertain {
@@ -130,6 +137,47 @@ enum AuthoredReply {
     ReceiptExpired {},
 }
 registry_platform_yaml::tagged_union!(AuthoredReply);
+
+/// One package-declared refusal code, kept in the same bounded shape as the
+/// protocol value without admitting an arbitrary product problem document.
+struct RefusalCode(String);
+
+impl std::fmt::Debug for RefusalCode {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("RefusalCode(<undisclosed>)")
+    }
+}
+
+impl<'de> Deserialize<'de> for RefusalCode {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        DeclaredRefusal::new(&text).map(|_| Self(text)).ok_or_else(|| {
+            Invalid::expected(
+                "a non-empty declared refusal code of at most 128 characters without control characters",
+                "Write the package-declared refusal code exactly, without control characters.",
+            )
+            .into_error()
+        })
+    }
+}
+
+#[cfg(feature = "schema")]
+impl schemars::JsonSchema for RefusalCode {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "DeclaredRefusalCode".into()
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
+        })
+    }
+}
 
 #[derive(Deserialize)]
 #[serde(
@@ -276,6 +324,10 @@ pub enum Reply {
     },
     Refused {
         refused: String,
+    },
+    DeclaredRefusal {
+        #[serde(rename = "declaredRefusal")]
+        declared_refusal: String,
     },
     Uncertain {
         uncertain: String,
@@ -471,6 +523,11 @@ impl CoordinatorScenarios {
                                     AuthoredReply::Refused { code } => Reply::Refused {
                                         refused: code.into_string(),
                                     },
+                                    AuthoredReply::DeclaredRefusal { refusal_code } => {
+                                        Reply::DeclaredRefusal {
+                                            declared_refusal: refusal_code.0,
+                                        }
+                                    }
                                     AuthoredReply::Uncertain { code } => Reply::Uncertain {
                                         uncertain: code.into_string(),
                                     },
@@ -618,18 +675,39 @@ fn execute(definition: &Definition, scenario: &Scenario) -> Result<ScenarioRepor
         // not this run consumes it.
         let operation = call.operation.as_str();
         for (index, reply) in replies.iter().enumerate() {
-            if let Reply::Success { success } = reply {
-                contract(call.operation)
-                    .check_output(success)
-                    .map_err(|violation| {
-                        contract_error(
-                            "scenario.reply-output",
-                            format!("/replies/{step}/{index}/value{}", violation.path),
-                            &violation,
-                            &format!("in a success reply to step {step}, as the {operation} output declares; the synthetic value does not match"),
-                            &format!("Correct the synthetic value so it satisfies the {operation} output."),
-                        )
-                    })?;
+            match reply {
+                Reply::Success { success } => {
+                    contract(call.operation)
+                        .check_output(success)
+                        .map_err(|violation| {
+                            contract_error(
+                                "scenario.reply-output",
+                                format!("/replies/{step}/{index}/value{}", violation.path),
+                                &violation,
+                                &format!("in a success reply to step {step}, as the {operation} output declares; the synthetic value does not match"),
+                                &format!("Correct the synthetic value so it satisfies the {operation} output."),
+                            )
+                        })?;
+                }
+                Reply::DeclaredRefusal { declared_refusal } => {
+                    if !call.operation.descriptor().declared_refusal {
+                        return Err(error(
+                            "scenario.reply",
+                            format!("/replies/{step}/{index}"),
+                            format!("step {step} calls {operation}, which cannot return a package-declared business refusal"),
+                            "Use declared-refusal only for invoke-breg-action; use refused for an operational or authority refusal.",
+                        ));
+                    }
+                    if DeclaredRefusal::new(declared_refusal).is_none() {
+                        return Err(error(
+                            "scenario.reply",
+                            format!("/replies/{step}/{index}/refusalCode"),
+                            format!("the declared refusal code for step {step} is outside its contract"),
+                            "Write a non-empty package-declared refusal code of at most 128 characters without control characters.",
+                        ));
+                    }
+                }
+                _ => {}
             }
         }
     }
@@ -791,7 +869,12 @@ fn execute(definition: &Definition, scenario: &Scenario) -> Result<ScenarioRepor
                 report.output = Some(result);
                 break;
             }
-            Step::Call { call, next, .. } => {
+            Step::Call {
+                call,
+                next,
+                on_declared_refusal,
+                ..
+            } => {
                 let value = definition.evaluate_synthetic(&step, &scenario.input, &outputs)?;
                 let operation = call.operation.as_str();
                 contract(call.operation)
@@ -847,7 +930,7 @@ fn execute(definition: &Definition, scenario: &Scenario) -> Result<ScenarioRepor
                 })?;
                 let recovery = scenario.recovery.get(&step);
                 let mut prior_unknown = false;
-                let mut success = None;
+                let mut completion = None;
                 for (index, reply) in replies.iter().enumerate() {
                     let at = format!("/replies/{step}/{index}");
                     if command.operation.is_evaluation()
@@ -900,7 +983,33 @@ fn execute(definition: &Definition, scenario: &Scenario) -> Result<ScenarioRepor
                     *report.call_attempts.entry(step.clone()).or_default() += 1;
                     match reply {
                         Reply::Success { success: value } => {
-                            success = Some(value.clone());
+                            completion = Some((next.clone(), value.clone()));
+                            break;
+                        }
+                        Reply::DeclaredRefusal { declared_refusal } => {
+                            if prior_unknown {
+                                report.state = "uncertain".into();
+                            } else if let Some(target) = on_declared_refusal {
+                                let refusal = DeclaredRefusal::new(declared_refusal).ok_or_else(|| {
+                                    error(
+                                        "scenario.reply",
+                                        format!("{at}/refusalCode"),
+                                        format!("the declared refusal code for step {step} is outside its contract"),
+                                        "Write a non-empty package-declared refusal code of at most 128 characters without control characters.",
+                                    )
+                                })?;
+                                let output = serde_json::to_value(refusal).map_err(|_| {
+                                    error(
+                                        "scenario.reply",
+                                        format!("{at}/refusalCode"),
+                                        format!("the declared refusal code for step {step} could not be retained"),
+                                        "Report this Coordinator defect with the project.",
+                                    )
+                                })?;
+                                completion = Some((target.clone(), output));
+                            } else {
+                                report.state = "refused".into();
+                            }
                             break;
                         }
                         Reply::Uncertain { .. } => {
@@ -953,10 +1062,10 @@ fn execute(definition: &Definition, scenario: &Scenario) -> Result<ScenarioRepor
                         }
                     }
                 }
-                if let Some(value) = success {
+                if let Some((target, value)) = completion {
                     outputs.insert(step.clone(), value);
                     report.state = "running".into();
-                    step = next.clone();
+                    step = target;
                 } else {
                     break;
                 }

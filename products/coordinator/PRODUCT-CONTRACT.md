@@ -78,6 +78,29 @@ ETags. Changed contracts, stale conditions and revoked authority do not silently
 produce a replacement command. An ambiguous response remains uncertain; a
 record read or operator assertion cannot establish action success.
 
+An `invoke-breg-action` call may declare `onDeclaredRefusal`. BReg returns the
+typed `422 action.refused` response only after validating the code against the
+active package's declared refusal catalogue and guaranteeing that the refusal
+had no action effect. The maintained adapter accepts the branch outcome only
+for that exact problem class with a bounded refusal code. The branch output is
+exactly `{refusalCode}`. It carries no problem detail, field path,
+submitted value or raw response. The call's successful receipt remains the
+output on `next`. A mapping may read the receipt only on routes reached through
+`next`, and the refusal object only on routes reached through
+`onDeclaredRefusal`; after those routes join, the call output is unavailable
+because its shape is ambiguous. Authentication, authorization, transport,
+protocol and preparation failures remain call failures. Without the optional
+edge, a declared refusal also stops the run as refused.
+
+A declared refusal is checkpointed atomically with its branch target. If a
+prior attempt has an unknown effect, a later refusal cannot settle that
+attempt, so the original command remains uncertain and the refusal branch is
+not taken. The original command and workflow deadline remain fixed. A
+checkpointed result retains the existing rule that following pure `choose` and
+`finish` steps may complete, while a later call or wait still observes expiry.
+If cancellation wins before the refusal checkpoint, the worker records the
+completion as no-effect and leaves the run cancelled.
+
 `external-get` is a configured read boundary: operators bind a base URL, exact
 paths, allowed query parameter names, optional service authorization and a local
 response schema through `runtime.externalHttpConnections`. Calls can supply only
@@ -240,7 +263,11 @@ resolve secret values. An explicitly supplied runtime is checked once.
 Scenario files use `kind: CoordinatorScenarios` and the API version
 `id.registrystack.org/formats/coordinator/scenarios/v1alpha1`. Each case has a unique local `id`. Replies name their `type`: `success` carries a
 foreign JSON `value`; `retryable`, `refused` and `uncertain` carry a `code`;
-`receipt-expired` has no additional members. `waits` states what each
+`declared-refusal` carries a non-empty `refusalCode` of at most 128 characters
+without control characters; `receipt-expired` has no additional members. A
+declared-refusal reply is accepted only for `invoke-breg-action`. It takes the
+authored refusal edge, stops as refused when that edge is absent, and leaves a
+prior unknown attempt uncertain. `waits` states what each
 `wait-for` step the run reaches receives: `{type: event, value}` delivers the
 event when the wait starts, and `{type: timeout}` moves the virtual clock by
 the step's `timeoutSeconds`. A run without `onTimeout` stops as `timed-out`,

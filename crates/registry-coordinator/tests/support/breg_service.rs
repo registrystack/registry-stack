@@ -128,6 +128,17 @@ impl Breg {
         root_connection.abort();
         let project = service.root.join("project");
         std::fs::create_dir_all(project.join("tests")).unwrap();
+        std::fs::create_dir_all(project.join("scripts")).unwrap();
+        crate::support::private_file(
+            &project.join("scripts/update-item.rhai"),
+            br#"fn handle(ctx) {
+    if ctx.inputs.label == "Refuse" {
+        return #{refusal: #{code: "label-not-eligible", field: "label"}};
+    }
+    #{effects: [#{id: "item", set: #{label: ctx.inputs.label}}]}
+}
+"#,
+        );
         document(
             &project.join("registry.yaml"),
             json!({
@@ -140,7 +151,9 @@ impl Breg {
                 "actions":[{"id":"update-item", "inputs":[
                     {"id":"target", "apiName":"targetId", "type":"reference", "target":"item", "required":true, "classification":"internal"},
                     {"id":"label", "type":"string", "required":true, "minimumLength":1, "maximumLength":80, "classification":"internal"}],
-                    "effects":[{"id":"item", "target":{"fromField":"target"}, "operation":"patch", "set":{"label":{"fromField":"label"}}}]}],
+                    "handler":{"type":"rhai", "script":"scripts/update-item.rhai", "abi":"registry.action-handler/v1",
+                        "refusals":[{"code":"label-not-eligible", "label":"The label is not eligible."}],
+                        "writes":[{"id":"item", "target":{"fromField":"target"}, "operation":"patch", "fields":["label"]}]}}],
                 "accessProfiles":[
                     {"id":"writer", "default":true, "principalClaim":"sub", "requiredScopes":["applications:read"], "actorKind":"service", "requesterClients":["application-reader"],
                         "permissions":{"entities":[{"entity":"item", "operations":["create","get","list"], "readableFields":["owner","label"], "writableFields":["owner","label"],

@@ -24,5 +24,9 @@ First release of Registry Coordinator.
 - `submit-review-request` and `cancel-review-request` hand work to Casework
   human review as a review producer, and a `wait-for` step on a
   `review-result` event waits for the reviewer's result.
+- `invoke-breg-action` calls may route a package-declared, no-effect BReg
+  action refusal through `onDeclaredRefusal`. The branch receives only its
+  validated `refusalCode`; operational failures and prior uncertain attempts
+  retain their existing failure and recovery behavior.
 - Add Linux amd64 `coordinator` and `coordinatorctl` binaries and a Docker
   image that carries both, from v0.41.0.

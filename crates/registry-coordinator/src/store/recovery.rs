@@ -340,7 +340,7 @@ impl Store {
                 let input_row=tx.query_one(&format!("SELECT input FROM {}.runs WHERE run_id=$1",self.namespace),&[&run]).await.map_err(unavailable)?;
                 let input:Value=self.open_value(run,"input","",&input_row.get::<_,Value>(0))?;
                 let payload=Payload{snapshot,input,outputs,command:Some(command)};
-                let detail=Detail{next:Some(next.clone()),output:Some(value),outcome:None,failure_code:None,failure_path:None,uncertain:false,receipt_expired:false,recheck_seconds:None};
+                let detail=Detail{next:Some(next.clone()),output:Some(value),outcome:None,failure_code:None,failure_path:None,uncertain:false,receipt_expired:false,completed_without_effect:false,recheck_seconds:None};
                 let written=self.apply_success(&tx,run,&step,payload,&detail,current.get(4)).await.map_err(unavailable)?;
                 let mapping_failed=written=="failed";
                 tx.execute(&format!("UPDATE {}.jobs SET state='delivered',attempt=GREATEST(attempt,1),uncertain=false,next_attempt_at=NULL,attempt_started_at=NULL,lease_expires_at=NULL,lease_token=NULL,delivered_at=transaction_timestamp(),dead_lettered_at=NULL,expired_at=NULL,failure_code=NULL,failure_path=NULL WHERE run_id=$1 AND step=$2",self.namespace),&[&run,&step]).await.map_err(unavailable)?;

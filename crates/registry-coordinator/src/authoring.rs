@@ -386,7 +386,7 @@ enum AuthoredStep {
         on_timeout: Option<LocalId>,
     },
     /// Calls one operation through a connection, then continues with its
-    /// output available to later steps.
+    /// successful output available to later steps.
     Call {
         /// The connection the call goes through, declared under `connections`.
         connection: LocalId,
@@ -397,6 +397,11 @@ enum AuthoredStep {
         input: AuthoredInput,
         /// The step that follows a completed call.
         next: LocalId,
+        /// The step that follows a product-declared, no-effect business
+        /// refusal. Only operations whose reference declares this capability
+        /// accept the member; other refusals still stop the run.
+        #[serde(default)]
+        on_declared_refusal: Option<LocalId>,
     },
     /// Selects a label and continues with the step its case names.
     Choose {
@@ -506,6 +511,7 @@ impl TryFrom<AuthoredStep> for Step {
                 operation,
                 input,
                 next,
+                on_declared_refusal,
             } => Self::Call {
                 call: Call {
                     operation: Operation::parse(&operation.0)
@@ -514,6 +520,7 @@ impl TryFrom<AuthoredStep> for Step {
                 },
                 input: input.into(),
                 next: next.into_string(),
+                on_declared_refusal: on_declared_refusal.map(LocalId::into_string),
             },
             AuthoredStep::Choose { choose, cases } => Self::Choose {
                 choose: choose.into(),
@@ -791,13 +798,17 @@ fn operation_input_members() -> serde_json::Value {
             if let Some(required) = input.get("required") {
                 fields["required"] = required.clone();
             }
-            serde_json::json!({
+            let mut rule = serde_json::json!({
                 "if": {
                     "properties": {"operation": {"const": descriptor.id}},
                     "required": ["operation"]
                 },
                 "then": {"properties": {"input": {"properties": {"fields": fields}}}}
-            })
+            });
+            if !descriptor.declared_refusal {
+                rule["then"]["not"] = serde_json::json!({"required": ["onDeclaredRefusal"]});
+            }
+            rule
         })
         .collect()
 }
