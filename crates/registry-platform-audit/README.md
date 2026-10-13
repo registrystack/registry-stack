@@ -128,7 +128,8 @@ of the change:
   The deadline sits below the 10-second request timeout the Base Registry
   Engine defaults to and the Evidence reference projects set, so a stalled
   destination is answered as an unavailable audit destination, not as a
-  timed-out request.
+  timed-out request. The deadline bounds the wait on the audit destination,
+  not anything else the process writes to the same stream.
 - **Enforcement point.** `LineStream` in `src/writer.rs`. `append` refuses
   before queueing when the stream has failed or the write in progress is
   older than the deadline, hands the line over with `try_send` so a full
@@ -160,14 +161,46 @@ of the change:
   enough that lines wait in the queue for most of a deadline can do the same
   with no stall reported. The start of a stall is logged by the first append
   or readiness check that sees it, not by a timer, so a writer nothing is
-  asking logs it late. A full queue refuses lines without turning `ready()`
-  false. A destination that never takes its line keeps one thread until the
-  process exits, and unfinished response entries queued behind it when the
-  writer is dropped are not written, which is reported once. An operator who
+  asking logs it late: at the latest when the destination takes the line,
+  just before the end. The two reports are made outside the stream's lock,
+  so a destination that takes its line at the instant a caller first sees
+  the stall can log the end ahead of the start. A full queue refuses lines
+  without turning `ready()` false and without a report. A destination that
+  never takes its line keeps one thread until the process exits, and
+  unfinished response entries queued behind it when the writer is dropped
+  are not written, which is reported once. An operator who
   sets a request timeout under 5 seconds still sees a timed-out request
   first. A refused entry does not undo work a product already committed: a
   product that writes its outcome entry after its transaction commits reports
   that operation as unresolved, as it does for a failed write.
+
+  Two more limits hold in a product. Both are read from each binary's
+  logging setup and neither was exercised:
+
+  - Every report this writer makes, the stall and loss reports included, is
+    logged under the target `registry_platform_audit::writer`, and an
+    operator sees it only where the product's log filter admits that target.
+    Evidence (`EVIDENCE_LOG`) and Registry Scheduling (`RUST_LOG`) admit
+    every target at `info` by default and show the reports. Registry Render
+    defaults to `registry_render=info` and shows them only when `RUST_LOG`
+    admits the target. The Base Registry Engine, Registry Casework, Registry
+    Messaging, `breg-mcp`, and `breg-review` admit only their own targets and
+    have no setting that admits another, so their operators see the refusals
+    and the failed readiness, never these reports.
+  - The Base Registry Engine, Registry Casework, `breg-mcp`, and
+    `breg-review` write their operational log to standard output, the stream
+    a `stdout` audit destination writes. While that stream holds an audit
+    line, a log record written by any thread waits for it, with no deadline.
+    The Base Registry Engine logs one `info` record for every request and
+    every probe before the response leaves, at its default level, and
+    `breg-mcp` and `breg-review` log an `error` record for each refused
+    audit entry before they answer, so in those three a request the writer
+    refused can hang instead of being answered. Registry Casework logs no
+    record on that path and blocks wherever it does log, such as a
+    background pass that fails. Evidence, Registry Scheduling, Registry
+    Messaging, and Registry Render log to standard error. The executed proof
+    above holds its sink through `from_line_sink`; no test blocks a real
+    standard output.
 
 ## Testing
 
