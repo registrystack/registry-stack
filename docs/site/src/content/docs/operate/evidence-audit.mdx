@@ -106,9 +106,13 @@ Copying a sealed file is safe at any time.
 A `stdout` destination stalls when its collector stops reading the stream.
 Once the writer has held one entry for 5 seconds, the request waiting on that entry is refused,
 later audited requests are refused at once, and readiness fails.
-The log on standard error carries `audit stream has held one entry past the write deadline`.
+With `EVIDENCE_LOG` at its default of `info`, the log on standard error carries
+`audit stream has held one entry past the write deadline`.
 When the collector reads again, the log carries `audit stream took the entry it was holding`, and
 the writer accepts entries with no restart.
+The first record is logged at `error` and the second at `warn`, both under the
+`registry_platform_audit` target, so an `EVIDENCE_LOG` filter that leaves out that target or those
+levels hides them.
 The stream still receives the entry the collector was holding, so it can carry an entry for a
 request that was refused.
 Restore the collector rather than restarting Evidence Gateway: a process that exits during a stall
@@ -122,7 +126,8 @@ A write the stream refuses is a different fault and stops the writer until the p
     StreamEvent::WrittenAfterRefusal, StreamEvent::AbandonedAtDrop,
     a_stalled_stream_refuses_the_append_at_the_deadline_and_later_ones_at_once, and
     readiness_follows_a_stall_and_returns_once_the_stream_drains;
-    crates/registry-evidence/src/runtime.rs, ready(). */}
+    crates/registry-evidence/src/runtime.rs, ready();
+    crates/registry-evidence/src/main.rs, install_operational_logging. */}
 
 ## Ship audit to append-only storage
 
