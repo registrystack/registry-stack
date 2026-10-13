@@ -22,7 +22,6 @@ pub struct OperationContract {
     pub declared_refusal: Option<Value>,
     input_validator: JSONSchema,
     output_validator: JSONSchema,
-    declared_refusal_validator: Option<JSONSchema>,
 }
 
 /// Where a value leaves a contract. The path is an RFC 6901 pointer into the
@@ -59,17 +58,6 @@ impl OperationContract {
     /// Checks a value offered as the operation's step output.
     pub fn check_output(&self, value: &Value) -> Result<(), Violation> {
         first_violation(&self.output_validator, value)
-    }
-
-    /// Checks a product-declared refusal before it becomes a step output.
-    pub fn check_declared_refusal(&self, value: &Value) -> Result<(), Violation> {
-        let Some(validator) = &self.declared_refusal_validator else {
-            return Err(Violation {
-                path: String::new(),
-                expected: "an operation that declares a routable business refusal".into(),
-            });
-        };
-        first_violation(validator, value)
     }
 }
 
@@ -244,11 +232,12 @@ pub fn contract(operation: Operation) -> &'static OperationContract {
                 };
                 let (input, input_validator) = parse(input);
                 let (output, output_validator) = parse(output);
-                let (declared_refusal, declared_refusal_validator) = DECLARED_REFUSALS
+                let declared_refusal = DECLARED_REFUSALS
                     .iter()
                     .find(|(operation, _)| operation == id)
-                    .map(|(_, schema)| parse(schema))
-                    .unzip();
+                    .map(|(_, schema)| {
+                        serde_json::from_str(schema).expect("committed operation contract is JSON")
+                    });
                 (
                     *id,
                     OperationContract {
@@ -257,7 +246,6 @@ pub fn contract(operation: Operation) -> &'static OperationContract {
                         input_validator,
                         output_validator,
                         declared_refusal,
-                        declared_refusal_validator,
                     },
                 )
             })
@@ -577,9 +565,12 @@ mod derived {
                 recovery = word(&descriptor.recovery)?,
                 receipt = if descriptor.read_receipt { "read" } else { "none" },
                 declared_refusal = if descriptor.declared_refusal {
-                    "[`onDeclaredRefusal`](invoke-breg-action.declared-refusal.schema.json)"
+                    format!(
+                        "[`onDeclaredRefusal`]({}.declared-refusal.schema.json)",
+                        descriptor.id
+                    )
                 } else {
-                    "none"
+                    "none".into()
                 },
             ));
         }
@@ -855,19 +846,21 @@ mod tests {
                 descriptor.id
             );
         }
-        let action = contract(Operation::InvokeBregAction);
+        let refusal = contract(Operation::InvokeBregAction)
+            .declared_refusal
+            .as_ref()
+            .unwrap();
+        let validator = crate::definition::compile_schema(refusal)
+            .unwrap_or_else(|error| panic!("declared-refusal contract does not compile: {error}"));
         assert_eq!(
-            action.check_declared_refusal(&json!({"refusalCode":"not-eligible"})),
+            first_violation(&validator, &json!({"refusalCode":"not-eligible"})),
             Ok(())
         );
-        assert!(action
-            .check_declared_refusal(&json!({
-                "refusalCode":"not-eligible", "detail":"private-canary"
-            }))
-            .is_err());
-        assert!(contract(Operation::ReadRecord)
-            .check_declared_refusal(&json!({"refusalCode":"not-eligible"}))
-            .is_err());
+        assert!(first_violation(
+            &validator,
+            &json!({"refusalCode":"not-eligible", "detail":"private-canary"})
+        )
+        .is_err());
     }
 
     #[test]

@@ -45,15 +45,11 @@ fn declared_refusal(
     status: Option<u16>,
     problem: Option<BRegProblemCode>,
     refusal_code: Option<&str>,
-    outcome_unknown: bool,
 ) -> Option<DeclaredRefusal> {
-    (mutation
-        && !outcome_unknown
-        && status == Some(422)
-        && problem == Some(BRegProblemCode::ActionRefused))
-    .then_some(refusal_code)
-    .flatten()
-    .and_then(DeclaredRefusal::new)
+    (mutation && status == Some(422) && problem == Some(BRegProblemCode::ActionRefused))
+        .then_some(refusal_code)
+        .flatten()
+        .and_then(DeclaredRefusal::new)
 }
 
 fn failure(error: BaseRegistryClientError, mutation: bool) -> CallOutcome {
@@ -70,7 +66,6 @@ fn failure(error: BaseRegistryClientError, mutation: bool) -> CallOutcome {
         error.status(),
         error.problem_code(),
         error.refusal_code().map(|code| code.as_str()),
-        false,
     ) {
         return CallOutcome::DeclaredRefusal(refusal);
     }
@@ -198,70 +193,27 @@ mod tests {
 
     #[test]
     fn declared_refusal_classification_requires_every_typed_execution_guard() {
-        let classify = |mutation, status, problem, code, unknown| {
-            declared_refusal(mutation, status, problem, code, unknown)
+        let classify = |mutation, status, problem, code| {
+            declared_refusal(mutation, status, problem, code)
                 .map(|refusal| refusal.refusal_code().to_owned())
         };
+        let refused = Some(BRegProblemCode::ActionRefused);
         assert_eq!(
-            classify(
-                true,
-                Some(422),
-                Some(BRegProblemCode::ActionRefused),
-                Some("not-eligible"),
-                false,
-            ),
+            classify(true, Some(422), refused, Some("not-eligible")),
             Some("not-eligible".to_owned())
         );
         for refusal in [
-            classify(
-                false,
-                Some(422),
-                Some(BRegProblemCode::ActionRefused),
-                Some("not-eligible"),
-                false,
-            ),
-            classify(
-                true,
-                Some(409),
-                Some(BRegProblemCode::ActionRefused),
-                Some("not-eligible"),
-                false,
-            ),
+            classify(false, Some(422), refused, Some("not-eligible")),
+            classify(true, Some(409), refused, Some("not-eligible")),
             classify(
                 true,
                 Some(422),
                 Some(BRegProblemCode::PreconditionFailed),
                 Some("not-eligible"),
-                false,
             ),
-            classify(
-                true,
-                Some(422),
-                Some(BRegProblemCode::ActionRefused),
-                None,
-                false,
-            ),
-            classify(
-                true,
-                Some(422),
-                Some(BRegProblemCode::ActionRefused),
-                Some("line\nbreak"),
-                false,
-            ),
-            classify(
-                true,
-                Some(422),
-                Some(BRegProblemCode::ActionRefused),
-                Some(&"x".repeat(129)),
-                false,
-            ),
-            classify(
-                true,
-                Some(422),
-                Some(BRegProblemCode::ActionRefused),
-                Some("not-eligible"),
-                true,
-            ),
+            classify(true, Some(422), refused, None),
+            classify(true, Some(422), refused, Some("line\nbreak")),
+            classify(true, Some(422), refused, Some(&"x".repeat(129))),
         ] {
             assert_eq!(refusal, None);
         }

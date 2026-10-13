@@ -155,7 +155,7 @@ pub struct DeclaredRefusal {
         feature = "schema",
         schemars(
             length(min = 1, max = 128),
-            regex(pattern = r"^[^\x00-\x1F\x7F-\x9F]+$")
+            regex(pattern = r"^[^\u0000-\u001F\u007F-\u009F]+$")
         )
     )]
     refusal_code: String,
