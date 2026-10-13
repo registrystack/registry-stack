@@ -723,7 +723,7 @@ jobs:
     name: Build native macOS ${{ matrix.group }} payload once
     needs: validate
     runs-on: macos-26
-    timeout-minutes: 35
+    timeout-minutes: 60
     permissions:
       contents: read
     strategy:
