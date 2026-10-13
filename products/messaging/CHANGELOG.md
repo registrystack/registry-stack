@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- `messagingctl dev PROJECT --issuer-project BREG_OWNER --resource URI`
+  borrows a ready BReg development issuer for the clients named by the
+  Messaging package. It obtains credentials only through public
+  `bregctl dev export-client`, requests the explicit Messaging resource and
+  profile scopes, and verifies real issued tokens against a retained static
+  RS256 key snapshot before becoming ready. `dev token` rechecks the retained
+  public binding and caller identity. Messaging remains an ephemeral
+  foreground session and never manages the BReg owner's lifecycle. Omitting
+  both options preserves the standalone session-generated ES256 issuer.
+
 ## 0.41.0 - 2026-10-13
 
 - BREAKING: the published `registry-stack-client` Python package, which carries

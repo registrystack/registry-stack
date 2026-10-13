@@ -24,7 +24,7 @@ fn session() -> (tempfile::TempDir, PathBuf, PathBuf, LoadedPackage) {
     let (lock, root) = fresh_session(&project, &docker).unwrap();
     drop(lock);
     let loaded = install_project(&project, &root).unwrap();
-    let passwords = config::generate(&root).unwrap();
+    let passwords = config::generate(&root, true).unwrap();
     config::database_urls(&root, 55432, &passwords).unwrap();
     (temporary, project, root, loaded)
 }
@@ -251,4 +251,294 @@ fn dev_parses_a_start_and_a_token_request() {
     };
     assert_eq!(token.client, "case-system");
     assert_eq!(token.project, PathBuf::from("project"));
+}
+
+fn borrowed_binding() -> borrowed::Binding {
+    serde_json::from_value(json!({
+        "project": "/owner", "bregctl": "/bin/bregctl",
+        "issuer": "http://127.0.0.1:8095",
+        "tokenEndpoint": "http://127.0.0.1:8095/oauth2/token",
+        "resource": "urn:registrystack:messaging:notices",
+        "clients": {"case-system": {
+            "principal": "case-system", "profile": "case-notices", "actorKind": "service"
+        }}
+    }))
+    .unwrap()
+}
+
+fn borrowed_claims(binding: &borrowed::Binding) -> Value {
+    let now = chrono::Utc::now().timestamp();
+    json!({
+        "iss": binding.issuer, "aud": binding.resource,
+        "sub": "case-system", "azp": "case-system",
+        "scope": "messaging:send", "registry_actor_kind": "service",
+        "iat": now, "nbf": now, "exp": now + 3600,
+        "jti": uuid::Uuid::new_v4().to_string()
+    })
+}
+
+fn sign_borrowed(root: &Path, loaded: &LoadedPackage, claims: &Value) -> Zeroizing<String> {
+    let own = config::token(root, loaded, "case-system").unwrap();
+    let header = jsonwebtoken::decode_header(&own).unwrap();
+    let key = Zeroizing::new(private::read(&root.join("issuer/signing-key.der"), 4096).unwrap());
+    Zeroizing::new(
+        jsonwebtoken::encode(
+            &header,
+            claims,
+            &jsonwebtoken::EncodingKey::from_ec_der(&key),
+        )
+        .unwrap(),
+    )
+}
+
+#[test]
+fn paired_issuer_options_require_an_explicit_resource() {
+    for arguments in [
+        vec![
+            "messagingctl",
+            "dev",
+            "project",
+            "--issuer-project",
+            "owner",
+        ],
+        vec![
+            "messagingctl",
+            "dev",
+            "project",
+            "--resource",
+            "urn:messaging",
+        ],
+    ] {
+        assert!(Cli::try_parse_from(arguments).is_err());
+    }
+    let cli = Cli::try_parse_from([
+        "messagingctl",
+        "dev",
+        "project",
+        "--issuer-project",
+        "owner",
+        "--resource",
+        "urn:messaging",
+    ])
+    .unwrap();
+    let Command::Dev(args) = cli.command else {
+        panic!("dev command");
+    };
+    assert_eq!(args.start.resource.as_deref(), Some("urn:messaging"));
+}
+
+#[test]
+fn borrowed_configuration_uses_scope_and_static_issuer_keys() {
+    let (_temporary, _project, root, loaded) = session();
+    let binding = borrowed_binding();
+    let document = config::runtime_document_with_issuer(
+        &root.join("package"),
+        &root,
+        &loaded,
+        &config::Endpoints {
+            api_port: 18107,
+            metrics_port: 19107,
+            smtp_port: 11025,
+            gateway_port: 18200,
+        },
+        Some(&binding),
+    )
+    .unwrap();
+    let path = root.join("runtime.yaml");
+    private::create(&path, document.as_bytes()).unwrap();
+    let checked = RuntimeConfig::load(&path).unwrap();
+    assert_eq!(checked.authentication.oidc.scope_claim, "scope");
+    assert!(document.contains(&binding.issuer));
+    assert!(document.contains(&binding.resource));
+    assert!(document.contains("secret:file/jwks.json"));
+    assert!(!document.contains("assertion-key"));
+    assert!(!document.contains("assertionIssuers"));
+}
+
+#[tokio::test]
+async fn borrowed_client_tokens_preserve_messaging_authorization() {
+    let (_temporary, _project, root, loaded) = session();
+    let binding = borrowed_binding();
+    let claims = borrowed_claims(&binding);
+    let signed = sign_borrowed(&root, &loaded, &claims);
+    let (expires, caller) = borrowed::verify(&root, &loaded, &binding, "case-system", &signed)
+        .await
+        .unwrap();
+    assert!(expires > 0 && expires <= 3600);
+    assert_eq!(
+        serde_json::to_value(&caller).unwrap()["principal"],
+        "case-system"
+    );
+    for (claim, value) in [
+        ("scope", json!("messaging:operate")),
+        ("aud", json!("urn:another-resource")),
+        ("iss", json!("http://127.0.0.1:8096")),
+        ("registry_actor_kind", json!("human")),
+        ("azp", json!("operations-console")),
+    ] {
+        let mut changed = claims.clone();
+        changed[claim] = value;
+        let signed = sign_borrowed(&root, &loaded, &changed);
+        assert!(
+            borrowed::verify(&root, &loaded, &binding, "case-system", &signed)
+                .await
+                .is_err(),
+            "accepted changed {claim}"
+        );
+    }
+    let (_other, _project, other_root, other_loaded) = session();
+    let signed = sign_borrowed(&other_root, &other_loaded, &claims);
+    assert!(
+        borrowed::verify(&root, &loaded, &binding, "case-system", &signed)
+            .await
+            .is_err()
+    );
+}
+
+#[test]
+fn borrowed_token_refuses_changed_client_credentials() {
+    let (_temporary, _project, root, _loaded) = session();
+    private::directory(&root.join("credentials")).unwrap();
+    let retained = root.join("credentials/case-system");
+    private::directory(&retained).unwrap();
+    let scratch = tempfile::Builder::new()
+        .permissions(fs::Permissions::from_mode(0o700))
+        .tempdir_in(&root)
+        .unwrap();
+    for file in ["client-id", "assertion-key.jwk"] {
+        private::create(&retained.join(file), b"original").unwrap();
+        private::create(&scratch.path().join(file), b"original").unwrap();
+    }
+    borrowed::same_export(&root, scratch.path(), "case-system").unwrap();
+    for file in ["client-id", "assertion-key.jwk"] {
+        private::replace(&scratch.path().join(file), b"changed").unwrap();
+        assert!(borrowed::same_export(&root, scratch.path(), "case-system").is_err());
+        private::replace(&scratch.path().join(file), b"original").unwrap();
+    }
+}
+
+#[test]
+fn borrowed_token_refuses_changed_principal() {
+    let binding = borrowed_binding();
+    let expected = &binding.clients["case-system"];
+    borrowed::same_caller(expected, expected).unwrap();
+    for (member, value) in [
+        ("principal", json!("another")),
+        ("profile", json!("operations")),
+        ("actorKind", json!("human")),
+    ] {
+        let mut changed = serde_json::to_value(expected).unwrap();
+        changed[member] = value;
+        let changed = serde_json::from_value(changed).unwrap();
+        assert!(borrowed::same_caller(expected, &changed).is_err());
+    }
+}
+
+#[test]
+fn borrowed_token_requires_ready_session() {
+    let (_temporary, project, root, _loaded) = session();
+    let session = Session {
+        root: root.clone(),
+        owner: uuid::Uuid::new_v4().to_string(),
+        containers: vec![],
+        borrowed: Some(borrowed_binding()),
+    };
+    for state in ["starting", "stopped", "stop-failed"] {
+        session.write(state, &json!({})).unwrap();
+        let Err(error) = token(&TokenArgs {
+            client: "case-system".to_owned(),
+            project: project.clone(),
+        }) else {
+            panic!("a stopped session cannot issue a token");
+        };
+        assert!(error.message.contains("not ready"));
+        assert!(!root.join("headers/case-system").exists());
+    }
+}
+
+#[test]
+fn borrowed_state_round_trips_a_profile_without_actor_kind() {
+    let (_temporary, _project, root, _loaded) = session();
+    let mut binding = borrowed_binding();
+    binding.clients.insert(
+        "operations-console".to_owned(),
+        serde_json::from_value(json!({
+            "principal": "operations-console", "profile": "operations"
+        }))
+        .unwrap(),
+    );
+    Session {
+        root: root.clone(),
+        owner: uuid::Uuid::new_v4().to_string(),
+        containers: vec![],
+        borrowed: Some(binding),
+    }
+    .write("ready", &json!({}))
+    .unwrap();
+    let record = read_session(&root).unwrap();
+    assert_eq!(record.borrowed_issuer.unwrap().clients.len(), 2);
+}
+
+#[test]
+fn dev_state_checks_offline_and_refuses_wrong_envelopes() {
+    let example = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../products/messaging/examples/formats/dev-session/.messaging/dev/session.json");
+    check_session_file(&example).unwrap();
+    let temporary = tempfile::tempdir().unwrap();
+    let path = temporary.path().join("state.json");
+    let original: Value = serde_json::from_slice(&fs::read(&example).unwrap()).unwrap();
+    for (member, value) in [
+        ("kind", json!("OtherState")),
+        ("apiVersion", json!("future")),
+        ("state", json!("unknown")),
+    ] {
+        let mut changed = original.clone();
+        changed[member] = value;
+        fs::write(&path, serde_json::to_vec(&changed).unwrap()).unwrap();
+        assert!(check_session_file(&path).is_err());
+    }
+    assert!(Cli::try_parse_from([
+        "messagingctl",
+        "check",
+        "--dev-state",
+        "state.json",
+        "--project",
+        "project"
+    ])
+    .is_err());
+}
+
+#[test]
+fn a_standalone_session_keeps_its_local_token_behavior() {
+    let (_temporary, project, root, _loaded) = session();
+    Session {
+        root,
+        owner: uuid::Uuid::new_v4().to_string(),
+        containers: vec![],
+        borrowed: None,
+    }
+    .write("stopped", &json!({}))
+    .unwrap();
+    assert!(token(&TokenArgs {
+        client: "case-system".to_owned(),
+        project
+    })
+    .is_ok());
+}
+
+#[test]
+fn a_borrowed_session_does_not_generate_a_signing_key() {
+    let temporary = tempfile::tempdir().unwrap();
+    fs::set_permissions(temporary.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let project = temporary.path().join("project");
+    starter::write(&project).unwrap();
+    let docker = docker::Docker::new(PathBuf::from("/nonexistent/docker"));
+    let (_lock, root) = fresh_session(&project, &docker).unwrap();
+    private::create(&root.join("secrets/jwks.json"), b"retained public snapshot").unwrap();
+    config::generate(&root, false).unwrap();
+    assert!(!root.join("issuer/signing-key.der").exists());
+    assert_eq!(
+        fs::read(root.join("secrets/jwks.json")).unwrap(),
+        b"retained public snapshot"
+    );
 }

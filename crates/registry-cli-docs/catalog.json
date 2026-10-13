@@ -12731,9 +12731,18 @@
           "invocation": "messagingctl check",
           "about": "Check an authoring project, installed package, or runtime file",
           "long_about": null,
-          "usage": "messagingctl check [OPTIONS] <--runtime-config <FILE>|--package <DIRECTORY>|--project <DIRECTORY>>",
+          "usage": "messagingctl check [OPTIONS] <--runtime-config <FILE>|--package <DIRECTORY>|--project <DIRECTORY>|--dev-state <FILE>>",
           "arguments": [],
           "options": [
+            {
+              "display": "--dev-state <FILE>",
+              "description": "Generated development session state. Checked offline without secrets",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
             {
               "display": "--runtime-config <FILE>",
               "description": "Runtime configuration file",
@@ -12810,13 +12819,38 @@
               "arguments": [
                 "--runtime-config <FILE>",
                 "--package <DIRECTORY>",
-                "--project <DIRECTORY>"
+                "--project <DIRECTORY>",
+                "--dev-state <FILE>"
               ]
             },
             {
               "kind": "requires-all",
               "when": "--environment",
               "arguments": [
+                "--runtime-config <FILE>"
+              ]
+            },
+            {
+              "kind": "mutually-exclusive",
+              "when": null,
+              "arguments": [
+                "--dev-state <FILE>",
+                "--package <DIRECTORY>"
+              ]
+            },
+            {
+              "kind": "mutually-exclusive",
+              "when": null,
+              "arguments": [
+                "--dev-state <FILE>",
+                "--project <DIRECTORY>"
+              ]
+            },
+            {
+              "kind": "mutually-exclusive",
+              "when": null,
+              "arguments": [
+                "--dev-state <FILE>",
                 "--runtime-config <FILE>"
               ]
             },
@@ -13630,6 +13664,24 @@
               "environment": null
             },
             {
+              "display": "--issuer-project <PROJECT>",
+              "description": "Borrow pre-registered clients from this BReg development project",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--resource <URI>",
+              "description": "The exact Messaging audience registered at the borrowed issuer",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
               "display": "--format <FORMAT>",
               "description": "Emit the selected command's report in this format",
               "always_required": false,
@@ -13658,7 +13710,7 @@
             {
               "name": "token",
               "invocation": "messagingctl dev token",
-              "about": "Write a bearer header file for a client an access profile names, signed with the running session's key and valid for one hour",
+              "about": "Write a bearer header file for a client an access profile names, using the running session's local key or borrowed issuer",
               "long_about": null,
               "usage": "messagingctl dev token [OPTIONS] <CLIENT> [PROJECT]",
               "arguments": [

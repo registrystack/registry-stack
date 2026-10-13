@@ -131,24 +131,94 @@ The session's secrets, generated `runtime.yaml`, audit journal, and JSON log
 live in the project's private `.messaging/dev` directory (mode 0700, files
 0600, ignored by git through `.messaging/.gitignore`), and the next start in
 the project replaces it. A second start in the same project is refused while
-the first runs. `messagingctl dev token CLIENT` signs a one-hour bearer token
-for a client one access profile names, carrying that profile's scopes and
-actor kind, with the key the running session's runtime trusts, and writes it
-as a header file under `.messaging/dev/tokens/`. The tokens and the key are
-for this session only; nothing about the session is a production posture.
-`products/messaging/scripts/test-dev.sh` is the automated run of the same
-path.
+the first runs. In the default standalone session, `messagingctl dev token CLIENT`
+signs a one-hour bearer token for a client one access profile names,
+carrying that profile's scopes and actor kind, with the key the running
+session's runtime trusts. It writes the token as a header file under
+`.messaging/dev/tokens/`. The tokens and the key are for this session only;
+nothing about the session is a production posture.
 
-`.messaging/dev/session.json` is the session's record. It is written when the
-session starts, as each container starts, and when the session is ready, and
-holds `owner`, the value of the `org.registrystack.messagingctl.dev-owner`
-label on every container the session started; `state`, `starting` or `ready`;
-`containers`, the containers started so far; and `detail`, empty while
-starting and the ready report once ready. Mailpit publishes on a port Docker
-picks, so `detail.mailpit` is where a script reads the Mailpit address;
-`detail.api`, `detail.metrics`, and `detail.mockGateway` name the other
-endpoints. The next start in the project reads `owner` to remove the
-containers an interrupted session left.
+A local Messaging session can instead borrow the issuer of a ready BReg
+development session. The BReg owner's `dev-clients.yaml` registers every
+Messaging requester client at one explicit Messaging resource:
+
+```yaml
+apiVersion: id.registrystack.org/formats/breg/dev-clients/v1alpha1
+kind: BRegDevClients
+clients:
+  - id: case-system
+    accessProfiles: []
+    scopes: [messaging:send]
+    claims: {registry_actor_kind: service}
+  - id: operations-console
+    accessProfiles: []
+    scopes: [messaging:operate]
+    claims: {}
+issuer:
+  resources:
+    - audience: urn:registrystack:messaging:notices
+      scopes: [messaging:send, messaging:operate]
+  clientResources:
+    case-system: urn:registrystack:messaging:notices
+    operations-console: urn:registrystack:messaging:notices
+```
+
+With that owner already ready, start Messaging with the paired options:
+
+```bash
+messagingctl dev ./notices \
+  --issuer-project /absolute/path/to/breg-owner \
+  --resource urn:registrystack:messaging:notices
+```
+
+`--issuer-project` and `--resource` are accepted only together. The explicit
+resource binds this Messaging invocation to its intended audience; a real
+OAuth grant proves that each client can use it.
+Messaging invokes that public command for the clients named by its access
+profiles; it never reads the owner's private `.breg` state. It requests each
+profile's exact scopes for the explicit resource through the shared
+`PrivateKeyJwt` client, configures `scopeClaim: scope`, snapshots the ready
+issuer's bounded public RS256 keys through `local::snapshot`, and verifies an
+issued token with `MessagingAuthenticator` before reporting ready. The runtime
+uses that static key snapshot and otherwise has the same generated
+configuration and lifecycle as a standalone session. No token-exchange trust
+is configured.
+
+In a borrowed session, `messagingctl dev token CLIENT` requires the Messaging
+session to be ready. It exports the current owner credential into private
+scratch space, compares the credential and public endpoint binding with the
+session capture, obtains a new token for the retained resource and scopes,
+and verifies that token against the retained static keys and the same caller
+identity before replacing the header file. Restarting the BReg owner with its
+retained keys and registrations continues to work. A changed credential,
+endpoint, signing key, or principal is refused until Messaging is restarted;
+that new foreground start discards its old files and captures the current
+public trust again. Messaging never starts, stops, resets, or removes the BReg
+owner. Stopping Messaging removes only its own PostgreSQL and Mailpit
+containers and their volumes.
+
+`products/messaging/scripts/test-dev.sh` exercises the standalone path, and
+`products/messaging/scripts/test-dev-shared-issuer.sh` exercises the shared
+issuer path.
+
+`.messaging/dev/session.json` is the typed session record. Its envelope names
+`MessagingDevState`; the format registry checks the current `apiVersion` and
+`kind` wherever the file is read. It is written when the session starts, as
+each container starts, and when the session is ready. It holds `owner`, the
+value of the `org.registrystack.messagingctl.dev-owner` label on every
+container the session started; `state`, `starting`, `ready`, `stopped`, or
+`stop-failed`; `containers`,
+the containers started so far; and `detail`, empty while starting and the
+ready report once ready. A borrowed session also records the public issuer
+binding needed to compare the credentials kept in its private session files;
+no bearer token or private key is written into the state document. Mailpit
+publishes on a port Docker picks, so `detail.mailpit` is where a script reads
+the Mailpit address; `detail.api`, `detail.metrics`, and
+`detail.mockGateway` name the other endpoints. The next start in the project
+reads `owner` to remove the containers an interrupted session left.
+`messagingctl check --dev-state FILE` checks this generated record offline,
+without contacting the issuer or reading credentials. Cleanup also recognizes
+pre-envelope records with a valid owner identifier.
 
 To run the runtime yourself, `messagingctl init DIRECTORY` creates an editable
 project with `messaging.yaml`, `providers/`, and `templates/`. Check that
@@ -311,6 +381,7 @@ MESSAGING_TEST_DATABASE_URL=<disposable database> cargo test --locked \
 MESSAGING_TEST_DATABASE_URL=<disposable database> cargo test --locked \
   -p registry-messagingctl --features postgres-test --test postgres_messages_cli
 products/messaging/scripts/test-dev.sh
+products/messaging/scripts/test-dev-shared-issuer.sh
 ```
 
 The checkpoint runs the database-free checks: dependency direction,
@@ -323,6 +394,11 @@ starts `messagingctl dev` on a starter whose SMS provider is the example mock
 provider, sends one email and one SMS, requires the SMS to be `delivered`
 through one applied signed callback and the email to be `submitted` with one
 message in Mailpit, and requires the stopped session to leave no container.
+`test-dev-shared-issuer.sh` also needs Docker: it starts a BReg owner with the
+two Messaging requester clients and their explicit resource, runs the same
+Messaging journey with borrowed tokens, exercises retained-owner restart and
+replacement refusals, and requires Messaging cleanup to leave the owner
+running.
 Each PostgreSQL suite works in its own schema inside the database the
 URL names and fails, rather than skipping, when the URL is absent. A test
 binary that skips because its database is absent is not database

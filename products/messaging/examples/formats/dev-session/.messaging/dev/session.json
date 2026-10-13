@@ -1,0 +1,30 @@
+{
+  "apiVersion": "id.registrystack.org/formats/messaging/dev-state/v1alpha1",
+  "kind": "MessagingDevState",
+  "owner": "6f1c2a7e-3b4d-4c5e-8f90-a1b2c3d4e5f6",
+  "state": "ready",
+  "containers": [
+    "5555555555555555555555555555555555555555555555555555555555555555",
+    "6666666666666666666666666666666666666666666666666666666666666666",
+    "7777777777777777777777777777777777777777777777777777777777777777"
+  ],
+  "detail": {},
+  "borrowedIssuer": {
+    "project": "/home/operator/registry-owner",
+    "bregctl": "/usr/local/bin/bregctl",
+    "issuer": "http://127.0.0.1:8095",
+    "tokenEndpoint": "http://127.0.0.1:8095/oauth2/token",
+    "resource": "urn:registrystack:messaging:notices",
+    "clients": {
+      "case-system": {
+        "principal": "case-system",
+        "profile": "case-notices",
+        "actorKind": "service"
+      },
+      "operations-console": {
+        "principal": "operations-console",
+        "profile": "operations"
+      }
+    }
+  }
+}

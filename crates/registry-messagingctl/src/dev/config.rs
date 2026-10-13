@@ -73,7 +73,7 @@ pub(super) struct DatabasePasswords {
 /// Write every generated secret and certificate under `root`, a fresh
 /// private session directory whose `secrets/`, `database/`, and `issuer/`
 /// directories exist.
-pub(super) fn generate(root: &Path) -> DevResult<DatabasePasswords> {
+pub(super) fn generate(root: &Path, own_issuer: bool) -> DevResult<DatabasePasswords> {
     let secrets = root.join("secrets");
     write(
         &secrets.join("messaging-audit-key"),
@@ -133,6 +133,9 @@ pub(super) fn generate(root: &Path) -> DevResult<DatabasePasswords> {
           hostssl all all ::/0 scram-sha-256\n",
     )?;
 
+    if !own_issuer {
+        return Ok(passwords);
+    }
     let random = SystemRandom::new();
     let signing = EcdsaKeyPair::generate_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, &random)
         .map_err(|_| failed("the token signing key could not be generated".to_owned()))?;
@@ -197,13 +200,30 @@ pub(super) struct Endpoints {
 
 /// The session's `runtime.yaml`: the schema modeline on the first line,
 /// then `apiVersion` and `kind`, then the members of [`runtime_members`].
+#[cfg(test)]
 pub(super) fn runtime_document(
     project: &Path,
     root: &Path,
     loaded: &LoadedPackage,
     endpoints: &Endpoints,
 ) -> Result<String, serde_norway::Error> {
-    let members = serde_norway::to_string(&runtime_members(project, root, loaded, endpoints))?;
+    runtime_document_with_issuer(project, root, loaded, endpoints, None)
+}
+
+pub(super) fn runtime_document_with_issuer(
+    project: &Path,
+    root: &Path,
+    loaded: &LoadedPackage,
+    endpoints: &Endpoints,
+    borrowed: Option<&super::borrowed::Binding>,
+) -> Result<String, serde_norway::Error> {
+    let mut members = runtime_members(project, root, loaded, endpoints);
+    if let Some(binding) = borrowed {
+        members["authentication"]["oidc"]["issuer"] = json!(binding.issuer);
+        members["authentication"]["oidc"]["audience"] = json!(binding.resource);
+        members["authentication"]["oidc"]["scopeClaim"] = json!("scope");
+    }
+    let members = serde_norway::to_string(&members)?;
     Ok(format!(
         "# yaml-language-server: $schema={MESSAGING_RUNTIME_SCHEMA_ID}\n\
          apiVersion: {MESSAGING_RUNTIME_API_VERSION}\n\
@@ -310,7 +330,7 @@ fn runtime_members(
 }
 
 /// Whether `client` is safe as a file name.
-fn file_safe(client: &str) -> bool {
+pub(super) fn file_safe(client: &str) -> bool {
     !client.is_empty()
         && client.len() <= 128
         && !client.starts_with('.')
