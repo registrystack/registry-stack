@@ -157,11 +157,22 @@ async fn an_unchanged_successor_replaces_an_older_derived_wrapper() {
     };
     let successor = prepare_package(successor_request)
         .expect("unchanged project prepares a compiler-upgrade successor");
-    let [replacement] = successor.manifest().migration_plan.statements.as_slice() else {
-        panic!("the successor carries one retained derived-view replacement");
-    };
-    assert_eq!(replacement.id, "entity.neutral-record.derived.summary.view");
-    assert!(replacement.sql.starts_with("CREATE OR REPLACE VIEW "));
+    let statements = &successor.manifest().migration_plan.statements;
+    assert_eq!(
+        statements
+            .iter()
+            .map(|statement| statement.id.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "entity.neutral-record.source-view",
+            "entity.neutral-record.derived.summary.view"
+        ],
+        "the successor replaces the retained derived view and, because another \
+         compiler generated the predecessor's script, the entity source view"
+    );
+    assert!(statements
+        .iter()
+        .all(|statement| statement.sql.starts_with("CREATE OR REPLACE VIEW ")));
     let successor_root = TempRoot::create();
     successor
         .publish_to_directory(successor_root.path())

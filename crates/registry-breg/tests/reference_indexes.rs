@@ -517,17 +517,25 @@ mod migration {
             .iter()
             .map(|statement| statement.id.as_str())
             .collect::<Vec<_>>();
+        // The baseline still states the script generated with the reference
+        // indexes, which is not the script this compiler generates for the
+        // model without them. That is the mark of a predecessor another
+        // compiler built, so the plan also replaces the retained source views.
         assert_eq!(
             ids,
             vec![
                 "entity.asset.index.reference:owner",
                 "entity.asset.index.reference:site",
+                "entity.asset.source-view",
+                "entity.site.source-view",
             ]
         );
-        assert!(plan
-            .statements
+        assert!(plan.statements[..2]
             .iter()
             .all(|statement| statement.sql.starts_with("CREATE INDEX \"breg_ri_asset_")));
+        assert!(plan.statements[2..].iter().all(|statement| statement
+            .sql
+            .starts_with("CREATE OR REPLACE VIEW registry_source.")));
     }
 
     #[test]
