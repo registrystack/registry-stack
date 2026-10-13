@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- `bregctl dev token` requests a client's registered `issuer.clientResources`
+  audience, matching `dev export-client`. Unmapped clients retain the session's
+  default resource. This lets development workflows obtain valid tokens for
+  independently authorized components through the shared issuer.
+
 ## 0.41.0 - 2026-10-13
 
 - BREAKING: the published `registry-stack-client` Python package, which carries

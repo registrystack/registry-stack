@@ -2541,6 +2541,11 @@ fn token_with_scopes(state: &State, id: &str, scopes: Vec<String>) -> Result<()>
     runtime.block_on(token_async_with_claims(state, id, id, scopes, id))
 }
 
+fn token_resource(state: &State, id: &str) -> Result<String> {
+    let clients = retained_clients(&state.root())?;
+    Ok(config::client_resource(state, &clients, id))
+}
+
 async fn token_async(state: &State, id: &str) -> Result<()> {
     let client = retained_clients(&state.root())?;
     let scopes = client
@@ -2563,6 +2568,7 @@ async fn token_async_with_claims(
     use registry_platform_httputil::TokenProvider;
 
     let root = state.root();
+    let resource = token_resource(state, credential_id)?;
     let issuer = state.issuer_origin();
     let endpoint: url::Url = format!("{issuer}/oauth2/token")
         .parse()
@@ -2583,7 +2589,7 @@ async fn token_async_with_claims(
         token_client_id.to_owned(),
         key,
         &issuer,
-        &state.audience(),
+        &resource,
         scopes,
     )
     .map_err(|error| anyhow::anyhow!("the dev token provider is unusable: {error}"))?;

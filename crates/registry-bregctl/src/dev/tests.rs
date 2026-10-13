@@ -46,6 +46,86 @@ fn rehearsal_token_provider_omits_empty_scopes_and_preserves_explicit_scopes() {
     );
 }
 
+#[test]
+fn dev_token_requests_each_clients_registered_resource_or_the_default() {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let requests = thread::spawn(move || {
+        (0..2)
+            .map(|_| {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+                let mut request = Vec::new();
+                let header_end = loop {
+                    let mut chunk = [0; 4096];
+                    let read = stream.read(&mut chunk).unwrap();
+                    assert!(read > 0, "token request ended before its headers");
+                    request.extend_from_slice(&chunk[..read]);
+                    if let Some(index) = request.windows(4).position(|part| part == b"\r\n\r\n") {
+                        break index + 4;
+                    }
+                };
+                let headers = String::from_utf8(request[..header_end].to_vec()).unwrap();
+                let length = headers
+                    .lines()
+                    .find_map(|line| {
+                        line.to_ascii_lowercase()
+                            .strip_prefix("content-length:")
+                            .map(str::trim)
+                            .map(str::parse::<usize>)
+                    })
+                    .unwrap()
+                    .unwrap();
+                while request.len() < header_end + length {
+                    let mut chunk = [0; 4096];
+                    let read = stream.read(&mut chunk).unwrap();
+                    assert!(read > 0, "token request ended before its body");
+                    request.extend_from_slice(&chunk[..read]);
+                }
+                let fields = url::form_urlencoded::parse(&request[header_end..header_end + length])
+                    .into_owned()
+                    .collect::<BTreeMap<_, _>>();
+                let body = br#"{"access_token":"e30.e30.signature","token_type":"Bearer","expires_in":300}"#;
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                )
+                .unwrap();
+                stream.write_all(body).unwrap();
+                fields
+            })
+            .collect::<Vec<_>>()
+    });
+    let (_temp, mut state, mut clients, files) = fixture();
+    state.issuer_port = port;
+    let resource = "urn:example:messaging";
+    clients
+        .clients
+        .iter_mut()
+        .find(|client| client.id == "source")
+        .unwrap()
+        .access_profiles
+        .clear();
+    clients.issuer.resources.push(config::IssuerResource {
+        audience: resource.into(),
+        scopes: vec!["registry:evidence:lookup".into()],
+    });
+    clients
+        .issuer
+        .client_resources
+        .insert("source".into(), resource.into());
+    initialize(&state.root(), &state, &clients, &files).unwrap();
+
+    token_with_scopes(&state, "source", vec!["registry:evidence:lookup".into()]).unwrap();
+    token_with_scopes(&state, "operator", vec!["registry:generic:operate".into()]).unwrap();
+    let requests = requests.join().unwrap();
+    assert_eq!(requests[0]["resource"], resource);
+    assert_eq!(requests[0]["scope"], "registry:evidence:lookup");
+    assert_eq!(requests[1]["resource"], state.audience());
+    assert_eq!(requests[1]["scope"], "registry:generic:operate");
+}
+
 pub(super) fn fixture() -> (tempfile::TempDir, State, Clients, BTreeMap<String, Vec<u8>>) {
     let temporary = tempfile::tempdir().expect("temporary");
     let project = fs::canonicalize(temporary.path()).expect("canonical");
