@@ -1510,6 +1510,42 @@ fn unchanged_derived_relation_emits_compiler_owned_view_replacement() {
     );
 }
 
+#[test]
+fn authored_index_ends_with_the_record_id_and_a_reference_index_does_not() {
+    let candidate = compile_variant(Variant::ReferenceConstraintIndex);
+    let names = &candidate.physical_names().entities["asset"];
+    let statement = |id: &str| {
+        candidate
+            .ddl()
+            .statements
+            .iter()
+            .find(|statement| statement.id == id)
+            .expect("candidate carries the statement")
+            .sql
+            .as_str()
+    };
+    let column = |field: &str| format!("\"{}\"", names.fields[field]);
+
+    assert_eq!(
+        statement("entity.asset.index.code-idx"),
+        format!(
+            "CREATE INDEX \"{}\" ON registry_data.\"{}\" ({}, record_id)",
+            names.indexes["code-idx"],
+            names.table,
+            column("code"),
+        )
+    );
+    assert_eq!(
+        statement("entity.asset.index.reference:site"),
+        format!(
+            "CREATE INDEX \"{}\" ON registry_data.\"{}\" ({})",
+            names.indexes["reference:site"],
+            names.table,
+            column("site"),
+        )
+    );
+}
+
 #[cfg(feature = "tooling")]
 #[test]
 fn unrelated_reviewed_change_rebuilds_every_view_around_a_retained_derived_relation() {
