@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.41.0 - 2026-10-13
+
+- No user-visible product changes in this release.
+
 ## v0.40.0 - 2026-10-11
 
 - Runtime file flags use the help text "Runtime configuration file" and

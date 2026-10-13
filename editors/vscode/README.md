@@ -40,7 +40,7 @@ and virtual workspaces.
 
 ## Install and launch
 
-Prerequisites are Node.js 22 or newer, the `code` command-line tool, and a matching
+Prerequisites are Node.js 24 or newer, the `code` command-line tool, and a matching
 `evidencectl`, which embeds the language server.
 
 Configure the project's maintained schemas and native validation task from the repository root:

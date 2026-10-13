@@ -274,6 +274,10 @@ select an opaque immediate-action binding only after validating its operation,
 profile, source/package identity, route, input contracts, bounds, target
 condition requirements, and permitted result effects.
 
+An immediate-action descriptor may include `requiredCapabilities`; absence is
+equivalent to an empty list. A client does not promote an action when the list
+contains a capability it does not understand.
+
 Input descriptors distinguish requiredness from nullability and retain the
 owning action's input mode and bounds. Target-condition retrieval and invocation
 are separate explicit methods. Invocation retains the original input,
@@ -286,11 +290,39 @@ or replace execution-time authorization.
 
 Parsed Rust, Node, and Python metadata retains selectors, read paths, vocabulary
 labels, reference-operation details, immediate actions, and change-request
-capabilities. New optional descriptors remain optional when reading older
-servers, but a missing executable request contract returns an unsupported
-selection error. Older strict clients may reject added metadata members, so
-upgrade clients and servers together. These descriptors expose existing runtime
-capabilities without changing permissions, history retention, or database schema.
+capabilities. Clients ignore unknown object members but still refuse duplicate
+members, exceeded resource bounds, missing required members, and known members
+with the wrong type. A missing executable request contract returns an unsupported
+selection error. `requiredCapabilities` is the must-understand gate: an unknown
+capability disables only the operation that names it, while other operations in
+the same document remain usable. An engine addition that changes how an existing
+member must be interpreted or executed must add a new `requiredCapabilities`
+value; every other additive member is ignorable. The engine still authorizes every
+request at execution time.
+
+Well-formed values newer than the client are isolated at the smallest supported
+discovery or selection boundary:
+
+| Unsupported vocabulary | Client behavior |
+| --- | --- |
+| Statistical period kind, granularity, reserved dimension code, or operation | Omits the affected dataset; supported datasets remain available. |
+| Change-request review type, approved mode, planner kind/ABI, or write/effect operation | Omits that entity's descriptive change-request capability; lifecycle execution remains separately capability-gated. |
+| Selector value origin | Omits the affected selector after validating its fields and references. |
+| Spatial CRS or semantics | Omits that typed query capability; the rest of the operation remains available. |
+| Temporal mode | Retains the `temporal` descriptor as served, uninterpreted; the rest of the operation remains available. Null still means the collection is not temporal. |
+| Operation kind or immediate-action input mode | Retains an inert descriptor and refuses unsupported executable selection. |
+| Attachment classification, verification, or route semantics | Refuses only the requested slot selection. |
+
+Unsupported values are never interpreted as supported values. Malformed required
+common members or supported-variant fields, duplicate identifiers, resource
+bounds, and binding or reference integrity failures still refuse the document. Unsupported `metadataVersion`,
+entity schema identity, generated route identity, and `readableRequestFields`
+values also refuse the document: these anchor its grammar, execution bindings,
+or disclosure grants. Unknown optional object members remain ignorable within
+those boundaries.
+
+These descriptors expose existing runtime capabilities without changing
+permissions, history retention, or database schema.
 
 A successful `GET /v1/registry` response carries a `Registry-Engine-Version`
 header naming the engine release that served it, the same value `breg --version`

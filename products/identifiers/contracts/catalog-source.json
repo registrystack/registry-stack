@@ -75,6 +75,21 @@
   ],
   "referenceExclusions": [
     {
+      "glob": "crates/registry-breg-client-node/__test__/binding.test.js",
+      "classification": "fixture",
+      "reason": "Unknown future Base Registry Engine Problem codes are synthetic test inputs outside the active resolver catalog by design."
+    },
+    {
+      "glob": "crates/registry-breg-client-py/tests/python/test_errors.py",
+      "classification": "fixture",
+      "reason": "Unknown future Base Registry Engine Problem codes are synthetic test inputs outside the active resolver catalog by design."
+    },
+    {
+      "glob": "crates/registry-breg-client/tests/http_boundary.rs",
+      "classification": "fixture",
+      "reason": "Unknown future Base Registry Engine Problem codes are synthetic test inputs outside the active resolver catalog by design."
+    },
+    {
       "glob": "crates/registry-manifest-core/tests/**",
       "classification": "fixture",
       "reason": "Manifest test shapes are local conformance fixtures, not Registry Stack identifier contracts."

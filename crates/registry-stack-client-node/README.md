@@ -10,7 +10,7 @@ Registry Stack.
 npm install "@registrystack/client@<version>"
 ```
 
-Requires Node.js 22.12 or newer. Supported targets are macOS arm64, Linux
+Requires Node.js 24.11 or newer. Supported targets are macOS arm64, Linux
 arm64 with glibc, and Linux x64 with glibc; installing the package pulls in
 one platform-specific optional dependency containing all seven native
 bindings.

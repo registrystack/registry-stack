@@ -1,0 +1,76 @@
+apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
+journeys:
+  - id: register-and-correct-dossier
+    steps:
+      - id: create-subject
+        entity: subject
+        accessProfile: dossier-registrar
+        claims:
+          principal: synthetic-dossier-registrar
+          scopes: [registry:dossier:register]
+          purpose: dossier-registration
+        request:
+          type: create
+          data:
+            registryCode: SUBJECT-001
+            displayName: Synthetic subject
+        expect:
+          outcome: success
+          status: 201
+          fields:
+            registryCode: SUBJECT-001
+            displayName: Synthetic subject
+        capture: subject
+      - id: create-dossier-with-subject
+        entity: dossier
+        accessProfile: dossier-registrar
+        claims:
+          principal: synthetic-dossier-registrar
+          scopes: [registry:dossier:register]
+          purpose: dossier-registration
+        request:
+          type: create
+          data:
+            subject: {recordCapture: subject}
+            description: Initial description
+        expect:
+          outcome: success
+          status: 201
+          fields:
+            description: Initial description
+        capture: dossier
+      - id: read-dossier-for-correction
+        entity: dossier
+        accessProfile: dossier-corrector
+        claims:
+          principal: synthetic-dossier-corrector
+          scopes: [registry:dossier:correct]
+          purpose: dossier-correction
+        request:
+          type: get
+          recordCapture: dossier
+        expect:
+          outcome: success
+          status: 200
+          fields:
+            description: Initial description
+        capture: dossier-for-correction
+      - id: correct-description
+        entity: dossier
+        accessProfile: dossier-corrector
+        claims:
+          principal: synthetic-dossier-corrector
+          scopes: [registry:dossier:correct]
+          purpose: dossier-correction
+        request:
+          type: patch
+          recordCapture: dossier-for-correction
+          etagCapture: dossier-for-correction
+          changes:
+            - {field: description, value: Corrected description}
+        expect:
+          outcome: success
+          status: 200
+          fields:
+            description: Corrected description

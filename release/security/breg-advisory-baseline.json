@@ -27,7 +27,7 @@
       "sha256:7db505d90756626f425c6c5468eca565c82f589b144ecaa4f411ad9bbf79e614"
     ],
     "application_layer_ids": [
-      "sha256:207675edfb29ed0b3e5084eb008a6c10ab00bc85587d91905edfe2488712e0bf",
+      "sha256:fd46c67622a80eee6636fed0e8c04ebc1bfbb2363c9cb1b34a39250312c499ad",
       "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
     ],
     "config": {
@@ -51,7 +51,7 @@
       ],
       "stop_signal": ""
     },
-    "definition_digest": "sha256:493d954527c893584289a870f55a70bf863a18766d821c0519dfb82061ae7044"
+    "definition_digest": "sha256:4b2be79f70c29d41ce114ad17a21a41b5afd1b97c3b87da1670eb9c4300b60a9"
   },
   "policies": [
     {
@@ -74,8 +74,8 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Reviewed the v0.40.0 Linux amd64 breg local reproduction from rehearsal 38153828761 on 2026-10-11. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libc6 2.41-12+deb13u4. The carried libc/resolver implementation remains present. The reviewed application executables import and contain none of ns_printrrf, ns_printrr, ns_sprintrrf, ns_sprintrr or fp_nquery, and no reviewed dynamic lookup selects them. The bounded source paths do not enter the affected TSIG diagnostic-printing functions; ordinary resolver initialization does not establish that path. The reviewed reports exposure/breg.json and exposure/breg.bregctl.json record no review-required dynamic lookup in /usr/local/bin/breg and /usr/local/bin/bregctl; their resolved constant lookups select no affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The existing owner, invalidation triggers and 2026-10-20 expiry remain unchanged.",
-      "reviewed_at": "2026-10-11",
+      "rationale": "Reviewed the v0.41.0 Linux amd64 breg local reproduction from rehearsal 38322311043 on 2026-10-12. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libc6 2.41-12+deb13u4. The carried libc/resolver implementation remains present. The reviewed application executables import and contain none of ns_printrrf, ns_printrr, ns_sprintrrf, ns_sprintrr or fp_nquery, and no reviewed dynamic lookup selects them. The bounded source paths do not enter the affected TSIG diagnostic-printing functions; ordinary resolver initialization does not establish that path. The reviewed reports exposure/breg.json and exposure/breg.bregctl.json record no review-required dynamic lookup in /usr/local/bin/breg and /usr/local/bin/bregctl; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The existing owner, invalidation triggers and 2026-10-20 expiry remain unchanged.",
+      "reviewed_at": "2026-10-12",
       "expires_at": "2026-10-20",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -92,14 +92,14 @@
         "runtime_config_changed",
         "runtime_base_changed"
       ],
-      "runtime_definition_digest": "sha256:493d954527c893584289a870f55a70bf863a18766d821c0519dfb82061ae7044",
-      "component_layer_id": "sha256:207675edfb29ed0b3e5084eb008a6c10ab00bc85587d91905edfe2488712e0bf",
+      "runtime_definition_digest": "sha256:4b2be79f70c29d41ce114ad17a21a41b5afd1b97c3b87da1670eb9c4300b60a9",
+      "component_layer_id": "sha256:fd46c67622a80eee6636fed0e8c04ebc1bfbb2363c9cb1b34a39250312c499ad",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:d0719e66889ac76af3549699288bcb1ef46ed5d8c618ceb656055be7500332b7",
-        "reference_source_revision": "10e0e22997a2e59396cdadf7894be53eca261f67",
+        "reference_image_digest": "sha256:15046633fb4d312ba55f4f1510e8e2f767dd48d75b1713805461d24eb7aeb380",
+        "reference_source_revision": "b2c781a930d4eabb4a896a516e5d9ed4e6ebdb62",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:493d954527c893584289a870f55a70bf863a18766d821c0519dfb82061ae7044",
+        "runtime_definition_digest": "sha256:4b2be79f70c29d41ce114ad17a21a41b5afd1b97c3b87da1670eb9c4300b60a9",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -119,10 +119,10 @@
           },
           {
             "path": "/usr/local/bin/breg",
-            "sha256": "sha256:6622c6c63c3f0b8946224da61bd740dbda19deabf444636fab6ee88252cefd27"
+            "sha256": "sha256:c460b8afe9a8bf20d98256024cc8914049efb4e07070ddf22945d5eb90fce98c"
           }
         ],
-        "definition_digest": "sha256:e30fa48acc0d1e69ab1ab164dac65ca164f38a4b490b8a4bae9f5e09c23aa161"
+        "definition_digest": "sha256:f419707ce7e956130d98bd2945796fd4e9283d88705544ec43f3747965dc2fc6"
       }
     },
     {
@@ -132,8 +132,8 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Reviewed the v0.40.0 Linux amd64 breg local reproduction from rehearsal 38153828761 on 2026-10-11. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libc6 2.41-12+deb13u4. The carried libc exports strfmon, strfmon_l and __strfmon_l. The reviewed application executables neither import nor contain strfmon or strfmon_l, and no reviewed dynamic lookup selects them. The bounded source paths contain no monetary-format call or caller-controlled right-justified monetary-format width path. The reviewed reports exposure/breg.json and exposure/breg.bregctl.json record no review-required dynamic lookup in /usr/local/bin/breg and /usr/local/bin/bregctl; their resolved constant lookups select no affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The existing owner, invalidation triggers and 2026-10-20 expiry remain unchanged.",
-      "reviewed_at": "2026-10-11",
+      "rationale": "Reviewed the v0.41.0 Linux amd64 breg local reproduction from rehearsal 38322311043 on 2026-10-12. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libc6 2.41-12+deb13u4. The carried libc exports strfmon, strfmon_l and __strfmon_l. The reviewed application executables neither import nor contain strfmon or strfmon_l, and no reviewed dynamic lookup selects them. The bounded source paths contain no monetary-format call or caller-controlled right-justified monetary-format width path. The reviewed reports exposure/breg.json and exposure/breg.bregctl.json record no review-required dynamic lookup in /usr/local/bin/breg and /usr/local/bin/bregctl; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The existing owner, invalidation triggers and 2026-10-20 expiry remain unchanged.",
+      "reviewed_at": "2026-10-12",
       "expires_at": "2026-10-20",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -150,14 +150,14 @@
         "runtime_config_changed",
         "runtime_base_changed"
       ],
-      "runtime_definition_digest": "sha256:493d954527c893584289a870f55a70bf863a18766d821c0519dfb82061ae7044",
-      "component_layer_id": "sha256:207675edfb29ed0b3e5084eb008a6c10ab00bc85587d91905edfe2488712e0bf",
+      "runtime_definition_digest": "sha256:4b2be79f70c29d41ce114ad17a21a41b5afd1b97c3b87da1670eb9c4300b60a9",
+      "component_layer_id": "sha256:fd46c67622a80eee6636fed0e8c04ebc1bfbb2363c9cb1b34a39250312c499ad",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:d0719e66889ac76af3549699288bcb1ef46ed5d8c618ceb656055be7500332b7",
-        "reference_source_revision": "10e0e22997a2e59396cdadf7894be53eca261f67",
+        "reference_image_digest": "sha256:15046633fb4d312ba55f4f1510e8e2f767dd48d75b1713805461d24eb7aeb380",
+        "reference_source_revision": "b2c781a930d4eabb4a896a516e5d9ed4e6ebdb62",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:493d954527c893584289a870f55a70bf863a18766d821c0519dfb82061ae7044",
+        "runtime_definition_digest": "sha256:4b2be79f70c29d41ce114ad17a21a41b5afd1b97c3b87da1670eb9c4300b60a9",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -177,10 +177,10 @@
           },
           {
             "path": "/usr/local/bin/breg",
-            "sha256": "sha256:6622c6c63c3f0b8946224da61bd740dbda19deabf444636fab6ee88252cefd27"
+            "sha256": "sha256:c460b8afe9a8bf20d98256024cc8914049efb4e07070ddf22945d5eb90fce98c"
           }
         ],
-        "definition_digest": "sha256:e30fa48acc0d1e69ab1ab164dac65ca164f38a4b490b8a4bae9f5e09c23aa161"
+        "definition_digest": "sha256:f419707ce7e956130d98bd2945796fd4e9283d88705544ec43f3747965dc2fc6"
       }
     },
     {
@@ -190,8 +190,8 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Reviewed the v0.40.0 Linux amd64 breg local reproduction from rehearsal 38153828761 on 2026-10-11. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports not-fixed with no fixed version for zlib1g 1:1.3.dfsg+really1.3.1-1+b1. The base carries zlib, including gzwrite, gzfwrite, gzprintf and gzvprintf. The reviewed application executables neither need libz nor contain libz.so, gz_vacate, gzwrite, gzfwrite, gzprintf or gzvprintf. No reviewed dynamic lookup opens that closure, and the bounded source paths expose no stalled gzip-write followed by formatted-output operation. The reviewed reports exposure/breg.json and exposure/breg.bregctl.json record no review-required dynamic lookup in /usr/local/bin/breg and /usr/local/bin/bregctl; their resolved constant lookups select no affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The existing owner, invalidation triggers and 2026-10-20 expiry remain unchanged.",
-      "reviewed_at": "2026-10-11",
+      "rationale": "Reviewed the v0.41.0 Linux amd64 breg local reproduction from rehearsal 38322311043 on 2026-10-12. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports not-fixed with no fixed version for zlib1g 1:1.3.dfsg+really1.3.1-1+b1. The base carries zlib, including gzwrite, gzfwrite, gzprintf and gzvprintf. The reviewed application executables neither need libz nor contain libz.so, gz_vacate, gzwrite, gzfwrite, gzprintf or gzvprintf. No reviewed dynamic lookup opens that closure, and the bounded source paths expose no stalled gzip-write followed by formatted-output operation. The reviewed reports exposure/breg.json and exposure/breg.bregctl.json record no review-required dynamic lookup in /usr/local/bin/breg and /usr/local/bin/bregctl; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The existing owner, invalidation triggers and 2026-10-20 expiry remain unchanged.",
+      "reviewed_at": "2026-10-12",
       "expires_at": "2026-10-20",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -208,14 +208,14 @@
         "runtime_config_changed",
         "runtime_base_changed"
       ],
-      "runtime_definition_digest": "sha256:493d954527c893584289a870f55a70bf863a18766d821c0519dfb82061ae7044",
+      "runtime_definition_digest": "sha256:4b2be79f70c29d41ce114ad17a21a41b5afd1b97c3b87da1670eb9c4300b60a9",
       "component_layer_id": "sha256:e4ba966d7f0527dfe0fcb559e4e18d4da42c4e6beae924719255e0dedb554ed0",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:d0719e66889ac76af3549699288bcb1ef46ed5d8c618ceb656055be7500332b7",
-        "reference_source_revision": "10e0e22997a2e59396cdadf7894be53eca261f67",
+        "reference_image_digest": "sha256:15046633fb4d312ba55f4f1510e8e2f767dd48d75b1713805461d24eb7aeb380",
+        "reference_source_revision": "b2c781a930d4eabb4a896a516e5d9ed4e6ebdb62",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:493d954527c893584289a870f55a70bf863a18766d821c0519dfb82061ae7044",
+        "runtime_definition_digest": "sha256:4b2be79f70c29d41ce114ad17a21a41b5afd1b97c3b87da1670eb9c4300b60a9",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -235,10 +235,10 @@
           },
           {
             "path": "/usr/local/bin/breg",
-            "sha256": "sha256:6622c6c63c3f0b8946224da61bd740dbda19deabf444636fab6ee88252cefd27"
+            "sha256": "sha256:c460b8afe9a8bf20d98256024cc8914049efb4e07070ddf22945d5eb90fce98c"
           }
         ],
-        "definition_digest": "sha256:e30fa48acc0d1e69ab1ab164dac65ca164f38a4b490b8a4bae9f5e09c23aa161"
+        "definition_digest": "sha256:f419707ce7e956130d98bd2945796fd4e9283d88705544ec43f3747965dc2fc6"
       }
     },
     {
@@ -248,8 +248,8 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Reviewed the v0.40.0 Linux amd64 breg local reproduction from rehearsal 38153828761 on 2026-10-11. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for gcc-14-base 14.2.0-19. The existing exception concerns GCC PR127656 and a C++ __gnu_pbds binary-heap template instantiation. The relevant base libraries and reviewed application executables contain no __gnu_pbds or binary_heap names. The application executables need none of libstdc++, libgcc_s or libgomp, and the bounded source and normal-dependency review found no affected template instantiation. The carried package remains vulnerable according to the scan; this is a non-reachability decision, not a dependency fix. The reviewed reports exposure/breg.json and exposure/breg.bregctl.json record no review-required dynamic lookup in /usr/local/bin/breg and /usr/local/bin/bregctl; their resolved constant lookups select no affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The existing owner, invalidation triggers and 2026-10-20 expiry remain unchanged.",
-      "reviewed_at": "2026-10-11",
+      "rationale": "Reviewed the v0.41.0 Linux amd64 breg local reproduction from rehearsal 38322311043 on 2026-10-12. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for gcc-14-base 14.2.0-19. The existing exception concerns GCC PR127656 and a C++ __gnu_pbds binary-heap template instantiation. The relevant base libraries and reviewed application executables contain no __gnu_pbds or binary_heap names. The application executables need none of libstdc++, libgcc_s or libgomp, and the bounded source and normal-dependency review found no affected template instantiation. The carried package remains vulnerable according to the scan; this is a non-reachability decision, not a dependency fix. The reviewed reports exposure/breg.json and exposure/breg.bregctl.json record no review-required dynamic lookup in /usr/local/bin/breg and /usr/local/bin/bregctl; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The existing owner, invalidation triggers and 2026-10-20 expiry remain unchanged.",
+      "reviewed_at": "2026-10-12",
       "expires_at": "2026-10-20",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -266,14 +266,14 @@
         "runtime_config_changed",
         "runtime_base_changed"
       ],
-      "runtime_definition_digest": "sha256:493d954527c893584289a870f55a70bf863a18766d821c0519dfb82061ae7044",
+      "runtime_definition_digest": "sha256:4b2be79f70c29d41ce114ad17a21a41b5afd1b97c3b87da1670eb9c4300b60a9",
       "component_layer_id": "sha256:7db505d90756626f425c6c5468eca565c82f589b144ecaa4f411ad9bbf79e614",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:d0719e66889ac76af3549699288bcb1ef46ed5d8c618ceb656055be7500332b7",
-        "reference_source_revision": "10e0e22997a2e59396cdadf7894be53eca261f67",
+        "reference_image_digest": "sha256:15046633fb4d312ba55f4f1510e8e2f767dd48d75b1713805461d24eb7aeb380",
+        "reference_source_revision": "b2c781a930d4eabb4a896a516e5d9ed4e6ebdb62",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:493d954527c893584289a870f55a70bf863a18766d821c0519dfb82061ae7044",
+        "runtime_definition_digest": "sha256:4b2be79f70c29d41ce114ad17a21a41b5afd1b97c3b87da1670eb9c4300b60a9",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -293,10 +293,10 @@
           },
           {
             "path": "/usr/local/bin/breg",
-            "sha256": "sha256:6622c6c63c3f0b8946224da61bd740dbda19deabf444636fab6ee88252cefd27"
+            "sha256": "sha256:c460b8afe9a8bf20d98256024cc8914049efb4e07070ddf22945d5eb90fce98c"
           }
         ],
-        "definition_digest": "sha256:e30fa48acc0d1e69ab1ab164dac65ca164f38a4b490b8a4bae9f5e09c23aa161"
+        "definition_digest": "sha256:f419707ce7e956130d98bd2945796fd4e9283d88705544ec43f3747965dc2fc6"
       }
     },
     {
@@ -306,8 +306,8 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Reviewed the v0.40.0 Linux amd64 breg local reproduction from rehearsal 38153828761 on 2026-10-11. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libgcc-s1 14.2.0-19. The existing exception concerns GCC PR127656 and a C++ __gnu_pbds binary-heap template instantiation. The relevant base libraries and reviewed application executables contain no __gnu_pbds or binary_heap names. The application executables need none of libstdc++, libgcc_s or libgomp, and the bounded source and normal-dependency review found no affected template instantiation. The carried package remains vulnerable according to the scan; this is a non-reachability decision, not a dependency fix. The reviewed reports exposure/breg.json and exposure/breg.bregctl.json record no review-required dynamic lookup in /usr/local/bin/breg and /usr/local/bin/bregctl; their resolved constant lookups select no affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The existing owner, invalidation triggers and 2026-10-20 expiry remain unchanged.",
-      "reviewed_at": "2026-10-11",
+      "rationale": "Reviewed the v0.41.0 Linux amd64 breg local reproduction from rehearsal 38322311043 on 2026-10-12. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libgcc-s1 14.2.0-19. The existing exception concerns GCC PR127656 and a C++ __gnu_pbds binary-heap template instantiation. The relevant base libraries and reviewed application executables contain no __gnu_pbds or binary_heap names. The application executables need none of libstdc++, libgcc_s or libgomp, and the bounded source and normal-dependency review found no affected template instantiation. The carried package remains vulnerable according to the scan; this is a non-reachability decision, not a dependency fix. The reviewed reports exposure/breg.json and exposure/breg.bregctl.json record no review-required dynamic lookup in /usr/local/bin/breg and /usr/local/bin/bregctl; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The existing owner, invalidation triggers and 2026-10-20 expiry remain unchanged.",
+      "reviewed_at": "2026-10-12",
       "expires_at": "2026-10-20",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -324,14 +324,14 @@
         "runtime_config_changed",
         "runtime_base_changed"
       ],
-      "runtime_definition_digest": "sha256:493d954527c893584289a870f55a70bf863a18766d821c0519dfb82061ae7044",
+      "runtime_definition_digest": "sha256:4b2be79f70c29d41ce114ad17a21a41b5afd1b97c3b87da1670eb9c4300b60a9",
       "component_layer_id": "sha256:c16b2ec4b1493bad1b1de23d659c899e60abb166bda756d02792f0a03ba54a43",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:d0719e66889ac76af3549699288bcb1ef46ed5d8c618ceb656055be7500332b7",
-        "reference_source_revision": "10e0e22997a2e59396cdadf7894be53eca261f67",
+        "reference_image_digest": "sha256:15046633fb4d312ba55f4f1510e8e2f767dd48d75b1713805461d24eb7aeb380",
+        "reference_source_revision": "b2c781a930d4eabb4a896a516e5d9ed4e6ebdb62",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:493d954527c893584289a870f55a70bf863a18766d821c0519dfb82061ae7044",
+        "runtime_definition_digest": "sha256:4b2be79f70c29d41ce114ad17a21a41b5afd1b97c3b87da1670eb9c4300b60a9",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -351,10 +351,10 @@
           },
           {
             "path": "/usr/local/bin/breg",
-            "sha256": "sha256:6622c6c63c3f0b8946224da61bd740dbda19deabf444636fab6ee88252cefd27"
+            "sha256": "sha256:c460b8afe9a8bf20d98256024cc8914049efb4e07070ddf22945d5eb90fce98c"
           }
         ],
-        "definition_digest": "sha256:e30fa48acc0d1e69ab1ab164dac65ca164f38a4b490b8a4bae9f5e09c23aa161"
+        "definition_digest": "sha256:f419707ce7e956130d98bd2945796fd4e9283d88705544ec43f3747965dc2fc6"
       }
     },
     {
@@ -364,8 +364,8 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Reviewed the v0.40.0 Linux amd64 breg local reproduction from rehearsal 38153828761 on 2026-10-11. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libgomp1 14.2.0-19. The existing exception concerns GCC PR127656 and a C++ __gnu_pbds binary-heap template instantiation. The relevant base libraries and reviewed application executables contain no __gnu_pbds or binary_heap names. The application executables need none of libstdc++, libgcc_s or libgomp, and the bounded source and normal-dependency review found no affected template instantiation. The carried package remains vulnerable according to the scan; this is a non-reachability decision, not a dependency fix. The reviewed reports exposure/breg.json and exposure/breg.bregctl.json record no review-required dynamic lookup in /usr/local/bin/breg and /usr/local/bin/bregctl; their resolved constant lookups select no affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The existing owner, invalidation triggers and 2026-10-20 expiry remain unchanged.",
-      "reviewed_at": "2026-10-11",
+      "rationale": "Reviewed the v0.41.0 Linux amd64 breg local reproduction from rehearsal 38322311043 on 2026-10-12. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libgomp1 14.2.0-19. The existing exception concerns GCC PR127656 and a C++ __gnu_pbds binary-heap template instantiation. The relevant base libraries and reviewed application executables contain no __gnu_pbds or binary_heap names. The application executables need none of libstdc++, libgcc_s or libgomp, and the bounded source and normal-dependency review found no affected template instantiation. The carried package remains vulnerable according to the scan; this is a non-reachability decision, not a dependency fix. The reviewed reports exposure/breg.json and exposure/breg.bregctl.json record no review-required dynamic lookup in /usr/local/bin/breg and /usr/local/bin/bregctl; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The existing owner, invalidation triggers and 2026-10-20 expiry remain unchanged.",
+      "reviewed_at": "2026-10-12",
       "expires_at": "2026-10-20",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -382,14 +382,14 @@
         "runtime_config_changed",
         "runtime_base_changed"
       ],
-      "runtime_definition_digest": "sha256:493d954527c893584289a870f55a70bf863a18766d821c0519dfb82061ae7044",
+      "runtime_definition_digest": "sha256:4b2be79f70c29d41ce114ad17a21a41b5afd1b97c3b87da1670eb9c4300b60a9",
       "component_layer_id": "sha256:1f5d28bd51650f429293f7730ede274b81dc0744aa918bc887133c4ad610258c",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:d0719e66889ac76af3549699288bcb1ef46ed5d8c618ceb656055be7500332b7",
-        "reference_source_revision": "10e0e22997a2e59396cdadf7894be53eca261f67",
+        "reference_image_digest": "sha256:15046633fb4d312ba55f4f1510e8e2f767dd48d75b1713805461d24eb7aeb380",
+        "reference_source_revision": "b2c781a930d4eabb4a896a516e5d9ed4e6ebdb62",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:493d954527c893584289a870f55a70bf863a18766d821c0519dfb82061ae7044",
+        "runtime_definition_digest": "sha256:4b2be79f70c29d41ce114ad17a21a41b5afd1b97c3b87da1670eb9c4300b60a9",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -409,10 +409,10 @@
           },
           {
             "path": "/usr/local/bin/breg",
-            "sha256": "sha256:6622c6c63c3f0b8946224da61bd740dbda19deabf444636fab6ee88252cefd27"
+            "sha256": "sha256:c460b8afe9a8bf20d98256024cc8914049efb4e07070ddf22945d5eb90fce98c"
           }
         ],
-        "definition_digest": "sha256:e30fa48acc0d1e69ab1ab164dac65ca164f38a4b490b8a4bae9f5e09c23aa161"
+        "definition_digest": "sha256:f419707ce7e956130d98bd2945796fd4e9283d88705544ec43f3747965dc2fc6"
       }
     },
     {
@@ -422,8 +422,8 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Reviewed the v0.40.0 Linux amd64 breg local reproduction from rehearsal 38153828761 on 2026-10-11. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libstdc++6 14.2.0-19. The existing exception concerns GCC PR127656 and a C++ __gnu_pbds binary-heap template instantiation. The relevant base libraries and reviewed application executables contain no __gnu_pbds or binary_heap names. The application executables need none of libstdc++, libgcc_s or libgomp, and the bounded source and normal-dependency review found no affected template instantiation. The carried package remains vulnerable according to the scan; this is a non-reachability decision, not a dependency fix. The reviewed reports exposure/breg.json and exposure/breg.bregctl.json record no review-required dynamic lookup in /usr/local/bin/breg and /usr/local/bin/bregctl; their resolved constant lookups select no affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The existing owner, invalidation triggers and 2026-10-20 expiry remain unchanged.",
-      "reviewed_at": "2026-10-11",
+      "rationale": "Reviewed the v0.41.0 Linux amd64 breg local reproduction from rehearsal 38322311043 on 2026-10-12. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libstdc++6 14.2.0-19. The existing exception concerns GCC PR127656 and a C++ __gnu_pbds binary-heap template instantiation. The relevant base libraries and reviewed application executables contain no __gnu_pbds or binary_heap names. The application executables need none of libstdc++, libgcc_s or libgomp, and the bounded source and normal-dependency review found no affected template instantiation. The carried package remains vulnerable according to the scan; this is a non-reachability decision, not a dependency fix. The reviewed reports exposure/breg.json and exposure/breg.bregctl.json record no review-required dynamic lookup in /usr/local/bin/breg and /usr/local/bin/bregctl; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The existing owner, invalidation triggers and 2026-10-20 expiry remain unchanged.",
+      "reviewed_at": "2026-10-12",
       "expires_at": "2026-10-20",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -440,14 +440,14 @@
         "runtime_config_changed",
         "runtime_base_changed"
       ],
-      "runtime_definition_digest": "sha256:493d954527c893584289a870f55a70bf863a18766d821c0519dfb82061ae7044",
+      "runtime_definition_digest": "sha256:4b2be79f70c29d41ce114ad17a21a41b5afd1b97c3b87da1670eb9c4300b60a9",
       "component_layer_id": "sha256:6e18ad80f3d64a8cbbcd1ff2e8a0d5ce7282cf664e816b86183a59d30a618e8a",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:d0719e66889ac76af3549699288bcb1ef46ed5d8c618ceb656055be7500332b7",
-        "reference_source_revision": "10e0e22997a2e59396cdadf7894be53eca261f67",
+        "reference_image_digest": "sha256:15046633fb4d312ba55f4f1510e8e2f767dd48d75b1713805461d24eb7aeb380",
+        "reference_source_revision": "b2c781a930d4eabb4a896a516e5d9ed4e6ebdb62",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:493d954527c893584289a870f55a70bf863a18766d821c0519dfb82061ae7044",
+        "runtime_definition_digest": "sha256:4b2be79f70c29d41ce114ad17a21a41b5afd1b97c3b87da1670eb9c4300b60a9",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -467,10 +467,10 @@
           },
           {
             "path": "/usr/local/bin/breg",
-            "sha256": "sha256:6622c6c63c3f0b8946224da61bd740dbda19deabf444636fab6ee88252cefd27"
+            "sha256": "sha256:c460b8afe9a8bf20d98256024cc8914049efb4e07070ddf22945d5eb90fce98c"
           }
         ],
-        "definition_digest": "sha256:e30fa48acc0d1e69ab1ab164dac65ca164f38a4b490b8a4bae9f5e09c23aa161"
+        "definition_digest": "sha256:f419707ce7e956130d98bd2945796fd4e9283d88705544ec43f3747965dc2fc6"
       }
     },
     {
@@ -480,8 +480,8 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Reviewed the v0.40.0 Linux amd64 breg local reproduction from rehearsal 38153828761 on 2026-10-11. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for gcc-14-base 14.2.0-19. The carried libstdc++ aligned operator-new implementation calls posix_memalign with the unrounded requested size and imports neither aligned_alloc nor memalign. libgcc_s and libgomp define no aligned operator new; libgomp separately imports memalign for its OpenMP allocator. The reviewed application executables need none of libstdc++, libgcc_s or libgomp, import no C++ symbols and contain no aligned operator-new names. The complete representative base-ELF scan found no libstdc++ or libgomp consumer and only libstdc++ itself needing libgcc_s. Relevant base-library bytes match across all ten exports, and every application executable was checked separately. No reviewed application or dynamic lookup reaches that C++ allocation closure. The reviewed reports exposure/breg.json and exposure/breg.bregctl.json record no review-required dynamic lookup in /usr/local/bin/breg and /usr/local/bin/bregctl; their resolved constant lookups select no affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The existing owner, invalidation triggers and 2026-10-20 expiry remain unchanged.",
-      "reviewed_at": "2026-10-11",
+      "rationale": "Reviewed the v0.41.0 Linux amd64 breg local reproduction from rehearsal 38322311043 on 2026-10-12. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for gcc-14-base 14.2.0-19. The carried libstdc++ aligned operator-new implementation calls posix_memalign with the unrounded requested size and imports neither aligned_alloc nor memalign. libgcc_s and libgomp define no aligned operator new; libgomp separately imports memalign for its OpenMP allocator. The reviewed application executables need none of libstdc++, libgcc_s or libgomp, import no C++ symbols and contain no aligned operator-new names. The complete representative base-ELF scan found no libstdc++ or libgomp consumer and only libstdc++ itself needing libgcc_s. Relevant base-library bytes match across all ten exports, and every application executable was checked separately. No reviewed application or dynamic lookup reaches that C++ allocation closure. The reviewed reports exposure/breg.json and exposure/breg.bregctl.json record no review-required dynamic lookup in /usr/local/bin/breg and /usr/local/bin/bregctl; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The existing owner, invalidation triggers and 2026-10-20 expiry remain unchanged.",
+      "reviewed_at": "2026-10-12",
       "expires_at": "2026-10-20",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -498,14 +498,14 @@
         "runtime_config_changed",
         "runtime_base_changed"
       ],
-      "runtime_definition_digest": "sha256:493d954527c893584289a870f55a70bf863a18766d821c0519dfb82061ae7044",
+      "runtime_definition_digest": "sha256:4b2be79f70c29d41ce114ad17a21a41b5afd1b97c3b87da1670eb9c4300b60a9",
       "component_layer_id": "sha256:7db505d90756626f425c6c5468eca565c82f589b144ecaa4f411ad9bbf79e614",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:d0719e66889ac76af3549699288bcb1ef46ed5d8c618ceb656055be7500332b7",
-        "reference_source_revision": "10e0e22997a2e59396cdadf7894be53eca261f67",
+        "reference_image_digest": "sha256:15046633fb4d312ba55f4f1510e8e2f767dd48d75b1713805461d24eb7aeb380",
+        "reference_source_revision": "b2c781a930d4eabb4a896a516e5d9ed4e6ebdb62",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:493d954527c893584289a870f55a70bf863a18766d821c0519dfb82061ae7044",
+        "runtime_definition_digest": "sha256:4b2be79f70c29d41ce114ad17a21a41b5afd1b97c3b87da1670eb9c4300b60a9",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -525,10 +525,10 @@
           },
           {
             "path": "/usr/local/bin/breg",
-            "sha256": "sha256:6622c6c63c3f0b8946224da61bd740dbda19deabf444636fab6ee88252cefd27"
+            "sha256": "sha256:c460b8afe9a8bf20d98256024cc8914049efb4e07070ddf22945d5eb90fce98c"
           }
         ],
-        "definition_digest": "sha256:e30fa48acc0d1e69ab1ab164dac65ca164f38a4b490b8a4bae9f5e09c23aa161"
+        "definition_digest": "sha256:f419707ce7e956130d98bd2945796fd4e9283d88705544ec43f3747965dc2fc6"
       }
     },
     {
@@ -538,8 +538,8 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Reviewed the v0.40.0 Linux amd64 breg local reproduction from rehearsal 38153828761 on 2026-10-11. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libgcc-s1 14.2.0-19. The carried libstdc++ aligned operator-new implementation calls posix_memalign with the unrounded requested size and imports neither aligned_alloc nor memalign. libgcc_s and libgomp define no aligned operator new; libgomp separately imports memalign for its OpenMP allocator. The reviewed application executables need none of libstdc++, libgcc_s or libgomp, import no C++ symbols and contain no aligned operator-new names. The complete representative base-ELF scan found no libstdc++ or libgomp consumer and only libstdc++ itself needing libgcc_s. Relevant base-library bytes match across all ten exports, and every application executable was checked separately. No reviewed application or dynamic lookup reaches that C++ allocation closure. The reviewed reports exposure/breg.json and exposure/breg.bregctl.json record no review-required dynamic lookup in /usr/local/bin/breg and /usr/local/bin/bregctl; their resolved constant lookups select no affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The existing owner, invalidation triggers and 2026-10-20 expiry remain unchanged.",
-      "reviewed_at": "2026-10-11",
+      "rationale": "Reviewed the v0.41.0 Linux amd64 breg local reproduction from rehearsal 38322311043 on 2026-10-12. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libgcc-s1 14.2.0-19. The carried libstdc++ aligned operator-new implementation calls posix_memalign with the unrounded requested size and imports neither aligned_alloc nor memalign. libgcc_s and libgomp define no aligned operator new; libgomp separately imports memalign for its OpenMP allocator. The reviewed application executables need none of libstdc++, libgcc_s or libgomp, import no C++ symbols and contain no aligned operator-new names. The complete representative base-ELF scan found no libstdc++ or libgomp consumer and only libstdc++ itself needing libgcc_s. Relevant base-library bytes match across all ten exports, and every application executable was checked separately. No reviewed application or dynamic lookup reaches that C++ allocation closure. The reviewed reports exposure/breg.json and exposure/breg.bregctl.json record no review-required dynamic lookup in /usr/local/bin/breg and /usr/local/bin/bregctl; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The existing owner, invalidation triggers and 2026-10-20 expiry remain unchanged.",
+      "reviewed_at": "2026-10-12",
       "expires_at": "2026-10-20",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -556,14 +556,14 @@
         "runtime_config_changed",
         "runtime_base_changed"
       ],
-      "runtime_definition_digest": "sha256:493d954527c893584289a870f55a70bf863a18766d821c0519dfb82061ae7044",
+      "runtime_definition_digest": "sha256:4b2be79f70c29d41ce114ad17a21a41b5afd1b97c3b87da1670eb9c4300b60a9",
       "component_layer_id": "sha256:c16b2ec4b1493bad1b1de23d659c899e60abb166bda756d02792f0a03ba54a43",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:d0719e66889ac76af3549699288bcb1ef46ed5d8c618ceb656055be7500332b7",
-        "reference_source_revision": "10e0e22997a2e59396cdadf7894be53eca261f67",
+        "reference_image_digest": "sha256:15046633fb4d312ba55f4f1510e8e2f767dd48d75b1713805461d24eb7aeb380",
+        "reference_source_revision": "b2c781a930d4eabb4a896a516e5d9ed4e6ebdb62",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:493d954527c893584289a870f55a70bf863a18766d821c0519dfb82061ae7044",
+        "runtime_definition_digest": "sha256:4b2be79f70c29d41ce114ad17a21a41b5afd1b97c3b87da1670eb9c4300b60a9",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -583,10 +583,10 @@
           },
           {
             "path": "/usr/local/bin/breg",
-            "sha256": "sha256:6622c6c63c3f0b8946224da61bd740dbda19deabf444636fab6ee88252cefd27"
+            "sha256": "sha256:c460b8afe9a8bf20d98256024cc8914049efb4e07070ddf22945d5eb90fce98c"
           }
         ],
-        "definition_digest": "sha256:e30fa48acc0d1e69ab1ab164dac65ca164f38a4b490b8a4bae9f5e09c23aa161"
+        "definition_digest": "sha256:f419707ce7e956130d98bd2945796fd4e9283d88705544ec43f3747965dc2fc6"
       }
     },
     {
@@ -596,8 +596,8 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Reviewed the v0.40.0 Linux amd64 breg local reproduction from rehearsal 38153828761 on 2026-10-11. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libgomp1 14.2.0-19. The carried libstdc++ aligned operator-new implementation calls posix_memalign with the unrounded requested size and imports neither aligned_alloc nor memalign. libgcc_s and libgomp define no aligned operator new; libgomp separately imports memalign for its OpenMP allocator. The reviewed application executables need none of libstdc++, libgcc_s or libgomp, import no C++ symbols and contain no aligned operator-new names. The complete representative base-ELF scan found no libstdc++ or libgomp consumer and only libstdc++ itself needing libgcc_s. Relevant base-library bytes match across all ten exports, and every application executable was checked separately. No reviewed application or dynamic lookup reaches that C++ allocation closure. The reviewed reports exposure/breg.json and exposure/breg.bregctl.json record no review-required dynamic lookup in /usr/local/bin/breg and /usr/local/bin/bregctl; their resolved constant lookups select no affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The existing owner, invalidation triggers and 2026-10-20 expiry remain unchanged.",
-      "reviewed_at": "2026-10-11",
+      "rationale": "Reviewed the v0.41.0 Linux amd64 breg local reproduction from rehearsal 38322311043 on 2026-10-12. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libgomp1 14.2.0-19. The carried libstdc++ aligned operator-new implementation calls posix_memalign with the unrounded requested size and imports neither aligned_alloc nor memalign. libgcc_s and libgomp define no aligned operator new; libgomp separately imports memalign for its OpenMP allocator. The reviewed application executables need none of libstdc++, libgcc_s or libgomp, import no C++ symbols and contain no aligned operator-new names. The complete representative base-ELF scan found no libstdc++ or libgomp consumer and only libstdc++ itself needing libgcc_s. Relevant base-library bytes match across all ten exports, and every application executable was checked separately. No reviewed application or dynamic lookup reaches that C++ allocation closure. The reviewed reports exposure/breg.json and exposure/breg.bregctl.json record no review-required dynamic lookup in /usr/local/bin/breg and /usr/local/bin/bregctl; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The existing owner, invalidation triggers and 2026-10-20 expiry remain unchanged.",
+      "reviewed_at": "2026-10-12",
       "expires_at": "2026-10-20",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -614,14 +614,14 @@
         "runtime_config_changed",
         "runtime_base_changed"
       ],
-      "runtime_definition_digest": "sha256:493d954527c893584289a870f55a70bf863a18766d821c0519dfb82061ae7044",
+      "runtime_definition_digest": "sha256:4b2be79f70c29d41ce114ad17a21a41b5afd1b97c3b87da1670eb9c4300b60a9",
       "component_layer_id": "sha256:1f5d28bd51650f429293f7730ede274b81dc0744aa918bc887133c4ad610258c",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:d0719e66889ac76af3549699288bcb1ef46ed5d8c618ceb656055be7500332b7",
-        "reference_source_revision": "10e0e22997a2e59396cdadf7894be53eca261f67",
+        "reference_image_digest": "sha256:15046633fb4d312ba55f4f1510e8e2f767dd48d75b1713805461d24eb7aeb380",
+        "reference_source_revision": "b2c781a930d4eabb4a896a516e5d9ed4e6ebdb62",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:493d954527c893584289a870f55a70bf863a18766d821c0519dfb82061ae7044",
+        "runtime_definition_digest": "sha256:4b2be79f70c29d41ce114ad17a21a41b5afd1b97c3b87da1670eb9c4300b60a9",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -641,10 +641,10 @@
           },
           {
             "path": "/usr/local/bin/breg",
-            "sha256": "sha256:6622c6c63c3f0b8946224da61bd740dbda19deabf444636fab6ee88252cefd27"
+            "sha256": "sha256:c460b8afe9a8bf20d98256024cc8914049efb4e07070ddf22945d5eb90fce98c"
           }
         ],
-        "definition_digest": "sha256:e30fa48acc0d1e69ab1ab164dac65ca164f38a4b490b8a4bae9f5e09c23aa161"
+        "definition_digest": "sha256:f419707ce7e956130d98bd2945796fd4e9283d88705544ec43f3747965dc2fc6"
       }
     },
     {
@@ -654,8 +654,8 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Reviewed the v0.40.0 Linux amd64 breg local reproduction from rehearsal 38153828761 on 2026-10-11. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libstdc++6 14.2.0-19. The carried libstdc++ aligned operator-new implementation calls posix_memalign with the unrounded requested size and imports neither aligned_alloc nor memalign. libgcc_s and libgomp define no aligned operator new; libgomp separately imports memalign for its OpenMP allocator. The reviewed application executables need none of libstdc++, libgcc_s or libgomp, import no C++ symbols and contain no aligned operator-new names. The complete representative base-ELF scan found no libstdc++ or libgomp consumer and only libstdc++ itself needing libgcc_s. Relevant base-library bytes match across all ten exports, and every application executable was checked separately. No reviewed application or dynamic lookup reaches that C++ allocation closure. The reviewed reports exposure/breg.json and exposure/breg.bregctl.json record no review-required dynamic lookup in /usr/local/bin/breg and /usr/local/bin/bregctl; their resolved constant lookups select no affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The existing owner, invalidation triggers and 2026-10-20 expiry remain unchanged.",
-      "reviewed_at": "2026-10-11",
+      "rationale": "Reviewed the v0.41.0 Linux amd64 breg local reproduction from rehearsal 38322311043 on 2026-10-12. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libstdc++6 14.2.0-19. The carried libstdc++ aligned operator-new implementation calls posix_memalign with the unrounded requested size and imports neither aligned_alloc nor memalign. libgcc_s and libgomp define no aligned operator new; libgomp separately imports memalign for its OpenMP allocator. The reviewed application executables need none of libstdc++, libgcc_s or libgomp, import no C++ symbols and contain no aligned operator-new names. The complete representative base-ELF scan found no libstdc++ or libgomp consumer and only libstdc++ itself needing libgcc_s. Relevant base-library bytes match across all ten exports, and every application executable was checked separately. No reviewed application or dynamic lookup reaches that C++ allocation closure. The reviewed reports exposure/breg.json and exposure/breg.bregctl.json record no review-required dynamic lookup in /usr/local/bin/breg and /usr/local/bin/bregctl; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The existing owner, invalidation triggers and 2026-10-20 expiry remain unchanged.",
+      "reviewed_at": "2026-10-12",
       "expires_at": "2026-10-20",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -672,14 +672,14 @@
         "runtime_config_changed",
         "runtime_base_changed"
       ],
-      "runtime_definition_digest": "sha256:493d954527c893584289a870f55a70bf863a18766d821c0519dfb82061ae7044",
+      "runtime_definition_digest": "sha256:4b2be79f70c29d41ce114ad17a21a41b5afd1b97c3b87da1670eb9c4300b60a9",
       "component_layer_id": "sha256:6e18ad80f3d64a8cbbcd1ff2e8a0d5ce7282cf664e816b86183a59d30a618e8a",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:d0719e66889ac76af3549699288bcb1ef46ed5d8c618ceb656055be7500332b7",
-        "reference_source_revision": "10e0e22997a2e59396cdadf7894be53eca261f67",
+        "reference_image_digest": "sha256:15046633fb4d312ba55f4f1510e8e2f767dd48d75b1713805461d24eb7aeb380",
+        "reference_source_revision": "b2c781a930d4eabb4a896a516e5d9ed4e6ebdb62",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:493d954527c893584289a870f55a70bf863a18766d821c0519dfb82061ae7044",
+        "runtime_definition_digest": "sha256:4b2be79f70c29d41ce114ad17a21a41b5afd1b97c3b87da1670eb9c4300b60a9",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -699,10 +699,10 @@
           },
           {
             "path": "/usr/local/bin/breg",
-            "sha256": "sha256:6622c6c63c3f0b8946224da61bd740dbda19deabf444636fab6ee88252cefd27"
+            "sha256": "sha256:c460b8afe9a8bf20d98256024cc8914049efb4e07070ddf22945d5eb90fce98c"
           }
         ],
-        "definition_digest": "sha256:e30fa48acc0d1e69ab1ab164dac65ca164f38a4b490b8a4bae9f5e09c23aa161"
+        "definition_digest": "sha256:f419707ce7e956130d98bd2945796fd4e9283d88705544ec43f3747965dc2fc6"
       }
     }
   ]

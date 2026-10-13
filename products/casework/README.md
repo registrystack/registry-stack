@@ -500,9 +500,10 @@ caseworkctl check ./casework
 caseworkctl test ./casework
 ```
 
-`source add` drives the same-version public `bregctl check` and `bregctl explain
-change-requests` interfaces. Preview reports the exact local BReg event and
-read-only service grant additions plus the authority and optional executor runtime candidates. Apply
+`source add` drives the same-version public `bregctl check`, `bregctl explain
+access`, and `bregctl explain change-requests` interfaces. Preview reports the
+exact local BReg event and read-only service grant additions plus the authority
+and optional executor runtime candidates. Apply
 checks a staged copy before changing the authored registry, writes the imported
 source description and runtime candidate, and checks BReg again. It does not
 activate a package, provision an identity provider, or infer authority from the
@@ -527,6 +528,12 @@ and `kind: CaseworkBregSourceDescription`, and lists every paired entity in a
 `requests` array in declaration order, one entry for a source with one
 entity. Requests that share a review authority must agree on its producer
 admission.
+
+The generated reader profile preserves the BReg project's common
+`principalClaim`; source add refuses mixed existing claims. For `sub`, the local
+reader client uses the issuer's verified subject and declares no artificial
+subject claim. This service-reader choice is separate from the explicit stable
+principal claim used by the local human reviewer bridge.
 
 `check` and `test` are offline. Check's `--format json` report carries
 effective inbox limits and the passive target default. When source metadata has been imported, it checks the
@@ -598,9 +605,9 @@ Startup only reads: it refuses a database with no activation, a schema other
 than its own, an active package other than the one it loaded, a source
 generation the ledger has not registered, or an activation recorded split-role
 whose runtime credential can now write the ledger, and each refusal names
-`caseworkctl plan` then `caseworkctl apply`. `casework migrate` and
-`caseworkctl db migrate` were removed; each still parses only to refuse with
-exit 2 and name the two commands. The first `caseworkctl apply` on a database
+`caseworkctl plan` then `caseworkctl apply`. `casework` has no `migrate`
+subcommand and `caseworkctl` has no `db` subcommand: each is refused as an
+unrecognized subcommand with exit 2. The first `caseworkctl apply` on a database
 an earlier release migrated adopts it: it migrates to the current schema and
 records the first activation.
 
@@ -829,7 +836,7 @@ The following operator-supplied variables select the maintained suites:
 | `CASEWORK_CLOCK_TEST_DATABASE_URL` | `--lib clocks::tests::source_clocks_survive_restart_and_preserve_subject_budget` | Its own: the test resets `public` |
 | `CASEWORK_REVIEW_TEST_DATABASE_URL` | `--test review_postgres --test review_http --test review_payment_fixture_postgres` | May be shared: each fixture creates a unique schema |
 | `CASEWORK_REVIEW_MIGRATION_TEST_DATABASE_URL` | `--test review_migration_postgres` | May be shared: the fixture creates a unique schema |
-| `CASEWORK_ASSIGNMENT_TEST_DATABASE_URL` | `--test assignment_postgres` | May be shared: the fixture creates a unique schema |
+| `CASEWORK_ASSIGNMENT_TEST_DATABASE_URL` | `--test assignment_postgres --test task_grant_invalidation` | May be shared: each fixture creates a unique schema |
 | `CASEWORK_ROUTING_TEST_DATABASE_URL` | `--test routing_postgres` | May be shared: the fixture creates a unique schema |
 | `CASEWORK_INBOX_TEST_DATABASE_URL` | `--test inbox_ordering_postgres` | May be shared: the fixture creates a unique schema |
 | `CASEWORK_ACTIVATION_TEST_DATABASE_URL` | `--test activation_postgres` | May be shared: each test creates a unique schema; the split-role tests also create and drop their own login roles, so the URL's role must be allowed to create roles |
@@ -863,7 +870,8 @@ cargo test -p registry-casework --features postgres-test --lib --locked \
   -- --exact clocks::tests::source_clocks_survive_restart_and_preserve_subject_budget
 cargo test -p registry-casework --features postgres-test --locked \
   --test review_postgres --test review_http --test review_payment_fixture_postgres \
-  --test review_migration_postgres --test assignment_postgres --test routing_postgres
+  --test review_migration_postgres --test assignment_postgres --test routing_postgres \
+  --test task_grant_invalidation
 cargo test -p registry-casework --features postgres-test --test inbox_ordering_postgres --locked
 cargo test -p registry-casework --features postgres-test --test activation_postgres --locked
 ```

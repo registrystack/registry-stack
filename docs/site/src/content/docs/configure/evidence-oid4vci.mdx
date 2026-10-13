@@ -120,9 +120,8 @@ curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/downl
 evidence-oid4vci --version
 ```
 
-Starting with v0.38.0, the release roster also admits the separate
-`ghcr.io/registrystack/evidence-oid4vci:<tag>` image. Until a release at or after that boundary is
-published, no public image exists under that name. The image runs
+Releases from v0.38.0 also publish the separate
+`ghcr.io/registrystack/evidence-oid4vci:<tag>` image. The image runs
 `/usr/local/bin/evidence-oid4vci` from Distroless `cc-debian13` as the `nonroot` user. It starts
 `serve` with `/etc/registry-evidence-oid4vci/runtime.yaml` and uses
 `/var/lib/registry-evidence-oid4vci` as its working directory. Mount the runtime file read-only,

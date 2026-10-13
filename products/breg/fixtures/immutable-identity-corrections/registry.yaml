@@ -1,0 +1,87 @@
+apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
+  id: immutable-identity-corrections
+  canonicalBaseIri: https://immutable-identity-corrections.example.gov
+  version: 0.1.0
+  defaultLanguage: en
+package:
+  sourceRevision: immutable-identity-corrections-fixture-0.1.0
+manifestProjection:
+  accessProfile: dossier-corrector
+  classificationCeiling: internal
+  catalog:
+    baseUrl: https://immutable-identity-corrections.example.gov
+    title: Immutable identity correction catalog
+    description: Portable metadata for dossiers with fixed subjects and correctable descriptions.
+    publisher:
+      id: records-authority
+      name: Records Authority
+      iri: https://immutable-identity-corrections.example.gov/authority
+  publicService: {id: dossier-service, title: Dossier registry}
+  datasets:
+    - id: dossiers
+      title: Dossiers
+      description: Dossiers whose subject is fixed after registration.
+      owner: Records Authority
+      status: active
+  dataServices:
+    - id: dossier-api
+      title: Dossier registry API
+      endpointUrl: https://immutable-identity-corrections.example.gov
+      servesDatasets: [dossiers]
+  distributions: []
+
+entities:
+  - id: subject
+    primaryDataset: dossiers
+    route: subjects
+    mutationMode: create-only
+    fields:
+      - {id: registry-code, apiName: registryCode, type: string, required: true, maximumLength: 64, classification: internal}
+      - {id: display-name, apiName: displayName, type: string, required: true, maximumLength: 160, classification: internal}
+    constraints:
+      - {type: unique, fields: [registry-code]}
+  - id: dossier
+    primaryDataset: dossiers
+    route: dossiers
+    mutationMode: mutable
+    fields:
+      - {id: subject, type: reference, target: subject, required: true, classification: internal}
+      - {id: description, type: text, required: true, maximumLength: 2000, classification: internal}
+    constraints:
+      - {type: unique, fields: [subject]}
+
+accessProfiles:
+  - id: dossier-registrar
+    default: true
+    principalClaim: registry_principal
+    requiredScopes: [registry:dossier:register]
+    requiredPurposes: [dossier-registration]
+    permissions:
+      entities:
+        - entity: subject
+          operations: [create, get]
+          readableFields: [registry-code, display-name]
+          writableFields: [registry-code, display-name]
+          rowBoundaries: unrestricted
+        - entity: dossier
+          operations: [create, get]
+          readableFields: [subject, description]
+          writableFields: [subject, description]
+          rowBoundaries: unrestricted
+  - id: dossier-corrector
+    principalClaim: registry_principal
+    requiredScopes: [registry:dossier:correct]
+    requiredPurposes: [dossier-correction]
+    permissions:
+      entities:
+        - entity: subject
+          operations: [get]
+          readableFields: [registry-code, display-name]
+          rowBoundaries: unrestricted
+        - entity: dossier
+          operations: [get, patch]
+          readableFields: [subject, description]
+          writableFields: [description]
+          rowBoundaries: unrestricted

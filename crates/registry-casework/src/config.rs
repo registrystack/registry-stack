@@ -32,9 +32,6 @@ use thiserror::Error;
 
 /// The command that builds a Casework package, named in every package refusal.
 pub const PACKAGE_COMMAND: &str = "caseworkctl package";
-/// The manifest earlier Casework packages carried. A package root holding it
-/// is refused, naming the command that writes the current package.
-pub const RETIRED_PACKAGE_MANIFEST_FILE: &str = "casework.package.json";
 pub const RUNTIME_CONFIG_API_VERSION: &str =
     "id.registrystack.org/formats/casework/runtime/v1alpha1";
 /// The apiVersion an earlier Casework runtime configuration carried.
@@ -139,9 +136,6 @@ pub fn verify_casework_package(
 fn verify_casework_envelope(
     package: &RuntimePackageConfig,
 ) -> Result<VerifiedPackage, RuntimeConfigError> {
-    if std::fs::symlink_metadata(package.root.join(RETIRED_PACKAGE_MANIFEST_FILE)).is_ok() {
-        return Err(RuntimeConfigError::RetiredPackageManifest);
-    }
     let verified = package
         .shared()
         .verify_package(&package_limits(), PACKAGE_COMMAND)
@@ -3062,25 +3056,73 @@ reviewProducers:
         assert!(error.to_string().contains("extra: notes.txt"), "{error}");
     }
 
+    /// The runtime knows no file named `casework.package.json`: one found in
+    /// a package root is refused as any file the package does not list is.
     #[test]
-    fn a_retired_package_manifest_is_refused_with_its_replacement() {
+    fn a_stray_casework_package_json_is_refused_as_any_file_the_package_does_not_list() {
+        const STRAY: &str = "casework.package.json";
         let root = canonical_tempdir();
-        let package = root.path().join("package");
-        std::fs::create_dir(&package).unwrap();
-        std::fs::create_dir_all(package.join("sources")).unwrap();
-        std::fs::write(package.join("casework.yaml"), SOURCE_PROJECT).unwrap();
-        std::fs::write(
-            package.join("sources/professional.json"),
-            SOURCE_DESCRIPTION,
+        let (package, operator, _) = packaged_operator(root.path(), "development-loopback");
+        let refused = || RuntimeConfig::load(&operator).expect_err("the stray file is refused");
+
+        // Beside a package's own files, SHA256SUMS does not list it.
+        std::fs::write(package.join(STRAY), b"{}").unwrap();
+        let error = refused();
+        assert!(
+            matches!(
+                &error,
+                RuntimeConfigError::Package(error)
+                    if matches!(
+                        error.kind(),
+                        PackageErrorKind::Mismatch { changed, missing, extra }
+                            if changed.is_empty() && missing.is_empty() && extra == &[STRAY.to_owned()]
+                    )
+            ),
+            "{error:?}"
+        );
+        assert_eq!(error.code(), "casework.package.invalid");
+        assert_eq!(error.pointer(), "/package/root");
+        let message = error.to_string();
+        assert!(
+            message.contains("extra: casework.package.json"),
+            "{message}"
+        );
+        assert!(message.contains(PACKAGE_COMMAND), "{message}");
+
+        // Listed by SHA256SUMS, it is a file casework.yaml does not name.
+        std::fs::remove_file(package.join(SUM_FILE)).unwrap();
+        registry_platform_config::write_sum_file(
+            &package,
+            None,
+            &package_limits(),
+            PACKAGE_COMMAND,
         )
         .unwrap();
-        std::fs::write(package.join(RETIRED_PACKAGE_MANIFEST_FILE), b"{}").unwrap();
-        let operator = write_operator(
-            root.path(),
-            &operator_value(&package, "development-loopback"),
+        let error = refused();
+        assert!(
+            matches!(
+                &error,
+                RuntimeConfigError::PackageContents { missing, extra }
+                    if missing.is_empty() && extra == &[STRAY.to_owned()]
+            ),
+            "{error:?}"
         );
-        let error = RuntimeConfig::load(&operator).expect_err("the retired manifest is refused");
-        assert!(matches!(error, RuntimeConfigError::RetiredPackageManifest));
+        assert_eq!(error.code(), "casework.package.unexpected-contents");
+        assert!(error.to_string().contains(PACKAGE_COMMAND), "{error}");
+
+        // Without SHA256SUMS, the directory is refused as any directory
+        // `caseworkctl package` did not write is.
+        std::fs::remove_file(package.join(SUM_FILE)).unwrap();
+        let error = refused();
+        assert!(
+            matches!(
+                &error,
+                RuntimeConfigError::Package(error)
+                    if matches!(error.kind(), PackageErrorKind::SumFileMissing)
+            ),
+            "{error:?}"
+        );
+        assert_eq!(error.code(), "casework.package.invalid");
         assert!(error.to_string().contains(PACKAGE_COMMAND), "{error}");
     }
 
@@ -4041,10 +4083,6 @@ pub enum RuntimeConfigError {
     )]
     PackageFileChanged { path: String },
     #[error(
-        "package.root holds casework.package.json, which Casework no longer reads; rebuild the package with `caseworkctl package`, which writes SHA256SUMS"
-    )]
-    RetiredPackageManifest,
-    #[error(
         "package.acknowledgeStrandedWork must be sha256: followed by 64 lowercase hexadecimal digits"
     )]
     InvalidStrandedWorkAcknowledgement,
@@ -4160,7 +4198,6 @@ impl RuntimeConfigError {
             | Self::Package(_)
             | Self::PackageContents { .. }
             | Self::PackageFileChanged { .. }
-            | Self::RetiredPackageManifest
             | Self::SourceDescription
             | Self::Invalid => "",
         }
@@ -4185,7 +4222,6 @@ impl RuntimeConfigError {
             | Self::Package(_)
             | Self::PackageContents { .. }
             | Self::PackageFileChanged { .. }
-            | Self::RetiredPackageManifest
             | Self::SourceDescription => "/package/root".to_owned(),
             Self::Invalid => String::new(),
             _ => pointer_to(&self.member().split('.').collect::<Vec<_>>()),
@@ -4209,7 +4245,6 @@ impl RuntimeConfigError {
             Self::PackageDigest(_) => "casework.package.digest-mismatch",
             Self::PackageContents { .. } => "casework.package.unexpected-contents",
             Self::PackageFileChanged { .. } => "casework.package.file-changed",
-            Self::RetiredPackageManifest => "casework.package.retired-manifest",
             Self::InvalidStrandedWorkAcknowledgement => {
                 "casework.runtime.invalid-stranded-work-acknowledgement"
             }
@@ -4268,8 +4303,7 @@ impl RuntimeConfigError {
             Self::PolicyUnreadable
             | Self::Package(_)
             | Self::PackageContents { .. }
-            | Self::PackageFileChanged { .. }
-            | Self::RetiredPackageManifest => REBUILD_PACKAGE,
+            | Self::PackageFileChanged { .. } => REBUILD_PACKAGE,
             Self::PackageDigest(_) => {
                 "Set package.expectedDigest to the digest `caseworkctl package` reported for the package at package.root, or remove it."
             }
@@ -4346,7 +4380,6 @@ impl RuntimeConfigError {
                 | Self::PackageDigest(_)
                 | Self::PackageContents { .. }
                 | Self::PackageFileChanged { .. }
-                | Self::RetiredPackageManifest
                 | Self::SourceDescription
                 | Self::Invalid
                 | Self::Oidc

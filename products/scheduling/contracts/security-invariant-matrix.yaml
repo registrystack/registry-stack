@@ -50,11 +50,14 @@ invariants:
       observation commits capacity, or a request that waited on a lock commits
       after its access token or grant expired.
     enforcementPoint: >-
+      The runtime file must state taskGrantStatus, and startup refuses a file
+      that omits it or lists no authority. When it lists authorities,
       require_current_task_grant obtains a fresh exact status before every
-      capacity transaction and receipt replay when any taskGrantStatus entry is
-      configured, without holding a database lock. An entirely unconfigured
-      runtime admits only grants with at most 900 seconds remaining. The
-      transaction re-checks the earlier of the verified access-token and grant
+      capacity transaction and receipt replay, without holding a database
+      lock, and refuses a grant from an unlisted source rather than falling
+      back to the offline path. The unchecked-final-fifteen-minutes keyword
+      admits only grants with at most 900 seconds remaining. The transaction
+      re-checks the earlier of the verified access-token and grant
       deadlines after every lock wait and immediately before commit. Status is
       an observation, not a distributed transaction: withdrawal after a
       positive answer can race the local commit until that earlier deadline.
@@ -542,14 +545,14 @@ invariants:
       credential before it binds the listener, compares the ledger's
       identity.databaseId and active package digest with the verified
       package, and writes no activation state. package.expectedDigest still
-      pins the package at package.root. scheduling migrate is removed.
+      pins the package at package.root. serve is the runtime's only command.
     refusal: >-
       Refuse to start when the ledger holds no row, names another package, or
       belongs to another identity.databaseId, and refuse records apply when
       another package is active, naming schedulingctl plan
       --runtime-config FILE then schedulingctl apply --runtime-config FILE;
-      refuse a pin mismatch naming package.expectedDigest; exit 2 for the
-      removed migrate command naming the same two commands.
+      refuse a pin mismatch naming package.expectedDigest; exit 2 as a usage
+      error for any command other than serve.
     negativeTest:
       path: crates/registry-schedulingctl/tests/activation_postgres.rs
       name: startup_refuses_a_database_the_ledger_does_not_name_for_this_package

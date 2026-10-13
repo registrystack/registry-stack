@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import contextlib
 import datetime as dt
+import hashlib
 import importlib.util
 import io
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -237,8 +239,9 @@ class NightlyTest(unittest.TestCase):
                 nightly.identity(tag)
 
     def test_identity_loads_without_tomllib(self):
-        # The native arm64 builder runs the runner's Python 3.10, which has no
-        # tomllib, and imports this module only to check the nightly identity.
+        # The native arm64 builder imports this module only to check the
+        # nightly identity, and that check must load on an interpreter that
+        # has no tomllib.
         script = (
             "import sys\n"
             "sys.modules['tomllib'] = None\n"
@@ -964,8 +967,8 @@ class NightlyTest(unittest.TestCase):
         commands.mkdir()
         scripts = {
             "uname": '#!/bin/sh\ncase "$1" in -s) echo Linux;; -m) echo x86_64;; *) exit 1;; esac\n',
-            "getconf": '#!/bin/sh\necho "glibc 2.35"\n',
-            "ldd": '#!/bin/sh\necho "ldd (GNU libc) 2.35"\n',
+            "getconf": '#!/bin/sh\necho "glibc 2.34"\n',
+            "ldd": '#!/bin/sh\necho "ldd (GNU libc) 2.34"\n',
             # Emulate GNU mv's atomic replacement on macOS as well as Linux.
             "mv": "#!/usr/bin/env python3\nimport os,sys\nos.replace(sys.argv[-2], sys.argv[-1])\n",
             "curl": """#!/usr/bin/env bash
@@ -1044,8 +1047,8 @@ cp "$source" "$destination"
             commands.mkdir()
             scripts = {
                 "uname": f'#!/bin/sh\ncase "$1" in -s) echo {os_name};; -m) echo {arch};; *) exit 1;; esac\n',
-                "getconf": '#!/bin/sh\necho "glibc 2.35"\n',
-                "ldd": '#!/bin/sh\necho "ldd (GNU libc) 2.35"\n',
+                "getconf": '#!/bin/sh\necho "glibc 2.34"\n',
+                "ldd": '#!/bin/sh\necho "ldd (GNU libc) 2.34"\n',
                 # Emulate GNU mv's atomic replacement on macOS as well as Linux.
                 "mv": "#!/usr/bin/env python3\nimport os,sys\nos.replace(sys.argv[-2], sys.argv[-1])\n",
             }
@@ -1095,6 +1098,170 @@ cp "$source" "$destination"
                             ).strip(),
                             f"{binary} {TAG[1:]}",
                         )
+
+    def test_linux_binary_that_cannot_start_never_replaces_the_installed_toolset(self):
+        output = self.assembled()
+        commands = self.root / "commands-unstartable"
+        commands.mkdir()
+        scripts = {
+            "uname": '#!/bin/sh\ncase "$1" in -s) echo Linux;; -m) echo x86_64;; *) exit 1;; esac\n',
+            "getconf": '#!/bin/sh\necho "glibc 2.34"\n',
+            "ldd": '#!/bin/sh\necho "ldd (GNU libc) 2.34"\n',
+            # Emulate GNU mv's atomic replacement on macOS as well as Linux.
+            "mv": "#!/usr/bin/env python3\nimport os,sys\nos.replace(sys.argv[-2], sys.argv[-1])\n",
+        }
+        for name, script in scripts.items():
+            (commands / name).write_text(script)
+            (commands / name).chmod(0o755)
+        # Every binary each installer stages on Linux amd64, the one platform
+        # that carries the Scheduling runtime.
+        toolsets = {
+            "breg": ("breg", "bregctl"),
+            "evidencectl": ("evidence", "evidencectl", "evidence-oid4vci"),
+            "casework": ("casework", "caseworkctl"),
+            "scheduling": ("scheduling", "schedulingctl"),
+        }
+        self.assertEqual(set(toolsets), set(nightly.INSTALLERS))
+
+        def install(product, assets, destination):
+            prefix = nightly.INSTALLERS[product][1]
+            environment = os.environ | {
+                "PATH": str(commands) + os.pathsep + os.environ["PATH"],
+                f"{prefix}_ASSET_DIR": str(assets),
+                f"{prefix}_INSTALL_DIR": str(destination),
+            }
+            environment.pop(f"{prefix}_VERSION", None)
+            return subprocess.run(
+                ["bash", str(output / f"{product}-{TAG}-install.sh")],
+                env=environment,
+                text=True,
+                capture_output=True,
+            )
+
+        def installed(destination, binaries):
+            return (
+                sorted(path.name for path in destination.iterdir()),
+                [(destination / binary).resolve() for binary in binaries],
+                [
+                    subprocess.check_output(
+                        [str(destination / binary), "--version"], text=True
+                    )
+                    for binary in binaries
+                ],
+            )
+
+        for product, binaries in toolsets.items():
+            destination = self.root / f"installed-{product}-unstartable"
+            result = install(product, output, destination)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            before = installed(destination, binaries)
+            self.assertEqual(
+                before[2], [f"{binary} {TAG[1:]}\n" for binary in binaries]
+            )
+            for failing in binaries:
+                with self.subTest(product=product, failing=failing):
+                    # The same verified release, except that one binary cannot
+                    # start, the way a binary built for a newer GNU libc cannot.
+                    assets = self.root / f"unstartable-{product}-{failing}"
+                    assets.mkdir()
+                    sums = []
+                    for binary in binaries:
+                        name = f"{binary}-{TAG}-linux-amd64"
+                        shutil.copy2(output / name, assets / name)
+                        if binary == failing:
+                            (assets / name).write_text(
+                                "#!/bin/sh\n"
+                                "echo \"$0: version 'GLIBC_9.99' not found\" >&2\n"
+                                "exit 1\n"
+                            )
+                        digest = hashlib.sha256((assets / name).read_bytes())
+                        sums.append(f"{digest.hexdigest()}  {name}\n")
+                    (assets / "SHA256SUMS").write_text("".join(sums))
+
+                    result = install(product, assets, destination)
+
+                    self.assertNotEqual(result.returncode, 0, result.stdout)
+                    self.assertIn(
+                        f"The staged {failing} {TAG} did not start on this system, "
+                        "so this release cannot run here.",
+                        result.stderr,
+                    )
+                    self.assertIn(
+                        "need the GNU libc that release was built for", result.stderr
+                    )
+                    self.assertIn("The installed toolset is unchanged.", result.stderr)
+                    self.assertEqual(before, installed(destination, binaries))
+
+    def test_linux_start_check_does_not_read_the_installing_shell_environment(self):
+        output = self.assembled()
+        commands = self.root / "commands-environment"
+        commands.mkdir()
+        scripts = {
+            "uname": '#!/bin/sh\ncase "$1" in -s) echo Linux;; -m) echo x86_64;; *) exit 1;; esac\n',
+            "getconf": '#!/bin/sh\necho "glibc 2.34"\n',
+            "ldd": '#!/bin/sh\necho "ldd (GNU libc) 2.34"\n',
+            # Emulate GNU mv's atomic replacement on macOS as well as Linux.
+            "mv": "#!/usr/bin/env python3\nimport os,sys\nos.replace(sys.argv[-2], sys.argv[-1])\n",
+        }
+        for name, script in scripts.items():
+            (commands / name).write_text(script)
+            (commands / name).chmod(0o755)
+        toolsets = {
+            "breg": ("breg", "bregctl"),
+            "evidencectl": ("evidence", "evidencectl", "evidence-oid4vci"),
+            "casework": ("casework", "caseworkctl"),
+            "scheduling": ("scheduling", "schedulingctl"),
+        }
+        self.assertEqual(set(toolsets), set(nightly.INSTALLERS))
+
+        for product, binaries in toolsets.items():
+            with self.subTest(product=product):
+                # A runtime reads its configuration from the environment before
+                # it reads its arguments, so one left in the installing shell
+                # can make a binary that starts here exit before `--version`.
+                assets = self.root / f"environment-{product}"
+                assets.mkdir()
+                sums = []
+                for binary in binaries:
+                    name = f"{binary}-{TAG}-linux-amd64"
+                    (assets / name).write_text(
+                        "#!/bin/sh\n"
+                        'if [ -n "${REGISTRY_RUNTIME_SETTING+x}" ]; then\n'
+                        '\techo "$0: REGISTRY_RUNTIME_SETTING is not supported" >&2\n'
+                        "\texit 2\n"
+                        "fi\n"
+                        f'echo "{binary} {TAG[1:]}"\n'
+                    )
+                    digest = hashlib.sha256((assets / name).read_bytes())
+                    sums.append(f"{digest.hexdigest()}  {name}\n")
+                (assets / "SHA256SUMS").write_text("".join(sums))
+                destination = self.root / f"installed-{product}-environment"
+                prefix = nightly.INSTALLERS[product][1]
+                environment = os.environ | {
+                    "PATH": str(commands) + os.pathsep + os.environ["PATH"],
+                    f"{prefix}_ASSET_DIR": str(assets),
+                    f"{prefix}_INSTALL_DIR": str(destination),
+                    "REGISTRY_RUNTIME_SETTING": "left in the installing shell",
+                }
+                environment.pop(f"{prefix}_VERSION", None)
+
+                result = subprocess.run(
+                    ["bash", str(output / f"{product}-{TAG}-install.sh")],
+                    env=environment,
+                    text=True,
+                    capture_output=True,
+                )
+
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(
+                    sorted(
+                        path.name
+                        for path in destination.iterdir()
+                        if not path.name.startswith(".")
+                    ),
+                    sorted(binaries),
+                )
+
 
 if __name__ == "__main__":
     unittest.main()

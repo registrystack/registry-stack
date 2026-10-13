@@ -1219,9 +1219,8 @@ limit.
 
 Beside the listener, `breg` runs a webhook delivery worker and a review worker, an attachment
 verification worker when the runtime file enables attachment verification, and a subject access
-log retention worker when the active package keeps a subject access log. `GET /ready` does not
-reflect any of them. Watch them through two gauges and the operational records the process writes
-on standard output.
+log retention worker. `GET /ready` does not reflect any of them. Watch them through two gauges and
+the operational records the process writes on standard output.
 
 `breg_worker_last_success_age_seconds` gives the seconds since each worker last finished an
 iteration without failure, whether or not that iteration found work. The attachment verification

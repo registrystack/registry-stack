@@ -85,8 +85,12 @@ another. A grant that does not cover the request answers
 `operation.not-authorized` and nothing is written.
 
 The bounds are matched at the service before the capacity transaction opens.
-When `taskGrantStatus` is configured, Scheduling first obtains a fresh answer
-from the authority selected by the signed grant's source issuer. The answer
+Every runtime file states `taskGrantStatus`, either as a list of task
+authorities or as the keyword `unchecked-final-fifteen-minutes`; a file that
+omits it is refused at startup with
+`scheduling.runtime.missing-task-grant-status`. When `taskGrantStatus` lists
+authorities, Scheduling first obtains a fresh answer from the authority
+selected by the signed grant's source issuer. The answer
 must say the grant is active and must reproduce the exact grant id, source
 issuer, principal, client, resource, purpose, bounds, signed subject values,
 and deadline. Scheduling does not cache a positive answer. It checks again for
@@ -110,12 +114,14 @@ Scheduling checks the earlier of the verified access token deadline and the
 grant deadline against the transaction clock. A credential that expires after
 the status answer cannot take capacity through a delayed transaction.
 
-An entirely unconfigured deployment retains the bounded offline path only for
-a grant with no more than 900 seconds remaining at request entry. Configuring
-even one `taskGrantStatus` entry disables that fallback for every source,
-including an unlisted one. Because the token does not name its authorization
-mode, the final 15 minutes of an originally deferred grant can use the offline
-path if its deployment remains unconfigured. Configure status for every new
+`taskGrantStatus: unchecked-final-fifteen-minutes` selects the offline path:
+no authority is asked, no revocation is observed, and Scheduling accepts a
+grant only while it is unexpired with no more than 900 seconds remaining at
+request entry. A list of authorities disables that path for every source,
+including an unlisted one, which is refused even with less than 15 minutes
+left. Because the token does not name its authorization mode, the final 15
+minutes of an originally deferred grant can use the offline path on a
+deployment that writes the keyword. List the task authorities for every
 deployment that accepts deferred grants.
 
 ## What the audit records

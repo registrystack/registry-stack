@@ -64,6 +64,7 @@ def operation(identifier: str, method: str, path: str, kind: str, request: dict)
         "responseEntity": "company",
         "accessProfile": "company-writer",
         "requiredCapabilities": [],
+        "futureExecutionMember": {"ignored": True},
         "entityLabel": "Companies",
         "identifier": {"apiName": "id", "location": "envelope"},
         "titleFields": ["legal-name"],
@@ -192,6 +193,7 @@ def metadata() -> dict:
         "version": "1.2.3",
         "revision": REVISION,
         "metadataVersion": "1",
+        "futureDescription": {"label": "Future registry description"},
         "entities": [
             {
                 "id": "company",
@@ -349,13 +351,20 @@ class MutationParityTests(unittest.TestCase):
     def setUp(self) -> None:
         self.requests = []
         requests = self.requests
+        self.metadata_document = metadata()
+        metadata_document = self.metadata_document
+        self.metadata_body = {"value": None}
+        metadata_body = self.metadata_body
         self.lose_next_invocation = {"value": False}
         lose_next_invocation = self.lose_next_invocation
 
         class Handler(BaseHTTPRequestHandler):
             def do_GET(self) -> None:  # noqa: N802
                 requests.append((self.command, self.path, dict(self.headers), b""))
-                self.respond(metadata())
+                if self.path.startswith("/v1/registry"):
+                    self.respond(metadata_body["value"] or metadata_document)
+                else:
+                    self.respond(record(), record_response=True)
 
             def do_POST(self) -> None:  # noqa: N802
                 body = self.rfile.read(int(self.headers["content-length"]))
@@ -410,11 +419,15 @@ class MutationParityTests(unittest.TestCase):
 
             def respond(
                 self,
-                value: dict,
+                value: dict | bytes,
                 record_response: bool = False,
                 mutation: bool = False,
             ) -> None:
-                body = json.dumps(value, separators=(",", ":")).encode()
+                body = (
+                    value
+                    if isinstance(value, bytes)
+                    else json.dumps(value, separators=(",", ":")).encode()
+                )
                 self.send_response(200)
                 self.send_header("content-type", "application/json")
                 self.send_header("traceparent", TRACEPARENT)
@@ -514,6 +527,40 @@ class MutationParityTests(unittest.TestCase):
         )
         self.assertIsNone(get_operation["request"]["allow_create"])
         self.assertIsNone(get_operation["request"]["allow_patch"])
+
+        read = self.client.get_record(
+            "companies", RECORD_ID, access_profile="company-writer"
+        )
+        self.assertEqual(read["value"]["data"]["recordIdentifier"], RECORD_ID)
+
+        self.metadata_document["operations"][1]["requiredCapabilities"] = [
+            "future-tombstone-protocol"
+        ]
+        partly_unsupported = self.client.registry_contract("company-writer")
+        with self.assertRaises(BaseRegistryClientError) as unsupported:
+            partly_unsupported.select_tombstone("company", "company-writer")
+        self.assertEqual(unsupported.exception.code, "required-capability")
+        partly_unsupported.select_batch("company", "company-writer")
+        self.metadata_document["operations"][1]["requiredCapabilities"] = []
+
+        encoded = json.dumps(self.metadata_document, separators=(",", ":"))
+        self.metadata_body["value"] = encoded.replace(
+            '"id":"business-registry"',
+            '"id":"business-registry","id":"duplicate-registry"',
+            1,
+        ).encode()
+        with self.assertRaises(BaseRegistryClientError) as duplicate:
+            self.client.registry_contract("company-writer")
+        self.assertEqual(duplicate.exception.kind, "protocol")
+        self.metadata_body["value"] = None
+
+        self.metadata_document["futureDescription"]["label"] = "x" * 65_537
+        with self.assertRaises(BaseRegistryClientError) as oversized:
+            self.client.registry_contract("company-writer")
+        self.assertEqual(oversized.exception.kind, "protocol")
+        self.metadata_document["futureDescription"]["label"] = (
+            "Future registry description"
+        )
 
         binding = self.contract.select_immediate_action(
             "rename-company", "company-writer"

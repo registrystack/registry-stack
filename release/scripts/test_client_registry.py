@@ -661,6 +661,22 @@ class ClientRegistryTest(unittest.TestCase):
         )
         self.assertFalse(any("abi3-linux_" in name for name in names))
 
+    def test_wheels_use_the_311_stable_abi_from_v0_41_0(self) -> None:
+        for version, expected in (("0.40.0", "cp310-abi3"), ("0.41.0", "cp311-abi3")):
+            with self.subTest(version=version):
+                self.assertEqual(
+                    [
+                        f"registry_stack_client-{version}-{expected}-{platform}.whl"
+                        for platform in self.module.WHEEL_PLATFORMS
+                    ],
+                    [
+                        path.name
+                        for path in self.module.wheel_paths(
+                            self.directory, version, "stack"
+                        )
+                    ],
+                )
+
     def test_rejects_root_package_with_a_native_binary(self) -> None:
         definition = self.module.client_definition(self.client)
         root = self.module.npm_tarballs(

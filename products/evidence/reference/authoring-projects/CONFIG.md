@@ -549,7 +549,7 @@ of a longer chain), must name a fact the question's source declares: a
 source's `factSchema` when that schema is a closed object
 (`additionalProperties: false`). A read of any other name is refused as
 `evidence.derivation.fact-undeclared` against the derivation file, by
-`check`, fixture runs, `build`, `package`, and the structural check `source
+`check`, fixture runs, `package`, and the structural check `source
 diff` and `source update` run. That is what turns a source rename, such as a
 regenerated export whose fact changed name, into an authoring refusal rather
 than a failure of every request. The operands of one `??` fallback are read

@@ -44,6 +44,11 @@ BOOKER_A = "demo-booker-a"
 BOOKER_B = "demo-booker-b"
 READER = "demo-reader"
 
+# How long a demo task grant lives. The demo runtime writes
+# `taskGrantStatus: unchecked-final-fifteen-minutes`, which accepts only a
+# grant with at most fifteen minutes left, so every grant is minted short.
+GRANT_LIFETIME_SECONDS = 600
+
 # The task-grant permissions every booking caller carries: one permission per
 # location, naming the offering's service and the actions the demo exercises.
 GRANT_PERMISSIONS = [
@@ -202,7 +207,7 @@ def caller_claims(
                 "registry_grant_source_issuer": DEMO_ISSUER,
                 "registry_grant_client": client,
                 "registry_grant_resource": DEMO_AUDIENCE,
-                "registry_grant_exp": issued_at + 3600,
+                "registry_grant_exp": issued_at + GRANT_LIFETIME_SECONDS,
                 "registry_grant_bounds": {
                     "type": "scheduling",
                     "permissions": GRANT_PERMISSIONS,
@@ -421,6 +426,7 @@ database:
     jwksSource:
       type: static
       documentRef: secret:file/jwks
+taskGrantStatus: unchecked-final-fifteen-minutes
 audit:
   path: {audit_path}
   hashKeyRef: secret:file/audit-key

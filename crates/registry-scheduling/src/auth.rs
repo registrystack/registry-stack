@@ -131,10 +131,11 @@ impl SchedulingAuthenticator {
         // Casework exchanges preserve approved subjects in the signed
         // `identity` object. Keep only an object-shaped value. The shared
         // binding validates its field and value bounds before any use. The
-        // entirely unconfigured offline path does not require this member, so
-        // absence or an older shape remains a status-binding miss rather than
-        // changing bearer admission; a configured service fails that miss
-        // closed before capacity is touched.
+        // offline path that `unchecked-final-fifteen-minutes` selects does not
+        // require this member, so absence or an older shape remains a
+        // status-binding miss rather than changing bearer admission; a
+        // service that lists status authorities fails that miss closed before
+        // capacity is touched.
         let task_grant_subjects = grant.as_ref().and_then(|_| {
             verified
                 .claims
@@ -475,7 +476,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_unconfigured_offline_grant_need_not_carry_status_binding_members() {
+    async fn an_offline_path_grant_need_not_carry_status_binding_members() {
         let mut grant = grant_claims_value(AUDIENCE);
         grant["registry_grant_id"] = json!("grant-1");
         grant

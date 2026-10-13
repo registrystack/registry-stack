@@ -719,14 +719,9 @@ async fn action_written_revisions_are_readable_through_revision_history() {
         json!({"householdCode": "H-HISTORY", "statusNote": "renamed by action"})
     );
 
-    // A journal written before actions recorded the canonical operation holds
-    // the compiled effect identifier instead. It stays readable only when the
-    // compiled package declares that effect against the same entity with the
-    // same operation.
-    set_journal_operation(&database, "person", &person_id, 1, "person-only", "create").await;
-    let detail = history_read(&app, &person_detail).await;
-    assert_eq!(detail.status, StatusCode::OK, "{}", detail.body);
-    assert_eq!(detail.body["data"]["operationIdentifier"], "person-only");
+    // An effect identifier is not a journal operation. A revision journaled
+    // under one is refused even when the action that wrote it still declares
+    // that effect against the same entity with the same operation.
     set_journal_operation(
         &database,
         "household",
@@ -736,14 +731,32 @@ async fn action_written_revisions_are_readable_through_revision_history() {
         "patch",
     )
     .await;
+    let refused = history_read(&app, &household_detail).await;
+    assert_eq!(
+        refused.status,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "a declared patch effect identifier is corrupt provenance: {}",
+        refused.body
+    );
+    assert_eq!(refused.body["code"], "source.unavailable");
+    set_journal_operation(
+        &database,
+        "household",
+        HOUSEHOLD_ID,
+        2,
+        "records.household.patch",
+        "patch",
+    )
+    .await;
     let detail = history_read(&app, &household_detail).await;
     assert_eq!(detail.status, StatusCode::OK, "{}", detail.body);
-    assert_eq!(
-        detail.body["data"]["operationIdentifier"],
-        "household-code-update"
-    );
 
     for (operation_id, mutation_kind, why) in [
+        (
+            "person-only",
+            "create",
+            "the effect identifier the writing action declares",
+        ),
         (
             "undeclared-effect",
             "create",
@@ -790,20 +803,9 @@ async fn action_written_revisions_are_readable_through_revision_history() {
         assert_eq!(refused.body["code"], "source.unavailable", "{why}");
     }
 
-    // Effect identifiers are unique only within one action. A legacy revision
-    // whose stored result link names an action the package no longer declares
-    // stays unavailable even though another action declares the same effect
-    // against the same entity with the same operation.
+    // The list refuses the same revision, and the record's history reads
+    // again once the journal names the canonical operation.
     set_journal_operation(&database, "person", &person_id, 1, "person-only", "create").await;
-    set_result_link_action(&database, "person", &person_id, 1, "retired-person-action").await;
-    let refused = history_read(&app, &person_detail).await;
-    assert_eq!(
-        refused.status,
-        StatusCode::SERVICE_UNAVAILABLE,
-        "another action's effect is foreign provenance: {}",
-        refused.body
-    );
-    assert_eq!(refused.body["code"], "source.unavailable");
     let list = history_read(
         &app,
         &format!("/v1/records/people/{person_id}/revisions?accessProfile=record-history"),
@@ -816,12 +818,21 @@ async fn action_written_revisions_are_readable_through_revision_history() {
         list.body
     );
     assert_eq!(list.body["code"], "source.unavailable");
-    set_result_link_action(&database, "person", &person_id, 1, "create-local-person").await;
+    set_journal_operation(
+        &database,
+        "person",
+        &person_id,
+        1,
+        "records.person.create",
+        "create",
+    )
+    .await;
     let detail = history_read(&app, &person_detail).await;
     assert_eq!(detail.status, StatusCode::OK, "{}", detail.body);
 
-    // A request lifecycle revision never takes the effect-identifier path,
-    // even when the effect is declared against this entity and operation.
+    // A request lifecycle revision journaled under an effect identifier is
+    // refused the same way.
+    set_journal_operation(&database, "person", &person_id, 1, "person-only", "create").await;
     database
         .admin
         .batch_execute(&format!(
@@ -892,36 +903,6 @@ async fn set_journal_operation(
     assert_eq!(changed, 1, "the journal fixture revision exists");
 }
 
-/// Rename the originating action of every stored action result and its
-/// application that wrote one revision.
-async fn set_result_link_action(
-    database: &TestDatabase,
-    entity_id: &str,
-    record_id: &str,
-    revision: i64,
-    action_id: &str,
-) {
-    let changed = database
-        .admin
-        .execute(
-            "WITH results AS (
-                 UPDATE registry_internal.registry_immediate_action_results
-                    SET action_id = $4
-                  WHERE target_entity_id = $1
-                    AND target_record_id = $2::text::uuid
-                    AND target_record_revision = $3
-                 RETURNING key_reference
-             )
-             UPDATE registry_internal.registry_immediate_action_applications
-                SET action_id = $4
-              WHERE key_reference IN (SELECT key_reference FROM results)",
-            &[&entity_id, &record_id, &revision, &action_id],
-        )
-        .await
-        .expect("administrator rewrites the action result link fixture");
-    assert_eq!(changed, 1, "one application wrote the fixture revision");
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn absent_optional_inputs_are_skipped_on_create_and_patch_while_null_and_required_inputs_refuse(
 ) {
@@ -933,32 +914,34 @@ async fn absent_optional_inputs_are_skipped_on_create_and_patch_while_null_and_r
         compile_project(&project, &[], CompileProfile::Authoring).expect("fixture compiles");
     let (database, registry, identity) = install_action_registry(registry).await;
     let app = action_router(&database, registry.clone(), identity);
-    let invoke = |route: &'static str, key: &'static str, body: Value| {
-        let app = app.clone();
-        async move {
-            let mut headers = vec![("content-type", "application/json")];
-            if !key.is_empty() {
-                headers.push(("idempotency-key", key));
-            }
-            response_parts(
-                send(
-                    &app,
-                    Method::POST,
-                    route,
-                    Some(action_claims()),
-                    &headers,
-                    serde_json::to_vec(&body).expect("action body serializes"),
+    let invoke =
+        |route: &'static str, key: &'static str, claims: VerifiedRequestClaims, body: Value| {
+            let app = app.clone();
+            async move {
+                let mut headers = vec![("content-type", "application/json")];
+                if !key.is_empty() {
+                    headers.push(("idempotency-key", key));
+                }
+                response_parts(
+                    send(
+                        &app,
+                        Method::POST,
+                        route,
+                        Some(claims),
+                        &headers,
+                        serde_json::to_vec(&body).expect("action body serializes"),
+                    )
+                    .await,
                 )
-                .await,
-            )
-            .await
-        }
-    };
+                .await
+            }
+        };
 
     let created = invoke(
         "/v1/actions/create-entry",
         "create-without-note",
-        json!({"input": {"label": "First entry"}}),
+        action_claims(),
+        json!({"input": {"label": "First entry", "jurisdiction": "zone-a"}}),
     )
     .await;
     assert_eq!(created.status, StatusCode::OK, "{}", created.body);
@@ -968,14 +951,66 @@ async fn absent_optional_inputs_are_skipped_on_create_and_patch_while_null_and_r
         .to_owned();
     assert_eq!(
         entry_values(&database, &registry, &entry_id).await,
-        ("First entry".to_owned(), None, None, 1),
-        "an absent optional input leaves the created field absent"
+        (
+            "First entry".to_owned(),
+            "zone-a".to_owned(),
+            None,
+            None,
+            None,
+            1
+        ),
+        "absent optional scalar and reference inputs leave the created fields absent"
     );
+
+    let linked_create_body = json!({"input": {
+        "label": "Linked entry",
+        "jurisdiction": "zone-a",
+        "relatedEntry": entry_id
+    }});
+    let linked = invoke(
+        "/v1/actions/create-entry",
+        "create-with-reference",
+        action_claims(),
+        linked_create_body.clone(),
+    )
+    .await;
+    assert_eq!(linked.status, StatusCode::OK, "{}", linked.body);
+    let linked_id = linked.body["results"]["created"]["recordId"]
+        .as_str()
+        .expect("linked create result names the record")
+        .to_owned();
+    assert_eq!(
+        entry_values(&database, &registry, &linked_id).await,
+        (
+            "Linked entry".to_owned(),
+            "zone-a".to_owned(),
+            None,
+            None,
+            Some(entry_id.clone()),
+            1
+        ),
+        "a supplied optional reference is authorized and stored"
+    );
+    let replayed_linked = invoke(
+        "/v1/actions/create-entry",
+        "create-with-reference",
+        action_claims(),
+        linked_create_body,
+    )
+    .await;
+    assert_eq!(
+        replayed_linked.status,
+        StatusCode::OK,
+        "{}",
+        replayed_linked.body
+    );
+    assert_eq!(replayed_linked.body, linked.body);
 
     let noted = invoke(
         "/v1/actions/create-entry",
         "create-with-note",
-        json!({"input": {"label": "Second entry", "note": "kept"}}),
+        action_claims(),
+        json!({"input": {"label": "Second entry", "jurisdiction": "zone-a", "note": "kept"}}),
     )
     .await;
     assert_eq!(noted.status, StatusCode::OK, "{}", noted.body);
@@ -987,6 +1022,7 @@ async fn absent_optional_inputs_are_skipped_on_create_and_patch_while_null_and_r
     let condition = invoke(
         "/v1/actions/update-entry/target-conditions",
         "",
+        action_claims(),
         json!({"input": {"entryId": noted_id}}),
     )
     .await;
@@ -994,6 +1030,7 @@ async fn absent_optional_inputs_are_skipped_on_create_and_patch_while_null_and_r
     let updated = invoke(
         "/v1/actions/update-entry",
         "update-without-note",
+        action_claims(),
         json!({
             "input": {"entryId": noted_id, "status": "reviewed"},
             "preconditions": condition.body["preconditions"].clone()
@@ -1005,11 +1042,209 @@ async fn absent_optional_inputs_are_skipped_on_create_and_patch_while_null_and_r
         entry_values(&database, &registry, &noted_id).await,
         (
             "Second entry".to_owned(),
+            "zone-a".to_owned(),
             Some("kept".to_owned()),
             Some("reviewed".to_owned()),
+            None,
             2
         ),
-        "an absent optional input leaves the patched field unchanged"
+        "absent optional scalar and reference inputs leave patched fields unchanged"
+    );
+
+    let condition = invoke(
+        "/v1/actions/update-entry/target-conditions",
+        "",
+        action_claims(),
+        json!({"input": {"entryId": noted_id}}),
+    )
+    .await;
+    assert_eq!(condition.status, StatusCode::OK, "{}", condition.body);
+    let linked_patch_body = json!({
+        "input": {"entryId": noted_id, "status": "linked", "relatedEntry": entry_id},
+        "preconditions": condition.body["preconditions"].clone()
+    });
+    let linked_patch = invoke(
+        "/v1/actions/update-entry",
+        "update-with-reference",
+        action_claims(),
+        linked_patch_body.clone(),
+    )
+    .await;
+    assert_eq!(linked_patch.status, StatusCode::OK, "{}", linked_patch.body);
+    assert_eq!(
+        entry_values(&database, &registry, &noted_id).await,
+        (
+            "Second entry".to_owned(),
+            "zone-a".to_owned(),
+            Some("kept".to_owned()),
+            Some("linked".to_owned()),
+            Some(entry_id.clone()),
+            3
+        )
+    );
+    let replayed_patch = invoke(
+        "/v1/actions/update-entry",
+        "update-with-reference",
+        action_claims(),
+        linked_patch_body,
+    )
+    .await;
+    assert_eq!(
+        replayed_patch.status,
+        StatusCode::OK,
+        "{}",
+        replayed_patch.body
+    );
+    assert_eq!(replayed_patch.body, linked_patch.body);
+
+    let foreign = invoke(
+        "/v1/actions/create-entry",
+        "create-foreign-entry",
+        action_claims_for("registry:contact:register", "zone-b"),
+        json!({"input": {"label": "Foreign entry", "jurisdiction": "zone-b"}}),
+    )
+    .await;
+    assert_eq!(foreign.status, StatusCode::OK, "{}", foreign.body);
+    let foreign_id = foreign.body["results"]["created"]["recordId"]
+        .as_str()
+        .expect("foreign create result names the record")
+        .to_owned();
+    let missing_id = "00000000-0000-4000-8000-000000000999";
+    let before_refusals = entity_count(&database, &registry, "entry").await;
+    let before_refusal_receipts = immediate_action_receipt_count(&database).await;
+
+    let unauthorized_create = invoke(
+        "/v1/actions/create-entry",
+        "create-with-unauthorized-reference",
+        action_claims(),
+        json!({"input": {
+            "label": "Unauthorized reference",
+            "jurisdiction": "zone-a",
+            "relatedEntry": foreign_id
+        }}),
+    )
+    .await;
+    assert_eq!(
+        unauthorized_create.status,
+        StatusCode::PRECONDITION_FAILED,
+        "{}",
+        unauthorized_create.body
+    );
+    let missing_create = invoke(
+        "/v1/actions/create-entry",
+        "create-with-missing-reference",
+        action_claims(),
+        json!({"input": {
+            "label": "Missing reference",
+            "jurisdiction": "zone-a",
+            "relatedEntry": missing_id
+        }}),
+    )
+    .await;
+    assert_eq!(
+        missing_create.status,
+        StatusCode::PRECONDITION_FAILED,
+        "{}",
+        missing_create.body
+    );
+    let null_reference_create = invoke(
+        "/v1/actions/create-entry",
+        "create-with-null-reference",
+        action_claims(),
+        json!({"input": {
+            "label": "Null reference",
+            "jurisdiction": "zone-a",
+            "relatedEntry": null
+        }}),
+    )
+    .await;
+    assert_eq!(
+        null_reference_create.status,
+        StatusCode::BAD_REQUEST,
+        "{}",
+        null_reference_create.body
+    );
+    assert_eq!(null_reference_create.body["code"], "request.invalid");
+
+    let condition = invoke(
+        "/v1/actions/update-entry/target-conditions",
+        "",
+        action_claims(),
+        json!({"input": {"entryId": noted_id}}),
+    )
+    .await;
+    assert_eq!(condition.status, StatusCode::OK, "{}", condition.body);
+    let current_preconditions = condition.body["preconditions"].clone();
+    let unauthorized_patch = invoke(
+        "/v1/actions/update-entry",
+        "update-with-unauthorized-reference",
+        action_claims(),
+        json!({
+            "input": {"entryId": noted_id, "status": "denied", "relatedEntry": foreign_id},
+            "preconditions": current_preconditions
+        }),
+    )
+    .await;
+    assert_eq!(
+        unauthorized_patch.status,
+        StatusCode::PRECONDITION_FAILED,
+        "{}",
+        unauthorized_patch.body
+    );
+    let missing_patch = invoke(
+        "/v1/actions/update-entry",
+        "update-with-missing-reference",
+        action_claims(),
+        json!({
+            "input": {"entryId": noted_id, "status": "missing", "relatedEntry": missing_id},
+            "preconditions": condition.body["preconditions"].clone()
+        }),
+    )
+    .await;
+    assert_eq!(
+        missing_patch.status,
+        StatusCode::PRECONDITION_FAILED,
+        "{}",
+        missing_patch.body
+    );
+    let null_reference_patch = invoke(
+        "/v1/actions/update-entry",
+        "update-with-null-reference",
+        action_claims(),
+        json!({
+            "input": {"entryId": noted_id, "status": "null", "relatedEntry": null},
+            "preconditions": condition.body["preconditions"].clone()
+        }),
+    )
+    .await;
+    assert_eq!(
+        null_reference_patch.status,
+        StatusCode::BAD_REQUEST,
+        "{}",
+        null_reference_patch.body
+    );
+    assert_eq!(null_reference_patch.body["code"], "request.invalid");
+    assert_eq!(
+        entity_count(&database, &registry, "entry").await,
+        before_refusals,
+        "reference refusals create no records"
+    );
+    assert_eq!(
+        immediate_action_receipt_count(&database).await,
+        before_refusal_receipts,
+        "reference refusals create no successful receipts"
+    );
+    assert_eq!(
+        entry_values(&database, &registry, &noted_id).await,
+        (
+            "Second entry".to_owned(),
+            "zone-a".to_owned(),
+            Some("kept".to_owned()),
+            Some("linked".to_owned()),
+            Some(entry_id.clone()),
+            3
+        ),
+        "reference refusals leave the patched record unchanged"
     );
 
     // An explicit null is a supplied value, not an omission: a fixed-effect
@@ -1017,7 +1252,8 @@ async fn absent_optional_inputs_are_skipped_on_create_and_patch_while_null_and_r
     let null_on_create = invoke(
         "/v1/actions/create-entry",
         "create-with-null-note",
-        json!({"input": {"label": "Null entry", "note": null}}),
+        action_claims(),
+        json!({"input": {"label": "Null entry", "jurisdiction": "zone-a", "note": null}}),
     )
     .await;
     assert_eq!(
@@ -1030,6 +1266,7 @@ async fn absent_optional_inputs_are_skipped_on_create_and_patch_while_null_and_r
     let condition = invoke(
         "/v1/actions/update-entry/target-conditions",
         "",
+        action_claims(),
         json!({"input": {"entryId": noted_id}}),
     )
     .await;
@@ -1037,6 +1274,7 @@ async fn absent_optional_inputs_are_skipped_on_create_and_patch_while_null_and_r
     let null_on_patch = invoke(
         "/v1/actions/update-entry",
         "update-with-null-note",
+        action_claims(),
         json!({
             "input": {"entryId": noted_id, "status": "closed", "note": null},
             "preconditions": condition.body["preconditions"].clone()
@@ -1054,9 +1292,11 @@ async fn absent_optional_inputs_are_skipped_on_create_and_patch_while_null_and_r
         entry_values(&database, &registry, &noted_id).await,
         (
             "Second entry".to_owned(),
+            "zone-a".to_owned(),
             Some("kept".to_owned()),
-            Some("reviewed".to_owned()),
-            2
+            Some("linked".to_owned()),
+            Some(entry_id),
+            3
         ),
         "a refused explicit null leaves the stored record unchanged"
     );
@@ -1064,7 +1304,8 @@ async fn absent_optional_inputs_are_skipped_on_create_and_patch_while_null_and_r
     let missing_label = invoke(
         "/v1/actions/create-entry",
         "create-without-label",
-        json!({"input": {"note": "no label"}}),
+        action_claims(),
+        json!({"input": {"jurisdiction": "zone-a", "note": "no label"}}),
     )
     .await;
     assert_eq!(
@@ -1074,7 +1315,7 @@ async fn absent_optional_inputs_are_skipped_on_create_and_patch_while_null_and_r
         missing_label.body
     );
     assert_eq!(missing_label.body["code"], "request.invalid");
-    assert_eq!(entity_count(&database, &registry, "entry").await, 2);
+    assert_eq!(entity_count(&database, &registry, "entry").await, 4);
     database.cleanup().await;
 }
 
@@ -1082,23 +1323,39 @@ async fn entry_values(
     database: &TestDatabase,
     registry: &registry_breg::CompiledRegistry,
     entry_id: &str,
-) -> (String, Option<String>, Option<String>, i64) {
+) -> (
+    String,
+    String,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    i64,
+) {
     let entry = &registry.entities()["entry"];
     let row = database
         .admin
         .query_one(
             &format!(
-                "SELECT {label}, {note}, {status}, record_revision FROM registry_data.{table} WHERE record_id = $1",
+                "SELECT {label}, {jurisdiction}, {note}, {status}, {related}::text, record_revision FROM registry_data.{table} WHERE record_id = $1",
                 table = q(&entry.physical_table),
                 label = q(&entry.fields["label"].physical_name),
+                jurisdiction = q(&entry.fields["jurisdiction"].physical_name),
                 note = q(&entry.fields["note"].physical_name),
                 status = q(&entry.fields["status"].physical_name),
+                related = q(&entry.fields["related-entry"].physical_name),
             ),
             &[&Uuid::parse_str(entry_id).expect("entry UUID")],
         )
         .await
         .expect("administrator reads entry values");
-    (row.get(0), row.get(1), row.get(2), row.get(3))
+    (
+        row.get(0),
+        row.get(1),
+        row.get(2),
+        row.get(3),
+        row.get(4),
+        row.get(5),
+    )
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

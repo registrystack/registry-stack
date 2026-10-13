@@ -15,9 +15,8 @@ import { resolve, dirname } from 'node:path';
 // --- Load the function ---------------------------------------------------------
 // The source is TypeScript. We strip types at import time with a small inline
 // transform rather than requiring tsx/ts-node, so the tests run offline with
-// plain `node --test` (Node 22 supports --experimental-strip-types for .ts
-// files when invoked explicitly, but that flag is experimental). Instead we
-// read the .ts source, strip the type annotations with a minimal regex, and
+// plain `node --test` and do not depend on the runtime's own type stripping.
+// We read the .ts source, strip the type annotations with a minimal regex, and
 // eval it as a module. This keeps the test self-contained and dependency-free.
 
 const here = dirname(fileURLToPath(import.meta.url));

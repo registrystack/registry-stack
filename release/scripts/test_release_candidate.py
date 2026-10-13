@@ -813,6 +813,26 @@ class ReleaseCandidateTest(TestCase):
             ],
         )
 
+    def test_unified_wheels_use_the_311_stable_abi_from_v0_41_0(self) -> None:
+        historical = self.module._release_payload_inventory("0.40.0")
+        current = self.module._release_payload_inventory("0.41.0")
+        platform = "manylinux_2_17_x86_64.manylinux2014_x86_64"
+
+        self.assertEqual(
+            "client-package",
+            historical[f"registry_stack_client-0.40.0-cp310-abi3-{platform}.whl"],
+        )
+        self.assertNotIn(
+            f"registry_stack_client-0.40.0-cp311-abi3-{platform}.whl", historical
+        )
+        self.assertEqual(
+            "client-package",
+            current[f"registry_stack_client-0.41.0-cp311-abi3-{platform}.whl"],
+        )
+        self.assertNotIn(
+            f"registry_stack_client-0.41.0-cp310-abi3-{platform}.whl", current
+        )
+
     def test_v2_security_evidence_members_follow_candidate_images(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

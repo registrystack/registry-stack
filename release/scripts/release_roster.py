@@ -33,12 +33,18 @@ operator CLI already ship; only the client facades join, in v0.40.0.
 
 ``COORDINATOR_CLIENT_FIRST_RELEASE`` is the single place that decides which
 release first adds the Registry Coordinator namespace and native bindings to the
-unified Node and Python client packages; the client facades join in v0.41.0.
+unified Node and Python client packages; the client facades first join in v0.42.0.
 
 ``COORDINATOR_FIRST_RELEASE`` is the single place that decides which release
 first ships the Registry Coordinator binaries, ``coordinator`` and
 ``coordinatorctl``, its image, and its security evidence. Those packaging
-surfaces join in v0.41.0, the same release as the client facades.
+surfaces remain held until their package permissions and image-specific
+advisory evidence are ready; client facades are governed independently.
+
+``PYTHON_311_ABI_FIRST_RELEASE`` is the single place that decides which
+release first builds the Python client wheels against the Python 3.11 stable
+ABI, which names them ``cp311-abi3``. Releases before v0.41.0 were built
+against the Python 3.10 stable ABI and keep their ``cp310-abi3`` wheel names.
 """
 
 from __future__ import annotations
@@ -58,9 +64,11 @@ SCHEDULING_BINARY_FIRST_RELEASE: tuple[int, int, int] | None = (0, 38, 0)
 
 SCHEDULING_CLIENT_FIRST_RELEASE: tuple[int, int, int] | None = (0, 40, 0)
 
-COORDINATOR_CLIENT_FIRST_RELEASE: tuple[int, int, int] | None = (0, 41, 0)
+COORDINATOR_CLIENT_FIRST_RELEASE: tuple[int, int, int] | None = (0, 42, 0)
 
-COORDINATOR_FIRST_RELEASE: tuple[int, int, int] | None = (0, 41, 0)
+COORDINATOR_FIRST_RELEASE: tuple[int, int, int] | None = None
+
+PYTHON_311_ABI_FIRST_RELEASE: tuple[int, int, int] = (0, 41, 0)
 
 RENDER_FIRST_RELEASE: tuple[int, int, int] | None = (0, 38, 0)
 
@@ -135,6 +143,18 @@ def coordinator_in_release(version: tuple[int, int, int]) -> bool:
     """
     first_release = COORDINATOR_FIRST_RELEASE
     return first_release is not None and tuple(version) >= first_release
+
+
+def python_wheel_abi_tag(version: tuple[int, int, int]) -> str:
+    """Return the interpreter and ABI tag of the release's Python client wheels.
+
+    The tag follows the stable ABI the wheels are compiled against, which is
+    the ``abi3-py3xx`` PyO3 feature in the workspace ``Cargo.toml``.
+    """
+
+    if tuple(version) >= PYTHON_311_ABI_FIRST_RELEASE:
+        return "cp311-abi3"
+    return "cp310-abi3"
 
 
 def render_in_release(version: tuple[int, int, int]) -> bool:

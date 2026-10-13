@@ -68,7 +68,7 @@ on targets without pre-generated bindings, bindgen with libclang. Bindings are
 pre-generated for the workspace's server targets, including
 `aarch64-apple-darwin` and the `x86_64`/`aarch64` `unknown-linux-gnu` and
 `musl` targets. Hosted artifact and macOS verification workflows install Go
-1.24.4 explicitly, and the release builder installs snapshot-pinned CMake and
+1.27.2 explicitly, and the release builder installs snapshot-pinned CMake and
 Go packages; the review accompanies those build-input changes.
 
 Linux packages continue to compile and link through the pinned Zig adapter so

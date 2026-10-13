@@ -15,7 +15,6 @@ use std::{
 };
 
 use anyhow::{anyhow, bail, Context as _, Result};
-use clap::Args;
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
@@ -34,25 +33,21 @@ const SECRET_PREFIX: &str = "secret:file/";
 /// What a delegated validation run is called in the diagnostics it produces.
 const EVIDENCE_VALIDATION: &str = "Evidence deployment validation";
 
-#[derive(Debug, Args)]
+#[derive(Debug)]
 pub struct BuildArgs {
-    /// Evidence project directory; defaults to the current directory.
+    /// Evidence project directory.
     ///
     /// This command needs an editable project: one holding questions/ and
     /// sources/ beside evidence-project.yaml.
-    #[arg(long, default_value = ".")]
     pub project: PathBuf,
 
     /// Explicit deployment target containing governance.yaml and runtime.yaml.
-    #[arg(long)]
     pub target: PathBuf,
 
     /// New candidate directory to create. It must not already exist.
-    #[arg(long)]
     pub output: PathBuf,
 
     /// Optional source or review revision recorded in `REVISION`.
-    #[arg(long)]
     pub revision: Option<String>,
 }
 

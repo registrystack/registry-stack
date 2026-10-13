@@ -43,7 +43,9 @@ use url::Url;
 
 use crate::audit::SchedulingAudit;
 use crate::auth::SchedulingAuthenticator;
-use crate::config::{ReminderDestinationConfig, RuntimeConfig, RuntimeConfigError};
+use crate::config::{
+    ReminderDestinationConfig, RuntimeConfig, RuntimeConfigError, TaskGrantStatus,
+};
 use crate::hooks::{ActivatedHooks, HookActivationError, HookRuntimeIdentity};
 use crate::http::{router, HttpState};
 use crate::service::SchedulingService;
@@ -93,38 +95,7 @@ pub fn command() -> Command {
                 .required(true),
         )
         .subcommand_required(true)
-        // Kept only to refuse by name: `schedulingctl apply` migrates now.
-        .subcommand(
-            Command::new("migrate")
-                .about("Removed; run `schedulingctl plan` then `schedulingctl apply`")
-                .hide(true),
-        )
         .subcommand(Command::new("serve").about("Run the Scheduling HTTP service"))
-}
-
-/// The refusal for a removed `scheduling` subcommand named in `args` (the
-/// arguments after the program name), found before the command line is
-/// parsed so it answers even without the otherwise required
-/// `--runtime-config`.
-#[must_use]
-pub fn removed_command_refusal<I, S>(args: I) -> Option<RuntimeError>
-where
-    I: IntoIterator<Item = S>,
-    S: AsRef<std::ffi::OsStr>,
-{
-    let mut args = args.into_iter();
-    while let Some(arg) = args.next() {
-        let arg = arg.as_ref();
-        if arg == "--runtime-config" {
-            args.next();
-            continue;
-        }
-        if arg.to_string_lossy().starts_with('-') {
-            continue;
-        }
-        return (arg == "migrate").then_some(RuntimeError::RemovedCommand);
-    }
-    None
 }
 
 pub async fn run(matches: &clap::ArgMatches) -> Result<(), RuntimeError> {
@@ -132,7 +103,6 @@ pub async fn run(matches: &clap::ArgMatches) -> Result<(), RuntimeError> {
         .get_one::<String>("runtime-config")
         .ok_or(RuntimeError::Arguments)?;
     match matches.subcommand_name() {
-        Some("migrate") => Err(RuntimeError::RemovedCommand),
         Some("serve") => serve_from_path(path).await,
         _ => Err(RuntimeError::Arguments),
     }
@@ -273,20 +243,22 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
         None => None,
     };
 
-    // Once a deployment configures any status authority, every commitment
-    // must resolve through that exact registry. An unlisted source therefore
-    // fails closed instead of falling back to the short-lived offline path.
-    let task_grant_status = if config.task_grant_status.is_empty() {
-        None
-    } else {
-        Some(Arc::new(
+    // A deployment that lists status authorities resolves every commitment
+    // through that exact registry. An unlisted source therefore fails closed
+    // instead of falling back to the short-lived offline path, which only
+    // `unchecked-final-fifteen-minutes` selects. Loading refuses a file that
+    // states neither, so an absent member is never read as the offline path.
+    let task_grant_status = match &config.task_grant_status {
+        Some(TaskGrantStatus::UncheckedFinalFifteenMinutes) => None,
+        Some(TaskGrantStatus::Authorities(authorities)) => Some(Arc::new(
             TaskGrantStatusRegistry::activate(
-                &crate::config::task_grant_status_endpoints(&config.task_grant_status),
+                &crate::config::task_grant_status_endpoints(authorities),
                 &config.authentication.oidc.provider.audience,
                 &secrets,
             )
             .map_err(|_| RuntimeError::TaskGrantStatus)?,
-        ))
+        )),
+        None => return Err(RuntimeError::TaskGrantStatus),
     };
 
     let service = Arc::new(
@@ -455,10 +427,6 @@ pub enum RuntimeError {
     HookDelivery,
     #[error("a Scheduling background worker stopped")]
     WorkerStopped,
-    #[error(
-        "`scheduling migrate` is removed; run `schedulingctl plan --runtime-config FILE` then `schedulingctl apply --runtime-config FILE`"
-    )]
-    RemovedCommand,
     #[error("the deployment's scheduling id does not match the authored policy")]
     DeploymentIdentity,
     #[error("a due reminder intent could not be rendered as an event")]
@@ -466,16 +434,6 @@ pub enum RuntimeError {
 }
 
 impl RuntimeError {
-    /// The process exit code: 2 for a command line the binary no longer
-    /// accepts, 1 for every other refusal or failure.
-    #[must_use]
-    pub fn exit_code(&self) -> i32 {
-        match self {
-            Self::RemovedCommand => 2,
-            _ => 1,
-        }
-    }
-
     /// The reader's report when startup refused the runtime file or the
     /// packaged policy, so `scheduling` prints its CFG-DIAG-2 lines
     /// unchanged after its own one-sentence refusal.
@@ -1083,31 +1041,23 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn the_removed_migrate_command_refuses_as_usage_naming_plan_then_apply() {
-        let command = command();
-        let visible: Vec<_> = command
+    #[test]
+    fn serve_is_the_only_command_and_any_other_name_is_a_usage_error() {
+        let subcommands: Vec<_> = command()
             .get_subcommands()
-            .filter(|subcommand| !subcommand.is_hide_set())
             .map(|subcommand| subcommand.get_name().to_owned())
             .collect();
-        assert_eq!(visible, vec!["serve".to_owned()]);
+        assert_eq!(subcommands, vec!["serve".to_owned()]);
 
-        // The path is never read: the refusal comes before any configuration.
-        let matches = command
+        let error = command()
             .try_get_matches_from([
                 "scheduling",
                 "--runtime-config",
                 "/nonexistent/runtime.yaml",
                 "migrate",
             ])
-            .expect("the removed command still parses so it can refuse by name");
-        let error = run(&matches).await.expect_err("migrate is removed");
-        assert!(matches!(error, RuntimeError::RemovedCommand), "{error:?}");
+            .expect_err("serve is the only command");
+        assert_eq!(error.kind(), clap::error::ErrorKind::InvalidSubcommand);
         assert_eq!(error.exit_code(), 2);
-        assert_eq!(
-            error.to_string(),
-            "`scheduling migrate` is removed; run `schedulingctl plan --runtime-config FILE` then `schedulingctl apply --runtime-config FILE`"
-        );
     }
 }

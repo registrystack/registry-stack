@@ -161,7 +161,7 @@ jobs:
       - name: Install Go for the AWS-LC-FIPS source build
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: 1.24.4
+          go-version: 1.27.2
           cache: false
 
       - name: Restore Evidence development Cargo cache
@@ -171,9 +171,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: registry-evidence-dev-go-1.24.4-${{ matrix.asset }}-${{ matrix.runner }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
+          key: registry-evidence-dev-go-1.27.2-${{ matrix.asset }}-${{ matrix.runner }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
           restore-keys: |
-            registry-evidence-dev-go-1.24.4-${{ matrix.asset }}-${{ matrix.runner }}-
+            registry-evidence-dev-go-1.27.2-${{ matrix.asset }}-${{ matrix.runner }}-
 
       - name: Build native Evidence development binaries
         shell: bash
@@ -227,20 +227,20 @@ jobs:
           - runner: ubuntu-24.04
             asset: linux-amd64
             target: x86_64-unknown-linux-gnu
-            # `pyo3`'s `abi3-py310` feature (see the workspace `Cargo.toml`)
-            # makes one wheel per platform cover every CPython from 3.10 up,
+            # `pyo3`'s `abi3-py311` feature (see the workspace `Cargo.toml`)
+            # makes one wheel per platform cover every CPython from 3.11 up,
             # so these tags are the whole roster: no Python-version matrix.
-            wheel_tag: cp310-abi3-linux_x86_64
+            wheel_tag: cp311-abi3-linux_x86_64
             napi_platform: linux-x64-gnu
           - runner: ubuntu-24.04-arm
             asset: linux-arm64
             target: aarch64-unknown-linux-gnu
-            wheel_tag: cp310-abi3-linux_aarch64
+            wheel_tag: cp311-abi3-linux_aarch64
             napi_platform: linux-arm64-gnu
           - runner: macos-26
             asset: macos-arm64
             target: aarch64-apple-darwin
-            wheel_tag: cp310-abi3-macosx_11_0_arm64
+            wheel_tag: cp311-abi3-macosx_11_0_arm64
             napi_platform: darwin-arm64
     steps:
       - name: Checkout exact development source
@@ -254,13 +254,13 @@ jobs:
       - name: Install Go for the AWS-LC-FIPS source build
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: 1.24.4
+          go-version: 1.27.2
           cache: false
 
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 22.12.0
+          node-version: 24.11.0
           cache: npm
           cache-dependency-path: crates/registry-evidence-client-node/package-lock.json
 
@@ -271,9 +271,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: registry-evidence-dev-clients-go-1.24.4-zig-0.12.1-${{ matrix.asset }}-${{ matrix.runner }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock', 'release/requirements/maturin-1.9.6.txt', 'release/scripts/zig-glibc-compiler', 'release/scripts/build-linux-python-client') }}
+          key: registry-evidence-dev-clients-go-1.27.2-zig-0.12.1-${{ matrix.asset }}-${{ matrix.runner }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock', 'release/requirements/maturin-1.9.6.txt', 'release/scripts/zig-glibc-compiler', 'release/scripts/build-linux-python-client') }}
           restore-keys: |
-            registry-evidence-dev-clients-go-1.24.4-zig-0.12.1-${{ matrix.asset }}-${{ matrix.runner }}-
+            registry-evidence-dev-clients-go-1.27.2-zig-0.12.1-${{ matrix.asset }}-${{ matrix.runner }}-
 
       - name: Build the Python client wheel
         working-directory: crates/registry-evidence-client-py
@@ -642,12 +642,12 @@ jobs:
             echo "evidence-client-node-${tag}-${platform}.tgz"
           done > "${RUNNER_TEMP}/expected-assets"
           # One wheel per platform, not per Python version: `pyo3`'s
-          # `abi3-py310` feature is what makes that true, so a change to it
+          # `abi3-py311` feature is what makes that true, so a change to it
           # fails this roster rather than quietly publishing wheels no
           # documented installer command names.
           python_version="${{ needs.validate.outputs.python_version }}"
           for wheel_platform in linux_x86_64 linux_aarch64 macosx_11_0_arm64; do
-            echo "registry_evidence_client-${python_version}-cp310-abi3-${wheel_platform}.whl"
+            echo "registry_evidence_client-${python_version}-cp311-abi3-${wheel_platform}.whl"
           done >> "${RUNNER_TEMP}/expected-assets"
           {
             echo "evidencectl-${tag}-install.sh"
@@ -712,11 +712,11 @@ jobs:
             echo 'prerelease, substituting your own platform:'
             echo
             echo '```sh'
-            echo "pip install \"${download_url}/registry_evidence_client-${python_version}-cp310-abi3-linux_x86_64.whl\""
+            echo "pip install \"${download_url}/registry_evidence_client-${python_version}-cp311-abi3-linux_x86_64.whl\""
             echo "npm install \"${download_url}/evidence-client-node-${tag}-linux-amd64.tgz\""
             echo '```'
             echo
-            echo 'One wheel covers CPython 3.10 and later. The wheels for the other'
+            echo 'One wheel covers CPython 3.11 and later. The wheels for the other'
             echo "platforms end in \`linux_aarch64\` or \`macosx_11_0_arm64\`, and the"
             echo "Node packages in \`linux-arm64\` or \`macos-arm64\`."
             echo
@@ -738,7 +738,7 @@ jobs:
             echo
             echo '```sh'
             echo "curl -fsSL \"${install_url}\" | bash"
-            echo "pip install \"${download_url}/registry_evidence_client-${python_version}-cp310-abi3-linux_x86_64.whl\""
+            echo "pip install \"${download_url}/registry_evidence_client-${python_version}-cp311-abi3-linux_x86_64.whl\""
             echo "npm install \"${download_url}/evidence-client-node-${tag}-linux-amd64.tgz\""
             echo '```'
             echo

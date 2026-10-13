@@ -2,6 +2,66 @@
 
 ## Unreleased
 
+## 0.41.0 - 2026-10-13
+
+- BREAKING: the published `registry-stack-client` Python package, which carries
+  the Registry Casework client, requires Python 3.11 or later: its
+  `Requires-Python` is `>=3.11` (was `>=3.10`), and its wheels are built
+  against the Python 3.11 stable ABI and named `cp311-abi3` (was `cp310-abi3`).
+  Python 3.10 is no longer supported. Migration: run Python 3.11 or later.
+
+- BREAKING: the published `@registrystack/client` Node.js package, which
+  carries the Registry Casework client, requires Node.js 24.11.0 or later: its
+  `engines.node` is `>=24.11.0` (was `>=22.12.0`). Node.js 22 is no longer
+  supported. Migration: run Node.js 24.11.0 or later.
+- BREAKING: `casework migrate` and `caseworkctl db` are no longer subcommands.
+  Each is refused as an unrecognized subcommand with exit 2, without the
+  sentence naming its replacement, and `caseworkctl --format json` reports
+  `usage.invalid` where it reported `usage.removed-command`. Migration: apply
+  database changes with `caseworkctl plan --runtime-config FILE` then
+  `caseworkctl apply --runtime-config FILE`.
+- BREAKING: the refusal code `casework.package.retired-manifest` is removed. A
+  package root that holds `casework.package.json` is refused as any file the
+  package does not list: `casework.package.invalid` names it as an extra file,
+  or `casework.package.unexpected-contents` when `SHA256SUMS` lists it. A
+  `package.expectedDigest` that pins another digest is checked before the
+  contents and is reported first, as `casework.package.digest-mismatch`.
+  Migration: rebuild the package with `caseworkctl package`.
+- BREAKING: `caseworkctl dev` removes a database volume only when the volume
+  carries the session's ownership label. A volume with no label is refused
+  even when the session's own container mounts it. Every session v0.40.0
+  started labels its volume. Migration: remove an unlabeled
+  `casework-dev-<identifier>` volume with `docker volume rm`.
+- BREAKING: the Base Registry Engine source adapter refuses a stored discovery
+  cursor that is a bare continuation naming no request entity, as it refuses
+  any malformed cursor. A source with one request entity resumed from one
+  before. Every cursor v0.40.0 stored names its entity. Migration: none for a
+  database v0.40.0 created.
+- `caseworkctl source add` preserves exact `testBindings` claim variants when
+  adding a default BReg local client for the same profile. Automatic executor
+  inference selects only the default service client; explicit executor bindings
+  may still name a test-bound variant. Duplicate defaults and duplicate
+  journey-step bindings are refused before any file is written.
+- Source pairing accepts authority endpoint spellings that join to the same
+  Casework review API, including equivalent trailing slashes, while preserving
+  the authored spelling. Different destinations and authority bindings still
+  require explicit correction.
+- `caseworkctl source add` also drives the same-version `bregctl explain
+  access` and writes the generated `casework-reader` access profile with the
+  BReg project's one compiled `principalClaim`, where it always wrote
+  `registry_principal`. For `sub`, the generated local reader client declares
+  no subject claim, because the issuer supplies the verified subject. A
+  project with no authenticated grant keeps `registry_principal`. Before it
+  reads or writes the registry file, `source add` refuses a project whose
+  grants name more than one `principalClaim`, and an access report that
+  carries a `claimContractError` or a malformed `principalClaims` list. A
+  registry with mixed principal claims was already refused when its BReg
+  runtime started, so no pairing that ran before is refused now. If affected,
+  align every entity profile and action grant, including a `casework-reader`
+  profile an earlier `source add` wrote with `registry_principal`, to one
+  `principalClaim`, then repeat `source add`. The local human reviewer bridge
+  is unchanged: a reviewer profile still authenticates its principal through
+  `registry_principal`.
 - Task templates may opt into `authorizationMode: deferred` for delayed
   work, with a `lifetimeSeconds` of at most 604800 (seven days). An omitted
   mode stays `immediate`, with its 900-second ceiling. The preview, the
@@ -63,6 +123,12 @@
   transport kind, and the source still sends the assertion request once.
   Migration: treat `invalid-credential` as a refusal that needs a new
   approval, and stop retrying it.
+- `caseworkctl dev start` pulls its PostgreSQL image from the Docker
+  Official Images mirror `public.ecr.aws/docker/library/postgres` at the
+  same digest, and its help names that reference. An egress allowlist for
+  local development must admit `public.ecr.aws`. A retained session
+  container on the Docker Hub `postgres:17.11` reference at that digest is
+  still accepted.
 
 ## v0.40.0 - 2026-10-11
 

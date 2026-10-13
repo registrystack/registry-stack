@@ -2,6 +2,92 @@
 
 ## Unreleased
 
+## 0.41.0 - 2026-10-13
+
+- BREAKING: the published `registry-stack-client` Python package, which carries
+  the Base Registry Engine client, requires Python 3.11 or later: its
+  `Requires-Python` is `>=3.11` (was `>=3.10`), and its wheels are built
+  against the Python 3.11 stable ABI and named `cp311-abi3` (was `cp310-abi3`).
+  Python 3.10 is no longer supported. Migration: run Python 3.11 or later.
+
+- BREAKING: the published `@registrystack/client` Node.js package, which
+  carries the Base Registry Engine client, requires Node.js 24.11.0 or later:
+  its `engines.node` is `>=24.11.0` (was `>=22.12.0`). Node.js 22 is no longer
+  supported. Migration: run Node.js 24.11.0 or later.
+- BREAKING: revision history no longer reads a revision journaled under an
+  immediate action's effect identifier. The detail read of such a revision,
+  and any list page that includes it, answer `503 source.unavailable`, whether
+  or not the active package still declares that effect. Only v0.38.0 and
+  earlier journaled an action's revision this way; every release since
+  journals it under the entity's canonical operation identifier, such as
+  `records.person.create`, and v0.40.0 serves only a database a v0.40.0 apply
+  created. A database v0.40.0 created needs no action. Rows an earlier release
+  wrote are not read in place: apply to a new database, as v0.40.0 already
+  required.
+- BREAKING: a database without the subject access-log storage is no longer
+  verified or served. v0.38.0 introduced the storage, and every apply since
+  installs it whether or not the package declares `accessLog`; a database
+  last applied by an earlier release was served without it, until its next
+  apply, as long as its package declared no `accessLog`. Startup now refuses
+  such a database before binding a listener and writes nothing: with separate
+  roles it answers `the Registry runtime role is missing grants the active
+  package gives it`, and with one role `the Registry database is not ready
+  for this package`. A database v0.40.0 created holds the storage and needs
+  no action. A database last applied before v0.38.0 is not upgraded in place:
+  apply to a new database, as v0.40.0 already required.
+- Fixed actions accept omitted optional reference inputs on create and patch,
+  consistently with optional scalar inputs. Supplied references still require
+  an existing authorized target; explicit null and missing required inputs
+  remain invalid. Handler reference restrictions are unchanged.
+- Rust, Node.js, and Python metadata readers ignore unknown object members
+  while retaining duplicate, type, required-member, and resource checks.
+  Unsupported `requiredCapabilities` disable the affected executable binding
+  without blocking supported operations. Immediate-action descriptors also
+  recognize an optional must-understand capability list. Tombstone, batch,
+  and lifecycle selection now report `required-capability`, where they
+  reported `contract-mismatch`, when no selected operation carries
+  capabilities the client understands.
+- Well-formed unsupported metadata vocabulary now omits only the affected
+  statistical dataset, descriptive change-request capability, selector, or
+  spatial capability. An unsupported temporal mode keeps its `temporal`
+  descriptor as served, because null already means the collection is not
+  temporal. Supported siblings remain usable; malformed known fields,
+  bindings, disclosure grants, and execution gates stay strict.
+- Rust, Node.js, and Python clients handle valid unknown Problem codes by HTTP
+  status and trace ID, with no inferred code or extension semantics. Known
+  codes keep their exact validation; additive object members are ignored after
+  duplicate checks. Malformed envelopes still refuse as protocol errors.
+- The `immutable-identity-corrections` fixture demonstrates a required subject
+  reference on creation and later description corrections using separate
+  existing access profiles, with no subject-retargeting patch authority.
+- `bregctl dev` compiles the captured project whenever it generates the local
+  runtime and writes the compiled registry's one principal claim to
+  `authentication.authorityClaims.principal`, where it always wrote
+  `registry_principal`. A project whose entity profiles and action grants all
+  name another claim, such as `principalClaim: sub`, now gets a local runtime
+  that agrees with it; before, the engine refused that runtime because the
+  configured principal claim was not the one the profiles require. A local
+  client's token must carry the claim the project names; for `sub` that is the
+  issuer's verified subject. A project with no authenticated grant keeps
+  `registry_principal`, and a project whose grants all name
+  `registry_principal` gets the same principal claim as before: no action is
+  needed. An operated runtime is unchanged and still sets
+  `authentication.authorityClaims.principal` itself.
+- `bregctl dev` writes `authentication.authorityClaims.purpose`, as
+  `registry_purpose`, only when a compiled access profile requires a purpose,
+  where it wrote the member for every project. The engine accepts a purpose
+  claim exactly when a profile requires one, so a project that requires no
+  purpose now gets a local runtime the engine accepts. No action is needed.
+- `bregctl dev` checks the generated runtime's authentication against the
+  compiled registry before a first start retains the project's `.breg/dev`
+  state, and refuses a project it cannot serve under one claim mapping:
+  grants that name more than one `principalClaim` (the refusal lists them), a
+  `principalClaim` of `scope`, and a `principalClaim` of `registry_purpose` in
+  a project that requires a purpose. Each of these projects already failed
+  later in the start, when the engine refused the generated runtime's claim
+  mapping, so no project that started before is refused now. If affected, give
+  every entity profile and action grant, including those a module contributes,
+  one `principalClaim` that is neither the scope claim nor the purpose claim.
 - BREAKING: the task-grant status check before a governed write, a later
   approval, or an application reports a 401 or 403 from the Casework status
   endpoint as an outage, so the request answers `service.unavailable` (503)
@@ -31,15 +117,11 @@
   before. Set them only for a task authority that answers under another
   scope or route: `statusScope` is one scope token, and `statusPath` starts
   with `/` and holds exactly one whole `{grantId}` segment.
-- BREAKING: `bregctl dev` derives the generated runtime's principal claim
-  from the compiled access profiles, where it always mapped
-  `registry_principal`, and refuses a project whose authenticated profiles
-  use different claims. A `sub` project uses the issuer's subject. A native
-  fixture journey under a `sub` profile writes
-  `claims: {principal: "$localClientSubject"}`, which resolves to the
-  selected local client's registered subject in the private captured
-  project only. Migration: give every authenticated profile the same
-  principal claim.
+- A native `bregctl dev` fixture journey under a `sub` access profile may
+  write `claims: {principal: "$localClientSubject"}`. The marker resolves to
+  the selected local client's registered subject in the private captured
+  project only; the authored journey file is unchanged. The marker is refused
+  under any other principal claim and anywhere else in a journey.
 - `bregctl dev` binds the Casework task-grant status services a
   `dev-clients.yaml` declares under `taskGrantStatus`, at most eight, each
   with its own status-only client on a numeric loopback endpoint, into the
@@ -48,6 +130,13 @@
   ordinary tokens at other issuer resources; the grants change neither its
   primary scopes, its exported resource, nor its BReg admission. See
   `products/breg/DEV.md`.
+- `bregctl dev start` pulls its PostgreSQL image from the Docker Official
+  Images mirror `public.ecr.aws/docker/library/postgres` at the same
+  digest, and its help names that reference. A session whose schema
+  requires PostGIS still pulls `postgis/postgis` from Docker Hub. An egress
+  allowlist for local development must admit `public.ecr.aws`. A retained
+  session container on the Docker Hub `postgres:17.11` reference at that
+  digest is still accepted.
 
 ## v0.40.0 - 2026-10-11
 

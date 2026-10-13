@@ -246,6 +246,7 @@ fn glibc_below_the_floor_refuses_before_installing() {
 fn glibc_at_the_floor_installs_both_commands() {
     let (major, minor) = glibc_floor();
     let fixture = InstallerFixture::linux();
+    let start_log = fixture.start_log();
     let mut command = fixture.command();
     command.env("FAKE_GLIBC", format!("{major}.{minor}"));
     let output = command.output().unwrap();
@@ -254,7 +255,45 @@ fn glibc_at_the_floor_installs_both_commands() {
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+    assert_eq!(
+        fs::read_to_string(&start_log).unwrap(),
+        "casework\ncaseworkctl\n",
+        "every staged binary must be started before the toolset is selected"
+    );
     fixture.assert_release_toolset_active();
+}
+
+#[test]
+fn linux_binary_that_cannot_start_leaves_the_previous_toolset_selected() {
+    for failing in BINARIES {
+        let fixture = InstallerFixture::linux();
+        fixture.preinstall_runnable_pointer_toolset();
+        fixture.make_release_binary_unstartable(failing);
+
+        let output = fixture.command().output().unwrap();
+
+        assert!(
+            !output.status.success(),
+            "a release whose {failing} cannot start must be refused"
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(&format!(
+                "The staged {failing} {TEST_VERSION} did not start on this system, \
+                 so this release cannot run here."
+            )),
+            "stderr: {stderr}"
+        );
+        assert!(
+            stderr.contains("need the GNU libc that release was built for"),
+            "stderr: {stderr}"
+        );
+        assert!(
+            stderr.contains("The installed toolset is unchanged."),
+            "stderr: {stderr}"
+        );
+        fixture.assert_previous_pointer_toolset_selected();
+    }
 }
 
 #[test]
@@ -389,22 +428,27 @@ printf 'ldd (GNU libc) %s\n' "${FAKE_GLIBC:-2.41}"
         let minor: u32 = components.next().unwrap().parse().unwrap();
         let macos_bundle = asset_suffix == "macos-arm64" && (major > 0 || minor >= 33);
         if forced_uname.is_some() {
-            // Keep atomic pointer replacement equivalent when the synthetic
-            // platform differs from the host running this fixture.
+            // A forced Linux run reaches the installer's GNU pointer switch,
+            // which asks for mv -T. A macOS workstation spells that same
+            // guarantee mv -h, so translate it there. A forced macOS run asks
+            // for mv -h, which GNU mv spells -T, so translate it back on a
+            // Linux runner. Everything else passes through untouched.
             write_executable(
                 &fake_bin.join("mv"),
                 r#"#!/usr/bin/env bash
 set -euo pipefail
-real_system="$(/usr/bin/uname -s)"
-forced_system="${FAKE_UNAME_S:-$real_system}"
-if [[ "$real_system" == Darwin && "$forced_system" == Linux && "${1:-}" == -Tf ]]; then
-  shift
-  set -- -f -h "$@"
-elif [[ "$real_system" == Linux && "$forced_system" == Darwin && "${1:-}" == -fh ]]; then
-  shift
-  set -- -Tf "$@"
-fi
-exec /bin/mv "$@"
+host="$(/usr/bin/uname -s)"
+arguments=()
+for argument in "$@"; do
+  case "$host:$argument" in
+    Darwin:-Tf | Darwin:-fT) arguments+=(-f -h) ;;
+    Darwin:-T) arguments+=(-h) ;;
+    Linux:-fh | Linux:-hf) arguments+=(-T -f) ;;
+    Linux:-h) arguments+=(-T) ;;
+    *) arguments+=("$argument") ;;
+  esac
+done
+exec /bin/mv "${arguments[@]}"
 "#,
             );
         }
@@ -436,7 +480,7 @@ exec /bin/mv "$@"
             if self.macos_bundle {
                 let source = self.root.join("bundle-sources").join(binary);
                 fs::create_dir_all(&source).unwrap();
-                self.write_fixture_binary(&source.join(&stem), binary);
+                write_fixture_binary(&source.join(&stem), binary, self.version, &self.start_log());
                 let library = "libaws_lc_fips_0_14_2_crypto.dylib";
                 write_executable(&source.join(library), "synthetic library\n");
                 fs::write(source.join("THIRD_PARTY_NOTICES"), "synthetic notices\n").unwrap();
@@ -454,28 +498,11 @@ exec /bin/mv "$@"
                     String::from_utf8_lossy(&output.stderr)
                 );
             } else {
-                self.write_fixture_binary(&path, binary);
+                write_fixture_binary(&path, binary, self.version, &self.start_log());
             }
             sums.push_str(&format!("{}  {asset}\n", sha256(&path)));
         }
         fs::write(self.release_dir.join("SHA256SUMS"), sums).unwrap();
-    }
-
-    fn write_fixture_binary(&self, path: &Path, binary: &str) {
-        write_executable(
-            path,
-            &format!(
-                r#"#!/usr/bin/env bash
-set -euo pipefail
-if [[ "${{1:-}}" == --version ]]; then
-  printf '%s\n' '{binary} {version}'
-else
-  printf '%s\n' '{binary} release binary'
-fi
-"#,
-                version = self.version.trim_start_matches('v')
-            ),
-        );
     }
 
     fn preinstall_previous_toolset(&self) {
@@ -549,6 +576,52 @@ fi
         )
         .unwrap();
         std::os::unix::fs::symlink(".breg-current/mint", self.install_dir.join("mint")).unwrap();
+    }
+
+    /// A machine an earlier release installed in full through the pointer,
+    /// with commands that run.
+    fn preinstall_runnable_pointer_toolset(&self) {
+        let toolset = self.install_dir.join(".casework-toolset.earlier");
+        fs::create_dir_all(&toolset).unwrap();
+        for binary in BINARIES {
+            write_executable(
+                &toolset.join(binary),
+                &format!("#!/usr/bin/env bash\nprintf '%s\\n' '{binary} previous binary'\n"),
+            );
+            std::os::unix::fs::symlink(
+                format!(".casework-current/{binary}"),
+                self.install_dir.join(binary),
+            )
+            .unwrap();
+        }
+        std::os::unix::fs::symlink(
+            ".casework-toolset.earlier",
+            self.install_dir.join(".casework-current"),
+        )
+        .unwrap();
+    }
+
+    /// Replaces one Linux release asset with a binary that cannot start, the
+    /// way a binary built for a newer GNU libc cannot, and rewrites the
+    /// checksums so the asset still passes integrity verification.
+    fn make_release_binary_unstartable(&self, failing: &str) {
+        let suffix = &self.asset_suffix;
+        let mut sums = String::new();
+        for binary in BINARIES {
+            let asset = format!("{binary}-{TEST_VERSION}-{suffix}");
+            let path = self.release_dir.join(&asset);
+            if binary == failing {
+                write_executable(
+                    &path,
+                    r#"#!/usr/bin/env bash
+printf '%s\n' "$0: /lib/x86_64-linux-gnu/libc.so.6: version 'GLIBC_9.99' not found" >&2
+exit 1
+"#,
+                );
+            }
+            sums.push_str(&format!("{}  {asset}\n", sha256(&path)));
+        }
+        fs::write(self.release_dir.join("SHA256SUMS"), sums).unwrap();
     }
 
     fn command(&self) -> Command {
@@ -657,6 +730,13 @@ exec "$REAL_MV" "$@"
         );
     }
 
+    /// Where each release asset this fixture writes records that it was
+    /// started. The path is written into the asset, because the installer
+    /// starts a staged binary with an empty environment.
+    fn start_log(&self) -> PathBuf {
+        self.root.join("started")
+    }
+
     fn assert_release_toolset_active(&self) {
         for binary in BINARIES {
             let output = Command::new(self.install_dir.join(binary))
@@ -672,6 +752,43 @@ exec "$REAL_MV" "$@"
                 format!("{binary} release binary\n")
             );
         }
+    }
+
+    fn assert_previous_pointer_toolset_selected(&self) {
+        assert_eq!(
+            fs::read_link(self.install_dir.join(".casework-current")).unwrap(),
+            PathBuf::from(".casework-toolset.earlier"),
+            "the toolset pointer must not move"
+        );
+        for binary in BINARIES {
+            let output = Command::new(self.install_dir.join(binary))
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{binary} stderr: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(
+                String::from_utf8(output.stdout).unwrap(),
+                format!("{binary} previous binary\n")
+            );
+        }
+        let mut entries: Vec<String> = fs::read_dir(&self.install_dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .collect();
+        entries.sort();
+        assert_eq!(
+            entries,
+            [
+                ".casework-current",
+                ".casework-toolset.earlier",
+                "casework",
+                "caseworkctl"
+            ],
+            "the refused release must leave nothing staged behind"
+        );
     }
 
     fn assert_active_toolset_is_traversable(&self) {
@@ -696,6 +813,27 @@ fn installer_path() -> PathBuf {
 fn write_executable(path: &Path, body: &str) {
     fs::write(path, body).unwrap();
     fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+/// A release asset that starts: it answers `--version` the way the published
+/// binary does and otherwise names itself.
+fn write_fixture_binary(path: &Path, binary: &str, version: &str, start_log: &Path) {
+    write_executable(
+        path,
+        &format!(
+            r#"#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${{1:-}}" == --version ]]; then
+  printf '%s\n' '{binary}' >> '{start_log}'
+  printf '%s\n' '{binary} {version}'
+else
+  printf '%s\n' '{binary} release binary'
+fi
+"#,
+            version = version.trim_start_matches('v'),
+            start_log = start_log.display()
+        ),
+    );
 }
 
 fn platform_suffix() -> &'static str {

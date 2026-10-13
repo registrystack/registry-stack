@@ -1237,60 +1237,6 @@ async fn a_database_failure_names_the_violated_constraint_without_row_data() {
     );
 }
 
-#[tokio::test]
-async fn migration_16_releases_superseded_identities_in_a_database_that_holds_them() {
-    let (store, client, _schema) = isolated_schema("occurrence_identity_upgrade").await;
-    store.migrate().await.expect("establish current schema");
-    client
-        .batch_execute(
-            "DROP INDEX casework_items_occurrence_idx; \
-             CREATE UNIQUE INDEX casework_items_occurrence_idx \
-                 ON casework_items(source_id, subject_kind, subject_id, occurrence_key); \
-             DELETE FROM casework_schema_migrations WHERE version=16;",
-        )
-        .await
-        .expect("simulate the schema before migration 16");
-    let first_a = observe_open_in_generation(&store, "binding-a").await;
-    let b = observe_open_in_generation(&store, "binding-b").await;
-
-    store
-        .migrate()
-        .await
-        .expect("migration 16 applies over superseded rows");
-
-    assert_eq!(
-        applied_versions(&client).await,
-        (1..=22).collect::<Vec<_>>()
-    );
-    let second_a = observe_open_in_generation(&store, "binding-a").await;
-    let states: Vec<(uuid::Uuid, String)> = items_by_state(&client)
-        .await
-        .into_iter()
-        .map(|(_, state, item_id)| (item_id, state))
-        .collect();
-    assert_eq!(
-        states,
-        [
-            (first_a, "superseded".to_owned()),
-            (b, "superseded".to_owned()),
-            (second_a, "open".to_owned()),
-        ]
-    );
-    let duplicate_active = client
-        .execute(
-            "INSERT INTO casework_items(item_id,source_id,subject_kind,subject_id,occurrence_kind,occurrence_key,stage,binding,state,queue_id,revision,first_observed_at,updated_at) SELECT $1,source_id,subject_kind,subject_id,occurrence_kind,occurrence_key,stage,binding,'open',queue_id,1,now(),now() FROM casework_items WHERE item_id=$2",
-            &[&uuid::Uuid::new_v4(), &second_a],
-        )
-        .await
-        .expect_err("a second live item for one occurrence identity is refused");
-    assert_eq!(
-        duplicate_active
-            .as_db_error()
-            .and_then(|error| error.constraint()),
-        Some("casework_items_occurrence_idx")
-    );
-}
-
 /// Source-item tables used to exercise named refusals for earlier objects.
 const SOURCE_ITEM_MIGRATIONS: [&str; 14] = [
     include_str!("../migrations/0001_casework.sql"),
@@ -1538,77 +1484,6 @@ async fn migration_locks_hosted_work_before_counting_it_for_the_drop() {
 }
 
 #[tokio::test]
-async fn migration_13_adds_sync_claim_indexes_to_an_existing_schema() {
-    let (store, client, _schema) = isolated_schema("sync_claim_indexes").await;
-    store.migrate().await.expect("establish current schema");
-    client
-        .batch_execute(
-            "DROP INDEX casework_subjects_sync_claim_idx; \
-             DROP INDEX casework_subjects_source_sync_claim_idx; \
-             DELETE FROM casework_schema_migrations WHERE version=13;",
-        )
-        .await
-        .expect("simulate a schema missing migration 13 indexes");
-
-    store.migrate().await.expect("apply sync claim indexes");
-
-    assert_eq!(
-        applied_versions(&client).await,
-        (1..=22).collect::<Vec<_>>()
-    );
-    let indexes: Vec<String> = client
-        .query(
-            "SELECT indexrelid::regclass::text FROM pg_index WHERE indexrelid IN ('casework_subjects_sync_claim_idx'::regclass,'casework_subjects_source_sync_claim_idx'::regclass) ORDER BY indexrelid::regclass::text",
-            &[],
-        )
-        .await
-        .expect("read upgraded sync claim indexes")
-        .into_iter()
-        .map(|row| row.get(0))
-        .collect();
-    assert_eq!(
-        indexes,
-        [
-            "casework_subjects_source_sync_claim_idx",
-            "casework_subjects_sync_claim_idx"
-        ]
-    );
-}
-
-// Establish the migration history through `through` rather than removing
-// fields from a newer schema. This keeps each upgrade's starting authority
-// contract exact.
-async fn establish_review_discovery_predecessor(client: &tokio_postgres::Client, through: i64) {
-    assert!((19..=21).contains(&through));
-    establish_source_schema(client).await;
-    for (version, migration) in [
-        (15, include_str!("../migrations/0015_unified_reviews.sql")),
-        (
-            16,
-            include_str!("../migrations/0016_occurrence_identity_excludes_superseded.sql"),
-        ),
-        (17, include_str!("../migrations/0017_audit_writer.sql")),
-        (
-            18,
-            include_str!("../migrations/0018_source_reconciliation_health.sql"),
-        ),
-        (19, include_str!("../migrations/0019_activations.sql")),
-        (
-            20,
-            include_str!("../migrations/0020_review_task_discovery_indexes.sql"),
-        ),
-        (
-            21,
-            include_str!("../migrations/0021_own_review_decisions.sql"),
-        ),
-    ] {
-        if version <= through {
-            apply_fixture_migration(client, version, migration).await;
-        }
-    }
-}
-
-#[tokio::test]
 async fn migration_22_preserves_review_discovery_and_adds_deferred_assignment_authority() {
     let (store, client, schema) = isolated_schema("deferred_assignment_upgrade").await;
     establish_review_discovery_predecessor(&client, 21).await;
@@ -1677,47 +1552,37 @@ async fn migration_22_preserves_review_discovery_and_adds_deferred_assignment_au
     );
 }
 
-#[tokio::test]
-async fn migration_20_adds_review_discovery_indexes_to_an_existing_schema() {
-    let (store, client, schema) = isolated_schema("review_discovery_indexes").await;
-    establish_review_discovery_predecessor(&client, 19).await;
-    assert_eq!(
-        applied_versions(&client).await,
-        (1..=19).collect::<Vec<_>>()
-    );
-
-    store
-        .migrate()
-        .await
-        .expect("apply review discovery indexes");
-    assert_eq!(
-        applied_versions(&client).await,
-        (1..=22).collect::<Vec<_>>()
-    );
-    let indexes = review_discovery_indexes(&client, &schema).await;
-    assert_eq!(
-        indexes
-            .iter()
-            .map(|(name, _)| name.as_str())
-            .collect::<Vec<_>>(),
-        [
-            "casework_review_accountability_task_idx",
-            "casework_review_task_assigned_position_idx",
-            "casework_review_task_queue_position_idx",
-        ]
-    );
-    store.ready().await.expect("the upgraded schema is current");
-
-    store.migrate().await.expect("repeat the migration");
-    assert_eq!(
-        applied_versions(&client).await,
-        (1..=22).collect::<Vec<_>>()
-    );
-    assert_eq!(
-        review_discovery_indexes(&client, &schema).await,
-        indexes,
-        "repeated migration leaves the review discovery indexes in place"
-    );
+// Establish the migration history through `through` rather than removing
+// fields from a newer schema. This keeps each upgrade's starting authority
+// contract exact.
+async fn establish_review_discovery_predecessor(client: &tokio_postgres::Client, through: i64) {
+    assert!((19..=21).contains(&through));
+    establish_source_schema(client).await;
+    for (version, migration) in [
+        (15, include_str!("../migrations/0015_unified_reviews.sql")),
+        (
+            16,
+            include_str!("../migrations/0016_occurrence_identity_excludes_superseded.sql"),
+        ),
+        (17, include_str!("../migrations/0017_audit_writer.sql")),
+        (
+            18,
+            include_str!("../migrations/0018_source_reconciliation_health.sql"),
+        ),
+        (19, include_str!("../migrations/0019_activations.sql")),
+        (
+            20,
+            include_str!("../migrations/0020_review_task_discovery_indexes.sql"),
+        ),
+        (
+            21,
+            include_str!("../migrations/0021_own_review_decisions.sql"),
+        ),
+    ] {
+        if version <= through {
+            apply_fixture_migration(client, version, migration).await;
+        }
+    }
 }
 
 #[tokio::test]

@@ -276,9 +276,9 @@ jobs:
             .cargo-home/registry
             .cargo-home/git
             target
-          key: registry-stack-release-${{ runner.os }}-${{ matrix.group }}-${{ hashFiles('rust-toolchain.toml', 'release/scripts/build-release-binaries.sh', 'release/docker/Dockerfile.builder', 'release/requirements/ziglang-0.12.1.txt', 'release/glibc-floor.env', 'release/scripts/zig-glibc-compiler') }}-${{ hashFiles('Cargo.lock') }}
+          key: registry-stack-release-${{ runner.os }}-${{ matrix.group }}-${{ hashFiles('rust-toolchain.toml', 'release/scripts/build-release-binaries.sh', 'release/docker/Dockerfile.builder', 'release/requirements/ziglang-0.12.1.txt', 'release/glibc-floor.env', 'release/scripts/zig-glibc-compiler', 'release/scripts/zig-glibc-toolchain.sh') }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
-            registry-stack-release-${{ runner.os }}-${{ matrix.group }}-${{ hashFiles('rust-toolchain.toml', 'release/scripts/build-release-binaries.sh', 'release/docker/Dockerfile.builder', 'release/requirements/ziglang-0.12.1.txt', 'release/glibc-floor.env', 'release/scripts/zig-glibc-compiler') }}-
+            registry-stack-release-${{ runner.os }}-${{ matrix.group }}-${{ hashFiles('rust-toolchain.toml', 'release/scripts/build-release-binaries.sh', 'release/docker/Dockerfile.builder', 'release/requirements/ziglang-0.12.1.txt', 'release/glibc-floor.env', 'release/scripts/zig-glibc-compiler', 'release/scripts/zig-glibc-toolchain.sh') }}-
 
       - name: Build canonical Linux binary shard
         env:
@@ -539,7 +539,7 @@ jobs:
       - name: Setup Node for exact release docs archive
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 22.12.0
+          node-version: 24.11.0
           cache: npm
           cache-dependency-path: docs/site/package-lock.json
 
@@ -569,14 +569,16 @@ jobs:
     name: Build native ${{ matrix.asset }} payload once
     needs: validate
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 35
+    # Covers an uncached native compile through the pinned Zig toolchain,
+    # AWS-LC-FIPS included, plus the toolchain install.
+    timeout-minutes: 60
     permissions:
       contents: read
     strategy:
       fail-fast: false
       matrix:
         include:
-          - runner: ubuntu-22.04-arm
+          - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             asset: linux-arm64
     steps:
@@ -591,7 +593,7 @@ jobs:
       - name: Install Go for the AWS-LC-FIPS source build
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: 1.24.4
+          go-version: 1.27.2
           cache: false
 
       - name: Build native platform payload once
@@ -602,6 +604,12 @@ jobs:
           set -euo pipefail
           rustup toolchain install 1.95.0 \
             --profile minimal --target "${{ matrix.target }}"
+          # The runner's glibc is newer than the release floor. Compile and
+          # link through the same pinned Zig toolchain as the canonical Linux
+          # recipe, so the floor is set by release/glibc-floor.env and never
+          # by the runner image.
+          . release/scripts/zig-glibc-toolchain.sh
+          install_zig_glibc_toolchain "${RUNNER_TEMP:?RUNNER_TEMP is required}/zig-glibc-toolchain"
           cargo build --release --locked \
             -p registry-evidence -p registry-evidencectl \
             -p registry-evidence-oid4vci \
@@ -734,7 +742,7 @@ jobs:
       - name: Install Go for the AWS-LC-FIPS source build
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: 1.24.4
+          go-version: 1.27.2
           cache: false
 
       - name: Build native macOS release shard
@@ -793,7 +801,7 @@ jobs:
       # Native client packages are self-contained. aws-lc-fips-sys otherwise
       # defaults to a build-directory dylib on macOS.
       AWS_LC_FIPS_SYS_STATIC: "1"
-      NODE_RUNTIME_SMOKE_IMAGE: registry.access.redhat.com/ubi8/nodejs-22-minimal:1-1791478428@sha256:d8eb7fb50c650455750f30a7250a8b5498cd2881bfa8eaf170490ad66504511c
+      NODE_RUNTIME_SMOKE_IMAGE: registry.access.redhat.com/ubi8/nodejs-24-minimal:1-1791463611@sha256:dc01310904907c73f7e5faddc0bc062e6d24561a01716bbc6701ba2072e18e08
     permissions:
       contents: read
     strategy:
@@ -803,20 +811,20 @@ jobs:
           - runner: ubuntu-24.04
             asset: linux-amd64-glibc
             target: x86_64-unknown-linux-gnu
-            wheel_tag: cp310-abi3-linux_x86_64
-            registry_wheel_tag: cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64
+            wheel_tag: cp311-abi3-linux_x86_64
+            registry_wheel_tag: cp311-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64
             napi_platform: linux-x64-gnu
           - runner: ubuntu-24.04-arm
             asset: linux-arm64-glibc
             target: aarch64-unknown-linux-gnu
-            wheel_tag: cp310-abi3-linux_aarch64
-            registry_wheel_tag: cp310-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64
+            wheel_tag: cp311-abi3-linux_aarch64
+            registry_wheel_tag: cp311-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64
             napi_platform: linux-arm64-gnu
           - runner: macos-26
             asset: macos-arm64
             target: aarch64-apple-darwin
-            wheel_tag: cp310-abi3-macosx_11_0_arm64
-            registry_wheel_tag: cp310-abi3-macosx_11_0_arm64
+            wheel_tag: cp311-abi3-macosx_11_0_arm64
+            registry_wheel_tag: cp311-abi3-macosx_11_0_arm64
             napi_platform: darwin-arm64
     steps:
       - name: Checkout exact candidate source
@@ -830,13 +838,13 @@ jobs:
       - name: Install Go for the AWS-LC-FIPS source build
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: 1.24.4
+          go-version: 1.27.2
           cache: false
 
       - name: Setup minimum Node runtime
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 22.12.0
+          node-version: 24.11.0
           package-manager-cache: false
 
       - name: Retain minimum Node runtime for package smokes
@@ -844,15 +852,16 @@ jobs:
         run: |
           minimum_node_bin="$(command -v node)"
           [[ "${minimum_node_bin}" == /* ]]
-          test "$("${minimum_node_bin}" --version)" = v22.12.0
+          test "$("${minimum_node_bin}" --version)" = v24.11.0
           printf 'MINIMUM_NODE_BIN=%s\n' "${minimum_node_bin}" >> "${GITHUB_ENV}"
 
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          # napi-rs CLI 3.8.2 requires Node 22.13 or later. Package smokes
-          # independently exercise the retained minimum Node 22.12 runtime.
-          node-version: 22.20.0
+          # The napi-rs CLI's toolchain dependencies require Node 24.12 or
+          # later. Package smokes independently exercise the retained minimum
+          # Node 24.11 runtime.
+          node-version: 24.21.0
           cache: npm
           cache-dependency-path: |
             crates/registry-discovery-client-node/package-lock.json
@@ -874,9 +883,9 @@ jobs:
             target/release-client-node
           # AWS-LC does not track the deployment-target environment variable.
           # Exclude older runner images and builds without the macOS 11 pin.
-          key: registry-stack-release-isolated-clients-go-1.24.4-zig-0.12.1-glibc-2.17-${{ matrix.asset }}-${{ matrix.asset == 'macos-arm64' && 'macos-26-deployment-11.0-' || '' }}${{ hashFiles('.github/workflows/release-candidate.yml', 'rust-toolchain.toml', 'Cargo.lock', 'release/requirements/maturin-1.9.6.txt', 'release/scripts/zig-glibc-compiler', 'release/scripts/build-linux-python-client', 'release/scripts/build-linux-node-client', 'release/scripts/assemble-registry-client-wheel.py', 'release/scripts/macos_fips_packaging.py', 'release/scripts/bundle-client-macos-fips.py', 'release/scripts/sync-registry-client-node.py', 'crates/registry-discovery-client-node/package-lock.json', 'crates/registry-evidence-client-node/package-lock.json', 'crates/registry-breg-client-node/package-lock.json', 'crates/registry-casework-client-node/package-lock.json', 'crates/registry-messaging-client-node/package-lock.json', 'crates/registry-scheduling-client-node/package-lock.json', 'crates/registry-coordinator-client-node/package-lock.json', 'crates/registry-stack-client-node/package-lock.json') }}
+          key: registry-stack-release-isolated-clients-go-1.27.2-zig-0.12.1-glibc-2.17-${{ matrix.asset }}-${{ matrix.asset == 'macos-arm64' && 'macos-26-deployment-11.0-' || '' }}${{ hashFiles('.github/workflows/release-candidate.yml', 'rust-toolchain.toml', 'Cargo.lock', 'release/requirements/maturin-1.9.6.txt', 'release/scripts/zig-glibc-compiler', 'release/scripts/build-linux-python-client', 'release/scripts/build-linux-node-client', 'release/scripts/assemble-registry-client-wheel.py', 'release/scripts/macos_fips_packaging.py', 'release/scripts/bundle-client-macos-fips.py', 'release/scripts/sync-registry-client-node.py', 'crates/registry-discovery-client-node/package-lock.json', 'crates/registry-evidence-client-node/package-lock.json', 'crates/registry-breg-client-node/package-lock.json', 'crates/registry-casework-client-node/package-lock.json', 'crates/registry-messaging-client-node/package-lock.json', 'crates/registry-scheduling-client-node/package-lock.json', 'crates/registry-coordinator-client-node/package-lock.json', 'crates/registry-stack-client-node/package-lock.json') }}
           restore-keys: |
-            registry-stack-release-isolated-clients-go-1.24.4-zig-0.12.1-glibc-2.17-${{ matrix.asset }}-${{ matrix.asset == 'macos-arm64' && 'macos-26-deployment-11.0-' || '' }}
+            registry-stack-release-isolated-clients-go-1.27.2-zig-0.12.1-glibc-2.17-${{ matrix.asset }}-${{ matrix.asset == 'macos-arm64' && 'macos-26-deployment-11.0-' || '' }}
 
       - name: Build Python client wheels
         shell: bash
@@ -1769,7 +1778,7 @@ jobs:
                 manylinux_2_17_x86_64.manylinux2014_x86_64 \
                 manylinux_2_17_aarch64.manylinux2014_aarch64 \
                 macosx_11_0_arm64; do
-                echo "registry_stack_client-${version}-cp310-abi3-${wheel_platform}.whl"
+                echo "registry_stack_client-${version}-cp311-abi3-${wheel_platform}.whl"
               done
             else
               for platform in linux-amd64-glibc linux-arm64-glibc macos-arm64; do
@@ -1780,7 +1789,7 @@ jobs:
                 wheel_platforms=(manylinux_2_17_x86_64.manylinux2014_x86_64 manylinux_2_17_aarch64.manylinux2014_aarch64 macosx_11_0_arm64)
               fi
               for wheel_platform in "${wheel_platforms[@]}"; do
-                echo "registry_evidence_client-${{ needs.validate.outputs.version }}-cp310-abi3-${wheel_platform}.whl"
+                echo "registry_evidence_client-${{ needs.validate.outputs.version }}-cp311-abi3-${wheel_platform}.whl"
               done
             if [[ "${include_registry_packages}" -eq 1 ]]; then
               echo "registrystack-evidence-client-${version}.tgz"
@@ -1793,7 +1802,7 @@ jobs:
                 echo "discovery-client-node-${{ needs.validate.outputs.tag }}-${platform}.tgz"
               done
               for wheel_platform in "${wheel_platforms[@]}"; do
-                echo "registry_discovery_client-${{ needs.validate.outputs.version }}-cp310-abi3-${wheel_platform}.whl"
+                echo "registry_discovery_client-${{ needs.validate.outputs.version }}-cp311-abi3-${wheel_platform}.whl"
               done
               if [[ "${include_registry_packages}" -eq 1 ]]; then
                 echo "registrystack-discovery-client-${version}.tgz"

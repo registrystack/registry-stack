@@ -145,20 +145,11 @@ cleanup_zig_toolchain() {
 
 prepare_zig_toolchain() {
   # shellcheck source-path=SCRIPTDIR
-  # shellcheck source=../glibc-floor.env
-  . "${repo_root}/release/glibc-floor.env"
-  local floor="${REGISTRY_GLIBC_FLOOR:?REGISTRY_GLIBC_FLOOR is required}"
+  # shellcheck source=zig-glibc-toolchain.sh
+  . "${script_dir}/zig-glibc-toolchain.sh"
 
-  local machine zig_arch
-  machine="$(uname -m)"
-  case "${machine}" in
-    x86_64) zig_arch=x86_64 ;;
-    aarch64 | arm64) zig_arch=aarch64 ;;
-    *)
-      printf 'no approved zig glibc target for %s\n' "${machine}" >&2
-      exit 2
-      ;;
-  esac
+  local zig_arch
+  zig_arch="$(zig_glibc_arch)" || exit 2
 
   # Cargo fingerprints the compiler/linker paths. An identical pinned recipe
   # must expose the same paths in each fresh container, including after a lock
@@ -176,7 +167,8 @@ prepare_zig_toolchain() {
           release/docker/Dockerfile.builder \
           release/requirements/ziglang-0.12.1.txt \
           release/glibc-floor.env \
-          release/scripts/zig-glibc-compiler
+          release/scripts/zig-glibc-compiler \
+          release/scripts/zig-glibc-toolchain.sh
       )
     } | sha256sum | cut -d ' ' -f 1
   )"
@@ -189,28 +181,9 @@ prepare_zig_toolchain() {
   fi
   release_zig_wrapper_root="${wrapper_root}"
   trap cleanup_zig_toolchain EXIT
-  ln -s "${script_dir}/zig-glibc-compiler" "${release_zig_wrapper_root}/zig-cc"
-  ln -s "${script_dir}/zig-glibc-compiler" "${release_zig_wrapper_root}/zig-cxx"
-
-  local rust_target="${zig_arch}-unknown-linux-gnu"
-  local target_env="${rust_target//-/_}"
-  local cargo_target_env
-  cargo_target_env="$(printf '%s' "${target_env}" | tr '[:lower:]' '[:upper:]')"
-
-  # Zig picks its cache from HOME, which the builder points at the mounted
-  # checkout, so an unset cache directory fills the working tree with build
-  # artefacts. Both live under the wrapper root the exit trap removes.
-  export ZIG_GLOBAL_CACHE_DIR="${release_zig_wrapper_root}/cache-global"
-  export ZIG_LOCAL_CACHE_DIR="${release_zig_wrapper_root}/cache-local"
-  export REGISTRY_ZIG_PYTHON=/usr/bin/python3
-  export REGISTRY_ZIG_TARGET="${zig_arch}-linux-gnu.${floor}"
-  export HOST_CC="${release_zig_wrapper_root}/zig-cc"
-  export HOST_CXX="${release_zig_wrapper_root}/zig-cxx"
-  export TARGET_CC="${release_zig_wrapper_root}/zig-cc"
-  export TARGET_CXX="${release_zig_wrapper_root}/zig-cxx"
-  export "CC_${target_env}=${release_zig_wrapper_root}/zig-cc"
-  export "CXX_${target_env}=${release_zig_wrapper_root}/zig-cxx"
-  export "CARGO_TARGET_${cargo_target_env}_LINKER=${release_zig_wrapper_root}/zig-cc"
+  # The builder image carries the pinned Zig in its system interpreter. The
+  # Zig caches land under the wrapper root, which the exit trap removes.
+  select_zig_glibc_toolchain /usr/bin/python3 "${release_zig_wrapper_root}"
 }
 
 # A release binary must be a function of the source tree, not of the checkout

@@ -1043,6 +1043,16 @@ accepted command. Authentication, bounded bodies, exact caller/request matching,
 retention, and audit gates still apply. The PostgreSQL test
 `original_receipt_reads_neither_spend_nor_require_submission_budget` reads the
 same stored receipt before and after the budget is exhausted and proves that
-the next submission is still rate limited.
+the next submission is still rate limited. The operation's published contract
+lists no `429`, which `the_receipt_read_publishes_no_rate_limit_answer` in
+`schema.rs` holds.
+
+Residual risk: receipt observation is not throttled. An authenticated caller
+that repeats it makes the runtime authenticate each request, perform one
+bounded indexed lookup, and write its audit records, the same kind of journal
+growth a refused submission flood already causes (see Limits). This is
+accepted rather than given a separate read budget: an operator relies on the
+deployment's edge proxy to bound an authenticated flood on this route as on
+every other.
 
 When a caller must be bound to its issuer and subject, configure the Messaging caller profile with `principalClaim: sub`. Other profiles retain the product’s existing configured principal ownership rule, and cannot substitute a different principal to observe an original receipt.

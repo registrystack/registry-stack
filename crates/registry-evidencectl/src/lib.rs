@@ -94,9 +94,6 @@ enum Command {
     Jwk(jwk::JwkCommand),
     /// Start an editable Evidence Gateway project from OpenAPI, a starter, or a SQLite extract.
     New(scaffold::NewArgs),
-    /// Retired spelling of `package`.
-    #[command(hide = true)]
-    Build(build::BuildArgs),
     /// Drive the evidence binary across a project's bundle fixtures.
     #[command(subcommand)]
     Fixtures(fixtures::FixturesCommand),
@@ -108,7 +105,7 @@ enum Command {
     Target(target::TargetCommand),
     /// Check one runtime configuration and its startup dependencies.
     Doctor(runtime::DoctorArgs),
-    /// Compatibility operations over deployment artifacts.
+    /// Inspect deployment artifact custody.
     #[command(subcommand)]
     Artifact(ArtifactCommand),
     /// Run the private local issuer and Evidence Gateway pair.
@@ -533,18 +530,6 @@ fn run_entry() -> ExitCode {
         Command::Jwks(args) => jwks::run(args, format),
         Command::Jwk(command) => jwk::run(command, format),
         Command::New(args) => scaffold::run_with_format(args, "new", format),
-        Command::Build(args) => Err(SafeCliFailure {
-            operational: false,
-            code: "evidence.build.retired".to_owned(),
-            artifact: args.project.display().to_string(),
-            path: "$".to_owned(),
-            message: "The evidencectl build command was removed.".to_owned(),
-            suggested_action:
-                "Run evidencectl package with the same project, target, and new output directory."
-                    .to_owned(),
-            cause: None,
-        }
-        .into()),
         Command::Fixtures(fixtures::FixturesCommand::Run(mut args)) => {
             args.json |= format == OutputFormat::Json;
             args.junit = junit;
@@ -1345,7 +1330,6 @@ mod tests {
         "jwks",
         "jwk from-pem",
         "new",
-        "build",
         "fixtures run",
         "doctor",
         "artifact inspect",
@@ -1956,11 +1940,7 @@ mod tests {
         };
         let documented: Vec<_> = projects
             .iter()
-            .filter(|(path, argument)| {
-                // Clap does not propagate a hidden command's state to its
-                // arguments. The retired build spelling is not public API.
-                path != "evidencectl build" && !argument.is_hide_set() && !own_phrase(path)
-            })
+            .filter(|(path, argument)| !argument.is_hide_set() && !own_phrase(path))
             .collect();
         assert_eq!(
             documented

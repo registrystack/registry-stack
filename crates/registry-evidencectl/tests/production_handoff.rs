@@ -612,7 +612,7 @@ fn public_lifecycle_keeps_local_dev_state_out_of_the_production_candidate() {
             .arg(&fixture.project)
             .arg("--openapi")
             .arg(&retained_openapi)
-            .args(["--profile", "local", "--generate-keys"])
+            .args(["--profile", "local"])
             .output()
             .expect("public new starts"),
         "public new",

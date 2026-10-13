@@ -99,6 +99,46 @@ Omit both identifiers when expecting a generic conflict, such as a duplicate
 unique value or a concealed change-request application failure. That expectation
 requires a response without field metadata.
 
+## Related pattern: fixed identity, correctable description
+
+The [`immutable-identity-corrections`](fixtures/immutable-identity-corrections/)
+fixture shows the smallest current pattern for a record that must name its
+subject when created, permit later description corrections, and never expose a
+subject-retargeting patch. It uses two ordinary access profiles:
+
+- `dossier-registrar` can create a dossier and therefore lists both `subject`
+  and `description` in `writableFields`, but it has no dossier patch operation.
+- `dossier-corrector` can patch a dossier, but its only writable field is
+  `description`.
+
+No access profile has both the dossier patch operation and `subject` in its
+writable fields. BReg compiles the caller-filtered patch contract from that
+combination, so a corrector can update the description while a fixture journey
+or request that tries to replace `subject` is refused before the write. The
+fixture's checked journey creates the referenced subject, creates a dossier
+with that identity reference, then corrects its description.
+
+Inspect and exercise the maintained example with the normal authoring tools:
+
+```sh
+bregctl check products/breg/fixtures/immutable-identity-corrections --production
+bregctl --format json explain access products/breg/fixtures/immutable-identity-corrections
+bregctl --format json explain routes products/breg/fixtures/immutable-identity-corrections
+bregctl test products/breg/fixtures/immutable-identity-corrections \
+  --runtime-config <schema-test-runtime.yaml> \
+  --credentials <schema-test-credentials.yaml> \
+  --output <receipt.json>
+```
+
+This is an HTTP authority boundary for the configured profiles. It does not
+make an identity reference physically immutable to package evolution or an
+operator holding migration authority. Review those powers separately. If the
+identity itself must change, model that as a new dossier, a normalized dated
+observation, a separate entity, or a narrow typed action with the required
+review semantics. An institution may require prior approval before a caller
+uses the correction profile, but that procedure is not engine-enforced
+independent review.
+
 ## Package evolution
 
 Every pattern check has a stable identity derived from its entity and field,

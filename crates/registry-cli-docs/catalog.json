@@ -1247,7 +1247,7 @@
               "name": "start",
               "invocation": "bregctl dev start",
               "about": "Start or reuse the project's retained local database and services",
-              "long_about": "Start or reuse the project's retained local database and services. A resident supervisor owns this project's PostgreSQL and ThunderID containers plus its Base Registry Engine (BReg) child. The database runs the pinned image postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675, or, when the compiled schema requires PostGIS, postgis/postgis@sha256:01a6a70e41e6c4467c8f55f6063555ed72db2d6662cd0d571040d42eadaeb6f6, which the supervisor pulls on the first start. Each supervised prerequisite command may run for 120 seconds, and the database and each started service have 45 seconds to answer as ready. A start that passes a deadline fails, stops what it acquired, and keeps its owner-only diagnostics in the project's private .breg/dev/logs directory. Catchable termination signals trigger owned cleanup, but an uncatchable outside kill can leave surviving service owners that need inspection before restart. products/breg/DEV.md documents this lifecycle in 'Native local BReg lifecycle' and its recovery in 'Retained state and recovery'.",
+              "long_about": "Start or reuse the project's retained local database and services. A resident supervisor owns this project's PostgreSQL and ThunderID containers plus its Base Registry Engine (BReg) child. The database runs the pinned image public.ecr.aws/docker/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675, the Docker Official Images mirror of postgres:17.11 at that digest, or, when the compiled schema requires PostGIS, the Docker Hub image postgis/postgis@sha256:01a6a70e41e6c4467c8f55f6063555ed72db2d6662cd0d571040d42eadaeb6f6, which the supervisor pulls on the first start. Each supervised prerequisite command may run for 120 seconds, and the database and each started service have 45 seconds to answer as ready. A start that passes a deadline fails, stops what it acquired, and keeps its owner-only diagnostics in the project's private .breg/dev/logs directory. Catchable termination signals trigger owned cleanup, but an uncatchable outside kill can leave surviving service owners that need inspection before restart. products/breg/DEV.md documents this lifecycle in 'Native local BReg lifecycle' and its recovery in 'Retained state and recovery'.",
               "usage": "bregctl dev start [OPTIONS] [PROJECT]",
               "arguments": [
                 {
@@ -6430,7 +6430,7 @@
               "name": "start",
               "invocation": "caseworkctl dev start",
               "about": "Start or reuse the project's retained local database and services",
-              "long_about": "Start or reuse the project's retained local database and services. A resident supervisor owns this project's PostgreSQL container and Casework child. Standalone sessions also own a pinned issuer container; --source-project sessions use the running Base Registry Engine (BReg) session's stock issuer. The database runs the pinned image postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675, which the supervisor pulls on the first start. Each supervised prerequisite command may run for 120 seconds, and the database and each started service have 45 seconds to answer as ready. A start that passes a deadline fails, stops what it acquired, and keeps its owner-only diagnostics in the project's private .casework/dev/logs directory.",
+              "long_about": "Start or reuse the project's retained local database and services. A resident supervisor owns this project's PostgreSQL container and Casework child. Standalone sessions also own a pinned issuer container; --source-project sessions use the running Base Registry Engine (BReg) session's stock issuer. The database runs the pinned image public.ecr.aws/docker/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675, the Docker Official Images mirror of postgres:17.11 at that digest, which the supervisor pulls on the first start. Each supervised prerequisite command may run for 120 seconds, and the database and each started service have 45 seconds to answer as ready. A start that passes a deadline fails, stops what it acquired, and keeps its owner-only diagnostics in the project's private .casework/dev/logs directory.",
               "usage": "caseworkctl dev start [OPTIONS] [PROJECT]",
               "arguments": [
                 {
@@ -10989,7 +10989,7 @@
         {
           "name": "artifact",
           "invocation": "evidencectl artifact",
-          "about": "Compatibility operations over deployment artifacts",
+          "about": "Inspect deployment artifact custody",
           "long_about": null,
           "usage": "evidencectl artifact [OPTIONS] <COMMAND>",
           "arguments": [],
@@ -15222,7 +15222,7 @@
           "name": "dev",
           "invocation": "messagingctl dev",
           "about": "Run an authoring project locally with PostgreSQL, Mailpit, and a mock HTTP gateway in Docker, until Ctrl-C",
-          "long_about": null,
+          "long_about": "Run an authoring project locally with PostgreSQL, Mailpit, and a mock HTTP gateway in Docker, until Ctrl-C. The session pulls and runs the pinned images public.ecr.aws/docker/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675 and ghcr.io/axllent/mailpit:v1.31.2@sha256:74d609a42ec279aa63c6b4622a6fa9b5408d1ad5b1d76a1c4be40a265ce0863d, the Docker Official Images and upstream GHCR mirrors of postgres:17.11 and axllent/mailpit:v1.31.2 at those digests. Each publishes on 127.0.0.1 only, and the session removes both when it stops.",
           "usage": "messagingctl dev [OPTIONS] [PROJECT]\n       messagingctl dev <COMMAND>",
           "arguments": [
             {
@@ -15287,7 +15287,7 @@
             },
             {
               "display": "-h, --help",
-              "description": "Print help",
+              "description": "Print help (see a summary with '-h')",
               "always_required": false,
               "repeatable": false,
               "default_values": [],

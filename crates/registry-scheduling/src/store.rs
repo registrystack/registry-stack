@@ -157,13 +157,6 @@ pub enum StoreError {
     Corrupt,
     #[error("the Scheduling database belongs to another deployment")]
     DeploymentIdentity,
-    /// A retained policy document carries the top-level `scheduling` block
-    /// the predecessor wrote where this release writes `project`. Nothing
-    /// the document holds is repeated.
-    #[error(
-        "the Scheduling database was written by an earlier release, which this release does not read; start from a new database, then run `schedulingctl apply --runtime-config FILE` and `schedulingctl records apply` again"
-    )]
-    EarlierRelease,
     /// A commit whose acknowledgment never arrived and whose outcome could
     /// not be read back: it may have taken effect.
     #[error(
@@ -311,7 +304,6 @@ impl StoreError {
                 | Self::LedgerUnreadable { .. }
                 | Self::RetainedHookBindings
                 | Self::DeploymentIdentity
-                | Self::EarlierRelease
                 | Self::PolicyInUse(_)
                 | Self::CombinedInvariant(_)
                 | Self::SupplyIdentifierCollision(_)
@@ -2943,13 +2935,7 @@ async fn publish_policy(
 }
 
 /// Read a retained policy document without reinterpreting its stored members.
-/// The retired `scheduling` identity names an earlier release explicitly.
 fn retained_policy(document: Value) -> Result<SchedulingPolicy, StoreError> {
-    if let Some(object) = document.as_object() {
-        if object.contains_key("scheduling") && !object.contains_key("project") {
-            return Err(StoreError::EarlierRelease);
-        }
-    }
     serde_json::from_value(document).map_err(|_| StoreError::Corrupt)
 }
 

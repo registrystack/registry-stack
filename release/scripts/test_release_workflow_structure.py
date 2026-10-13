@@ -20,6 +20,10 @@ WORKFLOWS = ROOT / ".github" / "workflows"
 LATEST_RELEASE_HELPER = ROOT / "release/scripts/verify_latest_published_release.py"
 LINUX_NODE_BUILD_HELPER = ROOT / "release/scripts/build-linux-node-client"
 SETUP_GO_ACTION = "actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e"
+# Go builds AWS-LC-FIPS and is not shipped. Every hosted job installs this one
+# release, and every cache that holds its output names it.
+GO_VERSION = "1.27.2"
+GO_CACHE_TOKEN_RE = re.compile(r"\bgo-([0-9]+(?:\.[0-9]+)+)")
 
 
 def workflow(name: str) -> tuple[str, dict]:
@@ -42,7 +46,7 @@ def assert_pinned_go(test: unittest.TestCase, document: dict, job: str) -> None:
         if item.get("name") == "Install Go for the AWS-LC-FIPS source build"
     )
     test.assertEqual(step["uses"], SETUP_GO_ACTION)
-    test.assertEqual(step["with"], {"go-version": "1.24.4", "cache": False})
+    test.assertEqual(step["with"], {"go-version": GO_VERSION, "cache": False})
 
 
 def verify_latest_release_fixture(
@@ -84,7 +88,7 @@ class EvidenceDevelopmentWorkflowStructureTest(unittest.TestCase):
                 for step in document["jobs"][job]["steps"]
                 if "Cargo cache" in step.get("name", "")
             )
-            self.assertIn("go-1.24.4", cache["with"]["key"])
+            self.assertIn(f"go-{GO_VERSION}", cache["with"]["key"])
 
     def test_is_manual_main_only_with_one_narrow_publication_job(self) -> None:
         text, document = workflow("evidence-dev.yml")
@@ -235,19 +239,19 @@ class EvidenceDevelopmentWorkflowStructureTest(unittest.TestCase):
                 (
                     "linux-amd64",
                     "x86_64-unknown-linux-gnu",
-                    "cp310-abi3-linux_x86_64",
+                    "cp311-abi3-linux_x86_64",
                     "linux-x64-gnu",
                 ),
                 (
                     "linux-arm64",
                     "aarch64-unknown-linux-gnu",
-                    "cp310-abi3-linux_aarch64",
+                    "cp311-abi3-linux_aarch64",
                     "linux-arm64-gnu",
                 ),
                 (
                     "macos-arm64",
                     "aarch64-apple-darwin",
-                    "cp310-abi3-macosx_11_0_arm64",
+                    "cp311-abi3-macosx_11_0_arm64",
                     "darwin-arm64",
                 ),
             },
@@ -298,7 +302,7 @@ class EvidenceDevelopmentWorkflowStructureTest(unittest.TestCase):
         )
         self.assertIn('echo "evidence-client-node-${tag}-${platform}.tgz"', roster)
         self.assertIn(
-            'echo "registry_evidence_client-${python_version}-cp310-abi3-${wheel_platform}.whl"',
+            'echo "registry_evidence_client-${python_version}-cp311-abi3-${wheel_platform}.whl"',
             roster,
         )
         self.assertIn(
@@ -794,7 +798,7 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
             )
         )
 
-    def test_arm64_platform_runner_matches_the_glibc_floor_and_is_checked(
+    def test_arm64_platform_build_links_at_the_glibc_floor_and_is_checked(
         self,
     ) -> None:
         _, document = workflow("release-candidate.yml")
@@ -802,7 +806,7 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         self.assertEqual(
             {(entry["runner"], entry["target"], entry["asset"]) for entry in matrix},
             {
-                ("ubuntu-22.04-arm", "aarch64-unknown-linux-gnu", "linux-arm64"),
+                ("ubuntu-24.04-arm", "aarch64-unknown-linux-gnu", "linux-arm64"),
             },
         )
         steps = document["jobs"]["build-platforms"]["steps"]
@@ -818,6 +822,18 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         native = step_run(
             document, "build-platforms", "Build native platform payload once"
         )
+        # The runner's own glibc is newer than the floor, so the build reaches
+        # the floor through the shared Zig toolchain, installed before the
+        # first compile and never configured in the workflow itself.
+        toolchain = native.index(". release/scripts/zig-glibc-toolchain.sh\n")
+        install = native.index(
+            'install_zig_glibc_toolchain "${RUNNER_TEMP:?RUNNER_TEMP is required}'
+            '/zig-glibc-toolchain"\n'
+        )
+        self.assertLess(toolchain, install)
+        self.assertLess(install, native.index("cargo build"))
+        self.assertNotIn("REGISTRY_ZIG_TARGET", native)
+        self.assertNotIn("_LINKER", native)
         schedulingctl = native.split(
             "if (( release_major > 0 || release_minor >= 36 )); then", 1
         )[1]
@@ -960,22 +976,22 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
                 (
                     "linux-amd64-glibc",
                     "x86_64-unknown-linux-gnu",
-                    "cp310-abi3-linux_x86_64",
-                    "cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64",
+                    "cp311-abi3-linux_x86_64",
+                    "cp311-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64",
                     "linux-x64-gnu",
                 ),
                 (
                     "linux-arm64-glibc",
                     "aarch64-unknown-linux-gnu",
-                    "cp310-abi3-linux_aarch64",
-                    "cp310-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64",
+                    "cp311-abi3-linux_aarch64",
+                    "cp311-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64",
                     "linux-arm64-gnu",
                 ),
                 (
                     "macos-arm64",
                     "aarch64-apple-darwin",
-                    "cp310-abi3-macosx_11_0_arm64",
-                    "cp310-abi3-macosx_11_0_arm64",
+                    "cp311-abi3-macosx_11_0_arm64",
+                    "cp311-abi3-macosx_11_0_arm64",
                     "darwin-arm64",
                 ),
             },
@@ -988,19 +1004,19 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         setup_node = next(
             step for step in clients["steps"] if step.get("name") == "Setup Node"
         )
-        self.assertEqual(setup_node["with"]["node-version"], "22.20.0")
+        self.assertEqual(setup_node["with"]["node-version"], "24.21.0")
         minimum_node = next(
             step for step in clients["steps"]
             if step.get("name") == "Setup minimum Node runtime"
         )
-        self.assertEqual(minimum_node["with"]["node-version"], "22.12.0")
+        self.assertEqual(minimum_node["with"]["node-version"], "24.11.0")
         self.assertFalse(minimum_node["with"]["package-manager-cache"])
         retain_minimum = step_run(
             document, "clients", "Retain minimum Node runtime for package smokes"
         )
         self.assertIn('minimum_node_bin="$(command -v node)"', retain_minimum)
         self.assertIn('[[ "${minimum_node_bin}" == /* ]]', retain_minimum)
-        self.assertIn('test "$("${minimum_node_bin}" --version)" = v22.12.0', retain_minimum)
+        self.assertIn('test "$("${minimum_node_bin}" --version)" = v24.11.0', retain_minimum)
         self.assertIn("MINIMUM_NODE_BIN=%s\\n", retain_minimum)
         self.assertIn('"${GITHUB_ENV}"', retain_minimum)
         step_names = [step.get("name") for step in clients["steps"]]
@@ -1034,8 +1050,8 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         self.assertIn(macos_recipe, cache_key)
         self.assertIn(macos_recipe, restore_key)
         self.assertIn(".github/workflows/release-candidate.yml", cache_key)
-        self.assertIn("go-1.24.4", cache_key)
-        self.assertIn("go-1.24.4", restore_key)
+        self.assertIn(f"go-{GO_VERSION}", cache_key)
+        self.assertIn(f"go-{GO_VERSION}", restore_key)
         self.assertIn("zig-0.12.1-glibc-2.17", cache_key)
         self.assertIn("release/requirements/maturin-1.9.6.txt", cache_key)
         self.assertIn("release/scripts/zig-glibc-compiler", cache_key)
@@ -1289,7 +1305,7 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         )
         baseline = clients["env"]["NODE_RUNTIME_SMOKE_IMAGE"]
         self.assertRegex(
-            baseline, r"^registry\.access\.redhat\.com/ubi8/nodejs-22-minimal:1-[0-9]+@sha256:[0-9a-f]{64}$"
+            baseline, r"^registry\.access\.redhat\.com/ubi8/nodejs-24-minimal:1-[0-9]+@sha256:[0-9a-f]{64}$"
         )
         self.assertIn("-maxdepth 1 -name '*.node'", node_smoke)
         self.assertIn("node_modules/@registrystack/${client}-client-", node_smoke)
@@ -1453,7 +1469,8 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
             "'release/docker/Dockerfile.builder', "
             "'release/requirements/ziglang-0.12.1.txt', "
             "'release/glibc-floor.env', "
-            "'release/scripts/zig-glibc-compiler') }}-"
+            "'release/scripts/zig-glibc-compiler', "
+            "'release/scripts/zig-glibc-toolchain.sh') }}-"
         )
         for filename, job_name in (
             ("release-candidate.yml", "build-canonical-binaries"),
@@ -2340,6 +2357,21 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
         self.assertNotIn("NODE_AUTH_TOKEN", text)
         self.assertNotIn("PYPI_TOKEN", text)
 
+    def test_every_node_setup_pins_the_build_runtime(self) -> None:
+        _, document = workflow("release.yml")
+        setup_node_steps = [
+            (job_name, step)
+            for job_name, job in document["jobs"].items()
+            for step in job.get("steps", ())
+            if step.get("uses", "").startswith("actions/setup-node@")
+        ]
+        self.assertIn(
+            "publish_client_npm", [job_name for job_name, _ in setup_node_steps]
+        )
+        for job_name, step in setup_node_steps:
+            with self.subTest(job=job_name, step=step.get("name")):
+                self.assertEqual(step["with"]["node-version"], "24.21.0")
+
 
     def test_client_publication_matrices_preserve_historical_relay_only(self) -> None:
         _, document = workflow("release.yml")
@@ -2420,7 +2452,64 @@ class SupportingWorkflowStructureTest(unittest.TestCase):
             for step in document["jobs"]["golden"]["steps"]
             if step.get("name") == "Cache Cargo registry and build artifacts"
         )
-        self.assertIn("go-1.24.4", cache["with"]["key"])
+        self.assertIn(f"go-{GO_VERSION}", cache["with"]["key"])
+
+    def test_every_go_setup_pins_the_supported_toolchain(self) -> None:
+        setup_go_jobs = set()
+        for path in sorted(WORKFLOWS.glob("*.yml")):
+            text, document = workflow(path.name)
+            for job_name, job in document["jobs"].items():
+                steps = job.get("steps", ())
+                setup_go_steps = [
+                    step
+                    for step in steps
+                    if step.get("uses", "").startswith("actions/setup-go@")
+                ]
+                if not setup_go_steps:
+                    continue
+                setup_go_jobs.add((path.name, job_name))
+                for step in setup_go_steps:
+                    with self.subTest(workflow=path.name, job=job_name):
+                        self.assertEqual(step["uses"], SETUP_GO_ACTION)
+                        self.assertEqual(
+                            step["with"], {"go-version": GO_VERSION, "cache": False}
+                        )
+                # Cargo does not track the Go release as a build input, so a
+                # restored target directory keeps AWS-LC-FIPS objects built by
+                # whichever Go produced them. The key has to name the release.
+                for step in steps:
+                    if not step.get("uses", "").startswith(
+                        ("actions/cache@", "Swatinem/rust-cache@")
+                    ):
+                        continue
+                    keys = [step["with"]["key"]]
+                    keys += step["with"].get("restore-keys", "").splitlines()
+                    with self.subTest(
+                        workflow=path.name, job=job_name, cache=step.get("name")
+                    ):
+                        for key in keys:
+                            self.assertIn(f"go-{GO_VERSION}", key)
+            with self.subTest(workflow=path.name, check="cache identity"):
+                self.assertLessEqual(
+                    set(GO_CACHE_TOKEN_RE.findall(text)), {GO_VERSION}
+                )
+        self.assertEqual(
+            setup_go_jobs,
+            {
+                ("ci.yml", "release-linux-node-clients"),
+                ("evidence-dev.yml", "build"),
+                ("evidence-dev.yml", "clients"),
+                ("macos-contributor.yml", "direct-cargo-binaries"),
+                ("nightly-release.yml", "arm64"),
+                ("nightly-release.yml", "macos"),
+                ("release-candidate.yml", "build-macos-platforms"),
+                ("release-candidate.yml", "build-platforms"),
+                ("release-candidate.yml", "clients"),
+                ("release-native-benchmark.yml", "build"),
+                ("release-rehearsal.yml", "node-clients"),
+                ("render-golden.yml", "golden"),
+            },
+        )
 
     def test_public_verification_selects_the_versioned_image_roster(self) -> None:
         verify = (ROOT / "release/VERIFY.md").read_text(encoding="utf-8")
@@ -3299,6 +3388,140 @@ class BregServicesRosterStructureTest(unittest.TestCase):
             self.assertFalse(roster.breg_services_in_release((0, 36, 9)))
             self.assertTrue(roster.breg_services_in_release((0, 37, 0)))
             self.assertTrue(roster.breg_services_in_release((1, 0, 0)))
+
+
+PYTHON_FLOOR = (3, 11)
+PYTHON_REQUIRES = ">=3.11"
+PYTHON_STABLE_ABI_FEATURE = "abi3-py311"
+PYTHON_WHEEL_ABI_TAG = "cp311-abi3"
+PYTHON_CLIENT_PACKAGES = (
+    "registry-breg-client-py",
+    "registry-casework-client-py",
+    "registry-discovery-client-py",
+    "registry-evidence-client-py",
+    "registry-messaging-client-py",
+    "registry-scheduling-client-py",
+    "registry-stack-client-py",
+)
+PYTHON_VERSION_CLASSIFIER = re.compile(
+    r"^Programming Language :: Python :: (\d+)\.(\d+)$"
+)
+PYTHON_WHEEL_ABI_TAG_PATTERN = re.compile(r"cp3\d+-abi3")
+PYTHON_STABLE_ABI_FEATURE_PATTERN = re.compile(r"abi3-py3\d+")
+PYTHON_WHEEL_WORKFLOWS = ("evidence-dev.yml", "release-candidate.yml")
+
+
+def load_release_script(name: str):
+    spec = importlib.util.spec_from_file_location(
+        f"{Path(name).stem.replace('-', '_')}_python_floor_under_test",
+        ROOT / "release/scripts" / name,
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    # A dataclass resolves its own module through sys.modules while it is defined.
+    with mock.patch.dict(sys.modules, {spec.name: module}):
+        spec.loader.exec_module(module)
+    return module
+
+
+class PythonClientFloorStructureTest(unittest.TestCase):
+    """Every statement of the minimum Python of the client packages agrees.
+
+    The floor is stated by the package metadata, by the PyO3 stable ABI
+    feature the wheels are compiled against, by the wheel tag maturin derives
+    from that feature, and by each workflow and release script that names a
+    wheel file. A wheel named for one stable ABI and built against another is
+    published under a requirement it does not meet, so the statements move
+    together or this test fails.
+    """
+
+    def test_every_python_client_package_declares_the_floor(self) -> None:
+        import tomllib
+
+        self.assertEqual(
+            sorted(PYTHON_CLIENT_PACKAGES),
+            sorted(
+                path.parent.name
+                for path in (ROOT / "crates").glob("registry-*-client-py/pyproject.toml")
+            ),
+        )
+        for package in PYTHON_CLIENT_PACKAGES:
+            with self.subTest(package=package):
+                project = tomllib.loads(
+                    (ROOT / "crates" / package / "pyproject.toml").read_text(
+                        encoding="utf-8"
+                    )
+                )["project"]
+                self.assertEqual(PYTHON_REQUIRES, project["requires-python"])
+                versions = [
+                    (int(match.group(1)), int(match.group(2)))
+                    for match in map(
+                        PYTHON_VERSION_CLASSIFIER.match, project.get("classifiers", [])
+                    )
+                    if match
+                ]
+                self.assertEqual([], [v for v in versions if v < PYTHON_FLOOR])
+
+    def test_the_stable_abi_feature_matches_the_floor(self) -> None:
+        import tomllib
+
+        workspace = tomllib.loads((ROOT / "Cargo.toml").read_text(encoding="utf-8"))
+        self.assertEqual(
+            [PYTHON_STABLE_ABI_FEATURE],
+            workspace["workspace"]["dependencies"]["pyo3"]["features"],
+        )
+
+    def test_the_unified_wheel_metadata_declares_the_floor(self) -> None:
+        assembler = load_release_script("assemble-registry-client-wheel.py")
+        self.assertIn(
+            f"\nRequires-Python: {PYTHON_REQUIRES}\n",
+            assembler.metadata("0.0.0").decode("utf-8"),
+        )
+
+    def test_release_scripts_name_the_floor_wheel_tag(self) -> None:
+        import tomllib
+
+        version = tuple(
+            int(part)
+            for part in tomllib.loads(
+                (ROOT / "Cargo.toml").read_text(encoding="utf-8")
+            )["workspace"]["package"]["version"].split(".")
+        )
+        roster = load_release_script("release_roster.py")
+        self.assertEqual(PYTHON_WHEEL_ABI_TAG, roster.python_wheel_abi_tag(version))
+        packages = load_release_script("assemble-registry-client-packages.py")
+        for platform, definition in packages.PLATFORMS.items():
+            with self.subTest(platform=platform):
+                self.assertTrue(
+                    definition["wheel_tag"].startswith(f"{PYTHON_WHEEL_ABI_TAG}-")
+                )
+
+    def test_workflows_name_only_the_floor_wheel_tag(self) -> None:
+        naming = set()
+        for path in sorted(WORKFLOWS.glob("*.yml")):
+            text = path.read_text(encoding="utf-8")
+            with self.subTest(workflow=path.name):
+                tags = set(PYTHON_WHEEL_ABI_TAG_PATTERN.findall(text))
+                self.assertLessEqual(tags, {PYTHON_WHEEL_ABI_TAG})
+                self.assertLessEqual(
+                    set(PYTHON_STABLE_ABI_FEATURE_PATTERN.findall(text)),
+                    {PYTHON_STABLE_ABI_FEATURE},
+                )
+                if tags:
+                    naming.add(path.name)
+        self.assertEqual(set(PYTHON_WHEEL_WORKFLOWS), naming)
+
+    def test_promotion_takes_the_wheel_tag_from_the_candidate(self) -> None:
+        # The workflows that build wheels name the floor tag. Promotion also
+        # accepts a candidate of an earlier release, whose wheels keep the tag
+        # they were built with, so it copies whichever stable ABI tag the
+        # candidate carries and `pypi-state` holds the exact names.
+        text = (WORKFLOWS / "release.yml").read_text(encoding="utf-8")
+        self.assertIn(
+            'cp "extracted/registry_${client}_client-${version}-"cp3*-abi3-"${platform}.whl" dist/',
+            text,
+        )
+        self.assertIn("client_registry.py pypi-state", text)
 
 
 if __name__ == "__main__":

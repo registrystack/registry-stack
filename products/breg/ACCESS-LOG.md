@@ -11,10 +11,9 @@ create a global subject pseudonym, share a subject key with another registry, or
 make the log searchable across registries. There is no backfill for reads that
 happened before a package enabling the log became active.
 
-The log's storage is installed by an apply. A database activated by a release
-without it keeps serving its active package after an upgrade, as long as that
-package declares no `accessLog`; the next successor apply installs the storage,
-and a package that declares `accessLog` is never served without it.
+The log's storage is installed by every apply, whether or not the package
+declares `accessLog`, and it is part of the catalog BReg verifies before it
+serves. A database without the storage is refused at startup.
 
 ## Author the policy
 

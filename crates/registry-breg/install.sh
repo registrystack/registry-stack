@@ -351,7 +351,7 @@ asset_name() {
 # the dynamic linker only says so at the first run, long after this installer
 # would have reported success. Refuse here instead, before anything downloads.
 if [ "$os_label" = "linux" ]; then
-	libc_floor="2.35"
+	libc_floor="2.34"
 	# musl's ldd exits non-zero when asked for a version, and this installer runs
 	# under pipefail, so its report is captured once here instead of being read
 	# through a pipeline whose status would hide the match.
@@ -567,6 +567,21 @@ for binary in "${binaries[@]}"; do
 	else
 		cp "$tmpdir/$(asset_name "$binary")" "$stage_dir/$binary"
 		chmod 0755 "$stage_dir/$binary"
+		# The libc preflight knows only the floor of the release this installer
+		# was published with, and a release's Linux binaries need the GNU libc
+		# that release was built for. Start each staged binary before the
+		# toolset pointer moves, so a release that cannot run here is refused
+		# while the installed toolset is still the selected one. A runtime
+		# reads its settings from the environment before its arguments, so the
+		# binary starts with an empty one: a setting left in this shell must
+		# not be read as a binary that cannot start.
+		if [ "$os_label" = "linux" ] && ! env -i "$stage_dir/$binary" --version >/dev/null </dev/null; then
+			printf 'The staged %s %s did not start on this system, so this release cannot run here.\n' \
+				"$binary" "$version" >&2
+			printf 'The Linux binaries of a release need the GNU libc that release was built for, which may be newer than the one on this system.\n' >&2
+			printf 'The installed toolset is unchanged. Choose a release built for the GNU libc of this system, or run the published container images.\n' >&2
+			exit 1
+		fi
 	fi
 done
 

@@ -55,8 +55,7 @@ every listener mode, with or without `package.expectedDigest`, the directory
 must be a package `caseworkctl package` wrote: a `SHA256SUMS` file listing
 exactly `casework.yaml` and the source descriptions it names, each matching its
 digest. A directory without `SHA256SUMS`, such as an authored project, is
-refused and names `caseworkctl package`; so is a directory that holds the
-retired `casework.package.json`. `caseworkctl dev` packages the authored
+refused and names `caseworkctl package`. `caseworkctl dev` packages the authored
 project on every start and serves that package.
 
 `package.expectedDigest` is optional. When set, it is `sha256:` followed by 64

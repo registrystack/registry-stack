@@ -70,7 +70,7 @@ wire contract.
 | `dev grant` | `CaseworkDevGrantReport` | `DevGrantReport.schema.json` |
 | `dev identity` | `CaseworkDevIdentityReport` | `DevIdentityReport.schema.json` |
 | `dev token` | `CaseworkDevTokenReport` | `DevTokenReport.schema.json` |
-| invalid command arguments, and the removed `db migrate` | `CaseworkUsageReport` | `UsageReport.schema.json` |
+| invalid command arguments | `CaseworkUsageReport` | `UsageReport.schema.json` |
 
 The dev-only reports are included. They are local operator surfaces, but shell
 tools still parse them and need the same explicit drift signal as adopter

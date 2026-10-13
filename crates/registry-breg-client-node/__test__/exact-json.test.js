@@ -35,6 +35,7 @@ function operation(kind) {
   return {id:`records.item.${kind}`, method:kind === 'create' ? 'POST' : kind === 'patch' ? 'PATCH' : 'GET',
     path:`/v1/records/items${kind === 'patch' ? '/{record_id}' : ''}`, operation:kind,
     sourceEntity:'item', responseEntity:'item', accessProfile:profile, requiredCapabilities:[],
+    futureExecutionMember:{ignored:true},
     entityLabel:'Item', identifier:{apiName:'id',location:'envelope'}, titleFields:[], fields,
     readableFields:fields.map(f=>f.id), readableRequestFields:['reason'],
     createWritableFields:kind === 'create' ? fields.map(f=>f.id) : [],
@@ -101,6 +102,7 @@ function otherCreateOperation() {
     sourceEntity:'other',responseEntity:'other'};
 }
 const metadata = {id:'test-registry',version:'1',revision:`sha256:${'a'.repeat(64)}`,metadataVersion:'1',
+  futureDescription:{label:'Future registry description'},
   entities:[{id:'item',datasetIdentifier:'items',route:'items',schema:'/v1/schemas/item',
     operations:['create','patch','list','lookup','apply-request','tombstone','batch'].map(operation=>({operation,accessProfile:profile})),readableFields:fields.map(f=>f.id),
     changeRequest:{planner:{kind:'declarative'},
@@ -147,6 +149,7 @@ const receipt = {
 test('native JSON methods preserve values, metadata, cursors and mutation preconditions', async () => {
   const requests = [];
   let responseNumber = '9007199254740992';
+  let metadataWire = null;
   const server = http.createServer(async (request, response) => {
     let body = ''; for await (const chunk of request) body += chunk;
     requests.push({method:request.method,url:request.url,body,headers:request.headers});
@@ -154,7 +157,7 @@ test('native JSON methods preserve values, metadata, cursors and mutation precon
     response.setHeader('content-type','application/json');
     response.setHeader('cache-control','no-store');
     response.setHeader('vary','authorization, accept');
-    if (request.url.startsWith('/v1/registry')) return response.end(JSON.stringify(metadata));
+    if (request.url.startsWith('/v1/registry')) return response.end(metadataWire ?? JSON.stringify(metadata));
     const path = request.url.split('?')[0];
     if (path.endsWith(':lookup')) {
       response.setHeader('link','<https://id.registrystack.org/profiles/registry-record/v1>; rel="profile", </v1/schemas/item>; rel="describedby"');
@@ -201,6 +204,27 @@ test('native JSON methods preserve values, metadata, cursors and mutation precon
     list.id = 'forged';
     assert.equal(contract.operations.find(op=>op.kind === 'list').id,'records.item.list');
     const binding = contract.selectCreate('records.item.create',profile);
+
+    metadata.operations[0].requiredCapabilities = ['future-write-protocol'];
+    const partlyUnsupported = await client.registryContract(profile);
+    assert.throws(
+      () => partlyUnsupported.selectCreate('records.item.create',profile),
+      error => error.kind === 'metadata-selection' && error.code === 'required-capability',
+    );
+    assert.doesNotThrow(() => partlyUnsupported.selectPatch('records.item.patch',profile));
+    metadata.operations[0].requiredCapabilities = [];
+
+    metadataWire = JSON.stringify(metadata).replace(
+      '"id":"test-registry"',
+      '"id":"test-registry","id":"duplicate-registry"',
+    );
+    await assert.rejects(client.registryContract(profile), error => error.kind === 'protocol');
+    metadataWire = null;
+
+    metadata.futureDescription.label = 'x'.repeat(65_537);
+    await assert.rejects(client.registryContract(profile), error => error.kind === 'protocol');
+    metadata.futureDescription.label = 'Future registry description';
+
     const data = `{"wide":9007199254740992,"decimal":"12.3400","date":"2026-09-08","nullable":null,"reference":"${id}"}`;
     const structuredCreateCount = requests.length;
     assert.throws(() => client.createRecord(binding,{wide:Number.MAX_SAFE_INTEGER + 1},'unsafe-create'),error=>error.kind === 'invalid-request');

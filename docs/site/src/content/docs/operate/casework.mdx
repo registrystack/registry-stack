@@ -93,11 +93,10 @@ and the release also publishes `casework-install.sh` as a movable alias of the p
 Each release publishes the container image `ghcr.io/registrystack/casework:<tag>`, built on a
 distroless nonroot base for `linux/amd64`. Its entrypoint is `/usr/local/bin/casework`, its default arguments are
 `--runtime-config /etc/registry-casework/runtime.yaml serve`, and it exposes port 8100. It carries
-no shell and no healthcheck command. From `v0.36.0` it also carries the matching `caseworkctl` at
-`/usr/local/bin/caseworkctl`, and the entrypoint stays `casework`; an earlier image carries the
-runtime binary alone. `plan`, `apply`, `status`, and `doctor` belong to `caseworkctl`, so they run
-from an operator host that has that binary installed and reaches the database, or, from `v0.36.0`,
-from the image with its entrypoint overridden, as
+no shell and no healthcheck command. It also carries the matching `caseworkctl` at
+`/usr/local/bin/caseworkctl`, and the entrypoint stays `casework`. `plan`, `apply`, `status`, and
+`doctor` belong to `caseworkctl`, so they run from an operator host that has that binary installed
+and reaches the database, or from the image with its entrypoint overridden, as
 [Run plan, apply, and status from the image](#run-plan-apply-and-status-from-the-image) shows. One directory is
 writable, `/var/lib/registry-casework/audit`, owned by UID and GID 65532 with mode `0700`, for the
 audit file; mount the runtime file, the policy package, and the secret root read-only. The
@@ -436,8 +435,7 @@ descriptions it names. A start that verifies the package records the package dig
 digest of `SHA256SUMS`, in the runtime log before anything else happens.
 
 With `tlsTermination: operator-controlled-upstream`, an absent `SHA256SUMS` is a refusal rather
-than a fallback to the authored project. A directory that still holds `casework.package.json` is
-refused and names `caseworkctl package` as the command that rebuilds it.
+than a fallback to the authored project.
 
 A verified package proves its files match its own `SHA256SUMS`, not that it is the package you
 reviewed. Set `package.expectedDigest` to the `packageDigest` that `caseworkctl package` reported
@@ -588,8 +586,8 @@ refuses the response entry after the commit, apply exits `3` with
 `casework.activation.applied-unaudited`: the package is active, so do not apply it again; restore
 the audit destination and record the activation `status` names in your audit trail.
 
-`casework migrate` and `caseworkctl db migrate` no longer migrate. Each still parses only to exit
-`2` and name `caseworkctl plan` then `caseworkctl apply`. The first `apply` on a fresh database
+`casework` has no `migrate` subcommand and `caseworkctl` has no `db` subcommand. Each is refused
+as an unrecognized subcommand with exit `2`. The first `apply` on a fresh database
 installs the current schema and records the first activation. For a release upgrade, follow
 [Upgrade and retire](../advanced/upgrade-and-retire/). The v0.39.0-to-v0.40.0 step requires a new
 database; v0.40.0 supports no in-place upgrade from v0.39.0. From v0.40.0 onward, upgrade one
@@ -632,11 +630,9 @@ disposable local session, use `caseworkctl dev stop PROJECT --remove` and start 
     migration_refuses_to_drop_retained_hosted_work_and_writes_nothing(); CONTRIBUTING.md,
     schema migration and predecessor-readability policy. */}
 
-If you run Casework 0.33.0 or earlier, upgrade one release at a time using each target release's
-notes. Do not rely on the current runtime to supersede or convert its stored work. At the
-v0.39.0-to-v0.40.0 step, finish or settle source-backed work before the move, then apply the rebuilt
-package to a new database. Stored work items, claims, drafts, and pending attempts do not carry
-into that database. Follow [Upgrade and retire](../advanced/upgrade-and-retire/) for the full
+At the v0.39.0-to-v0.40.0 step, finish or settle source-backed work before the move, then apply the
+rebuilt package to a new database. Stored work items, claims, drafts, and pending attempts do not
+carry into that database. Follow [Upgrade and retire](../advanced/upgrade-and-retire/) for the full
 product order and recovery boundary.
 
 {/* Evidence: CONTRIBUTING.md, schema migration and predecessor-readability policy;
@@ -644,9 +640,9 @@ product order and recovery boundary.
 
 ### Run plan, apply, and status from the image
 
-From `v0.36.0` the Casework image carries the `caseworkctl` built from the same source as its
-`casework`, so you can activate the package from the image digest you serve, without installing
-`caseworkctl` on an operator host. Override the entrypoint with `/usr/local/bin/caseworkctl`, mount
+The Casework image carries the `caseworkctl` built from the same source as its `casework`, so you
+can activate the package from the image digest you serve, without installing `caseworkctl` on an
+operator host. Override the entrypoint with `/usr/local/bin/caseworkctl`, mount
 the runtime file, the package, and the secret root read-only at the absolute paths the runtime file
 names, and pass the same arguments as on the operator host:
 
@@ -1060,7 +1056,7 @@ bound to the actor and selected profile for 15 minutes; an expired preview retur
 | `casework.activation.already-active` | The active package is applied with nothing to change. Nothing needs applying. |
 | `casework.activation.audit-unavailable` | The audit destination refused the request entry, so nothing was applied. Restore the destination named at `audit`, then apply again. |
 | `casework.activation.applied-unaudited` | The package is active but its response entry did not reach the audit destination. Do not apply again; restore the destination and record the activation `caseworkctl status` names. |
-| `casework migrate` or `caseworkctl db migrate` exits `2` | Those commands were removed. Run `caseworkctl plan --runtime-config FILE` then `caseworkctl apply --runtime-config FILE`. |
+| `casework migrate` or `caseworkctl db migrate` exits `2` | Those commands do not exist. Run `caseworkctl plan --runtime-config FILE` then `caseworkctl apply --runtime-config FILE`. |
 | `the Casework database schema version N is newer than this binary supports (M)` | A newer release already migrated this database. Run that release or a later one; Casework does not migrate a schema down. |
 | `the Casework database holds hosted work that schema migration 15 would drop` | The database still holds hosted work from Casework 0.32.0 or earlier. Keep it with that release until its work is exported, then apply this release to a fresh database as [Plan, apply, and serve](#plan-apply-and-serve) describes. |
 | `the Casework database holds N audit record(s) that schema migration 17 would drop` | The earlier database has unpublished audit records. Keep it with the release that wrote it until its audit records are published and its work and accountability records are exported, then apply v0.40.0 to a new database as [earlier database and audit state](#earlier-database-and-audit-state) describes. |

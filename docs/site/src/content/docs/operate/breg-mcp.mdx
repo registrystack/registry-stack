@@ -193,9 +193,6 @@ The new writer does not verify a hash chain or detect a changed pseudonym key.
 
 ## Upgrade
 
-When upgrading from the draft chained format, archive its files and configure a fresh audit path.
-Set each `listener.bind` explicitly.
-
 A configuration written for an earlier release may still carry a retired `apiVersion` or a renamed
 key. `check` refuses each one and names what to write instead: the current `apiVersion` is
 `id.registrystack.org/formats/breg/mcp-runtime/v1alpha1` for the gateway and
@@ -228,8 +225,7 @@ effective limit.
 
 ## Install the services or run their images
 
-The first release eligible to publish the paired services is v0.38.0. For a published release at
-or after that boundary, choose `<tag>` from the
+Choose `<tag>` from the
 [latest release](https://github.com/registrystack/registry-stack/releases/latest), download the
 `breg-mcp-<tag>-linux-amd64` and `breg-review-<tag>-linux-amd64` assets, and authenticate both
 through the shared `SHA256SUMS` procedure at

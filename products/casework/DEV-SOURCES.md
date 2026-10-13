@@ -17,6 +17,14 @@ client's stable native subject before authoring its `agent.subject`:
 caseworkctl dev identity task-agent
 ```
 
+`source add` owns the generated BReg hook ID
+`casework-lifecycle-v1-<entity>` for each paired request entity and the generated
+`casework-reader` profile permission. These IDs are reserved for the exact
+generated content. Add operator-authored hooks under distinct IDs beside the
+generated hook; do not edit or reuse a generated ID. When refreshing a pairing,
+remove a stale generated hook or permission as directed by the refusal, then let
+`source add --apply` recreate its current exact form.
+
 With `--issuer-project`, use the task client's native agent ID from the BREG
 issuer owner instead. That ID derives from the owner's `instanceId` and the
 same client ID. The standalone `caseworkctl dev identity` result does not
@@ -202,12 +210,20 @@ or client admission to the human profiles. For manual application, the apply
 profile must still admit the human reviewers.
 
 For local development, `source add --apply` reuses an exact existing
-`reviewExecutors` entry. When the entry is absent and one authored service
-client is already bound to the automatic apply profile, it adds the executor
-binding without changing that client or its grants. With no such client it
+`reviewExecutors` entry. When the entry is absent and one authored default
+service client is already bound to the automatic apply profile, it adds the
+executor binding without changing that client or its grants. Clients with
+nonempty `testBindings` are excluded from inference; an explicit
+`reviewExecutors` entry may still name one. With no default service client it
 reports the authoring still needed; it does not invent a credential. More than
-one eligible service client, or more than one human source-context profile, is
-refused as ambiguous.
+one default client, or more than one human source-context profile, is refused
+as ambiguous.
+
+BReg local clients may bind one default client to an access profile and add
+claim variants selected by exact `testBindings` journey and step pairs.
+`source add --apply` preserves those variants when it adds a generated default
+client. Two defaults for one profile and duplicate exact journey-step bindings
+remain ambiguous and are refused before any file is written.
 
 The local `reviewAuthorities` entry `source add --apply` writes into the BReg
 `dev-clients.yaml` calls Casework at `http://127.0.0.1:8092`, the default
@@ -216,8 +232,11 @@ example beside other registries on per-registry port ranges, pass the session's
 URL with `--casework-endpoint http://127.0.0.1:PORT`. The option accepts only
 an exact loopback HTTP URL with an explicit nonzero port, the shape
 `bregctl dev` admits, and refuses anything else without repeating the value.
-An existing entry that differs only in its endpoint is refused with a message
-naming the option, so repeat the pairing with the endpoint that entry names.
+Equivalent trailing-slash spellings that join to the same Casework review API
+destination are accepted while preserving the endpoint spelling already in the
+file. A different host, port, or path prefix is substantive and is refused with
+a message naming the option, so repeat the pairing with the endpoint that entry
+names.
 
 `caseworkctl check --format json` reports each request's `applicationMode`
 from its imported BReg description, and `caseworkctl test` checks the fixture against that mode.

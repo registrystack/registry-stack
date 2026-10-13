@@ -231,6 +231,7 @@ async fn records_apply_replaces_facts_wholesale_and_audits_each_write() {
              database:\n  runtimeUrlRef: secret:env/SCHEDULING_RECORDS_TEST_DATABASE\n\
              \x20 migrationUrlRef: secret:env/SCHEDULING_RECORDS_TEST_DATABASE\n\
              \x20 testOnlyPlaintext: true\n\
+             taskGrantStatus: unchecked-final-fifteen-minutes\n\
              audit:\n  path: {audit}\n  hashKeyRef: secret:env/SCHEDULING_RECORDS_TEST_AUDIT\n\
              retention:\n  attemptReceiptRetentionDays: 2\n",
             project = project.display(),
@@ -391,6 +392,7 @@ async fn records_apply_rejects_a_different_deployment_identity_without_writing()
              database:\n  runtimeUrlRef: secret:env/SCHEDULING_RECORDS_IDENTITY_DATABASE\n\
              \x20 migrationUrlRef: secret:env/SCHEDULING_RECORDS_IDENTITY_DATABASE\n\
              \x20 testOnlyPlaintext: true\n\
+             taskGrantStatus: unchecked-final-fifteen-minutes\n\
              audit:\n  path: {audit}\n  hashKeyRef: secret:env/SCHEDULING_RECORDS_IDENTITY_AUDIT\n\
              retention:\n  attemptReceiptRetentionDays: 2\n",
             project = project.display(),
@@ -576,6 +578,7 @@ async fn records_apply_refuses_a_database_where_this_package_is_not_active() {
              database:\n  runtimeUrlRef: secret:env/SCHEDULING_RECORDS_INACTIVE_DATABASE\n\
              \x20 migrationUrlRef: secret:env/SCHEDULING_RECORDS_INACTIVE_DATABASE\n\
              \x20 testOnlyPlaintext: true\n\
+             taskGrantStatus: unchecked-final-fifteen-minutes\n\
              audit:\n  path: {audit}\n  hashKeyRef: secret:env/SCHEDULING_RECORDS_INACTIVE_AUDIT\n\
              retention:\n  attemptReceiptRetentionDays: 2\n",
         project = project.display(),
