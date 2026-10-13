@@ -25,8 +25,7 @@ use crate::{
 /// The compiled snapshot format, carried by its workflow.
 pub(crate) const API_VERSION: &str =
     "id.registrystack.org/formats/coordinator/definition-snapshot/v1alpha1";
-const ADAPTER_ABI_V1: &str = "coordinator/product-operations/v1";
-const ADAPTER_ABI_V2: &str = "coordinator/product-operations/v2";
+const ADAPTER_ABI: &str = "coordinator/product-operations/v1";
 const SCHEMA_ABI: &str = "coordinator/jsonschema-0.18/draft202012/formats-asserted+uuid/v1";
 const MAX_DOCUMENT_BYTES: usize = 1_048_576;
 /// Maximum canonical snapshot size, shared by authoring, restore and packaging.
@@ -291,25 +290,6 @@ fn operation_identities(workflow: &Workflow) -> Vec<OperationIdentity> {
     identities
 }
 
-/// Workflows that do not opt into declared-refusal routing retain the exact v1
-/// adapter ABI. The v2 ABI pins both the classification and the branch output
-/// shape for workflows that use `onDeclaredRefusal`.
-fn adapter_abi(workflow: &Workflow) -> &'static str {
-    if workflow.steps.values().any(|step| {
-        matches!(
-            step,
-            Step::Call {
-                on_declared_refusal: Some(_),
-                ..
-            }
-        )
-    }) {
-        ADAPTER_ABI_V2
-    } else {
-        ADAPTER_ABI_V1
-    }
-}
-
 /// Compiled definitions keyed by the digest of their snapshot text, so one
 /// worker serving several flows compiles each pinned or in-flight snapshot once.
 ///
@@ -397,12 +377,11 @@ impl Definition {
             let exit = error.exit_code;
             crate::authoring::positioned(&document, error.at(&path, "functions")).with_exit(exit)
         })?;
-        let adapter_abi = adapter_abi(&workflow).into();
         let definition = Self::restore_checked(Snapshot {
             operation_identities: operation_identities(&workflow),
             workflow,
             source,
-            adapter_abi,
+            adapter_abi: ADAPTER_ABI.into(),
             interpreter_abi: INTERPRETER_ABI.into(),
             schema_abi: SCHEMA_ABI.into(),
         })
@@ -444,7 +423,7 @@ impl Definition {
                 .iter()
                 .all(OperationIdentity::matches_registered);
         if !operations_match
-            || frozen.adapter_abi != adapter_abi(&frozen.workflow)
+            || frozen.adapter_abi != ADAPTER_ABI
             || frozen.interpreter_abi != INTERPRETER_ABI
             || frozen.schema_abi != SCHEMA_ABI
         {

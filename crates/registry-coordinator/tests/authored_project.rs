@@ -79,14 +79,14 @@ fn authored_project_converts_to_the_versioned_snapshot_abi() {
 }
 
 #[test]
-fn declared_refusal_opt_in_uses_v2_and_restores_only_with_its_shape() {
+fn declared_refusal_edge_is_frozen_in_the_snapshot_and_restores_exactly() {
     let root = tempfile::tempdir().unwrap();
     let project = declared_refusal_project();
     write_project(root.path(), &project, "fn command(input) { input }");
     let definition = Definition::load(root.path()).unwrap();
     let snapshot = definition.snapshot().unwrap();
     let frozen: Value = serde_json::from_str(&snapshot).unwrap();
-    assert_eq!(frozen["adapterAbi"], "coordinator/product-operations/v2");
+    assert_eq!(frozen["adapterAbi"], "coordinator/product-operations/v1");
     assert_eq!(
         frozen["workflow"]["steps"]["act"]["onDeclaredRefusal"],
         "refused"
@@ -107,26 +107,31 @@ fn declared_refusal_opt_in_uses_v2_and_restores_only_with_its_shape() {
         snapshot
     );
 
-    for changed in [
-        {
-            let mut changed = frozen.clone();
-            changed["adapterAbi"] = json!("coordinator/product-operations/v1");
-            changed
-        },
-        {
-            let mut changed = frozen.clone();
-            changed["workflow"]["steps"]["act"]
-                .as_object_mut()
-                .unwrap()
-                .remove("onDeclaredRefusal");
-            changed
-        },
-    ] {
-        let error = Definition::from_snapshot(&changed.to_string())
+    // The step decoder is closed: an edge it does not know is refused, never
+    // dropped, so a snapshot cannot lose its refusal route on restore.
+    let mut unknown_edge = frozen.clone();
+    let act = unknown_edge["workflow"]["steps"]["act"]
+        .as_object_mut()
+        .unwrap();
+    let target = act.remove("onDeclaredRefusal").unwrap();
+    act.insert("onUndeclaredEdge".into(), target);
+    assert_eq!(
+        Definition::from_snapshot(&unknown_edge.to_string())
             .err()
-            .expect("ABI and feature shape must agree");
-        assert_eq!(error.code, "definition.abi");
-    }
+            .expect("an unknown step member must refuse")
+            .code,
+        "definition.snapshot"
+    );
+
+    let mut other_abi = frozen;
+    other_abi["adapterAbi"] = json!("coordinator/product-operations/v2");
+    assert_eq!(
+        Definition::from_snapshot(&other_abi.to_string())
+            .err()
+            .expect("another adapter ABI must refuse")
+            .code,
+        "definition.abi"
+    );
 }
 
 #[test]
@@ -187,6 +192,34 @@ fn operations_without_a_declared_refusal_contract_reject_the_edge() {
     let error = Definition::load(root.path()).err().unwrap();
     assert_eq!(error.code, "coordinator.definition.operation");
     assert_eq!(error.field.as_deref(), Some("/steps/act/onDeclaredRefusal"));
+}
+
+#[test]
+fn a_snapshot_cannot_carry_the_refusal_edge_on_an_operation_without_it() {
+    let root = tempfile::tempdir().unwrap();
+    let mut project = declared_refusal_project();
+    project["steps"]["act"]["operation"] = json!("read-record");
+    let steps = project["steps"].as_object_mut().unwrap();
+    steps["act"]
+        .as_object_mut()
+        .unwrap()
+        .remove("onDeclaredRefusal");
+    steps.remove("refused");
+    project["outcomes"]
+        .as_object_mut()
+        .unwrap()
+        .remove("refused");
+    write_project(root.path(), &project, "fn command(input) { input }");
+    let snapshot = Definition::load(root.path()).unwrap().snapshot().unwrap();
+    let mut frozen: Value = serde_json::from_str(&snapshot).unwrap();
+    frozen["workflow"]["steps"]["act"]["onDeclaredRefusal"] = json!("accepted");
+    assert_eq!(
+        Definition::from_snapshot(&frozen.to_string())
+            .err()
+            .expect("the restored edge must refuse")
+            .code,
+        "definition.operation"
+    );
 }
 
 #[test]

@@ -157,10 +157,6 @@ fn declared_refusal_without_an_authored_edge_preserves_refused_behavior() {
     )
     .unwrap();
     let definition = Definition::load(root.path()).unwrap();
-    assert_eq!(
-        definition.explain().unwrap()["adapterAbi"],
-        "coordinator/product-operations/v1"
-    );
     let mut document = scenarios::load(&source.join("scenarios.yaml")).unwrap();
     let scenario = document
         .cases

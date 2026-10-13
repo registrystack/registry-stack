@@ -23,8 +23,7 @@ pub enum KeyRequirement {
 
 /// Binding behavior is versioned independently of the workflow. The fields
 /// copied into [`OperationIdentity`] must not silently change for an admitted
-/// run; authoring capabilities outside that identity are pinned by their
-/// workflow ABI.
+/// run. `declared_refusal` is an authoring capability outside that identity.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct OperationDescriptor {
     pub id: &'static str,
@@ -35,11 +34,12 @@ pub struct OperationDescriptor {
     pub requires_preparation: bool,
     pub recovery: RecoverySemantics,
     pub read_receipt: bool,
-    /// Whether an adapter ABI v2 workflow may route a product-declared,
-    /// no-effect business refusal through `onDeclaredRefusal`.
+    /// Whether a call may route a product-declared, no-effect business
+    /// refusal through `onDeclaredRefusal`.
     ///
-    /// This capability is pinned by the workflow's adapter ABI rather than by
-    /// [`OperationIdentity`], so adding it does not invalidate v1 snapshots.
+    /// The capability is outside [`OperationIdentity`]. A snapshot carries the
+    /// authored edge itself, and restoring it refuses an edge on an operation
+    /// that does not declare the capability.
     pub declared_refusal: bool,
 }
 
