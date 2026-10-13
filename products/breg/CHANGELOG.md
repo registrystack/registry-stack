@@ -13,14 +13,37 @@
   fields a list filters by followed by the field it sorts by now returns
   each page of that list, first or deep, without ordering the filtered set.
   The generated DDL, and with it every package revision and managed schema
-  fingerprint, changes. This release does not upgrade v0.41.0 state in
-  place: rebuild the package with this release and apply it to a new
-  database.
+  fingerprint, changes, so this release's `breg` refuses a v0.41.0 package
+  with `the package compiler derivation failed` until a successor is active.
+  Migration: build a successor over the active v0.41.0 package with this
+  release's `bregctl` and apply it before starting this release's `breg`.
+  v0.41.0 state upgrades in place. The first successor this release builds
+  over a v0.41.0 package, from an unchanged project too, also brings the
+  compiler-generated DDL up to date once: it replaces every entity source
+  view, and drops and rebuilds every declared index. Dropping an index takes
+  an `ACCESS EXCLUSIVE` lock on its entity table, rebuilding it takes a
+  `SHARE` lock and reads the table once, and replacing a view rewrites no
+  row. A successor without a reviewed migration runs its statements in one
+  transaction, so the locks are held until it commits and a failure rolls
+  all of them back. Each lock wait is bounded by
+  `operationalTimeouts.migrationLockMilliseconds` and each statement by
+  `operationalTimeouts.migrationStatementMilliseconds`: size the second for
+  the largest indexed entity table. A successor built over a package this
+  release built carries none of these statements.
 - BREAKING: an authored index declares at most 31 fields. The compiler
   refuses a longer one with `breg.index.fields-too-many`, because the
   record id it appends takes the last of the 32 key columns PostgreSQL
   allows in an index. An index of exactly 32 fields, which compiled and
   applied before, must drop a field.
+- `package.json` gains the optional
+  `migrationPlan.priorBaseline.generatedDdlSha256`: the digest of the
+  `database/ddl.sql` the baseline package carries, as its manifest file list
+  states it. A successor whose baseline states the digest this compiler
+  generates for the baseline model plans only the change; one whose baseline
+  states another digest, or none, also carries the statements that bring
+  compiler-generated views and declared indexes up to date. A package
+  v0.41.0 built has no such key in its own plan and still reads as a
+  baseline.
 - `bregctl dev` requests local client tokens for the resource that
   `issuer.clientResources` assigns to that client. Previously, startup requested
   every token for the owner BReg audience, so an owner that registered a client

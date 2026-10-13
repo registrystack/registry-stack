@@ -3402,3 +3402,126 @@ tie-break, row-level security, and path-visibility suites pass unchanged.
   change that adds such a read policy must revisit this note.
 - No security invariant row changes. No row names the barrier, and the
   read boundary rows already rest on row-level security.
+
+## Compiler-owned DDL refreshed over a predecessor another compiler built
+
+A successor plan compares what this compiler generates for the baseline
+model with what it generates for the candidate. That comparison describes
+the installed schema only when this compiler also generated the baseline
+package's script. A package another compiler built, such as a v0.41.0
+package under a compiler that appends the record id to authored indexes and
+creates source views without a barrier, holds other DDL for the same model,
+and a plan that ignored it would leave the database short of the candidate
+schema.
+
+The plan baseline therefore states the digest of the script its package
+carries, `migrationPlan.priorBaseline.generatedDdlSha256`
+(`CompiledRegistryMigrationBaseline` in `crates/registry-breg/src/package.rs`).
+`load_predecessor_closure` reads it from the predecessor manifest's file
+entry for `database/ddl.sql`, after the closure read has held the packaged
+script to that digest; `from_compiled` computes it from the generated
+script. `additive_migration_plan` compares it with the digest of the script
+this compiler generates for the baseline model. When the two differ, or the
+baseline states none, the plan also replaces the source view of every
+retained entity and drops and recreates every retained authored index whose
+statement the change leaves alone. When they are equal the plan carries
+nothing extra. A reviewed successor is planned through the same function, so
+it carries the same statements.
+
+### Threat
+
+Two things could go wrong. A refresh that is skipped when it is owed leaves
+an upgraded database with source views that still hold the barrier and
+indexes without the record id: a schema the candidate does not describe. A
+refresh that is planned could become a way to run DDL nobody generated, or
+to leave a source view with weaker options than a fresh install gives it.
+
+Neither weakens what a caller may read. Row-level security on the entity
+tables is the read boundary, as the note on source views without a security
+barrier sets out, and the refresh changes no policy, no role, and no
+`FORCE ROW LEVEL SECURITY` setting; a replaced view keeps the grants the
+package gives it. The refresh statements are the
+candidate's own generated `CREATE OR REPLACE VIEW` and `CREATE INDEX`
+statements plus `DROP INDEX IF EXISTS` on a physical name taken from the
+baseline's recorded names and quoted as an identifier; no authored or
+caller-supplied SQL enters them. A replaced source view ends with exactly
+`security_invoker=true`, the options a fresh install gives it.
+
+A skipped refresh fails closed. Activation makes a package ready only after
+the managed schema fingerprint of the database equals the candidate's
+(`activate_verified_package` in
+`crates/registry-breg/src/postgres/interlock.rs`), and startup verifies the
+same fingerprint, so a database left on the earlier views or indexes is
+refused and never served.
+
+### Enforcement and defaults
+
+- The digest is optional and its absence selects the refresh, so a baseline
+  that says nothing about its script is treated as built by another
+  compiler. A predecessor manifest with no generated DDL entry yields none.
+- A stated digest must be `sha256:` followed by 64 lowercase hex digits;
+  `validate_migration_baseline` refuses any other shape with the migration
+  plan error.
+- The digest is part of the plan baseline in the signed manifest, and
+  `expected_migration_plan` rederives the whole plan from that baseline and
+  the compiled candidate when a package is loaded. A packaged plan that
+  carries more, fewer, or other statements than the rederived one is
+  refused, so the refresh cannot be added to or removed from a package
+  without changing the baseline it is derived from.
+- A baseline that states this compiler's digest for a script another
+  compiler installed plans no refresh. The result is the skipped refresh of
+  the threat: activation refuses on the fingerprint and the target stays
+  pinned. It is never a served database with a mixed schema.
+- Reference indexes carry no compiler-owned key column and are never
+  rebuilt. An authored index whose declared fields or columns change is left
+  to the reviewed change that moves them.
+- The statements run under the migration role inside the apply interlock,
+  with the configured migration lock and statement timeouts, like every
+  other compiler statement. A compiler-applied successor runs them in one
+  transaction and a failure rolls all of them back.
+
+### Tests
+
+`crates/registry-breg/tests/postgres_package/compiler_upgrade.rs` is the
+executed proof on PostgreSQL. Its fixture activates a package, rewinds the
+authored index and both source views to the shape an earlier compiler
+generated, and rewrites the packaged script and fingerprint to match, so the
+package no longer derives under this compiler.
+`an_unchanged_successor_over_an_earlier_compilers_package_refreshes_compiler_owned_ddl_once`
+asserts the exact four refresh statements, that the applied database has the
+fingerprint of a fresh install, that the index ends with the record id, that
+each source view holds exactly `security_invoker=true`, and that startup
+succeeds; it then plans a second unchanged successor with no statement and a
+model change that leaves the index in place.
+`a_model_change_over_an_earlier_compilers_package_carries_the_refresh_too`
+and
+`a_reviewed_change_over_an_earlier_compilers_package_carries_the_refresh_too`
+hold the same end state for a compiler-applied and a reviewed change.
+
+`crates/registry-breg/tests/package_change_plan.rs` holds the plan without a
+database: a baseline with no digest and one with another digest both carry
+the refresh, a baseline with this compiler's digest plans nothing, a baseline
+without the key loads and serializes without it, a loaded predecessor states
+the digest of its packaged script, and
+`malformed_generated_ddl_digest_in_a_baseline_is_refused` holds the shape.
+`a_baseline_activated_without_reference_indexes_gains_them_additively` in
+`crates/registry-breg/tests/reference_indexes.rs` shows reference indexes
+are added and never rebuilt by the refresh.
+
+`release/scripts/rehearse-upgrade.py --product breg` runs the released
+v0.41.0 binaries, then this workspace's, over one database and requires the
+state to be served with no row lost.
+
+### Accepted residuals
+
+- The first successor over a package another compiler built rebuilds every
+  authored index of every retained entity, whether or not that compiler's
+  index differed. The digest says the scripts differ, not where.
+- The refresh covers source views and authored indexes, the compiler-owned
+  DDL that differs from v0.41.0. A later compiler change to another kind of
+  generated statement must extend it, or the fingerprint check refuses the
+  activation.
+- Dropping an authored index takes an exclusive lock on its entity table
+  until the apply transaction ends, and each rebuild reads the table once.
+  The registry is in maintenance for that time.
+- No security invariant row changes.
