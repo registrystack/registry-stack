@@ -273,7 +273,12 @@ fn a_bregctl_that_is_not_installed_is_refused_before_any_export() {
             .capture(&bregctl, &AtomicBool::new(false))
             .err()
             .expect("the capture does not succeed");
-        assert_refused(&failure, "bregctl is unavailable");
+        assert_refused(
+            &failure,
+            "put the bregctl of this Registry Stack release on PATH",
+        );
+        // The operator is never pointed at an option the help does not list.
+        assert!(!failure.message.contains("--"));
         assert!(!fixture.root.join("credentials").exists());
         assert!(!fixture.snapshot().exists());
     }
