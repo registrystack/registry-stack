@@ -1499,6 +1499,11 @@ impl StreamState {
         match written {
             Ok(()) => {
                 if let Some(took) = took.filter(|took| reported || *took >= self.deadline) {
+                    // A stall no append or readiness check saw has its start
+                    // reported here, so no end is reported without a start.
+                    if !reported {
+                        self.report(StreamEvent::StallStarted);
+                    }
                     self.report(StreamEvent::StallEnded(took));
                 }
                 Ok(())
@@ -6264,6 +6269,31 @@ mod tests {
                     StreamEvent::StallEnded(_),
                     StreamEvent::WrittenAfterRefusal
                 ]
+            ),
+            "{reported:?}"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_stall_nothing_looked_at_reports_its_start_before_its_end() {
+        let sink = GatedSink::new();
+        let writer = limited(sink.clone(), TEST_DEADLINE, 16);
+        let state = stream_state(&writer);
+        // The held line is an unfinished response, which nobody waits on, and
+        // no append or readiness check looks at the stream while it is held.
+        writer.append_detached(&AuditEntry::response(SCHEMA, "held", unfinished()));
+        sink.wait_entered(1).await;
+        tokio::time::sleep(TEST_DEADLINE).await;
+        assert!(reported(&state).is_empty());
+
+        sink.release();
+        writer.wait_for_detached_entries();
+        assert_eq!(correlations(&sink.buffer), ["held"]);
+        let reported = reported(&state);
+        assert!(
+            matches!(
+                reported.as_slice(),
+                [StreamEvent::StallStarted, StreamEvent::StallEnded(_)]
             ),
             "{reported:?}"
         );
