@@ -368,6 +368,51 @@ async fn typed_action_refused_problem_exposes_only_its_bounded_code() {
 }
 
 #[tokio::test]
+async fn action_refused_shaped_problems_outside_the_typed_contract_stay_uncertain() {
+    let server_error = json!({
+        "type":"https://id.registrystack.org/problems/registry-breg/action/refused",
+        "title":"Internal Server Error",
+        "status":500,
+        "code":"action.refused",
+        "detail":"Synthetic private label that must not cross the adapter.",
+        "traceId":"4bf92f3577b34da6a3ce929d0e0e4736",
+        "refusalCode":"label-not-eligible"
+    });
+    let missing_refusal_code = json!({
+        "type":"https://id.registrystack.org/problems/registry-breg/action/refused",
+        "title":"Unprocessable Entity",
+        "status":422,
+        "code":"action.refused",
+        "detail":"Synthetic private label that must not cross the adapter.",
+        "traceId":"4bf92f3577b34da6a3ce929d0e0e4736"
+    });
+    for (status, body) in [(500, server_error), (422, missing_refusal_code)] {
+        let server = MockServer::start().await;
+        authority(&server).await;
+        Mock::given(method("POST"))
+            .and(path("/tenant/base/v1/actions/update-item"))
+            .respond_with(
+                ResponseTemplate::new(status)
+                    .insert_header("traceparent", TRACE)
+                    .insert_header("cache-control", "no-store")
+                    .set_body_raw(body.to_string(), "application/problem+json"),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let client = client(&server, Arc::new(CountingToken::default()));
+        let command = request();
+        let prepared = prepare(&client, "writer", &command)
+            .await
+            .unwrap_or_else(|_| panic!("valid preparation"));
+        match execute(&client, "writer", &command, &prepared).await {
+            CallOutcome::Uncertain { code } => assert_eq!(code, "transport-uncertain"),
+            _ => panic!("a refusal the typed contract does not cover must stay uncertain"),
+        }
+    }
+}
+
+#[tokio::test]
 async fn expired_receipt_and_known_rollbacks_remain_distinct_from_unknown_effects() {
     for code in [
         BRegProblemCode::IdempotencyExpired,
