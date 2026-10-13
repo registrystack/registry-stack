@@ -31,7 +31,8 @@ async fn every_coordinator_method_names_its_types(
     idempotency_key: &str,
     run: Uuid,
     request: &StartRunRequest,
-    list_query: &RunListQuery,
+    query: &RunListQuery,
+    state: RunListState,
 ) -> Result<(), CoordinatorClientError> {
     let client: CoordinatorClient = CoordinatorClient::new(config)?;
     let _: CoordinatorComplete<RunStatus> = client.start(token, idempotency_key, request).await?;
@@ -41,8 +42,9 @@ async fn every_coordinator_method_names_its_types(
         .reconcile(token, run, "operator reviewed the original receipt")
         .await?;
     let _: CoordinatorComplete<RunList> = client.list(token, 20).await?;
-    let _: CoordinatorComplete<RunList> = client.list_page(token, list_query).await?;
-    let _: Option<RunListState> = list_query.state;
+    let mut filtered_query = query.clone();
+    filtered_query.state = Some(state);
+    let _: CoordinatorComplete<RunList> = client.list_page(token, &filtered_query).await?;
     let _: CoordinatorComplete<RetryScheduled> = client
         .retry_same(token, run, "operator reviewed the inspection")
         .await?;

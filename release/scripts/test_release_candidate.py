@@ -136,10 +136,12 @@ def security_evidence_tar(
 
 class ReleaseCandidateTest(TestCase):
     def setUp(self) -> None:
-        enabled = roster_patch("release_roster.COORDINATOR_FIRST_RELEASE", (0, 42, 0))
+        self.module = load_module()
+        enabled = mock.patch.object(
+            self.module.release_roster, "COORDINATOR_FIRST_RELEASE", (0, 42, 0)
+        )
         enabled.start()
         self.addCleanup(enabled.stop)
-        self.module = load_module()
         self.now = datetime(2026, 7, 25, 12, 0, tzinfo=timezone.utc)
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
