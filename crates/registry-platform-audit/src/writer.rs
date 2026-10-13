@@ -1320,8 +1320,11 @@ impl LineStream {
                 match outcome.try_recv() {
                     Ok(result) => result,
                     Err(_) => {
-                        // Looked at for its report: a stall that began under
-                        // this caller is logged as this caller is refused.
+                        // Looked at for its report. This wait began before
+                        // the line was handed over, so the write in progress
+                        // can still be younger than the deadline: its stall
+                        // is then reported by the next append or readiness
+                        // check that sees it, or as the write ends.
                         self.state.stalled();
                         Err(AuditUnavailable::new(AuditUnavailableReason::Stalled))
                     }
@@ -6403,6 +6406,10 @@ mod tests {
         runtime
             .block_on(writer.append(request("stuck")))
             .expect_err("refused at the deadline");
+        // The write began after the refused caller's wait did, so the stall
+        // is reported once a readiness check finds the line held a whole
+        // deadline.
+        runtime.block_on(readiness_becomes(&writer, false));
         writer.append_detached(&AuditEntry::response(SCHEMA, "queued", unfinished()));
 
         let started = std::time::Instant::now();
