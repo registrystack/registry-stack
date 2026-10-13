@@ -570,6 +570,7 @@ DOCS_ARCHIVE_INPUTS = frozenset(
 SECURITY_WORKFLOW_GATES: dict[str, frozenset[str]] = {
     ".github/workflows/codeql.yml": frozenset({"release_tool"}),
     ".github/workflows/mirror-buildkit.yml": frozenset({"release_tool"}),
+    ".github/workflows/mirror-postgres.yml": frozenset({"release_tool"}),
     ".github/workflows/docs-pages.yml": frozenset(
         {"docs", "release_source_proof", "release_tool"}
     ),

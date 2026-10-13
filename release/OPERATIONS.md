@@ -316,6 +316,65 @@ upstream manifest digest byte for byte, so it adds no org-controlled build
 input; every other GHCR reference stays banned so the rehearsal cannot read
 published release artifacts.
 
+### Mirror the pinned PostgreSQL image
+
+`ghcr.io/registrystack/postgres` is a public mirror of the PostgreSQL Docker
+Official Image, `docker.io/library/postgres`, kept so the pinned image stays
+available when a public registry refuses anonymous pulls. The mirror is
+digest-preserving: the mirrored tag must resolve to exactly the upstream
+digest. Nothing pulls from this mirror: CI services and local dev tools use
+the `public.ecr.aws` reference described under "Pull pinned prerequisite
+images" below, and the rehearsal canonical job does not reference it.
+
+When a pin bump changes the PostgreSQL tag or digest, mirror the new digest,
+then confirm the package stays public:
+
+```sh
+gh api --method POST repos/registrystack/registry-stack/dispatches \
+  -f event_type=mirror-postgres \
+  -F 'client_payload[tag]=17.11' \
+  -F 'client_payload[digest]=sha256:<the-new-pinned-digest>'
+```
+
+The tag is the canonical `MAJOR.MINOR` PostgreSQL version, with no `v` prefix
+and no variant suffix. It labels the mirrored digest and is not compared with
+the upstream tag: Docker Official Image tags are rebuilt in place, so an
+upstream tag stops naming a pinned digest. The digest is the binding. The
+mirror run copies by digest from `docker.io/library/postgres`, so it refuses a
+digest that repository does not serve, and it fails when the mirrored tag
+resolves to another digest or the package visibility is not public. Every
+reference that consumes the image pins the digest in a reviewed file.
+Dispatching the same tag with a different digest moves the mirror tag to the
+new digest.
+
+Provision the `postgres` package identity once, before the first mirror run.
+A mirror has no candidate package, and the release image bootstrap under
+"Onboard a new release image" accepts release images only, so push the one
+non-release bootstrap artifact directly and never put the token on the
+command line:
+
+```sh
+bootstrap_dir="$(mktemp -d)"
+printf 'Registry Stack postgres mirror package bootstrap\n' \
+  > "${bootstrap_dir}/bootstrap.txt"
+printf '%s' "${GHCR_BOOTSTRAP_TOKEN:?set a classic PAT with write:packages}" \
+  | oras login ghcr.io \
+      --username "${GHCR_BOOTSTRAP_USER:?set the PAT owner}" \
+      --password-stdin
+(
+  cd -- "${bootstrap_dir}"
+  oras push \
+    --artifact-type application/vnd.registrystack.package-bootstrap.v1 \
+    --annotation \
+      org.opencontainers.image.source=https://github.com/registrystack/registry-stack \
+    "ghcr.io/registrystack/postgres:bootstrap" \
+    "bootstrap.txt:text/plain"
+)
+```
+
+Then change the package to public in the organization package settings and
+grant `registrystack/registry-stack` Actions access with Write.
+
 ### Pull pinned prerequisite images
 
 Root CI's PostgreSQL services, nightly platform coverage, the release upgrade

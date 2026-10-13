@@ -2456,6 +2456,247 @@ class MirrorBuildkitWorkflowStructureTest(unittest.TestCase):
         self.assertFalse(checkout["with"]["persist-credentials"])
 
 
+class MirrorPostgresWorkflowStructureTest(unittest.TestCase):
+    DIGEST = "sha256:" + "0" * 64
+    # Stands in for crane: records each invocation, answers a digest lookup for
+    # the source repository or the mirror, and reads the login password.
+    CRANE_FIXTURE = """#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" >> "${CRANE_LOG}"
+case "$1" in
+  digest)
+    if [[ "$2" == "${SOURCE_IMAGE}"* ]]; then
+      [[ -n "${FIXTURE_SOURCE_DIGEST}" ]] || exit 1
+      printf '%s\\n' "${FIXTURE_SOURCE_DIGEST}"
+    else
+      printf '%s\\n' "${FIXTURE_MIRROR_DIGEST}"
+    fi
+    ;;
+  auth) cat > /dev/null ;;
+  copy) ;;
+  *) exit 2 ;;
+esac
+"""
+
+    def test_is_dispatch_only_with_narrow_scopes_and_a_single_mirror_job(self) -> None:
+        text, document = workflow("mirror-postgres.yml")
+        trigger = text.split("permissions:", 1)[0]
+        self.assertIn("repository_dispatch:\n    types: [mirror-postgres]\n", trigger)
+        self.assertNotIn("workflow_dispatch:", trigger)
+        self.assertNotIn("push:", trigger)
+        self.assertNotIn("pull_request:", trigger)
+        self.assertNotIn("schedule:", trigger)
+        self.assertEqual(document["permissions"], {"contents": "read"})
+        self.assertEqual(
+            document["concurrency"],
+            {"group": "mirror-postgres", "cancel-in-progress": False},
+        )
+        self.assertEqual(list(document["jobs"]), ["mirror"])
+        self.assertEqual(
+            document["jobs"]["mirror"]["permissions"],
+            {"contents": "read", "packages": "write"},
+        )
+        self.assertEqual(text.count("packages: write"), 1)
+
+    def test_mirrors_one_digest_preserving_copy_behind_input_validation(self) -> None:
+        text, document = workflow("mirror-postgres.yml")
+        self.assertEqual(document["env"]["REGISTRY"], "ghcr.io")
+        self.assertEqual(document["env"]["IMAGE_NAMESPACE"], "registrystack")
+        self.assertEqual(document["env"]["SOURCE_IMAGE"], "docker.io/library/postgres")
+        self.assertEqual(document["env"]["MIRROR_PACKAGE"], "postgres")
+        validation = step_run(document, "mirror", "Validate mirror request")
+        self.assertIn('"${GITHUB_REPOSITORY}" != "registrystack/registry-stack"', validation)
+        self.assertIn("client_payload.tag must be a canonical MAJOR.MINOR value", validation)
+        self.assertIn("client_payload.digest must be a lowercase sha256:<64 hex> value", validation)
+        mirror = step_run(document, "mirror", "Mirror the pinned image digest")
+        # The digest is the binding. Docker Official Image tags are rebuilt in
+        # place, so the run addresses the official repository by digest only
+        # and never resolves the upstream tag; the tag labels the mirrored copy.
+        self.assertNotIn("${SOURCE_IMAGE}:", text)
+        self.assertNotIn("docker.io/library/postgres:", text)
+        self.assertNotIn("no longer resolves to", text)
+        source = 'crane digest "${SOURCE_IMAGE}@${REQUESTED_DIGEST}"'
+        self.assertIn(source, mirror)
+        self.assertIn("does not serve", mirror)
+        self.assertIn(
+            'crane copy "${SOURCE_IMAGE}@${REQUESTED_DIGEST}" "${mirror_tag}"', mirror
+        )
+        self.assertLess(mirror.index(source), mirror.index("crane auth login"))
+        self.assertLess(mirror.index("crane auth login"), mirror.index("crane copy"))
+        self.assertIn("must preserve", mirror)
+        self.assertNotIn("--insecure", mirror)
+        install = step_run(document, "mirror", "Install pinned crane")
+        self.assertIn("sha256sum --check --strict", install)
+        visibility = step_run(
+            document, "mirror", "Require the mirror package to stay public"
+        )
+        self.assertIn("require-package-visibility", visibility)
+        self.assertIn("--visibility public", visibility)
+        self.assertIn('"${MIRROR_PACKAGE}"', visibility)
+        checkout = next(
+            step
+            for step in document["jobs"]["mirror"]["steps"]
+            if step.get("uses", "").startswith("actions/checkout@")
+        )
+        self.assertEqual(checkout["with"]["ref"], "${{ github.sha }}")
+        self.assertFalse(checkout["with"]["persist-credentials"])
+
+    def mirror(
+        self, *, source_digest: str, mirror_digest: str
+    ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
+        """Run the mirror step against a crane that records its arguments."""
+
+        _, document = workflow("mirror-postgres.yml")
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            crane = directory / "crane"
+            crane.write_text(self.CRANE_FIXTURE, encoding="utf-8")
+            crane.chmod(0o755)
+            log = directory / "crane.log"
+            log.touch()
+            result = subprocess.run(
+                ["bash", "-c", step_run(document, "mirror", "Mirror the pinned image digest")],
+                env={
+                    **document["env"],
+                    "PATH": f"{directory}{os.pathsep}{os.environ['PATH']}",
+                    "REQUESTED_TAG": "17.11",
+                    "REQUESTED_DIGEST": self.DIGEST,
+                    "GH_TOKEN": "fixture-token",
+                    "GITHUB_ACTOR": "operator",
+                    "CRANE_LOG": str(log),
+                    "FIXTURE_SOURCE_DIGEST": source_digest,
+                    "FIXTURE_MIRROR_DIGEST": mirror_digest,
+                },
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            return result, log.read_text(encoding="utf-8").splitlines()
+
+    def test_mirror_copies_by_digest_and_never_resolves_the_upstream_tag(self) -> None:
+        result, calls = self.mirror(source_digest=self.DIGEST, mirror_digest=self.DIGEST)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stderr, "")
+        self.assertEqual(
+            calls,
+            [
+                f"digest docker.io/library/postgres@{self.DIGEST}",
+                "auth login ghcr.io --username operator --password-stdin",
+                f"copy docker.io/library/postgres@{self.DIGEST}"
+                " ghcr.io/registrystack/postgres:17.11",
+                "digest ghcr.io/registrystack/postgres:17.11",
+            ],
+        )
+        self.assertNotIn("fixture-token", result.stdout + result.stderr + "".join(calls))
+
+    def test_mirror_refuses_a_digest_the_official_repository_does_not_serve(self) -> None:
+        for name, source_digest in (
+            ("absent", ""),
+            ("another digest", "sha256:" + "1" * 64),
+        ):
+            with self.subTest(source=name):
+                result, calls = self.mirror(
+                    source_digest=source_digest, mirror_digest=self.DIGEST
+                )
+                self.assertEqual(result.returncode, 1)
+                self.assertEqual(
+                    result.stderr,
+                    f"upstream docker.io/library/postgres does not serve {self.DIGEST}\n",
+                )
+                self.assertEqual(calls, [f"digest docker.io/library/postgres@{self.DIGEST}"])
+
+    def test_mirror_fails_when_the_mirrored_tag_names_another_digest(self) -> None:
+        result, calls = self.mirror(
+            source_digest=self.DIGEST, mirror_digest="sha256:" + "1" * 64
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(
+            result.stderr,
+            f"mirror ghcr.io/registrystack/postgres:17.11 must preserve {self.DIGEST}"
+            " byte for byte\n",
+        )
+        self.assertEqual(len(calls), 4)
+
+    def validate(
+        self, tag: str, digest: str, repository: str = "registrystack/registry-stack"
+    ) -> subprocess.CompletedProcess[str]:
+        _, document = workflow("mirror-postgres.yml")
+        return subprocess.run(
+            ["bash", "-c", step_run(document, "mirror", "Validate mirror request")],
+            env={
+                "PATH": os.environ["PATH"],
+                "GITHUB_REPOSITORY": repository,
+                "REQUESTED_TAG": tag,
+                "REQUESTED_DIGEST": digest,
+            },
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    def test_validation_accepts_only_a_canonical_major_minor_tag(self) -> None:
+        for tag in ("17.11", "18.0", "9.6", "100.100"):
+            with self.subTest(accepted=tag):
+                result = self.validate(tag, self.DIGEST)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout, f"tag: {tag}\ndigest: {self.DIGEST}\n")
+                self.assertEqual(result.stderr, "")
+        for tag in (
+            "",
+            "17",
+            "17.",
+            ".11",
+            "v17.11",
+            "17.11.1",
+            "017.11",
+            "17.011",
+            "17.11-alpine",
+            "17.11-trixie",
+            "17-11",
+            "17.x",
+            "latest",
+            " 17.11",
+            "17.11 ",
+            "17.11\n",
+            "17.11\n18.0",
+            "17.11@" + self.DIGEST,
+        ):
+            with self.subTest(refused=tag):
+                result = self.validate(tag, self.DIGEST)
+                self.assertEqual(result.returncode, 1)
+                self.assertEqual(result.stdout, "")
+                self.assertEqual(
+                    result.stderr,
+                    "client_payload.tag must be a canonical MAJOR.MINOR value\n",
+                )
+
+    def test_validation_refuses_a_malformed_digest_or_another_repository(self) -> None:
+        for digest in (
+            "",
+            "0" * 64,
+            "sha256:" + "0" * 63,
+            "sha256:" + "0" * 65,
+            "sha256:" + "A" * 64,
+            "sha512:" + "0" * 64,
+            self.DIGEST + "\n",
+        ):
+            with self.subTest(refused=digest):
+                result = self.validate("17.11", digest)
+                self.assertEqual(result.returncode, 1)
+                self.assertEqual(result.stdout, "tag: 17.11\n")
+                self.assertEqual(
+                    result.stderr,
+                    "client_payload.digest must be a lowercase sha256:<64 hex> value\n",
+                )
+        result = self.validate("17.11", self.DIGEST, repository="fork/registry-stack")
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(
+            result.stderr,
+            "PostgreSQL mirroring can only run in registrystack/registry-stack\n",
+        )
+
+
 class SupportingWorkflowStructureTest(unittest.TestCase):
     def test_render_golden_pins_go_and_scopes_its_native_cache(self) -> None:
         _, document = workflow("render-golden.yml")
