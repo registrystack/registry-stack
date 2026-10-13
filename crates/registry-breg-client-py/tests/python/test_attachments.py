@@ -91,7 +91,7 @@ class AttachmentTests(unittest.TestCase):
 
     def test_slot_exposes_the_served_policy_and_the_record_projection(self):
         self.assertEqual(self.slot.slot_identifier, "supporting-file")
-        self.assertEqual(self.slot.entity_identifier, "company")
+        self.assertEqual(self.slot.record_type_identifier, "company")
         self.assertEqual(self.slot.access_profile, "company-writer")
         self.assertTrue(self.slot.required_for_submit)
         self.assertEqual(self.slot.maximum_bytes, 1024)

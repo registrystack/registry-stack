@@ -61,7 +61,7 @@ class ConstructionTests(unittest.TestCase):
         for name in (
             "BRegCreateBinding",
             "BRegPatchBinding",
-            "BRegImmediateActionBinding",
+            "BRegActionBinding",
             "BRegTombstoneBinding",
             "BRegBatchBinding",
             "BRegActionTargetConditions",

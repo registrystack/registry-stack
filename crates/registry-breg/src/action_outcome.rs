@@ -28,14 +28,10 @@ use crate::action_handler::{
 use crate::contract::{FieldTypeSource, Operation};
 use crate::data::{validate_field_value, FieldValue};
 use crate::model::{
-    CompiledAction, CompiledActionEffect, CompiledActionHandler, CompiledActionMutation,
-    CompiledActionValue, CompiledChangeRequestPlannerWrite,
+    CompiledAction, CompiledPlanEffect, CompiledPlanFunction, CompiledPlanMutation,
+    CompiledPlanValue, CompiledPlanWrite,
 };
-use crate::rhai_planner::{
-    self, CandidateChangeRequestEffect, CandidateChangeRequestMutation,
-    CandidateChangeRequestTarget, CandidateChangeRequestTargetBinding, CandidateChangeRequestValue,
-    ChangeRequestPlannerError,
-};
+use crate::rhai_planner::{self, PlanError};
 
 /// The backend-neutral value tree of a handler outcome document.
 ///
@@ -358,7 +354,7 @@ pub(crate) fn decode_document(
 /// mapping and the serialized snapshot size.
 pub(crate) fn validate_proposed_outcome(
     action: &CompiledAction,
-    handler: &CompiledActionHandler,
+    handler: &CompiledPlanFunction,
     proposed: ProposedActionOutcome,
 ) -> Result<ActionHandlerOutcome, ActionHandlerDiagnostic> {
     match proposed {
@@ -401,7 +397,7 @@ pub(crate) fn validate_proposed_outcome(
 
 fn validate_proposed_effects(
     action: &CompiledAction,
-    handler: &CompiledActionHandler,
+    handler: &CompiledPlanFunction,
     results: Vec<ProposedValue>,
 ) -> Result<ActionHandlerOutcome, ActionHandlerDiagnostic> {
     if results.is_empty() {
@@ -477,29 +473,19 @@ fn validate_proposed_effects(
                 message: diagnostic.message,
             }
         })?;
-        let depends_on = mutations
-            .iter()
-            .filter_map(|mutation| match mutation {
-                CandidateChangeRequestMutation::Set {
-                    value: CandidateChangeRequestValue::FromEffect { effect, .. },
-                    ..
-                } => Some(effect.clone()),
-                _ => None,
-            })
-            .collect();
-        let binding = match &slot.ceiling.target_from_field {
-            Some(from_field) => CandidateChangeRequestTargetBinding::Existing {
-                from_field: from_field.clone(),
-            },
-            None => CandidateChangeRequestTargetBinding::ReservedCreate { effect: id.clone() },
-        };
-        effects.push(CandidateChangeRequestEffect {
+        let declared = action.effects.iter().find(|effect| effect.id == id)
+            .ok_or(ActionHandlerError::Ceiling)?;
+        let mut depends_on = declared.depends_on.clone();
+        depends_on.extend(mutations.iter().filter_map(|mutation| match mutation {
+            CompiledPlanMutation::Set {
+                value: CompiledPlanValue::FromEffect { effect, .. }, ..
+            } => Some(effect.clone()),
+            _ => None,
+        }));
+        effects.push(CompiledPlanEffect {
             id,
-            target: CandidateChangeRequestTarget {
-                entity_id: slot.ceiling.target_entity_id.clone(),
-                binding,
-            },
-            operation: slot.ceiling.operation,
+            target: declared.target.clone(),
+            operation: declared.operation,
             mutations,
             depends_on,
         });
@@ -517,10 +503,10 @@ fn validate_proposed_effects(
     }
     for effect in &effects {
         for mutation in &effect.mutations {
-            if let CandidateChangeRequestMutation::Set {
+            if let CompiledPlanMutation::Set {
                 field,
                 value:
-                    CandidateChangeRequestValue::FromEffect {
+                    CompiledPlanValue::FromEffect {
                         effect: id,
                         target_entity_id,
                     },
@@ -553,58 +539,12 @@ fn validate_proposed_effects(
             }
         }
     }
-    let effects = rhai_planner::order_candidates(effects)
-        .map_err(|kind| {
-            ActionHandlerDiagnostic::new(
-                kind.into(),
-                "Emit create references without a dependency cycle.",
-            )
-        })?
-        .into_iter()
-        .map(|effect| {
-            let slot = action
-                .effects
-                .iter()
-                .find(|slot| slot.id == effect.id)
-                .ok_or(ActionHandlerError::Ceiling)?;
-            let mutations = effect
-                .mutations
-                .into_iter()
-                .map(|mutation| match mutation {
-                    CandidateChangeRequestMutation::Clear { field } => {
-                        CompiledActionMutation::Clear { field }
-                    }
-                    CandidateChangeRequestMutation::Set { field, value } => {
-                        CompiledActionMutation::Set {
-                            field,
-                            value: match value {
-                                CandidateChangeRequestValue::Literal(value) => {
-                                    CompiledActionValue::Literal { value }
-                                }
-                                CandidateChangeRequestValue::FromRequestField { field: input } => {
-                                    CompiledActionValue::FromInput { input }
-                                }
-                                CandidateChangeRequestValue::FromEffect {
-                                    effect,
-                                    target_entity_id,
-                                } => CompiledActionValue::FromEffect {
-                                    effect,
-                                    target_entity_id,
-                                },
-                            },
-                        }
-                    }
-                })
-                .collect();
-            Ok(CompiledActionEffect {
-                id: effect.id,
-                target: slot.target.clone(),
-                operation: slot.operation,
-                mutations,
-                depends_on: effect.depends_on,
-            })
-        })
-        .collect::<Result<Vec<_>, ActionHandlerError>>()?;
+    let effects = crate::plan::order_plan_effects(effects).map_err(|_| {
+        ActionHandlerDiagnostic::new(
+            ActionHandlerError::Result,
+            "Emit all declared dependencies without a dependency cycle.",
+        )
+    })?;
     if serde_json::to_vec(&effects)
         .map_err(|_| ActionHandlerError::Result)?
         .len()
@@ -620,13 +560,13 @@ fn validate_proposed_effects(
 /// static repair message. Locations come from the compiled ceiling, never an
 /// unknown script key.
 pub(crate) struct WriteMutationDiagnostic {
-    pub kind: ChangeRequestPlannerError,
+    pub kind: PlanError,
     pub field: Option<String>,
     pub message: &'static str,
 }
 
 impl WriteMutationDiagnostic {
-    fn new(kind: ChangeRequestPlannerError, message: &'static str) -> Self {
+    fn new(kind: PlanError, message: &'static str) -> Self {
         Self {
             kind,
             field: None,
@@ -635,9 +575,9 @@ impl WriteMutationDiagnostic {
     }
 
     fn at_field(
-        write: &CompiledChangeRequestPlannerWrite,
+        write: &CompiledPlanWrite,
         field: &str,
-        kind: ChangeRequestPlannerError,
+        kind: PlanError,
         message: &'static str,
     ) -> Self {
         Self {
@@ -653,9 +593,9 @@ impl WriteMutationDiagnostic {
 /// and the change-request planner, so both enforce the same field, ceiling
 /// and reference rules with the same diagnostics.
 pub(crate) fn decode_slot_mutations(
-    write: &CompiledChangeRequestPlannerWrite,
+    write: &CompiledPlanWrite,
     members: &[(String, ProposedValue)],
-) -> Result<Vec<CandidateChangeRequestMutation>, WriteMutationDiagnostic> {
+) -> Result<Vec<CompiledPlanMutation>, WriteMutationDiagnostic> {
     let operation = write.operation;
     let mut mutations = Vec::new();
     let mut touched = BTreeSet::new();
@@ -664,7 +604,7 @@ pub(crate) fn decode_slot_mutations(
             ProposedValue::Object(set_members) => set_members,
             _ => {
                 return Err(WriteMutationDiagnostic::new(
-                    ChangeRequestPlannerError::Result,
+                    PlanError::Result,
                     "Return set as a map of declared fields to values.",
                 ))
             }
@@ -674,12 +614,12 @@ pub(crate) fn decode_slot_mutations(
                 return Err(WriteMutationDiagnostic::at_field(
                     write,
                     field,
-                    ChangeRequestPlannerError::Ceiling,
+                    PlanError::Ceiling,
                     "Set only fields declared by this slot.",
                 ));
             }
             touched.insert(field.to_string());
-            mutations.push(CandidateChangeRequestMutation::Set {
+            mutations.push(CompiledPlanMutation::Set {
                 field: field.to_string(),
                 value: decode_slot_value(write, field, value).map_err(|kind| {
                     let message = if matches!(value, ProposedValue::Absent) {
@@ -688,7 +628,7 @@ pub(crate) fn decode_slot_mutations(
                         write.field_types.get(field.as_str()),
                         Some(FieldTypeSource::Reference { .. })
                     ) {
-                        "Use a declared fromField or an emitted compatible fromEffect reference."
+                        "Use a declared fromInput or an emitted compatible fromEffect reference."
                     } else {
                         "Use a value matching the declared field type and bounds."
                     };
@@ -702,7 +642,7 @@ pub(crate) fn decode_slot_mutations(
             ProposedValue::Array(clear_items) => clear_items,
             _ => {
                 return Err(WriteMutationDiagnostic::new(
-                    ChangeRequestPlannerError::Result,
+                    PlanError::Result,
                     "Return clear as a list of optional patch field names.",
                 ))
             }
@@ -726,16 +666,16 @@ pub(crate) fn decode_slot_mutations(
                 return Err(WriteMutationDiagnostic::at_field(
                     write,
                     &field,
-                    ChangeRequestPlannerError::Ceiling,
+                    PlanError::Ceiling,
                     message,
                 ));
             }
-            mutations.push(CandidateChangeRequestMutation::Clear { field });
+            mutations.push(CompiledPlanMutation::Clear { field });
         }
     }
     if mutations.is_empty() {
         return Err(WriteMutationDiagnostic::new(
-            ChangeRequestPlannerError::Result,
+            PlanError::Result,
             "Return at least one set or clear mutation for the slot.",
         ));
     }
@@ -744,7 +684,7 @@ pub(crate) fn decode_slot_mutations(
             return Err(WriteMutationDiagnostic::at_field(
                 write,
                 field,
-                ChangeRequestPlannerError::Ceiling,
+                PlanError::Ceiling,
                 "Set this required field when creating a record.",
             ));
         }
@@ -753,40 +693,40 @@ pub(crate) fn decode_slot_mutations(
 }
 
 fn decode_slot_value(
-    write: &CompiledChangeRequestPlannerWrite,
+    write: &CompiledPlanWrite,
     field: &str,
     value: &ProposedValue,
-) -> Result<CandidateChangeRequestValue, ChangeRequestPlannerError> {
+) -> Result<CompiledPlanValue, PlanError> {
     let field_type = write
         .field_types
         .get(field)
-        .ok_or(ChangeRequestPlannerError::Ceiling)?;
+        .ok_or(PlanError::Ceiling)?;
     if let FieldTypeSource::Reference { .. } = field_type {
         let sources = write
             .reference_sources
             .get(field)
-            .ok_or(ChangeRequestPlannerError::Ceiling)?;
+            .ok_or(PlanError::Ceiling)?;
         let envelope = match value {
             ProposedValue::Object(envelope) => envelope,
-            _ => return Err(ChangeRequestPlannerError::Result),
+            _ => return Err(PlanError::Result),
         };
         match (
-            member(envelope, "fromField"),
+            member(envelope, "fromInput"),
             member(envelope, "fromEffect"),
         ) {
             (Some(field), None) => {
-                if !exact_members(envelope, &["fromField"], &[]) {
-                    return Err(ChangeRequestPlannerError::Result);
+                if !exact_members(envelope, &["fromInput"], &[]) {
+                    return Err(PlanError::Result);
                 }
                 let field = member_string(field)?;
-                if !sources.request_fields.contains(&field) {
-                    return Err(ChangeRequestPlannerError::Ceiling);
+                if !sources.inputs.contains(&field) {
+                    return Err(PlanError::Ceiling);
                 }
-                Ok(CandidateChangeRequestValue::FromRequestField { field })
+                Ok(CompiledPlanValue::FromInput { input: field })
             }
             (None, Some(effect)) => {
                 if !exact_members(envelope, &["fromEffect"], &[]) {
-                    return Err(ChangeRequestPlannerError::Result);
+                    return Err(PlanError::Result);
                 }
                 let effect = member_string(effect)?;
                 let target_entity_id = sources
@@ -794,29 +734,29 @@ fn decode_slot_value(
                     .iter()
                     .next()
                     .cloned()
-                    .ok_or(ChangeRequestPlannerError::Ceiling)?;
-                Ok(CandidateChangeRequestValue::FromEffect {
+                    .ok_or(PlanError::Ceiling)?;
+                Ok(CompiledPlanValue::FromEffect {
                     effect,
                     target_entity_id,
                 })
             }
-            _ => Err(ChangeRequestPlannerError::Result),
+            _ => Err(PlanError::Result),
         }
     } else {
         let value = proposed_to_json(value, 0)?;
         if value.is_null() || !validate_field_value(FieldValue::Json(&value), field_type) {
-            return Err(ChangeRequestPlannerError::Result);
+            return Err(PlanError::Result);
         }
-        Ok(CandidateChangeRequestValue::Literal(value))
+        Ok(CompiledPlanValue::Literal { value })
     }
 }
 
 fn proposed_to_json(
     value: &ProposedValue,
     depth: usize,
-) -> Result<Value, ChangeRequestPlannerError> {
+) -> Result<Value, PlanError> {
     if depth > rhai_planner::MAXIMUM_VALUE_DEPTH {
-        return Err(ChangeRequestPlannerError::Resource);
+        return Err(PlanError::Resource);
     }
     match value {
         ProposedValue::Absent => Ok(Value::Null),
@@ -824,13 +764,13 @@ fn proposed_to_json(
         ProposedValue::Int(value) => Ok(Value::Number(Number::from(*value))),
         ProposedValue::Str(value) => {
             if value.len() > rhai_planner::MAXIMUM_STRING_BYTES {
-                return Err(ChangeRequestPlannerError::Resource);
+                return Err(PlanError::Resource);
             }
             Ok(Value::String(value.clone()))
         }
         ProposedValue::Array(items) => {
             if items.len() > rhai_planner::MAXIMUM_ARRAY_ITEMS {
-                return Err(ChangeRequestPlannerError::Resource);
+                return Err(PlanError::Resource);
             }
             items
                 .iter()
@@ -840,20 +780,20 @@ fn proposed_to_json(
         }
         ProposedValue::Object(members) => {
             if members.len() > rhai_planner::MAXIMUM_MAP_ENTRIES {
-                return Err(ChangeRequestPlannerError::Resource);
+                return Err(PlanError::Resource);
             }
             members
                 .iter()
                 .map(|(key, value)| {
                     if key.len() > rhai_planner::MAXIMUM_STRING_BYTES {
-                        return Err(ChangeRequestPlannerError::Resource);
+                        return Err(PlanError::Resource);
                     }
                     Ok((key.clone(), proposed_to_json(value, depth + 1)?))
                 })
                 .collect::<Result<JsonMap<_, _>, _>>()
                 .map(Value::Object)
         }
-        ProposedValue::Inexpressible => Err(ChangeRequestPlannerError::Result),
+        ProposedValue::Inexpressible => Err(PlanError::Result),
     }
 }
 
@@ -875,12 +815,12 @@ fn exact_members(
             .all(|(key, _)| required.contains(&key.as_str()) || optional.contains(&key.as_str()))
 }
 
-fn member_string(value: &ProposedValue) -> Result<String, ChangeRequestPlannerError> {
+fn member_string(value: &ProposedValue) -> Result<String, PlanError> {
     match value {
         ProposedValue::Str(value) if value.len() <= rhai_planner::MAXIMUM_STRING_BYTES => {
             Ok(value.clone())
         }
-        _ => Err(ChangeRequestPlannerError::Result),
+        _ => Err(PlanError::Result),
     }
 }
 

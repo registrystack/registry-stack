@@ -2,6 +2,9 @@
 
 //! Concrete PostgreSQL mutation runtime for the compiled HTTP surface.
 
+#[path = "proposal.rs"]
+mod proposal;
+
 use std::sync::Arc;
 use std::time::Duration;
 

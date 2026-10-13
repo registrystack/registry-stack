@@ -17,9 +17,7 @@ use crate::manifest_adapter::project_manifest_artifacts;
 use crate::model::{
     ActionRouteKind, CompiledAccessInventory, CompiledAction, CompiledActionInput,
     CompiledActionInventory, CompiledActionRoute, CompiledActionTargetUseSource,
-    CompiledChangeRequestMutation, CompiledChangeRequestPlanner,
-    CompiledChangeRequestRetentionMode, CompiledChangeRequestTargetBinding,
-    CompiledChangeRequestValue, CompiledEntity, CompiledEventDeliveryInventory,
+    CompiledEntity, CompiledEventDeliveryInventory,
     CompiledManifestProjection, CompiledMetadataInventory, CompiledModuleIdentity,
     CompiledQueryInventory, CompiledQueryKind, CompiledQueryOperation,
     CompiledQueryTemporalValueKind, CompiledRecipients, CompiledRevisionKind, CompiledRoute,
@@ -27,6 +25,9 @@ use crate::model::{
 };
 use crate::physical_names::{hex_prefix, PhysicalNameInventory};
 use crate::record_profile::{link_header_value, CONTEXT_IDENTIFIER, PROFILE_IDENTIFIER};
+
+#[path = "project_sdk.rs"]
+mod project_sdk;
 
 pub const REGISTRY_METADATA_ARTIFACT_PATH: &str = "generated/metadata/registry.json";
 
@@ -247,6 +248,7 @@ pub(crate) fn generate_artifacts(
             projected.dcat,
         );
     }
+    project_sdk::generate(&mut artifacts, entities, actions);
     Ok(GeneratedArtifacts { artifacts })
 }
 
@@ -614,12 +616,6 @@ fn entity_schema(entity: &CompiledEntity, entities: &BTreeMap<String, CompiledEn
             render_change_control(entity, entities),
         );
     }
-    if entity.change_request.is_some() {
-        object.insert(
-            "x-registry-changeRequest".to_owned(),
-            render_change_request(entity, entities),
-        );
-    }
     schema
 }
 
@@ -709,7 +705,7 @@ fn request_lifecycle_event_schema(event: &HookSource) -> Value {
 fn application_reason_schema() -> Value {
     json!({
         "type": "string",
-        "maxLength": crate::request_workflow::MAX_APPLICATION_REASON_CHARS,
+        "maxLength": crate::proposal_workflow::MAX_APPLICATION_REASON_CHARS,
         "pattern": "^[^\\u0000]*$",
         "description": "Optional application explanation, preserved unchanged. At most 4096 Unicode characters; NUL is refused."
     })
@@ -753,342 +749,42 @@ pub(crate) fn openapi_request_action_input_schema(operation: Operation) -> Value
     }
 }
 
-fn render_change_control(
-    entity: &CompiledEntity,
-    entities: &BTreeMap<String, CompiledEntity>,
-) -> Value {
-    let controlled_operations = entity
-        .change_control
-        .as_ref()
-        .map(|control| {
-            control
-                .required_for
-                .iter()
-                .map(|operation| operation_name(*operation))
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    let eligible_request_types = entities
-        .values()
-        .filter_map(|request_entity| {
-            let request = request_entity.change_request.as_ref()?;
-            let operations = request
-                .effects
-                .iter()
-                .filter(|effect| effect.target.entity_id == entity.id)
-                .map(|effect| operation_name(effect.operation))
-                .chain(
-                    request
-                        .planner
-                        .iter()
-                        .flat_map(|planner| planner.writes.iter())
-                        .filter(|write| write.target_entity_id == entity.id)
-                        .map(|write| operation_name(write.operation)),
-                )
-                .collect::<BTreeSet<_>>();
-            (!operations.is_empty()).then(|| {
-                json!({
-                    "requestEntity": request_entity.id,
-                    "requestRoute": request_entity.route,
-                    "operations": operations.into_iter().collect::<Vec<_>>(),
-                    "contractFingerprint": request.contract_fingerprint,
-                })
-            })
-        })
-        .collect::<Vec<_>>();
+fn render_change_control(entity: &CompiledEntity, _entities: &BTreeMap<String, CompiledEntity>) -> Value {
+    json!({"requiredFor": entity.change_control.as_ref().map(|control| &control.required_for),
+        "directWriteRestriction": "controlled_operations_require_proposal_application"})
+}
+
+/// The source-free definition inspector shared by tooling and caller metadata.
+/// Caller projections must additionally apply their disclosure authority.
+pub fn inspect_action(action: &CompiledAction) -> Value {
     json!({
-        "requiredFor": controlled_operations,
-        "directWriteRestriction": "controlled_operations_require_compiled_change_request_application",
-        "eligibleRequestTypes": eligible_request_types,
+        "id": action.id, "apiName": action.api_name,
+        "revision": action.definition_revision, "display": action.display,
+        "execution": action.execution,
+        "inputs": action.inputs.iter().map(|input| action_input_metadata(input, action.handler.is_some())).collect::<Vec<_>>(),
+        "plan": {"effects": action.effects, "function": action.handler,
+            "order": action.effects.iter().map(|effect| &effect.id).collect::<Vec<_>>()},
+        "commitGuards": action.requires,
+        "dependencies": {"evidence": action.evidence},
+        "bounds": {"maximumTargets": action.maximum_targets,
+            "maximumFieldMutations": action.maximum_field_mutations,
+            "maximumSnapshotBytes": action.maximum_snapshot_bytes},
     })
 }
 
-fn render_change_request(
-    entity: &CompiledEntity,
-    entities: &BTreeMap<String, CompiledEntity>,
-) -> Value {
-    let request = entity
-        .change_request
-        .as_ref()
-        .expect("caller checked change request presence");
-    json!({
-        "requestEntity": request.request_entity_id,
-        "contractFingerprint": request.contract_fingerprint,
-        "planner": render_request_planner(request.planner.as_ref(), request),
-        "review": request.review,
-        "onApproved": request.on_approved,
-        "application": request.application,
-        "retention": render_request_retention(request.retention_mode),
-        "bounds": {
-            "maximumTargets": request.maximum_targets,
-            "maximumFieldMutations": request.maximum_field_mutations,
-            "maximumSnapshotBytes": request.maximum_snapshot_bytes,
-        },
-        "stateEnvelope": {
-            "states": ["draft", "submitted", "cancelled", "applied"],
-            "proposalBinding": ["proposalVersion", "effectDigest", "contractFingerprint"],
-            "actionAvailability": "advisory_rechecked_on_use",
-        },
-        "effects": request.effects.iter().map(|effect| {
-            let target = entities.get(&effect.target.entity_id);
-            json!({
-                "id": effect.id,
-                "operation": operation_name(effect.operation),
-                "target": {
-                    "entity": effect.target.entity_id,
-                    "binding": render_target_binding(&effect.target.binding),
-                },
-                "mutations": effect.mutations.iter().map(|mutation| {
-                    render_request_mutation(mutation, target)
-                }).collect::<Vec<_>>(),
-                "dependsOn": effect.depends_on.iter().collect::<Vec<_>>(),
-            })
-        }).collect::<Vec<_>>(),
-        "actions": request.actions.iter().map(|action| json!({
-            "operation": operation_name(action.operation.access_operation()),
-            "method": "POST",
-            "requiresIdempotencyKey": true,
-            "requiresRecordPrecondition": true,
-            "inputSchema": openapi_input_schema_id(&entity.id, action.operation.access_operation()),
-            "responseSchema": "ChangeRequestActionResponse",
+/// Author inspection uses exactly the normalized definitions used by execution.
+pub fn inspect_registry(registry: &crate::model::CompiledRegistry) -> Value {
+    json!({"registryId": registry.registry_id(), "revision": registry.revision(),
+        "recordTypes": registry.entities().values().map(|record_type| json!({
+            "id": record_type.id, "apiName": record_type.api_name,
+            "revision": record_type.definition_revision, "display": record_type.display,
+            "fields": record_type.stored_fields.iter().map(|field| json!({
+                "id": field.logical.id, "apiName": field.logical.api_name,
+                "schema": field_value_schema(&field.logical.field_type, !field.required),
+                "required": field.required,
+            })).collect::<Vec<_>>()
         })).collect::<Vec<_>>(),
-        "applyPermissions": request.apply_permissions,
-        "presencePermissions": request.presence_permissions,
-        "targetEntities": request.target_entities,
-    })
-}
-
-/// Source-free change-request capability projection for caller-filtered
-/// Registry metadata. It omits permissions and all planner provenance, so this
-/// descriptive surface cannot manufacture action authority. Effects and
-/// planner writes are described only through what the caller may read:
-/// `readable_by_entity` holds the caller's readable fields per entity, an
-/// effect on an entity the caller cannot read is left out, and a target or
-/// request field the caller cannot read is never named.
-#[allow(dead_code)] // Called by the production /v1/registry metadata route.
-pub(crate) fn request_capability_metadata(
-    request: &crate::model::CompiledChangeRequest,
-    readable_by_entity: &BTreeMap<String, BTreeSet<String>>,
-) -> Value {
-    let empty = BTreeSet::new();
-    let request_fields = readable_by_entity
-        .get(&request.request_entity_id)
-        .unwrap_or(&empty);
-    let readable_target = |entity: &str| readable_by_entity.get(entity);
-    let visible_target = |entity: &str, from_field: Option<&String>| {
-        let mut target = json!({"entity": entity});
-        if let Some(field) = from_field.filter(|field| request_fields.contains(*field)) {
-            target["fromField"] = json!(field);
-        }
-        target
-    };
-    let planner = match request.planner.as_ref() {
-        None => json!({"kind": "declarative"}),
-        Some(planner) => {
-            let operations = planner
-                .writes
-                .iter()
-                .map(|write| operation_name(write.operation))
-                .collect::<BTreeSet<_>>();
-            let writes = planner
-                .writes
-                .iter()
-                .filter_map(|write| {
-                    let readable = readable_target(&write.target_entity_id)?;
-                    Some(json!({
-                        "target": visible_target(
-                            &write.target_entity_id,
-                            write.target_from_field.as_ref(),
-                        ),
-                        "operation": operation_name(write.operation),
-                        "fields": write.fields.intersection(readable).collect::<Vec<_>>(),
-                    }))
-                })
-                .collect::<Vec<_>>();
-            json!({
-                "kind": "rhai",
-                "abi": planner.abi,
-                "limits": render_request_planner(Some(planner), request)["limits"],
-                "possibleWriteCount": planner.writes.len(),
-                "possibleWriteOperations": operations,
-                "writes": writes,
-            })
-        }
-    };
-    // An effect on an entity the caller cannot read is left out, and so is
-    // every reference to it from an effect the caller can see.
-    let visible_effects = request
-        .effects
-        .iter()
-        .filter(|effect| readable_target(&effect.target.entity_id).is_some())
-        .map(|effect| effect.id.as_str())
-        .collect::<BTreeSet<_>>();
-    let effects = request
-        .effects
-        .iter()
-        .filter_map(|effect| {
-            let readable = readable_target(&effect.target.entity_id)?;
-            let target = match &effect.target.binding {
-                CompiledChangeRequestTargetBinding::Existing { from_field } => {
-                    visible_target(&effect.target.entity_id, Some(from_field))
-                }
-                CompiledChangeRequestTargetBinding::ReservedCreate { effect: reserved } => {
-                    let mut target = json!({"entity": effect.target.entity_id});
-                    if visible_effects.contains(reserved.as_str()) {
-                        target["fromEffect"] = json!(reserved);
-                    }
-                    target
-                }
-            };
-            let mut set = Vec::new();
-            let mut clear = Vec::new();
-            for mutation in &effect.mutations {
-                match mutation {
-                    CompiledChangeRequestMutation::Set { field, value }
-                        if readable.contains(field) =>
-                    {
-                        let mut entry = json!({"field": field});
-                        match value {
-                            CompiledChangeRequestValue::FromField { field }
-                                if request_fields.contains(field) =>
-                            {
-                                entry["fromField"] = json!(field);
-                            }
-                            CompiledChangeRequestValue::FromEffect { effect, .. }
-                                if visible_effects.contains(effect.as_str()) =>
-                            {
-                                entry["fromEffect"] = json!(effect);
-                            }
-                            CompiledChangeRequestValue::FromField { .. }
-                            | CompiledChangeRequestValue::FromEffect { .. } => {}
-                        }
-                        set.push(entry);
-                    }
-                    CompiledChangeRequestMutation::Clear { field } if readable.contains(field) => {
-                        clear.push(field);
-                    }
-                    CompiledChangeRequestMutation::Set { .. }
-                    | CompiledChangeRequestMutation::Clear { .. } => {}
-                }
-            }
-            Some(json!({
-                "id": effect.id,
-                "operation": operation_name(effect.operation),
-                "target": target,
-                "set": set,
-                "clear": clear,
-            }))
-        })
-        .collect::<Vec<_>>();
-    json!({
-        "planner": planner,
-        "effects": effects,
-        "review": request.review,
-        "onApproved": request.on_approved,
-        "application": request.application,
-    })
-}
-
-fn render_request_planner(
-    planner: Option<&CompiledChangeRequestPlanner>,
-    request: &crate::model::CompiledChangeRequest,
-) -> Value {
-    match planner {
-        None => json!({"kind": "declarative"}),
-        Some(planner) => json!({
-            "kind": "rhai",
-            "abi": planner.abi,
-            "limits": {
-                "maximumTargets": request.maximum_targets,
-                "maximumFieldMutations": request.maximum_field_mutations,
-                "maximumSnapshotBytes": request.maximum_snapshot_bytes,
-                "maximumSourceBytes": planner.limits.maximum_source_bytes,
-                "maximumOperations": planner.limits.maximum_operations,
-                "maximumCallDepth": planner.limits.maximum_call_depth,
-                "maximumExpressionDepth": planner.limits.maximum_expression_depth,
-                "maximumStringBytes": planner.limits.maximum_string_bytes,
-                "maximumArrayItems": planner.limits.maximum_array_items,
-                "maximumMapEntries": planner.limits.maximum_map_entries,
-                "maximumModules": planner.limits.maximum_modules,
-            },
-            "possibleWrites": planner.writes.iter().map(|write| {
-                let target = match &write.target_from_field {
-                    Some(field) => json!({"fromField": field}),
-                    None => json!({"entity": write.target_entity_id}),
-                };
-                json!({
-                    "target": target,
-                    "operation": operation_name(write.operation),
-                    "fields": write.fields,
-                })
-            }).collect::<Vec<_>>(),
-        }),
-    }
-}
-
-fn render_request_retention(mode: CompiledChangeRequestRetentionMode) -> Value {
-    let mode = match mode {
-        CompiledChangeRequestRetentionMode::Retain => "retain",
-        CompiledChangeRequestRetentionMode::OperatorErase => "operator-erase",
-    };
-    json!({
-        "mode": mode,
-        "effectivePolicy": {
-            "payloadSnapshots": match mode {
-                "retain" => "retained_until_package_or_operator_policy_changes",
-                "operator-erase" => "operator_erasable_after_terminal_state",
-                _ => unreachable!("closed retention mode"),
-            },
-            "provenanceStub": "retained_while_target_revisions_reference_request",
-            "erasedDetailMarker": "request.detailErased",
-        }
-    })
-}
-
-fn render_target_binding(binding: &CompiledChangeRequestTargetBinding) -> Value {
-    match binding {
-        CompiledChangeRequestTargetBinding::Existing { from_field } => {
-            json!({"kind": "existing", "fromField": from_field})
-        }
-        CompiledChangeRequestTargetBinding::ReservedCreate { effect } => {
-            json!({"kind": "reserved-create", "effect": effect})
-        }
-    }
-}
-
-fn render_request_mutation(
-    mutation: &CompiledChangeRequestMutation,
-    target: Option<&CompiledEntity>,
-) -> Value {
-    match mutation {
-        CompiledChangeRequestMutation::Set { field, value } => json!({
-            "kind": "set",
-            "field": field,
-            "apiName": target.and_then(|entity| api_field_name(entity, field)),
-            "value": render_request_value(value),
-        }),
-        CompiledChangeRequestMutation::Clear { field } => json!({
-            "kind": "clear",
-            "field": field,
-            "apiName": target.and_then(|entity| api_field_name(entity, field)),
-        }),
-    }
-}
-
-fn render_request_value(value: &CompiledChangeRequestValue) -> Value {
-    match value {
-        CompiledChangeRequestValue::FromField { field } => {
-            json!({"kind": "from-field", "field": field})
-        }
-        CompiledChangeRequestValue::FromEffect {
-            effect,
-            target_entity_id,
-        } => json!({
-            "kind": "from-effect",
-            "effect": effect,
-            "targetEntity": target_entity_id,
-        }),
-    }
+        "actions": registry.actions().actions.iter().map(inspect_action).collect::<Vec<_>>()})
 }
 
 pub(crate) fn openapi_action_input_schema_id(action_id: &str) -> String {
@@ -1178,6 +874,9 @@ pub(crate) fn openapi_action_response_schema(
     action: &CompiledAction,
     selected_result_effects: Option<&BTreeSet<String>>,
 ) -> Value {
+    if action.execution.is_proposal() {
+        return proposal_schema();
+    }
     let result_shapes = action_response_result_shapes(action, selected_result_effects);
     let results_schema = match result_shapes.as_slice() {
         [shape] => action_results_schema(action, shape),
@@ -1251,9 +950,9 @@ fn action_results_schema(action: &CompiledAction, effect_ids: &BTreeSet<String>)
                 json!({
                     "type": "object",
                     "additionalProperties": false,
-                    "required": ["entity", "recordId", "revision"],
+                    "required": ["recordType", "recordId", "revision"],
                     "properties": {
-                        "entity": {"const": effect.target.entity_id},
+                        "recordType": {"const": effect.target.entity_id},
                         "recordId": {"type": "string", "format": "uuid"},
                         "revision": {"type": "integer", "format": "int64", "minimum": 1}
                     }
@@ -1393,8 +1092,12 @@ pub(crate) fn public_action_metadata_entry(
         Some(profile) => json!({"selectedProfile": profile}),
         None => json!({"accessProfiles": action_profile_ids(action)}),
     };
-    json!({
+    let mut metadata = json!({
         "id": action.id,
+        "apiName": action.api_name,
+        "revision": action.definition_revision,
+        "display": action.display,
+        "execution": {"mode": if action.execution.is_proposal() { "proposal" } else { "immediate" }},
         "route": action.route,
         "conditionRoute": action.condition_route,
         "contractFingerprint": action.contract_fingerprint,
@@ -1410,7 +1113,7 @@ pub(crate) fn public_action_metadata_entry(
             .filter(|effect| selected_result_effects.contains(&effect.id))
             .map(|effect| json!({
                 "effect": effect.id,
-                "entity": effect.target.entity_id,
+                "recordType": effect.target.entity_id,
                 "operation": operation_name(effect.operation),
             }))
             .collect::<Vec<_>>(),
@@ -1438,7 +1141,42 @@ pub(crate) fn public_action_metadata_entry(
             "maximumFieldMutations": action.maximum_field_mutations,
             "maximumSnapshotBytes": action.maximum_snapshot_bytes,
         }
-    })
+    });
+    if action.execution.is_proposal() {
+        let mut start = metadata["routes"]["invoke"].take();
+        start["operationId"] = json!(format!("actions.{}.start", action.id));
+        metadata["routes"].as_object_mut().expect("route object").remove("invoke");
+        metadata["routes"]["start"] = start;
+    }
+    metadata
+}
+
+/// Shared schema for the distinct Proposal resource, never a Record envelope.
+pub fn proposal_schema() -> Value {
+    json!({"type":"object", "additionalProperties":false,
+        "required":["id","actionId","actionRevision","version","revision","state","links"],
+        "properties": {
+            "id":{"type":"string","format":"uuid"},
+            "actionId":{"type":"string"},"actionRevision":{"type":"string"},
+            "version":{"type":"integer","minimum":0},"revision":{"type":"integer","minimum":1},
+            "state":{"enum":["draft","submitted","applied","cancelled"]},
+            "blockedReason":{"enum":["package-changed"]},"effectDigest":{"type":"string"},
+            "links":{"type":"object","additionalProperties":{
+                "type":"object","additionalProperties":false,
+                "required":["method","path","accessProfile","operation"],
+                "properties":{"method":{"enum":["GET","POST"]},"path":{"type":"string"},
+                    "accessProfile":{"type":"string"},"operation":{"type":"string"},
+                    "ifMatch":{"type":"string"},"availability":availability_schema()}
+            }}
+        }})
+}
+
+pub fn availability_schema() -> Value {
+    json!({"type":"object","additionalProperties":false,"required":["available","observedRevision"],
+        "properties":{"available":{"type":"boolean"},"observedRevision":{"type":"integer","minimum":1},
+            "reason":{"enum":["pending-review","stale-revision","contract-changed","dependency-outage","invalid-input","already-applied"]},
+            "recovery":{"enum":["refresh","retry","correct-input","terminal","receipt-only"]}},
+        "if":{"properties":{"available":{"const":false}}},"then":{"required":["reason","recovery"]}})
 }
 
 fn action_input_metadata(input: &CompiledActionInput, handler: bool) -> Value {
@@ -1493,7 +1231,7 @@ fn reference_input_metadata(input: &CompiledActionInput) -> Option<Value> {
     Some(json!({
         "input": input.id,
         "apiName": input.api_name,
-        "targetEntity": target,
+        "targetRecordType": target,
     }))
 }
 
@@ -1605,9 +1343,9 @@ fn immediate_action_result_reference_schema() -> Value {
     json!({
         "type": "object",
         "additionalProperties": false,
-        "required": ["entity", "recordId", "revision"],
+        "required": ["recordType", "recordId", "revision"],
         "properties": {
-            "entity": {"type": "string"},
+            "recordType": {"type": "string"},
             "recordId": {"type": "string", "format": "uuid"},
             "revision": {"type": "integer", "format": "int64", "minimum": 1}
         }
@@ -2532,7 +2270,8 @@ fn operation_response_shape(spec: OpenApiOperationSpec<'_>) -> &'static str {
         }
         Operation::Revisions => "BRegRevisionCollectionV1",
         Operation::Batch => "BRegAtomicBatchMutationResponseV1",
-        Operation::Invoke => "BRegImmediateActionResponseV1",
+        Operation::Invoke => "BRegActionReceiptV1",
+        Operation::Start => "BRegProposalV1",
         Operation::Import => {
             unreachable!("import routes are served only by the ingestion-run surface")
         }
@@ -2603,7 +2342,7 @@ fn request_action_target_entities(spec: OpenApiOperationSpec<'_>) -> Vec<String>
                 | Operation::Lookup
                 | Operation::Revisions
                 | Operation::Snapshot => {}
-                Operation::Invoke => {}
+                Operation::Invoke | Operation::Start => {}
                 Operation::Import => {
                     unreachable!("import routes are served only by the ingestion-run surface")
                 }
@@ -2717,7 +2456,7 @@ fn operation_parameters(
             }
         }
         Operation::Revisions => {}
-        Operation::Invoke => {}
+        Operation::Invoke | Operation::Start => {}
         Operation::Import => {
             unreachable!("import routes are served only by the ingestion-run surface")
         }
@@ -2939,7 +2678,7 @@ fn operation_request_body(spec: OpenApiOperationSpec<'_>) -> Option<Value> {
         | Operation::Tombstone
         | Operation::Revisions
         | Operation::Snapshot => None,
-        Operation::Invoke => None,
+        Operation::Invoke | Operation::Start => None,
         Operation::Import => {
             unreachable!("import routes are served only by the ingestion-run surface")
         }
@@ -3201,7 +2940,7 @@ fn operation_responses(spec: OpenApiOperationSpec<'_>) -> Value {
         Operation::Import => {
             unreachable!("import routes are served only by the ingestion-run surface")
         }
-        Operation::Invoke => success_response(
+        Operation::Invoke | Operation::Start => success_response(
             "Action accepted",
             StatusResponseHeaders::ActionMutation,
             json!({"type": "object"}),
@@ -4823,6 +4562,7 @@ fn operation_name(operation: Operation) -> &'static str {
         Operation::CancelRequest => "cancel-request",
         Operation::ApplyRequest => "apply-request",
         Operation::Invoke => "invoke",
+        Operation::Start => "start",
         Operation::Import => "import",
     }
 }

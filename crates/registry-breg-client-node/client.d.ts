@@ -561,7 +561,7 @@ export interface BRegOperationDescriptor {
   }
 }
 
-export interface BRegImmediateActionDescriptor {
+export interface BRegActionDescriptor {
   readonly id: string
   readonly contractFingerprint: string
   readonly inputMode: string | null
@@ -896,7 +896,7 @@ export declare class BRegPatchBinding {
   private readonly __opaque: void
 }
 /** Opaque authority for one metadata-selected immediate action. */
-export declare class BRegImmediateActionBinding {
+export declare class BRegActionBinding {
   private constructor()
   private readonly __opaque: void
 }
@@ -1025,7 +1025,7 @@ export declare class BRegMetadata {
   private constructor()
   private readonly __opaque: void
   readonly operations: ReadonlyArray<BRegOperationDescriptor>
-  readonly immediateActions: ReadonlyArray<BRegImmediateActionDescriptor>
+  readonly immediateActions: ReadonlyArray<BRegActionDescriptor>
   readonly actionsJson: string | null
   /** Validated caller-filtered inert descriptions. They never grant entity authority. */
   readonly statisticalDatasets: ReadonlyArray<BRegStatisticalDatasetDescriptor> | null
@@ -1039,7 +1039,7 @@ export declare class BRegMetadata {
   selectPatch(operationIdentifier: string, expectedProfile: string): BRegPatchBinding
   selectLifecycle(entityIdentifier: string, expectedProfile: string): BRegLifecycleAuthority
   selectAttachments(entityIdentifier: string, expectedProfile: string): ReadonlyArray<BRegAttachmentSlot>
-  selectImmediateAction(actionIdentifier: string, expectedProfile: string): BRegImmediateActionBinding
+  selectImmediateAction(actionIdentifier: string, expectedProfile: string): BRegActionBinding
   selectTombstone(entityIdentifier: string, expectedProfile: string): BRegTombstoneBinding
   selectBatch(entityIdentifier: string, expectedProfile: string): BRegBatchBinding
 }
@@ -1130,18 +1130,18 @@ export declare class BaseRegistryClient {
   listRelationshipRecords(entityRoute: string, recordIdentifier: string, pathRoute: string, options?: CollectionOptions | null): Promise<PageOutcome<RecordCollection, RelationshipListContinuation>>
   continueRelationshipList(continuation: RelationshipListContinuation): Promise<PageOutcome<RecordCollection, RelationshipListContinuation>>
   lookupRecord(entityRoute: string, selector: string, values?: JsonObject | null, options?: RecordProjectionOptions | null): Promise<CompleteOutcome<RecordEnvelope>>
-  actionTargetConditions(binding: BRegImmediateActionBinding, inputs: JsonObject): Promise<BRegActionTargetConditions>
-  actionTargetConditionsJson(binding: BRegImmediateActionBinding, inputsJson: string): Promise<BRegActionTargetConditions>
-  invokeAction(binding: BRegImmediateActionBinding, inputs: JsonObject, idempotencyKey: string, conditions?: BRegActionTargetConditions | null): Promise<CompleteOutcome<BRegActionReceipt>>
-  invokeActionJson(binding: BRegImmediateActionBinding, inputsJson: string, idempotencyKey: string, conditions?: BRegActionTargetConditions | null): Promise<JsonOutcome>
+  actionTargetConditions(binding: BRegActionBinding, inputs: JsonObject): Promise<BRegActionTargetConditions>
+  actionTargetConditionsJson(binding: BRegActionBinding, inputsJson: string): Promise<BRegActionTargetConditions>
+  invokeAction(binding: BRegActionBinding, inputs: JsonObject, idempotencyKey: string, conditions?: BRegActionTargetConditions | null): Promise<CompleteOutcome<BRegActionReceipt>>
+  invokeActionJson(binding: BRegActionBinding, inputsJson: string, idempotencyKey: string, conditions?: BRegActionTargetConditions | null): Promise<JsonOutcome>
   /** Validate and retain one invocation before any I/O, for recovery after a lost response. */
-  prepareAction(binding: BRegImmediateActionBinding, inputs: JsonObject, idempotencyKey: string, conditions?: BRegActionTargetConditions | null): BRegPreparedAction
-  prepareActionJson(binding: BRegImmediateActionBinding, inputsJson: string, idempotencyKey: string, conditions?: BRegActionTargetConditions | null): BRegPreparedAction
+  prepareAction(binding: BRegActionBinding, inputs: JsonObject, idempotencyKey: string, conditions?: BRegActionTargetConditions | null): BRegPreparedAction
+  prepareActionJson(binding: BRegActionBinding, inputsJson: string, idempotencyKey: string, conditions?: BRegActionTargetConditions | null): BRegPreparedAction
   /** Revalidate saved evidence against fresh authority and the original inputs and key. Performs no I/O. */
-  recoverAction(binding: BRegImmediateActionBinding, prepared: BRegPreparedAction, inputs: JsonObject, idempotencyKey: string): BRegRecoveredAction
-  recoverActionJson(binding: BRegImmediateActionBinding, prepared: BRegPreparedAction, inputsJson: string, idempotencyKey: string): BRegRecoveredAction
-  executeRecoveredAction(binding: BRegImmediateActionBinding, recovered: BRegRecoveredAction): Promise<CompleteOutcome<BRegActionReceipt>>
-  executeRecoveredActionJson(binding: BRegImmediateActionBinding, recovered: BRegRecoveredAction): Promise<JsonOutcome>
+  recoverAction(binding: BRegActionBinding, prepared: BRegPreparedAction, inputs: JsonObject, idempotencyKey: string): BRegRecoveredAction
+  recoverActionJson(binding: BRegActionBinding, prepared: BRegPreparedAction, inputsJson: string, idempotencyKey: string): BRegRecoveredAction
+  executeRecoveredAction(binding: BRegActionBinding, recovered: BRegRecoveredAction): Promise<CompleteOutcome<BRegActionReceipt>>
+  executeRecoveredActionJson(binding: BRegActionBinding, recovered: BRegRecoveredAction): Promise<JsonOutcome>
   createRecord(binding: BRegCreateBinding, data: JsonObject, idempotencyKey: string, format?: RecordFormat | null): Promise<CompleteOutcome<RecordEnvelope>>
   prepareCreate(binding: BRegCreateBinding, data: JsonObject, idempotencyKey: string, format?: RecordFormat | null): BRegPreparedCreate
   prepareCreateJson(binding: BRegCreateBinding, dataJson: string, idempotencyKey: string, format?: RecordFormat | null): BRegPreparedCreate

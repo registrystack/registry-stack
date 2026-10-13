@@ -93,10 +93,6 @@ pub enum BRegOperationKind {
     Batch,
     Revisions,
     Snapshot,
-    SubmitRequest,
-    ReviseRequest,
-    CancelRequest,
-    ApplyRequest,
     Invoke,
     /// A future operation remains discoverable but is never executable by
     /// this client version.
@@ -116,10 +112,6 @@ impl BRegOperationKind {
             Self::Batch => "batch",
             Self::Revisions => "revisions",
             Self::Snapshot => "snapshot",
-            Self::SubmitRequest => "submit-request",
-            Self::ReviseRequest => "revise-request",
-            Self::CancelRequest => "cancel-request",
-            Self::ApplyRequest => "apply-request",
             Self::Invoke => "invoke",
             Self::Unknown(value) => value,
         }
@@ -136,10 +128,6 @@ impl BRegOperationKind {
             "batch" => Self::Batch,
             "revisions" => Self::Revisions,
             "snapshot" => Self::Snapshot,
-            "submit-request" => Self::SubmitRequest,
-            "revise-request" => Self::ReviseRequest,
-            "cancel-request" => Self::CancelRequest,
-            "apply-request" => Self::ApplyRequest,
             "invoke" => Self::Invoke,
             _ => Self::Unknown(value),
         }
@@ -155,380 +143,6 @@ impl fmt::Debug for BRegOperationKind {
     }
 }
 
-/// Planner implementation described by caller-filtered change-request metadata.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum BRegChangeRequestPlannerKind {
-    Declarative,
-    Rhai,
-}
-
-/// Fixed resource and proposal ceilings for a visible Rhai planner.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct BRegChangeRequestPlannerLimits {
-    maximum_targets: u64,
-    maximum_field_mutations: u64,
-    maximum_snapshot_bytes: u64,
-    maximum_source_bytes: u64,
-    maximum_operations: u64,
-    maximum_call_depth: u64,
-    maximum_expression_depth: u64,
-    maximum_string_bytes: u64,
-    maximum_array_items: u64,
-    maximum_map_entries: u64,
-    maximum_modules: u64,
-}
-
-impl BRegChangeRequestPlannerLimits {
-    #[must_use]
-    pub const fn maximum_targets(self) -> u64 {
-        self.maximum_targets
-    }
-
-    #[must_use]
-    pub const fn maximum_field_mutations(self) -> u64 {
-        self.maximum_field_mutations
-    }
-
-    #[must_use]
-    pub const fn maximum_snapshot_bytes(self) -> u64 {
-        self.maximum_snapshot_bytes
-    }
-
-    #[must_use]
-    pub const fn maximum_source_bytes(self) -> u64 {
-        self.maximum_source_bytes
-    }
-
-    #[must_use]
-    pub const fn maximum_operations(self) -> u64 {
-        self.maximum_operations
-    }
-
-    #[must_use]
-    pub const fn maximum_call_depth(self) -> u64 {
-        self.maximum_call_depth
-    }
-
-    #[must_use]
-    pub const fn maximum_expression_depth(self) -> u64 {
-        self.maximum_expression_depth
-    }
-
-    #[must_use]
-    pub const fn maximum_string_bytes(self) -> u64 {
-        self.maximum_string_bytes
-    }
-
-    #[must_use]
-    pub const fn maximum_array_items(self) -> u64 {
-        self.maximum_array_items
-    }
-
-    #[must_use]
-    pub const fn maximum_map_entries(self) -> u64 {
-        self.maximum_map_entries
-    }
-
-    #[must_use]
-    pub const fn maximum_modules(self) -> u64 {
-        self.maximum_modules
-    }
-}
-
-/// Source-free planner capability. This value is descriptive and cannot
-/// create lifecycle or target-write authority.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct BRegChangeRequestPlannerCapability {
-    kind: BRegChangeRequestPlannerKind,
-    abi: Option<String>,
-    limits: Option<BRegChangeRequestPlannerLimits>,
-    possible_write_count: Option<u64>,
-    possible_write_operations: Vec<BRegOperationKind>,
-    writes: Vec<BRegChangeRequestPlannerWrite>,
-}
-
-impl BRegChangeRequestPlannerCapability {
-    #[must_use]
-    pub const fn kind(&self) -> BRegChangeRequestPlannerKind {
-        self.kind
-    }
-
-    #[must_use]
-    pub fn abi(&self) -> Option<&str> {
-        self.abi.as_deref()
-    }
-
-    #[must_use]
-    pub const fn limits(&self) -> Option<BRegChangeRequestPlannerLimits> {
-        self.limits
-    }
-
-    #[must_use]
-    pub const fn possible_write_count(&self) -> Option<u64> {
-        self.possible_write_count
-    }
-
-    #[must_use]
-    pub fn possible_write_operations(&self) -> &[BRegOperationKind] {
-        &self.possible_write_operations
-    }
-
-    /// Declared planner writes on entities the caller may read, each naming
-    /// only the fields the caller may read. `possible_write_count` still
-    /// counts every declared write.
-    #[must_use]
-    pub fn writes(&self) -> &[BRegChangeRequestPlannerWrite] {
-        &self.writes
-    }
-}
-
-/// Where a change-request target or value comes from, when the caller may
-/// read it: a field on the request entity, or the record another effect of
-/// the same request creates.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum BRegChangeRequestBinding {
-    FromField(String),
-    FromEffect(String),
-}
-
-/// The entity a change-request effect or planner write changes. The binding
-/// is absent when the target is created by the effect itself or is chosen
-/// by a request field the caller cannot read.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct BRegChangeRequestTarget {
-    entity: String,
-    binding: Option<BRegChangeRequestBinding>,
-}
-
-impl BRegChangeRequestTarget {
-    #[must_use]
-    pub fn entity(&self) -> &str {
-        &self.entity
-    }
-
-    #[must_use]
-    pub const fn binding(&self) -> Option<&BRegChangeRequestBinding> {
-        self.binding.as_ref()
-    }
-}
-
-/// One declared planner write, filtered to fields the caller may read.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct BRegChangeRequestPlannerWrite {
-    target: BRegChangeRequestTarget,
-    operation: BRegOperationKind,
-    fields: Vec<String>,
-}
-
-impl BRegChangeRequestPlannerWrite {
-    #[must_use]
-    pub const fn target(&self) -> &BRegChangeRequestTarget {
-        &self.target
-    }
-
-    #[must_use]
-    pub const fn operation(&self) -> &BRegOperationKind {
-        &self.operation
-    }
-
-    #[must_use]
-    pub fn fields(&self) -> &[String] {
-        &self.fields
-    }
-}
-
-/// One field a change-request effect sets. The value source is absent when
-/// it is a request field the caller cannot read.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct BRegChangeRequestFieldSet {
-    field: String,
-    value: Option<BRegChangeRequestBinding>,
-}
-
-impl BRegChangeRequestFieldSet {
-    #[must_use]
-    pub fn field(&self) -> &str {
-        &self.field
-    }
-
-    #[must_use]
-    pub const fn value(&self) -> Option<&BRegChangeRequestBinding> {
-        self.value.as_ref()
-    }
-}
-
-/// One declared change-request effect on an entity the caller may read,
-/// naming only the target fields the caller may read. Descriptive only: it
-/// cannot create target-write authority.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct BRegChangeRequestEffect {
-    id: String,
-    operation: BRegOperationKind,
-    target: BRegChangeRequestTarget,
-    set: Vec<BRegChangeRequestFieldSet>,
-    clear: Vec<String>,
-}
-
-impl BRegChangeRequestEffect {
-    #[must_use]
-    pub fn id(&self) -> &str {
-        &self.id
-    }
-
-    #[must_use]
-    pub const fn operation(&self) -> &BRegOperationKind {
-        &self.operation
-    }
-
-    #[must_use]
-    pub const fn target(&self) -> &BRegChangeRequestTarget {
-        &self.target
-    }
-
-    #[must_use]
-    pub fn set(&self) -> &[BRegChangeRequestFieldSet] {
-        &self.set
-    }
-
-    #[must_use]
-    pub fn clear(&self) -> &[String] {
-        &self.clear
-    }
-}
-
-/// External review requirement compiled into one request type.
-#[derive(Clone, Eq, PartialEq)]
-pub enum BRegChangeRequestReviewRequirement {
-    None,
-    External(BRegChangeRequestExternalReviewRequirement),
-}
-
-impl fmt::Debug for BRegChangeRequestReviewRequirement {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::None => formatter.write_str("BRegChangeRequestReviewRequirement::None"),
-            Self::External(_) => {
-                formatter.write_str("BRegChangeRequestReviewRequirement::External(<redacted>)")
-            }
-        }
-    }
-}
-
-#[derive(Clone, Eq, PartialEq)]
-pub struct BRegChangeRequestExternalReviewRequirement {
-    authority: String,
-    policy_id: String,
-}
-
-impl BRegChangeRequestExternalReviewRequirement {
-    #[must_use]
-    pub fn authority(&self) -> &str {
-        &self.authority
-    }
-
-    #[must_use]
-    pub fn policy_id(&self) -> &str {
-        &self.policy_id
-    }
-}
-
-impl fmt::Debug for BRegChangeRequestExternalReviewRequirement {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("BRegChangeRequestExternalReviewRequirement(<redacted>)")
-    }
-}
-
-/// Source-owned application behavior after an approved external result.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum BRegChangeRequestOnApprovedMode {
-    Manual,
-    Automatic,
-}
-
-/// Descriptive post-approval application policy.
-#[derive(Clone, Eq, PartialEq)]
-pub struct BRegChangeRequestOnApprovedCapability {
-    mode: BRegChangeRequestOnApprovedMode,
-    executor: Option<String>,
-}
-
-impl BRegChangeRequestOnApprovedCapability {
-    #[must_use]
-    pub const fn mode(&self) -> BRegChangeRequestOnApprovedMode {
-        self.mode
-    }
-    #[must_use]
-    pub fn executor(&self) -> Option<&str> {
-        self.executor.as_deref()
-    }
-}
-
-impl fmt::Debug for BRegChangeRequestOnApprovedCapability {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("BRegChangeRequestOnApprovedCapability")
-            .field("mode", &self.mode)
-            .field("has_executor", &self.executor.is_some())
-            .finish()
-    }
-}
-
-/// Bounded, descriptive application preconditions. The value cannot grant
-/// lifecycle authority and remains bound by the metadata response ceiling.
-#[derive(Clone, Eq, PartialEq)]
-pub struct BRegChangeRequestApplicationCapability {
-    preconditions: Option<Value>,
-}
-
-impl BRegChangeRequestApplicationCapability {
-    #[must_use]
-    pub const fn preconditions(&self) -> Option<&Value> {
-        self.preconditions.as_ref()
-    }
-}
-
-impl fmt::Debug for BRegChangeRequestApplicationCapability {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("BRegChangeRequestApplicationCapability")
-            .field("has_preconditions", &self.preconditions.is_some())
-            .finish()
-    }
-}
-
-/// Caller-filtered, descriptive change-request capability for one entity.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct BRegChangeRequestCapability {
-    planner: BRegChangeRequestPlannerCapability,
-    effects: Vec<BRegChangeRequestEffect>,
-    review: BRegChangeRequestReviewRequirement,
-    on_approved: BRegChangeRequestOnApprovedCapability,
-    application: BRegChangeRequestApplicationCapability,
-}
-
-impl BRegChangeRequestCapability {
-    #[must_use]
-    pub const fn planner(&self) -> &BRegChangeRequestPlannerCapability {
-        &self.planner
-    }
-    #[must_use]
-    pub fn effects(&self) -> &[BRegChangeRequestEffect] {
-        &self.effects
-    }
-    #[must_use]
-    pub const fn review(&self) -> &BRegChangeRequestReviewRequirement {
-        &self.review
-    }
-    #[must_use]
-    pub const fn on_approved(&self) -> &BRegChangeRequestOnApprovedCapability {
-        &self.on_approved
-    }
-    #[must_use]
-    pub const fn application(&self) -> &BRegChangeRequestApplicationCapability {
-        &self.application
-    }
-}
-/// One caller-visible field on an authoritative runtime operation.
 #[derive(Clone, PartialEq)]
 pub struct BRegMetadataField {
     id: String,
@@ -601,7 +215,7 @@ impl fmt::Debug for BRegReferenceOperationDescriptor {
 #[derive(Clone, PartialEq)]
 pub struct BRegReferenceDescriptor {
     manual_entry: bool,
-    target_entity: Option<String>,
+    target_record_type: Option<String>,
     operations: Vec<BRegReferenceOperationDescriptor>,
 }
 
@@ -612,8 +226,8 @@ impl BRegReferenceDescriptor {
     }
 
     #[must_use]
-    pub fn target_entity(&self) -> Option<&str> {
-        self.target_entity.as_deref()
+    pub fn target_record_type(&self) -> Option<&str> {
+        self.target_record_type.as_deref()
     }
 
     #[must_use]
@@ -651,10 +265,10 @@ impl BRegMetadataField {
     /// The declared target entity for this field's typed record reference.
     /// This is metadata, not authority to read or mutate the target entity.
     #[must_use]
-    pub fn reference_target_entity(&self) -> Option<&str> {
+    pub fn reference_target_record_type(&self) -> Option<&str> {
         self.reference
             .as_ref()
-            .and_then(BRegReferenceDescriptor::target_entity)
+            .and_then(BRegReferenceDescriptor::target_record_type)
     }
 
     #[must_use]
@@ -996,8 +610,8 @@ pub struct BRegMetadataOperation {
     method: String,
     path: String,
     kind: BRegOperationKind,
-    source_entity: String,
-    response_entity: String,
+    source_record_type: String,
+    response_record_type: String,
     access_profile: String,
     required_capabilities: Vec<String>,
     fields: Vec<BRegMetadataField>,
@@ -1006,7 +620,7 @@ pub struct BRegMetadataOperation {
     create_writable_fields: Vec<String>,
     patch_writable_fields: Vec<String>,
     request: BRegOperationRequest,
-    entity_label: String,
+    record_type_label: String,
     title_fields: Vec<String>,
     query: Option<BRegQueryDescriptor>,
     selectors: Vec<BRegLookupSelectorDescriptor>,
@@ -1014,9 +628,17 @@ pub struct BRegMetadataOperation {
 }
 
 impl BRegMetadataOperation {
+    /// Use only this caller projection's declared readable title fields.
+    /// The permitted opaque identity is the fallback when no title was disclosed.
+    pub fn title_for_record(&self, record: &crate::RegistryRecord) -> String {
+        self.title_fields.iter().filter_map(|id| {
+            let field = self.fields.iter().find(|field| field.id == *id && self.readable_fields.contains(id))?;
+            record.domain_data.get(&field.api_name)?.as_str().filter(|title| !title.is_empty())
+        }).next().map(str::to_owned).unwrap_or_else(|| record.record_identifier.clone())
+    }
     #[must_use]
-    pub fn entity_label(&self) -> &str {
-        &self.entity_label
+    pub fn record_type_label(&self) -> &str {
+        &self.record_type_label
     }
     #[must_use]
     pub fn title_fields(&self) -> &[String] {
@@ -1058,13 +680,13 @@ impl BRegMetadataOperation {
     }
 
     #[must_use]
-    pub fn source_entity(&self) -> &str {
-        &self.source_entity
+    pub fn source_record_type(&self) -> &str {
+        &self.source_record_type
     }
 
     #[must_use]
-    pub fn response_entity(&self) -> &str {
-        &self.response_entity
+    pub fn response_record_type(&self) -> &str {
+        &self.response_record_type
     }
 
     #[must_use]
@@ -1134,12 +756,11 @@ struct BRegMetadataEntity {
     operations: Vec<(BRegOperationKind, String)>,
     readable_fields: Vec<String>,
     change_control: Option<Value>,
-    change_request: Option<BRegChangeRequestCapability>,
 }
 
 /// One typed input advertised by a caller-visible immediate action.
 #[derive(Clone, PartialEq)]
-pub struct BRegImmediateActionInputDescriptor {
+pub struct BRegActionInputDescriptor {
     id: String,
     api_name: String,
     field_type: Value,
@@ -1148,7 +769,7 @@ pub struct BRegImmediateActionInputDescriptor {
     classification: String,
 }
 
-impl BRegImmediateActionInputDescriptor {
+impl BRegActionInputDescriptor {
     #[must_use]
     pub fn identifier(&self) -> &str {
         &self.id
@@ -1175,10 +796,10 @@ impl BRegImmediateActionInputDescriptor {
     }
 }
 
-impl fmt::Debug for BRegImmediateActionInputDescriptor {
+impl fmt::Debug for BRegActionInputDescriptor {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("BRegImmediateActionInputDescriptor")
+            .debug_struct("BRegActionInputDescriptor")
             .field("required", &self.required)
             .field("nullable", &self.nullable)
             .finish_non_exhaustive()
@@ -1187,13 +808,13 @@ impl fmt::Debug for BRegImmediateActionInputDescriptor {
 
 /// A typed immediate-action input that references one entity.
 #[derive(Clone, PartialEq)]
-pub struct BRegImmediateActionReferenceInputDescriptor {
+pub struct BRegActionReferenceInputDescriptor {
     input: String,
     api_name: String,
-    target_entity: String,
+    target_record_type: String,
 }
 
-impl BRegImmediateActionReferenceInputDescriptor {
+impl BRegActionReferenceInputDescriptor {
     #[must_use]
     pub fn input_identifier(&self) -> &str {
         &self.input
@@ -1203,26 +824,26 @@ impl BRegImmediateActionReferenceInputDescriptor {
         &self.api_name
     }
     #[must_use]
-    pub fn target_entity(&self) -> &str {
-        &self.target_entity
+    pub fn target_record_type(&self) -> &str {
+        &self.target_record_type
     }
 }
 
 /// One caller-visible result effect from an immediate action.
 #[derive(Clone, PartialEq)]
-pub struct BRegImmediateActionResultEffectDescriptor {
+pub struct BRegActionResultEffectDescriptor {
     effect: String,
     entity: String,
     operation: BRegOperationKind,
 }
 
-impl BRegImmediateActionResultEffectDescriptor {
+impl BRegActionResultEffectDescriptor {
     #[must_use]
     pub fn effect_identifier(&self) -> &str {
         &self.effect
     }
     #[must_use]
-    pub fn entity_identifier(&self) -> &str {
+    pub fn record_type_identifier(&self) -> &str {
         &self.entity
     }
     #[must_use]
@@ -1233,13 +854,13 @@ impl BRegImmediateActionResultEffectDescriptor {
 
 /// Resource ceilings advertised for an immediate action.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct BRegImmediateActionBounds {
+pub struct BRegActionBounds {
     maximum_targets: u64,
     maximum_field_mutations: u64,
     maximum_snapshot_bytes: u64,
 }
 
-impl BRegImmediateActionBounds {
+impl BRegActionBounds {
     #[must_use]
     pub const fn maximum_targets(self) -> u64 {
         self.maximum_targets
@@ -1254,27 +875,46 @@ impl BRegImmediateActionBounds {
     }
 }
 
-/// Complete descriptive metadata for one caller-visible immediate action.
+/// Fixed execution mode is authored and cannot be selected by an invocation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum BRegActionMode {
+    Immediate,
+    Proposal,
+}
+
+/// Complete descriptive metadata for one caller-visible Action.
 #[derive(Clone, PartialEq)]
-pub struct BRegImmediateActionDescriptor {
+pub struct BRegActionDescriptor {
     id: String,
+    mode: BRegActionMode,
+    api_name: String,
+    definition_revision: String,
+    display: Value,
     required_capabilities: Vec<String>,
     route: String,
     condition_route: Option<String>,
     contract_fingerprint: String,
     input_mode: Option<String>,
     maximum_input_string_bytes: Option<u64>,
-    inputs: Vec<BRegImmediateActionInputDescriptor>,
-    reference_inputs: Vec<BRegImmediateActionReferenceInputDescriptor>,
+    inputs: Vec<BRegActionInputDescriptor>,
+    reference_inputs: Vec<BRegActionReferenceInputDescriptor>,
     required_condition_keys: Vec<String>,
-    result_effects: Vec<BRegImmediateActionResultEffectDescriptor>,
+    result_effects: Vec<BRegActionResultEffectDescriptor>,
     access_profile: String,
     invoke_path: String,
     target_conditions_path: Option<String>,
-    bounds: BRegImmediateActionBounds,
+    bounds: BRegActionBounds,
 }
 
-impl BRegImmediateActionDescriptor {
+impl BRegActionDescriptor {
+    pub fn api_name(&self) -> &str { &self.api_name }
+    pub fn definition_revision(&self) -> &str { &self.definition_revision }
+    pub fn display(&self) -> &Value { &self.display }
+    #[must_use]
+    pub const fn mode(&self) -> BRegActionMode {
+        self.mode
+    }
     #[must_use]
     pub fn identifier(&self) -> &str {
         &self.id
@@ -1292,11 +932,11 @@ impl BRegImmediateActionDescriptor {
         self.maximum_input_string_bytes
     }
     #[must_use]
-    pub fn inputs(&self) -> &[BRegImmediateActionInputDescriptor] {
+    pub fn inputs(&self) -> &[BRegActionInputDescriptor] {
         &self.inputs
     }
     #[must_use]
-    pub fn reference_inputs(&self) -> &[BRegImmediateActionReferenceInputDescriptor] {
+    pub fn reference_inputs(&self) -> &[BRegActionReferenceInputDescriptor] {
         &self.reference_inputs
     }
     #[must_use]
@@ -1304,7 +944,7 @@ impl BRegImmediateActionDescriptor {
         &self.required_condition_keys
     }
     #[must_use]
-    pub fn result_effects(&self) -> &[BRegImmediateActionResultEffectDescriptor] {
+    pub fn result_effects(&self) -> &[BRegActionResultEffectDescriptor] {
         &self.result_effects
     }
     #[must_use]
@@ -1320,15 +960,15 @@ impl BRegImmediateActionDescriptor {
         self.target_conditions_path.as_deref()
     }
     #[must_use]
-    pub const fn bounds(&self) -> BRegImmediateActionBounds {
+    pub const fn bounds(&self) -> BRegActionBounds {
         self.bounds
     }
 }
 
-impl fmt::Debug for BRegImmediateActionDescriptor {
+impl fmt::Debug for BRegActionDescriptor {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("BRegImmediateActionDescriptor")
+            .debug_struct("BRegActionDescriptor")
             .field("input_count", &self.inputs.len())
             .field("result_effect_count", &self.result_effects.len())
             .finish_non_exhaustive()
@@ -1343,13 +983,22 @@ pub struct BRegMetadata {
     revision: String,
     entities: Vec<BRegMetadataEntity>,
     operations: Vec<BRegMetadataOperation>,
-    actions: Option<Value>,
+    action_metadata: Option<Value>,
     statistical_datasets: Option<Value>,
-    immediate_actions: Vec<BRegImmediateActionDescriptor>,
+    proposals: Option<Value>,
+    actions: Vec<BRegActionDescriptor>,
     source_binding: Option<String>,
 }
 
 impl BRegMetadata {
+    /// Promote only an explicitly advertised Proposal collection grant.
+    pub fn select_proposals(&self, expected_profile: &str) -> Result<crate::BRegProposalCollection, BRegMetadataSelectionError> {
+        crate::BRegProposalCollection::from_metadata(
+            self.proposals.as_ref().ok_or_else(|| selection_error(BRegMetadataSelectionErrorKind::NotFound))?,
+            self.source_binding.as_ref().ok_or_else(|| selection_error(BRegMetadataSelectionErrorKind::UnboundSource))?,
+            &self.revision, expected_profile,
+        ).map_err(|_| selection_error(BRegMetadataSelectionErrorKind::ContractMismatch))
+    }
     /// Parse runtime metadata v1 bytes using duplicate-key detection and
     /// resource bounds before interpreting known members. Unknown object
     /// members are ignored; required capabilities still gate execution.
@@ -1391,25 +1040,12 @@ impl BRegMetadata {
             .find(|operation| operation.id == operation_identifier)
     }
 
-    /// Returns caller-filtered descriptive change-request capability metadata.
-    /// Executable authority still comes only from [`Self::select_lifecycle`].
-    #[must_use]
-    pub fn change_request_capability(
-        &self,
-        entity_identifier: &str,
-    ) -> Option<&BRegChangeRequestCapability> {
-        self.entities
-            .iter()
-            .find(|entity| entity.id == entity_identifier)
-            .and_then(|entity| entity.change_request.as_ref())
-    }
-
     /// Returns caller-filtered immediate-action metadata as a bounded inert
     /// JSON value. A separate action contract validator must promote it before
     /// invocation.
     #[must_use]
-    pub fn actions(&self) -> Option<&Value> {
-        self.actions.as_ref()
+    pub fn action_metadata(&self) -> Option<&Value> {
+        self.action_metadata.as_ref()
     }
 
     /// Returns validated caller-filtered statistical dataset descriptions as
@@ -1421,22 +1057,22 @@ impl BRegMetadata {
 
     /// Returns complete typed caller-filtered immediate-action descriptors.
     #[must_use]
-    pub fn immediate_actions(&self) -> &[BRegImmediateActionDescriptor] {
-        &self.immediate_actions
+    pub fn actions(&self) -> &[BRegActionDescriptor] {
+        &self.actions
     }
 
     /// Promote one complete caller-visible immediate-action contract.
-    pub fn select_immediate_action(
+    pub fn select_action(
         &self,
         action_identifier: &str,
         expected_profile: &str,
-    ) -> Result<BRegImmediateActionBinding, BRegMetadataSelectionError> {
+    ) -> Result<BRegActionBinding, BRegMetadataSelectionError> {
         let source_binding = self
             .source_binding
             .as_ref()
             .ok_or_else(|| selection_error(BRegMetadataSelectionErrorKind::UnboundSource))?;
         let action = self
-            .immediate_actions
+            .actions
             .iter()
             .find(|action| action.id == action_identifier)
             .ok_or_else(|| selection_error(BRegMetadataSelectionErrorKind::NotFound))?;
@@ -1467,12 +1103,12 @@ impl BRegMetadata {
             }
             _ => false,
         };
-        if !semantics_are_exact || !immediate_action_contract_is_exact(action) {
+        if !semantics_are_exact || !action_contract_is_exact(action) {
             return Err(selection_error(
                 BRegMetadataSelectionErrorKind::ContractMismatch,
             ));
         }
-        Ok(BRegImmediateActionBinding::from_descriptor(
+        Ok(BRegActionBinding::from_descriptor(
             self.revision.clone(),
             source_binding.clone(),
             action,
@@ -1482,11 +1118,11 @@ impl BRegMetadata {
     /// Promote one exact direct Tombstone contract.
     pub fn select_tombstone(
         &self,
-        entity_identifier: &str,
+        record_type_identifier: &str,
         expected_profile: &str,
     ) -> Result<BRegTombstoneBinding, BRegMetadataSelectionError> {
         let (entity, operation, source_binding) = self.select_mutation_operation(
-            entity_identifier,
+            record_type_identifier,
             expected_profile,
             BRegOperationKind::Tombstone,
         )?;
@@ -1532,11 +1168,11 @@ impl BRegMetadata {
     /// Promote one exact caller-visible atomic Batch contract.
     pub fn select_batch(
         &self,
-        entity_identifier: &str,
+        record_type_identifier: &str,
         expected_profile: &str,
     ) -> Result<BRegBatchBinding, BRegMetadataSelectionError> {
         let (entity, operation, source_binding) = self.select_mutation_operation(
-            entity_identifier,
+            record_type_identifier,
             expected_profile,
             BRegOperationKind::Batch,
         )?;
@@ -1615,7 +1251,7 @@ impl BRegMetadata {
 
     fn select_mutation_operation(
         &self,
-        entity_identifier: &str,
+        record_type_identifier: &str,
         expected_profile: &str,
         expected_kind: BRegOperationKind,
     ) -> Result<(&BRegMetadataEntity, &BRegMetadataOperation, String), BRegMetadataSelectionError>
@@ -1627,16 +1263,16 @@ impl BRegMetadata {
         let entity = self
             .entities
             .iter()
-            .find(|entity| entity.id == entity_identifier)
+            .find(|entity| entity.id == record_type_identifier)
             .ok_or_else(|| selection_error(BRegMetadataSelectionErrorKind::NotFound))?;
         let mut operations = self.operations.iter().filter(|operation| {
-            operation.source_entity == entity.id && operation.kind == expected_kind
+            operation.source_record_type == entity.id && operation.kind == expected_kind
         });
         let operation = operations
             .find(|operation| operation.access_profile == expected_profile)
             .ok_or_else(|| {
                 if self.operations.iter().any(|operation| {
-                    operation.source_entity == entity.id && operation.kind == expected_kind
+                    operation.source_record_type == entity.id && operation.kind == expected_kind
                 }) {
                     selection_error(BRegMetadataSelectionErrorKind::ProfileMismatch)
                 } else {
@@ -1648,7 +1284,7 @@ impl BRegMetadata {
                 BRegMetadataSelectionErrorKind::RequiredCapability,
             ));
         }
-        if operation.response_entity != entity.id {
+        if operation.response_record_type != entity.id {
             return Err(selection_error(
                 BRegMetadataSelectionErrorKind::ContractMismatch,
             ));
@@ -1691,9 +1327,9 @@ impl BRegMetadata {
         let entity = self
             .entities
             .iter()
-            .find(|entity| entity.id == operation.source_entity)
+            .find(|entity| entity.id == operation.source_record_type)
             .ok_or_else(|| selection_error(BRegMetadataSelectionErrorKind::ContractMismatch))?;
-        if operation.response_entity != entity.id {
+        if operation.response_record_type != entity.id {
             return Err(selection_error(
                 BRegMetadataSelectionErrorKind::ContractMismatch,
             ));
@@ -1707,7 +1343,7 @@ impl BRegMetadata {
             registry_revision: self.revision.clone(),
             operation_identifier: operation.id.clone(),
             access_profile: operation.access_profile.clone(),
-            entity_identifier: entity.id.clone(),
+            record_type_identifier: entity.id.clone(),
             collection_path: expected_collection_path.clone(),
             request_schema: request.schema.clone().expect("checked direct schema"),
             source_binding: source_binding.clone(),
@@ -1802,88 +1438,6 @@ impl BRegMetadata {
         }
     }
 
-    /// Promote the caller-visible lifecycle routes for one request entity and
-    /// one exact selected access profile. Only a route whose required
-    /// capabilities are exactly the lifecycle capability is promoted; any
-    /// other route is left out of the authority, and selection is refused
-    /// when none remains.
-    pub fn select_lifecycle(
-        &self,
-        entity_identifier: &str,
-        expected_profile: &str,
-    ) -> Result<crate::BRegLifecycleAuthority, BRegMetadataSelectionError> {
-        let source_binding = self
-            .source_binding
-            .as_ref()
-            .ok_or_else(|| selection_error(BRegMetadataSelectionErrorKind::UnboundSource))?;
-        let entity = self
-            .entities
-            .iter()
-            .find(|entity| entity.id == entity_identifier)
-            .ok_or_else(|| selection_error(BRegMetadataSelectionErrorKind::NotFound))?;
-        let entity_lifecycle = self
-            .operations
-            .iter()
-            .filter_map(|operation| {
-                lifecycle_operation(&operation.kind).map(|kind| (operation, kind))
-            })
-            .filter(|(operation, _)| operation.source_entity == entity.id)
-            .collect::<Vec<_>>();
-        if entity_lifecycle.is_empty() {
-            return Err(selection_error(BRegMetadataSelectionErrorKind::NotFound));
-        }
-        let candidates = entity_lifecycle
-            .into_iter()
-            .filter(|(operation, _)| operation.access_profile == expected_profile)
-            .collect::<Vec<_>>();
-        if candidates.is_empty() {
-            return Err(selection_error(
-                BRegMetadataSelectionErrorKind::ProfileMismatch,
-            ));
-        }
-
-        let understood = candidates
-            .into_iter()
-            .filter(|(operation, _)| operation_capabilities_are_understood(operation))
-            .collect::<Vec<_>>();
-        if understood.is_empty() {
-            return Err(selection_error(
-                BRegMetadataSelectionErrorKind::RequiredCapability,
-            ));
-        }
-
-        let base_path = format!("/v1/records/{}/{{record_id}}/actions", entity.route);
-        let mut bindings = Vec::with_capacity(understood.len());
-        for (operation, kind) in understood {
-            if operation.response_entity != entity.id
-                || operation.method != "POST"
-                || !operation.create_writable_fields.is_empty()
-                || !operation.patch_writable_fields.is_empty()
-                || !lifecycle_request_is_exact(operation, kind)
-            {
-                return Err(selection_error(
-                    BRegMetadataSelectionErrorKind::ContractMismatch,
-                ));
-            }
-            lifecycle_route_is_exact(operation, kind, &base_path, &entity.id)?;
-            bindings.push(crate::BRegLifecycleOperationBinding::new(
-                kind,
-                operation.path.clone(),
-            ));
-        }
-
-        crate::BRegLifecycleAuthority::new(
-            self.id.clone(),
-            entity.dataset_identifier.clone(),
-            self.revision.clone(),
-            entity.id.clone(),
-            expected_profile.to_owned(),
-            source_binding.clone(),
-            bindings,
-        )
-        .map_err(|_| selection_error(BRegMetadataSelectionErrorKind::ContractMismatch))
-    }
-
     /// Promote every caller-visible attachment slot on one entity for one exact
     /// selected access profile.
     ///
@@ -1895,7 +1449,7 @@ impl BRegMetadata {
     /// own route.
     pub fn select_attachments(
         &self,
-        entity_identifier: &str,
+        record_type_identifier: &str,
         expected_profile: &str,
     ) -> Result<Vec<crate::BRegAttachmentSlot>, BRegMetadataSelectionError> {
         let source_binding = self
@@ -1905,14 +1459,14 @@ impl BRegMetadata {
         let entity = self
             .entities
             .iter()
-            .find(|entity| entity.id == entity_identifier)
+            .find(|entity| entity.id == record_type_identifier)
             .ok_or_else(|| selection_error(BRegMetadataSelectionErrorKind::NotFound))?;
         let carrying = self
             .operations
             .iter()
             .filter(|operation| {
-                operation.source_entity == entity.id
-                    && operation.response_entity == entity.id
+                operation.source_record_type == entity.id
+                    && operation.response_record_type == entity.id
                     && operation.fields.iter().any(attachment_capability_present)
             })
             .collect::<Vec<_>>();
@@ -1943,7 +1497,7 @@ impl BRegMetadata {
             registry_identifier: self.id.clone(),
             dataset_identifier: entity.dataset_identifier.clone(),
             registry_revision: self.revision.clone(),
-            entity_identifier: entity.id.clone(),
+            record_type_identifier: entity.id.clone(),
             access_profile: expected_profile.to_owned(),
             collection_path: format!("/v1/records/{}", entity.route),
             source_binding: source_binding.clone(),
@@ -1980,20 +1534,12 @@ impl BRegMetadata {
 }
 
 fn operation_capabilities_are_understood(operation: &BRegMetadataOperation) -> bool {
-    match &operation.kind {
-        BRegOperationKind::SubmitRequest
-        | BRegOperationKind::ReviseRequest
-        | BRegOperationKind::CancelRequest
-        | BRegOperationKind::ApplyRequest => {
-            operation.required_capabilities == ["change_request_lifecycle"]
-        }
-        BRegOperationKind::Unknown(_) => false,
-        _ => operation.required_capabilities.is_empty(),
-    }
+    operation.required_capabilities.is_empty()
 }
 
-fn immediate_action_contract_is_exact(action: &BRegImmediateActionDescriptor) -> bool {
-    if action.invoke_path != format!("/v1/actions/{}", action.id)
+fn action_contract_is_exact(action: &BRegActionDescriptor) -> bool {
+    if !action.invoke_path.starts_with("/v1/")
+        || action.invoke_path.contains(['?', '#', '%', '\\'])
         || action.bounds.maximum_targets > MAX_SUPPORTED_ACTION_TARGETS
         || action.bounds.maximum_field_mutations > MAX_SUPPORTED_ACTION_FIELD_MUTATIONS
         || action.bounds.maximum_snapshot_bytes > MAX_SUPPORTED_ACTION_SNAPSHOT_BYTES
@@ -2012,7 +1558,7 @@ fn immediate_action_contract_is_exact(action: &BRegImmediateActionDescriptor) ->
         return false;
     }
     match &action.target_conditions_path {
-        Some(path) if path != &format!("{}/target-conditions", action.invoke_path) => return false,
+        Some(path) if !path.starts_with("/v1/") || path.contains(['?', '#', '%', '\\']) => return false,
         None if !action.required_condition_keys.is_empty() => return false,
         _ => {}
     }
@@ -2026,7 +1572,7 @@ fn immediate_action_contract_is_exact(action: &BRegImmediateActionDescriptor) ->
         };
         if input.field_type.get("type").and_then(Value::as_str) != Some("reference")
             || input.field_type.get("target").and_then(Value::as_str)
-                != Some(reference.target_entity.as_str())
+                != Some(reference.target_record_type.as_str())
         {
             return false;
         }
@@ -2309,7 +1855,7 @@ impl fmt::Debug for BRegMetadata {
             .debug_struct("BRegMetadata")
             .field("entity_count", &self.entities.len())
             .field("operation_count", &self.operations.len())
-            .field("has_actions", &self.actions.is_some())
+            .field("has_actions", &self.action_metadata.is_some())
             .field(
                 "has_statistical_datasets",
                 &self.statistical_datasets.is_some(),
@@ -2362,14 +1908,14 @@ impl std::error::Error for BRegMetadataSelectionError {}
 
 /// Exact input contract retained by an immediate-action binding.
 #[derive(Clone, PartialEq)]
-pub struct BRegImmediateActionInputBinding {
+pub struct BRegActionInputBinding {
     api_name: String,
     required: bool,
     nullable: bool,
     field_type: Value,
 }
 
-impl BRegImmediateActionInputBinding {
+impl BRegActionInputBinding {
     #[must_use]
     pub fn api_name(&self) -> &str {
         &self.api_name
@@ -2390,8 +1936,9 @@ impl BRegImmediateActionInputBinding {
 
 /// Opaque executable binding for one exact caller-visible immediate action.
 #[derive(Clone, PartialEq)]
-pub struct BRegImmediateActionBinding {
+pub struct BRegActionBinding {
     action_identifier: String,
+    mode: BRegActionMode,
     registry_revision: String,
     access_profile: String,
     invoke_path: String,
@@ -2399,22 +1946,23 @@ pub struct BRegImmediateActionBinding {
     contract_fingerprint: String,
     required_condition_keys: BTreeSet<String>,
     result_effects: BTreeMap<String, String>,
-    inputs: Vec<BRegImmediateActionInputBinding>,
-    reference_inputs: Vec<BRegImmediateActionReferenceInputDescriptor>,
-    bounds: BRegImmediateActionBounds,
+    inputs: Vec<BRegActionInputBinding>,
+    reference_inputs: Vec<BRegActionReferenceInputDescriptor>,
+    bounds: BRegActionBounds,
     handler: bool,
     maximum_input_string_bytes: Option<u64>,
     source_binding: String,
 }
 
-impl BRegImmediateActionBinding {
+impl BRegActionBinding {
     fn from_descriptor(
         registry_revision: String,
         source_binding: String,
-        action: &BRegImmediateActionDescriptor,
+        action: &BRegActionDescriptor,
     ) -> Self {
         Self {
             action_identifier: action.id.clone(),
+            mode: action.mode,
             registry_revision,
             access_profile: action.access_profile.clone(),
             invoke_path: action.invoke_path.clone(),
@@ -2429,7 +1977,7 @@ impl BRegImmediateActionBinding {
             inputs: action
                 .inputs
                 .iter()
-                .map(|input| BRegImmediateActionInputBinding {
+                .map(|input| BRegActionInputBinding {
                     api_name: input.api_name.clone(),
                     required: input.required,
                     nullable: input
@@ -2449,6 +1997,10 @@ impl BRegImmediateActionBinding {
     #[must_use]
     pub fn action_identifier(&self) -> &str {
         &self.action_identifier
+    }
+    #[must_use]
+    pub const fn mode(&self) -> BRegActionMode {
+        self.mode
     }
     #[must_use]
     pub fn registry_revision(&self) -> &str {
@@ -2471,7 +2023,7 @@ impl BRegImmediateActionBinding {
         &self.contract_fingerprint
     }
     #[must_use]
-    pub const fn bounds(&self) -> BRegImmediateActionBounds {
+    pub const fn bounds(&self) -> BRegActionBounds {
         self.bounds
     }
     #[must_use]
@@ -2491,11 +2043,11 @@ impl BRegImmediateActionBinding {
         &self.result_effects
     }
     #[must_use]
-    pub(crate) fn inputs(&self) -> &[BRegImmediateActionInputBinding] {
+    pub(crate) fn inputs(&self) -> &[BRegActionInputBinding] {
         &self.inputs
     }
     #[must_use]
-    pub fn reference_inputs(&self) -> &[BRegImmediateActionReferenceInputDescriptor] {
+    pub fn reference_inputs(&self) -> &[BRegActionReferenceInputDescriptor] {
         &self.reference_inputs
     }
     #[must_use]
@@ -2508,9 +2060,9 @@ impl BRegImmediateActionBinding {
     }
 }
 
-impl fmt::Debug for BRegImmediateActionBinding {
+impl fmt::Debug for BRegActionBinding {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("BRegImmediateActionBinding(<bound>)")
+        formatter.write_str("BRegActionBinding(<bound>)")
     }
 }
 
@@ -2521,7 +2073,7 @@ struct BRegMutationBinding {
     registry_revision: String,
     operation_identifier: String,
     access_profile: String,
-    entity_identifier: String,
+    record_type_identifier: String,
     collection_path: String,
     request_schema: Option<Value>,
     source_binding: String,
@@ -2542,7 +2094,7 @@ impl BRegMutationBinding {
             registry_revision: metadata.revision.clone(),
             operation_identifier: operation.id.clone(),
             access_profile: operation.access_profile.clone(),
-            entity_identifier: entity.id.clone(),
+            record_type_identifier: entity.id.clone(),
             collection_path,
             request_schema,
             source_binding,
@@ -2595,8 +2147,8 @@ macro_rules! mutation_binding_accessors {
                 &self.common.access_profile
             }
             #[must_use]
-            pub fn entity_identifier(&self) -> &str {
-                &self.common.entity_identifier
+            pub fn record_type_identifier(&self) -> &str {
+                &self.common.record_type_identifier
             }
             #[must_use]
             pub fn request_schema(&self) -> Option<&Value> {
@@ -2686,7 +2238,7 @@ struct BRegDirectWriteBinding {
     registry_revision: String,
     operation_identifier: String,
     access_profile: String,
-    entity_identifier: String,
+    record_type_identifier: String,
     collection_path: String,
     request_schema: Value,
     source_binding: String,
@@ -2754,8 +2306,8 @@ macro_rules! direct_binding_accessors {
             }
 
             #[must_use]
-            pub fn entity_identifier(&self) -> &str {
-                &self.common.entity_identifier
+            pub fn record_type_identifier(&self) -> &str {
+                &self.common.record_type_identifier
             }
 
             #[must_use]
@@ -2823,116 +2375,6 @@ impl fmt::Debug for BRegPatchBinding {
     }
 }
 
-fn lifecycle_operation(operation: &BRegOperationKind) -> Option<crate::BRegLifecycleOperation> {
-    use crate::BRegLifecycleOperation as Lifecycle;
-    Some(match operation {
-        BRegOperationKind::SubmitRequest => Lifecycle::SubmitRequest,
-        BRegOperationKind::ReviseRequest => Lifecycle::ReviseRequest,
-        BRegOperationKind::CancelRequest => Lifecycle::CancelRequest,
-        BRegOperationKind::ApplyRequest => Lifecycle::ApplyRequest,
-        _ => return None,
-    })
-}
-
-fn lifecycle_request_is_exact(
-    operation: &BRegMetadataOperation,
-    kind: crate::BRegLifecycleOperation,
-) -> bool {
-    let request = &operation.request;
-    request.field_names.as_deref() == Some("api")
-        && request.query_parameters.is_empty()
-        && request.body.as_deref() == Some("change_request_action")
-        && request.content_type.as_deref() == Some("application/json")
-        && request.idempotency_key_required == Some(true)
-        && request.if_match_required == Some(true)
-        && request.mutation_semantics.as_deref() == Some("change_request_lifecycle")
-        && request.patch_path_prefix.is_none()
-        && request.patch_operations.is_empty()
-        && request.remove_semantics.is_none()
-        && request.maximum_items.is_none()
-        && request.maximum_body_bytes.is_none()
-        && request.allow_create.is_none()
-        && request.allow_patch.is_none()
-        && request.schema.as_ref().is_some_and(|schema| {
-            expected_object_members_match(schema, &expected_lifecycle_schema(kind))
-        })
-}
-
-fn expected_object_members_match(actual: &Value, expected: &Value) -> bool {
-    match expected {
-        Value::Object(expected) => actual.as_object().is_some_and(|actual| {
-            expected.iter().all(|(member, expected)| {
-                actual
-                    .get(member)
-                    .is_some_and(|actual| expected_object_members_match(actual, expected))
-            })
-        }),
-        _ => actual == expected,
-    }
-}
-
-fn expected_lifecycle_schema(kind: crate::BRegLifecycleOperation) -> Value {
-    use crate::BRegLifecycleOperation as Lifecycle;
-    let mut schema = match kind {
-        Lifecycle::ApplyRequest => serde_json::json!({
-            "$schema": "https://json-schema.org/draft/2020-12/schema",
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["proposalVersion", "effectDigest"],
-            "properties": {
-                "proposalVersion": {
-                    "type": "integer", "format": "int64", "minimum": 1,
-                    "maximum": u32::MAX
-                },
-                "effectDigest": {
-                    "type": "string",
-                    "pattern": "^sha256:[0-9a-f]{64}$",
-                    "description": "Digest of the immutable proposal effects displayed to the actor."
-                }
-            }
-        }),
-        Lifecycle::ReviseRequest => serde_json::json!({
-            "$schema": "https://json-schema.org/draft/2020-12/schema",
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["rebase"],
-            "properties": {"rebase": {"type": "boolean"}}
-        }),
-        Lifecycle::SubmitRequest | Lifecycle::CancelRequest => serde_json::json!({
-            "$schema": "https://json-schema.org/draft/2020-12/schema",
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {}
-        }),
-    };
-    if kind == Lifecycle::ApplyRequest {
-        schema["properties"]["reason"] = serde_json::json!({"type": "string", "maxLength": 4096, "pattern": r"^[^\u0000]*$", "description": "Optional application explanation, preserved unchanged. At most 4096 Unicode characters; NUL is refused."});
-    }
-    schema
-}
-
-fn lifecycle_route_is_exact(
-    operation: &BRegMetadataOperation,
-    kind: crate::BRegLifecycleOperation,
-    base_path: &str,
-    entity_identifier: &str,
-) -> Result<(), BRegMetadataSelectionError> {
-    use crate::BRegLifecycleOperation as Lifecycle;
-    let mismatch = || selection_error(BRegMetadataSelectionErrorKind::ContractMismatch);
-    let (id_suffix, path_suffix) = match kind {
-        Lifecycle::SubmitRequest => ("submit", "submit"),
-        Lifecycle::ReviseRequest => ("revise", "revise"),
-        Lifecycle::CancelRequest => ("cancel", "cancel"),
-        Lifecycle::ApplyRequest => ("apply", "apply"),
-    };
-    if operation.id != format!("records.{entity_identifier}.request.{id_suffix}")
-        || operation.path != format!("{base_path}/{path_suffix}")
-    {
-        return Err(mismatch());
-    }
-    Ok(())
-}
-
 fn parse_metadata(value: Value) -> Result<BRegMetadata, BRegMetadataError> {
     let mut root = object(value)?;
     let metadata_version = string(required(&mut root, "metadataVersion")?)?;
@@ -2945,7 +2387,7 @@ fn parse_metadata(value: Value) -> Result<BRegMetadata, BRegMetadataError> {
     if !valid_revision(&revision) {
         return Err(metadata_error(BRegMetadataErrorKind::Revision));
     }
-    let entities = array(required(&mut root, "entities")?)?
+    let entities = array(required(&mut root, "recordTypes")?)?
         .into_iter()
         .map(parse_entity)
         .collect::<Result<Vec<_>, _>>()?;
@@ -2953,14 +2395,15 @@ fn parse_metadata(value: Value) -> Result<BRegMetadata, BRegMetadataError> {
         .into_iter()
         .map(parse_operation)
         .collect::<Result<Vec<_>, _>>()?;
-    let actions = root.remove("actions");
+    let action_metadata = root.remove("actions");
+    let proposals = root.remove("proposals");
     let statistical_datasets = root
         .remove("statisticalDatasets")
         .map(parse_statistical_datasets)
         .transpose()?;
-    let immediate_actions = actions
+    let actions = action_metadata
         .as_ref()
-        .map(|value| parse_immediate_actions(value.clone()))
+        .map(|value| parse_actions(value.clone()))
         .transpose()?
         .unwrap_or_default();
     finish(root)?;
@@ -2976,9 +2419,10 @@ fn parse_metadata(value: Value) -> Result<BRegMetadata, BRegMetadataError> {
         revision,
         entities,
         operations,
-        actions,
+        action_metadata,
         statistical_datasets,
-        immediate_actions,
+        proposals,
+        actions,
         source_binding: None,
     })
 }
@@ -3131,11 +2575,6 @@ fn parse_entity(value: Value) -> Result<BRegMetadataEntity, BRegMetadataError> {
     if let Some(value) = &change_control {
         validate_change_control(value)?;
     }
-    let change_request = entity
-        .remove("changeRequest")
-        .map(parse_change_request_capability)
-        .transpose()?
-        .flatten();
     finish(entity)?;
     Ok(BRegMetadataEntity {
         id,
@@ -3145,302 +2584,7 @@ fn parse_entity(value: Value) -> Result<BRegMetadataEntity, BRegMetadataError> {
         operations,
         readable_fields,
         change_control,
-        change_request,
     })
-}
-
-fn parse_change_request_capability(
-    value: Value,
-) -> Result<Option<BRegChangeRequestCapability>, BRegMetadataError> {
-    let mut capability = object(value)?;
-    let planner = parse_change_request_planner(required(&mut capability, "planner")?)?;
-    let effects = array(required(&mut capability, "effects")?)?
-        .into_iter()
-        .map(parse_change_request_effect)
-        .collect::<Result<Vec<_>, _>>()?;
-    ensure_unique(effects.iter().map(BRegChangeRequestEffect::id))?;
-    let listed = effects
-        .iter()
-        .map(BRegChangeRequestEffect::id)
-        .collect::<BTreeSet<_>>();
-    let dangling = effects.iter().any(|effect| {
-        effect
-            .target
-            .binding
-            .iter()
-            .chain(effect.set.iter().filter_map(|set| set.value.as_ref()))
-            .any(|binding| {
-                matches!(binding, BRegChangeRequestBinding::FromEffect(id) if !listed.contains(id.as_str()))
-            })
-    });
-    if dangling {
-        return Err(metadata_error(BRegMetadataErrorKind::DanglingReference));
-    }
-    let review = parse_change_request_review(required(&mut capability, "review")?)?;
-    let on_approved = parse_change_request_on_approved(required(&mut capability, "onApproved")?)?;
-    let application = parse_change_request_application(required(&mut capability, "application")?)?;
-    finish(capability)?;
-    let effects_are_supported = effects.iter().all(|effect| {
-        matches!(
-            effect.operation(),
-            BRegOperationKind::Create | BRegOperationKind::Patch
-        )
-    });
-    Ok(match (planner, review, on_approved) {
-        (Some(planner), Some(review), Some(on_approved)) if effects_are_supported => {
-            Some(BRegChangeRequestCapability {
-                planner,
-                effects,
-                review,
-                on_approved,
-                application,
-            })
-        }
-        _ => None,
-    })
-}
-
-fn parse_change_request_review(
-    value: Value,
-) -> Result<Option<BRegChangeRequestReviewRequirement>, BRegMetadataError> {
-    let mut review = object(value)?;
-    match identifier(required(&mut review, "type")?)?.as_str() {
-        "none" => {
-            finish(review)?;
-            return Ok(Some(BRegChangeRequestReviewRequirement::None));
-        }
-        "required" => {}
-        _ => {
-            finish(review)?;
-            return Ok(None);
-        }
-    }
-    let authority = identifier(required(&mut review, "authority")?)?;
-    let policy_id = identifier(required(&mut review, "policyId")?)?;
-    finish(review)?;
-    Ok(Some(BRegChangeRequestReviewRequirement::External(
-        BRegChangeRequestExternalReviewRequirement {
-            authority,
-            policy_id,
-        },
-    )))
-}
-
-fn parse_change_request_on_approved(
-    value: Value,
-) -> Result<Option<BRegChangeRequestOnApprovedCapability>, BRegMetadataError> {
-    let mut policy = object(value)?;
-    let mode = match identifier(required(&mut policy, "mode")?)?.as_str() {
-        "manual" => BRegChangeRequestOnApprovedMode::Manual,
-        "automatic" => BRegChangeRequestOnApprovedMode::Automatic,
-        _ => {
-            finish(policy)?;
-            return Ok(None);
-        }
-    };
-    let executor = policy.remove("executor").map(identifier).transpose()?;
-    if (mode == BRegChangeRequestOnApprovedMode::Automatic) != executor.is_some() {
-        return Err(metadata_error(BRegMetadataErrorKind::Shape));
-    }
-    finish(policy)?;
-    Ok(Some(BRegChangeRequestOnApprovedCapability {
-        mode,
-        executor,
-    }))
-}
-
-fn parse_change_request_application(
-    value: Value,
-) -> Result<BRegChangeRequestApplicationCapability, BRegMetadataError> {
-    let mut application = object(value)?;
-    let preconditions = application.remove("preconditions");
-    if preconditions
-        .as_ref()
-        .is_some_and(|value| !value.is_object())
-    {
-        return Err(metadata_error(BRegMetadataErrorKind::Shape));
-    }
-    finish(application)?;
-    Ok(BRegChangeRequestApplicationCapability { preconditions })
-}
-fn parse_change_request_planner(
-    value: Value,
-) -> Result<Option<BRegChangeRequestPlannerCapability>, BRegMetadataError> {
-    let mut planner = object(value)?;
-    match identifier(required(&mut planner, "kind")?)?.as_str() {
-        "declarative" => {
-            finish(planner)?;
-            Ok(Some(BRegChangeRequestPlannerCapability {
-                kind: BRegChangeRequestPlannerKind::Declarative,
-                abi: None,
-                limits: None,
-                possible_write_count: None,
-                possible_write_operations: Vec::new(),
-                writes: Vec::new(),
-            }))
-        }
-        "rhai" => {
-            let abi = bounded_short_text(required(&mut planner, "abi")?)?;
-            let abi_is_supported = abi == "registry.change-request-plan/v1";
-            let limits = parse_change_request_planner_limits(required(&mut planner, "limits")?)?;
-            let possible_write_count =
-                positive_integer(required(&mut planner, "possibleWriteCount")?)?;
-            let possible_write_operations =
-                identifier_array(required(&mut planner, "possibleWriteOperations")?)?
-                    .into_iter()
-                    .map(BRegOperationKind::parse)
-                    .collect::<Vec<_>>();
-            if possible_write_operations.is_empty()
-                || u64::try_from(possible_write_operations.len())
-                    .map_or(true, |count| count > possible_write_count)
-            {
-                return Err(metadata_error(BRegMetadataErrorKind::Shape));
-            }
-            ensure_unique(
-                possible_write_operations
-                    .iter()
-                    .map(BRegOperationKind::as_str),
-            )?;
-            let writes = array(required(&mut planner, "writes")?)?
-                .into_iter()
-                .map(parse_change_request_planner_write)
-                .collect::<Result<Vec<_>, _>>()?;
-            if u64::try_from(writes.len()).map_or(true, |count| count > possible_write_count) {
-                return Err(metadata_error(BRegMetadataErrorKind::Shape));
-            }
-            finish(planner)?;
-            let operations_are_supported = possible_write_operations
-                .iter()
-                .chain(writes.iter().map(BRegChangeRequestPlannerWrite::operation))
-                .all(|operation| {
-                    matches!(
-                        operation,
-                        BRegOperationKind::Create | BRegOperationKind::Patch
-                    )
-                });
-            Ok((abi_is_supported && operations_are_supported).then_some(
-                BRegChangeRequestPlannerCapability {
-                    kind: BRegChangeRequestPlannerKind::Rhai,
-                    abi: Some(abi),
-                    limits: Some(limits),
-                    possible_write_count: Some(possible_write_count),
-                    possible_write_operations,
-                    writes,
-                },
-            ))
-        }
-        _ => {
-            finish(planner)?;
-            Ok(None)
-        }
-    }
-}
-
-fn parse_change_request_planner_write(
-    value: Value,
-) -> Result<BRegChangeRequestPlannerWrite, BRegMetadataError> {
-    let mut write = object(value)?;
-    let target = parse_change_request_target(required(&mut write, "target")?)?;
-    // A planner write targets a stored record; only an effect's target or
-    // value may name another effect of the same request.
-    if matches!(
-        target.binding,
-        Some(BRegChangeRequestBinding::FromEffect(_))
-    ) {
-        return Err(metadata_error(BRegMetadataErrorKind::Shape));
-    }
-    let operation = parse_change_request_operation(required(&mut write, "operation")?)?;
-    let fields = identifier_array(required(&mut write, "fields")?)?;
-    ensure_unique(fields.iter().map(String::as_str))?;
-    finish(write)?;
-    Ok(BRegChangeRequestPlannerWrite {
-        target,
-        operation,
-        fields,
-    })
-}
-
-fn parse_change_request_effect(value: Value) -> Result<BRegChangeRequestEffect, BRegMetadataError> {
-    let mut effect = object(value)?;
-    let id = identifier(required(&mut effect, "id")?)?;
-    let operation = parse_change_request_operation(required(&mut effect, "operation")?)?;
-    let target = parse_change_request_target(required(&mut effect, "target")?)?;
-    let set = array(required(&mut effect, "set")?)?
-        .into_iter()
-        .map(|value| {
-            let mut entry = object(value)?;
-            let field = identifier(required(&mut entry, "field")?)?;
-            let value = parse_change_request_binding(&mut entry)?;
-            finish(entry)?;
-            Ok(BRegChangeRequestFieldSet { field, value })
-        })
-        .collect::<Result<Vec<_>, BRegMetadataError>>()?;
-    let clear = identifier_array(required(&mut effect, "clear")?)?;
-    ensure_unique(
-        set.iter()
-            .map(BRegChangeRequestFieldSet::field)
-            .chain(clear.iter().map(String::as_str)),
-    )?;
-    finish(effect)?;
-    Ok(BRegChangeRequestEffect {
-        id,
-        operation,
-        target,
-        set,
-        clear,
-    })
-}
-
-fn parse_change_request_target(value: Value) -> Result<BRegChangeRequestTarget, BRegMetadataError> {
-    let mut target = object(value)?;
-    let entity = identifier(required(&mut target, "entity")?)?;
-    let binding = parse_change_request_binding(&mut target)?;
-    finish(target)?;
-    Ok(BRegChangeRequestTarget { entity, binding })
-}
-
-fn parse_change_request_binding(
-    object: &mut Map<String, Value>,
-) -> Result<Option<BRegChangeRequestBinding>, BRegMetadataError> {
-    let from_field = object.remove("fromField").map(identifier).transpose()?;
-    let from_effect = object.remove("fromEffect").map(identifier).transpose()?;
-    match (from_field, from_effect) {
-        (Some(_), Some(_)) => Err(metadata_error(BRegMetadataErrorKind::Shape)),
-        (Some(field), None) => Ok(Some(BRegChangeRequestBinding::FromField(field))),
-        (None, Some(effect)) => Ok(Some(BRegChangeRequestBinding::FromEffect(effect))),
-        (None, None) => Ok(None),
-    }
-}
-
-fn parse_change_request_operation(value: Value) -> Result<BRegOperationKind, BRegMetadataError> {
-    Ok(BRegOperationKind::parse(identifier(value)?))
-}
-
-fn parse_change_request_planner_limits(
-    value: Value,
-) -> Result<BRegChangeRequestPlannerLimits, BRegMetadataError> {
-    let mut limits = object(value)?;
-    let parsed = BRegChangeRequestPlannerLimits {
-        maximum_targets: positive_integer(required(&mut limits, "maximumTargets")?)?,
-        maximum_field_mutations: positive_integer(required(&mut limits, "maximumFieldMutations")?)?,
-        maximum_snapshot_bytes: positive_integer(required(&mut limits, "maximumSnapshotBytes")?)?,
-        maximum_source_bytes: positive_integer(required(&mut limits, "maximumSourceBytes")?)?,
-        maximum_operations: positive_integer(required(&mut limits, "maximumOperations")?)?,
-        maximum_call_depth: positive_integer(required(&mut limits, "maximumCallDepth")?)?,
-        maximum_expression_depth: positive_integer(required(
-            &mut limits,
-            "maximumExpressionDepth",
-        )?)?,
-        maximum_string_bytes: positive_integer(required(&mut limits, "maximumStringBytes")?)?,
-        maximum_array_items: positive_integer(required(&mut limits, "maximumArrayItems")?)?,
-        maximum_map_entries: positive_integer(required(&mut limits, "maximumMapEntries")?)?,
-        maximum_modules: required(&mut limits, "maximumModules")?
-            .as_u64()
-            .filter(|value| *value == 0)
-            .ok_or_else(|| metadata_error(BRegMetadataErrorKind::Shape))?,
-    };
-    finish(limits)?;
-    Ok(parsed)
 }
 
 fn parse_operation(value: Value) -> Result<BRegMetadataOperation, BRegMetadataError> {
@@ -3455,8 +2599,8 @@ fn parse_operation(value: Value) -> Result<BRegMetadataOperation, BRegMetadataEr
     }
     let path = path(required(&mut operation, "path")?)?;
     let kind = BRegOperationKind::parse(identifier(required(&mut operation, "operation")?)?);
-    let source_entity = identifier(required(&mut operation, "sourceEntity")?)?;
-    let response_entity = identifier(required(&mut operation, "responseEntity")?)?;
+    let source_record_type = identifier(required(&mut operation, "sourceRecordType")?)?;
+    let response_record_type = identifier(required(&mut operation, "responseRecordType")?)?;
     let access_profile = identifier(required(&mut operation, "accessProfile")?)?;
     let required_capabilities =
         identifier_array(required(&mut operation, "requiredCapabilities")?)?;
@@ -3496,7 +2640,7 @@ fn parse_operation(value: Value) -> Result<BRegMetadataOperation, BRegMetadataEr
         return Err(metadata_error(BRegMetadataErrorKind::Shape));
     }
     let request = parse_request(required(&mut operation, "request")?)?;
-    let entity_label = bounded_text(required(&mut operation, "entityLabel")?)?;
+    let record_type_label = bounded_text(required(&mut operation, "recordTypeLabel")?)?;
     validate_envelope_identifier(required(&mut operation, "identifier")?)?;
     let title_fields = identifier_array(required(&mut operation, "titleFields")?)?;
     ensure_unique(title_fields.iter().map(String::as_str))?;
@@ -3540,8 +2684,8 @@ fn parse_operation(value: Value) -> Result<BRegMetadataOperation, BRegMetadataEr
         method,
         path,
         kind,
-        source_entity,
-        response_entity,
+        source_record_type,
+        response_record_type,
         access_profile,
         required_capabilities,
         fields,
@@ -3550,7 +2694,7 @@ fn parse_operation(value: Value) -> Result<BRegMetadataOperation, BRegMetadataEr
         create_writable_fields,
         patch_writable_fields,
         request,
-        entity_label,
+        record_type_label,
         title_fields,
         query,
         selectors,
@@ -3646,8 +2790,8 @@ fn parse_code_labels(value: Value) -> Result<BTreeMap<String, String>, BRegMetad
 fn parse_references(value: Value) -> Result<BRegReferenceDescriptor, BRegMetadataError> {
     let mut reference = object(value)?;
     let manual_entry = boolean(required(&mut reference, "manualEntry")?)?;
-    let target_entity = reference
-        .remove("targetEntity")
+    let target_record_type = reference
+        .remove("targetRecordType")
         .map(identifier)
         .transpose()?;
     let Some(operations) = reference.remove("operations") else {
@@ -3677,7 +2821,7 @@ fn parse_references(value: Value) -> Result<BRegReferenceDescriptor, BRegMetadat
     finish(reference)?;
     Ok(BRegReferenceDescriptor {
         manual_entry,
-        target_entity,
+        target_record_type,
         operations: references,
     })
 }
@@ -3947,9 +3091,9 @@ fn validate_change_control(value: &Value) -> Result<(), BRegMetadataError> {
     finish(change_control)
 }
 
-fn parse_immediate_actions(
+fn parse_actions(
     value: Value,
-) -> Result<Vec<BRegImmediateActionDescriptor>, BRegMetadataError> {
+) -> Result<Vec<BRegActionDescriptor>, BRegMetadataError> {
     let actions = array(value)?;
     let mut identifiers = BTreeSet::new();
     let mut parsed = Vec::with_capacity(actions.len());
@@ -3985,6 +3129,17 @@ fn parse_immediate_actions(
         }
         let mut action = object(action)?;
         let id = identifier(required(&mut action, "id")?)?;
+        let api_name = api_name(required(&mut action, "apiName")?)?;
+        let definition_revision = string(required(&mut action, "revision")?)?;
+        if !valid_revision(&definition_revision) { return Err(metadata_error(BRegMetadataErrorKind::Revision)); }
+        let display = required(&mut action, "display")?;
+        if !display.is_object() { return Err(metadata_error(BRegMetadataErrorKind::Shape)); }
+        let mut execution = object(required(&mut action, "execution")?)?;
+        let mode = match string(required(&mut execution, "mode")?)?.as_str() {
+            "immediate" => BRegActionMode::Immediate,
+            "proposal" => BRegActionMode::Proposal,
+            _ => return Err(metadata_error(BRegMetadataErrorKind::Shape)),
+        };
         let required_capabilities =
             optional_identifier_array(&mut action, "requiredCapabilities")?.unwrap_or_default();
         ensure_unique(required_capabilities.iter().map(String::as_str))?;
@@ -4001,13 +3156,13 @@ fn parse_immediate_actions(
         };
         let inputs = array(required(&mut action, "inputs")?)?
             .into_iter()
-            .map(parse_immediate_action_input)
+            .map(parse_action_input)
             .collect::<Result<Vec<_>, _>>()?;
         ensure_unique(inputs.iter().map(|input| input.id.as_str()))?;
         ensure_unique(inputs.iter().map(|input| input.api_name.as_str()))?;
         let reference_inputs = array(required(&mut action, "referenceInputs")?)?
             .into_iter()
-            .map(parse_immediate_action_reference_input)
+            .map(parse_action_reference_input)
             .collect::<Result<Vec<_>, _>>()?;
         ensure_unique(reference_inputs.iter().map(|input| input.input.as_str()))?;
         for reference in &reference_inputs {
@@ -4029,7 +3184,7 @@ fn parse_immediate_actions(
         }
         let result_effects = array(required(&mut action, "resultEffects")?)?
             .into_iter()
-            .map(parse_immediate_action_result_effect)
+            .map(parse_action_result_effect)
             .collect::<Result<Vec<_>, _>>()?;
         ensure_unique(result_effects.iter().map(|effect| effect.effect.as_str()))?;
 
@@ -4037,9 +3192,10 @@ fn parse_immediate_actions(
         let access_profile = identifier(required(&mut access, "selectedProfile")?)?;
         finish(access)?;
         let mut routes = object(required(&mut action, "routes")?)?;
-        let invoke_path = parse_immediate_action_route(
-            required(&mut routes, "invoke")?,
-            &format!("actions.{id}.invoke"),
+        let invocation = if mode == BRegActionMode::Immediate { "invoke" } else { "start" };
+        let invoke_path = parse_action_route(
+            required(&mut routes, invocation)?,
+            &format!("actions.{id}.{invocation}"),
             true,
             &format!("action-{id}-invoke-input"),
             &format!("action-{id}-invoke-response"),
@@ -4049,7 +3205,7 @@ fn parse_immediate_actions(
         }
         let target_conditions_path = match required(&mut routes, "targetConditions")? {
             Value::Null => None,
-            value => Some(parse_immediate_action_route(
+            value => Some(parse_action_route(
                 value,
                 &format!("actions.{id}.target-conditions"),
                 false,
@@ -4062,7 +3218,7 @@ fn parse_immediate_actions(
         }
         finish(routes)?;
         let mut bounds_value = object(required(&mut action, "bounds")?)?;
-        let bounds = BRegImmediateActionBounds {
+        let bounds = BRegActionBounds {
             maximum_targets: positive_integer(required(&mut bounds_value, "maximumTargets")?)?,
             maximum_field_mutations: positive_integer(required(
                 &mut bounds_value,
@@ -4075,8 +3231,12 @@ fn parse_immediate_actions(
         };
         finish(bounds_value)?;
         finish(action)?;
-        parsed.push(BRegImmediateActionDescriptor {
+        parsed.push(BRegActionDescriptor {
             id,
+            mode,
+            api_name,
+            definition_revision,
+            display,
             required_capabilities,
             route,
             condition_route,
@@ -4096,11 +3256,11 @@ fn parse_immediate_actions(
     Ok(parsed)
 }
 
-fn parse_immediate_action_input(
+fn parse_action_input(
     value: Value,
-) -> Result<BRegImmediateActionInputDescriptor, BRegMetadataError> {
+) -> Result<BRegActionInputDescriptor, BRegMetadataError> {
     let mut input = object(value)?;
-    let parsed = BRegImmediateActionInputDescriptor {
+    let parsed = BRegActionInputDescriptor {
         id: identifier(required(&mut input, "id")?)?,
         api_name: api_name(required(&mut input, "apiName")?)?,
         field_type: required(&mut input, "fieldType")?,
@@ -4112,33 +3272,33 @@ fn parse_immediate_action_input(
     Ok(parsed)
 }
 
-fn parse_immediate_action_reference_input(
+fn parse_action_reference_input(
     value: Value,
-) -> Result<BRegImmediateActionReferenceInputDescriptor, BRegMetadataError> {
+) -> Result<BRegActionReferenceInputDescriptor, BRegMetadataError> {
     let mut input = object(value)?;
-    let parsed = BRegImmediateActionReferenceInputDescriptor {
+    let parsed = BRegActionReferenceInputDescriptor {
         input: identifier(required(&mut input, "input")?)?,
         api_name: api_name(required(&mut input, "apiName")?)?,
-        target_entity: identifier(required(&mut input, "targetEntity")?)?,
+        target_record_type: identifier(required(&mut input, "targetRecordType")?)?,
     };
     finish(input)?;
     Ok(parsed)
 }
 
-fn parse_immediate_action_result_effect(
+fn parse_action_result_effect(
     value: Value,
-) -> Result<BRegImmediateActionResultEffectDescriptor, BRegMetadataError> {
+) -> Result<BRegActionResultEffectDescriptor, BRegMetadataError> {
     let mut effect = object(value)?;
-    let parsed = BRegImmediateActionResultEffectDescriptor {
+    let parsed = BRegActionResultEffectDescriptor {
         effect: identifier(required(&mut effect, "effect")?)?,
-        entity: identifier(required(&mut effect, "entity")?)?,
+        entity: identifier(required(&mut effect, "recordType")?)?,
         operation: BRegOperationKind::parse(identifier(required(&mut effect, "operation")?)?),
     };
     finish(effect)?;
     Ok(parsed)
 }
 
-fn parse_immediate_action_route(
+fn parse_action_route(
     value: Value,
     expected_operation_id: &str,
     requires_idempotency: bool,
@@ -4200,7 +3360,7 @@ fn validate_metadata_references(
     for operation in operations {
         if !entities
             .iter()
-            .any(|entity| entity.id == operation.response_entity)
+            .any(|entity| entity.id == operation.response_record_type)
         {
             return Err(metadata_error(BRegMetadataErrorKind::DanglingReference));
         }
@@ -4228,7 +3388,7 @@ fn validate_metadata_references(
         for target in operation
             .fields
             .iter()
-            .filter_map(|field| field.reference.as_ref()?.target_entity.as_ref())
+            .filter_map(|field| field.reference.as_ref()?.target_record_type.as_ref())
         {
             if !entities.iter().any(|entity| entity.id == *target) {
                 return Err(metadata_error(BRegMetadataErrorKind::DanglingReference));
@@ -4238,7 +3398,7 @@ fn validate_metadata_references(
     for entity in entities {
         if entity.readable_fields.iter().any(|field| {
             !operations.iter().any(|operation| {
-                operation.response_entity == entity.id
+                operation.response_record_type == entity.id
                     && operation
                         .readable_fields
                         .iter()
@@ -4249,7 +3409,7 @@ fn validate_metadata_references(
         }
         for (kind, profile) in &entity.operations {
             if !operations.iter().any(|operation| {
-                operation.response_entity == entity.id
+                operation.response_record_type == entity.id
                     && operation.kind.as_str() == kind.as_str()
                     && operation.access_profile == *profile
             }) {
@@ -4257,64 +3417,6 @@ fn validate_metadata_references(
             }
         }
         let _ = (&entity.schema_path, &entity.change_control);
-        if let Some(change_request) = &entity.change_request {
-            validate_change_request_references(entities, entity, change_request)?;
-        }
-    }
-    Ok(())
-}
-
-/// A change request names only listed entities and fields the caller may
-/// read: target fields on the target entity, and value or target sources on
-/// the entity that carries the request.
-fn validate_change_request_references(
-    entities: &[BRegMetadataEntity],
-    request_entity: &BRegMetadataEntity,
-    change_request: &BRegChangeRequestCapability,
-) -> Result<(), BRegMetadataError> {
-    let readable = |entity: &BRegMetadataEntity, field: &str| {
-        entity
-            .readable_fields
-            .iter()
-            .any(|candidate| candidate == field)
-    };
-    let bound_readably = |binding: Option<&BRegChangeRequestBinding>| match binding {
-        Some(BRegChangeRequestBinding::FromField(field)) => readable(request_entity, field),
-        Some(BRegChangeRequestBinding::FromEffect(_)) | None => true,
-    };
-    let targets = change_request
-        .planner
-        .writes
-        .iter()
-        .map(|write| (&write.target, write.fields.iter().collect::<Vec<_>>()))
-        .chain(change_request.effects.iter().map(|effect| {
-            (
-                &effect.target,
-                effect
-                    .set
-                    .iter()
-                    .map(|set| &set.field)
-                    .chain(&effect.clear)
-                    .collect(),
-            )
-        }));
-    for (target, fields) in targets {
-        let Some(target_entity) = entities.iter().find(|entity| entity.id == target.entity) else {
-            return Err(metadata_error(BRegMetadataErrorKind::DanglingReference));
-        };
-        if !bound_readably(target.binding.as_ref())
-            || fields.iter().any(|field| !readable(target_entity, field))
-        {
-            return Err(metadata_error(BRegMetadataErrorKind::DanglingReference));
-        }
-    }
-    if change_request
-        .effects
-        .iter()
-        .flat_map(|effect| &effect.set)
-        .any(|set| !bound_readably(set.value.as_ref()))
-    {
-        return Err(metadata_error(BRegMetadataErrorKind::DanglingReference));
     }
     Ok(())
 }
@@ -4665,3 +3767,7 @@ fn ensure_unique<'a>(values: impl Iterator<Item = &'a str>) -> Result<(), BRegMe
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "metadata_tests.rs"]
+mod tests;

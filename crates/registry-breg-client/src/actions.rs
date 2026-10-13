@@ -13,7 +13,7 @@ use uuid::Uuid;
 use zeroize::Zeroizing;
 
 use crate::{
-    BRegComplete, BRegIdempotencyKey, BRegImmediateActionBinding, BaseRegistryClient,
+    BRegComplete, BRegIdempotencyKey, BRegActionBinding, BaseRegistryClient,
     BaseRegistryClientError,
 };
 
@@ -22,7 +22,7 @@ const MAXIMUM_CONDITION_BYTES: usize = 256;
 /// A value-free reason an immediate-action request or response is invalid.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 #[non_exhaustive]
-pub enum BRegImmediateActionError {
+pub enum BRegActionError {
     #[error("the Base Registry Engine action input object contains an unknown field")]
     UnknownInput,
     #[error("the Base Registry Engine action input object is missing a required field")]
@@ -53,11 +53,11 @@ impl BRegActionTargetConditionsRequest {
     /// Build the explicit target-condition exchange from only the action's
     /// declared condition-bearing reference inputs.
     pub fn new(
-        action: &BRegImmediateActionBinding,
+        action: &BRegActionBinding,
         inputs: Map<String, Value>,
-    ) -> Result<Self, BRegImmediateActionError> {
+    ) -> Result<Self, BRegActionError> {
         if action.target_conditions_path().is_none() {
-            return Err(BRegImmediateActionError::TargetConditionsUnavailable);
+            return Err(BRegActionError::TargetConditionsUnavailable);
         }
         validate_inputs(action, &inputs, ActionInputUse::TargetConditions)?;
         let body = encode_bounded(
@@ -132,17 +132,17 @@ pub struct BRegActionInvocationRequest {
 impl BRegActionInvocationRequest {
     /// Validate invocation inputs before acquiring any target conditions.
     pub fn validate_inputs(
-        action: &BRegImmediateActionBinding,
+        action: &BRegActionBinding,
         inputs: &Map<String, Value>,
-    ) -> Result<(), BRegImmediateActionError> {
+    ) -> Result<(), BRegActionError> {
         validate_inputs(action, inputs, ActionInputUse::Invoke)
     }
 
     pub fn new(
-        action: &BRegImmediateActionBinding,
+        action: &BRegActionBinding,
         inputs: Map<String, Value>,
         conditions: Option<&BRegActionTargetConditions>,
-    ) -> Result<Self, BRegImmediateActionError> {
+    ) -> Result<Self, BRegActionError> {
         validate_inputs(action, &inputs, ActionInputUse::Invoke)?;
         let requires_conditions = !action.required_condition_keys().is_empty();
         let preconditions = match (requires_conditions, conditions) {
@@ -150,14 +150,14 @@ impl BRegActionInvocationRequest {
             (_, Some(conditions)) => {
                 let binding = ActionRequestBinding::from_action(action);
                 if conditions.binding != binding {
-                    return Err(BRegImmediateActionError::TargetConditionBindingMismatch);
+                    return Err(BRegActionError::TargetConditionBindingMismatch);
                 }
                 let target_inputs = action
                     .required_condition_keys()
                     .iter()
                     .map(|name| inputs.get(name).cloned().map(|value| (name.clone(), value)))
                     .collect::<Option<Map<_, _>>>()
-                    .ok_or(BRegImmediateActionError::TargetConditionInputMismatch)?;
+                    .ok_or(BRegActionError::TargetConditionInputMismatch)?;
                 let target_input_body = Zeroizing::new(encode_bounded(
                     &ActionInputEnvelope {
                         input: &target_inputs,
@@ -165,12 +165,12 @@ impl BRegActionInvocationRequest {
                     action.bounds().maximum_snapshot_bytes(),
                 )?);
                 if target_input_body.as_slice() != conditions.target_input_body.as_slice() {
-                    return Err(BRegImmediateActionError::TargetConditionInputMismatch);
+                    return Err(BRegActionError::TargetConditionInputMismatch);
                 }
                 Some(&conditions.preconditions)
             }
             (true, None) => {
-                return Err(BRegImmediateActionError::TargetConditionBindingMismatch);
+                return Err(BRegActionError::TargetConditionBindingMismatch);
             }
         };
         let body = encode_bounded(
@@ -209,6 +209,8 @@ struct ActionRequestBinding {
     action_identifier: String,
     access_profile: String,
     contract_fingerprint: String,
+    mode: crate::BRegActionMode,
+    path: String,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -258,13 +260,15 @@ fn action_recovery_refusal() -> BaseRegistryClientError {
 }
 
 impl ActionRequestBinding {
-    fn from_action(action: &BRegImmediateActionBinding) -> Self {
+    fn from_action(action: &BRegActionBinding) -> Self {
         Self {
             source_binding: action.source_binding().to_owned(),
             registry_revision: action.registry_revision().to_owned(),
             action_identifier: action.action_identifier().to_owned(),
             access_profile: action.access_profile().to_owned(),
             contract_fingerprint: action.contract_fingerprint().to_owned(),
+            mode: action.mode(),
+            path: action.invoke_path().to_owned(),
         }
     }
 }
@@ -285,6 +289,7 @@ struct ActionInvocationEnvelope<'a> {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BRegActionResultReference {
+    #[serde(rename = "recordType")]
     entity: String,
     #[serde(serialize_with = "serialize_uuid")]
     record_id: Uuid,
@@ -293,7 +298,7 @@ pub struct BRegActionResultReference {
 
 impl BRegActionResultReference {
     #[must_use]
-    pub fn entity_identifier(&self) -> &str {
+    pub fn record_type_identifier(&self) -> &str {
         &self.entity
     }
 
@@ -339,7 +344,7 @@ impl BaseRegistryClient {
     /// Retain the exact invocation and idempotency key before sending. No I/O.
     pub fn prepare_action(
         &self,
-        action: &BRegImmediateActionBinding,
+        action: &BRegActionBinding,
         request: &BRegActionInvocationRequest,
         key: &BRegIdempotencyKey,
     ) -> Result<BRegPreparedAction, BaseRegistryClientError> {
@@ -362,7 +367,7 @@ impl BaseRegistryClient {
     /// or sends a mutation. The caller explicitly invokes with the same key.
     pub fn recover_action(
         &self,
-        action: &BRegImmediateActionBinding,
+        action: &BRegActionBinding,
         prepared: &BRegPreparedAction,
         original_inputs: &Map<String, Value>,
         original_key: &BRegIdempotencyKey,
@@ -423,7 +428,7 @@ impl BaseRegistryClient {
     /// This performs exactly one exchange and never refreshes a condition.
     pub async fn action_target_conditions(
         &self,
-        action: &BRegImmediateActionBinding,
+        action: &BRegActionBinding,
         request: &BRegActionTargetConditionsRequest,
     ) -> Result<BRegComplete<BRegActionTargetConditions>, BaseRegistryClientError> {
         self.validate_action_request(action, &request.binding)?;
@@ -455,11 +460,14 @@ impl BaseRegistryClient {
     /// mutation retry count.
     pub async fn invoke_action(
         &self,
-        action: &BRegImmediateActionBinding,
+        action: &BRegActionBinding,
         request: &BRegActionInvocationRequest,
         idempotency_key: &BRegIdempotencyKey,
     ) -> Result<BRegComplete<BRegActionReceipt>, BaseRegistryClientError> {
         self.validate_action_request(action, &request.binding)?;
+        if action.mode() != crate::BRegActionMode::Immediate {
+            return Err(action_recovery_refusal());
+        }
         let raw = self
             .execute_bound_json(
                 action.invoke_path(),
@@ -481,9 +489,29 @@ impl BaseRegistryClient {
         })
     }
 
+    /// Start a distinct Proposal using this Action's authored fixed mode.
+    pub async fn start_proposal(
+        &self,
+        action: &BRegActionBinding,
+        request: &BRegActionInvocationRequest,
+        idempotency_key: &BRegIdempotencyKey,
+    ) -> Result<BRegComplete<crate::BRegProposal>, BaseRegistryClientError> {
+        self.validate_action_request(action, &request.binding)?;
+        if action.mode() != crate::BRegActionMode::Proposal {
+            return Err(action_recovery_refusal());
+        }
+        let raw = self.execute_action_start(action.invoke_path(), action.access_profile(),
+            request.body.to_vec(), idempotency_key).await?;
+        let proposal = crate::BRegProposal::from_slice(raw.value.as_bytes())?;
+        if proposal.action_id() != action.action_identifier() {
+            return Err(action_recovery_refusal());
+        }
+        Ok(BRegComplete { value: proposal.bind(self.source_binding()), metadata: raw.metadata })
+    }
+
     fn validate_action_request(
         &self,
-        action: &BRegImmediateActionBinding,
+        action: &BRegActionBinding,
         request: &ActionRequestBinding,
     ) -> Result<(), BaseRegistryClientError> {
         if !action.matches_source(&self.source_binding())
@@ -504,10 +532,10 @@ enum ActionInputUse {
 }
 
 fn validate_inputs(
-    action: &BRegImmediateActionBinding,
+    action: &BRegActionBinding,
     inputs: &Map<String, Value>,
     use_for: ActionInputUse,
-) -> Result<(), BRegImmediateActionError> {
+) -> Result<(), BRegActionError> {
     let accepted = match use_for {
         ActionInputUse::TargetConditions => {
             if action.required_condition_keys().iter().any(|name| {
@@ -516,7 +544,7 @@ fn validate_inputs(
                     .iter()
                     .any(|reference| reference.api_name() == name)
             }) {
-                return Err(BRegImmediateActionError::InvalidInput);
+                return Err(BRegActionError::InvalidInput);
             }
             action.required_condition_keys().clone()
         }
@@ -527,21 +555,21 @@ fn validate_inputs(
             .collect::<BTreeSet<_>>(),
     };
     if inputs.keys().any(|name| !accepted.contains(name)) {
-        return Err(BRegImmediateActionError::UnknownInput);
+        return Err(BRegActionError::UnknownInput);
     }
     for name in accepted {
         let contract = action
             .inputs()
             .iter()
             .find(|input| input.api_name() == name)
-            .ok_or(BRegImmediateActionError::InvalidInput)?;
+            .ok_or(BRegActionError::InvalidInput)?;
         let required = match use_for {
             ActionInputUse::TargetConditions => true,
             ActionInputUse::Invoke => contract.required(),
         };
         let Some(value) = inputs.get(&name) else {
             if required {
-                return Err(BRegImmediateActionError::MissingInput);
+                return Err(BRegActionError::MissingInput);
             }
             continue;
         };
@@ -549,14 +577,14 @@ fn validate_inputs(
             if contract.nullable() {
                 continue;
             }
-            return Err(BRegImmediateActionError::InvalidInput);
+            return Err(BRegActionError::InvalidInput);
         }
         if !valid_action_input(
             value,
             contract.field_type(),
             action.maximum_input_string_bytes(),
         ) {
-            return Err(BRegImmediateActionError::InvalidInput);
+            return Err(BRegActionError::InvalidInput);
         }
     }
     Ok(())
@@ -564,25 +592,25 @@ fn validate_inputs(
 
 fn decode_conditions(
     bytes: &[u8],
-    action: &BRegImmediateActionBinding,
+    action: &BRegActionBinding,
     request: &BRegActionTargetConditionsRequest,
-) -> Result<BRegActionTargetConditions, BRegImmediateActionError> {
+) -> Result<BRegActionTargetConditions, BRegActionError> {
     let value = crate::strict_json::from_slice(bytes)
-        .map_err(|_| BRegImmediateActionError::InvalidResponse)?;
+        .map_err(|_| BRegActionError::InvalidResponse)?;
     let object = value
         .as_object()
         .filter(|object| object.len() == 1)
-        .ok_or(BRegImmediateActionError::InvalidResponse)?;
+        .ok_or(BRegActionError::InvalidResponse)?;
     let conditions = object
         .get("preconditions")
         .and_then(Value::as_object)
-        .ok_or(BRegImmediateActionError::InvalidResponse)?;
+        .ok_or(BRegActionError::InvalidResponse)?;
     if conditions.len() != action.required_condition_keys().len()
         || conditions
             .keys()
             .any(|name| !action.required_condition_keys().contains(name))
     {
-        return Err(BRegImmediateActionError::InvalidResponse);
+        return Err(BRegActionError::InvalidResponse);
     }
     let preconditions = conditions
         .iter()
@@ -590,12 +618,12 @@ fn decode_conditions(
             let condition = value
                 .as_object()
                 .filter(|condition| condition.len() == 1)
-                .ok_or(BRegImmediateActionError::InvalidResponse)?;
+                .ok_or(BRegActionError::InvalidResponse)?;
             let if_match = condition
                 .get("ifMatch")
                 .and_then(Value::as_str)
                 .filter(|value| valid_condition(value))
-                .ok_or(BRegImmediateActionError::InvalidResponse)?;
+                .ok_or(BRegActionError::InvalidResponse)?;
             Ok((
                 name.clone(),
                 BRegActionPrecondition {
@@ -613,33 +641,33 @@ fn decode_conditions(
 
 fn decode_receipt(
     bytes: &[u8],
-    action: &BRegImmediateActionBinding,
-) -> Result<BRegActionReceipt, BRegImmediateActionError> {
+    action: &BRegActionBinding,
+) -> Result<BRegActionReceipt, BRegActionError> {
     let value = crate::strict_json::from_slice(bytes)
-        .map_err(|_| BRegImmediateActionError::InvalidResponse)?;
+        .map_err(|_| BRegActionError::InvalidResponse)?;
     let object = value
         .as_object()
         .filter(|object| object.len() == 3)
-        .ok_or(BRegImmediateActionError::InvalidResponse)?;
+        .ok_or(BRegActionError::InvalidResponse)?;
     if object.get("action").and_then(Value::as_str) != Some(action.action_identifier()) {
-        return Err(BRegImmediateActionError::InvalidResponse);
+        return Err(BRegActionError::InvalidResponse);
     }
     let application_id = object
         .get("applicationId")
         .and_then(Value::as_str)
         .and_then(canonical_uuid)
-        .ok_or(BRegImmediateActionError::InvalidResponse)?;
+        .ok_or(BRegActionError::InvalidResponse)?;
     let values = object
         .get("results")
         .and_then(Value::as_object)
-        .ok_or(BRegImmediateActionError::InvalidResponse)?;
+        .ok_or(BRegActionError::InvalidResponse)?;
     if values.len() > action.result_effects().len()
         || (!action.is_handler() && values.len() != action.result_effects().len())
         || values
             .keys()
             .any(|name| !action.result_effects().contains_key(name))
     {
-        return Err(BRegImmediateActionError::InvalidResponse);
+        return Err(BRegActionError::InvalidResponse);
     }
     let results = values
         .iter()
@@ -647,9 +675,9 @@ fn decode_receipt(
             let result = value
                 .as_object()
                 .filter(|result| result.len() == 3)
-                .ok_or(BRegImmediateActionError::InvalidResponse)?;
+                .ok_or(BRegActionError::InvalidResponse)?;
             let entity = result
-                .get("entity")
+                .get("recordType")
                 .and_then(Value::as_str)
                 .filter(|entity| {
                     action
@@ -657,17 +685,17 @@ fn decode_receipt(
                         .get(effect)
                         .is_some_and(|v| v == entity)
                 })
-                .ok_or(BRegImmediateActionError::InvalidResponse)?;
+                .ok_or(BRegActionError::InvalidResponse)?;
             let record_id = result
                 .get("recordId")
                 .and_then(Value::as_str)
                 .and_then(canonical_uuid)
-                .ok_or(BRegImmediateActionError::InvalidResponse)?;
+                .ok_or(BRegActionError::InvalidResponse)?;
             let revision = result
                 .get("revision")
                 .and_then(Value::as_u64)
                 .filter(|revision| *revision > 0 && *revision <= i64::MAX as u64)
-                .ok_or(BRegImmediateActionError::InvalidResponse)?;
+                .ok_or(BRegActionError::InvalidResponse)?;
             Ok((
                 effect.clone(),
                 BRegActionResultReference {
@@ -708,10 +736,10 @@ fn valid_condition(value: &str) -> bool {
 fn encode_bounded(
     value: &impl Serialize,
     maximum_bytes: u64,
-) -> Result<Vec<u8>, BRegImmediateActionError> {
-    let body = serde_json::to_vec(value).map_err(|_| BRegImmediateActionError::BodyEncoding)?;
+) -> Result<Vec<u8>, BRegActionError> {
+    let body = serde_json::to_vec(value).map_err(|_| BRegActionError::BodyEncoding)?;
     if u64::try_from(body.len()).map_or(true, |length| length > maximum_bytes) {
-        return Err(BRegImmediateActionError::BodyTooLarge);
+        return Err(BRegActionError::BodyTooLarge);
     }
     Ok(body)
 }
@@ -988,11 +1016,11 @@ mod tests {
 
     use super::*;
 
-    fn action_binding(handler: bool) -> BRegImmediateActionBinding {
+    fn action_binding(handler: bool) -> BRegActionBinding {
         action_binding_with_conditions(handler, true)
     }
 
-    fn action_binding_with_conditions(handler: bool, required: bool) -> BRegImmediateActionBinding {
+    fn action_binding_with_conditions(handler: bool, required: bool) -> BRegActionBinding {
         let input_mode = if handler { "handler" } else { "fixed" };
         let maximum_string_bytes = handler.then_some(json!(16_384)).unwrap_or(Value::Null);
         let optional_nullable = handler;
@@ -1001,10 +1029,10 @@ mod tests {
             "version": "1",
             "revision": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             "metadataVersion": "1",
-            "entities": [],
+            "recordTypes": [],
             "operations": [],
             "actions": [{
-                "id": "update-item",
+                "id": "update-item", "apiName":"updateItem", "revision":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "display":{}, "execution":{"mode":"immediate"},
                 "route": "/v1/actions/update-item",
                 "conditionRoute": "/v1/actions/update-item/target-conditions",
                 "contractFingerprint": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
@@ -1022,9 +1050,9 @@ mod tests {
                         "fieldType": {"type":"string","minimumLength":1,"maximumLength":16}
                     }
                 ],
-                "referenceInputs": [{"input":"target","apiName":"targetId","targetEntity":"item"}],
+                "referenceInputs": [{"input":"target","apiName":"targetId","targetRecordType":"item"}],
                 "requiredConditionKeys": if required { json!(["targetId"]) } else { json!([]) },
-                "resultEffects": [{"effect":"item","entity":"item","operation":"patch"}],
+                "resultEffects": [{"effect":"item","recordType":"item","operation":"patch"}],
                 "access": {"selectedProfile":"writer"},
                 "routes": {
                     "invoke": {
@@ -1046,7 +1074,7 @@ mod tests {
         crate::BRegMetadata::from_slice(&serde_json::to_vec(&metadata).unwrap())
             .unwrap()
             .bind_source("https://registry.example/".to_owned())
-            .select_immediate_action("update-item", "writer")
+            .select_action("update-item", "writer")
             .unwrap()
     }
 
@@ -1303,7 +1331,7 @@ mod tests {
         .clone();
         assert!(matches!(
             BRegActionInvocationRequest::new(&action, wrong_target, Some(&conditions)),
-            Err(BRegImmediateActionError::TargetConditionInputMismatch)
+            Err(BRegActionError::TargetConditionInputMismatch)
         ));
     }
 
@@ -1312,7 +1340,7 @@ mod tests {
         let fixed = action_binding(false);
         assert!(matches!(
             BRegActionTargetConditionsRequest::new(&fixed, Map::new()),
-            Err(BRegImmediateActionError::MissingInput)
+            Err(BRegActionError::MissingInput)
         ));
         let invalid = json!({
             "targetId":"00000000-0000-4000-8000-000000000001",
@@ -1323,7 +1351,7 @@ mod tests {
         .clone();
         assert!(matches!(
             BRegActionInvocationRequest::new(&fixed, invalid, None),
-            Err(BRegImmediateActionError::InvalidInput)
+            Err(BRegActionError::InvalidInput)
         ));
 
         let handler = action_binding(true);
@@ -1340,7 +1368,7 @@ mod tests {
         .unwrap();
         assert!(matches!(
             BRegActionInvocationRequest::new(&handler, Map::new(), Some(&conditions)),
-            Err(BRegImmediateActionError::MissingInput)
+            Err(BRegActionError::MissingInput)
         ));
         let nullable = json!({
             "targetId":"00000000-0000-4000-8000-000000000001",
@@ -1356,7 +1384,7 @@ mod tests {
     fn receipts_release_only_selected_effect_references() {
         let action = action_binding(false);
         let receipt = decode_receipt(
-            br#"{"action":"update-item","applicationId":"00000000-0000-4000-8000-000000000010","results":{"item":{"entity":"item","recordId":"00000000-0000-4000-8000-000000000001","revision":2}}}"#,
+            br#"{"action":"update-item","applicationId":"00000000-0000-4000-8000-000000000010","results":{"item":{"recordType":"item","recordId":"00000000-0000-4000-8000-000000000001","revision":2}}}"#,
             &action,
         )
         .unwrap();
@@ -1369,7 +1397,7 @@ mod tests {
         let undisclosed = br#"{"action":"update-item","applicationId":"00000000-0000-4000-8000-000000000010","results":{"secret":{"entity":"hidden","recordId":"00000000-0000-4000-8000-000000000002","revision":1}}}"#;
         assert!(matches!(
             decode_receipt(undisclosed, &action),
-            Err(BRegImmediateActionError::InvalidResponse)
+            Err(BRegActionError::InvalidResponse)
         ));
     }
 }

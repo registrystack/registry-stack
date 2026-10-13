@@ -8,7 +8,7 @@
 
 use uuid::Uuid;
 
-use crate::model::CompiledChangeRequestOnApprovedMode;
+use crate::model::CompiledProposalApplication;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HumanIdentityBinding {
@@ -139,6 +139,8 @@ pub struct AcceptedReviewEvidence {
     policy: ReviewPolicyBinding,
     submission_digest: String,
     completed_at: String,
+    available_until: String,
+    observed_at: String,
 }
 
 impl AcceptedReviewEvidence {
@@ -224,22 +226,37 @@ impl AcceptedReviewEvidence {
             policy: result.policy.clone(),
             submission_digest: result.submission_digest.clone(),
             completed_at: result.completed_at.clone(),
+            available_until: result.available_until.clone(),
+            observed_at: chrono::Utc::now().to_rfc3339(),
         })
     }
 
     pub fn matches_proposal(
         &self,
         authority: &str,
-        policy_id: &str,
+        source: &str,
+        policy: &registry_review_protocol::PolicyBinding,
         request_id: &str,
         proposal_version: u32,
         proposal_digest: &str,
+        commit_time: &str,
     ) -> bool {
+        let fresh = (|| {
+            let observed = chrono::DateTime::parse_from_rfc3339(&self.observed_at).ok()?;
+            let available = chrono::DateTime::parse_from_rfc3339(&self.available_until).ok()?;
+            let commit = chrono::DateTime::parse_from_rfc3339(commit_time).ok()?;
+            Some(commit >= observed && commit < available
+                && commit.signed_duration_since(observed) <= chrono::Duration::seconds(30))
+        })().unwrap_or(false);
         self.authority == authority
-            && self.policy.id == policy_id
+            && self.policy.id == policy.id
+            && self.policy.version == policy.version
+            && self.policy.digest == policy.digest.as_str()
+            && self.subject.source == source
             && self.subject.id == request_id
             && self.subject.version == proposal_version.to_string()
             && self.subject.digest == proposal_digest
+            && fresh
     }
 }
 
@@ -285,22 +302,13 @@ pub enum ApplicationBindingError {
 }
 
 pub fn validate_application_binding(
-    mode: CompiledChangeRequestOnApprovedMode,
-    executor: Option<&str>,
+    application: &CompiledProposalApplication,
 ) -> Result<(), ApplicationBindingError> {
-    match (mode, executor) {
-        (CompiledChangeRequestOnApprovedMode::Manual, None) => Ok(()),
-        (CompiledChangeRequestOnApprovedMode::Manual, Some(_)) => {
-            Err(ApplicationBindingError::ManualExecutor)
-        }
-        (CompiledChangeRequestOnApprovedMode::Automatic, Some(executor))
-            if !executor.trim().is_empty() =>
-        {
-            Ok(())
-        }
-        (CompiledChangeRequestOnApprovedMode::Automatic, _) => {
-            Err(ApplicationBindingError::AutomaticExecutor)
-        }
+    match application {
+        CompiledProposalApplication::Manual => Ok(()),
+        CompiledProposalApplication::Automatic { executor, maximum_attempts }
+            if !executor.trim().is_empty() && (1..=1000).contains(maximum_attempts) => Ok(()),
+        CompiledProposalApplication::Automatic { .. } => Err(ApplicationBindingError::AutomaticExecutor),
     }
 }
 

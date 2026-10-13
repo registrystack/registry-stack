@@ -191,7 +191,7 @@ fn run_rhai_hook(
     let document: Value = registry_platform_canonical_json::parse_json_strict(envelope)
         .map_err(|_| failure(ErrorCategory::Source))?;
     let context = crate::rhai_planner::json_to_dynamic(&document, 0).map_err(|error| {
-        if error == crate::rhai_planner::ChangeRequestPlannerError::Resource {
+        if error == crate::rhai_planner::PlanError::Resource {
             failure(ErrorCategory::Resource)
         } else {
             failure(ErrorCategory::Source)

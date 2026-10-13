@@ -1412,6 +1412,7 @@ enum ArtifactSelector {
     Metadata,
     Sql,
     EvidenceSource,
+    Sdk,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, ValueEnum)]
@@ -1422,7 +1423,7 @@ enum ExplainSubject {
     Routes,
     Queries,
     Actions,
-    ChangeRequests,
+    Proposals,
     Events,
     Lifecycle,
 }
@@ -7393,204 +7394,8 @@ fn generate(
 }
 
 fn planner_test(args: &ProjectPlannerTestArgs) -> Result<PlannerTestSuccessReport, FailureReport> {
-    const COMMAND: &str = "project planner-test";
-    let compiled = compile(&args.project, ProfileArg::Authoring, COMMAND)?;
-    if args.action.is_some() {
-        return action_handler_test::run(args, &compiled);
-    }
-    let entity_id = args.entity.as_deref().ok_or_else(|| {
-        planner_test_failure(
-            "planner-test.entity.required",
-            "entity",
-            "select a request entity or action",
-        )
-    })?;
-    let request_path = args.request.as_ref().ok_or_else(|| {
-        planner_test_failure(
-            "planner-test.request.required",
-            "request",
-            "provide a synthetic request file",
-        )
-    })?;
-    let entity = compiled.entities().get(entity_id).ok_or_else(|| {
-        planner_test_failure(
-            "planner-test.entity.not-found",
-            "entity",
-            "select one compiled entity",
-        )
-    })?;
-    let request = entity.change_request.as_ref().ok_or_else(|| {
-        planner_test_failure(
-            "planner-test.entity.not-request",
-            "entity",
-            "select a compiled change-request entity",
-        )
-    })?;
-    let planner = request.planner.as_ref().ok_or_else(|| {
-        planner_test_failure(
-            "planner-test.planner.declarative",
-            "entity",
-            "the local planner test accepts only Rhai-backed request entities",
-        )
-    })?;
-
-    let input_bytes = read_bounded_regular_file(
-        request_path,
-        "planner-test.request.unavailable",
-        MAX_PLANNER_TEST_REQUEST_BYTES,
-    )
-    .map_err(|diagnostic| {
-        let (code, message) = if diagnostic.code == "breg.source.file-bounds" {
-            (
-                "planner-test.request.bounds",
-                "the synthetic request exceeds its fixed size bound",
-            )
-        } else {
-            (
-                "planner-test.request.unavailable",
-                "the synthetic request must be a readable regular file without symbolic links",
-            )
-        };
-        planner_test_failure(code, "request", message)
-    })?;
-    let input = parse_json_strict(&input_bytes).map_err(|_| {
-        planner_test_failure(
-            "planner-test.request.invalid",
-            "request",
-            "the synthetic request must be strict JSON",
-        )
-    })?;
-    let input = input.as_object().ok_or_else(|| {
-        planner_test_failure(
-            "planner-test.request.invalid",
-            "request",
-            "the synthetic request must be one JSON object",
-        )
-    })?;
-    if !bounded_planner_test_value(&Value::Object(input.clone()), 0) {
-        return Err(planner_test_failure(
-            "planner-test.request.bounds",
-            "request",
-            "the synthetic request exceeds the closed planner value bounds",
-        ));
-    }
-    let declared_fields = planner.request_fields.iter().collect::<BTreeSet<_>>();
-    if input.keys().any(|field| !declared_fields.contains(field)) {
-        return Err(planner_test_failure(
-            "planner-test.request.fields",
-            "request",
-            "the synthetic request may contain only planner-declared request fields",
-        ));
-    }
-
-    let candidate = registry_breg::rhai_planner::plan_change_request_effects(
-        request,
-        input,
-        Instant::now() + PLANNER_TEST_DEADLINE,
-    )
-    .map_err(|error| {
-        planner_test_failure(
-            error.code(),
-            "planner",
-            "the closed Rhai planner refused the synthetic request",
-        )
-    })?;
-    if candidate.planner_binding.kind != "rhai"
-        || candidate.planner_binding.abi_identifier != planner.abi
-        || candidate.planner_binding.script_sha256.as_deref()
-            != Some(planner.script_sha256.as_str())
-    {
-        return Err(planner_test_failure(
-            "planner-test.planner.binding",
-            "planner",
-            "the planner result did not preserve its compiled identity",
-        ));
-    }
-
-    let mut field_mutations = 0usize;
-    let mut dependency_count = 0usize;
-    let effect_aliases = candidate
-        .effects
-        .iter()
-        .enumerate()
-        .map(|(index, effect)| (effect.id.as_str(), format!("effect-{}", index + 1)))
-        .collect::<BTreeMap<_, _>>();
-    let effects = candidate
-        .effects
-        .iter()
-        .enumerate()
-        .map(|(index, effect)| {
-            let mut fields = effect
-                .mutations
-                .iter()
-                .map(|mutation| match mutation {
-                    registry_breg::rhai_planner::CandidateChangeRequestMutation::Set {
-                        field,
-                        ..
-                    }
-                    | registry_breg::rhai_planner::CandidateChangeRequestMutation::Clear {
-                        field,
-                    } => field.clone(),
-                })
-                .collect::<Vec<_>>();
-            fields.sort();
-            fields.dedup();
-            field_mutations += effect.mutations.len();
-            dependency_count += effect.depends_on.len();
-            let mut depends_on = effect
-                .depends_on
-                .iter()
-                .map(|dependency| {
-                    effect_aliases
-                        .get(dependency.as_str())
-                        .cloned()
-                        .ok_or_else(|| {
-                            planner_test_failure(
-                                "planner-test.planner.binding",
-                                "planner",
-                                "the planner result contains an unresolved effect dependency",
-                            )
-                        })
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-            depends_on.sort();
-            Ok(PlannerTestEffectReport {
-                id: format!("effect-{}", index + 1),
-                target_kind: match effect.target.binding {
-                    registry_breg::rhai_planner::CandidateChangeRequestTargetBinding::Existing {
-                        ..
-                    } => "existing",
-                    registry_breg::rhai_planner::CandidateChangeRequestTargetBinding::ReservedCreate {
-                        ..
-                    } => "reserved-create",
-                },
-                operation: operation_wire_name(effect.operation),
-                fields,
-                depends_on,
-            })
-        })
-        .collect::<Result<Vec<_>, FailureReport>>()?;
-    Ok(PlannerTestSuccessReport {
-        ok: true,
-        command: COMMAND,
-        compiled_revision: compiled.revision().to_owned(),
-        request_entity: entity.id.clone(),
-        action: None,
-        refusal: None,
-        assertions_passed: None,
-        planner: Some(PlannerTestIdentityReport {
-            kind: "rhai",
-            abi: planner.abi.clone(),
-            script_sha256: planner.script_sha256.clone(),
-        }),
-        handler: None,
-        counts: PlannerTestCountReport {
-            effects: effects.len(),
-            field_mutations,
-            dependencies: dependency_count,
-        },
-        effects,
-    })
+    let compiled = compile(&args.project, ProfileArg::Authoring, "project planner-test")?;
+    action_handler_test::run(args, &compiled)
 }
 
 fn bounded_planner_test_value(value: &Value, depth: usize) -> bool {
@@ -7662,9 +7467,9 @@ const ACTIONS_EXPLANATION: ExplainFormat = ExplainFormat {
     api_version: "id.registrystack.org/formats/breg/actions-explanation/v1alpha4",
     kind: "BRegActionsExplanation",
 };
-const CHANGE_REQUESTS_EXPLANATION: ExplainFormat = ExplainFormat {
+const PROPOSALS_EXPLANATION: ExplainFormat = ExplainFormat {
     api_version: "id.registrystack.org/formats/breg/change-requests-explanation/v1alpha4",
-    kind: "BRegChangeRequestsExplanation",
+    kind: "BRegProposalsExplanation",
 };
 const EVENTS_EXPLANATION: ExplainFormat = ExplainFormat {
     api_version: "id.registrystack.org/formats/breg/events-explanation/v1alpha4",
@@ -7685,7 +7490,7 @@ fn explain_format(subject: ExplainSubject, scenario_present: bool) -> &'static E
         ExplainSubject::Routes => &ROUTES_EXPLANATION,
         ExplainSubject::Queries => &QUERIES_EXPLANATION,
         ExplainSubject::Actions => &ACTIONS_EXPLANATION,
-        ExplainSubject::ChangeRequests => &CHANGE_REQUESTS_EXPLANATION,
+        ExplainSubject::Proposals => &PROPOSALS_EXPLANATION,
         ExplainSubject::Events => &EVENTS_EXPLANATION,
         ExplainSubject::Lifecycle => &LIFECYCLE_EXPLANATION,
     }
@@ -7856,7 +7661,7 @@ fn explain(
         ExplainSubject::Routes => explain_routes(&compiled),
         ExplainSubject::Queries => explain_queries(&compiled),
         ExplainSubject::Actions => explain_actions(&compiled),
-        ExplainSubject::ChangeRequests => explain_change_requests(&compiled),
+        ExplainSubject::Proposals => explain_proposals(&compiled),
         ExplainSubject::Events => serde_json::to_value(compiled.event_deliveries()),
         ExplainSubject::Lifecycle => unreachable!("lifecycle returns before the project compiles"),
     }
@@ -8243,30 +8048,18 @@ fn load_project_planner_asset_files(
     project_directory: &SafeDir,
     project: &RegistryProject,
 ) -> Result<Vec<CapturedModuleAssetSource>, Diagnostic> {
-    let mut paths = project
-        .entities
-        .iter()
-        .filter_map(|entity| {
-            entity
-                .change_request
-                .as_ref()
-                .and_then(|request| request.planner.as_ref())
-                .map(|planner| {
-                    (
-                        planner.script.clone(),
-                        format!("entities[{}].changeRequest.planner.script", entity.id),
-                    )
-                })
-        })
-        .collect::<BTreeMap<_, _>>();
+    let mut paths = BTreeMap::new();
     let mut wasm_module_paths = BTreeMap::new();
-    for action in &project.actions {
-        partition_handler_source(
-            action.handler.as_ref().map(|handler| &handler.handler),
-            &format!("actions[{}]", action.id),
-            &mut paths,
-            &mut wasm_module_paths,
-        );
+    for function in &project.functions {
+        let location = format!("functions[{}].source", function.id);
+        match function.runtime {
+            registry_breg::contract::ActionHandlerKindSource::Rhai => {
+                paths.insert(function.source.clone(), location);
+            }
+            registry_breg::contract::ActionHandlerKindSource::Wasm => {
+                wasm_module_paths.insert(function.source.clone(), location);
+            }
+        }
     }
     for entity in &project.entities {
         for hook in &entity.hooks {
@@ -8397,49 +8190,8 @@ fn load_module_asset_files(
             Ok(CapturedModuleAssetSource { path, bytes })
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let mut planner_paths = module
-        .entities
-        .iter()
-        .filter_map(|entity| {
-            entity
-                .change_request
-                .as_ref()
-                .and_then(|request| request.planner.as_ref())
-                .map(|planner| {
-                    (
-                        planner.script.clone(),
-                        format!(
-                            "modules[{module_id}].entities[{}].changeRequest.planner.script",
-                            entity.id
-                        ),
-                    )
-                })
-        })
-        .chain(module.extend_entities.iter().filter_map(|extension| {
-            extension
-                .change_request
-                .as_ref()
-                .and_then(|request| request.planner.as_ref())
-                .map(|planner| {
-                    (
-                        planner.script.clone(),
-                        format!(
-                            "modules[{module_id}].extendEntities[{}].changeRequest.planner.script",
-                            extension.entity
-                        ),
-                    )
-                })
-        }))
-        .collect::<BTreeMap<_, _>>();
+    let mut planner_paths = BTreeMap::new();
     let mut wasm_module_paths = BTreeMap::new();
-    for action in &module.actions {
-        partition_handler_source(
-            action.handler.as_ref().map(|handler| &handler.handler),
-            &format!("modules[{module_id}].actions[{}]", action.id),
-            &mut planner_paths,
-            &mut wasm_module_paths,
-        );
-    }
     for entity in &module.entities {
         for hook in &entity.hooks {
             partition_handler_source(
@@ -9573,6 +9325,7 @@ impl ArtifactSelector {
             ArtifactSelector::Metadata => path == "generated/metadata/registry.json",
             ArtifactSelector::Sql => path == "generated/postgres/schema.sql",
             ArtifactSelector::EvidenceSource => false,
+            ArtifactSelector::Sdk => path.starts_with("generated/sdk/"),
         }
     }
 
@@ -9657,190 +9410,13 @@ fn explain_model(compiled: &CompiledRegistry) -> serde_json::Result<Value> {
     }))
 }
 
-fn explain_change_requests(compiled: &CompiledRegistry) -> serde_json::Result<Value> {
-    let requests = compiled
-        .entities()
-        .values()
-        .filter(|entity| entity.change_request.is_some())
-        .map(|entity| {
-            let request = entity.change_request.as_ref().expect("filtered request entity");
-            let artifact = compiled.artifacts()
-                .get(&format!("generated/schemas/{}.schema.json", entity.id))
-                .expect("compiled entities have generated schemas");
-            let schema: Value = serde_json::from_slice(&artifact.bytes)?;
-            Ok(json!({
-                "requestEntity": entity.id,
-                "requestRoute": entity.route,
-                "fields": entity.stored_fields.iter().map(|field| json!({
-                    "field": field.logical.id,
-                    "apiName": field.logical.api_name,
-                    "schema": schema["properties"][&field.logical.api_name],
-                })).collect::<Vec<_>>(),
-                "contractFingerprint": request.contract_fingerprint,
-                "bounds": {
-                    "maximumTargets": request.maximum_targets,
-                    "maximumFieldMutations": request.maximum_field_mutations,
-                    "maximumSnapshotBytes": request.maximum_snapshot_bytes,
-                },
-                "planner": explain_change_request_planner(compiled, entity, request),
-                "review": request.review,
-                "onApproved": request.on_approved,
-                "application": request.application,
-                "effects": request.effects.iter().map(|effect| {
-                    let target = compiled.entities().get(&effect.target.entity_id);
-                    json!({
-                        "id": effect.id,
-                        "operation": operation_wire_name(effect.operation),
-                        "target": {
-                            "entity": effect.target.entity_id,
-                            "binding": match &effect.target.binding {
-                                registry_breg::model::CompiledChangeRequestTargetBinding::Existing { from_field } => {
-                                    json!({"type": "existing", "fromField": field_summary(entity, from_field)})
-                                }
-                                registry_breg::model::CompiledChangeRequestTargetBinding::ReservedCreate { effect } => {
-                                    json!({"type": "reserved-create", "effect": effect})
-                                }
-                            },
-                        },
-                        "fields": effect.mutations.iter().map(|mutation| match mutation {
-                            registry_breg::model::CompiledChangeRequestMutation::Set { field, value } => json!({
-                                "type": "set",
-                                "target": field_summary_optional(target, field),
-                                "value": match value {
-                                    registry_breg::model::CompiledChangeRequestValue::FromField { field } => {
-                                        json!({"type": "from-field", "field": field_summary(entity, field)})
-                                    }
-                                    registry_breg::model::CompiledChangeRequestValue::FromEffect { effect, target_entity_id } => {
-                                        json!({"type": "from-effect", "effect": effect, "targetEntity": target_entity_id})
-                                    }
-                                },
-                            }),
-                            registry_breg::model::CompiledChangeRequestMutation::Clear { field } => json!({
-                                "type": "clear",
-                                "target": field_summary_optional(target, field),
-                            }),
-                        }).collect::<Vec<_>>(),
-                        "dependsOn": effect.depends_on.iter().collect::<Vec<_>>(),
-                    })
-                }).collect::<Vec<_>>(),
-                "actions": request.actions.iter().map(|action| json!({
-                    "operation": operation_wire_name(action.operation.access_operation()),
-                    "routeId": compiled.routes().routes.iter()
-                        .find(|route| route.entity_id == entity.id
-                            && route.operation == action.operation.access_operation())
-                        .map(|route| route.id.as_str()),
-                    "method": "POST",
-                    "preconditions": request_action_preconditions(action.operation.access_operation()),
-                })).collect::<Vec<_>>(),
-                "applyPermissions": request.apply_permissions.iter().map(|grant| json!({
-                    "profile": grant.profile_id,
-                    "targetEntity": grant.target_entity_id,
-                    "rowBoundaries": grant.row_boundaries,
-                })).collect::<Vec<_>>(),
-                "presencePermissions": request.presence_permissions.iter().map(|grant| json!({
-                    "profile": grant.profile_id,
-                    "targetEntity": grant.target_entity_id,
-                    "requestRowBoundaries": grant.request_row_boundaries,
-                })).collect::<Vec<_>>(),
-            }))
-        })
-        .collect::<serde_json::Result<Vec<_>>>()?;
-    let controlled_writes = compiled
-        .entities()
-        .values()
-        .filter_map(|entity| {
-            let control = entity.change_control.as_ref()?;
-            let eligible = compiled
-                .entities()
-                .iter()
-                .filter_map(|(request_entity_id, request_entity)| {
-                    let request = request_entity.change_request.as_ref()?;
-                    let declarative = request
-                        .effects
-                        .iter()
-                        .any(|effect| effect.target.entity_id == entity.id);
-                    let planned = request.planner.as_ref().is_some_and(|planner| {
-                        planner
-                            .writes
-                            .iter()
-                            .any(|write| write.target_entity_id == entity.id)
-                    });
-                    (declarative || planned).then_some(request_entity_id.clone())
-                })
-                .collect::<Vec<_>>();
-            Some(json!({
-                "entity": entity.id,
-                "route": entity.route,
-                "requiredFor": control.required_for.iter().map(|operation| operation_wire_name(*operation)).collect::<Vec<_>>(),
-                "eligibleRequestTypes": eligible,
-                "directWriteRestriction": "controlled operations are absent from ordinary permissions and require compiled apply-request context",
-            }))
-        })
-        .collect::<Vec<_>>();
-    serde_json::to_value(json!({
-        "requests": requests,
-        "controlledWrites": controlled_writes,
-    }))
+fn explain_proposals(compiled: &CompiledRegistry) -> serde_json::Result<Value> {
+    Ok(json!({"actions": compiled.actions().actions.iter()
+        .filter(|action| action.execution.is_proposal())
+        .map(registry_breg::artifacts::inspect_action).collect::<Vec<_>>()}))
 }
 
-fn explain_change_request_planner(
-    compiled: &CompiledRegistry,
-    request_entity: &registry_breg::model::CompiledEntity,
-    request: &registry_breg::model::CompiledChangeRequest,
-) -> Value {
-    let Some(planner) = request.planner.as_ref() else {
-        return json!({
-            "type": "declarative",
-            "abi": registry_breg::contract::CHANGE_REQUEST_PLAN_ABI_V1,
-        });
-    };
-    json!({
-        "type": "rhai",
-        "abi": planner.abi,
-        "rhaiVersion": planner.rhai_version,
-        "scriptSha256": planner.script_sha256,
-        "declaringOrigin": match &planner.source_module {
-            Some(module) => json!({"type": "module", "id": module}),
-            None => json!({"type": "project"}),
-        },
-        "requestFields": planner.request_fields.iter()
-            .map(|field| field_summary(request_entity, field))
-            .collect::<Vec<_>>(),
-        "limits": {
-            "maximumTargets": request.maximum_targets,
-            "maximumFieldMutations": request.maximum_field_mutations,
-            "maximumSnapshotBytes": request.maximum_snapshot_bytes,
-            "maximumSourceBytes": planner.limits.maximum_source_bytes,
-            "maximumOperations": planner.limits.maximum_operations,
-            "maximumCallDepth": planner.limits.maximum_call_depth,
-            "maximumExpressionDepth": planner.limits.maximum_expression_depth,
-            "maximumStringBytes": planner.limits.maximum_string_bytes,
-            "maximumArrayItems": planner.limits.maximum_array_items,
-            "maximumMapEntries": planner.limits.maximum_map_entries,
-            "maximumModules": planner.limits.maximum_modules,
-        },
-        "possibleWrites": planner.writes.iter().map(|write| {
-            let target = compiled.entities().get(&write.target_entity_id);
-            json!({
-                "target": match &write.target_from_field {
-                    Some(field) => json!({
-                        "type": "existing",
-                        "entity": write.target_entity_id,
-                        "fromField": field_summary(request_entity, field),
-                    }),
-                    None => json!({
-                        "type": "reserved-create",
-                        "entity": write.target_entity_id,
-                    }),
-                },
-                "operation": operation_wire_name(write.operation),
-                "fields": write.fields.iter()
-                    .map(|field| field_summary_optional(target, field))
-                    .collect::<Vec<_>>(),
-            })
-        }).collect::<Vec<_>>(),
-    })
-}
+
 
 fn explain_routes(compiled: &CompiledRegistry) -> serde_json::Result<Value> {
     // The explain payload mixes two record shapes in one array (entity routes and
@@ -9879,195 +9455,7 @@ fn explain_routes(compiled: &CompiledRegistry) -> serde_json::Result<Value> {
 }
 
 fn explain_actions(compiled: &CompiledRegistry) -> serde_json::Result<Value> {
-    let actions = compiled
-        .actions()
-        .actions
-        .iter()
-        .map(|action| {
-            let routes = compiled
-                .actions()
-                .routes
-                .iter()
-                .filter(|route| route.action_id == action.id)
-                .map(|route| {
-                    json!({
-                        "id": route.id,
-                        "kind": action_route_kind_wire_name(route.kind),
-                        "method": "POST",
-                        "path": route.path,
-                        "operation": operation_wire_name(route.operation),
-                        "accessProfiles": route.access_profiles,
-                        "defaultAccessProfile": route.default_access_profile,
-                        "requiresIdempotencyKey": route.kind == registry_breg::model::ActionRouteKind::Invoke,
-                    })
-                })
-                .collect::<Vec<_>>();
-            let mut summary = json!({
-                "id": action.id,
-                "sourceModule": action.source_module,
-                "contractFingerprint": action.contract_fingerprint,
-                "routes": routes,
-                "inputs": action.inputs.iter().map(action_input_summary).collect::<Vec<_>>(),
-                "effects": action.effects.iter().map(|effect| {
-                    let target_entity = compiled.entities().get(&effect.target.entity_id);
-                    json!({
-                        "id": effect.id,
-                        "operation": operation_wire_name(effect.operation),
-                        "target": action_target_summary(effect),
-                        "fields": effect.mutations.iter().map(|mutation| match mutation {
-                            registry_breg::model::CompiledActionMutation::Set { field, value } => json!({
-                                "type": "set",
-                                "target": field_summary_optional(target_entity, field),
-                                "value": match value {
-                                    registry_breg::model::CompiledActionValue::Literal { .. } => json!({"type": "computed"}),
-                                    registry_breg::model::CompiledActionValue::FromInput { input } => {
-                                        json!({"type": "from-input", "input": action_input_identity(action, input)})
-                                    }
-                                    registry_breg::model::CompiledActionValue::FromEffect { effect, target_entity_id } => {
-                                        json!({"type": "from-effect", "effect": effect, "targetEntity": target_entity_id})
-                                    }
-                                },
-                            }),
-                            registry_breg::model::CompiledActionMutation::Clear { field } => json!({
-                                "type": "clear",
-                                "target": field_summary_optional(target_entity, field),
-                            }),
-                        }).collect::<Vec<_>>(),
-                        "dependsOn": effect.depends_on.iter().collect::<Vec<_>>(),
-                    })
-                }).collect::<Vec<_>>(),
-                "targets": action.target_uses.iter().map(|target| json!({
-                    "entity": target.entity_id,
-                    "operation": operation_wire_name(target.operation),
-                    "fields": target.fields.iter()
-                        .map(|field| field_summary_optional(compiled.entities().get(&target.entity_id), field))
-                        .collect::<Vec<_>>(),
-                    "source": action_target_use_source(action, &target.source),
-                    "conditionRequired": target.condition_required,
-                })).collect::<Vec<_>>(),
-                "requiredConditionKeys": action.target_uses.iter()
-                    .filter(|target| target.condition_required)
-                    .filter_map(|target| match &target.source {
-                        registry_breg::model::CompiledActionTargetUseSource::Input { input } => {
-                            action.inputs.iter().find(|candidate| candidate.id == *input)
-                        }
-                        registry_breg::model::CompiledActionTargetUseSource::Effect { .. } => None,
-                    })
-                    .map(|input| input.api_name.as_str())
-                    .collect::<BTreeSet<_>>(),
-                "permissions": action.permissions.iter().map(|grant| json!({
-                    "profile": grant.profile_id,
-                    "default": grant.default,
-                    "requiredScopes": grant.required_scopes,
-                    "requiredPurposes": grant.required_purposes,
-                    "operations": grant.operations.iter().map(|operation| operation_wire_name(*operation)).collect::<Vec<_>>(),
-                    "targets": grant.targets.iter().map(|target| json!({
-                        "entity": target.entity_id,
-                        "operation": operation_wire_name(target.operation),
-                        "source": action_target_use_source(action, &target.source),
-                        "rowBoundaries": target.row_boundaries,
-                    })).collect::<Vec<_>>(),
-                    "results": grant.results,
-                })).collect::<Vec<_>>(),
-                "results": action.effects.iter()
-                    .filter(|effect| action.result_effects.contains(&effect.id))
-                    .map(|effect| json!({
-                        "effect": effect.id,
-                        "entity": effect.target.entity_id,
-                        "operation": operation_wire_name(effect.operation),
-                    }))
-                    .collect::<Vec<_>>(),
-                "bounds": {
-                    "maximumTargets": action.maximum_targets,
-                    "maximumFieldMutations": action.maximum_field_mutations,
-                    "maximumSnapshotBytes": action.maximum_snapshot_bytes,
-                }
-            });
-            if let Some(handler) = &action.handler {
-                use registry_breg::model::CompiledActionHandlerKind;
-                // The summary names the compiled backend and its source
-                // fingerprint; the Rhai-only members stay Rhai-only.
-                let (kind, backend_source) = match handler.kind {
-                    CompiledActionHandlerKind::Rhai => (
-                        json!("rhai"),
-                        json!({
-                            "scriptSha256": handler.script_sha256,
-                            "rhaiVersion": handler.rhai_version,
-                            "limits": handler.limits,
-                        }),
-                    ),
-                    CompiledActionHandlerKind::Wasm => (
-                        json!("wasm"),
-                        json!({
-                            "moduleSha256": handler.module_sha256,
-                            // The preflight compatibility contract for a WASM
-                            // handler: which servers run it and where package
-                            // loading is refused before activation.
-                            "compatibility": {
-                                "minimumServer": "registry-breg built with the wasm feature",
-                                "serversBeforeWasmSupport":
-                                    "refuse the package at load with a typed handler error and no state change",
-                                "serversBuiltWithoutTheFeature":
-                                    "refuse the package during load because handler rederivation requires WASM support",
-                                "moduleSha256": handler.module_sha256,
-                            },
-                        }),
-                    ),
-                };
-                let mut handler_summary = json!({
-                    "kind": kind, "abi": handler.abi,
-                    "entrypoint": "handle", "context": "ctx.inputs", "inputKeys": "authored-ids",
-                    "possibleWrites": handler.writes,
-                    "refusals": handler.refusals.iter().map(|(code,label)| json!({"code":code,"label":label})).collect::<Vec<_>>(),
-                    "outcomes": ["effects", "refusal"],
-                    "omittedSlots": "no-write-or-result; all-declared-existing-targets-still-require-admission-and-conditions",
-                    "evaluation": "after-locked-receipt-recovery-before-target-locks",
-                    "reads": "supplied-inputs-only",
-                    "replay": "recover-committed-result-without-handler-evaluation",
-                });
-                if let Some(object) = handler_summary.as_object_mut() {
-                    object.extend(backend_source.as_object().cloned().unwrap_or_default());
-                }
-                summary["handler"] = handler_summary;
-            }
-            if !action.evidence.is_empty() {
-                summary["evidence"] = json!({
-                    "capabilities": action.evidence,
-                    "maximumCalls": action.evidence.len(),
-                    "maximumCallsPerCapability": 1,
-                    "maximumConcurrentEvaluations": 8,
-                    "maximumRetainedBytes": 1_048_576,
-                    "maximumResponseBytes": 262_144,
-                    "retentionDays": 1,
-                    "maximumAssertionLifetimeSeconds": 300,
-                    "clockSkewSeconds": 0,
-                    "maximumObservationAgeSeconds": 300,
-                    "defaultActionDeadlineMilliseconds": 10_000,
-                    "deadline": "bounded-by-operator-http-request-timeout-and-action-timeout",
-                    "invocation": "optional-explicit-helper-calls; omission-makes-no-remote-request",
-                    "disclosure": "remote-requirement-disclosure-is-not-reduced-by-output-selection",
-                    "lifecycle": "outside-postgres; frozen-transcript-reused-for-sql-retries; receipt-replay-has-zero-calls"
-                });
-                summary["handler"]["evaluation"] = json!("outside-postgres-after-admission-and-receipt-preflight");
-            }
-            if !action.requires.is_empty() {
-                summary["requires"] = json!(action.requires.iter().map(|requirement| {
-                    json!({
-                        "input": action_input_identity(action, &requirement.input),
-                        "entity": requirement.entity_id,
-                        "field": field_summary_optional(
-                            compiled.entities().get(&requirement.entity_id),
-                            &requirement.field,
-                        ),
-                        "equals": requirement.equals,
-                        "evaluated": "before-effects-under-target-lock",
-                    })
-                }).collect::<Vec<_>>());
-            }
-            summary
-        })
-        .collect::<Vec<_>>();
-    serde_json::to_value(json!({ "actions": actions }))
+    Ok(registry_breg::artifacts::inspect_registry(compiled))
 }
 
 fn explain_queries(compiled: &CompiledRegistry) -> serde_json::Result<Value> {
@@ -10236,91 +9624,19 @@ fn query_field_identity<'a>(
         })
 }
 
-fn field_summary(entity: &registry_breg::model::CompiledEntity, field_id: &str) -> Value {
-    field_summary_optional(Some(entity), field_id)
-}
 
-fn field_summary_optional(
-    entity: Option<&registry_breg::model::CompiledEntity>,
-    field_id: &str,
-) -> Value {
-    let api_name = entity
-        .and_then(|entity| field_api_name(entity, field_id))
-        .unwrap_or(field_id);
-    json!({
-        "field": field_id,
-        "apiName": api_name,
-    })
-}
 
-fn field_api_name<'a>(
-    entity: &'a registry_breg::model::CompiledEntity,
-    field_id: &str,
-) -> Option<&'a str> {
-    entity
-        .stored_fields
-        .iter()
-        .find(|field| field.logical.id == field_id)
-        .map(|field| field.logical.api_name.as_str())
-        .or_else(|| {
-            entity
-                .derived_fields
-                .get(field_id)
-                .map(|field| field.logical.api_name.as_str())
-        })
-        .or_else(|| {
-            (entity.canonical_id.id == field_id).then_some(entity.canonical_id.api_name.as_str())
-        })
-}
 
-fn action_input_summary(input: &registry_breg::model::CompiledActionInput) -> Value {
-    json!({
-        "input": input.id,
-        "apiName": input.api_name,
-        "fieldType": input.field_type,
-        "required": input.required,
-        "classification": input.classification,
-    })
-}
 
-fn action_input_identity(action: &registry_breg::model::CompiledAction, input_id: &str) -> Value {
-    action
-        .inputs
-        .iter()
-        .find(|input| input.id == input_id)
-        .map(action_input_summary)
-        .unwrap_or_else(|| json!({"input": input_id}))
-}
 
-fn action_target_use_source(
-    action: &registry_breg::model::CompiledAction,
-    source: &registry_breg::model::CompiledActionTargetUseSource,
-) -> Value {
-    match source {
-        registry_breg::model::CompiledActionTargetUseSource::Effect { effect } => {
-            json!({"type": "effect", "effect": effect})
-        }
-        registry_breg::model::CompiledActionTargetUseSource::Input { input } => {
-            json!({"type": "input", "input": action_input_identity(action, input)})
-        }
-    }
-}
 
-fn action_target_summary(effect: &registry_breg::model::CompiledActionEffect) -> Value {
-    match &effect.target.binding {
-        registry_breg::model::CompiledActionTargetBinding::Create => json!({
-            "entity": effect.target.entity_id,
-            "binding": {"type": "create"},
-        }),
-        registry_breg::model::CompiledActionTargetBinding::Existing { input } => json!({
-            "entity": effect.target.entity_id,
-            "binding": {
-                "type": "existing",
-                "input": input,
-            },
-        }),
-    }
-}
+
+
+
+
+
+
+
 
 fn action_route_kind_wire_name(kind: registry_breg::model::ActionRouteKind) -> &'static str {
     match kind {
@@ -10329,16 +9645,7 @@ fn action_route_kind_wire_name(kind: registry_breg::model::ActionRouteKind) -> &
     }
 }
 
-fn request_action_preconditions(
-    operation: registry_breg::contract::Operation,
-) -> Vec<&'static str> {
-    let mut preconditions = vec!["Idempotency-Key", "If-Match"];
-    if matches!(operation, registry_breg::contract::Operation::ApplyRequest) {
-        preconditions.push("proposalVersion");
-        preconditions.push("effectDigest");
-    }
-    preconditions
-}
+
 
 fn operation_wire_name(operation: registry_breg::contract::Operation) -> &'static str {
     match operation {
@@ -10355,6 +9662,7 @@ fn operation_wire_name(operation: registry_breg::contract::Operation) -> &'stati
         registry_breg::contract::Operation::CancelRequest => "cancel-request",
         registry_breg::contract::Operation::ApplyRequest => "apply-request",
         registry_breg::contract::Operation::Invoke => "invoke",
+        registry_breg::contract::Operation::Start => "start",
         registry_breg::contract::Operation::Snapshot => "snapshot",
         registry_breg::contract::Operation::Import => "import",
     }
@@ -14602,7 +13910,7 @@ mod tests {
                 failure.diagnostics[0].code
             ),
         };
-        let explanation = explain_change_requests(&compiled).expect("explanation renders");
+        let explanation = explain_proposals(&compiled).expect("explanation renders");
         let request = explanation["requests"]
             .as_array()
             .and_then(|requests| {

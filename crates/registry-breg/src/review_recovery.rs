@@ -21,7 +21,7 @@ use serde::Serialize;
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::request_retention::{RequestRetentionError, RequestRetentionOperatorService};
+use crate::proposal_retention::{RequestRetentionError, RequestRetentionOperatorService};
 
 /// Codes a failed review may carry and still be resubmitted: each one means
 /// BReg gave up waiting, never that the authority refused or decided.
@@ -87,8 +87,8 @@ pub type Result<T> = std::result::Result<T, ReviewRecoveryError>;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ReviewRecoveryScope<'a> {
-    pub request_entity_id: &'a str,
-    pub request_id: Uuid,
+    pub action_id: &'a str,
+    pub proposal_id: Uuid,
     pub proposal_version: i64,
 }
 
@@ -96,8 +96,8 @@ pub struct ReviewRecoveryScope<'a> {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReviewRecovery {
-    pub request_entity_id: String,
-    pub request_id: String,
+    pub action_id: String,
+    pub proposal_id: String,
     pub proposal_version: i64,
     pub authority: String,
     pub previous_state: String,
@@ -197,7 +197,7 @@ impl ReviewRecoveryOperatorService {
             return Err(ReviewRecoveryError::NotFound);
         }
         self.verified
-            .request_plan(scope.request_entity_id)
+            .request_plan(scope.action_id)
             .map_err(|_| ReviewRecoveryError::NotFound)?;
         // The request entry is accepted before the recovery transaction
         // opens, so an audit outage changes no review; the response shares
@@ -211,7 +211,7 @@ impl ReviewRecoveryOperatorService {
             .audit_reference_hash(
                 "breg-record-v1",
                 package_revision,
-                &scope.request_id.to_string(),
+                &scope.proposal_id.to_string(),
             )
             .map_err(|_| ReviewRecoveryError::Unavailable)?;
         let correlation = Uuid::new_v4().to_string();
@@ -220,7 +220,7 @@ impl ReviewRecoveryOperatorService {
             "packageRevision":package_revision,
             "actor":"breg:review-recovery-operator",
             "correlation":correlation,
-            "entityId":scope.request_entity_id, "recordReference":record_reference,
+            "entityId":scope.action_id, "recordReference":record_reference,
             "proposalVersion":scope.proposal_version,
         });
         let mut attempt = audit
@@ -309,18 +309,18 @@ impl ReviewRecoveryOperatorService {
                 "SELECT s.state,s.last_error_code,s.withdrawn,s.authority,
                         s.create_request <> '{}'::jsonb,
                         EXISTS (
-                            SELECT 1 FROM registry_internal.registry_request_review_results r
-                             WHERE (r.request_entity_id,r.request_id,r.proposal_version)
-                                   =(s.request_entity_id,s.request_id,s.proposal_version)),
+                            SELECT 1 FROM registry_internal.registry_proposal_review_results r
+                             WHERE (r.action_id,r.proposal_id,r.proposal_version)
+                                   =(s.action_id,s.proposal_id,s.proposal_version)),
                         w.state='submitted' AND w.proposal_version=s.proposal_version
-                   FROM registry_internal.registry_request_review_submissions s
-                   LEFT JOIN registry_internal.registry_request_state w
-                     ON (w.request_entity_id,w.request_id)=(s.request_entity_id,s.request_id)
-                  WHERE s.request_entity_id=$1 AND s.request_id=$2 AND s.proposal_version=$3
+                   FROM registry_internal.registry_proposal_review_submissions s
+                   LEFT JOIN registry_internal.registry_proposal_state w
+                     ON (w.action_id,w.proposal_id)=(s.action_id,s.proposal_id)
+                  WHERE s.action_id=$1 AND s.proposal_id=$2 AND s.proposal_version=$3
                   FOR UPDATE OF s",
                 &[
-                    &scope.request_entity_id,
-                    &scope.request_id,
+                    &scope.action_id,
+                    &scope.proposal_id,
                     &scope.proposal_version,
                 ],
             )
@@ -359,7 +359,7 @@ impl ReviewRecoveryOperatorService {
                 // the recovery window restarts at its configured length.
                 transaction
                     .execute(
-                        "UPDATE registry_internal.registry_request_review_submissions
+                        "UPDATE registry_internal.registry_proposal_review_submissions
                             SET state='pending',accepted_binding=NULL,attempt_count=0,
                                 result_poll_attempts=0,lease_until=NULL,last_error_code=NULL,
                                 next_attempt_at=transaction_timestamp(),
@@ -367,10 +367,10 @@ impl ReviewRecoveryOperatorService {
                                 recovery_deadline=transaction_timestamp()
                                     +(recovery_deadline-created_at),
                                 updated_at=transaction_timestamp()
-                          WHERE request_entity_id=$1 AND request_id=$2 AND proposal_version=$3",
+                          WHERE action_id=$1 AND proposal_id=$2 AND proposal_version=$3",
                         &[
-                            &scope.request_entity_id,
-                            &scope.request_id,
+                            &scope.action_id,
+                            &scope.proposal_id,
                             &scope.proposal_version,
                         ],
                     )
@@ -381,13 +381,13 @@ impl ReviewRecoveryOperatorService {
             Operation::Close => {
                 transaction
                     .execute(
-                        "UPDATE registry_internal.registry_request_review_submissions
+                        "UPDATE registry_internal.registry_proposal_review_submissions
                             SET state='failed',lease_until=NULL,last_error_code=$4,
                                 updated_at=transaction_timestamp()
-                          WHERE request_entity_id=$1 AND request_id=$2 AND proposal_version=$3",
+                          WHERE action_id=$1 AND proposal_id=$2 AND proposal_version=$3",
                         &[
-                            &scope.request_entity_id,
-                            &scope.request_id,
+                            &scope.action_id,
+                            &scope.proposal_id,
                             &scope.proposal_version,
                             &OPERATOR_CLOSED,
                         ],
@@ -399,8 +399,8 @@ impl ReviewRecoveryOperatorService {
         };
         transaction.commit().await.map_err(|_| Stopped::AtCommit)?;
         Ok(ReviewRecovery {
-            request_entity_id: scope.request_entity_id.to_owned(),
-            request_id: scope.request_id.to_string(),
+            action_id: scope.action_id.to_owned(),
+            proposal_id: scope.proposal_id.to_string(),
             proposal_version: scope.proposal_version,
             authority,
             previous_state: state,
@@ -423,20 +423,20 @@ async fn retry_application_in_transaction(
                     AND r.result_id=j.result_id AND s.proposal_digest=j.proposal_digest
                     AND s.on_approved_mode='automatic' AND s.executor=j.executor
                     AND p.effect_digest=j.proposal_digest AND p.snapshot IS NOT NULL
-           FROM registry_internal.registry_request_application_jobs j
-           JOIN registry_internal.registry_request_review_submissions s
-             USING (request_entity_id,request_id,proposal_version)
-           JOIN registry_internal.registry_request_review_results r
-             USING (request_entity_id,request_id,proposal_version)
-           JOIN registry_internal.registry_request_proposals p
-             USING (request_entity_id,request_id,proposal_version)
-           JOIN registry_internal.registry_request_state w
-             USING (request_entity_id,request_id)
-          WHERE j.request_entity_id=$1 AND j.request_id=$2 AND j.proposal_version=$3
+           FROM registry_internal.registry_proposal_application_jobs j
+           JOIN registry_internal.registry_proposal_review_submissions s
+             USING (action_id,proposal_id,proposal_version)
+           JOIN registry_internal.registry_proposal_review_results r
+             USING (action_id,proposal_id,proposal_version)
+           JOIN registry_internal.registry_proposal_proposals p
+             USING (action_id,proposal_id,proposal_version)
+           JOIN registry_internal.registry_proposal_state w
+             USING (action_id,proposal_id)
+          WHERE j.action_id=$1 AND j.proposal_id=$2 AND j.proposal_version=$3
           FOR UPDATE OF j,s,r,p,w",
             &[
-                &scope.request_entity_id,
-                &scope.request_id,
+                &scope.action_id,
+                &scope.proposal_id,
                 &scope.proposal_version,
             ],
         )
@@ -465,22 +465,22 @@ async fn retry_application_in_transaction(
     }
     transaction
         .execute(
-            "UPDATE registry_internal.registry_request_application_jobs
+            "UPDATE registry_internal.registry_proposal_application_jobs
             SET state='queued',attempt_count=0,claim_token=NULL,last_error_code=NULL,
                 action_href=NULL,action_if_match=NULL,next_attempt_at=transaction_timestamp(),
                 updated_at=transaction_timestamp()
-          WHERE request_entity_id=$1 AND request_id=$2 AND proposal_version=$3",
+          WHERE action_id=$1 AND proposal_id=$2 AND proposal_version=$3",
             &[
-                &scope.request_entity_id,
-                &scope.request_id,
+                &scope.action_id,
+                &scope.proposal_id,
                 &scope.proposal_version,
             ],
         )
         .await
         .map_err(|_| ReviewRecoveryError::Unavailable)?;
     Ok(ReviewRecovery {
-        request_entity_id: scope.request_entity_id.to_owned(),
-        request_id: scope.request_id.to_string(),
+        action_id: scope.action_id.to_owned(),
+        proposal_id: scope.proposal_id.to_string(),
         proposal_version: scope.proposal_version,
         authority: row.get(2),
         previous_state: state,

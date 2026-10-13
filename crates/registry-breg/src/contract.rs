@@ -83,7 +83,16 @@ pub struct RegistryProject {
     #[serde(default)]
     pub modules: Vec<ModuleLockSource>,
     #[serde(default, deserialize_with = "unique_ids")]
+    #[serde(rename = "recordTypes")]
     pub entities: Vec<EntitySource>,
+    #[serde(default)]
+    pub datasets: Vec<DatasetSource>,
+    #[serde(default)]
+    pub review_authorities: Vec<ReviewAuthoritySource>,
+    #[serde(default)]
+    pub value_types: BTreeMap<String, FieldTypeSource>,
+    #[serde(default)]
+    pub functions: Vec<FunctionSource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub actions: Vec<ActionSource>,
     #[serde(default)]
@@ -100,6 +109,294 @@ pub struct RegistryProject {
     /// rows still validate. A retired scope matches nothing.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub retired_consent_scopes: Vec<String>,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct DisplaySource {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title_field: Option<String>,
+}
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct RelationshipSource {
+    #[serde(default)]
+    pub inverse_name: Option<String>,
+}
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct DatasetSource {
+    pub id: String,
+    #[serde(default)]
+    pub display: DisplaySource,
+}
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ReviewAuthoritySource {
+    pub id: String,
+    pub protocol: String,
+    #[serde(default)]
+    pub display: DisplaySource,
+}
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "mode", deny_unknown_fields, rename_all = "kebab-case")]
+pub enum ActionExecutionSource {
+    Immediate,
+    Proposal { proposal: ProposalPolicySource },
+}
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", deny_unknown_fields, rename_all = "kebab-case")]
+pub enum ActionPlanSource {
+    Fixed {
+        effects: Vec<ActionEffectSource>,
+    },
+    Function {
+        function: String,
+        inputs: Vec<String>,
+        writes: Vec<ActionHandlerWriteSource>,
+        #[serde(default)]
+        refusals: Vec<ActionHandlerRefusalSource>,
+        #[serde(default)]
+        capabilities: BTreeSet<String>,
+    },
+}
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CommitGuardsSource {
+    #[serde(default)]
+    pub targets: Vec<ActionRequirementSource>,
+    #[serde(default)]
+    pub evidence: Vec<ChangeRequestEvidenceSource>,
+}
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum GuardRevisionSource {
+    Unchanged,
+}
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct FunctionSource {
+    pub id: String,
+    pub runtime: ActionHandlerKindSource,
+    pub source: String,
+    pub entrypoint: String,
+    pub abi: String,
+    #[serde(default)]
+    pub capabilities: BTreeSet<String>,
+    #[serde(default)]
+    pub limits: FunctionLimitsSource,
+}
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct FunctionLimitsSource {
+    #[serde(default = "default_function_operations")]
+    pub maximum_operations: u64,
+    #[serde(default = "default_function_output_bytes")]
+    pub maximum_output_bytes: u32,
+}
+impl Default for FunctionLimitsSource {
+    fn default() -> Self {
+        Self {
+            maximum_operations: default_function_operations(),
+            maximum_output_bytes: default_function_output_bytes(),
+        }
+    }
+}
+fn default_function_operations() -> u64 {
+    10000
+}
+fn default_function_output_bytes() -> u32 {
+    8192
+}
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ProposalPolicySource {
+    pub review: ProposalReviewSource,
+    pub application: ProposalApplicationSource,
+    pub retention: ProposalRetentionSource,
+    #[serde(default)]
+    pub review_context: Option<ProposalReviewContextSource>,
+}
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", deny_unknown_fields, rename_all = "kebab-case")]
+pub enum ProposalReviewSource {
+    None,
+    Required {
+        authority: String,
+        source: String,
+        policy: PolicyBindingSource,
+    },
+}
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct PolicyBindingSource {
+    pub id: String,
+    pub version: String,
+    pub digest: Digest,
+}
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(
+    tag = "mode",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum ProposalApplicationSource {
+    Manual,
+    Automatic {
+        executor: String,
+        #[serde(default = "default_apply_attempts")]
+        maximum_attempts: u16,
+    },
+}
+fn default_apply_attempts() -> u16 {
+    3
+}
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ProposalRetentionSource {
+    pub mode: ProposalRetentionMode,
+}
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProposalRetentionMode {
+    Retain,
+    OperatorErase,
+}
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ProposalReviewContextSource {
+    pub id: String,
+    pub fields: BTreeMap<String, ProposalContextValueSource>,
+}
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ProposalContextValueSource {
+    #[serde(default)]
+    pub from_input: Option<String>,
+    #[serde(default)]
+    pub from_record: Option<String>,
+    #[serde(default)]
+    pub field: Option<String>,
+}
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProposalOperation {
+    Get,
+    List,
+    Submit,
+    Revise,
+    Cancel,
+    Apply,
+    GetReviewContext,
+}
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProposalOwnership {
+    Caller,
+}
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ProposalPermissionSource {
+    pub action: String,
+    pub operations: UniqueSet<ProposalOperation>,
+    #[serde(default)]
+    pub ownership: Option<ProposalOwnership>,
+    #[serde(default)]
+    pub targets: Vec<ProposalTargetPermissionSource>,
+    #[serde(default)]
+    pub readable_context_fields: UniqueSet<String>,
+}
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ProposalTargetPermissionSource {
+    pub record_type: String,
+    #[serde(default)]
+    pub row_boundaries: Vec<RowBoundarySource>,
+}
+
+fn resolve_local_value_types(value: &mut Value) -> Result<(), (String, &'static str)> {
+    let types = value
+        .get("valueTypes")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    for collection in ["recordTypes", "actions"] {
+        if let Some(items) = value.get_mut(collection).and_then(Value::as_array_mut) {
+            for (item_index, item) in items.iter_mut().enumerate() {
+                let member = if collection == "recordTypes" {
+                    "fields"
+                } else {
+                    "inputs"
+                };
+                if let Some(fields) = item.get_mut(member).and_then(Value::as_array_mut) {
+                    for (field_index, field) in fields.iter_mut().enumerate() {
+                        let Some(object) = field.as_object_mut() else {
+                            continue;
+                        };
+                        let Some(reference) = object.remove("typeRef") else {
+                            continue;
+                        };
+                        let Some(reference) = reference.as_str() else {
+                            return Err((
+                                format!(
+                                    "/{collection}/{item_index}/{member}/{field_index}/typeRef"
+                                ),
+                                "typeRef must be a local value type identifier",
+                            ));
+                        };
+                        let Some(definition) = types.get(reference).and_then(Value::as_object)
+                        else {
+                            return Err((
+                                format!(
+                                    "/{collection}/{item_index}/{member}/{field_index}/typeRef"
+                                ),
+                                "typeRef must name a declared local value type",
+                            ));
+                        };
+                        for (key, value) in definition {
+                            if object.contains_key(key) {
+                                return Err((
+                                    format!(
+                                        "/{collection}/{item_index}/{member}/{field_index}/{key}"
+                                    ),
+                                    "typeRef constraints cannot be overridden at the use site",
+                                ));
+                            }
+                            object.insert(key.clone(), value.clone());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -262,6 +559,8 @@ pub struct RegistryIdentitySource {
     #[serde(default)]
     #[cfg_attr(feature = "schema", schemars(!default))]
     pub canonical_base_iri: String,
+    #[serde(default)]
+    pub display: DisplaySource,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -632,6 +931,10 @@ impl registry_platform_yaml::Identified for EntitySource {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct EntitySource {
+    #[serde(default)]
+    pub api_name: Option<String>,
+    #[serde(default)]
+    pub display: DisplaySource,
     #[serde(deserialize_with = "local_id")]
     #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
@@ -699,6 +1002,7 @@ pub struct EntitySource {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub change_control: Option<ChangeControlSource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip)]
     pub change_request: Option<ChangeRequestSource>,
     /// Declares this entity's rows as subject-issued consent decisions that
     /// `requireConsent` permissions check before returning a subject's row.
@@ -943,7 +1247,7 @@ pub struct EntityExtensionSource {
     pub read_paths: Vec<ReadPathSource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub change_control: Option<ChangeControlSource>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip)]
     pub change_request: Option<ChangeRequestSource>,
 }
 
@@ -1280,20 +1584,32 @@ pub struct ActionSource {
     #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub handler: Option<ActionHandlerSource>,
+    pub api_name: Option<String>,
+    #[serde(default)]
+    pub display: DisplaySource,
+    pub execution: ActionExecutionSource,
     #[serde(default)]
     pub inputs: Vec<ActionInputSource>,
+    pub plan: ActionPlanSource,
     #[serde(default)]
-    pub effects: Vec<ActionEffectSource>,
-    /// Acceptance-time checks over exact existing reference inputs, combined with AND.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub requires: Vec<ActionRequirementSource>,
-    /// Required when the action creates consent-record rows.
+    pub commit_guards: CommitGuardsSource,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub consent_issuer: Option<ConsentIssuerSource>,
 }
 
-pub const ACTION_HANDLER_ABI_V1: &str = "registry.action-handler/v1";
+impl ActionSource {
+    pub fn effects(&self) -> &[ActionEffectSource] {
+        match &self.plan {
+            ActionPlanSource::Fixed { effects } => effects,
+            _ => &[],
+        }
+    }
+    pub fn is_proposal(&self) -> bool {
+        matches!(self.execution, ActionExecutionSource::Proposal { .. })
+    }
+}
+
+pub const ACTION_PLAN_ABI_V1: &str = "registry.action-plan/v1";
 
 /// The authored action handler: the shared hook handler declaration, with the
 /// authorization members a governed action adds.
@@ -1482,7 +1798,7 @@ fn action_handler_half_schema(generator: &mut schemars::SchemaGenerator) -> sche
                 "description": "The WASM handler module path, project-local. Declared for wasm\nhandlers only; the compiler enforces the pairing with the declared\nbackend.",
                 "type": ["string", "null"],
             },
-            "abi": {"type": "string", "enum": [ACTION_HANDLER_ABI_V1]},
+            "abi": {"type": "string", "enum": [ACTION_PLAN_ABI_V1]},
         },
         "required": ["type", "abi"],
     })
@@ -1525,6 +1841,7 @@ pub struct ActionHandlerRefusalSource {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ActionRequirementSource {
     pub input: String,
+    #[serde(default)]
     pub field: String,
     #[serde(
         default,
@@ -1542,7 +1859,10 @@ pub struct ActionRequirementSource {
     #[cfg_attr(feature = "schema", schemars(schema_with = "only_true_schema"))]
     pub is_null: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "equalsFromInput")]
     pub equals_input: Option<String>,
+    #[serde(default)]
+    pub revision: Option<GuardRevisionSource>,
 }
 
 impl ActionRequirementSource {
@@ -1582,6 +1902,7 @@ impl<'de> Deserialize<'de> for ActionInputSource {
             || raw.pattern.is_some()
             || raw.encrypted.is_some()
             || raw.lookup.is_some()
+            || raw.relationship.is_some()
         {
             return Err(Invalid::expected(
                 "an action input without validTimeRole, pattern, encrypted, or lookup",
@@ -1622,6 +1943,8 @@ pub struct ActionEffectSource {
     pub set: BTreeMap<String, ActionValueSource>,
     #[serde(default)]
     pub clear: UniqueSet<String>,
+    #[serde(default)]
+    pub after: UniqueSet<String>,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -1629,8 +1952,10 @@ pub struct ActionEffectSource {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ActionTargetSource {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "recordType")]
     pub entity: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "fromInput")]
     pub from_field: Option<String>,
 }
 
@@ -1639,9 +1964,16 @@ pub struct ActionTargetSource {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ActionValueSource {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "fromInput")]
     pub from_field: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub from_effect: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "present_json_value",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub value: Option<Value>,
 }
 
 /// Either a required review, `type: required` naming `authority` and
@@ -1770,6 +2102,8 @@ pub struct FieldSource {
     pub encrypted: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lookup: Option<FieldLookupSource>,
+    pub display: DisplaySource,
+    pub relationship: Option<RelationshipSource>,
 }
 
 #[cfg(feature = "schema")]
@@ -2241,6 +2575,8 @@ impl<'de> Deserialize<'de> for FieldSource {
             valid_time_role: raw.valid_time_role,
             encrypted,
             lookup: raw.lookup,
+            display: raw.display,
+            relationship: raw.relationship,
         })
     }
 }
@@ -2509,6 +2845,10 @@ struct RawFieldSource {
     encrypted: Option<bool>,
     #[serde(default)]
     lookup: Option<FieldLookupSource>,
+    #[serde(default)]
+    display: DisplaySource,
+    #[serde(default)]
+    relationship: Option<RelationshipSource>,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -3366,6 +3706,7 @@ pub enum Operation {
     CancelRequest,
     ApplyRequest,
     Invoke,
+    Start,
     /// Create records through a durable ingestion run, and nothing else. The
     /// grant is enabled only while an operator-opened import authority is open
     /// for the entity and profile. It declares no item route and no raw batch
@@ -3761,7 +4102,10 @@ pub struct PermissionsSource {
         feature = "schema",
         schemars(with = "Vec<sentinel::AuthoredEntityPermission>")
     )]
+    #[serde(rename = "records")]
     pub entities: Vec<EntityPermissionSource>,
+    #[serde(default)]
+    pub proposals: Vec<ProposalPermissionSource>,
     /// The actions the profile may invoke: one permission for each action it names.
     #[serde(default)]
     pub actions: Vec<ActionPermissionSource>,
@@ -3844,6 +4188,7 @@ pub struct CompiledTaskGrantPermissionSource {
     rename_all = "camelCase"
 )]
 pub struct EntityPermissionSource {
+    #[serde(rename = "recordType")]
     pub entity: String,
     pub operations: UniqueSet<Operation>,
     pub readable_fields: UniqueSet<String>,
@@ -3992,6 +4337,7 @@ pub enum RequestVisibilitySource {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ActionTargetPermissionSource {
+    #[serde(rename = "recordType")]
     pub entity: String,
     /// Row reach: `unrestricted`, or a list of at least one row boundary.
     #[serde(
@@ -4316,7 +4662,51 @@ pub const MODULE_FORMAT: FormatSpec<'static> = FormatSpec {
 /// column, and the action that fixes it (CFG-DIAG-1), and none repeats a
 /// value from the file.
 pub fn read_project_yaml(file: &str, bytes: &[u8]) -> Result<Decoded<RegistryProject>, Report> {
-    read_authored(file, bytes, &PROJECT_FORMAT)
+    let Decoded {
+        mut value,
+        document,
+    } = read_authored::<Value>(file, bytes, &PROJECT_FORMAT)?;
+    if value.get("valueTypes").is_none() {
+        return document.decode().map(|value| Decoded { value, document });
+    }
+    resolve_local_value_types(&mut value).map_err(|(path, message)| {
+        Report::new(vec![document.diagnostic_at_value(
+            Severity::Error,
+            "breg.value-type.reference-invalid",
+            &path,
+            message,
+            "Name a declared value type and keep its constraints at that declaration.",
+        )])
+    })?;
+    let normalized = serde_json::to_vec(&value).expect("normalized authoring value serializes");
+    match read_authored::<RegistryProject>(file, &normalized, &PROJECT_FORMAT) {
+        Ok(decoded) => Ok(Decoded {
+            value: decoded.value,
+            document,
+        }),
+        Err(report) => {
+            let diagnostics = report
+                .into_diagnostics()
+                .into_iter()
+                .map(|diagnostic| {
+                    let mut site = diagnostic.path.as_str();
+                    while document.span_of(site).is_none() && !site.is_empty() {
+                        site = site.rsplit_once('/').map_or("", |(parent, _)| parent);
+                    }
+                    let mut placed = document.diagnostic_at_value(
+                        diagnostic.severity,
+                        &diagnostic.code,
+                        site,
+                        &diagnostic.message,
+                        &diagnostic.suggested_action,
+                    );
+                    placed.path = diagnostic.path;
+                    placed
+                })
+                .collect();
+            Err(Report::new(diagnostics))
+        }
+    }
 }
 
 /// Read an authored module through the shared reader, as

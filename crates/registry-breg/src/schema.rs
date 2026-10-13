@@ -14,7 +14,7 @@ const SCHEMA_DIALECT: &str = "https://json-schema.org/draft/2020-12/schema";
 
 pub const REGISTRY_PROJECT_SCHEMA_FILE: &str = "registry-project.schema.json";
 pub const REGISTRY_PROJECT_SCHEMA_ID: &str =
-    "https://id.registrystack.org/schemas/breg/project/project.v1alpha1.schema.json";
+    "https://id.registrystack.org/schemas/breg/project/project.v2alpha1.schema.json";
 pub const REGISTRY_MODULE_SCHEMA_FILE: &str = "registry-module.schema.json";
 pub const REGISTRY_MODULE_SCHEMA_ID: &str =
     "https://id.registrystack.org/schemas/breg/module/module.v1alpha1.schema.json";
@@ -67,6 +67,7 @@ pub fn runtime_documents() -> Result<BTreeMap<&'static str, String>, serde_json:
 
 fn project_schema() -> Result<Value, serde_json::Error> {
     let mut derived = serde_json::to_value(schemars::schema_for!(RegistryProject))?;
+    local_value_type_use_schemas(&mut derived);
     for (property, expected) in [
         ("apiVersion", AUTHORING_API_VERSION),
         ("kind", AUTHORING_KIND),
@@ -79,6 +80,56 @@ fn project_schema() -> Result<Value, serde_json::Error> {
         }
     }
     Ok(derived)
+}
+
+/// Local scalar constraints are resolved before typed decoding. Describe that
+/// authored alternative beside the inline field types the compiler normalizes.
+fn local_value_type_use_schemas(schema: &mut Value) {
+    let Some(definitions) = schema.get_mut("$defs").and_then(Value::as_object_mut) else {
+        return;
+    };
+    for (name, definition) in definitions.iter_mut() {
+        if name.ends_with("FieldSourceSchema") {
+            if let Some(properties) = definition
+                .get_mut("properties")
+                .and_then(Value::as_object_mut)
+            {
+                properties.insert(
+                    "display".to_owned(),
+                    serde_json::json!({"$ref":"#/$defs/DisplaySource"}),
+                );
+                if name == "ReferenceFieldSourceSchema" {
+                    properties.insert("relationship".to_owned(), serde_json::json!({
+                        "type":"object","additionalProperties":false,
+                        "properties":{"inverseName":{"type":"string","pattern":"^[a-z][A-Za-z0-9]*$"}}
+                    }));
+                }
+            }
+        }
+    }
+    let named_field = serde_json::json!({
+        "type":"object", "additionalProperties":false,
+        "required":["id","typeRef","classification"],
+        "properties":{
+            "id":{"$ref":"#/$defs/LocalId"},
+            "apiName":{"type":"string"},
+            "typeRef":{"$ref":"#/$defs/LocalId"},
+            "required":{"type":"boolean","default":false},
+            "classification":{"$ref":"#/$defs/Classification"},
+            "display":{"$ref":"#/$defs/DisplaySource"}
+        }
+    });
+    if let Some(branches) = definitions
+        .get_mut("FieldSource")
+        .and_then(|field| field.get_mut("anyOf"))
+        .and_then(Value::as_array_mut)
+    {
+        branches.push(named_field.clone());
+    }
+    if let Some(input) = definitions.get_mut("ActionInputSource") {
+        let inline = input.take();
+        *input = serde_json::json!({"anyOf":[inline,named_field]});
+    }
 }
 
 /// The module schema with the header every `module.yaml` opens with. The

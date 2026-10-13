@@ -21,6 +21,10 @@ use crate::model::{
 
 use super::{ExpectedRegistryIdentity, PostgresKernelError, RegistryLockKey, Result};
 
+#[path = "proposal_context.rs"]
+mod proposal;
+pub(crate) use proposal::{begin_proposal_transaction, ProposalAuthority, ProposalAuthorityOperation, ProposalTargetPhase};
+
 const MAX_CONTEXT_VALUE_BYTES: usize = 512;
 const MAX_BOUNDARY_SET_VALUES: usize = 64;
 const MAX_BOUNDARY_CONTEXT_BYTES: usize = 64 * 1024;

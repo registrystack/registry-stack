@@ -42,7 +42,7 @@ def field() -> dict:
         "codeLabels": {"active": "Active"},
         "reference": {
             "manualEntry": True,
-            "targetEntity": "company",
+            "targetRecordType": "company",
             "operations": [
                 {
                     "operationId": "records.company.get",
@@ -60,12 +60,12 @@ def operation(identifier: str, method: str, path: str, kind: str, request: dict)
         "method": method,
         "path": path,
         "operation": kind,
-        "sourceEntity": "company",
-        "responseEntity": "company",
+        "sourceRecordType": "company",
+        "responseRecordType": "company",
         "accessProfile": "company-writer",
         "requiredCapabilities": [],
         "futureExecutionMember": {"ignored": True},
-        "entityLabel": "Companies",
+        "recordTypeLabel": "Companies",
         "identifier": {"apiName": "id", "location": "envelope"},
         "titleFields": ["legal-name"],
         "fields": [field()],
@@ -296,7 +296,7 @@ def metadata() -> dict:
                     },
                 ],
                 "referenceInputs": [
-                    {"input": "target", "apiName": "targetId", "targetEntity": "company"}
+                    {"input": "target", "apiName": "targetId", "targetRecordType": "company"}
                 ],
                 "requiredConditionKeys": ["targetId"],
                 "resultEffects": [
@@ -512,7 +512,7 @@ class MutationParityTests(unittest.TestCase):
         self.assertEqual(
             capability["application"], {"preconditions": {"request": []}}
         )
-        self.assertEqual(self.contract.immediate_actions[0]["input_mode"], "fixed")
+        self.assertEqual(self.contract.actions[0]["input_mode"], "fixed")
         batch_operation = next(
             operation
             for operation in self.contract.operations
@@ -562,7 +562,7 @@ class MutationParityTests(unittest.TestCase):
             "Future registry description"
         )
 
-        binding = self.contract.select_immediate_action(
+        binding = self.contract.select_action(
             "rename-company", "company-writer"
         )
         before = len(self.requests)
@@ -601,7 +601,7 @@ class MutationParityTests(unittest.TestCase):
         self.client = BaseRegistryClient(
             f"http://127.0.0.1:{self.server.server_port}", max_mutation_retries=0
         )
-        binding = self.contract.select_immediate_action(
+        binding = self.contract.select_action(
             "rename-company", "company-writer"
         )
         conditions = self.client.action_target_conditions(binding, {"targetId": RECORD_ID})
@@ -626,7 +626,7 @@ class MutationParityTests(unittest.TestCase):
         restarted = BaseRegistryClient(f"http://127.0.0.1:{self.server.server_port}")
         restarted_binding = restarted.registry_contract(
             "company-writer"
-        ).select_immediate_action("rename-company", "company-writer")
+        ).select_action("rename-company", "company-writer")
         restored = BRegPreparedAction.from_bytes(evidence)
         self.assertEqual(restored.to_bytes(), evidence)
         before_recovery = len(self.requests)

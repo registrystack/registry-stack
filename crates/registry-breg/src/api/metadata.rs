@@ -79,11 +79,7 @@ fn operation(
     // Request metadata disclosure is a separate grant. The projection repeats
     // the rule the request read path applies: only a profile on a
     // change-request entity receives the fields its grant names.
-    let readable_request_fields = if surface.entity.change_request.is_none() {
-        BTreeSet::new()
-    } else {
-        profile.readable_request_fields.clone().into()
-    };
+    let readable_request_fields = BTreeSet::<String>::new();
     let query = surface
         .route
         .query_kind
@@ -93,11 +89,11 @@ fn operation(
         "method": surface.route.method,
         "path": surface.route.path,
         "operation": surface.route.operation,
-        "sourceEntity": surface.entity.id,
-        "responseEntity": surface.response_entity.id,
+        "sourceRecordType": surface.entity.id,
+        "responseRecordType": surface.response_entity.id,
         "accessProfile": surface.context.selected_profile(),
         "requiredCapabilities": required_capabilities(surface.route.operation),
-        "entityLabel": entity_label(service, surface),
+        "recordTypeLabel": entity_label(service, surface),
         "identifier": {"apiName": "id", "location": "envelope"},
         "titleFields": title_fields(service, surface),
         "fields": fields.iter().filter_map(|id| field(service, surface, surfaces, id, &patch)).collect::<Vec<_>>(),
@@ -267,12 +263,14 @@ fn field(
             })).collect::<Vec<_>>(),
         });
         if !targets.is_empty() {
-            reference["targetEntity"] = json!(target);
+            reference["targetRecordType"] = json!(target);
         }
         value["reference"] = reference;
     }
     if let FieldTypeSource::VocabularyCode { vocabulary, values } = &logical.field_type {
-        let authored = projection(service, surface).and_then(|projection| {
+        let native = surface.response_entity.display.title_field.as_ref()
+        .filter(|field| readable_text_or_string(surface, field)).cloned();
+    let authored = projection(service, surface).and_then(|projection| {
             projection
                 .vocabularies
                 .iter()
@@ -564,7 +562,7 @@ fn title_fields(service: &HttpService, surface: &AuthorizedSurface<'_>) -> Vec<S
                 .find(|identifier| readable_string(surface, &identifier.field))
         })
         .map(|identifier| identifier.field.clone());
-    authored
+    native.or(authored)
         .or_else(|| temporal_scope_title_field(surface))
         .or_else(|| unique_title_field(surface))
         .or_else(|| {
@@ -650,7 +648,7 @@ fn unique_title_field(surface: &AuthorizedSurface<'_>) -> Option<String> {
 }
 
 fn entity_label(service: &HttpService, surface: &AuthorizedSurface<'_>) -> String {
-    projection(service, surface)
+    surface.response_entity.display.label.clone().or_else(|| projection(service, surface)
         .and_then(|projection| {
             projection
                 .entities
@@ -658,7 +656,7 @@ fn entity_label(service: &HttpService, surface: &AuthorizedSurface<'_>) -> Strin
                 .find(|entity| entity.id == surface.response_entity.id)
         })
         .and_then(|entity| entity.title.as_ref())
-        .map(text_label)
+        .map(text_label))
         .unwrap_or_else(|| humanize(&surface.response_entity.id))
 }
 

@@ -36,7 +36,7 @@ impl BaseRegistryClient {
             operation.access_profile(),
             operation.registry_identifier(),
             operation.dataset_identifier(),
-            operation.entity_identifier(),
+            operation.record_type_identifier(),
             record_identifier,
             etag,
             idempotency_key,

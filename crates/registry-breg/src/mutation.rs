@@ -62,8 +62,8 @@ use crate::ingestion_store::{
 };
 pub use crate::ingestion_store::{IngestionChunkBinding, IngestionRefusal};
 use crate::model::{
-    ActionRouteKind, CompiledAction, CompiledActionEffect, CompiledActionMutation,
-    CompiledActionTargetBinding, CompiledActionValue, CompiledEntity, CompiledEventDelivery,
+    ActionRouteKind, CompiledAction, CompiledPlanEffect, CompiledPlanMutation,
+    CompiledPlanTargetBinding, CompiledPlanValue, CompiledEntity, CompiledEventDelivery,
     CompiledField, CompiledFieldEncryption, CompiledRegistry, CompiledRoute,
     CompiledWebhookDeliveryMode, CompiledWebhookRetryProfile, HttpMethod,
 };
@@ -2500,7 +2500,7 @@ pub enum MutationError {
     /// travels with the error so the refusal is recorded and reported by the
     /// planner's closed vocabulary, never by script text or request values.
     #[error("change-request planner produced no plan")]
-    PlannerFailure(crate::rhai_planner::ChangeRequestPlannerError),
+    PlannerFailure(crate::rhai_planner::PlanError),
     #[error("action handler produced no effects")]
     ActionHandlerFailure(crate::action_handler::ActionHandlerError),
     #[error("the declared Evidence dependency could not be accepted")]
@@ -2995,6 +2995,44 @@ async fn apply_patch_row(
         field_encryption,
     )
     .await
+}
+
+/// Write one validated plan target inside its owning controller's transaction.
+/// The controller installs and checks its own authority context before this
+/// call. PostgreSQL RLS remains active for both Action and Proposal writers.
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn write_plan_row(
+    transaction: &Transaction<'_>,
+    entity: &CompiledEntity,
+    record_uuid: Uuid,
+    expected_revision: Option<i64>,
+    fields: Map<String, Value>,
+    before: Option<&Map<String, Value>>,
+    field_encryption: Option<&FieldEncryptionService>,
+) -> Result<CurrentRow, MutationError> {
+    if fields.is_empty() || fields.keys().any(|field| !entity.fields.contains_key(field)) {
+        return Err(MutationError::InvalidRequest);
+    }
+    let record_id = record_uuid.to_string();
+    let mut current = match expected_revision {
+        None => {
+            if before.is_some()
+                || entity.fields.values().any(|field| field.required && !fields.contains_key(&field.id))
+            {
+                return Err(MutationError::InvalidRequest);
+            }
+            insert_current_row(transaction, entity, &record_id, &fields, field_encryption).await?
+        }
+        Some(revision) => {
+            if revision < 1 || before.is_none() {
+                return Err(MutationError::InvalidRequest);
+            }
+            update_current_row(transaction, entity, &record_id, revision, fields, field_encryption).await?
+        }
+    };
+    current.predecessor_revision = expected_revision;
+    current.before_data = before.cloned();
+    Ok(current)
 }
 
 async fn insert_current_row(

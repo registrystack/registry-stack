@@ -28,7 +28,7 @@ use registry_platform_script::wasm::{
 use serde_json::{Map as JsonMap, Value};
 
 use crate::action_handler::{ActionHandlerDiagnostic, ActionHandlerError, ActionHandlerOutcome};
-use crate::model::{CompiledAction, CompiledActionHandler};
+use crate::model::{CompiledAction, CompiledPlanFunction};
 
 /// Named bound on prepared modules retained by one process. A package
 /// carries at most `wasm_handler::MAX_PACKAGE_WASM_MODULES` modules, so this
@@ -49,7 +49,7 @@ const WASM_MAXIMUM_OUTCOME_BYTES: usize = 1024 * 1024;
 /// wraps that document, so the ceiling is the snapshot ceiling plus wrapper
 /// margin: a request must never be refused for a document admission accepted.
 const WASM_MAXIMUM_REQUEST_BYTES: usize =
-    crate::change_request::MAX_CHANGE_REQUEST_SNAPSHOT_BYTES as usize + 1024;
+    crate::plan::MAX_PLAN_SNAPSHOT_BYTES as usize + 1024;
 
 /// The epoch-deadline tick cap. Deadlines are seconds in practice; the cap
 /// keeps the engine's tick arithmetic honest if a caller ever passes a
@@ -187,7 +187,7 @@ impl WasmHandlerRuntime {
     /// the runtime and its cache together.
     fn prepared_module(
         &self,
-        handler: &CompiledActionHandler,
+        handler: &CompiledPlanFunction,
     ) -> Result<Arc<PreparedModule>, ActionHandlerDiagnostic> {
         let module_sha256 = handler.module_sha256.as_deref().ok_or_else(|| {
             ActionHandlerDiagnostic::new(
@@ -446,7 +446,7 @@ fn epoch_ticks_until(deadline: Instant) -> u64 {
 /// then decode and validate the outcome through the shared layers.
 pub(crate) fn evaluate_wasm_handler(
     action: &CompiledAction,
-    handler: &CompiledActionHandler,
+    handler: &CompiledPlanFunction,
     inputs: &JsonMap<String, Value>,
     deadline: Instant,
 ) -> Result<ActionHandlerOutcome, ActionHandlerDiagnostic> {
@@ -457,7 +457,7 @@ pub(crate) fn evaluate_wasm_handler(
 fn evaluate_with_runtime(
     runtime: &WasmHandlerRuntime,
     action: &CompiledAction,
-    handler: &CompiledActionHandler,
+    handler: &CompiledPlanFunction,
     inputs: &JsonMap<String, Value>,
     deadline: Instant,
 ) -> Result<ActionHandlerOutcome, ActionHandlerDiagnostic> {

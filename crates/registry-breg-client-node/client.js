@@ -457,7 +457,7 @@ module.exports = {
   BRegRetainedRequestHistoryPage: native.RetainedRequestHistoryPage,
   BRegAttachmentSlot: native.BRegAttachmentSlot,
   BRegAttachmentUpload: native.BRegAttachmentUpload,
-  BRegImmediateActionBinding: native.BRegImmediateActionBinding,
+  BRegActionBinding: native.BRegActionBinding,
   BRegActionTargetConditions: native.BRegActionTargetConditions,
   BRegTombstoneBinding: native.BRegTombstoneBinding,
   BRegBatchBinding: native.BRegBatchBinding,

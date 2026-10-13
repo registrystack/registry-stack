@@ -43,6 +43,9 @@ pub(crate) use context::{
     ChangeRequestTargetBinding, ChangeRequestTargetContext, ImmediateActionLinkBinding,
     ImmediateActionLinkContext, ImmediateActionTargetBinding, ImmediateActionTargetContext,
 };
+pub(crate) use context::{
+    begin_proposal_transaction, ProposalAuthority, ProposalAuthorityOperation, ProposalTargetPhase,
+};
 pub use context::{
     begin_record_transaction, ClaimContext, GuardedTransaction, RowBoundaryContext,
     RowBoundaryOperator,

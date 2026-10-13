@@ -19,8 +19,8 @@ use crate::diagnostics::Diagnostic;
 use crate::generated_ddl::{quote_identifier, quote_literal};
 use crate::membership::{RowProbe, RowProbeForm};
 use crate::model::{
-    CompiledAction, CompiledActionInput, CompiledActionMutation, CompiledActionValue,
-    CompiledConsentRecord, CompiledConsentRequirement, CompiledEntity, CompiledRecipients,
+    CompiledAction, CompiledActionInput, CompiledConsentRecord, CompiledConsentRequirement,
+    CompiledEntity, CompiledPlanMutation, CompiledPlanValue, CompiledRecipients,
 };
 use crate::physical_names::hex_prefix;
 use sha2::{Digest, Sha256};
@@ -825,16 +825,17 @@ pub(crate) fn validate_action(
             .is_some_and(|entity| entity.consent_record.is_some())
     };
     let creates = action
-        .effects
+        .effects()
         .iter()
         .filter(|effect| effect.operation == Operation::Create)
         .filter(|effect| is_record(effect.target.entity.as_ref()))
         .collect::<Vec<_>>();
-    let handler_creates = action.handler.as_ref().is_some_and(|handler| {
-        handler.writes.iter().any(|write| {
+    let handler_creates = match &action.plan {
+        crate::contract::ActionPlanSource::Function { writes, .. } => writes.iter().any(|write| {
             write.operation == Operation::Create && is_record(write.target.entity.as_ref())
-        })
-    });
+        }),
+        crate::contract::ActionPlanSource::Fixed { .. } => false,
+    };
     let Some(issuer) = action.consent_issuer else {
         if !creates.is_empty() || handler_creates {
             errors.push(Diagnostic::error(
@@ -856,7 +857,7 @@ pub(crate) fn validate_action(
     if issuer == ConsentIssuerSource::Steward {
         return;
     }
-    let bound = action.handler.is_none()
+    let bound = matches!(action.plan, crate::contract::ActionPlanSource::Fixed { .. })
         && creates.iter().all(|effect| {
             let record = entities[effect.target.entity.as_ref().expect("record target")]
                 .consent_record
@@ -916,9 +917,9 @@ pub(crate) fn self_bound_targets(
             .find(|(_, field)| field.physical_name == record.subject_column)
             .map(|(id, _)| id.as_str());
         for mutation in &effect.mutations {
-            if let CompiledActionMutation::Set {
+            if let CompiledPlanMutation::Set {
                 field,
-                value: CompiledActionValue::FromInput { input },
+                value: CompiledPlanValue::FromInput { input },
             } = mutation
             {
                 if Some(field.as_str()) == subject_field {
@@ -956,68 +957,72 @@ fn subject_bound_through_link(
     entities: &BTreeMap<String, CompiledEntity>,
     profiles: &[ProjectAccessProfileSource],
 ) -> bool {
-    action.requires.iter().any(|subject_requirement| {
-        if subject_requirement.equals_input.as_deref() != Some(subject_input) {
-            return false;
-        }
-        let link_input = subject_requirement.input.as_str();
-        let Some(link) = action
-            .inputs
-            .iter()
-            .find(|input| input.id == link_input)
-            .and_then(|input| match &input.field_type {
-                FieldTypeSource::Reference { target, .. } => entities.get(target),
-                _ => None,
-            })
-        else {
-            return false;
-        };
-        let reference_field = link
-            .fields
-            .get(&subject_requirement.field)
-            .is_some_and(|field| {
-                matches!(field.field_type, FieldTypeSource::Reference { .. })
-                    && field.encryption.is_none()
+    action
+        .commit_guards
+        .targets
+        .iter()
+        .any(|subject_requirement| {
+            if subject_requirement.equals_input.as_deref() != Some(subject_input) {
+                return false;
+            }
+            let link_input = subject_requirement.input.as_str();
+            let Some(link) = action
+                .inputs
+                .iter()
+                .find(|input| input.id == link_input)
+                .and_then(|input| match &input.field_type {
+                    FieldTypeSource::Reference { target, .. } => entities.get(target),
+                    _ => None,
+                })
+            else {
+                return false;
+            };
+            let reference_field =
+                link.fields
+                    .get(&subject_requirement.field)
+                    .is_some_and(|field| {
+                        matches!(field.field_type, FieldTypeSource::Reference { .. })
+                            && field.encryption.is_none()
+                    });
+            let active = action.commit_guards.targets.iter().any(|requirement| {
+                requirement.input == link_input
+                    && requirement.equals == Some(serde_json::Value::Bool(true))
+                    && link
+                        .fields
+                        .get(&requirement.field)
+                        .is_some_and(|field| matches!(field.field_type, FieldTypeSource::Boolean))
             });
-        let active = action.requires.iter().any(|requirement| {
-            requirement.input == link_input
-                && requirement.equals == Some(serde_json::Value::Bool(true))
-                && link
-                    .fields
-                    .get(&requirement.field)
-                    .is_some_and(|field| matches!(field.field_type, FieldTypeSource::Boolean))
-        });
-        let permissions = profiles
-            .iter()
-            .flat_map(|profile| {
-                profile
-                    .permissions
-                    .actions
-                    .iter()
-                    .filter(|grant| grant.action == action.id)
-                    .map(move |grant| (profile, grant))
-            })
-            .collect::<Vec<_>>();
-        let principal_bound = !permissions.is_empty()
-            && permissions.iter().all(|(profile, grant)| {
-                let claim = profile.principal_claim.as_str();
-                grant
-                    .targets
-                    .iter()
-                    .filter(|target| target.entity == link.id)
-                    .any(|target| {
-                        target.row_boundaries.iter().any(|boundary| {
-                            boundary.claim == claim
-                                && boundary.operator == BoundaryOperator::Equals
-                                && link.fields.get(&boundary.field).is_some_and(|field| {
-                                    principal_field(field.field_type.clone())
-                                        && field.encryption.is_none()
-                                })
+            let permissions = profiles
+                .iter()
+                .flat_map(|profile| {
+                    profile
+                        .permissions
+                        .actions
+                        .iter()
+                        .filter(|grant| grant.action == action.id)
+                        .map(move |grant| (profile, grant))
+                })
+                .collect::<Vec<_>>();
+            let principal_bound = !permissions.is_empty()
+                && permissions.iter().all(|(profile, grant)| {
+                    let claim = profile.principal_claim.as_str();
+                    grant
+                        .targets
+                        .iter()
+                        .filter(|target| target.entity == link.id)
+                        .any(|target| {
+                            target.row_boundaries.iter().any(|boundary| {
+                                boundary.claim == claim
+                                    && boundary.operator == BoundaryOperator::Equals
+                                    && link.fields.get(&boundary.field).is_some_and(|field| {
+                                        principal_field(field.field_type.clone())
+                                            && field.encryption.is_none()
+                                    })
+                            })
                         })
-                    })
-            });
-        reference_field && active && principal_bound
-    })
+                });
+            reference_field && active && principal_bound
+        })
 }
 
 fn principal_field(field_type: FieldTypeSource) -> bool {

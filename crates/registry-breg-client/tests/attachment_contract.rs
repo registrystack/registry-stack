@@ -59,11 +59,11 @@ fn operation(
         "method": method,
         "path": path,
         "operation": kind,
-        "sourceEntity": "company",
-        "responseEntity": "company",
+        "sourceRecordType": "company",
+        "responseRecordType": "company",
         "accessProfile": "company-writer",
         "requiredCapabilities": [],
-        "entityLabel": "Companies",
+        "recordTypeLabel": "Companies",
         "identifier": {"apiName": "id", "location": "envelope"},
         "titleFields": ["legal-name"],
         "fields": [field("legal-name", "legalName")],
@@ -106,7 +106,7 @@ fn base_fixture() -> Value {
         "version": "1.2.3",
         "revision": REVISION,
         "metadataVersion": "1",
-        "entities": [{
+        "recordTypes": [{
             "id": "company",
             "datasetIdentifier": "legal-entities",
             "route": "companies",
@@ -214,7 +214,7 @@ fn exact_slot_capability_promotes_every_advertised_route() {
     assert_eq!(slot.registry_identifier(), "business-registry");
     assert_eq!(slot.dataset_identifier(), "legal-entities");
     assert_eq!(slot.registry_revision(), REVISION);
-    assert_eq!(slot.entity_identifier(), "company");
+    assert_eq!(slot.record_type_identifier(), "company");
     assert_eq!(slot.access_profile(), "company-writer");
     assert!(slot.required_for_submit());
     assert_eq!(slot.maximum_bytes(), 1024);
@@ -681,7 +681,7 @@ fn fixture_with_list(api_name: &str) -> Value {
         .as_array_mut()
         .unwrap()
         .push(list_operation(&descriptor, api_name));
-    value["entities"][0]["operations"]
+    value["recordTypes"][0]["operations"]
         .as_array_mut()
         .unwrap()
         .push(json!({"operation": "list", "accessProfile": "company-writer"}));

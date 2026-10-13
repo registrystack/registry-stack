@@ -17,38 +17,38 @@ pub fn valid_application_reason(reason: &str) -> bool {
     !reason.contains('\0') && reason.chars().count() <= MAX_APPLICATION_REASON_CHARS
 }
 
-pub const MAX_REQUEST_TARGETS: usize = 16;
-pub const MAX_REQUEST_FIELD_MUTATIONS: usize = 128;
+pub const MAX_PROPOSAL_TARGETS: usize = 16;
+pub const MAX_PROPOSAL_FIELD_MUTATIONS: usize = 128;
 /// Internal proposal and target snapshots retain unchanged encrypted members
 /// as tagged base64 envelopes. Keep the authored/plaintext admission ceiling
 /// at 2 MiB, but give the stored packet the same deterministic expansion
 /// headroom as revision snapshots.
-pub const MAX_REQUEST_SNAPSHOT_BYTES: usize = crate::history_schema::MAX_HISTORY_SNAPSHOT_BYTES;
+pub const MAX_PROPOSAL_SNAPSHOT_BYTES: usize = crate::history_schema::MAX_HISTORY_SNAPSHOT_BYTES;
 
 const MAX_IDENTIFIER_BYTES: usize = 512;
 
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct RequestWorkflow {
-    request: RequestKey,
+pub struct ProposalWorkflow {
+    request: ProposalKey,
     owner: TrustedActorRef,
-    state: RequestState,
+    state: ProposalState,
     current_version: ProposalVersion,
     workflow_revision: StateRevision,
     proposals: BTreeMap<ProposalVersion, ProposalSnapshot>,
     application: Option<ApplicationReceipt>,
 }
 
-impl RequestWorkflow {
+impl ProposalWorkflow {
     pub fn new_draft(
-        request: RequestKey,
+        request: ProposalKey,
         owner: TrustedActorRef,
         workflow_revision: StateRevision,
     ) -> Self {
         Self {
             request,
             owner,
-            state: RequestState::Draft,
+            state: ProposalState::Draft,
             current_version: ProposalVersion::first(),
             workflow_revision,
             proposals: BTreeMap::new(),
@@ -56,11 +56,11 @@ impl RequestWorkflow {
         }
     }
 
-    pub fn state(&self) -> RequestState {
+    pub fn state(&self) -> ProposalState {
         self.state
     }
 
-    pub fn request(&self) -> &RequestKey {
+    pub fn request(&self) -> &ProposalKey {
         &self.request
     }
 
@@ -96,9 +96,9 @@ impl RequestWorkflow {
     #[cfg(feature = "runtime")]
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn restore(
-        request: RequestKey,
+        request: ProposalKey,
         owner: TrustedActorRef,
-        state: RequestState,
+        state: ProposalState,
         current_version: ProposalVersion,
         workflow_revision: StateRevision,
         proposals: BTreeMap<ProposalVersion, ProposalSnapshot>,
@@ -121,7 +121,7 @@ impl RequestWorkflow {
         context: TrustedTransitionContext,
         proposal: PreparedProposal,
     ) -> Result<WorkflowTransition, WorkflowError> {
-        if self.state != RequestState::Draft {
+        if self.state != ProposalState::Draft {
             return Err(WorkflowError::InvalidTransition);
         }
         if self.proposals.contains_key(&self.current_version) {
@@ -132,7 +132,7 @@ impl RequestWorkflow {
         let effect_digest = proposal.effect_digest.clone();
         let review_requirement = proposal.review_requirement().clone();
         self.proposals.insert(version, proposal);
-        self.state = RequestState::Submitted;
+        self.state = ProposalState::Submitted;
         self.workflow_revision = self.workflow_revision.next()?;
         Ok(WorkflowTransition {
             workflow: self,
@@ -148,10 +148,10 @@ impl RequestWorkflow {
         mut self,
         _context: TrustedTransitionContext,
     ) -> Result<WorkflowTransition, WorkflowError> {
-        if self.state != RequestState::Submitted {
+        if self.state != ProposalState::Submitted {
             return Err(WorkflowError::InvalidTransition);
         }
-        self.state = RequestState::Draft;
+        self.state = ProposalState::Draft;
         let version = self.current_version.next()?;
         self.current_version = version;
         self.workflow_revision = self.workflow_revision.next()?;
@@ -168,10 +168,10 @@ impl RequestWorkflow {
         mut self,
         _context: TrustedTransitionContext,
     ) -> Result<WorkflowTransition, WorkflowError> {
-        if self.state != RequestState::Submitted {
+        if self.state != ProposalState::Submitted {
             return Err(WorkflowError::InvalidTransition);
         }
-        self.state = RequestState::Draft;
+        self.state = ProposalState::Draft;
         let version = self.current_version.next()?;
         self.current_version = version;
         self.workflow_revision = self.workflow_revision.next()?;
@@ -191,10 +191,10 @@ impl RequestWorkflow {
         if context.actor != self.owner {
             return Err(WorkflowError::NotOwner);
         }
-        if matches!(self.state, RequestState::Applied | RequestState::Cancelled) {
+        if matches!(self.state, ProposalState::Applied | ProposalState::Cancelled) {
             return Err(WorkflowError::InvalidTransition);
         }
-        self.state = RequestState::Cancelled;
+        self.state = ProposalState::Cancelled;
         self.workflow_revision = self.workflow_revision.next()?;
         Ok(WorkflowTransition {
             workflow: self,
@@ -220,7 +220,7 @@ impl RequestWorkflow {
         {
             return Err(WorkflowError::InvalidApplicationReason);
         }
-        if self.state != RequestState::Submitted {
+        if self.state != ProposalState::Submitted {
             return Err(WorkflowError::InvalidTransition);
         }
         if version != self.current_version {
@@ -241,15 +241,17 @@ impl RequestWorkflow {
             return Err(WorkflowError::ContractFingerprintMismatch);
         }
         match proposal.review_requirement() {
-            crate::model::CompiledChangeRequestReview::None if review_evidence.is_none() => {}
-            crate::model::CompiledChangeRequestReview::Required(requirement)
+            crate::model::CompiledProposalReview::None if review_evidence.is_none() => {}
+            crate::model::CompiledProposalReview::Required { authority, source, policy }
                 if review_evidence.is_some_and(|evidence| {
                     evidence.matches_proposal(
-                        &requirement.authority,
-                        &requirement.policy_id,
+                        authority,
+                        source,
+                        policy,
                         self.request.record_id().as_str(),
                         version.get(),
                         proposal.effect_digest().as_str(),
+                        context.now.as_str(),
                     )
                 }) => {}
             _ => return Err(WorkflowError::ReviewEvidenceMismatch),
@@ -267,7 +269,7 @@ impl RequestWorkflow {
             reason_present: reason.is_some(),
             reason,
         };
-        self.state = RequestState::Applied;
+        self.state = ProposalState::Applied;
         self.workflow_revision = self.workflow_revision.next()?;
         self.application = Some(receipt.clone());
         Ok(WorkflowTransition {
@@ -318,22 +320,22 @@ impl RequestWorkflow {
     fn validate_restored_state(&self) -> Result<(), WorkflowError> {
         let current_proposal = self.proposals.get(&self.current_version);
         match self.state {
-            RequestState::Draft => {
+            ProposalState::Draft => {
                 if current_proposal.is_some() || self.application.is_some() {
                     return Err(WorkflowError::InvalidRestoredState);
                 }
             }
-            RequestState::Submitted => {
+            ProposalState::Submitted => {
                 if current_proposal.is_none() || self.application.is_some() {
                     return Err(WorkflowError::InvalidRestoredState);
                 }
             }
-            RequestState::Cancelled => {
+            ProposalState::Cancelled => {
                 if self.application.is_some() {
                     return Err(WorkflowError::InvalidRestoredState);
                 }
             }
-            RequestState::Applied => {
+            ProposalState::Applied => {
                 if current_proposal.is_none() || self.application.is_none() {
                     return Err(WorkflowError::InvalidRestoredState);
                 }
@@ -344,7 +346,7 @@ impl RequestWorkflow {
 }
 
 /// Exact review binding copied into the immutable proposal snapshot.
-pub type FrozenReviewRequirement = crate::model::CompiledChangeRequestReview;
+pub type FrozenReviewRequirement = crate::model::CompiledProposalReview;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -390,7 +392,7 @@ impl FrozenPlanningBinding {
     }
 
     fn validate(&self) -> Result<(), WorkflowError> {
-        if self.abi_identifier != "registry.change-request-plan/v1"
+        if self.abi_identifier != "registry.action-plan/v1"
             || matches!(self.kind, FrozenPlannerKind::Rhai) != self.script_digest.is_some()
         {
             return Err(WorkflowError::InvalidPlanningBinding);
@@ -448,121 +450,34 @@ fn validate_attachment_manifest(
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct FrozenApplicationPreconditions {
-    pub contract: crate::model::CompiledChangeRequestPreconditions,
+    pub contract: Vec<crate::model::CompiledCommitGuard>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub request_values: BTreeMap<String, serde_json::Value>,
+    pub input_values: BTreeMap<String, serde_json::Value>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub targets: Vec<FrozenGuardTargetSnapshot>,
 }
 
 impl FrozenApplicationPreconditions {
     pub fn validate(&self) -> Result<(), WorkflowError> {
-        if self.contract.is_empty()
-            || self.targets.len() != self.contract.targets.len()
-            || self.targets.len() > MAX_REQUEST_TARGETS
-        {
+        if self.contract.is_empty() || self.targets.len() > MAX_PROPOSAL_TARGETS {
             return Err(WorkflowError::InvalidRestoredState);
         }
-        let expected_ids = self
-            .contract
-            .targets
-            .iter()
-            .map(|target| target.id.as_str())
+        let expected_inputs = self.contract.iter().map(|guard| guard.input.as_str())
             .collect::<BTreeSet<_>>();
-        let actual_ids = self
-            .targets
-            .iter()
-            .map(|target| target.id.as_str())
+        let actual_inputs = self.targets.iter().map(|target| target.id.as_str())
             .collect::<BTreeSet<_>>();
-        if expected_ids != actual_ids || actual_ids.len() != self.targets.len() {
+        if expected_inputs != actual_inputs || actual_inputs.len() != self.targets.len() {
             return Err(WorkflowError::InvalidRestoredState);
         }
-        let mut expected_request_fields = BTreeSet::new();
-        for predicate in &self.contract.request {
-            expected_request_fields.insert(predicate.field.as_str());
-            if let crate::model::CompiledChangeRequestPredicateExpected::RequestField { field } =
-                &predicate.expected
-            {
-                expected_request_fields.insert(field);
-            }
-        }
-        for target in &self.contract.targets {
-            expected_request_fields.insert(target.from_field.as_str());
-            for predicate in &target.requires {
-                if let crate::model::CompiledChangeRequestPredicateExpected::RequestField {
-                    field,
-                } = &predicate.expected
-                {
-                    expected_request_fields.insert(field);
-                }
-            }
-        }
-        for evidence in &self.contract.evidence {
-            for selector in evidence
-                .subjects
-                .values()
-                .flat_map(|subject| subject.selectors.values())
-            {
-                if let crate::model::CompiledChangeRequestSelector::RequestField { field } =
-                    selector
-                {
-                    expected_request_fields.insert(field);
-                }
-            }
-            for requirement in &evidence.requires {
-                if let crate::model::CompiledChangeRequestEvidenceExpected::RequestField { field } =
-                    &requirement.expected
-                {
-                    expected_request_fields.insert(field);
-                }
-            }
-        }
-        if expected_request_fields
-            != self
-                .request_values
-                .keys()
-                .map(String::as_str)
-                .collect::<BTreeSet<_>>()
-        {
-            return Err(WorkflowError::InvalidRestoredState);
-        }
-        for target in &self.targets {
-            target.validate()?;
-            let compiled = self
-                .contract
-                .targets
-                .iter()
-                .find(|candidate| candidate.id == target.id)
+        for guard in &self.contract {
+            let target = self.targets.iter().find(|target| target.id == guard.input)
                 .ok_or(WorkflowError::InvalidRestoredState)?;
-            if compiled.entity_id != target.entity_id {
-                return Err(WorkflowError::InvalidRestoredState);
-            }
-            let expected_fields = compiled
-                .requires
-                .iter()
-                .map(|predicate| predicate.field.as_str())
-                .chain(
-                    self.contract
-                        .evidence
-                        .iter()
-                        .flat_map(|evidence| evidence.subjects.values())
-                        .flat_map(|subject| subject.selectors.values())
-                        .filter_map(|selector| match selector {
-                            crate::model::CompiledChangeRequestSelector::TargetField {
-                                target: selector_target,
-                                field,
-                            } if selector_target == &target.id => Some(field.as_str()),
-                            _ => None,
-                        }),
-                )
-                .collect::<BTreeSet<_>>();
-            if expected_fields
-                != target
-                    .values
-                    .keys()
-                    .map(String::as_str)
-                    .collect::<BTreeSet<_>>()
-            {
+            target.validate()?;
+            if target.entity_id != guard.entity_id
+                || self.input_values.get(&guard.input).and_then(Value::as_str)
+                    != Some(target.record_id.as_str())
+                || (!guard.field.is_empty() && !target.values.contains_key(&guard.field))
+                || guard.equals_input.as_ref().is_some_and(|input| !self.input_values.contains_key(input)) {
                 return Err(WorkflowError::InvalidRestoredState);
             }
         }
@@ -585,7 +500,6 @@ impl FrozenGuardTargetSnapshot {
         if self.id.is_empty()
             || self.entity_id.is_empty()
             || self.expected_revision <= 0
-            || self.values.is_empty()
         {
             return Err(WorkflowError::InvalidRestoredState);
         }
@@ -599,7 +513,7 @@ impl FrozenGuardTargetSnapshot {
 pub struct PreparedProposal {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     attachments: BTreeMap<String, AttachmentManifestEntry>,
-    request_record_revision: RecordRevision,
+    input_revision: RecordRevision,
     contract_fingerprint: ContractFingerprint,
     originating_package: PackageFingerprint,
     effects: Vec<PreparedEffect>,
@@ -608,14 +522,14 @@ pub struct PreparedProposal {
     planning_binding: Option<FrozenPlanningBinding>,
     review_requirement: FrozenReviewRequirement,
     #[serde(default)]
-    on_approved: crate::model::CompiledChangeRequestOnApproved,
+    application_policy: crate::model::CompiledProposalApplication,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     application_preconditions: Option<FrozenApplicationPreconditions>,
 }
 
 impl PreparedProposal {
     pub fn new_with_binding(
-        request_record_revision: RecordRevision,
+        input_revision: RecordRevision,
         contract_fingerprint: ContractFingerprint,
         originating_package: PackageFingerprint,
         review_requirement: FrozenReviewRequirement,
@@ -626,14 +540,14 @@ impl PreparedProposal {
         planning_binding.validate()?;
         validate_effects(&effects, combined_snapshot_bytes)?;
         Ok(Self {
-            request_record_revision,
+            input_revision,
             contract_fingerprint,
             originating_package,
             effects,
             combined_snapshot_bytes,
             planning_binding: Some(planning_binding),
             review_requirement,
-            on_approved: crate::model::CompiledChangeRequestOnApproved::default(),
+            application_policy: crate::model::CompiledProposalApplication::Manual,
             attachments: BTreeMap::new(),
             application_preconditions: None,
         })
@@ -651,22 +565,19 @@ impl PreparedProposal {
         self.combined_snapshot_bytes = self
             .combined_snapshot_bytes
             .checked_add(canonical.len())
-            .filter(|bytes| *bytes <= MAX_REQUEST_SNAPSHOT_BYTES)
+            .filter(|bytes| *bytes <= MAX_PROPOSAL_SNAPSHOT_BYTES)
             .ok_or(WorkflowError::SnapshotTooLarge)?;
         self.application_preconditions = Some(preconditions);
         Ok(self)
     }
 
-    pub fn with_on_approved(
+    pub fn with_application_policy(
         mut self,
-        on_approved: crate::model::CompiledChangeRequestOnApproved,
+        application_policy: crate::model::CompiledProposalApplication,
     ) -> Result<Self, WorkflowError> {
-        crate::review_integration::validate_application_binding(
-            on_approved.mode,
-            on_approved.executor.as_deref(),
-        )
+        crate::review_integration::validate_application_binding(&application_policy)
         .map_err(|_| WorkflowError::InvalidRestoredState)?;
-        self.on_approved = on_approved;
+        self.application_policy = application_policy;
         Ok(self)
     }
 
@@ -680,8 +591,8 @@ impl PreparedProposal {
         Ok(self)
     }
 
-    pub fn request_record_revision(&self) -> RecordRevision {
-        self.request_record_revision
+    pub fn input_revision(&self) -> RecordRevision {
+        self.input_revision
     }
 
     pub fn contract_fingerprint(&self) -> &ContractFingerprint {
@@ -708,8 +619,8 @@ impl PreparedProposal {
         &self.review_requirement
     }
 
-    pub fn on_approved(&self) -> &crate::model::CompiledChangeRequestOnApproved {
-        &self.on_approved
+    pub fn application_policy(&self) -> &crate::model::CompiledProposalApplication {
+        &self.application_policy
     }
 
     pub fn application_preconditions(&self) -> Option<&FrozenApplicationPreconditions> {
@@ -718,7 +629,7 @@ impl PreparedProposal {
 
     fn freeze(
         self,
-        request: &RequestKey,
+        request: &ProposalKey,
         version: ProposalVersion,
         context: TrustedTransitionContext,
     ) -> Result<ProposalSnapshot, WorkflowError> {
@@ -726,26 +637,26 @@ impl PreparedProposal {
         let effect_digest = proposal_digest(ProposalDigestInput {
             request,
             version,
-            request_record_revision: self.request_record_revision,
+            input_revision: self.input_revision,
             contract_fingerprint: &self.contract_fingerprint,
             originating_package: &self.originating_package,
             effects: &self.effects,
             planning_binding: self.planning_binding.as_ref(),
             review_requirement: &self.review_requirement,
-            on_approved: &self.on_approved,
+            application_policy: &self.application_policy,
             attachments: &self.attachments,
             application_preconditions: self.application_preconditions.as_ref(),
         })?;
         Ok(ProposalSnapshot {
             version,
-            request_record_revision: self.request_record_revision,
+            input_revision: self.input_revision,
             contract_fingerprint: self.contract_fingerprint,
             originating_package: self.originating_package,
             effects: self.effects,
             combined_snapshot_bytes: self.combined_snapshot_bytes,
             planning_binding: self.planning_binding,
             review_requirement: self.review_requirement,
-            on_approved: self.on_approved,
+            application_policy: self.application_policy,
             application_preconditions: self.application_preconditions,
             effect_digest,
             attachments: self.attachments,
@@ -761,7 +672,7 @@ pub struct ProposalSnapshot {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     attachments: BTreeMap<String, AttachmentManifestEntry>,
     version: ProposalVersion,
-    request_record_revision: RecordRevision,
+    input_revision: RecordRevision,
     contract_fingerprint: ContractFingerprint,
     originating_package: PackageFingerprint,
     effects: Vec<PreparedEffect>,
@@ -770,7 +681,7 @@ pub struct ProposalSnapshot {
     planning_binding: Option<FrozenPlanningBinding>,
     review_requirement: FrozenReviewRequirement,
     #[serde(default)]
-    on_approved: crate::model::CompiledChangeRequestOnApproved,
+    application_policy: crate::model::CompiledProposalApplication,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     application_preconditions: Option<FrozenApplicationPreconditions>,
     effect_digest: ProposalDigest,
@@ -787,8 +698,8 @@ impl ProposalSnapshot {
         self.version
     }
 
-    pub fn request_record_revision(&self) -> RecordRevision {
-        self.request_record_revision
+    pub fn input_revision(&self) -> RecordRevision {
+        self.input_revision
     }
 
     pub fn effect_digest(&self) -> &ProposalDigest {
@@ -819,8 +730,8 @@ impl ProposalSnapshot {
         &self.review_requirement
     }
 
-    pub fn on_approved(&self) -> &crate::model::CompiledChangeRequestOnApproved {
-        &self.on_approved
+    pub fn application_policy(&self) -> &crate::model::CompiledProposalApplication {
+        &self.application_policy
     }
 
     pub fn application_preconditions(&self) -> Option<&FrozenApplicationPreconditions> {
@@ -835,17 +746,17 @@ impl ProposalSnapshot {
         &self.submitted_at
     }
 
-    pub fn verify_digest(&self, request: &RequestKey) -> Result<(), WorkflowError> {
+    pub fn verify_digest(&self, request: &ProposalKey) -> Result<(), WorkflowError> {
         let actual = proposal_digest(ProposalDigestInput {
             request,
             version: self.version,
-            request_record_revision: self.request_record_revision,
+            input_revision: self.input_revision,
             contract_fingerprint: &self.contract_fingerprint,
             originating_package: &self.originating_package,
             effects: &self.effects,
             planning_binding: self.planning_binding.as_ref(),
             review_requirement: &self.review_requirement,
-            on_approved: &self.on_approved,
+            application_policy: &self.application_policy,
             attachments: &self.attachments,
             application_preconditions: self.application_preconditions.as_ref(),
         })?;
@@ -856,10 +767,10 @@ impl ProposalSnapshot {
         }
     }
 
-    fn validate_restored(&self, request: &RequestKey) -> Result<(), WorkflowError> {
+    fn validate_restored(&self, request: &ProposalKey) -> Result<(), WorkflowError> {
         self.version.validate()?;
         validate_attachment_manifest(&self.attachments)?;
-        self.request_record_revision.validate()?;
+        self.input_revision.validate()?;
         self.contract_fingerprint.validate()?;
         self.originating_package.validate()?;
         self.planning_binding
@@ -946,6 +857,8 @@ pub struct PreparedEffect {
     operation: Operation,
     target: PreparedTarget,
     field_changes: Vec<PreparedFieldChange>,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    depends_on: BTreeSet<String>,
 }
 
 impl PreparedEffect {
@@ -980,8 +893,16 @@ impl PreparedEffect {
             operation,
             target,
             field_changes,
+            depends_on: BTreeSet::new(),
         })
     }
+
+    pub fn with_dependencies(mut self, depends_on: BTreeSet<String>) -> Self {
+        self.depends_on = depends_on;
+        self
+    }
+
+    pub fn depends_on(&self) -> &BTreeSet<String> { &self.depends_on }
 
     pub fn id(&self) -> &EffectId {
         &self.id
@@ -1484,16 +1405,16 @@ impl ApplicationResultLink {
 
 #[derive(Clone, PartialEq)]
 pub struct WorkflowTransition {
-    workflow: RequestWorkflow,
+    workflow: ProposalWorkflow,
     effect: TransitionEffect,
 }
 
 impl WorkflowTransition {
-    pub fn into_workflow(self) -> RequestWorkflow {
+    pub fn into_workflow(self) -> ProposalWorkflow {
         self.workflow
     }
 
-    pub fn workflow(&self) -> &RequestWorkflow {
+    pub fn workflow(&self) -> &ProposalWorkflow {
         &self.workflow
     }
 
@@ -1525,7 +1446,7 @@ pub enum DraftStartReason {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum RequestState {
+pub enum ProposalState {
     Draft,
     Submitted,
     Cancelled,
@@ -1533,7 +1454,7 @@ pub enum RequestState {
 }
 
 #[cfg(feature = "runtime")]
-impl RequestState {
+impl ProposalState {
     pub(crate) fn from_storage(value: &str) -> Result<Self, WorkflowError> {
         match value {
             "draft" => Ok(Self::Draft),
@@ -1556,12 +1477,12 @@ impl RequestState {
 
 #[derive(Clone, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct RequestKey {
+pub struct ProposalKey {
     entity_id: EntityId,
     record_id: RecordId,
 }
 
-impl RequestKey {
+impl ProposalKey {
     pub fn new(entity_id: EntityId, record_id: RecordId) -> Self {
         Self {
             entity_id,
@@ -1951,10 +1872,10 @@ impl fmt::Debug for Redacted {
     }
 }
 
-impl fmt::Debug for RequestWorkflow {
+impl fmt::Debug for ProposalWorkflow {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("RequestWorkflow")
+            .debug_struct("ProposalWorkflow")
             .field("request", &self.request)
             .field("owner", &Redacted)
             .field("state", &self.state)
@@ -1970,7 +1891,7 @@ impl fmt::Debug for PreparedProposal {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("PreparedProposal")
-            .field("request_record_revision", &Redacted)
+            .field("input_revision", &Redacted)
             .field("contract_fingerprint", &Redacted)
             .field("originating_package", &Redacted)
             .field("effect_count", &self.effects.len())
@@ -1984,7 +1905,7 @@ impl fmt::Debug for ProposalSnapshot {
         formatter
             .debug_struct("ProposalSnapshot")
             .field("version", &self.version)
-            .field("request_record_revision", &Redacted)
+            .field("input_revision", &Redacted)
             .field("contract_fingerprint", &Redacted)
             .field("originating_package", &Redacted)
             .field("effect_count", &self.effects.len())
@@ -2141,10 +2062,10 @@ impl fmt::Debug for TransitionEffect {
     }
 }
 
-impl fmt::Debug for RequestKey {
+impl fmt::Debug for ProposalKey {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("RequestKey")
+            .debug_struct("ProposalKey")
             .field("entity_id", &self.entity_id)
             .field("record_id", &Redacted)
             .finish()
@@ -2263,8 +2184,12 @@ fn validate_effects(
     let mut targets = BTreeSet::new();
     let mut target_states = BTreeMap::new();
     let mut field_writes = BTreeSet::new();
+    let mut effect_ids = BTreeSet::new();
     for effect in effects {
         effect.validate_restored()?;
+        if !effect.depends_on.is_subset(&effect_ids) || !effect_ids.insert(effect.id.as_str().to_owned()) {
+            return Err(WorkflowError::InvalidRestoredState);
+        }
         let target = effect.target.identity();
         let (_, expected_state) = effect.target.expected_state();
         if let Some(existing) = target_states.insert(target.clone(), expected_state) {
@@ -2279,17 +2204,17 @@ fn validate_effects(
             }
         }
     }
-    if targets.len() > MAX_REQUEST_TARGETS {
+    if targets.len() > MAX_PROPOSAL_TARGETS {
         return Err(WorkflowError::TooManyTargets);
     }
-    if field_writes.len() > MAX_REQUEST_FIELD_MUTATIONS {
+    if field_writes.len() > MAX_PROPOSAL_FIELD_MUTATIONS {
         return Err(WorkflowError::TooManyFieldMutations);
     }
     let canonical_effects = canonicalize_json(
         &serde_json::to_value(effects).map_err(|_| WorkflowError::Canonicalization)?,
     )
     .map_err(|_| WorkflowError::Canonicalization)?;
-    if combined_snapshot_bytes > MAX_REQUEST_SNAPSHOT_BYTES
+    if combined_snapshot_bytes > MAX_PROPOSAL_SNAPSHOT_BYTES
         || canonical_effects.len() > combined_snapshot_bytes
     {
         return Err(WorkflowError::SnapshotTooLarge);
@@ -2299,15 +2224,15 @@ fn validate_effects(
 
 struct ProposalDigestInput<'a> {
     attachments: &'a BTreeMap<String, AttachmentManifestEntry>,
-    request: &'a RequestKey,
+    request: &'a ProposalKey,
     version: ProposalVersion,
-    request_record_revision: RecordRevision,
+    input_revision: RecordRevision,
     contract_fingerprint: &'a ContractFingerprint,
     originating_package: &'a PackageFingerprint,
     effects: &'a [PreparedEffect],
     planning_binding: Option<&'a FrozenPlanningBinding>,
     review_requirement: &'a FrozenReviewRequirement,
-    on_approved: &'a crate::model::CompiledChangeRequestOnApproved,
+    application_policy: &'a crate::model::CompiledProposalApplication,
     application_preconditions: Option<&'a FrozenApplicationPreconditions>,
 }
 
@@ -2316,38 +2241,38 @@ fn proposal_digest(input: ProposalDigestInput<'_>) -> Result<ProposalDigest, Wor
         attachments,
         request,
         version,
-        request_record_revision,
+        input_revision,
         contract_fingerprint,
         originating_package,
         effects,
         planning_binding,
         review_requirement,
-        on_approved,
+        application_policy,
         application_preconditions,
     } = input;
     let planning_binding = planning_binding.ok_or(WorkflowError::InvalidPlanningBinding)?;
     let mut value = match application_preconditions {
         None => json!({
-            "schema": "breg.change-request.proposal.v5",
+            "schema": "breg.proposal/v1",
             "request": request,
             "version": version,
-            "requestRecordRevision": request_record_revision,
+            "inputRevision": input_revision,
             "contractFingerprint": contract_fingerprint,
             "originatingPackage": originating_package,
             "review": review_requirement,
-            "onApproved": on_approved,
+            "application": application_policy,
             "planningBinding": planning_binding,
             "effects": effects,
         }),
         Some(application_preconditions) => json!({
-            "schema": "breg.change-request.proposal.v5",
+            "schema": "breg.proposal/v1",
             "request": request,
             "version": version,
-            "requestRecordRevision": request_record_revision,
+            "inputRevision": input_revision,
             "contractFingerprint": contract_fingerprint,
             "originatingPackage": originating_package,
             "review": review_requirement,
-            "onApproved": on_approved,
+            "application": application_policy,
             "planningBinding": planning_binding,
             "effects": effects,
             "applicationPreconditions": application_preconditions,
@@ -2400,9 +2325,9 @@ mod source_owned_review_tests {
         )
     }
 
-    fn workflow() -> RequestWorkflow {
-        RequestWorkflow::new_draft(
-            RequestKey::new(entity("placement-correction-request"), record("request-1")),
+    fn workflow() -> ProposalWorkflow {
+        ProposalWorkflow::new_draft(
+            ProposalKey::new(entity("placement-correction-request"), record("request-1")),
             TrustedActorRef::from_verified_context("submitter").expect("owner"),
             StateRevision::new(1).expect("state revision"),
         )
@@ -2493,14 +2418,14 @@ mod source_owned_review_tests {
         };
         let accepted = AcceptedReviewBinding {
             authority: "casework-main".to_owned(),
-            request_id: Uuid::from_u128(1),
+            proposal_id: Uuid::from_u128(1),
             subject: subject.clone(),
             policy: policy.clone(),
             submission_digest: format!("sha256:{}", "c".repeat(64)),
         };
         let result = ReviewResultEnvelope {
             result_id: Uuid::from_u128(2),
-            request_id: accepted.request_id,
+            proposal_id: accepted.proposal_id,
             subject,
             policy,
             submission_digest: accepted.submission_digest.clone(),
@@ -2573,7 +2498,7 @@ mod source_owned_review_tests {
             )
             .expect("direct application")
             .into_workflow();
-        assert_eq!(applied.state(), RequestState::Applied);
+        assert_eq!(applied.state(), ProposalState::Applied);
     }
 
     #[test]
@@ -2618,7 +2543,7 @@ mod source_owned_review_tests {
             )
             .expect("review-backed application")
             .into_workflow();
-        assert_eq!(applied.state(), RequestState::Applied);
+        assert_eq!(applied.state(), ProposalState::Applied);
     }
 
     #[test]
@@ -2770,7 +2695,7 @@ mod source_owned_review_tests {
     fn unknown_stored_request_states_are_invalid() {
         for state in ["approved", "needs_changes", "rejected", "canceled", ""] {
             assert_eq!(
-                RequestState::from_storage(state),
+                ProposalState::from_storage(state),
                 Err(WorkflowError::InvalidRestoredState)
             );
         }

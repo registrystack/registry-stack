@@ -81,7 +81,7 @@ class RequestHistoryTests(unittest.TestCase):
         assert proposal is not None
         self.assertEqual(proposal.result_link_count, 1)
         reference = proposal.result_references[0]
-        self.assertEqual(reference.target_entity_identifier, "person")
+        self.assertEqual(reference.target_record_type_identifier, "person")
         self.assertEqual(reference.target_record_identifier, TARGET_ID)
         self.assertEqual(reference.target_revision, 4)
         self.assertEqual(repr(proposal), "BRegRetainedRequestProposal(<redacted>)")

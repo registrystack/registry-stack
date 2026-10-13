@@ -3,8 +3,8 @@
 use super::*;
 use crate::compiler::{compile_project, compile_project_with_assets, CompileProfile};
 use crate::contract::{parse_project_json, ModuleAssetSource};
-use crate::request_workflow::{
-    RequestKey, RequestWorkflow, TrustedActorRef, TrustedTimestamp, TrustedTransitionContext,
+use crate::proposal_workflow::{
+    ProposalKey, ProposalWorkflow, TrustedActorRef, TrustedTimestamp, TrustedTransitionContext,
 };
 use serde_json::json;
 use std::time::{Duration, Instant};
@@ -256,7 +256,7 @@ fn existing(
     registry: &CompiledRegistry,
     intake: Map<String, Value>,
     before: Map<String, Value>,
-) -> Result<PreparedRequest, MutationError> {
+) -> Result<PreparedProposalPlan, MutationError> {
     let entity = &registry.entities()["request"];
     let candidate = crate::rhai_planner::plan_change_request_effects(
         entity.change_request.as_ref().unwrap(),
@@ -454,7 +454,7 @@ fn unchanged_snapshot_bytes_count_toward_the_full_packet_limit() {
         json!([{"target":{"fromField":"one"},"operation":"patch","set":{"first":{"fromField":"value"}}}]),
     );
     let intake = map(json!({"one":TARGET,"value":"small"}));
-    let before = map(json!({"first":"old","notes":"a".repeat(MAX_REQUEST_SNAPSHOT_BYTES / 2)}));
+    let before = map(json!({"first":"old","notes":"a".repeat(MAX_PROPOSAL_SNAPSHOT_BYTES / 2)}));
     assert!(matches!(
         existing(&registry, intake, before),
         Err(MutationError::InvalidRequest)
@@ -504,17 +504,17 @@ fn unchanged_encrypted_members_fit_the_stored_packet_expansion_budget() {
         prepared.proposal.combined_snapshot_bytes()
             > crate::change_request::MAX_CHANGE_REQUEST_SNAPSHOT_BYTES as usize
     );
-    assert!(prepared.proposal.combined_snapshot_bytes() <= MAX_REQUEST_SNAPSHOT_BYTES);
+    assert!(prepared.proposal.combined_snapshot_bytes() <= MAX_PROPOSAL_SNAPSHOT_BYTES);
     assert_eq!(prepared.targets[0].after["first"], json!("changed"));
     assert_eq!(prepared.targets[0].after["secret-0"], envelope);
 
     let maximum_encrypted_members = 2
-        * crate::request_workflow::MAX_REQUEST_TARGETS
+        * crate::proposal_workflow::MAX_PROPOSAL_TARGETS
         * crate::contract::MAX_ENCRYPTED_FIELDS_PER_ENTITY;
     let worst_case_expanded = 4
         * (crate::change_request::MAX_CHANGE_REQUEST_SNAPSHOT_BYTES as usize).div_ceil(3)
         + maximum_encrypted_members * MAX_ENVELOPE_MEMBER_OVERHEAD;
-    assert!(worst_case_expanded <= MAX_REQUEST_SNAPSHOT_BYTES);
+    assert!(worst_case_expanded <= MAX_PROPOSAL_SNAPSHOT_BYTES);
 }
 
 #[test]
@@ -600,13 +600,13 @@ fn review_packet_refuses_extra_missing_or_altered_frozen_targets() {
     )
     .unwrap();
     let owner = TrustedActorRef::from_verified_context("owner-reference").unwrap();
-    let workflow = RequestWorkflow::new_draft(
-        RequestKey::new(
+    let workflow = ProposalWorkflow::new_draft(
+        ProposalKey::new(
             EntityId::new("request").unwrap(),
             RecordId::new(Uuid::new_v4().to_string()).unwrap(),
         ),
         owner.clone(),
-        crate::request_workflow::StateRevision::new(1).unwrap(),
+        crate::proposal_workflow::StateRevision::new(1).unwrap(),
     );
     let workflow = workflow
         .submit(

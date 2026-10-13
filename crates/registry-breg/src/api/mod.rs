@@ -14,6 +14,7 @@ mod context;
 mod gis;
 mod ingestion;
 mod metadata;
+pub(crate) mod proposals;
 mod service;
 mod statistics;
 
@@ -207,11 +208,15 @@ fn route_set(service: Arc<HttpService>) -> Router {
 
     if service.mutations.is_some() {
         for route in &service.registry.actions().routes {
-            app = app.route(
-                &route.path,
-                post(actions::dispatch).layer(Extension(route.clone())),
-            );
+            app = if route.operation == Operation::Start {
+                app.route(&route.path, post(proposals::start).layer(Extension(route.clone())))
+            } else {
+                app.route(&route.path, post(actions::dispatch).layer(Extension(route.clone())))
+            };
         }
+        app = app.route("/v1/proposals", get(proposals::list))
+            .route("/v1/proposals/{proposal_id}", get(proposals::get))
+            .route("/v1/proposals/{proposal_id}/{operation}", post(proposals::transition));
     }
 
     app.merge(access_log::routes(&service))

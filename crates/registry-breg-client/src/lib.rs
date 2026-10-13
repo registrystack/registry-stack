@@ -25,9 +25,9 @@ mod error;
 mod extended_mutation;
 mod geojson;
 mod ingestion;
-mod lifecycle;
 mod metadata;
 mod mutation;
+mod proposal;
 mod query;
 mod read;
 mod recovery;
@@ -48,12 +48,12 @@ pub use error::{
 };
 pub use geojson::*;
 pub use ingestion::*;
-pub use lifecycle::*;
 pub use metadata::*;
 pub use mutation::*;
+pub use proposal::*;
 pub use query::*;
 pub use read::*;
-pub use recovery::{BRegPreparedCreate, BRegPreparedLifecycle};
+pub use recovery::BRegPreparedCreate;
 pub use registry_platform_httputil::client::{
     BearerToken, PrivateKeyJwt, PrivateKeyJwtConfig, StaticToken, TokenError, TokenProvider,
     MAXIMUM_TRUSTED_ROOT_CERTIFICATE_BUNDLE_BYTES,

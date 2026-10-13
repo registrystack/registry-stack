@@ -6,12 +6,15 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
+#[path = "proposal_ddl.rs"]
+mod proposal;
+
 use crate::contract::{
     BoundaryOperator, ComparisonOperator, ConstraintSource, FieldTypeSource, Operation,
     UniqueWhenPredicate, ValidTimeRole,
 };
 use crate::model::{
-    CompiledAction, CompiledActionEffect, CompiledActionInventory, CompiledActionMutation,
+    CompiledAction, CompiledPlanEffect, CompiledActionInventory, CompiledPlanMutation,
     CompiledActionTargetUse, CompiledActionTargetUseSource, CompiledChangeRequestEffect,
     CompiledChangeRequestMutation, CompiledEntity, CompiledLogicalField, REFERENCE_INDEX_PREFIX,
 };
@@ -1306,6 +1309,7 @@ fn policies(
     policies.extend(read_path_policies_for_table(entity, entities));
     policies.extend(change_request_target_policies_for_table(entity, entities));
     policies.extend(immediate_action_target_policies_for_table(entity, actions));
+    policies.extend(proposal::target_policies(entity, actions));
     policies.extend(spatial_bbox_select_policies(entity));
     policies
 }
@@ -2337,7 +2341,7 @@ fn change_request_planner_write_policies(
     target_entity: &CompiledEntity,
     request_entity: &CompiledEntity,
     request: &crate::model::CompiledChangeRequest,
-    write: &crate::model::CompiledChangeRequestPlannerWrite,
+    write: &crate::model::CompiledPlanWrite,
     index: usize,
 ) -> Vec<DdlPolicy> {
     let mut policies = Vec::new();
@@ -2345,7 +2349,7 @@ fn change_request_planner_write_policies(
         "planner:{index}:{}:{}:{}",
         write.target_entity_id,
         operation_name(write.operation),
-        write.target_from_field.as_deref().unwrap_or("$create")
+        write.target_from_input.as_deref().unwrap_or("$create")
     );
     for profile in request_entity.access_profiles.values() {
         if profile.operations.iter().any(|operation| {
@@ -2526,7 +2530,7 @@ fn change_request_planner_preparation_expression(
     target_entity: &CompiledEntity,
     profile: &crate::contract::AccessProfileSource,
     request: &crate::model::CompiledChangeRequest,
-    write: &crate::model::CompiledChangeRequestPlannerWrite,
+    write: &crate::model::CompiledPlanWrite,
 ) -> String {
     let context = change_request_context_expression();
     let request_state_exists = format!(
@@ -2635,7 +2639,7 @@ fn change_request_planner_application_expression(
     target_entity: &CompiledEntity,
     request_entity: &CompiledEntity,
     request: &crate::model::CompiledChangeRequest,
-    write: &crate::model::CompiledChangeRequestPlannerWrite,
+    write: &crate::model::CompiledPlanWrite,
     grant: &crate::model::CompiledChangeRequestApplyPermission,
 ) -> String {
     [
@@ -2662,7 +2666,7 @@ fn change_request_planner_common_expression(
     target_entity: &CompiledEntity,
     profile_id: &str,
     request: &crate::model::CompiledChangeRequest,
-    write: &crate::model::CompiledChangeRequestPlannerWrite,
+    write: &crate::model::CompiledPlanWrite,
     phase: &str,
     stage: Option<&str>,
     permitted_fields: &BTreeSet<String>,
@@ -2954,6 +2958,9 @@ fn immediate_action_target_policies_for_table(
 ) -> Vec<DdlPolicy> {
     let mut policies = Vec::new();
     for action in &actions.actions {
+        if action.execution.is_proposal() {
+            continue;
+        }
         for effect in action
             .effects
             .iter()
@@ -3115,13 +3122,14 @@ fn immediate_action_target_policies_for_table(
 fn immediate_action_application_expression(
     target_entity: &CompiledEntity,
     action: &CompiledAction,
-    effect: &CompiledActionEffect,
+    effect: &CompiledPlanEffect,
     profile_id: &str,
 ) -> String {
     [
         immediate_action_common_expression(target_entity, action, effect, profile_id),
-        immediate_action_target_boundary_expression(
+        target_boundary_expression(
             immediate_action_context_expression(),
+            "targetRowBoundaries",
             target_entity,
             action
                 .permissions
@@ -3155,8 +3163,9 @@ fn immediate_action_link_expression(
             input_id,
             profile_id,
         ),
-        immediate_action_target_boundary_expression(
+        target_boundary_expression(
             immediate_action_link_context_expression(),
+            "targetRowBoundaries",
             target_entity,
             action
                 .permissions
@@ -3227,7 +3236,7 @@ fn immediate_action_link_common_expression(
 fn immediate_action_common_expression(
     target_entity: &CompiledEntity,
     action: &CompiledAction,
-    effect: &CompiledActionEffect,
+    effect: &CompiledPlanEffect,
     profile_id: &str,
 ) -> String {
     let context = immediate_action_context_expression();
@@ -3275,7 +3284,7 @@ fn immediate_action_common_expression(
 fn immediate_action_effect_group_expression(
     context: &str,
     action: &CompiledAction,
-    effect: &CompiledActionEffect,
+    effect: &CompiledPlanEffect,
 ) -> String {
     let compatible = action
         .effects
@@ -3292,8 +3301,8 @@ fn immediate_action_effect_group_expression(
         .flat_map(|candidate| {
             candidate.mutations.iter().map(|mutation| {
                 let field = match mutation {
-                    CompiledActionMutation::Set { field, .. }
-                    | CompiledActionMutation::Clear { field } => field,
+                    CompiledPlanMutation::Set { field, .. }
+                    | CompiledPlanMutation::Clear { field } => field,
                 };
                 format!(
                     "({}, {})",
@@ -3338,31 +3347,32 @@ fn immediate_action_effect_group_expression(
 }
 
 fn action_effects_can_share_target(
-    left: &CompiledActionEffect,
-    right: &CompiledActionEffect,
+    left: &CompiledPlanEffect,
+    right: &CompiledPlanEffect,
 ) -> bool {
     if left.target.entity_id != right.target.entity_id || left.operation != right.operation {
         return false;
     }
     match (&left.target.binding, &right.target.binding) {
         (
-            crate::model::CompiledActionTargetBinding::Create,
-            crate::model::CompiledActionTargetBinding::Create,
+            crate::model::CompiledPlanTargetBinding::Create,
+            crate::model::CompiledPlanTargetBinding::Create,
         ) => left.id == right.id,
         (
-            crate::model::CompiledActionTargetBinding::Existing { .. },
-            crate::model::CompiledActionTargetBinding::Existing { .. },
+            crate::model::CompiledPlanTargetBinding::Existing { .. },
+            crate::model::CompiledPlanTargetBinding::Existing { .. },
         ) => true,
         _ => false,
     }
 }
 
-fn immediate_action_target_boundary_expression(
+fn target_boundary_expression(
     context_expression: &str,
+    boundary_member: &str,
     entity: &CompiledEntity,
     boundaries: &[crate::contract::RowBoundarySource],
 ) -> String {
-    let context = format!("({context_expression} -> 'targetRowBoundaries')");
+    let context = format!("({context_expression} -> {})", quote_literal(boundary_member));
     let mut predicates = vec![
         format!("jsonb_typeof({context}) = 'array'"),
         format!("jsonb_array_length({context}) = {}", boundaries.len()),

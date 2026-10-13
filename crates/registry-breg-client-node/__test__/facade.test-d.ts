@@ -8,7 +8,7 @@ import {
   BRegChangeRequestPlannerWrite,
   BRegChangeRequestTarget,
   BRegCreateBinding,
-  BRegImmediateActionBinding,
+  BRegActionBinding,
   BRegIngestionChunk,
   BRegLifecycleAction,
   BRegLifecycleAuthority,
@@ -51,7 +51,7 @@ declare const preparedLifecycle: BRegPreparedLifecycle
 declare const recoveredAction: BRegRecoveredAction
 declare const recoveredCreate: BRegRecoveredCreate
 declare const recoveredLifecycle: BRegRecoveredLifecycle
-declare const immediateAction: BRegImmediateActionBinding
+declare const immediateAction: BRegActionBinding
 declare const conditions: BRegActionTargetConditions
 declare const batch: BRegBatchBinding
 declare const chunk: BRegIngestionChunk

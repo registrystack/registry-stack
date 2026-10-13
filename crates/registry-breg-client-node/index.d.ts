@@ -44,30 +44,30 @@ export declare class BaseRegistryClient {
   continueRelationshipList(value: any): Promise<PageOutcome>
   lookupRecord(entityRoute: string, selector: string, values?: any | undefined | null, options?: any | undefined | null): Promise<CompleteOutcome>
   /** Fetch opaque target conditions for one metadata-selected action. */
-  actionTargetConditions(binding: BRegImmediateActionBinding, inputs: any): Promise<BRegActionTargetConditions>
+  actionTargetConditions(binding: BRegActionBinding, inputs: any): Promise<BRegActionTargetConditions>
   /**
    * Invoke one metadata-selected immediate action. An invocation whose
    * outcome is unknown is resent identically under the same key, at most
    * `maxMutationRetries` times.
    */
-  invokeAction(binding: BRegImmediateActionBinding, inputs: any, idempotencyKey: string, conditions?: BRegActionTargetConditions | undefined | null): Promise<CompleteOutcome>
+  invokeAction(binding: BRegActionBinding, inputs: any, idempotencyKey: string, conditions?: BRegActionTargetConditions | undefined | null): Promise<CompleteOutcome>
   /**
    * Prepare inert invocation evidence before any token acquisition or I/O.
    * Persist `toBytes` before invoking so a lost response can be recovered.
    */
-  prepareAction(binding: BRegImmediateActionBinding, inputs: any, idempotencyKey: string, conditions?: BRegActionTargetConditions | undefined | null): BRegPreparedAction
+  prepareAction(binding: BRegActionBinding, inputs: any, idempotencyKey: string, conditions?: BRegActionTargetConditions | undefined | null): BRegPreparedAction
   /**
    * Revalidate saved invocation evidence against freshly selected authority
    * and the caller's original inputs and key. The saved target conditions
    * are reused exactly; this never fetches conditions or sends a request.
    */
-  recoverAction(binding: BRegImmediateActionBinding, prepared: BRegPreparedAction, inputs: any, idempotencyKey: string): BRegRecoveredAction
+  recoverAction(binding: BRegActionBinding, prepared: BRegPreparedAction, inputs: any, idempotencyKey: string): BRegRecoveredAction
   /**
    * Explicitly send a recovered invocation under its original key. An
    * invocation whose outcome is unknown is resent identically under that
    * key, at most `maxMutationRetries` times.
    */
-  executeRecoveredAction(binding: BRegImmediateActionBinding, recovered: BRegRecoveredAction): Promise<CompleteOutcome>
+  executeRecoveredAction(binding: BRegActionBinding, recovered: BRegRecoveredAction): Promise<CompleteOutcome>
   createRecord(binding: BRegCreateBinding, data: any, idempotencyKey: string, formatValue?: string | undefined | null): Promise<CompleteOutcome>
   /** Prepare inert Create evidence before any token acquisition or I/O. */
   prepareCreate(binding: BRegCreateBinding, data: any, idempotencyKey: string, formatValue?: string | undefined | null): BRegPreparedCreate
@@ -146,15 +146,15 @@ export declare class BaseRegistryClient {
   continueRelationshipListJson(value: any): Promise<JsonOutcome>
   lookupRecordJson(entityRoute: string, selector: string, valuesJson?: string | undefined | null, options?: any | undefined | null): Promise<JsonOutcome>
   /** Fetch opaque target conditions from exact action-input JSON. */
-  actionTargetConditionsJson(binding: BRegImmediateActionBinding, inputsJson: string): Promise<BRegActionTargetConditions>
+  actionTargetConditionsJson(binding: BRegActionBinding, inputsJson: string): Promise<BRegActionTargetConditions>
   /** Invoke an action from exact JSON and preserve exact receipt values. */
-  invokeActionJson(binding: BRegImmediateActionBinding, inputsJson: string, idempotencyKey: string, conditions?: BRegActionTargetConditions | undefined | null): Promise<JsonOutcome>
+  invokeActionJson(binding: BRegActionBinding, inputsJson: string, idempotencyKey: string, conditions?: BRegActionTargetConditions | undefined | null): Promise<JsonOutcome>
   /** Prepare inert invocation evidence from exact action-input JSON. */
-  prepareActionJson(binding: BRegImmediateActionBinding, inputsJson: string, idempotencyKey: string, conditions?: BRegActionTargetConditions | undefined | null): BRegPreparedAction
+  prepareActionJson(binding: BRegActionBinding, inputsJson: string, idempotencyKey: string, conditions?: BRegActionTargetConditions | undefined | null): BRegPreparedAction
   /** Revalidate saved invocation evidence against exact original input JSON. */
-  recoverActionJson(binding: BRegImmediateActionBinding, prepared: BRegPreparedAction, inputsJson: string, idempotencyKey: string): BRegRecoveredAction
+  recoverActionJson(binding: BRegActionBinding, prepared: BRegPreparedAction, inputsJson: string, idempotencyKey: string): BRegRecoveredAction
   /** Explicitly send a recovered invocation and preserve exact receipt values. */
-  executeRecoveredActionJson(binding: BRegImmediateActionBinding, recovered: BRegRecoveredAction): Promise<JsonOutcome>
+  executeRecoveredActionJson(binding: BRegActionBinding, recovered: BRegRecoveredAction): Promise<JsonOutcome>
   createRecordJson(binding: BRegCreateBinding, dataJson: string, idempotencyKey: string, formatValue?: string | undefined | null): Promise<JsonOutcome>
   /** Prepare inert Create evidence from exact JSON text. */
   prepareCreateJson(binding: BRegCreateBinding, dataJson: string, idempotencyKey: string, formatValue?: string | undefined | null): BRegPreparedCreate
@@ -218,8 +218,8 @@ export type BatchBinding = BRegBatchBinding
 export declare class BRegCreateBinding {}
 export type CreateBinding = BRegCreateBinding
 
-export declare class BRegImmediateActionBinding {}
-export type ImmediateActionBinding = BRegImmediateActionBinding
+export declare class BRegActionBinding {}
+export type ActionBinding = BRegActionBinding
 
 /**
  * One bounded, digest-bound chunk of an ingestion run. The chunk digest is
@@ -283,7 +283,7 @@ export declare class BRegMetadata {
   selectPatch(operationIdentifier: string, expectedProfile: string): BRegPatchBinding
   selectLifecycle(entityIdentifier: string, expectedProfile: string): BRegLifecycleAuthority
   selectAttachments(entityIdentifier: string, expectedProfile: string): Array<BRegAttachmentSlot>
-  selectImmediateAction(actionIdentifier: string, expectedProfile: string): BRegImmediateActionBinding
+  selectImmediateAction(actionIdentifier: string, expectedProfile: string): BRegActionBinding
   selectTombstone(entityIdentifier: string, expectedProfile: string): BRegTombstoneBinding
   selectBatch(entityIdentifier: string, expectedProfile: string): BRegBatchBinding
 }

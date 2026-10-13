@@ -233,11 +233,11 @@ fn operation(identifier: &str, method: &str, path: &str, kind: &str, request: Va
         "method": method,
         "path": path,
         "operation": kind,
-        "sourceEntity": "company",
-        "responseEntity": "company",
+        "sourceRecordType": "company",
+        "responseRecordType": "company",
         "accessProfile": "company-writer",
         "requiredCapabilities": [],
-        "entityLabel": "Companies",
+        "recordTypeLabel": "Companies",
         "identifier": {"apiName": "id", "location": "envelope"},
         "titleFields": ["legal-name"],
         "fields": fields(),
@@ -283,7 +283,7 @@ fn metadata_fixture() -> Value {
         "version": "1.2.3",
         "revision": REVISION,
         "metadataVersion": "1",
-        "entities": [{
+        "recordTypes": [{
             "id": "company",
             "datasetIdentifier": "legal-entities",
             "route": "companies",
@@ -607,7 +607,7 @@ async fn an_upload_prepared_for_another_slot_never_reaches_the_engine() {
             json!("/v1/records/companies/{record_id}/attachments/cover-letter");
         operation["readableFields"] = json!(["legal-name", "cover-letter"]);
     }
-    other["entities"][0]["readableFields"] = json!(["legal-name", "cover-letter"]);
+    other["recordTypes"][0]["readableFields"] = json!(["legal-name", "cover-letter"]);
     let second = test_client(vec![MockResponse::json(StatusCode::OK, other)]).await;
     let other_slot = self::slot(
         &second

@@ -42,7 +42,6 @@ pub mod attachment_verification_worker;
 pub mod audit;
 #[cfg(feature = "runtime")]
 pub mod auth;
-pub mod change_request;
 #[cfg(feature = "runtime")]
 pub mod cli;
 pub mod compiler;
@@ -110,6 +109,7 @@ pub mod migration_plan;
 #[cfg(feature = "runtime")]
 pub mod migration_reconcile;
 pub mod model;
+pub mod plan;
 #[cfg(feature = "runtime")]
 pub mod mutation;
 #[cfg(feature = "runtime")]
@@ -126,14 +126,14 @@ pub mod query;
 pub(crate) mod query_binding;
 pub mod record_profile;
 #[cfg(feature = "runtime")]
-pub mod request_events;
+pub mod proposal_events;
 #[cfg(feature = "runtime")]
-mod request_prepare;
+mod proposal_prepare;
 #[cfg(feature = "runtime")]
-pub mod request_retention;
+pub mod proposal_retention;
 #[cfg(feature = "runtime")]
-mod request_store;
-pub mod request_workflow;
+mod proposal_store;
+pub mod proposal_workflow;
 pub mod review_integration;
 #[cfg(feature = "runtime")]
 pub mod review_recovery;

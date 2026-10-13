@@ -939,7 +939,7 @@ impl MutationCoordinator {
         correlation: &RequestCorrelation,
         fault: FaultControl,
         deadline: tokio::time::Instant,
-        candidate: &mut Option<Vec<CompiledActionEffect>>,
+        candidate: &mut Option<Vec<CompiledPlanEffect>>,
         frozen: Option<&FrozenEvidenceEvaluation>,
         causation: Option<&Causation>,
     ) -> Result<MutationOutcome, MutationError> {
@@ -1390,7 +1390,7 @@ impl MutationCoordinator {
         transaction: &Transaction<'_>,
         registry: &CompiledRegistry,
         action: &CompiledAction,
-        effects: &[&CompiledActionEffect],
+        effects: &[&CompiledPlanEffect],
         claims: &ActionClaimContext,
         target_authority: &BTreeMap<String, Vec<RowBoundaryContext>>,
         input_values: &ActionInputs,
@@ -1419,14 +1419,14 @@ impl MutationCoordinator {
             return Err(MutationError::InvalidRequest);
         }
         let (record_uuid, expected_revision, before) = match &effect.target.binding {
-            CompiledActionTargetBinding::Create => (
+            CompiledPlanTargetBinding::Create => (
                 *reserved_creates
                     .get(&effect.id)
                     .ok_or(MutationError::InvalidRequest)?,
                 None,
                 None,
             ),
-            CompiledActionTargetBinding::Existing { .. } => {
+            CompiledPlanTargetBinding::Existing { .. } => {
                 let base = patch_bases
                     .get(&effect.id)
                     .ok_or(MutationError::PreconditionFailed)?;
@@ -1484,34 +1484,16 @@ impl MutationCoordinator {
             }
             _ => return Err(MutationError::InvalidRequest),
         }
-        let mut current = match effect.operation {
-            Operation::Create => {
-                insert_current_row(
-                    transaction,
-                    entity,
-                    &record_uuid.to_string(),
-                    &fields,
-                    self.field_encryption.as_deref(),
-                )
-                .await?
-            }
-            Operation::Patch => {
-                let before = before.ok_or(MutationError::PreconditionFailed)?;
-                let mut next = update_current_row(
-                    transaction,
-                    entity,
-                    &record_uuid.to_string(),
-                    before.record_revision,
-                    fields,
-                    self.field_encryption.as_deref(),
-                )
-                .await?;
-                next.predecessor_revision = Some(before.record_revision);
-                next.before_data = Some(before.data.clone());
-                next
-            }
-            _ => return Err(MutationError::InvalidRequest),
-        };
+        let current = write_plan_row(
+            transaction,
+            entity,
+            record_uuid,
+            expected_revision,
+            fields,
+            before.map(|row| &row.data),
+            self.field_encryption.as_deref(),
+        )
+        .await?;
         target_context
             .authorize_rows(
                 entity,
@@ -1520,9 +1502,6 @@ impl MutationCoordinator {
                 current.record_uuid,
             )
             .map_err(|_| MutationError::PreconditionFailed)?;
-        if effect.operation == Operation::Create {
-            current.predecessor_revision = None;
-        }
         Ok(current)
     }
 
@@ -1538,7 +1517,7 @@ impl MutationCoordinator {
         application_id: Uuid,
     ) -> Result<(), MutationError> {
         enum Role<'a> {
-            Patch(&'a CompiledActionEffect),
+            Patch(&'a CompiledPlanEffect),
             Link(&'a str),
         }
 
@@ -1547,7 +1526,7 @@ impl MutationCoordinator {
         // sorting each phase independently permits opposite-role deadlocks.
         let mut targets = BTreeMap::new();
         for effect in &action.effects {
-            if let CompiledActionTargetBinding::Existing { input } = &effect.target.binding {
+            if let CompiledPlanTargetBinding::Existing { input } = &effect.target.binding {
                 let record_id = Uuid::parse_str(&input_record_id(input_values, input)?)
                     .map_err(|_| MutationError::InvalidRequest)?;
                 targets
@@ -1651,8 +1630,8 @@ impl MutationCoordinator {
             .effects
             .iter()
             .filter_map(|effect| match &effect.target.binding {
-                CompiledActionTargetBinding::Existing { input } => Some((input, effect)),
-                CompiledActionTargetBinding::Create => None,
+                CompiledPlanTargetBinding::Existing { input } => Some((input, effect)),
+                CompiledPlanTargetBinding::Create => None,
             })
             .collect::<Vec<_>>();
         patch_effects.sort_by(|left, right| {
@@ -1760,7 +1739,7 @@ impl MutationCoordinator {
                 .effects
                 .iter()
                 .find(|effect| {
-                    matches!(&effect.target.binding, CompiledActionTargetBinding::Existing { input } if input == input_id)
+                    matches!(&effect.target.binding, CompiledPlanTargetBinding::Existing { input } if input == input_id)
                 })
                 .ok_or(MutationError::InvalidRequest)?;
             let entity = registry
@@ -2001,6 +1980,7 @@ fn action_for_route<'a>(
         .iter()
         .find(|action| {
             action.id == action_id
+                && matches!(action.execution, crate::model::CompiledActionExecution::Immediate)
                 && match kind {
                     ActionRouteKind::Invoke => action.route == route.path,
                     ActionRouteKind::TargetConditions => {
@@ -2162,8 +2142,8 @@ fn existing_target_inputs(action: &CompiledAction) -> BTreeSet<String> {
         .effects
         .iter()
         .filter_map(|effect| match &effect.target.binding {
-            CompiledActionTargetBinding::Existing { input } => Some(input.clone()),
-            CompiledActionTargetBinding::Create => None,
+            CompiledPlanTargetBinding::Existing { input } => Some(input.clone()),
+            CompiledPlanTargetBinding::Create => None,
         })
         .collect()
 }
@@ -2233,7 +2213,7 @@ fn action_link_context(
 fn action_target_context(
     registry: &CompiledRegistry,
     action: &CompiledAction,
-    effect: &CompiledActionEffect,
+    effect: &CompiledPlanEffect,
     claims: &ActionClaimContext,
     target_authority: &BTreeMap<String, Vec<RowBoundaryContext>>,
     record_id: Uuid,
@@ -2260,7 +2240,7 @@ fn action_target_context(
 fn action_target_group_context(
     registry: &CompiledRegistry,
     action: &CompiledAction,
-    effects: &[&CompiledActionEffect],
+    effects: &[&CompiledPlanEffect],
     claims: &ActionClaimContext,
     target_authority: &BTreeMap<String, Vec<RowBoundaryContext>>,
     record_id: Uuid,
@@ -2294,14 +2274,14 @@ fn action_target_group_context(
                 .mutations
                 .iter()
                 .map(|mutation| match mutation {
-                    CompiledActionMutation::Set { field, .. }
-                    | CompiledActionMutation::Clear { field } => field,
+                    CompiledPlanMutation::Set { field, .. }
+                    | CompiledPlanMutation::Clear { field } => field,
                 })
                 .collect::<BTreeSet<_>>();
             if effect.mutations.iter().any(|mutation| {
                 !ceiling.contains(match mutation {
-                    CompiledActionMutation::Set { field, .. }
-                    | CompiledActionMutation::Clear { field } => field,
+                    CompiledPlanMutation::Set { field, .. }
+                    | CompiledPlanMutation::Clear { field } => field,
                 })
             }) {
                 return Err(MutationError::InvalidRequest);
@@ -2313,7 +2293,7 @@ fn action_target_group_context(
         .iter()
         .flat_map(|effect| &effect.mutations)
         .map(|mutation| match mutation {
-            CompiledActionMutation::Set { field, .. } | CompiledActionMutation::Clear { field } => {
+            CompiledPlanMutation::Set { field, .. } | CompiledPlanMutation::Clear { field } => {
                 field.clone()
             }
         })
@@ -2347,7 +2327,7 @@ fn reserve_action_create_ids(
 ) -> Result<BTreeMap<String, Uuid>, MutationError> {
     let mut reserved = BTreeMap::new();
     for effect in &action.effects {
-        if matches!(effect.target.binding, CompiledActionTargetBinding::Create) {
+        if matches!(effect.target.binding, CompiledPlanTargetBinding::Create) {
             reserved.insert(effect.id.clone(), Uuid::new_v4());
         }
     }
@@ -2355,8 +2335,8 @@ fn reserve_action_create_ids(
 }
 
 fn ordered_action_effects(
-    effects: &[CompiledActionEffect],
-) -> Result<Vec<&CompiledActionEffect>, MutationError> {
+    effects: &[CompiledPlanEffect],
+) -> Result<Vec<&CompiledPlanEffect>, MutationError> {
     let mut remaining = effects.iter().collect::<Vec<_>>();
     let mut resolved = BTreeSet::new();
     let mut ordered = Vec::with_capacity(remaining.len());
@@ -2380,12 +2360,12 @@ fn ordered_action_effects(
 }
 
 fn ordered_action_effect_groups<'a>(
-    ordered: &[&'a CompiledActionEffect],
+    ordered: &[&'a CompiledPlanEffect],
     patch_bases: &BTreeMap<String, CurrentRow>,
     reserved_creates: &BTreeMap<String, Uuid>,
-) -> Result<Vec<Vec<&'a CompiledActionEffect>>, MutationError> {
+) -> Result<Vec<Vec<&'a CompiledPlanEffect>>, MutationError> {
     let mut positions = BTreeMap::<(String, Uuid), usize>::new();
-    let mut groups = Vec::<Vec<&CompiledActionEffect>>::new();
+    let mut groups = Vec::<Vec<&CompiledPlanEffect>>::new();
     for effect in ordered {
         let key = action_effect_target_key(effect, patch_bases, reserved_creates)?;
         if let Some(position) = positions.get(&key).copied() {
@@ -2399,8 +2379,8 @@ fn ordered_action_effect_groups<'a>(
 }
 
 fn order_action_effect_groups(
-    mut remaining: Vec<Vec<&CompiledActionEffect>>,
-) -> Result<Vec<Vec<&CompiledActionEffect>>, MutationError> {
+    mut remaining: Vec<Vec<&CompiledPlanEffect>>,
+) -> Result<Vec<Vec<&CompiledPlanEffect>>, MutationError> {
     // Aliased patch slots write one physical row. Folding a later patch into
     // an earlier group can introduce dependencies that the first slot lacked.
     // Order the groups by their complete dependency sets before executing any.
@@ -2428,15 +2408,15 @@ fn order_action_effect_groups(
 }
 
 fn action_effect_target_key(
-    effect: &CompiledActionEffect,
+    effect: &CompiledPlanEffect,
     patch_bases: &BTreeMap<String, CurrentRow>,
     reserved_creates: &BTreeMap<String, Uuid>,
 ) -> Result<(String, Uuid), MutationError> {
     let record_uuid = match &effect.target.binding {
-        CompiledActionTargetBinding::Create => *reserved_creates
+        CompiledPlanTargetBinding::Create => *reserved_creates
             .get(&effect.id)
             .ok_or(MutationError::InvalidRequest)?,
-        CompiledActionTargetBinding::Existing { .. } => {
+        CompiledPlanTargetBinding::Existing { .. } => {
             patch_bases
                 .get(&effect.id)
                 .ok_or(MutationError::PreconditionFailed)?
@@ -2449,7 +2429,7 @@ fn action_effect_target_key(
 fn action_effect_document(
     action: &CompiledAction,
     entity: &CompiledEntity,
-    effect: &CompiledActionEffect,
+    effect: &CompiledPlanEffect,
     input_values: &ActionInputs,
     prior_results: &BTreeMap<String, CurrentRow>,
     _before: Option<&CurrentRow>,
@@ -2457,14 +2437,14 @@ fn action_effect_document(
     let mut data = Map::new();
     for mutation in &effect.mutations {
         match mutation {
-            CompiledActionMutation::Set { field, value } => {
+            CompiledPlanMutation::Set { field, value } => {
                 let field_source = entity
                     .fields
                     .get(field)
                     .ok_or(MutationError::InvalidRequest)?;
                 let value = match value {
-                    CompiledActionValue::Literal { value } => value.clone(),
-                    CompiledActionValue::FromInput { input } => match input_values.get(input) {
+                    CompiledPlanValue::Literal { value } => value.clone(),
+                    CompiledPlanValue::FromInput { input } => match input_values.get(input) {
                         Some(value) => value.clone(),
                         // A fixed effect leaves out a field whose optional
                         // input is absent: a create stores the field's
@@ -2481,7 +2461,7 @@ fn action_effect_document(
                         }
                         None => return Err(MutationError::InvalidRequest),
                     },
-                    CompiledActionValue::FromEffect {
+                    CompiledPlanValue::FromEffect {
                         effect,
                         target_entity_id,
                     } => {
@@ -2504,7 +2484,7 @@ fn action_effect_document(
                 }
                 data.insert(field.clone(), value);
             }
-            CompiledActionMutation::Clear { field } => {
+            CompiledPlanMutation::Clear { field } => {
                 if entity.fields.get(field).is_none_or(|field| field.required) {
                     return Err(MutationError::InvalidRequest);
                 }
@@ -2599,7 +2579,7 @@ async fn verify_action_requirements(
 /// admits `equalsInput` only for a required input; should the named input
 /// still be absent, the request is refused rather than the check skipped.
 fn requirement_expected_value<'a>(
-    requirement: &'a crate::model::CompiledActionRequirement,
+    requirement: &'a crate::model::CompiledCommitGuard,
     inputs: &'a ActionInputs,
 ) -> Result<&'a Value, MutationError> {
     match (&requirement.equals, &requirement.equals_input) {
@@ -3395,7 +3375,7 @@ mod tests {
     /// skips its field.
     #[test]
     fn an_absent_equality_input_refuses_instead_of_skipping_the_requirement() {
-        let requirement = crate::model::CompiledActionRequirement {
+        let requirement = crate::model::CompiledCommitGuard {
             input: "parent".to_owned(),
             entity_id: "parent".to_owned(),
             field: "status".to_owned(),
@@ -3464,14 +3444,14 @@ mod tests {
 
     #[test]
     fn aliased_patch_group_waits_for_every_selected_create_dependency() {
-        let effect = |id: &str, operation, dependencies: &[&str]| CompiledActionEffect {
+        let effect = |id: &str, operation, dependencies: &[&str]| CompiledPlanEffect {
             id: id.to_owned(),
             target: crate::model::CompiledActionTarget {
                 entity_id: "synthetic".to_owned(),
                 binding: if operation == Operation::Create {
-                    CompiledActionTargetBinding::Create
+                    CompiledPlanTargetBinding::Create
                 } else {
-                    CompiledActionTargetBinding::Existing {
+                    CompiledPlanTargetBinding::Existing {
                         input: "target".to_owned(),
                     }
                 },

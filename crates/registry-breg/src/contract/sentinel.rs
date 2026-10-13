@@ -646,6 +646,7 @@ pub(super) fn permissions<'de, D: Deserializer<'de>>(
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(super) struct AuthoredEntityPermission {
+    #[serde(rename = "recordType")]
     entity: String,
     operations: UniqueSet<Operation>,
     #[serde(default)]

@@ -19,7 +19,7 @@ use crate::stored_bytes;
 // Every compiled effect mutates at least one field, so this also bounds the
 // number of separately named references in an immediate-action receipt.
 pub(crate) const MAX_IMMEDIATE_ACTION_RESULTS: u16 =
-    crate::change_request::MAX_CHANGE_REQUEST_FIELD_MUTATIONS;
+    crate::plan::MAX_PLAN_FIELD_MUTATIONS;
 
 pub(crate) const MAX_IDEMPOTENCY_KEY_BYTES: usize = 256;
 const MAX_HEADER_VALUE_BYTES: usize = 8 * 1024;
@@ -291,7 +291,7 @@ pub(crate) enum StoredResultMetadata {
     Batch {
         result_count: u16,
     },
-    Application {
+    Proposal {
         record_reference: String,
         record_revision: i64,
         proposal_version: i64,
@@ -864,7 +864,7 @@ pub(crate) async fn lock_and_load(
                 .ok_or(IdempotencyError::Unavailable)?;
             StoredResultMetadata::Batch { result_count }
         }
-        "application" => {
+        "proposal" => {
             let record_revision = row
                 .get::<_, Option<i64>>(2)
                 .filter(|revision| *revision > 0)
@@ -876,13 +876,13 @@ pub(crate) async fn lock_and_load(
             let result_count = row
                 .get::<_, Option<i16>>(7)
                 .and_then(|count| u16::try_from(count).ok())
-                .filter(|count| (1..=16).contains(count))
+                .filter(|count| (0..=16).contains(count))
                 .ok_or(IdempotencyError::Unavailable)?;
             let proposal_version = row
                 .get::<_, Option<i64>>(8)
                 .filter(|version| *version > 0)
                 .ok_or(IdempotencyError::Unavailable)?;
-            StoredResultMetadata::Application {
+            StoredResultMetadata::Proposal {
                 record_reference,
                 record_revision,
                 proposal_version,
@@ -971,7 +971,7 @@ pub(crate) async fn insert_result(
                 Some(i16::try_from(*result_count).map_err(|_| IdempotencyError::InvalidInput)?),
                 None,
             ),
-            StoredResultMetadata::Application {
+            StoredResultMetadata::Proposal {
                 record_reference,
                 record_revision,
                 proposal_version,
@@ -979,10 +979,10 @@ pub(crate) async fn insert_result(
             } if !record_reference.is_empty()
                 && *record_revision > 0
                 && *proposal_version > 0
-                && (1..=16).contains(result_count) =>
+                && (0..=16).contains(result_count) =>
             {
                 (
-                    "application",
+                    "proposal",
                     Some(*record_revision),
                     Some(record_reference.as_str()),
                     Some(i16::try_from(*result_count).map_err(|_| IdempotencyError::InvalidInput)?),

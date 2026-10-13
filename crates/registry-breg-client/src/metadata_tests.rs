@@ -1,33 +1,6 @@
 use serde_json::{json, Value};
 use uuid::Uuid;
-
-#[path = "../src/strict_json.rs"]
-mod strict_json;
-
-#[allow(dead_code)]
-#[path = "../../registry-record/src/lib.rs"]
-mod registry_record;
-pub use registry_record::*;
-
-#[allow(dead_code)]
-#[path = "../src/lifecycle.rs"]
-mod breg_lifecycle;
-pub use breg_lifecycle::*;
-
-#[allow(dead_code)]
-#[path = "../src/attachment.rs"]
-mod breg_attachment;
-pub use breg_attachment::*;
-
-#[allow(dead_code)]
-#[path = "../src/metadata.rs"]
-mod breg_metadata;
-
-use breg_metadata::{
-    BRegChangeRequestBinding, BRegChangeRequestOnApprovedMode, BRegChangeRequestPlannerKind,
-    BRegChangeRequestReviewRequirement, BRegDirectWrite, BRegMetadata, BRegMetadataErrorKind,
-    BRegMetadataSelectionErrorKind, BRegOperationKind,
-};
+use crate::*;
 
 const REVISION: &str = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
@@ -62,11 +35,11 @@ fn operation(
         "method": method,
         "path": path,
         "operation": kind,
-        "sourceEntity": "company",
-        "responseEntity": "company",
+        "sourceRecordType": "company",
+        "responseRecordType": "company",
         "accessProfile": "company-writer",
         "requiredCapabilities": required_capabilities,
-        "entityLabel": "Companies",
+        "recordTypeLabel": "Companies",
         "identifier": {"apiName": "id", "location": "envelope"},
         "titleFields": ["legal-name"],
         "fields": [field("legal-name", "legalName")],
@@ -115,7 +88,7 @@ fn fixture() -> Value {
         "version": "1.2.3",
         "revision": REVISION,
         "metadataVersion": "1",
-        "entities": [{
+        "recordTypes": [{
             "id": "company",
             "datasetIdentifier": "legal-entities",
             "route": "companies",
@@ -145,86 +118,9 @@ fn fixture() -> Value {
     })
 }
 
-fn lifecycle_schema(kind: &str) -> Value {
-    match kind {
-        "apply-request" => json!({
-            "$schema": "https://json-schema.org/draft/2020-12/schema",
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["proposalVersion", "effectDigest"],
-            "properties": {
-                "proposalVersion": {
-                    "type": "integer", "format": "int64", "minimum": 1,
-                    "maximum": 4294967295_u64
-                },
-                "effectDigest": {
-                    "type": "string",
-                    "pattern": "^sha256:[0-9a-f]{64}$",
-                    "description": "Digest of the immutable proposal effects displayed to the actor."
-                },
-                "reason": {
-                    "type": "string",
-                    "maxLength": 4096,
-                    "pattern": "^[^\\u0000]*$",
-                    "description": "Optional application explanation, preserved unchanged. At most 4096 Unicode characters; NUL is refused."
-                }
-            }
-        }),
-        _ => json!({
-            "$schema": "https://json-schema.org/draft/2020-12/schema",
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {}
-        }),
-    }
-}
 
-fn lifecycle_fixture() -> Value {
-    let mut value = fixture();
-    let mut lifecycle_operations = Vec::new();
-    let mut summaries = Vec::new();
-    for (id, path, kind) in [
-        (
-            "records.company.request.submit",
-            "/v1/records/companies/{record_id}/actions/submit",
-            "submit-request",
-        ),
-        (
-            "records.company.request.apply",
-            "/v1/records/companies/{record_id}/actions/apply",
-            "apply-request",
-        ),
-    ] {
-        lifecycle_operations.push(operation(
-            id,
-            "POST",
-            path,
-            kind,
-            json!(["change_request_lifecycle"]),
-            json!({
-                "fieldNames": "api",
-                "queryParameters": [],
-                "body": "change_request_action",
-                "contentType": "application/json",
-                "ifMatchRequired": true,
-                "idempotencyKeyRequired": true,
-                "mutationSemantics": "change_request_lifecycle",
-                "schema": lifecycle_schema(kind)
-            }),
-            (json!([]), json!([])),
-        ));
-        summaries.push(json!({"operation": kind, "accessProfile": "company-writer"}));
-    }
-    value["operations"]
-        .as_array_mut()
-        .unwrap()
-        .extend(lifecycle_operations);
-    value["entities"][0]["operations"]
-        .as_array_mut()
-        .unwrap()
-        .extend(summaries);
-    value
-}
+
+
 
 fn parse(value: &Value) -> BRegMetadata {
     BRegMetadata::from_slice(&serde_json::to_vec(value).unwrap())
@@ -264,7 +160,7 @@ fn runtime_v1_accepts_statistical_datasets_without_adding_entity_authority() {
         .is_ok());
 
     let mut release_only = mixed;
-    release_only["entities"] = json!([]);
+    release_only["recordTypes"] = json!([]);
     release_only["operations"] = json!([]);
     release_only["statisticalDatasets"][0]["operations"] = json!([
         "list-releases",
@@ -491,7 +387,7 @@ fn runtime_v1_promotes_only_exact_direct_create_and_patch_contracts() {
     assert_eq!(metadata.registry_version(), "1.2.3");
     assert_eq!(metadata.registry_revision(), REVISION);
     assert_eq!(metadata.operations().len(), 3);
-    assert!(metadata.actions().is_some());
+    assert!(metadata.action_metadata().is_some());
     assert!(metadata.statistical_datasets().is_none());
     assert_eq!(
         metadata.operations()[0].fields()[0].schema()["x-future-schema-key"]["kept"],
@@ -509,7 +405,7 @@ fn runtime_v1_promotes_only_exact_direct_create_and_patch_contracts() {
     assert_eq!(create.registry_revision(), REVISION);
     assert_eq!(create.operation_identifier(), "records.company.create");
     assert_eq!(create.access_profile(), "company-writer");
-    assert_eq!(create.entity_identifier(), "company");
+    assert_eq!(create.record_type_identifier(), "company");
     assert_eq!(create.path(), "/v1/records/companies");
     assert_eq!(
         create.writable_api_names(),
@@ -533,7 +429,7 @@ fn runtime_v1_promotes_only_exact_direct_create_and_patch_contracts() {
     assert_eq!(patch.registry_revision(), REVISION);
     assert_eq!(patch.operation_identifier(), "records.company.patch");
     assert_eq!(patch.access_profile(), "company-writer");
-    assert_eq!(patch.entity_identifier(), "company");
+    assert_eq!(patch.record_type_identifier(), "company");
     assert_eq!(
         patch.writable_api_names(),
         &std::collections::BTreeSet::from(["legalName".to_owned()])
@@ -561,343 +457,19 @@ fn runtime_v1_promotes_only_exact_direct_create_and_patch_contracts() {
 /// A company carrying `capability`, with every field the capability names
 /// readable on the entity and on each of its operations, as a conforming
 /// runtime publishes it.
-fn change_request_fixture(capability: &Value) -> Value {
-    let mut value = fixture();
-    let readable = [
-        ("legal-name", "legalName"),
-        ("company", "company"),
-        ("proposed-name", "proposedName"),
-        ("name", "name"),
-        ("status", "status"),
-        ("note", "note"),
-        ("parent", "parent"),
-    ];
-    value["entities"][0]["readableFields"] = json!(readable.map(|(id, _)| id));
-    for operation in value["operations"].as_array_mut().unwrap() {
-        operation["fields"] = json!(readable.map(|(id, api_name)| field(id, api_name)));
-        operation["readableFields"] = json!(readable.map(|(id, _)| id));
-    }
-    value["entities"][0]["changeRequest"] = capability.clone();
-    value
-}
 
-#[test]
-fn change_request_capability_is_strict_typed_and_never_creates_authority() {
-    let capability = json!({
-        "planner": {
-            "kind": "rhai",
-            "abi": "registry.change-request-plan/v1",
-            "limits": {
-                "maximumTargets": 16,
-                "maximumFieldMutations": 128,
-                "maximumSnapshotBytes": 2_097_152,
-                "maximumSourceBytes": 65_536,
-                "maximumOperations": 100_000,
-                "maximumCallDepth": 32,
-                "maximumExpressionDepth": 64,
-                "maximumStringBytes": 16_384,
-                "maximumArrayItems": 256,
-                "maximumMapEntries": 256,
-                "maximumModules": 0
-            },
-            "possibleWriteCount": 2,
-            "possibleWriteOperations": ["patch"],
-            "writes": [
-                {"target": {"entity": "company", "fromField": "company"}, "operation": "patch", "fields": ["name"]}
-            ]
-        },
-        "effects": [
-            {
-                "id": "rename",
-                "operation": "patch",
-                "target": {"entity": "company", "fromField": "company"},
-                "set": [{"field": "name", "fromField": "proposed-name"}, {"field": "status"}],
-                "clear": ["note"]
-            },
-            {
-                "id": "branch",
-                "operation": "create",
-                "target": {"entity": "company"},
-                "set": [],
-                "clear": []
-            },
-            {
-                "id": "link",
-                "operation": "patch",
-                "target": {"entity": "company", "fromEffect": "branch"},
-                "set": [{"field": "parent", "fromEffect": "branch"}],
-                "clear": []
-            }
-        ],
-        "review": {"type": "required", "authority":"casework", "policyId":"address-review"},
-        "onApproved": {"mode":"automatic", "executor":"breg-worker"},
-        "application": {"preconditions":{"request":[]}}
-    });
-    let value = change_request_fixture(&capability);
-    let metadata = parse(&value);
-    let change_request = metadata.change_request_capability("company").unwrap();
-    assert_eq!(
-        change_request.planner().kind(),
-        BRegChangeRequestPlannerKind::Rhai
-    );
-    assert_eq!(
-        change_request.planner().abi(),
-        Some("registry.change-request-plan/v1")
-    );
-    let limits = change_request.planner().limits().unwrap();
-    assert_eq!(limits.maximum_targets(), 16);
-    assert_eq!(limits.maximum_field_mutations(), 128);
-    assert_eq!(change_request.planner().possible_write_count(), Some(2));
-    assert!(matches!(
-        change_request.planner().possible_write_operations(),
-        [BRegOperationKind::Patch]
-    ));
-    let [write] = change_request.planner().writes() else {
-        panic!("one readable planner write")
-    };
-    assert_eq!(write.target().entity(), "company");
-    assert_eq!(
-        write.target().binding(),
-        Some(&BRegChangeRequestBinding::FromField("company".to_owned()))
-    );
-    assert_eq!(write.operation(), &BRegOperationKind::Patch);
-    assert_eq!(write.fields(), ["name"]);
-    let [rename, branch, link] = change_request.effects() else {
-        panic!("three readable effects")
-    };
-    assert_eq!(rename.id(), "rename");
-    assert_eq!(rename.operation(), &BRegOperationKind::Patch);
-    assert_eq!(rename.target().entity(), "company");
-    assert_eq!(
-        rename.target().binding(),
-        Some(&BRegChangeRequestBinding::FromField("company".to_owned()))
-    );
-    let [name, status] = rename.set() else {
-        panic!("two readable set fields")
-    };
-    assert_eq!(name.field(), "name");
-    assert_eq!(
-        name.value(),
-        Some(&BRegChangeRequestBinding::FromField(
-            "proposed-name".to_owned()
-        ))
-    );
-    assert_eq!(status.field(), "status");
-    assert_eq!(status.value(), None);
-    assert_eq!(rename.clear(), ["note"]);
-    assert_eq!(branch.operation(), &BRegOperationKind::Create);
-    assert_eq!(branch.target().binding(), None);
-    assert_eq!(
-        link.target().binding(),
-        Some(&BRegChangeRequestBinding::FromEffect("branch".to_owned()))
-    );
-    assert_eq!(
-        link.set()[0].value(),
-        Some(&BRegChangeRequestBinding::FromEffect("branch".to_owned()))
-    );
-    let BRegChangeRequestReviewRequirement::External(requirement) = change_request.review() else {
-        panic!("external")
-    };
-    assert_eq!(requirement.authority(), "casework");
-    assert_eq!(requirement.policy_id(), "address-review");
-    assert_eq!(
-        change_request.on_approved().mode(),
-        BRegChangeRequestOnApprovedMode::Automatic
-    );
-    assert_eq!(change_request.on_approved().executor(), Some("breg-worker"));
-    assert_eq!(
-        change_request.application().preconditions(),
-        Some(&json!({"request":[]}))
-    );
-    assert!(!format!("{change_request:?}").contains("address-review"));
-    assert!(!format!("{change_request:?}").contains("breg-worker"));
-    assert!(matches!(
-        metadata
-            .select_direct_write("records.company.patch", "company-writer")
-            .unwrap(),
-        BRegDirectWrite::Patch(_)
-    ));
 
-    let capability_for_references = capability.clone();
-    for malformed in [
-        {
-            let mut malformed = capability.clone();
-            malformed.as_object_mut().unwrap().remove("effects");
-            malformed
-        },
-        {
-            let mut malformed = capability.clone();
-            malformed["planner"]
-                .as_object_mut()
-                .unwrap()
-                .remove("writes");
-            malformed
-        },
-        {
-            let mut malformed = capability.clone();
-            malformed["planner"]["possibleWriteCount"] = json!(0);
-            malformed
-        },
-        {
-            let mut malformed = capability.clone();
-            let write = malformed["planner"]["writes"][0].clone();
-            malformed["planner"]["writes"] = json!([write.clone(), write.clone(), write]);
-            malformed
-        },
-        {
-            let mut malformed = capability.clone();
-            malformed["effects"][0]["target"]["fromEffect"] = json!("branch");
-            malformed
-        },
-        {
-            let mut malformed = capability.clone();
-            malformed["effects"][0]["set"][0]["fromEffect"] = json!("branch");
-            malformed
-        },
-        {
-            let mut malformed = capability.clone();
-            malformed["effects"][1]["id"] = json!("rename");
-            malformed
-        },
-        {
-            let mut malformed = capability.clone();
-            malformed["effects"][0]["set"][1]["field"] = json!("name");
-            malformed
-        },
-        {
-            let mut malformed = capability.clone();
-            malformed["effects"][0]["target"]["entity"] = json!("Company");
-            malformed
-        },
-        {
-            let mut malformed = capability.clone();
-            malformed["onApproved"]
-                .as_object_mut()
-                .unwrap()
-                .remove("executor");
-            malformed
-        },
-        {
-            let mut malformed = capability.clone();
-            malformed["onApproved"]["mode"] = json!("manual");
-            malformed
-        },
-    ] {
-        let value = change_request_fixture(&malformed);
-        assert!(BRegMetadata::from_slice(&serde_json::to_vec(&value).unwrap()).is_err());
-    }
 
-    let mut extended = capability.clone();
-    extended["planner"]["futureSourceHint"] = json!("scripts/private.rhai");
-    extended["effects"][0]["futurePermissionHint"] = json!("company-writer");
-    extended["application"]["futureGrantHint"] = json!("writers");
-    let metadata = parse(&change_request_fixture(&extended));
-    assert!(metadata.change_request_capability("company").is_some());
-
-    for unsupported in [
-        {
-            let mut unsupported = capability.clone();
-            unsupported["review"]["type"] = json!("future-review");
-            unsupported
-        },
-        {
-            let mut unsupported = capability.clone();
-            unsupported["onApproved"]["mode"] = json!("future-approval");
-            unsupported
-        },
-        {
-            let mut unsupported = capability.clone();
-            unsupported["planner"]["kind"] = json!("future-planner");
-            unsupported
-        },
-        {
-            let mut unsupported = capability.clone();
-            unsupported["planner"]["abi"] = json!("registry.change-request-plan/v2");
-            unsupported
-        },
-        {
-            let mut unsupported = capability.clone();
-            unsupported["planner"]["possibleWriteOperations"] = json!(["future-write"]);
-            unsupported
-        },
-        {
-            let mut unsupported = capability.clone();
-            unsupported["planner"]["writes"][0]["operation"] = json!("future-write");
-            unsupported
-        },
-        {
-            let mut unsupported = capability.clone();
-            unsupported["effects"][0]["operation"] = json!("future-effect");
-            unsupported
-        },
-    ] {
-        let metadata = parse(&change_request_fixture(&unsupported));
-        assert!(metadata.change_request_capability("company").is_none());
-        assert!(metadata
-            .select_direct_write("records.company.patch", "company-writer")
-            .is_ok());
-    }
-
-    // A source naming an effect the document does not list, an entity it
-    // does not list, or a field the caller cannot read is a dangling
-    // reference, never a name the caller may assume exists or may read.
-    let dangling_at = |pointer: &str, replacement: Value| {
-        let mut dangling = capability_for_references.clone();
-        *dangling.pointer_mut(pointer).unwrap() = replacement;
-        dangling
-    };
-    for dangling in [
-        dangling_at("/effects/2/target/fromEffect", json!("hidden")),
-        dangling_at("/effects/2/set/0/fromEffect", json!("hidden")),
-        dangling_at("/effects/0/target/entity", json!("hidden-company")),
-        dangling_at("/effects/0/target/fromField", json!("secret")),
-        dangling_at("/effects/0/set/0/field", json!("secret")),
-        dangling_at("/effects/0/set/0/fromField", json!("secret")),
-        dangling_at("/effects/0/clear/0", json!("secret")),
-        dangling_at("/planner/writes/0/target/entity", json!("hidden-company")),
-        dangling_at("/planner/writes/0/target/fromField", json!("secret")),
-        dangling_at("/planner/writes/0/fields/0", json!("secret")),
-    ] {
-        let value = change_request_fixture(&dangling);
-        assert_eq!(
-            BRegMetadata::from_slice(&serde_json::to_vec(&value).unwrap())
-                .unwrap_err()
-                .kind(),
-            BRegMetadataErrorKind::DanglingReference
-        );
-    }
-
-    // A planner write targets a stored record, never an effect the same
-    // request creates, so a planner target bound by fromEffect is refused
-    // whether or not the effect is listed.
-    for effect in ["rename", "hidden"] {
-        let mut malformed = capability_for_references.clone();
-        let target = malformed
-            .pointer_mut("/planner/writes/0/target")
-            .unwrap()
-            .as_object_mut()
-            .unwrap();
-        target.remove("fromField");
-        target.insert("fromEffect".to_owned(), json!(effect));
-        let value = change_request_fixture(&malformed);
-        assert_eq!(
-            BRegMetadata::from_slice(&serde_json::to_vec(&value).unwrap())
-                .unwrap_err()
-                .kind(),
-            BRegMetadataErrorKind::Shape
-        );
-    }
-}
 #[test]
 fn duplicate_json_members_are_refused_at_every_depth() {
     let duplicate_root = format!(
-        r#"{{"id":"business-registry","id":"attacker","version":"1","revision":"{REVISION}","metadataVersion":"1","entities":[],"operations":[]}}"#
+        r#"{{"id":"business-registry","id":"attacker","version":"1","revision":"{REVISION}","metadataVersion":"1","recordTypes":[],"operations":[]}}"#
     );
     let error = BRegMetadata::from_slice(duplicate_root.as_bytes()).unwrap_err();
     assert_eq!(error.kind(), BRegMetadataErrorKind::DuplicateMember);
 
     let nested = format!(
-        r#"{{"id":"business-registry","version":"1","revision":"{REVISION}","metadataVersion":"1","entities":[],"operations":[],"extension":{{"key":1,"key":2}}}}"#
+        r#"{{"id":"business-registry","version":"1","revision":"{REVISION}","metadataVersion":"1","recordTypes":[],"operations":[],"extension":{{"key":1,"key":2}}}}"#
     );
     let error = BRegMetadata::from_slice(nested.as_bytes()).unwrap_err();
     assert_eq!(error.kind(), BRegMetadataErrorKind::DuplicateMember);
@@ -908,7 +480,7 @@ fn legacy_entity_summary_cannot_grant_operation_authority() {
     let legacy = json!({
         "registryId": "business-registry",
         "version": "1",
-        "entities": [{
+        "recordTypes": [{
             "id": "company",
             "route": "companies",
             "schemaPath": "/v1/schemas/company",
@@ -950,7 +522,7 @@ fn unknown_capability_and_kind_remain_discoverable_but_inert() {
 
     let mut unknown = fixture();
     unknown["operations"][0]["operation"] = json!("future_mutation");
-    unknown["entities"][0]["operations"][0]["operation"] = json!("future_mutation");
+    unknown["recordTypes"][0]["operations"][0]["operation"] = json!("future_mutation");
     let metadata = parse(&unknown);
     assert!(matches!(
         metadata.operations()[0].kind(),
@@ -986,61 +558,7 @@ fn execution_selection_requires_exact_source_and_profile_binding() {
     );
 }
 
-#[test]
-fn lifecycle_authority_requires_exact_profile_capability_schema_and_routes() {
-    let metadata = parse(&lifecycle_fixture());
-    let authority = metadata
-        .select_lifecycle("company", "company-writer")
-        .expect("exact lifecycle authority");
-    assert_eq!(authority.registry_revision(), REVISION);
-    assert!(format!("{authority:?}").contains("operation_count: 2"));
 
-    assert_eq!(
-        metadata
-            .select_lifecycle("company", "other-profile")
-            .unwrap_err()
-            .kind(),
-        BRegMetadataSelectionErrorKind::ProfileMismatch
-    );
-
-    let mut malformed = lifecycle_fixture();
-    malformed["operations"][3]["request"]["schema"]["additionalProperties"] = json!(true);
-    let metadata = parse(&malformed);
-    assert_eq!(
-        metadata
-            .select_lifecycle("company", "company-writer")
-            .unwrap_err()
-            .kind(),
-        BRegMetadataSelectionErrorKind::ContractMismatch
-    );
-
-    let mut extended_schema = lifecycle_fixture();
-    extended_schema["operations"][3]["request"]["schema"]["futureAnnotation"] =
-        json!({"description": "ignored"});
-    extended_schema["operations"][4]["request"]["schema"]["properties"]["effectDigest"]
-        ["futureAnnotation"] = json!("ignored");
-    let authority = parse(&extended_schema)
-        .select_lifecycle("company", "company-writer")
-        .expect("schema object extensions do not change the known lifecycle contract");
-    assert!(format!("{authority:?}").contains("operation_count: 2"));
-
-    let mut partly_unsupported = lifecycle_fixture();
-    partly_unsupported["operations"][3]["requiredCapabilities"] =
-        json!(["change_request_lifecycle", "future_review_protocol"]);
-    let authority = parse(&partly_unsupported)
-        .select_lifecycle("company", "company-writer")
-        .expect("the understood lifecycle operation remains selectable");
-    assert!(format!("{authority:?}").contains("operation_count: 1"));
-
-    partly_unsupported["operations"][4]["requiredCapabilities"] = json!(["future_review_protocol"]);
-    assert_eq!(
-        parse(&partly_unsupported)
-            .select_lifecycle("company", "company-writer")
-            .unwrap_err()
-            .kind(),
-        BRegMetadataSelectionErrorKind::RequiredCapability
-    );
-}
 
 #[test]
 fn malformed_bindings_and_cross_field_references_fail_closed() {
@@ -1068,7 +586,7 @@ fn malformed_bindings_and_cross_field_references_fail_closed() {
     );
 
     let mut dangling = fixture();
-    dangling["operations"][0]["responseEntity"] = json!("hidden-company");
+    dangling["operations"][0]["responseRecordType"] = json!("hidden-company");
     assert_eq!(
         BRegMetadata::from_slice(&serde_json::to_vec(&dangling).unwrap())
             .unwrap_err()
@@ -1090,8 +608,8 @@ fn malformed_bindings_and_cross_field_references_fail_closed() {
 fn unknown_members_are_ignored_without_changing_known_selection_contracts() {
     let mut value = fixture();
     value["futureDescription"] = json!({"label": "Future registry description"});
-    value["entities"][0]["futureDescription"] = json!("Future entity description");
-    value["entities"][0]["operations"][2]["futureDescription"] = json!(true);
+    value["recordTypes"][0]["futureDescription"] = json!("Future entity description");
+    value["recordTypes"][0]["operations"][2]["futureDescription"] = json!(true);
     value["operations"][2]["futureDescription"] = json!({"group": "search"});
     value["operations"][2]["identifier"]["futureDescription"] = json!(true);
     value["operations"][2]["fields"][0]["futureDescription"] = json!("hint");
@@ -1122,7 +640,7 @@ fn known_members_keep_their_types_when_unknown_members_are_tolerated() {
         },
         {
             let mut value = fixture();
-            value["entities"][0]["readableFields"] = json!({});
+            value["recordTypes"][0]["readableFields"] = json!({});
             value
         },
         {
@@ -1458,7 +976,7 @@ fn complete_descriptive_metadata_is_retained_and_spatial_is_optional() {
         get["fields"][0]["codeLabels"] = json!({"active": "Active"});
         get["fields"][0]["reference"] = json!({
             "manualEntry": true,
-            "targetEntity": "company",
+            "targetRecordType": "company",
             "operations": [{"operationId": "records.company.get", "accessProfile": "company-writer",
                 "labelFields": ["legal-name"]}]
         });
@@ -1551,7 +1069,7 @@ fn exact_tombstone_batch_and_immediate_action_contracts_promote() {
         .as_array_mut()
         .unwrap()
         .extend([tombstone, batch]);
-    value["entities"][0]["operations"]
+    value["recordTypes"][0]["operations"]
         .as_array_mut()
         .unwrap()
         .extend([
@@ -1561,12 +1079,13 @@ fn exact_tombstone_batch_and_immediate_action_contracts_promote() {
     value["actions"] = json!([{
         "id": "register-company", "route": "/v1/actions/register-company",
         "conditionRoute": null, "contractFingerprint": REVISION,
+        "apiName": "registerCompany", "revision": REVISION, "display": {}, "execution": {"mode":"immediate"},
         "inputMode": "fixed", "maximumInputStringBytes": null,
         "inputs": [{"id": "legal-name", "apiName": "legalName", "fieldType": {
             "type": "string", "minimumLength": 0, "maximumLength": 100},
             "required": true, "nullable": false, "classification": "internal"}],
         "referenceInputs": [], "requiredConditionKeys": [],
-        "resultEffects": [{"effect": "company", "entity": "company", "operation": "create"}],
+        "resultEffects": [{"effect": "company", "recordType": "company", "operation": "create"}],
         "access": {"selectedProfile": "company-writer"},
         "routes": {"invoke": {"method": "POST", "path": "/v1/actions/register-company",
             "operationId": "actions.register-company.invoke", "requiresIdempotencyKey": true,
@@ -1614,7 +1133,7 @@ fn exact_tombstone_batch_and_immediate_action_contracts_promote() {
         .is_ok());
 
     let action = metadata
-        .select_immediate_action("register-company", "company-writer")
+        .select_action("register-company", "company-writer")
         .unwrap();
     assert_eq!(action.invoke_path(), "/v1/actions/register-company");
     assert!(!action.is_handler());
@@ -1623,14 +1142,14 @@ fn exact_tombstone_batch_and_immediate_action_contracts_promote() {
     let mut unsupported_input_mode = value.clone();
     unsupported_input_mode["actions"][0]["inputMode"] = json!("future-input-mode");
     let metadata = parse(&unsupported_input_mode);
-    assert_eq!(metadata.immediate_actions().len(), 1);
+    assert_eq!(metadata.actions().len(), 1);
     assert_eq!(
-        metadata.immediate_actions()[0].input_mode(),
+        metadata.actions()[0].input_mode(),
         Some("future-input-mode")
     );
     assert_eq!(
         metadata
-            .select_immediate_action("register-company", "company-writer")
+            .select_action("register-company", "company-writer")
             .unwrap_err()
             .kind(),
         BRegMetadataSelectionErrorKind::ContractMismatch
@@ -1651,10 +1170,10 @@ fn exact_tombstone_batch_and_immediate_action_contracts_promote() {
     let mut unsupported_action = value.clone();
     unsupported_action["actions"][0]["requiredCapabilities"] = json!(["future_action_protocol"]);
     let metadata = parse(&unsupported_action);
-    assert_eq!(metadata.immediate_actions().len(), 1);
+    assert_eq!(metadata.actions().len(), 1);
     assert_eq!(
         metadata
-            .select_immediate_action("register-company", "company-writer")
+            .select_action("register-company", "company-writer")
             .unwrap_err()
             .kind(),
         BRegMetadataSelectionErrorKind::RequiredCapability
@@ -1684,7 +1203,7 @@ fn exact_tombstone_batch_and_immediate_action_contracts_promote() {
     unsupported_bounds["actions"][0]["bounds"]["maximumTargets"] = json!(17);
     assert_eq!(
         parse(&unsupported_bounds)
-            .select_immediate_action("register-company", "company-writer")
+            .select_action("register-company", "company-writer")
             .unwrap_err()
             .kind(),
         BRegMetadataSelectionErrorKind::ContractMismatch
@@ -1697,7 +1216,7 @@ fn exact_tombstone_batch_and_immediate_action_contracts_promote() {
             "properties": {"value": {"type": "string"}}}
     });
     parse(&structured)
-        .select_immediate_action("register-company", "company-writer")
+        .select_action("register-company", "company-writer")
         .expect("a bounded closed Draft 2020-12 structured schema promotes");
 
     let oversized_properties = (0..3_000)
@@ -1718,7 +1237,7 @@ fn exact_tombstone_batch_and_immediate_action_contracts_promote() {
             json!({"type": "structured", "maximumBytes": 64, "schema": schema});
         assert_eq!(
             parse(&malformed)
-                .select_immediate_action("register-company", "company-writer")
+                .select_action("register-company", "company-writer")
                 .unwrap_err()
                 .kind(),
             BRegMetadataSelectionErrorKind::ContractMismatch
@@ -1739,12 +1258,12 @@ fn exact_tombstone_batch_and_immediate_action_contracts_promote() {
         json!({"type": "reference", "target": "company", "onDelete": "restrict"});
     optional_condition["actions"][0]["inputs"][0]["required"] = json!(false);
     optional_condition["actions"][0]["referenceInputs"] = json!([{
-        "input": "legal-name", "apiName": "legalName", "targetEntity": "company"
+        "input": "legal-name", "apiName": "legalName", "targetRecordType": "company"
     }]);
     optional_condition["actions"][0]["requiredConditionKeys"] = json!(["legalName"]);
     assert_eq!(
         parse(&optional_condition)
-            .select_immediate_action("register-company", "company-writer")
+            .select_action("register-company", "company-writer")
             .unwrap_err()
             .kind(),
         BRegMetadataSelectionErrorKind::ContractMismatch
@@ -1756,56 +1275,11 @@ fn exact_tombstone_batch_and_immediate_action_contracts_promote() {
         .remove("nullable");
     assert_eq!(
         parse(&value)
-            .select_immediate_action("register-company", "company-writer")
+            .select_action("register-company", "company-writer")
             .unwrap_err()
             .kind(),
         BRegMetadataSelectionErrorKind::ContractMismatch
     );
 }
 
-#[test]
-fn request_metadata_grants_are_retained_and_required_on_every_operation() {
-    let ungranted = parse(&fixture());
-    assert!(ungranted
-        .operations()
-        .iter()
-        .all(|operation| operation.readable_request_fields().is_empty()));
 
-    let mut missing = fixture();
-    missing["operations"][0]
-        .as_object_mut()
-        .unwrap()
-        .remove("readableRequestFields");
-    assert_eq!(
-        BRegMetadata::from_slice(&serde_json::to_vec(&missing).unwrap())
-            .unwrap_err()
-            .kind(),
-        BRegMetadataErrorKind::Shape
-    );
-
-    let mut granted = fixture();
-    granted["operations"][0]["readableRequestFields"] = json!(["reason", "review-state"]);
-    let metadata = parse(&granted);
-    assert_eq!(
-        metadata.operations()[0].readable_request_fields(),
-        ["reason", "review-state"]
-    );
-
-    let mut duplicate = fixture();
-    duplicate["operations"][0]["readableRequestFields"] = json!(["reason", "reason"]);
-    assert_eq!(
-        BRegMetadata::from_slice(&serde_json::to_vec(&duplicate).unwrap())
-            .unwrap_err()
-            .kind(),
-        BRegMetadataErrorKind::DuplicateIdentifier
-    );
-
-    let mut unknown = fixture();
-    unknown["operations"][0]["readableRequestFields"] = json!(["reviewer_notes"]);
-    assert_eq!(
-        BRegMetadata::from_slice(&serde_json::to_vec(&unknown).unwrap())
-            .unwrap_err()
-            .kind(),
-        BRegMetadataErrorKind::Shape
-    );
-}

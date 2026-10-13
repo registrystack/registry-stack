@@ -149,7 +149,7 @@ pub(crate) struct BRegAttachmentSource {
     pub(crate) registry_identifier: String,
     pub(crate) dataset_identifier: String,
     pub(crate) registry_revision: String,
-    pub(crate) entity_identifier: String,
+    pub(crate) record_type_identifier: String,
     pub(crate) access_profile: String,
     pub(crate) collection_path: String,
     pub(crate) source_binding: String,
@@ -161,7 +161,7 @@ pub struct BRegAttachmentSlot {
     registry_identifier: String,
     dataset_identifier: String,
     registry_revision: String,
-    entity_identifier: String,
+    record_type_identifier: String,
     access_profile: String,
     collection_path: String,
     source_binding: String,
@@ -196,8 +196,8 @@ impl BRegAttachmentSlot {
 
     /// Request entity that declares this slot.
     #[must_use]
-    pub fn entity_identifier(&self) -> &str {
-        &self.entity_identifier
+    pub fn record_type_identifier(&self) -> &str {
+        &self.record_type_identifier
     }
 
     /// Exact access profile the slot routes were filtered for.
@@ -363,7 +363,7 @@ impl BRegAttachmentSlot {
             registry_identifier: source.registry_identifier.clone(),
             dataset_identifier: source.dataset_identifier.clone(),
             registry_revision: source.registry_revision.clone(),
-            entity_identifier: source.entity_identifier.clone(),
+            record_type_identifier: source.record_type_identifier.clone(),
             access_profile: source.access_profile.clone(),
             collection_path: source.collection_path.clone(),
             source_binding: source.source_binding.clone(),

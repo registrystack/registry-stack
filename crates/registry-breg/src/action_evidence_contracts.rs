@@ -403,8 +403,8 @@ pub(crate) fn compile_evidence(
         let path = format!("actions[{}].evidence", action.id);
         if source.evidence.len() > MAX_EVIDENCE_CAPABILITIES
             || (!source.evidence.is_empty()
-                && source.handler.as_ref().is_none_or(|handler| {
-                    handler.kind() != Some(crate::contract::ActionHandlerKindSource::Rhai)
+                && action.handler.as_ref().is_none_or(|handler| {
+                    handler.kind != crate::model::CompiledPlanFunctionKind::Rhai
                 }))
         {
             errors.push(Diagnostic::error(
