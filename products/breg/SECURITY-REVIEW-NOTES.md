@@ -3189,3 +3189,107 @@ refusals above with an unchanged managed-database snapshot.
   v0.40.0 one is outside the promise; such a database is still refused or
   read as unavailable by the checks above, never read under the removed
   tolerances.
+
+## Development tokens for a client mapped to another resource
+
+`bregctl dev` requests each local client token for the resource the session's
+clients file assigns to that client. `token_async_with_claims` in
+`crates/registry-bregctl/src/dev/mod.rs` reads the retained clients and asks
+`config::client_resource` in `crates/registry-bregctl/src/dev/config.rs`
+which RFC 8707 `resource` to send: the audience `issuer.clientResources` maps
+the client to, or the session's own BReg audience (`State::audience`) for a
+client with no entry. It previously sent the BReg audience for every client.
+Startup (`tokens`), `bregctl dev token` (`fresh_token`), and the rehearsal
+tokens that are not purpose exchanges all go through that function, so one
+decision covers them.
+
+### Threat
+
+The change makes the audience of a development token depend on session
+configuration, so the question is whether a caller can obtain a token for an
+audience the session owner did not assign to that client: a client with no
+mapping receiving a token for another product's resource, a mapped client
+receiving a BReg token, or a token whose scopes the target resource does not
+define. A token for the wrong audience is a credential another local runtime
+would accept as its own.
+
+### Enforcement and defaults
+
+- `bregctl` enforces nothing about the issued token here. It only chooses
+  which `resource` to put in the request, and the token's audience is decided
+  by the issuer and checked by the runtime that receives the token.
+- The choice has one implementation, `config::client_resource`, keyed by the
+  exact client identifier. A client without an entry gets `State::audience`,
+  never another client's resource. `dev export-client` and the local review
+  and task-grant settings read the same function, so the resource a client is
+  told to request and the one `bregctl` requests for it cannot differ.
+- The mapping comes from state this `bregctl` wrote. A session reads its
+  clients file through `config::clients`, which runs `validate`, and
+  `initialize` writes the result to `.breg/dev/clients.json` in the
+  owner-only session tree. `retained_clients` reads it back through
+  `private::read` (owner only, a regular single-link file, opened without
+  following a link, size bounded) and the closed `config::retained` reader.
+  The command line names a client and never a resource: `fresh_token`
+  refuses an identifier that is not a bounded local client ID and a client
+  the retained file does not register, before it opens any credential path.
+- `validate` in `config.rs` admits an `issuer.clientResources` entry only for
+  a declared client, a declared `issuer.resources` audience, and client
+  scopes that are all scopes of that resource, at most 32 entries. A session
+  that borrows another session's issuer may declare none
+  (`validate_borrowed_issuer_composition`), and `prepare` refuses to borrow a
+  client the issuer owner maps to another resource.
+- The issuer registration agrees with the request. `issuer_description`
+  declares each `issuer.resources` audience as a resource server and points
+  a mapped client's role permission at its mapped resource server in place
+  of the BReg one.
+- The receiving runtime is the check that matters. `runtime` in `config.rs`
+  renders `authentication.oidc.audience` as `State::audience`, so the local
+  registry is configured to accept that audience only, and a token requested
+  for a mapped resource is not a registry credential.
+- The request is signed with the named client's own `private_key_jwt`
+  assertion key from `credentials/<client>/`, so the mapping changes which
+  resource a client asks for and never which client asks. `PrivateKeyJwt` in
+  `registry-platform-httputil` refuses a token response whose stated `scope`
+  lacks a requested scope. The token is stored under the session's `secrets/`
+  directory through `private::replace`, as before.
+
+### Tests
+
+`crates/registry-bregctl/src/dev/tests.rs`:
+`dev_token_requests_the_clients_registered_external_resource` runs the real
+token request against a local stand-in token endpoint and requires exactly
+one `resource` form value, the mapped audience, with the mapped client's
+identifier and scope.
+`dev_token_for_an_unmapped_client_requests_the_breg_audience_only` is the
+negative: in the same session, where another client is mapped, a client with
+no entry sends exactly one `resource`, the session's BReg audience, which the
+test requires to differ from the mapped one.
+
+`borrowed_issuer_refuses_owner_only_declarations_before_preparation`, in the
+same file and unchanged here, holds that a session borrowing an issuer cannot
+declare `clientResources`.
+
+### Accepted residuals
+
+- The stand-in endpoint proves what `bregctl` sends, not what an issuer
+  grants. What the pinned local issuer answers when a client requests a
+  resource it holds no permission on is that issuer's behaviour, and no test
+  in this repository pins it. `products/messaging/scripts/test-dev-shared-issuer.sh`
+  starts an owner session whose clients are mapped to a Messaging resource
+  against a real issuer and runs `bregctl dev token` for one of them. It
+  requires the written header file and does not present that token to a
+  runtime, it needs Docker, and it is not part of the database-free checks.
+- No test pins the `validate` refusal of an `issuer.clientResources` entry
+  that names an undeclared client, an undeclared audience, or a client whose
+  scopes the resource does not define. The refusal is unchanged here.
+- `config::retained` decodes the retained clients under the closed format and
+  does not rerun `validate`. A retained file edited by the session owner after
+  start can therefore map a client to a resource `validate` would have
+  refused. The owner already holds every client key in the same tree, the
+  issuer still decides what it issues, and the receiving runtime still checks
+  the audience.
+- A mapped client gets no client-credentials token for the BReg audience:
+  `bregctl` requests one resource per client, never two.
+- This is local development tooling. The token endpoint is the session's
+  loopback issuer origin (`State::issuer_origin`), and these tokens are not
+  deployment credentials.

@@ -46,13 +46,12 @@ fn rehearsal_token_provider_omits_empty_scopes_and_preserves_explicit_scopes() {
     );
 }
 
-#[test]
-fn dev_token_requests_the_clients_registered_external_resource() {
+/// A session whose `source` client is registered for `resource` and whose
+/// `operator` client is not, with its issuer placed on a local listener.
+fn external_resource_session(resource: &str) -> (tempfile::TempDir, State, TcpListener) {
     let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
-    let port = listener.local_addr().unwrap().port();
-    let (_temp, mut state, mut clients, files) = fixture();
-    state.issuer_port = port;
-    let resource = "urn:example:messaging";
+    let (temporary, mut state, mut clients, files) = fixture();
+    state.issuer_port = listener.local_addr().unwrap().port();
     let client = clients
         .clients
         .iter_mut()
@@ -69,7 +68,12 @@ fn dev_token_requests_the_clients_registered_external_resource() {
         .client_resources
         .insert("source".into(), resource.into());
     initialize(&state.root(), &state, &clients, &files).unwrap();
+    (temporary, state, listener)
+}
 
+/// The form fields `token_async` posts for `client`, read by a stand-in
+/// token endpoint on `listener` that answers with one compact token.
+fn token_request_form(listener: TcpListener, state: &State, client: &str) -> Vec<(String, String)> {
     let server = std::thread::spawn(move || {
         let (mut stream, _) = listener.accept().unwrap();
         stream
@@ -110,14 +114,44 @@ fn dev_token_requests_the_clients_registered_external_resource() {
         .enable_all()
         .build()
         .unwrap();
-    runtime.block_on(token_async(&state, "source")).unwrap();
+    runtime.block_on(token_async(state, client)).unwrap();
     let request = server.join().unwrap();
     assert!(request.starts_with("POST /oauth2/token HTTP/1.1"));
     let form = request.split("\r\n\r\n").nth(1).unwrap();
-    let fields: BTreeMap<_, _> = url::form_urlencoded::parse(form.as_bytes()).collect();
-    assert_eq!(fields.get("client_id").unwrap(), "source");
-    assert_eq!(fields.get("resource").unwrap(), resource);
-    assert_eq!(fields.get("scope").unwrap(), "messaging:send");
+    url::form_urlencoded::parse(form.as_bytes())
+        .into_owned()
+        .collect()
+}
+
+/// Every value the form carries for `name`, in the order sent.
+fn form_values<'a>(form: &'a [(String, String)], name: &str) -> Vec<&'a str> {
+    form.iter()
+        .filter(|(field, _)| field == name)
+        .map(|(_, value)| value.as_str())
+        .collect()
+}
+
+#[test]
+fn dev_token_requests_the_clients_registered_external_resource() {
+    let resource = "urn:example:messaging";
+    let (_temporary, state, listener) = external_resource_session(resource);
+
+    let form = token_request_form(listener, &state, "source");
+    assert_eq!(form_values(&form, "client_id"), ["source"]);
+    assert_eq!(form_values(&form, "resource"), [resource]);
+    assert_eq!(form_values(&form, "scope"), ["messaging:send"]);
+}
+
+#[test]
+fn dev_token_for_an_unmapped_client_requests_the_breg_audience_only() {
+    let resource = "urn:example:messaging";
+    let (_temporary, state, listener) = external_resource_session(resource);
+
+    let form = token_request_form(listener, &state, "operator");
+    assert_eq!(form_values(&form, "client_id"), ["operator"]);
+    assert_eq!(form_values(&form, "resource"), [state.audience()]);
+    assert_ne!(state.audience(), resource);
+    assert_eq!(form_values(&form, "scope"), ["registry:generic:operate"]);
 }
 
 pub(super) fn fixture() -> (tempfile::TempDir, State, Clients, BTreeMap<String, Vec<u8>>) {
