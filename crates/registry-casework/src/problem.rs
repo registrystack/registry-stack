@@ -203,7 +203,7 @@ Self::ReviewInitiatorExcluded=>{
                 "You submitted this request, and this review stage excludes the person who submitted it. Another reviewer must take it."
             },
 Self::ReviewInitiatorRequired=>{
-                "This review kind excludes the person who submitted the request, so the request must name its initiator."
+                "This review policy excludes the person who submitted the request, so the request must name its initiator."
             },
 Self::ReviewResultExpired=>{
                 "The retained review result is no longer available. Reconcile through the producer's retained source correlation."

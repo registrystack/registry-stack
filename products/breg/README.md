@@ -350,10 +350,12 @@ handler, declared business refusal, coordinated creates and an optional patch.
 See [native string patterns](native-patterns.md) for stored integrity rules.
 Its synthetic CLI cases assert computed effects and its PostgreSQL journeys
 verify stored values and existing action authority and concurrency contracts.
-The [citizen self-registration project](acceptance/citizen-self-registration/README.md)
-combines native ThunderID SMS signup, account-owned applications, Casework
-review, and automatic Person creation, account linking, and program enrollment.
-Its live driver uses the native products and separate disposable databases.
+The [citizen self-registration fixture](acceptance/citizen-self-registration/README.md)
+records an earlier ThunderID, BReg, and Casework integration design. Its
+Casework source-sync and automatic-review runner are historical and are not a
+current acceptance path. For current read-only native Proposal context pairing
+and independent apply authority, use the
+[canonical Casework review](../casework/examples/canonical-review/README.md).
 
 Run the current deterministic contract checks with:
 

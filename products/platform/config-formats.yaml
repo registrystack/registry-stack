@@ -2893,8 +2893,6 @@ outOfScope:
     reason: Repository pin metadata.
   - files: products/messaging/examples/providers/*/connection.example.yaml
     reason: Fragment of messaging/runtime providers.<id>; governed by that format.
-  - files: products/casework/examples/*/sources/*.breg-runtime.yaml
-    reason: Fragment of breg/runtime pasted by caseworkctl source add; governed by that format.
   - files: products/evidence/fixtures/conformance/**
     reason: Evidence conformance vectors, governed by the Evidence contracts.
   - files: products/render/bundles/*/schemas/*.schema.json

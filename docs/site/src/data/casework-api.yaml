@@ -25,7 +25,7 @@
     - ['`request.unprocessable`', '422', 'The request body does not match the Casework contract.']
     - ['`request.unsupported-media-type`', '415', 'Send a JSON request body with Content-Type application/json.']
     - ['`review.initiator-excluded`', '403', 'You submitted this request, and this review stage excludes the person who submitted it. Another reviewer must take it.']
-    - ['`review.initiator-required`', '422', 'This review kind excludes the person who submitted the request, so the request must name its initiator.']
+    - ['`review.initiator-required`', '422', 'This review policy excludes the person who submitted the request, so the request must name its initiator.']
     - ['`review.policy-mismatch`', '409', 'The expected review policy binding does not match the active policy.']
     - ['`review.query-too-broad`', '422', 'Narrow the queue or exact subject query to complete it within the configured read budget.']
     - ['`review.result-expired`', '410', 'The retained review result is no longer available. Reconcile through the producer''s retained source correlation.']

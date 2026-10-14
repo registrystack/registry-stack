@@ -1956,7 +1956,7 @@
                 "const": "review.initiator-required"
               },
               "detail": {
-                "const": "This review kind excludes the person who submitted the request, so the request must name its initiator."
+                "const": "This review policy excludes the person who submitted the request, so the request must name its initiator."
               },
               "status": {
                 "const": 422

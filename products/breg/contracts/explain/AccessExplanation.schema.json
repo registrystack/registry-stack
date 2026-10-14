@@ -75,7 +75,7 @@
     },
     "claimContract": {
       "type": ["object", "null"],
-      "description": "Passthrough of the compiled authority inventory, or null when that inventory failed. `principalClaims` is pinned for the Casework source-add consumer; every other member follows AuthorityInventory and remains outside this contract version.",
+      "description": "Passthrough of the compiled authority inventory, or null when that inventory failed. `principalClaims` is pinned for exact contract inspection; every other member follows AuthorityInventory and remains outside this contract version. Casework provider pairing verifies a sealed purpose-bound context export and grants no BReg authority.",
       "x-registry-passthrough": "bregctl writes the compiled authority inventory as the engine holds it; only principalClaims is pinned, and its other members follow AuthorityInventory outside this contract version.",
       "required": ["principalClaims"],
       "properties": {

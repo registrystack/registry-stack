@@ -328,7 +328,7 @@ impl CaseworkProblemCode {
             ),
             Self::ReviewInitiatorRequired => (
                 "Review initiator required",
-                "This review kind excludes the person who submitted the request, so the request must name its initiator.",
+                "This review policy excludes the person who submitted the request, so the request must name its initiator.",
             ),
             Self::ReviewQueryTooBroad => ("Review query too broad", "Narrow the queue or exact subject query to complete it within the configured read budget."),
             Self::ReviewPolicyMismatch => ("Review policy mismatch", "The expected review policy binding does not match the active policy."),
@@ -807,7 +807,7 @@ mod tests {
                 CaseworkProblemCode::ReviewInitiatorRequired,
                 422,
                 "Review initiator required",
-                "This review kind excludes the person who submitted the request, so the request must name its initiator.",
+                "This review policy excludes the person who submitted the request, so the request must name its initiator.",
             ),
             (
                 "review.result-expired",

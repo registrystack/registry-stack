@@ -295,8 +295,11 @@ profiles and token scopes still authorize each call.
 An integration client that must call BReg without becoming a journey or seed
 binding must opt in with `allowBregAccess: true`. Use that flag only when its
 scopes and authority claims are intentionally sufficient for the BReg profiles
-it will select. `caseworkctl source add` sets it only for exported Staff and
-Supervisor reviewers; other profile-free Casework clients remain excluded.
+it will select. For a Casework current-source review, configure the human
+reviewer's purpose-specific `get-review-context` profile and the independent
+service `get-review-status` profile explicitly in BReg. Pair the exact sealed
+context export with `caseworkctl provider pair`; pairing adds no client or BReg
+grant. Profile-free clients without `allowBregAccess` remain excluded.
 
 ```yaml
 apiVersion: id.registrystack.org/formats/breg/dev-clients/v1alpha1

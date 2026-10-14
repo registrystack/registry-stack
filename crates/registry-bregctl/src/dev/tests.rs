@@ -575,9 +575,9 @@ fn a_fresh_init_project_starts_without_edits() {
 
 #[test]
 fn the_professional_licences_submitter_is_a_person_a_paired_review_can_exclude() {
-    // The paired `professional-review` Casework template excludes a change
-    // request's initiator from its review, and BReg names an initiator only
-    // for a human caller. A service submitter would have its review refused.
+    // A review policy can exclude a change request's initiator, and BReg
+    // names an initiator only for a human caller. A service submitter would
+    // have its review refused under that policy.
     let client_bytes = fs::read(
         Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../products/breg/starters/professional-licences/core/dev-clients.yaml"),

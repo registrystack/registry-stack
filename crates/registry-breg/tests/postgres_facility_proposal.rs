@@ -10,8 +10,8 @@ mod postgres_harness;
 
 use registry_breg::{
     api::{VerifiedClaimValue, VerifiedRequestClaims},
-    compiler::{CompileProfile, compile_project_with_assets},
-    contract::{ModuleAssetSource, parse_project_yaml},
+    compiler::{compile_project_with_assets, CompileProfile},
+    contract::{parse_project_yaml, ModuleAssetSource},
     model::{CompiledActionExecution, CompiledProposalReview},
     proposal_workflow::{EntityId, FrozenPlannerKind, ProposalKey, ProposalSnapshot, RecordId},
 };
@@ -19,12 +19,12 @@ use registry_breg_client::{
     BRegActionInvocationRequest, BRegCreateRequest, BRegDirectWrite, BRegIdempotencyKey,
     BRegProblemCode, BRegProposal, BRegProposalState, BRegRecordFormat,
 };
-use serde_json::{Map, Value, json};
+use serde_json::{json, Map, Value};
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::{
-        Arc,
         atomic::{AtomicBool, AtomicUsize, Ordering},
+        Arc,
     },
 };
 use uuid::Uuid;
@@ -564,13 +564,11 @@ async fn canonical_rhai_correction_freezes_reviews_applies_and_recovers_locally(
     );
     assert!(purpose_read.context.fields.is_some());
     approve(&fixture, &submitted, &review).await;
-    assert!(
-        fixture
-            .mutations
-            .run_automatic_proposal_once_for_test()
-            .await
-            .unwrap()
-    );
+    assert!(fixture
+        .mutations
+        .run_automatic_proposal_once_for_test()
+        .await
+        .unwrap());
     assert_eq!(
         review.calls.load(Ordering::SeqCst),
         1,
@@ -603,13 +601,11 @@ async fn canonical_rhai_correction_freezes_reviews_applies_and_recovers_locally(
         )
     );
     review.unavailable.store(true, Ordering::SeqCst);
-    assert!(
-        !fixture
-            .mutations
-            .run_automatic_proposal_once_for_test()
-            .await
-            .unwrap()
-    );
+    assert!(!fixture
+        .mutations
+        .run_automatic_proposal_once_for_test()
+        .await
+        .unwrap());
     // Recover the original exact submission receipt after automatic application,
     // with the authority offline. This must retain its original response bytes.
     let replay = author.client.execute_proposal(&submit).await.unwrap();
@@ -712,13 +708,11 @@ async fn canonical_rhai_refusal_current_revision_and_status_guards_recover_by_re
             )
             .await
             .unwrap();
-        assert!(
-            fixture
-                .mutations
-                .run_automatic_proposal_once_for_test()
-                .await
-                .unwrap()
-        );
+        assert!(fixture
+            .mutations
+            .run_automatic_proposal_once_for_test()
+            .await
+            .unwrap());
         assert_eq!(
             author
                 .client
@@ -786,13 +780,11 @@ async fn canonical_rhai_refusal_current_revision_and_status_guards_recover_by_re
         assert_ne!(resubmitted.effect_digest(), submitted.effect_digest());
         assert_frozen_plan(&fixture, &resubmitted, &facility).await;
         approve(&fixture, &resubmitted, &review).await;
-        assert!(
-            fixture
-                .mutations
-                .run_automatic_proposal_once_for_test()
-                .await
-                .unwrap()
-        );
+        assert!(fixture
+            .mutations
+            .run_automatic_proposal_once_for_test()
+            .await
+            .unwrap());
         assert_eq!(
             author
                 .client

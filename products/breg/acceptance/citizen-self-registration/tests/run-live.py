@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run native SMS signup, real Casework review, and automatic BReg enrollment."""
+"""Historical native SMS signup runner for the retired Casework integration."""
 from __future__ import annotations
 
 import argparse
@@ -307,4 +307,11 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    print(
+        "This historical runner uses the retired Casework source-sync and "
+        "automatic-apply model. Use products/casework/examples/canonical-review/README.md "
+        "and products/casework/DEV-SOURCES.md for current review setup and "
+        "read-only native provider pairing.",
+        file=sys.stderr,
+    )
+    raise SystemExit(2)
