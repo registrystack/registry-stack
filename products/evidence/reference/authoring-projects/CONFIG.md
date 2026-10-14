@@ -1,5 +1,111 @@
 # Evidence authoring form reference
 
+The current normalized fields are described below and in the generated key-path
+inventory at the end of this page. The intervening historical reference describes
+the retired authoring format and will be migrated separately. Current authoring
+uses one `EvidenceProject`, named Sources and Functions, and a separate target
+authority document. Use the runnable [standalone example](../../examples/standalone/README.md)
+and the [current generated schemas](../../../../crates/registry-evidencectl/schemas/authoring/).
+
+## Current normalized fields
+
+Write the project in `evidence.yaml`. Stable identifiers connect
+`assertionDefinitions`, `sources`, `selectorProfiles`, and named `functions`.
+Optional `label` and `description` fields are presentation metadata. They do
+not change a definition's behavior revision. Presentation included in packaged
+artifacts remains covered by package integrity.
+
+### Selector fields and derivation references
+
+Each `selectorProfiles.<id>.fields.<field>` declares a closed `type` and only
+its applicable constraints:
+
+| `type` | Required constraints |
+|---|---|
+| `string` | `minimumBytes`, `maximumBytes`, each 1 through 8192, with minimum no greater than maximum |
+| `date` | None; values use canonical calendar dates |
+| `integer` | Inclusive `minimum` and `maximum`, within the JSON-safe integer range |
+| `boolean` | None |
+| `controlled-code` | Reviewed `codelist` asset, exact `codelistVersion`, and `maximumBytes` from 1 through 8192 |
+
+Each field may also have `label` and `description`. A profile has 1 through 16
+fields and a `maximumAggregateBytes` ceiling; each string or code field must
+fit that ceiling. Codelist paths name plain YAML or JSON assets under
+`codelists/`, and the declared version must match the reviewed asset.
+
+An assertion's `derive.selectorInputs` explicitly exposes selector fields to
+its named derive Function. Each entry names a subject `role` and an
+`alternatives` list. Each alternative names a declared selector `profile` and
+a nonempty unique `fields` list from that profile. The role and profile must
+also belong to the definition's subjects. This reference grants the Function
+access to those fields during derivation; it does not grant a caller access
+or include those private fields in the public assertion.
+
+### Output constraints
+
+Each `assertionDefinitions.<id>.outputs.<id>` names a public `concept` URI and
+one of the following exact `type` values. Supply all constraints listed for
+that type and omit constraints belonging to other types.
+
+| `type` | Required constraints |
+|---|---|
+| `boolean` | None |
+| `controlled-code` | `codelist`, `codelistVersion`, `maximumBytes` |
+| `controlled-category` | Inline nonempty unique `values`, or `codelist`, `categoryScheme`, `schemeVersion`, `maximumBytes` |
+| `bounded-identifier` | `prefix`, `minimumBytes`, `maximumBytes`; the maximum is at most 1024 bytes and exceeds the prefix length |
+| `bounded-integer` | Inclusive JSON-safe integer `minimum` and `maximum` |
+| `bounded-decimal` | Quoted canonical decimal `minimum` and `maximum`, plus `maximumScale` from 0 through 9 |
+| `date-bucket` | `bucketScheme`, `schemeVersion`, `codelist` |
+| `time-bucket` | `bucketScheme`, `schemeVersion`, `codelist` |
+| `audience-scoped-entity-reference` | `maximumBytes` |
+| `controlled-code-list` | `codelist`, `codelistVersion`, `minimumItems`, `maximumItems`, `unique: true` |
+| `entity-reference-list` | `minimumItems`, `maximumItems`, `unique: true` |
+| `reviewed-structured-value` | Reviewed `schema` asset and `maximumSerializedBytes` |
+
+Numeric minima cannot exceed maxima. JSON-safe integers range from
+-9007199254740991 through 9007199254740991. Decimal bounds are strings rather
+than floating-point numbers, with at most 28 digits and 9 fractional digits;
+canonical text has no leading plus, redundant leading zero, or trailing
+fractional zero. List bounds are 1 through 64
+items, byte maxima are 1 through 8192 unless the type specifies a smaller
+ceiling, and structured values have a serialized ceiling of 1 through 65536
+bytes.
+
+Explicit codelists are reviewed project assets. `codelistVersion` identifies a
+code vocabulary; `categoryScheme` or `bucketScheme` identifies the scheme URI,
+and `schemeVersion` its version. The compiler checks those identities against
+the asset and includes it in the package. Inline category values are compiled
+to a deterministic codelist. A structured Output's `schema` supplies its closed
+field shape to validation and generated TypeScript/Python declarations.
+
+Only `reviewed-structured-value` may declare `sdJwtVc`. Its `claim` is a unique,
+non-reserved ASCII claim name of at most 64 characters within the definition, and
+`disclosure` must be `top-level`. This projection does not authorize holder
+delivery: the definition ceiling, complete target grant, and selected
+representation must permit it.
+
+### Local client actor choice and target authority
+
+An `EvidenceAccessClient` may declare `actorKind` as `human`, `agent`, or
+`service`. When omitted, local tooling infers an actor only if the assigned
+access profiles and exchange mode admit one compatible choice. An ambiguous
+choice requires `evidencectl access client add --actor-kind`. Selecting an
+actor never widens a definition's ceiling or the target's complete grants;
+each request remains subject to its own definition and authority checks.
+
+The target's `authority` reference selects a separate
+`EvidenceTargetAuthority` for the same target and project. Its `accessProfiles`
+contain complete grants, including purpose, subject selectors and value
+origins, binding, and representations. Client registration and selector
+references grant no authority themselves. Private selector values, source
+responses, credentials, and secret values remain outside public inspection
+and generated declarations, which describe their types.
+
+## Historical authoring format
+
+The following body describes retired formats. The current normalized field
+section above and generated inventories below are the maintained additions.
+
 Status: Adopter tooling, outside the frozen Version 1 contract set
 
 The authoring form is what an adopter writes before a deployment project
@@ -781,7 +887,7 @@ Every key path the generated authoring schemas define, in one machine-checked
 list. A property is written `name`, an array item `name[]`, and a map value
 `name.*`.
 
-`products/evidence/scripts/check-config-key-paths.sh` fails when either block
+`products/evidence/scripts/check-config-key-paths.sh` fails when a block
 and its schema disagree in either direction, so a key added to the authoring
 model cannot ship without a line here, and a line here cannot outlive its key.
 The blocks are generated. After regenerating the schemas with
@@ -821,6 +927,13 @@ assertionDefinitions.*.derive
 assertionDefinitions.*.derive.function
 assertionDefinitions.*.derive.parameters
 assertionDefinitions.*.derive.selectorInputs
+assertionDefinitions.*.derive.selectorInputs[]
+assertionDefinitions.*.derive.selectorInputs[].alternatives
+assertionDefinitions.*.derive.selectorInputs[].alternatives[]
+assertionDefinitions.*.derive.selectorInputs[].alternatives[].fields
+assertionDefinitions.*.derive.selectorInputs[].alternatives[].fields[]
+assertionDefinitions.*.derive.selectorInputs[].alternatives[].profile
+assertionDefinitions.*.derive.selectorInputs[].role
 assertionDefinitions.*.description
 assertionDefinitions.*.disclosureGuard
 assertionDefinitions.*.existenceDisclosure
@@ -838,20 +951,29 @@ assertionDefinitions.*.label
 assertionDefinitions.*.observationTimezone
 assertionDefinitions.*.outputs
 assertionDefinitions.*.outputs.*
+assertionDefinitions.*.outputs.*.bucketScheme
+assertionDefinitions.*.outputs.*.categoryScheme
+assertionDefinitions.*.outputs.*.codelist
+assertionDefinitions.*.outputs.*.codelistVersion
 assertionDefinitions.*.outputs.*.concept
 assertionDefinitions.*.outputs.*.description
 assertionDefinitions.*.outputs.*.label
 assertionDefinitions.*.outputs.*.maximum
 assertionDefinitions.*.outputs.*.maximumBytes
 assertionDefinitions.*.outputs.*.maximumItems
+assertionDefinitions.*.outputs.*.maximumScale
 assertionDefinitions.*.outputs.*.maximumSerializedBytes
 assertionDefinitions.*.outputs.*.minimum
 assertionDefinitions.*.outputs.*.minimumBytes
 assertionDefinitions.*.outputs.*.minimumItems
 assertionDefinitions.*.outputs.*.prefix
 assertionDefinitions.*.outputs.*.schema
+assertionDefinitions.*.outputs.*.schemeVersion
 assertionDefinitions.*.outputs.*.sdJwtVc
+assertionDefinitions.*.outputs.*.sdJwtVc.claim
+assertionDefinitions.*.outputs.*.sdJwtVc.disclosure
 assertionDefinitions.*.outputs.*.type
+assertionDefinitions.*.outputs.*.unique
 assertionDefinitions.*.outputs.*.values
 assertionDefinitions.*.outputs.*.values[]
 assertionDefinitions.*.purpose
@@ -887,6 +1009,16 @@ selectorProfiles
 selectorProfiles.*
 selectorProfiles.*.description
 selectorProfiles.*.fields
+selectorProfiles.*.fields.*
+selectorProfiles.*.fields.*.codelist
+selectorProfiles.*.fields.*.codelistVersion
+selectorProfiles.*.fields.*.description
+selectorProfiles.*.fields.*.label
+selectorProfiles.*.fields.*.maximum
+selectorProfiles.*.fields.*.maximumBytes
+selectorProfiles.*.fields.*.minimum
+selectorProfiles.*.fields.*.minimumBytes
+selectorProfiles.*.fields.*.type
 selectorProfiles.*.label
 selectorProfiles.*.maximumAggregateBytes
 sources
@@ -960,6 +1092,7 @@ governed task policy. A `first-party` exchange also requires
 ```text
 accessProfiles
 accessProfiles[]
+actorKind
 apiVersion
 clientId
 evidenceAudience
@@ -1074,9 +1207,10 @@ subjectBinding
 
 ### `<target>-authority.yaml`
 
-The normalized target authority document owns issuer, signing, access,
-authentication, audit, rate-limit, and optional publication configuration for
-one target. It is compiled separately from the project and target documents.
+The normalized target authority document selects one target and project and
+owns its complete `accessProfiles` grants. Operational settings remain in the
+target document. Authority is compiled and activated separately from the
+immutable governed package.
 
 <!-- evidence-authoring-target-authority-key-paths:start -->
 ```text
