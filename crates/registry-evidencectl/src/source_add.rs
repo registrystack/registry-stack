@@ -263,7 +263,7 @@ fn configure(
     validate_endpoints(&inspection.endpoints)?;
     let selection = select(&args, &inspection, terminal)?;
     let mut prepare = base;
-    add_pair(&mut prepare, "--entity", &selection.entity);
+    add_pair(&mut prepare, "--record-type", &selection.entity);
     add_pair(&mut prepare, "--selector-field", &selection.selector_field);
     add_pair(
         &mut prepare,
@@ -394,7 +394,7 @@ fn configure(
         "evidence-source".into(),
         registry.as_os_str().into(),
     ];
-    add_pair(&mut generate, "--entity", &selection.entity);
+    add_pair(&mut generate, "--record-type", &selection.entity);
     add_pair(&mut generate, "--access-profile", &selection.access_profile);
     add_pair(&mut generate, "--selector", &selection.selector_profile);
     add_pair(&mut generate, "--fields", selection.fields.join(","));
@@ -1134,9 +1134,9 @@ mod tests {
                     "entities":[{"id":"record","selectorFields":[{"id":"code","type":"string"}],
                         "readableFields":[{"id":"code","type":"string"},{"id":"name","type":"string"},{"id":"group","type":"string"}],
                         "rowFields":[{"id":"group","type":"string"}]}]});
-                if arguments.iter().any(|arg| arg == "--entity") {
+                if arguments.iter().any(|arg| arg == "--record-type") {
                     for (key, flag) in [
-                        ("entity", "--entity"),
+                        ("entity", "--record-type"),
                         ("selectorField", "--selector-field"),
                         ("selectorProfile", "--selector-profile"),
                         ("accessProfile", "--access-profile"),
@@ -1360,7 +1360,7 @@ mod tests {
         selected.apply = false;
         let report = configure(selected, false, false, &mut |a| {
             let mut report = provider.invoke(a)?;
-            report["recoveredPriorApply"] = json!(!a.iter().any(|arg| arg == "--entity"));
+            report["recoveredPriorApply"] = json!(!a.iter().any(|arg| arg == "--record-type"));
             report["requiresRestart"] = json!(false);
             Ok(report)
         })
@@ -2007,7 +2007,7 @@ assertionDefinitions:
         };
         let mut prepare = public("dev", "prepare-source");
         for (flag, value) in [
-            ("--entity", "record"),
+            ("--record-type", "record"),
             ("--selector-field", "code"),
             ("--readable-fields", "name"),
             ("--client", "registry-name"),
@@ -2042,7 +2042,7 @@ assertionDefinitions:
         assert!(export.is_absolute() && export.file_name().unwrap() == "source");
         let mut generate = public("generate", "evidence-source");
         for (flag, value) in [
-            ("--entity", "record"),
+            ("--record-type", "record"),
             ("--access-profile", "registry-name"),
             ("--selector", "registry-name"),
             ("--fields", "name"),
