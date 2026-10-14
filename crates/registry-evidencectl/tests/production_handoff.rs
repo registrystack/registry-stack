@@ -409,13 +409,18 @@ fn explain_refuses_unknown_source_members_without_disclosing_values() {
         .stdout
         .windows(CANARY.len())
         .any(|part| part == CANARY.as_bytes()));
+    assert!(!output
+        .stderr
+        .windows(CANARY.len())
+        .any(|part| part == CANARY.as_bytes()));
     let report: Value = serde_json::from_slice(&output.stdout).expect("refusal JSON report");
-    assert!(report["findings"]
+    assert_eq!(report["status"], "refused");
+    assert!(report["diagnostics"]
         .as_array()
-        .unwrap()
+        .expect("diagnostics array")
         .iter()
-        .any(|finding| {
-            finding["path"]
+        .any(|diagnostic| {
+            diagnostic["path"]
                 .as_str()
                 .is_some_and(|path| path.contains("/sources/people/unknownSourceMember"))
         }));
@@ -429,9 +434,17 @@ fn offline_check_makes_private_staging_under_umask_022() {
     fixture.stage_authoring_project();
     fixture.stage_target();
 
+    let runtime_library_path = std::env::var("REGISTRY_CARGO_RUNTIME_LIBRARY_PATH")
+        .or_else(|_| std::env::var("DYLD_FALLBACK_LIBRARY_PATH"))
+        .unwrap_or_default();
     let output = assert_success(
-        Command::new("sh")
-            .args(["-c", "umask 022\nexec \"$@\"", "evidencectl-check"])
+        Command::new("/bin/sh")
+            .args([
+                "-c",
+                "umask 022\nexport DYLD_FALLBACK_LIBRARY_PATH=\"${REGISTRY_CARGO_RUNTIME_LIBRARY_PATH:-}\"\nexec \"$@\"",
+                "evidencectl-check",
+            ])
+            .env("REGISTRY_CARGO_RUNTIME_LIBRARY_PATH", runtime_library_path)
             .arg(env!("CARGO_BIN_EXE_evidencectl"))
             .args(["--format", "json", "check"])
             .arg(&fixture.project)
@@ -445,7 +458,7 @@ fn offline_check_makes_private_staging_under_umask_022() {
     );
     let report: Value = serde_json::from_slice(&output.stdout).expect("check JSON report");
     assert_eq!(report["status"], "complete");
-    assert_eq!(report["proof"], "deployment-closure");
+    assert_eq!(report["proof"], "compiled-target");
 }
 
 #[test]
@@ -470,14 +483,14 @@ fn explicit_evidence_grade_target_applies_its_own_strict_source_rules() {
         .expect("evidence-grade check starts");
     assert_eq!(output.status.code(), Some(1));
     let report: Value = serde_json::from_slice(&output.stdout).expect("refusal JSON report");
-    assert_eq!(report["status"], "refused");
-    assert!(report["findings"]
+    assert_eq!(report["status"], "domain-refusal");
+    assert!(report["diagnostics"]
         .as_array()
-        .unwrap()
+        .expect("diagnostics array")
         .iter()
-        .any(|finding| {
-            finding["severity"] == "error"
-                && finding["path"]
+        .any(|diagnostic| {
+            diagnostic["severity"] == "error"
+                && diagnostic["path"]
                     .as_str()
                     .is_some_and(|path| path.contains("/connections/people/origin"))
         }));
