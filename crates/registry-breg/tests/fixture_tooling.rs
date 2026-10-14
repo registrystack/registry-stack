@@ -2,9 +2,9 @@
 
 #![cfg(all(feature = "runtime", feature = "tooling"))]
 
-use registry_breg::compiler::{CompileProfile, compile_project, module_digest};
+use registry_breg::compiler::{compile_project, module_digest, CompileProfile};
 use registry_breg::contract::{parse_module_yaml, parse_project_json, parse_project_yaml};
-use registry_breg::fixtures::{FixtureError, LogicalReferenceRefusal, validate_fixture_journeys};
+use registry_breg::fixtures::{validate_fixture_journeys, FixtureError, LogicalReferenceRefusal};
 
 const PROJECT_TEMPLATE: &[u8] = include_bytes!("fixtures/fixture-tooling/project.yaml");
 const MODULE_SOURCE: &[u8] = include_bytes!("fixtures/fixture-tooling/module.yaml");
@@ -569,9 +569,7 @@ fn production_schema_test_executor_has_no_raw_server_source_or_receipt_seams() {
                 .expect("database is first accessed"),
         "credential shape and mode must fail before database I/O"
     );
-    assert!(
-        internal_executor.contains("let final_facts = database_execution_facts(&runtime.pool)")
-    );
+    assert!(internal_executor.contains("let final_facts = database_execution_facts(&runtime.pool)"));
     assert!(internal_executor.contains("final_facts != runtime.initial_facts"));
     assert!(internal_executor.contains("!runtime.readiness.is_ready().await"));
     assert!(!implementation.contains("pub fn build_schema_test_receipt"));
@@ -1239,18 +1237,18 @@ fn fixture_tooling_handler_refusals_and_negative_inputs_use_the_compiled_contrac
             "recordCapture: active-register",
             "recordCapture: uncaptured-register",
         ),
-        source.replace("      entityId: person\n", ""),
+        source.replace("      recordType: person\n", ""),
         source.replace("      fieldId: identifier\n", ""),
-        source.replace("entityId: person", "entityId: unknown"),
+        source.replace("recordType: person", "recordType: unknown"),
         source.replace("fieldId: identifier", "fieldId: unknown"),
         source.replace("fieldId: identifier", "fieldId: display-name"),
         source.replace(
-            "entityId: person\n      fieldId: identifier",
-            "entityId: register\n      fieldId: register-code",
+            "recordType: person\n      fieldId: identifier",
+            "recordType: register\n      fieldId: register-code",
         ),
         source.replace(
-            "status: 409\n      problemCode: mutation.conflict\n      entityId:",
-            "status: 400\n      problemCode: request.invalid\n      entityId:",
+            "status: 409\n      problemCode: mutation.conflict\n      recordType:",
+            "status: 400\n      problemCode: request.invalid\n      recordType:",
         ),
         source.replace("      refusalCode: blank-name\n", ""),
         source.replace("refusalCode: blank-name", "refusalCode: unknown"),

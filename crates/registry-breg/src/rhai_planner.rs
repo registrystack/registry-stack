@@ -3,7 +3,7 @@
 //! execution mechanics; BReg owns inputs and plan validation.
 
 use registry_platform_script::rhai as platform;
-use rhai::{AST, Array, Dynamic, Engine, EvalAltResult, ImmutableString, Map, Position};
+use rhai::{Array, Dynamic, Engine, EvalAltResult, ImmutableString, Map, Position, AST};
 use serde_json::Value;
 use std::time::Instant;
 
@@ -48,17 +48,6 @@ pub enum PlanError {
 }
 
 impl PlanError {
-    /// The closed kinds a submission is refused for. A planner that exhausted
-    /// its time budget is absent: it is a service outage, not a refusal.
-    pub const PLAN_REFUSALS: [Self; 6] = [
-        Self::Source,
-        Self::Entrypoint,
-        Self::Execution,
-        Self::Result,
-        Self::Ceiling,
-        Self::Resource,
-    ];
-
     pub const fn code(self) -> &'static str {
         match self {
             Self::Source => "action.plan.source",
@@ -68,24 +57,6 @@ impl PlanError {
             Self::Ceiling => "action.plan.ceiling",
             Self::Resource => "action.plan.resource",
             Self::Deadline => "action.plan.deadline",
-        }
-    }
-
-    /// The exact problem detail the service answers for this failure.
-    ///
-    /// A refusal names the failure kind from the closed vocabulary and nothing
-    /// else: no script text, no request value, no target data. A planner that
-    /// ran out of time is an outage rather than a refusal, so it carries the
-    /// unavailable detail every other timeout carries.
-    pub const fn problem_detail(self) -> &'static str {
-        match self {
-            Self::Source => "The Action plan was refused: action.plan.source.",
-            Self::Entrypoint => "The Action plan was refused: action.plan.entrypoint.",
-            Self::Execution => "The Action plan was refused: action.plan.execution.",
-            Self::Result => "The Action plan was refused: action.plan.result.",
-            Self::Ceiling => "The Action plan was refused: action.plan.ceiling.",
-            Self::Resource => "The Action plan was refused: action.plan.resource.",
-            Self::Deadline => "The Registry mutation service is unavailable.",
         }
     }
 }

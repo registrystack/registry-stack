@@ -13,7 +13,7 @@ use std::fmt;
 
 use registry_platform_audit::AuditEntry;
 use registry_platform_canonical_json::parse_json_strict;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use tokio_postgres::GenericClient;
 use uuid::Uuid;
 

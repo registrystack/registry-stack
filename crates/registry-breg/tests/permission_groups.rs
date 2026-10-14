@@ -9,10 +9,10 @@
 mod source_bytes;
 
 use registry_breg::contract::{
-    DatasetOperation, Operation, RegistryProject, parse_project_json, parse_project_yaml,
-    read_project_yaml,
+    parse_project_json, parse_project_yaml, read_project_yaml, DatasetOperation, Operation,
+    RegistryProject,
 };
-use registry_breg::{CompileProfile, compile_project};
+use registry_breg::{compile_project, CompileProfile};
 
 const PROJECT: &str = "\
 apiVersion: id.registrystack.org/formats/breg/project/v1alpha1

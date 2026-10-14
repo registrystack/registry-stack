@@ -169,21 +169,19 @@ fn field(
                 .iter()
                 .find(|item| item.id == *vocabulary)
         });
-        value["codeLabels"] = json!(
-            values
-                .iter()
-                .map(|code| {
-                    let label = authored
-                        .and_then(|vocabulary| {
-                            vocabulary.concepts.iter().find(|item| item.code == *code)
-                        })
-                        .and_then(|concept| concept.label.as_ref())
-                        .map(text_label)
-                        .unwrap_or_else(|| humanize(code));
-                    (code.clone(), label)
-                })
-                .collect::<BTreeMap<_, _>>()
-        );
+        value["codeLabels"] = json!(values
+            .iter()
+            .map(|code| {
+                let label = authored
+                    .and_then(|vocabulary| {
+                        vocabulary.concepts.iter().find(|item| item.code == *code)
+                    })
+                    .and_then(|concept| concept.label.as_ref())
+                    .map(text_label)
+                    .unwrap_or_else(|| humanize(code));
+                (code.clone(), label)
+            })
+            .collect::<BTreeMap<_, _>>());
     }
     Some(value)
 }

@@ -365,10 +365,8 @@
               "repeatable": false,
               "default_values": [],
               "possible_values": [
-                "professional-licences",
-                "agricultural-holdings",
-                "public-organizations",
-                "seed-lots"
+                "minimal-directory",
+                "facility-registry"
               ],
               "environment": null
             },
@@ -699,11 +697,11 @@
               "subcommands": []
             },
             {
-              "name": "planner-test",
-              "invocation": "bregctl project planner-test",
-              "about": "Test a Rhai request planner or action handler with bounded synthetic JSON",
+              "name": "action-test",
+              "invocation": "bregctl project action-test",
+              "about": "Test a named Action plan function with bounded synthetic JSON",
               "long_about": null,
-              "usage": "bregctl project planner-test [OPTIONS] <--entity <ENTITY>|--action <ACTION>> <PROJECT>",
+              "usage": "bregctl project action-test [OPTIONS] --input <JSON_FILE> --action <ACTION> <PROJECT>",
               "arguments": [
                 {
                   "display": "<PROJECT>",
@@ -717,27 +715,9 @@
               ],
               "options": [
                 {
-                  "display": "--entity <ENTITY>",
-                  "description": "Compiled change-request entity whose Rhai planner will run; pair with --request",
-                  "always_required": false,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
-                  "environment": null
-                },
-                {
-                  "display": "--request <JSON_FILE>",
-                  "description": "Bounded strict JSON object containing synthetic request fields; requires --entity. A symbolic link at any component of this path is refused.",
-                  "always_required": false,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
-                  "environment": null
-                },
-                {
                   "display": "--action <ACTION>",
-                  "description": "Compiled immediate action whose Rhai handler will run; pair with --input",
-                  "always_required": false,
+                  "description": "Compiled Action whose named plan function will run; pair with --input",
+                  "always_required": true,
                   "repeatable": false,
                   "default_values": [],
                   "possible_values": [],
@@ -787,28 +767,6 @@
               ],
               "constraints": [
                 {
-                  "kind": "required-exactly-one",
-                  "when": null,
-                  "arguments": [
-                    "--entity <ENTITY>",
-                    "--action <ACTION>"
-                  ]
-                },
-                {
-                  "kind": "requires-all",
-                  "when": "--entity <ENTITY>",
-                  "arguments": [
-                    "--request <JSON_FILE>"
-                  ]
-                },
-                {
-                  "kind": "requires-all",
-                  "when": "--request <JSON_FILE>",
-                  "arguments": [
-                    "--entity <ENTITY>"
-                  ]
-                },
-                {
                   "kind": "requires-all",
                   "when": "--action <ACTION>",
                   "arguments": [
@@ -828,54 +786,6 @@
                   "arguments": [
                     "--input <JSON_FILE>",
                     "--action <ACTION>"
-                  ]
-                },
-                {
-                  "kind": "mutually-exclusive",
-                  "when": null,
-                  "arguments": [
-                    "--action <ACTION>",
-                    "--entity <ENTITY>"
-                  ]
-                },
-                {
-                  "kind": "mutually-exclusive",
-                  "when": null,
-                  "arguments": [
-                    "--action <ACTION>",
-                    "--request <JSON_FILE>"
-                  ]
-                },
-                {
-                  "kind": "mutually-exclusive",
-                  "when": null,
-                  "arguments": [
-                    "--entity <ENTITY>",
-                    "--expect <JSON_FILE>"
-                  ]
-                },
-                {
-                  "kind": "mutually-exclusive",
-                  "when": null,
-                  "arguments": [
-                    "--entity <ENTITY>",
-                    "--input <JSON_FILE>"
-                  ]
-                },
-                {
-                  "kind": "mutually-exclusive",
-                  "when": null,
-                  "arguments": [
-                    "--expect <JSON_FILE>",
-                    "--request <JSON_FILE>"
-                  ]
-                },
-                {
-                  "kind": "mutually-exclusive",
-                  "when": null,
-                  "arguments": [
-                    "--input <JSON_FILE>",
-                    "--request <JSON_FILE>"
                   ]
                 }
               ],
@@ -1029,7 +939,8 @@
                 "manifest",
                 "metadata",
                 "sql",
-                "evidence-source"
+                "evidence-source",
+                "sdk"
               ],
               "environment": null
             },
@@ -1809,20 +1720,6 @@
                   "environment": null
                 },
                 {
-                  "display": "--step <STEP>",
-                  "description": "Advance one explicit source-owned request step. External review is completed separately",
-                  "always_required": false,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [
-                    "submit",
-                    "inspect",
-                    "apply",
-                    "history"
-                  ],
-                  "environment": null
-                },
-                {
                   "display": "--format <FORMAT>",
                   "description": "Emit the selected command's report in this format",
                   "always_required": false,
@@ -1879,7 +1776,7 @@
                 "routes",
                 "queries",
                 "actions",
-                "change-requests",
+                "proposals",
                 "events",
                 "lifecycle"
               ],
@@ -2900,7 +2797,7 @@
               "invocation": "bregctl data validate",
               "about": "Validate a JSONL import file against one closed package plan",
               "long_about": null,
-              "usage": "bregctl data validate [OPTIONS] --package <ABSOLUTE_DIRECTORY> --entity <ID> --profile <ID> --operation <OPERATION> --input <FILE>",
+              "usage": "bregctl data validate [OPTIONS] --package <ABSOLUTE_DIRECTORY> --record-type <ID> --profile <ID> --operation <OPERATION> --input <FILE>",
               "arguments": [],
               "options": [
                 {
@@ -2913,8 +2810,8 @@
                   "environment": null
                 },
                 {
-                  "display": "--entity <ID>",
-                  "description": "Compiled entity identifier",
+                  "display": "--record-type <ID>",
+                  "description": "Compiled Record type identifier",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -2983,7 +2880,7 @@
               "invocation": "bregctl data import",
               "about": "Import JSONL records through the ordinary authenticated batch API",
               "long_about": null,
-              "usage": "bregctl data import [OPTIONS] --package <ABSOLUTE_DIRECTORY> --breg-url <URL> --access-token-file <ABSOLUTE_FILE> --entity <ID> --profile <ID> --operation <OPERATION> --input <FILE> --checkpoint <FILE>",
+              "usage": "bregctl data import [OPTIONS] --package <ABSOLUTE_DIRECTORY> --breg-url <URL> --access-token-file <ABSOLUTE_FILE> --record-type <ID> --profile <ID> --operation <OPERATION> --input <FILE> --checkpoint <FILE>",
               "arguments": [],
               "options": [
                 {
@@ -3014,8 +2911,8 @@
                   "environment": null
                 },
                 {
-                  "display": "--entity <ID>",
-                  "description": "Compiled entity identifier",
+                  "display": "--record-type <ID>",
+                  "description": "Compiled Record type identifier",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -3102,7 +2999,7 @@
               "invocation": "bregctl data export",
               "about": "Export records through the ordinary authenticated list API",
               "long_about": null,
-              "usage": "bregctl data export [OPTIONS] --package <ABSOLUTE_DIRECTORY> --breg-url <URL> --access-token-file <ABSOLUTE_FILE> --entity <ID> --profile <ID> --field <ID> --output <FILE> --checkpoint <FILE>",
+              "usage": "bregctl data export [OPTIONS] --package <ABSOLUTE_DIRECTORY> --breg-url <URL> --access-token-file <ABSOLUTE_FILE> --record-type <ID> --profile <ID> --field <ID> --output <FILE> --checkpoint <FILE>",
               "arguments": [],
               "options": [
                 {
@@ -3133,8 +3030,8 @@
                   "environment": null
                 },
                 {
-                  "display": "--entity <ID>",
-                  "description": "Compiled entity identifier",
+                  "display": "--record-type <ID>",
+                  "description": "Compiled Record type identifier",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -3751,11 +3648,11 @@
           ]
         },
         {
-          "name": "request-retention",
-          "invocation": "bregctl request-retention",
-          "about": "Inspect and erase eligible change-request retention detail",
+          "name": "proposal-retention",
+          "invocation": "bregctl proposal-retention",
+          "about": "Inspect and erase eligible Proposal retention detail",
           "long_about": null,
-          "usage": "bregctl request-retention [OPTIONS] <COMMAND>",
+          "usage": "bregctl proposal-retention [OPTIONS] <COMMAND>",
           "arguments": [],
           "options": [
             {
@@ -3786,10 +3683,10 @@
           "subcommands": [
             {
               "name": "list",
-              "invocation": "bregctl request-retention list",
-              "about": "List bounded value-free change-request retention rows",
+              "invocation": "bregctl proposal-retention list",
+              "about": "List bounded value-free Proposal retention rows",
               "long_about": null,
-              "usage": "bregctl request-retention list [OPTIONS] --runtime-config <ABSOLUTE_FILE>",
+              "usage": "bregctl proposal-retention list [OPTIONS] --runtime-config <ABSOLUTE_FILE>",
               "arguments": [],
               "options": [
                 {
@@ -3802,8 +3699,8 @@
                   "environment": null
                 },
                 {
-                  "display": "--request-entity <ENTITY>",
-                  "description": "Limit the value-free listing to one compiled change-request entity",
+                  "display": "--action-id <ACTION>",
+                  "description": "Limit the value-free listing to one compiled Action",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],
@@ -3821,7 +3718,7 @@
                 },
                 {
                   "display": "--limit <COUNT>",
-                  "description": "Maximum number of request retention rows to return",
+                  "description": "Maximum number of Proposal retention rows to return",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [
@@ -3859,10 +3756,10 @@
             },
             {
               "name": "dry-run",
-              "invocation": "bregctl request-retention dry-run",
-              "about": "Count exactly what one request retention erase would remove",
+              "invocation": "bregctl proposal-retention dry-run",
+              "about": "Count exactly what one Proposal retention erase would remove",
               "long_about": null,
-              "usage": "bregctl request-retention dry-run [OPTIONS] --runtime-config <ABSOLUTE_FILE> --request-entity <ENTITY> --request-id <UUID> --proposal-version <VERSION>",
+              "usage": "bregctl proposal-retention dry-run [OPTIONS] --runtime-config <ABSOLUTE_FILE> --action-id <ACTION> --proposal-id <UUID> --submission-version <VERSION>",
               "arguments": [],
               "options": [
                 {
@@ -3875,8 +3772,8 @@
                   "environment": null
                 },
                 {
-                  "display": "--request-entity <ENTITY>",
-                  "description": "Compiled change-request entity identifier",
+                  "display": "--action-id <ACTION>",
+                  "description": "Compiled Action identifier",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -3884,8 +3781,8 @@
                   "environment": null
                 },
                 {
-                  "display": "--request-id <UUID>",
-                  "description": "Exact request record UUID",
+                  "display": "--proposal-id <UUID>",
+                  "description": "Exact Proposal UUID",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -3893,7 +3790,7 @@
                   "environment": null
                 },
                 {
-                  "display": "--proposal-version <VERSION>",
+                  "display": "--submission-version <VERSION>",
                   "description": "Exact proposal version to inspect or erase",
                   "always_required": true,
                   "repeatable": false,
@@ -3930,10 +3827,10 @@
             },
             {
               "name": "erase",
-              "invocation": "bregctl request-retention erase",
-              "about": "Erase eligible payload detail for one exact request proposal version",
+              "invocation": "bregctl proposal-retention erase",
+              "about": "Erase eligible payload detail for one exact submission version",
               "long_about": null,
-              "usage": "bregctl request-retention erase [OPTIONS] --runtime-config <ABSOLUTE_FILE> --request-entity <ENTITY> --request-id <UUID> --proposal-version <VERSION>",
+              "usage": "bregctl proposal-retention erase [OPTIONS] --runtime-config <ABSOLUTE_FILE> --action-id <ACTION> --proposal-id <UUID> --submission-version <VERSION>",
               "arguments": [],
               "options": [
                 {
@@ -3946,8 +3843,8 @@
                   "environment": null
                 },
                 {
-                  "display": "--request-entity <ENTITY>",
-                  "description": "Compiled change-request entity identifier",
+                  "display": "--action-id <ACTION>",
+                  "description": "Compiled Action identifier",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -3955,8 +3852,8 @@
                   "environment": null
                 },
                 {
-                  "display": "--request-id <UUID>",
-                  "description": "Exact request record UUID",
+                  "display": "--proposal-id <UUID>",
+                  "description": "Exact Proposal UUID",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -3964,7 +3861,7 @@
                   "environment": null
                 },
                 {
-                  "display": "--proposal-version <VERSION>",
+                  "display": "--submission-version <VERSION>",
                   "description": "Exact proposal version to inspect or erase",
                   "always_required": true,
                   "repeatable": false,
@@ -4001,10 +3898,10 @@
             },
             {
               "name": "cleanup-attachments",
-              "invocation": "bregctl request-retention cleanup-attachments",
+              "invocation": "bregctl proposal-retention cleanup-attachments",
               "about": "Retry deletion of unreferenced external attachments without erasing request detail",
               "long_about": null,
-              "usage": "bregctl request-retention cleanup-attachments [OPTIONS] --runtime-config <ABSOLUTE_FILE>",
+              "usage": "bregctl proposal-retention cleanup-attachments [OPTIONS] --runtime-config <ABSOLUTE_FILE>",
               "arguments": [],
               "options": [
                 {
@@ -4084,7 +3981,7 @@
               "invocation": "bregctl review-recovery resubmit",
               "about": "Submit the exact retained review request again under its original idempotency key",
               "long_about": null,
-              "usage": "bregctl review-recovery resubmit [OPTIONS] --runtime-config <ABSOLUTE_FILE> --request-entity <ENTITY> --request-id <UUID> --proposal-version <VERSION>",
+              "usage": "bregctl review-recovery resubmit [OPTIONS] --runtime-config <ABSOLUTE_FILE> --action-id <ACTION> --proposal-id <UUID> --submission-version <VERSION>",
               "arguments": [],
               "options": [
                 {
@@ -4097,8 +3994,8 @@
                   "environment": null
                 },
                 {
-                  "display": "--request-entity <ENTITY>",
-                  "description": "Compiled change-request entity identifier",
+                  "display": "--action-id <ACTION>",
+                  "description": "Compiled Action identifier",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -4106,8 +4003,8 @@
                   "environment": null
                 },
                 {
-                  "display": "--request-id <UUID>",
-                  "description": "Exact request record UUID",
+                  "display": "--proposal-id <UUID>",
+                  "description": "Exact Proposal UUID",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -4115,7 +4012,7 @@
                   "environment": null
                 },
                 {
-                  "display": "--proposal-version <VERSION>",
+                  "display": "--submission-version <VERSION>",
                   "description": "Exact proposal version whose review or application to recover",
                   "always_required": true,
                   "repeatable": false,
@@ -4155,7 +4052,7 @@
               "invocation": "bregctl review-recovery close",
               "about": "Close an accepted review without a result so it stops waiting on its authority",
               "long_about": null,
-              "usage": "bregctl review-recovery close [OPTIONS] --runtime-config <ABSOLUTE_FILE> --request-entity <ENTITY> --request-id <UUID> --proposal-version <VERSION>",
+              "usage": "bregctl review-recovery close [OPTIONS] --runtime-config <ABSOLUTE_FILE> --action-id <ACTION> --proposal-id <UUID> --submission-version <VERSION>",
               "arguments": [],
               "options": [
                 {
@@ -4168,8 +4065,8 @@
                   "environment": null
                 },
                 {
-                  "display": "--request-entity <ENTITY>",
-                  "description": "Compiled change-request entity identifier",
+                  "display": "--action-id <ACTION>",
+                  "description": "Compiled Action identifier",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -4177,8 +4074,8 @@
                   "environment": null
                 },
                 {
-                  "display": "--request-id <UUID>",
-                  "description": "Exact request record UUID",
+                  "display": "--proposal-id <UUID>",
+                  "description": "Exact Proposal UUID",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -4186,7 +4083,7 @@
                   "environment": null
                 },
                 {
-                  "display": "--proposal-version <VERSION>",
+                  "display": "--submission-version <VERSION>",
                   "description": "Exact proposal version whose review or application to recover",
                   "always_required": true,
                   "repeatable": false,
@@ -4226,7 +4123,7 @@
               "invocation": "bregctl review-recovery retry-application",
               "about": "Requeue an automatic application blocked by executor authorization after correcting its credentials or grants",
               "long_about": null,
-              "usage": "bregctl review-recovery retry-application [OPTIONS] --runtime-config <ABSOLUTE_FILE> --request-entity <ENTITY> --request-id <UUID> --proposal-version <VERSION>",
+              "usage": "bregctl review-recovery retry-application [OPTIONS] --runtime-config <ABSOLUTE_FILE> --action-id <ACTION> --proposal-id <UUID> --submission-version <VERSION>",
               "arguments": [],
               "options": [
                 {
@@ -4239,8 +4136,8 @@
                   "environment": null
                 },
                 {
-                  "display": "--request-entity <ENTITY>",
-                  "description": "Compiled change-request entity identifier",
+                  "display": "--action-id <ACTION>",
+                  "description": "Compiled Action identifier",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -4248,8 +4145,8 @@
                   "environment": null
                 },
                 {
-                  "display": "--request-id <UUID>",
-                  "description": "Exact request record UUID",
+                  "display": "--proposal-id <UUID>",
+                  "description": "Exact Proposal UUID",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -4257,7 +4154,7 @@
                   "environment": null
                 },
                 {
-                  "display": "--proposal-version <VERSION>",
+                  "display": "--submission-version <VERSION>",
                   "description": "Exact proposal version whose review or application to recover",
                   "always_required": true,
                   "repeatable": false,

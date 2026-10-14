@@ -234,6 +234,15 @@ fn review_policy_id<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String
 }
 
 #[cfg(feature = "schema")]
+fn review_policy_id_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({
+        "allOf":[generator.subschema_for::<ExternalId>()],
+        "maxLength": registry_review_protocol::MAXIMUM_IDENTIFIER_BYTES,
+        "$comment":"The review protocol also bounds UTF-8 bytes, which the reader checks without restricting externally issued identifiers to ASCII."
+    })
+}
+
+#[cfg(feature = "schema")]
 fn review_context_fields_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
     schemars::json_schema!({
         "type":"object",
@@ -242,7 +251,7 @@ fn review_context_fields_schema(generator: &mut schemars::SchemaGenerator) -> sc
         "propertyNames":{
             "type":"string", "minLength":1, "maxLength":64,
             "pattern":"^[a-z][A-Za-z0-9]{0,63}$",
-            "not":{"enum":["id","recordId","revision","createdAt","updatedAt","deletedAt"]}
+            "not":{"x-registry-member-names":true,"enum":["id","recordId","revision","createdAt","updatedAt","deletedAt"]}
         },
         "additionalProperties":generator.subschema_for::<ProposalContextValueSource>()
     })
@@ -296,6 +305,61 @@ pub struct ProposalPolicySource {
     pub attachments: Vec<AttachmentSlotSource>,
     #[serde(default)]
     pub review_context: Option<ProposalReviewContextSource>,
+    /// Post-commit observers of the fixed, value-free Proposal lifecycle event.
+    #[serde(
+        default,
+        deserialize_with = "unique_ids",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub hooks: Vec<ProposalHookSource>,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ProposalHookSource {
+    #[serde(deserialize_with = "local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "LocalId"))]
+    pub id: String,
+    /// Omit to observe every committed lifecycle transition.
+    #[serde(default, skip_serializing_if = "UniqueSet::is_empty")]
+    pub transitions: UniqueSet<ProposalEventTransition>,
+    pub handler: HookHandlerSource,
+}
+
+impl registry_platform_yaml::Identified for ProposalHookSource {
+    fn id(&self) -> &str {
+        &self.id
+    }
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProposalEventTransition {
+    Started,
+    Edited,
+    Submitted,
+    Revised,
+    Rebased,
+    Retried,
+    Cancelled,
+    Applied,
+}
+
+impl ProposalEventTransition {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Started => "started",
+            Self::Edited => "edited",
+            Self::Submitted => "submitted",
+            Self::Revised => "revised",
+            Self::Rebased => "rebased",
+            Self::Retried => "retried",
+            Self::Cancelled => "cancelled",
+            Self::Applied => "applied",
+        }
+    }
 }
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -316,7 +380,7 @@ serialize_tagged_union!(ProposalReviewSource, tag = "type");
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct PolicyBindingSource {
     #[serde(deserialize_with = "review_policy_id")]
-    #[cfg_attr(feature = "schema", schemars(with = "ExternalId"))]
+    #[cfg_attr(feature = "schema", schemars(schema_with = "review_policy_id_schema"))]
     pub id: String,
     pub version: String,
     pub digest: Digest,
@@ -1186,12 +1250,13 @@ pub struct AccessLogSource {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct AccessLogExemptionSource {
-    /// Entity whose access profile authorizes the read. Omitted for direct reads of the logged entity.
+    /// Record type whose access profile authorizes the read. Omitted for direct reads of the logged record type.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(
         feature = "schema",
         schemars(length(min = 1, max = 64), regex(pattern = "^[a-z][a-z0-9_-]*$"))
     )]
+    #[serde(rename = "sourceRecordType")]
     pub source_entity: Option<String>,
     /// Bounded policy reason retained and audited with each delayed entry.
     #[cfg_attr(feature = "schema", schemars(length(min = 1, max = 256)))]
@@ -4386,6 +4451,9 @@ fn read_with_value_types<T: DeserializeOwned>(
     if value.get("valueTypes").is_none() {
         return document.decode().map(|value| Decoded { value, document });
     }
+    // Validate declarations at their authored sites before copying constraints
+    // into use sites. A bad named type must point to its declaration.
+    let _: BTreeMap<LocalId, FieldTypeSource> = document.decode_at("/valueTypes")?;
     resolve_local_value_types(&mut value).map_err(|(path, message)| {
         Report::new(vec![document.diagnostic_at_value(
             Severity::Error,
@@ -4410,7 +4478,13 @@ fn read_with_value_types<T: DeserializeOwned>(
                     while document.span_of(site).is_none() && !site.is_empty() {
                         site = site.rsplit_once('/').map_or("", |(parent, _)| parent);
                     }
-                    let mut placed = document.diagnostic_at_value(
+                    let place = if diagnostic.code == "config.unknown-key" {
+                        registry_platform_yaml::Document::diagnostic_at_key
+                    } else {
+                        registry_platform_yaml::Document::diagnostic_at_value
+                    };
+                    let mut placed = place(
+                        &document,
                         diagnostic.severity,
                         &diagnostic.code,
                         site,
@@ -4418,6 +4492,30 @@ fn read_with_value_types<T: DeserializeOwned>(
                         &diagnostic.suggested_action,
                     );
                     placed.path = diagnostic.path;
+                    placed.related = diagnostic
+                        .related
+                        .into_iter()
+                        .map(|mut related| {
+                            if related.file == file {
+                                let mut site = related.path.as_str();
+                                while document.span_of(site).is_none() && !site.is_empty() {
+                                    site = site.rsplit_once('/').map_or("", |(parent, _)| parent);
+                                }
+                                let first = document.diagnostic_at_value(
+                                    diagnostic.severity,
+                                    &diagnostic.code,
+                                    site,
+                                    &related.message,
+                                    "",
+                                );
+                                if let Some(source) = first.source {
+                                    related.line = source.line;
+                                    related.column = source.column;
+                                }
+                            }
+                            related
+                        })
+                        .collect();
                     placed
                 })
                 .collect();

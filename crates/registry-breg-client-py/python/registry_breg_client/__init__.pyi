@@ -82,7 +82,6 @@ ExchangeAuthorization = TypedDict("ExchangeAuthorization", {"exchange": FirstPar
 class BaseRegistryClientError(Exception):
     kind: str
     code: str | None
-    plan_refusal: str | None
     refusal_code: str | None
     reason_code: str | None
     field_path: str | None

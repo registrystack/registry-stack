@@ -7,7 +7,8 @@ results without depending on the Casework runtime, task model, policy engine,
 or database.
 
 The submission digest covers the authenticated producer, source namespace,
-and complete create request. JSON values are bounded by canonical byte size,
+and complete create request, including its required policy ID, version, and
+digest. JSON values are bounded by canonical byte size,
 nesting depth, and node count so the same contract applies to parsed and
 programmatically constructed values.
 

@@ -432,7 +432,6 @@ pub(crate) fn classify_application(accepted: &Value, current: &Value) -> Applica
                 .and_then(|status| status.reason)
             {
                 Some(ContractChanged) => "proposal-contract-changed",
-                Some(ReviewUnavailable) => "proposal-review-unavailable",
                 Some(DependencyOutage) => "proposal-dependency-outage",
                 Some(LeaseExpired) => "proposal-lease-expired",
                 Some(ApplicationRefused) => "proposal-application-refused",

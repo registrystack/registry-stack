@@ -263,7 +263,7 @@ fn module_add_consent_writes_pins_and_compiles_once_a_profile_requires_consent()
     assert_eq!(explanation["subject"], "person");
     assert_eq!(explanation["module"], "consent-person");
     assert_eq!(
-        explanation["entities"],
+        explanation["recordTypes"],
         json!([
             "person-privacy-notice",
             "person-notice-clause",
@@ -302,8 +302,8 @@ fn module_add_consent_writes_pins_and_compiles_once_a_profile_requires_consent()
     assert_eq!(
         explanation["requireConsent"],
         json!([
-            {"entity": "person", "line": "{record: person-consent-decision, on: id}"},
-            {"entity": "household", "line": "{record: person-consent-decision, on: head}"}
+            {"recordType": "person", "line": "{record: person-consent-decision, on: id}"},
+            {"recordType": "household", "line": "{record: person-consent-decision, on: head}"}
         ])
     );
     // No profile requires consent yet, so the synthesized scope vocabulary the
@@ -504,7 +504,7 @@ fn module_add_consent_runs_once_per_subject_and_reuses_shared_vocabularies() {
     );
     assert_eq!(
         report["explanation"]["requireConsent"],
-        json!([{"entity": "household", "line": "{record: household-consent-decision, on: id}"}])
+        json!([{"recordType": "household", "line": "{record: household-consent-decision, on: id}"}])
     );
     let source = registry_source(project.path());
     assert!(

@@ -26,7 +26,7 @@ use crate::action_handler::{
     ActionHandlerDiagnostic, ActionHandlerError, ActionHandlerOutcome, ActionHandlerRefusal,
 };
 use crate::contract::{FieldTypeSource, Operation};
-use crate::data::{FieldValue, validate_field_value};
+use crate::data::{validate_field_value, FieldValue};
 use crate::model::{
     CompiledAction, CompiledPlanEffect, CompiledPlanFunction, CompiledPlanMutation,
     CompiledPlanValue, CompiledPlanWrite,

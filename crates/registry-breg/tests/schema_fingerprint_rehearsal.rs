@@ -7,18 +7,18 @@
 mod postgres_harness;
 
 use postgres_harness::TestDatabase;
-use registry_breg::CompiledRegistry;
-use registry_breg::compiler::{CompileProfile, compile_project};
+use registry_breg::compiler::{compile_project, CompileProfile};
 use registry_breg::contract::parse_project_json;
 use registry_breg::package::{
-    PackageBuildRequest, PackageError, PackageMigrationPlanInput, PackageSourceFile,
-    PreparedPackage, prepare_package,
+    prepare_package, PackageBuildRequest, PackageError, PackageMigrationPlanInput,
+    PackageSourceFile, PreparedPackage,
 };
-use registry_breg::runtime_config::{RuntimeConfig, parse_runtime_config};
+use registry_breg::runtime_config::{parse_runtime_config, RuntimeConfig};
 use registry_breg::startup::{
-    StartupError, prepare_schema_test_database_with_connection_configs_for_test,
-    rehearse_schema_fingerprint, rehearse_schema_fingerprint_with_connection_config_for_test,
+    prepare_schema_test_database_with_connection_configs_for_test, rehearse_schema_fingerprint,
+    rehearse_schema_fingerprint_with_connection_config_for_test, StartupError,
 };
+use registry_breg::CompiledRegistry;
 
 const ENVIRONMENT: &str = "production";
 const INSTANCE: &str = "rehearsal-instance";

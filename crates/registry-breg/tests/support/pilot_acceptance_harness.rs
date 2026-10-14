@@ -3,31 +3,31 @@
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use axum::body::{Body, to_bytes};
+use axum::body::{to_bytes, Body};
 use axum::http::header::AUTHORIZATION;
 use axum::http::{HeaderName, HeaderValue, Method, Request, Response};
-use registry_breg::CompiledRegistry;
-use registry_breg::compiler::{CompileProfile, compile_project_with_assets};
+use registry_breg::compiler::{compile_project_with_assets, CompileProfile};
 use registry_breg::contract::{
-    ModuleAssetSource, Operation, RegistryProject, parse_module_yaml, parse_project_yaml,
+    parse_module_yaml, parse_project_yaml, ModuleAssetSource, Operation, RegistryProject,
 };
 use registry_breg::package::{
-    PackageBuildRequest, PackageLoadContext, PackageMigrationPlanInput, PackageModuleSource,
-    PackageSourceFile, load_package, prepare_package_with_project_assets,
+    load_package, prepare_package_with_project_assets, PackageBuildRequest, PackageLoadContext,
+    PackageMigrationPlanInput, PackageModuleSource, PackageSourceFile,
 };
 use registry_breg::postgres::{
-    ExpectedManagedCatalog, RegistryStateTestIdentity, initialize_compiled_registry_state_for_test,
-    install_compiled_schema, managed_schema_fingerprint,
+    initialize_compiled_registry_state_for_test, install_compiled_schema,
+    managed_schema_fingerprint, ExpectedManagedCatalog, RegistryStateTestIdentity,
 };
-use registry_breg::startup::{PreparedServer, prepare_with_connection_and_key_source_for_test};
+use registry_breg::startup::{prepare_with_connection_and_key_source_for_test, PreparedServer};
+use registry_breg::CompiledRegistry;
 use registry_platform_httputil::FetchUrlPolicy;
 use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig};
 use registry_platform_testing::MockIdp;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use tower::ServiceExt as _;
@@ -363,7 +363,7 @@ struct FixtureSources {
 impl FixtureSources {
     fn load(name: &str) -> Self {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../products/breg/acceptance")
+            .join("tests/fixtures/native-models/products/breg/acceptance")
             .join(name);
         let project_bytes = fs::read(root.join("registry.yaml"))
             .expect("committed pilot registry source is readable");

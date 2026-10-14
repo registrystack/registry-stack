@@ -1,0 +1,27 @@
+{
+  "apiVersion": "id.registrystack.org/formats/breg/module/v1alpha1",
+  "kind": "BRegModule",
+  "id": "spatial-service-sites-core",
+  "version": "0.1.0",
+  "extendRecordTypes": [
+    {
+      "derived": [
+        {
+          "id": "map-labels",
+          "sql": "sql/map-labels.sql",
+          "key": "id",
+          "execution": "live",
+          "fields": [
+            {
+              "id": "map-label",
+              "type": "string",
+              "maximumLength": 220,
+              "classification": "public"
+            }
+          ]
+        }
+      ],
+      "recordType": "service-site"
+    }
+  ]
+}

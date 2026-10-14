@@ -59,6 +59,7 @@ struct Inbox {
 struct Delivery {
     id: String,
     destination_id: String,
+    matching: Vec<(String, String)>,
     data_schema: String,
     source: String,
     schema: jsonschema::JSONSchema,
@@ -83,6 +84,7 @@ impl Delivery {
             .map_err(|_| anyhow::anyhow!("compiled local event schema cannot be validated"))?;
         Ok(Self {
             id: delivery.id.clone(),
+            matching: Vec::new(),
             destination_id: delivery
                 .destination_id
                 .clone()
@@ -106,18 +108,52 @@ impl Receiver {
         // The local receiver stands in for a remote destination, so it holds
         // the url deliveries only; a local handler runs inside the engine and
         // never reaches an HTTP receiver.
-        let deliveries = compiled
+        let mut deliveries: BTreeMap<(String, String), Delivery> = BTreeMap::new();
+        for delivery in compiled
             .event_deliveries()
             .deliveries
             .iter()
             .filter(|delivery| delivery.destination_id.is_some())
-            .map(|delivery| {
-                Ok((
-                    (delivery.event_id.clone(), delivery.entity_id.clone()),
-                    Delivery::compile(&compiled, delivery, instance_id)?,
-                ))
-            })
-            .collect::<Result<_>>()?;
+        {
+            let keys = match &delivery.owner {
+                registry_breg::model::CompiledEventOwner::RecordType { record_type, .. } => {
+                    vec![(delivery.event_id.clone(), record_type.clone())]
+                }
+                registry_breg::model::CompiledEventOwner::ProposalAction { action } => {
+                    let owner = compiled
+                        .actions()
+                        .actions
+                        .iter()
+                        .find(|entry| &entry.id == action)
+                        .context("Proposal observer Action is missing")?;
+                    let registry_breg::model::CompiledActionExecution::Proposal { proposal } =
+                        &owner.execution
+                    else {
+                        bail!("Proposal observer Action mode is invalid")
+                    };
+                    let hook = proposal
+                        .hooks
+                        .iter()
+                        .find(|hook| hook.id == delivery.event_id)
+                        .context("Proposal observer declaration is missing")?;
+                    registry_breg::proposal_hooks::matching_transitions(&hook.transitions)
+                        .map(|transition| {
+                            (format!("proposal.{}", transition.as_str()), action.clone())
+                        })
+                        .collect()
+                }
+            };
+            for key in keys {
+                if let Some(existing) = deliveries.get_mut(&key) {
+                    existing.matching.push((
+                        delivery.id.clone(),
+                        delivery.destination_id.clone().expect("URL delivery"),
+                    ));
+                } else {
+                    deliveries.insert(key, Delivery::compile(&compiled, delivery, instance_id)?);
+                }
+            }
+        }
         Self::start_with_deliveries(root, port, deliveries)
     }
 
@@ -216,7 +252,11 @@ async fn receive(
     };
     let Some(delivery) = inbox.deliveries.get(&(
         record["eventType"].as_str().unwrap_or_default().to_owned(),
-        record["recordType"].as_str().unwrap_or_default().to_owned(),
+        record["recordType"]
+            .as_str()
+            .or_else(|| record["actionId"].as_str())
+            .unwrap_or_default()
+            .to_owned(),
     )) else {
         return (
             StatusCode::UNAUTHORIZED,
@@ -235,8 +275,23 @@ async fn receive(
             "local webhook verification refused",
         );
     }
-    record["deliveryId"] = Value::String(delivery.id.clone());
-    record["destinationId"] = Value::String(delivery.destination_id.clone());
+    if delivery.matching.is_empty() {
+        record["deliveryId"] = Value::String(delivery.id.clone());
+        record["destinationId"] = Value::String(delivery.destination_id.clone());
+    } else {
+        // The signed transport identifies the event, not its subscription.
+        // Keep the candidate subscriptions instead of guessing which sent it.
+        let matching = std::iter::once((&delivery.id, &delivery.destination_id))
+            .chain(
+                delivery
+                    .matching
+                    .iter()
+                    .map(|(id, destination)| (id, destination)),
+            )
+            .map(|(id, destination)| json!({"deliveryId":id,"destinationId":destination}))
+            .collect::<Vec<_>>();
+        record["matchingDeliveries"] = json!(matching);
+    }
     match append(&inbox.root, &record) {
         Ok(()) => (StatusCode::NO_CONTENT, ""),
         Err(_) => (
@@ -343,6 +398,37 @@ fn verify(key: &[u8], headers: &HeaderMap, body: &[u8]) -> Result<(Value, Value)
     let object = data
         .as_object()
         .context("webhook envelope data must be an object")?;
+    let registry = signed[2]
+        .strip_prefix("urn:registrystack:registry:")
+        .and_then(|source| source.split_once(":instance:"))
+        .filter(|(registry, instance)| !registry.is_empty() && !instance.is_empty())
+        .context("webhook source is invalid")?
+        .0;
+    if envelope.dataschema == registry_breg::proposal_hooks::PROPOSAL_EVENT_SCHEMA {
+        static SCHEMA: std::sync::LazyLock<jsonschema::JSONSchema> =
+            std::sync::LazyLock::new(|| {
+                jsonschema::JSONSchema::options()
+                    .with_draft(jsonschema::Draft::Draft202012)
+                    .should_validate_formats(true)
+                    .compile(&registry_breg::proposal_hooks::proposal_event_schema())
+                    .expect("fixed native Proposal event schema")
+            });
+        if !SCHEMA.is_valid(&data)
+            || signed[3]
+                != format!(
+                    "proposal.{}",
+                    data["transition"].as_str().unwrap_or_default()
+                )
+            || data["revision"].as_i64() != Some(envelope.subject.record_revision)
+        {
+            bail!("webhook Proposal event data shape is invalid");
+        }
+        let record = json!({"eventId":signed[1],"eventType":signed[3],"actionId":data["actionId"],
+            "trigger":"proposal-lifecycle","transition":data["transition"],"deliveryId":null,
+            "idempotencyKey":idempotency_key,"generation":generation,"attempt":attempt,"status":"received",
+            "receivedAt":OffsetDateTime::now_utc().format(&Rfc3339)?,"payload":data});
+        return Ok((record, data));
+    }
     if object.len() != 6
         || ![
             "recordType",
@@ -370,12 +456,6 @@ fn verify(key: &[u8], headers: &HeaderMap, body: &[u8]) -> Result<(Value, Value)
     {
         bail!("webhook envelope data shape is invalid");
     }
-    let registry = signed[2]
-        .strip_prefix("urn:registrystack:registry:")
-        .and_then(|source| source.split_once(":instance:"))
-        .filter(|(registry, instance)| !registry.is_empty() && !instance.is_empty())
-        .context("webhook source is invalid")?
-        .0;
     let prefix = format!(
         "urn:breg:event-schema:{registry}:{}:{}:",
         data["recordType"]
@@ -497,6 +577,9 @@ pub(super) fn report(root: &Path, include_payload: bool) -> Result<Value> {
                         "eventId"
                             | "eventType"
                             | "recordType"
+                            | "actionId"
+                            | "transition"
+                            | "matchingDeliveries"
                             | "trigger"
                             | "deliveryId"
                             | "destinationId"
@@ -1061,5 +1144,37 @@ mod tests {
         assert!(report(root.path(), false).is_err());
         assert!(clear(root.path()).is_err());
         assert!(target.exists());
+    }
+
+    #[test]
+    fn native_proposal_receipts_verify_the_fixed_contract_and_exact_transition() {
+        let mut headers = event_headers(1, 1);
+        headers.insert("ce-type", HeaderValue::from_static("proposal.submitted"));
+        headers.insert(
+            "ce-dataschema",
+            HeaderValue::from_static(registry_breg::proposal_hooks::PROPOSAL_EVENT_SCHEMA),
+        );
+        let data = json!({"actionId":"correct-name","actionRevision":format!("sha256:{}","a".repeat(64)),
+            "proposalId":"00000000-0000-4000-8000-000000000002","submissionVersion":1,"revision":1,
+            "fromState":"draft","state":"submitted","transition":"submitted","effectDigest":null,
+            "authorityKind":"caller","systemApplyGrantRevision":null});
+        let key = URL_SAFE_NO_PAD.encode([7; 32]);
+        let body = envelope_bytes(&headers, data.clone());
+        sign(&mut headers, &body);
+        let (record, projection) = verify(key.as_bytes(), &headers, &body).unwrap();
+        assert_eq!(record["actionId"], "correct-name");
+        assert!(record.get("recordType").is_none());
+        assert_eq!(projection, data);
+        for member in ["input", "context", "attachments", "actor"] {
+            let mut widened = data.clone();
+            widened[member] = json!("private-canary");
+            let body = envelope_bytes(&headers, widened);
+            sign(&mut headers, &body);
+            assert!(verify(key.as_bytes(), &headers, &body).is_err());
+        }
+        headers.insert("ce-type", HeaderValue::from_static("proposal.applied"));
+        let body = envelope_bytes(&headers, data);
+        sign(&mut headers, &body);
+        assert!(verify(key.as_bytes(), &headers, &body).is_err());
     }
 }

@@ -7,7 +7,7 @@ mod action;
 pub(crate) use action::erase_expired_action_evidence;
 pub(crate) use action::{HookProposalApplication, HookProposalOutcome};
 mod proposal;
-pub(crate) use proposal::{ProposalApplyPreflight, proposal_operation_name};
+pub(crate) use proposal::{proposal_operation_name, ProposalApplyPreflight};
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -17,48 +17,48 @@ use deadpool_postgres::Client;
 use registry_platform_audit::{AuditEntry, AuditProfile, AuditRequest};
 use registry_platform_canonical_json::canonicalize_json;
 use registry_platform_crypto::field_encryption::{
-    FieldCryptoError, MAX_FIELD_PLAINTEXT_BYTES, envelope_member_json,
+    envelope_member_json, FieldCryptoError, MAX_FIELD_PLAINTEXT_BYTES,
 };
 use registry_platform_hooks::HookHandlerKind;
-use serde_json::{Map, Value, json};
+use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 use tokio_postgres::types::ToSql;
-use tokio_postgres::{GenericClient, Transaction, error::SqlState};
+use tokio_postgres::{error::SqlState, GenericClient, Transaction};
 use uuid::Uuid;
 
 use crate::artifacts::event_data_schema_binding;
 use crate::audit::{
-    PreIoAudit, PreIoAuditKind, RegistryAudit, RegistryAuditError, TerminalAudit,
-    TerminalAuditOutcome, action_terminal_entry, begin_action_pre_io_audit, begin_pre_io_audit,
-    profile_is_keyed, record_action_pre_io_audit, record_pre_io_audit, terminal_entry,
+    action_terminal_entry, begin_action_pre_io_audit, begin_pre_io_audit, profile_is_keyed,
+    record_action_pre_io_audit, record_pre_io_audit, terminal_entry, PreIoAudit, PreIoAuditKind,
+    RegistryAudit, RegistryAuditError, TerminalAudit, TerminalAuditOutcome,
 };
 use crate::compiler::{
-    WEBHOOK_ATTEMPT_TIMEOUT_MS, WEBHOOK_BACKOFF_MULTIPLIER, WEBHOOK_INITIAL_BACKOFF_MS,
-    WEBHOOK_MAXIMUM_ATTEMPTS, WEBHOOK_MAXIMUM_BACKOFF_MS, event_classification_ceiling,
+    event_classification_ceiling, WEBHOOK_ATTEMPT_TIMEOUT_MS, WEBHOOK_BACKOFF_MULTIPLIER,
+    WEBHOOK_INITIAL_BACKOFF_MS, WEBHOOK_MAXIMUM_ATTEMPTS, WEBHOOK_MAXIMUM_BACKOFF_MS,
 };
 use crate::contract::{
     AccessProfileSource, EventTrigger, FieldTypeSource, MutationMode, Operation,
 };
 use crate::correlation::RequestCorrelation;
-use crate::data::{FieldValue, validate_field_value};
+use crate::data::{validate_field_value, FieldValue};
 use crate::event_destination::ActivatedEventDestinationRegistry;
 use crate::field_encryption::FieldEncryptionService;
 use crate::history_commit::{
-    CommitAllocation, HistoryCommitError, RevisionCommitMember, allocate_revision_commit,
-    install_history_commit_schema,
+    allocate_revision_commit, install_history_commit_schema, CommitAllocation, HistoryCommitError,
+    RevisionCommitMember,
 };
 use crate::history_context::{ChangeContext, CommitOrigin};
 use crate::history_schema::MAX_HISTORY_SNAPSHOT_BYTES;
 use crate::idempotency::{
-    ActionIdempotencyBinding, HeldResponse, IdempotencyBinding, IdempotencyError,
-    IdempotencyKeyDomain, IdempotencyPolicy, MAX_HELD_BODY_BYTES, MAX_IDEMPOTENCY_KEY_BYTES,
-    MAX_IMMEDIATE_ACTION_RESULTS, PermittedResponseHeader, StoredResultMetadata, insert_result,
-    lock_and_load, resolve_action_binding, resolve_binding, resolve_hook_action_binding,
-    resolve_hook_key_reference,
+    insert_result, lock_and_load, resolve_action_binding, resolve_binding,
+    resolve_hook_action_binding, resolve_hook_key_reference, ActionIdempotencyBinding,
+    HeldResponse, IdempotencyBinding, IdempotencyError, IdempotencyKeyDomain, IdempotencyPolicy,
+    PermittedResponseHeader, StoredResultMetadata, MAX_HELD_BODY_BYTES, MAX_IDEMPOTENCY_KEY_BYTES,
+    MAX_IMMEDIATE_ACTION_RESULTS,
 };
 use crate::ingestion_store::{
-    IngestionAttemptOutcome, IngestionChunkCommit, IngestionRunStatus, record_attempt,
+    record_attempt, IngestionAttemptOutcome, IngestionChunkCommit, IngestionRunStatus,
 };
 pub use crate::ingestion_store::{IngestionChunkBinding, IngestionRefusal};
 use crate::model::{
@@ -68,17 +68,17 @@ use crate::model::{
     CompiledWebhookRetryProfile, HttpMethod,
 };
 use crate::outbox::{
-    EnvelopeBinding, OutboxError, OutboxMutation, event_data_schemas, insert_configured_events,
+    event_data_schemas, insert_configured_events, EnvelopeBinding, OutboxError, OutboxMutation,
 };
 use crate::postgres::{
-    ActionClaimContext, ClaimContext, ExpectedRegistryIdentity, ImmediateActionLinkBinding,
-    ImmediateActionLinkContext, ImmediateActionTargetBinding, ImmediateActionTargetContext,
-    RegistryLockKey, RowBoundaryContext, SqlIdentifier, begin_action_transaction,
-    begin_record_transaction,
+    begin_action_transaction, begin_record_transaction, ActionClaimContext, ClaimContext,
+    ExpectedRegistryIdentity, ImmediateActionLinkBinding, ImmediateActionLinkContext,
+    ImmediateActionTargetBinding, ImmediateActionTargetContext, RegistryLockKey,
+    RowBoundaryContext, SqlIdentifier,
 };
 use crate::problem_location::{BatchItemMember, PatchMember, RequestLocation};
 use crate::record_profile::{self, RecordRepresentation};
-use crate::revision::{RevisionError, RevisionInsert, canonical_snapshot, insert_revision};
+use crate::revision::{canonical_snapshot, insert_revision, RevisionError, RevisionInsert};
 
 const MAX_LOGICAL_ID_BYTES: usize = 256;
 const TOMBSTONE_CURSOR: &str = "registry_tombstone_current";
@@ -524,7 +524,7 @@ fn exact_entity_event_deliveries(
         .event_deliveries()
         .deliveries
         .iter()
-        .filter(|delivery| delivery.entity_id == entity.id)
+        .filter(|delivery| matches!(&delivery.owner, crate::model::CompiledEventOwner::RecordType {record_type,..} if record_type == &entity.id))
         .cloned()
         .collect::<Vec<_>>();
     let mut delivery_ids = BTreeSet::new();
@@ -552,7 +552,11 @@ fn exact_entity_event_deliveries(
         if !delivery_ids.insert(delivery.id.as_str())
             || !delivered_events.insert(delivery.event_id.as_str())
             || delivery.id != format!("events.{}.{}.webhook", entity.id, event.id)
-            || delivery.trigger != event.trigger
+            || delivery.owner
+                != (crate::model::CompiledEventOwner::RecordType {
+                    record_type: entity.id.clone(),
+                    trigger: event.trigger,
+                })
             || delivery.destination_id.as_deref() != expected_destination_id
             || delivery.handler_kind() != expected_handler_kind
             || delivery.projection_fields != expected_projection
@@ -2188,11 +2192,6 @@ pub enum MutationError {
     /// `Unavailable`.
     #[error("mutation commit outcome is not proven")]
     CommitUnresolved,
-    /// The bounded change-request planner produced no plan. The failure kind
-    /// travels with the error so the refusal is recorded and reported by the
-    /// planner's closed vocabulary, never by script text or request values.
-    #[error("change-request planner produced no plan")]
-    PlannerFailure(crate::rhai_planner::PlanError),
     #[error("action handler produced no effects")]
     ActionHandlerFailure(crate::action_handler::ActionHandlerError),
     #[error("the declared Evidence dependency could not be accepted")]
@@ -4140,15 +4139,13 @@ mod tests {
             ),
             Err(MutationError::InvalidRequest)
         );
-        assert!(
-            sql_value(
-                &json!({"type":"Point","coordinates":[100.1234,10.1234]}),
-                &FieldTypeSource::Crs84Point {
-                    precision: 4,
-                    bbox: None,
-                },
-            )
-            .is_ok()
-        );
+        assert!(sql_value(
+            &json!({"type":"Point","coordinates":[100.1234,10.1234]}),
+            &FieldTypeSource::Crs84Point {
+                precision: 4,
+                bbox: None,
+            },
+        )
+        .is_ok());
     }
 }

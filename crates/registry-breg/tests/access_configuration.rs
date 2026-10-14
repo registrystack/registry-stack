@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use registry_breg::{CompileProfile, CompiledRegistry, compile_project, parse_project_json};
-use serde_json::{Value, json};
+use registry_breg::{compile_project, parse_project_json, CompileProfile, CompiledRegistry};
+use serde_json::{json, Value};
 
 fn source() -> Value {
     json!({"datasets":[{"id": "test-dataset"}],
@@ -67,12 +67,10 @@ fn assert_refused(value: &Value, code: &str) {
 #[test]
 fn requirements_are_mandatory_not_grants_and_cannot_be_weakened_by_profiles() {
     let compiled = compile(&source()).unwrap();
-    assert!(
-        compiled
-            .findings()
-            .iter()
-            .all(|d| !d.code.starts_with("access."))
-    );
+    assert!(compiled
+        .findings()
+        .iter()
+        .all(|d| !d.code.starts_with("access.")));
     let mutations = [
         (
             "/accessProfiles/0/requiredScopes",
@@ -281,13 +279,11 @@ fn additional_profile_cannot_omit_entity_requirements() {
         .unwrap()
         .push(additional);
     let failure = compile(&value).unwrap_err();
-    assert!(
-        failure
-            .diagnostics()
-            .iter()
-            .any(|d| d.code == "breg.access.requirements-scope-missing"
-                && d.path.contains("another-reader"))
-    );
+    assert!(failure
+        .diagnostics()
+        .iter()
+        .any(|d| d.code == "breg.access.requirements-scope-missing"
+            && d.path.contains("another-reader")));
 }
 
 #[test]
@@ -309,12 +305,10 @@ fn module_extensions_may_add_but_never_replace_requirements() {
         CompileProfile::Authoring,
     )
     .unwrap_err();
-    assert!(
-        failure
-            .diagnostics()
-            .iter()
-            .any(|d| d.code == "breg.extension.access-requirements-replace-forbidden")
-    );
+    assert!(failure
+        .diagnostics()
+        .iter()
+        .any(|d| d.code == "breg.extension.access-requirements-replace-forbidden"));
     value["recordTypes"][0]
         .as_object_mut()
         .unwrap()
@@ -341,13 +335,11 @@ fn relationship_grants_cannot_bypass_target_or_join_requirements() {
         json!({"id":"link","primaryDataset":"test-dataset","route":"links","mutationMode":"mutable","fields":[{"id":"entry","type":"reference","target":"entry","classification":"internal"},{"id":"child","type":"reference","target":"child","classification":"internal"}]})
     ]);
     let baseline = compile(&value).unwrap();
-    assert!(
-        baseline
-            .findings()
-            .iter()
-            .any(|d| d.code == "breg.access.profile-related-disclosure"
-                && d.path.contains("readPaths[path=children]"))
-    );
+    assert!(baseline
+        .findings()
+        .iter()
+        .any(|d| d.code == "breg.access.profile-related-disclosure"
+            && d.path.contains("readPaths[path=children]")));
     for index in [1, 2] {
         value["recordTypes"][index]["accessRequirements"] =
             json!({"requiredScopes":["entry:read"]});
@@ -426,23 +418,19 @@ fn footgun_findings_are_actionable_deterministic_and_do_not_change_authority() {
         assert!(finding.message.len() > 60);
     }
     assert_eq!(compiled.findings(), compile(&value).unwrap().findings());
-    assert!(
-        compiled.entities()["entry"].access_profiles["reader"]
-            .row_boundaries
-            .is_empty()
-    );
+    assert!(compiled.entities()["entry"].access_profiles["reader"]
+        .row_boundaries
+        .is_empty());
     let explanation =
         serde_json::to_value(registry_breg::access::explain_access(&compiled)).unwrap();
     assert_eq!(
-        explanation["entities"][0]["profiles"][0]["allowDataExport"],
+        explanation["recordTypes"][0]["profiles"][0]["allowDataExport"],
         true
     );
-    assert!(
-        explanation["scopeMatching"]
-            .as_str()
-            .unwrap()
-            .contains("all")
-    );
+    assert!(explanation["scopeMatching"]
+        .as_str()
+        .unwrap()
+        .contains("all"));
 }
 
 #[test]
@@ -472,13 +460,11 @@ fn history_sensitive_fields_and_writable_boundaries_are_visible_for_review() {
         patch_only.message
     );
     value["accessProfiles"][0]["permissions"]["records"][0]["writableFields"] = json!([]);
-    assert!(
-        !compile(&value)
-            .unwrap()
-            .findings()
-            .iter()
-            .any(|d| d.code == "breg.access.profile-writable-row-boundary")
-    );
+    assert!(!compile(&value)
+        .unwrap()
+        .findings()
+        .iter()
+        .any(|d| d.code == "breg.access.profile-writable-row-boundary"));
 }
 
 /// A row boundary compiles to an INSERT `WITH CHECK` pinning its field to the
@@ -512,12 +498,10 @@ fn create_grants_keep_the_row_boundary_field_writable() {
         "{}",
         finding.message
     );
-    assert!(
-        compiled
-            .findings()
-            .iter()
-            .all(|d| d.code != "breg.access.profile-row-boundary-not-writable")
-    );
+    assert!(compiled
+        .findings()
+        .iter()
+        .all(|d| d.code != "breg.access.profile-row-boundary-not-writable"));
 
     let mut create_only = value.clone();
     create_only["accessProfiles"][0]["permissions"]["records"][0]["operations"] =
@@ -548,31 +532,27 @@ fn create_grants_keep_the_row_boundary_field_writable() {
         "{}",
         finding.message
     );
-    assert!(
-        compiled
-            .findings()
-            .iter()
-            .all(|d| d.code != "breg.access.profile-writable-row-boundary")
-    );
+    assert!(compiled
+        .findings()
+        .iter()
+        .all(|d| d.code != "breg.access.profile-writable-row-boundary"));
     assert_eq!(compiled.findings(), compile(&value).unwrap().findings());
 
     // Without `create` the boundary field may stay unwritable.
     value["accessProfiles"][0]["permissions"]["records"][0]["operations"] =
         json!(["get", "list", "patch"]);
-    assert!(
-        compile(&value)
-            .unwrap()
-            .findings()
-            .iter()
-            .all(|d| d.code != "breg.access.profile-row-boundary-not-writable")
-    );
+    assert!(compile(&value)
+        .unwrap()
+        .findings()
+        .iter()
+        .all(|d| d.code != "breg.access.profile-row-boundary-not-writable"));
 }
 
 #[cfg(all(feature = "runtime", feature = "tooling"))]
 #[test]
 fn synthetic_preview_uses_http_admission_and_never_renders_claim_values() {
     let compiled = compile(&source()).unwrap();
-    let scenario = json!({"entity":"entry","accessProfile":"reader","operation":"list","claims":{
+    let scenario = json!({"recordType":"entry","accessProfile":"reader","operation":"list","claims":{
         "principalClaim":"registry_principal","principal":"private-principal-canary","scopes":["entry:read"],"purpose":"administration",
         "directClaims":{"districts":["private-district-canary"]}
     }});
@@ -615,13 +595,11 @@ fn synthetic_preview_uses_http_admission_and_never_renders_claim_values() {
     }
     let mut wrong_shape = scenario.clone();
     wrong_shape["claims"]["directClaims"]["districts"] = json!("scalar-instead-of-array");
-    assert!(
-        registry_breg::access_preview::preview_access(
-            &compiled,
-            serde_json::from_value(wrong_shape).unwrap()
-        )
-        .is_err()
-    );
+    assert!(registry_breg::access_preview::preview_access(
+        &compiled,
+        serde_json::from_value(wrong_shape).unwrap()
+    )
+    .is_err());
     // A value repeated in a multi-valued claim asserts the same authority once,
     // so HTTP admission collapses it and the preview reports the same answer.
     let mut repeated = scenario;
@@ -681,14 +659,12 @@ fn access_diffs_show_each_changed_dimension_without_guessing_mixed_authority() {
         "rowBoundaries",
         "allowDataExport",
     ] {
-        assert!(
-            narrowing
-                .changes
-                .iter()
-                .flat_map(|c| &c.access_details)
-                .any(|d| d.field == field
-                    && d.direction == registry_breg::tooling::AccessChangeDirection::Narrowing)
-        );
+        assert!(narrowing
+            .changes
+            .iter()
+            .flat_map(|c| &c.access_details)
+            .any(|d| d.field == field
+                && d.direction == registry_breg::tooling::AccessChangeDirection::Narrowing));
     }
 
     let mut only_requirements = source();
@@ -767,13 +743,11 @@ fn default_profile_refusals_name_the_entity_the_operation_and_the_profiles() {
         .unwrap()
         .push(second_reader());
     let registry = compile(&without_default).expect("explicit selection needs no default");
-    assert!(
-        registry
-            .access()
-            .entries
-            .iter()
-            .all(|entry| entry.default_profile_id.is_none())
-    );
+    assert!(registry
+        .access()
+        .entries
+        .iter()
+        .all(|entry| entry.default_profile_id.is_none()));
     let openapi: Value = serde_json::from_slice(
         &registry
             .artifacts()
@@ -836,13 +810,11 @@ fn write_grants_without_writable_fields_are_reported() {
         "{finding:?}"
     );
     value["accessProfiles"][0]["permissions"]["records"][0]["writableFields"] = json!(["code"]);
-    assert!(
-        !compile(&value)
-            .unwrap()
-            .findings()
-            .iter()
-            .any(|d| d.code == "breg.access.profile-no-writable-fields")
-    );
+    assert!(!compile(&value)
+        .unwrap()
+        .findings()
+        .iter()
+        .any(|d| d.code == "breg.access.profile-no-writable-fields"));
 }
 
 #[test]
@@ -877,11 +849,9 @@ fn create_grants_report_each_required_field_the_profile_cannot_write() {
             "recordTypes[id=entry].accessProfiles[id=reader].writableFields[field=district]",
         ]
     );
-    assert!(
-        findings
-            .iter()
-            .all(|diagnostic| diagnostic.message.contains("required"))
-    );
+    assert!(findings
+        .iter()
+        .all(|diagnostic| diagnostic.message.contains("required")));
 
     let mut production = value.clone();
     production["package"] = json!({"sourceRevision":"test-revision"});
@@ -904,28 +874,24 @@ fn create_grants_report_each_required_field_the_profile_cannot_write() {
 
     value["accessProfiles"][0]["permissions"]["records"][0]["writableFields"] =
         json!(["code", "district"]);
-    assert!(
-        compile(&value)
-            .unwrap()
-            .findings()
-            .iter()
-            .all(|diagnostic| {
-                diagnostic.code != "breg.access.profile-create-required-field-not-writable"
-            })
-    );
+    assert!(compile(&value)
+        .unwrap()
+        .findings()
+        .iter()
+        .all(|diagnostic| {
+            diagnostic.code != "breg.access.profile-create-required-field-not-writable"
+        }));
 
     value["accessProfiles"][0]["permissions"]["records"][0]["operations"] =
         json!(["get", "list", "patch"]);
     value["accessProfiles"][0]["permissions"]["records"][0]["writableFields"] = json!([]);
-    assert!(
-        compile(&value)
-            .unwrap()
-            .findings()
-            .iter()
-            .all(|diagnostic| {
-                diagnostic.code != "breg.access.profile-create-required-field-not-writable"
-            })
-    );
+    assert!(compile(&value)
+        .unwrap()
+        .findings()
+        .iter()
+        .all(|diagnostic| {
+            diagnostic.code != "breg.access.profile-create-required-field-not-writable"
+        }));
 }
 
 #[test]
@@ -959,11 +925,9 @@ fn import_grants_report_each_required_field_the_profile_cannot_write() {
             "recordTypes[id=entry].accessProfiles[id=reader].writableFields[field=district]",
         ]
     );
-    assert!(
-        findings
-            .iter()
-            .all(|diagnostic| diagnostic.message.contains("`import`"))
-    );
+    assert!(findings
+        .iter()
+        .all(|diagnostic| diagnostic.message.contains("`import`")));
 
     let mut production = value.clone();
     production["package"] = json!({"sourceRevision":"test-revision"});
@@ -986,27 +950,23 @@ fn import_grants_report_each_required_field_the_profile_cannot_write() {
 
     value["accessProfiles"][0]["permissions"]["records"][0]["writableFields"] =
         json!(["code", "district"]);
-    assert!(
-        compile(&value)
-            .unwrap()
-            .findings()
-            .iter()
-            .all(|diagnostic| {
-                diagnostic.code != "breg.access.profile-create-required-field-not-writable"
-            })
-    );
+    assert!(compile(&value)
+        .unwrap()
+        .findings()
+        .iter()
+        .all(|diagnostic| {
+            diagnostic.code != "breg.access.profile-create-required-field-not-writable"
+        }));
 
     value["accessProfiles"][0]["permissions"]["records"][0]["operations"] = json!(["get", "list"]);
     value["accessProfiles"][0]["permissions"]["records"][0]["writableFields"] = json!([]);
-    assert!(
-        compile(&value)
-            .unwrap()
-            .findings()
-            .iter()
-            .all(|diagnostic| {
-                diagnostic.code != "breg.access.profile-create-required-field-not-writable"
-            })
-    );
+    assert!(compile(&value)
+        .unwrap()
+        .findings()
+        .iter()
+        .all(|diagnostic| {
+            diagnostic.code != "breg.access.profile-create-required-field-not-writable"
+        }));
 }
 
 #[test]
@@ -1112,28 +1072,22 @@ fn unresolved_constraint_fields_name_the_entity_constraint_and_field() {
             "recordTypes[id=entry].constraints[id=unknowns].fields[field=missing-second]",
         ]
     );
-    assert!(
-        diagnostics[..2]
-            .iter()
-            .all(|diagnostic| diagnostic.message == "a constraint must name at least one field")
-    );
-    assert!(
-        diagnostics[2..]
-            .iter()
-            .all(|diagnostic| diagnostic.message == "a constraint refers to an unknown field")
-    );
+    assert!(diagnostics[..2]
+        .iter()
+        .all(|diagnostic| diagnostic.message == "a constraint must name at least one field"));
+    assert!(diagnostics[2..]
+        .iter()
+        .all(|diagnostic| diagnostic.message == "a constraint refers to an unknown field"));
 }
 
 #[test]
 fn sole_profile_is_implicit_default_and_action_routes_may_require_explicit_selection() {
     let registry = compile(&source()).unwrap();
-    assert!(
-        registry
-            .access()
-            .entries
-            .iter()
-            .all(|entry| entry.default_profile_id.as_deref() == Some("reader"))
-    );
+    assert!(registry
+        .access()
+        .entries
+        .iter()
+        .all(|entry| entry.default_profile_id.as_deref() == Some("reader")));
     let mut project =
         registry_breg::parse_project_yaml(include_bytes!("fixtures/action-authority-mapping.yaml"))
             .unwrap();
@@ -1142,21 +1096,17 @@ fn sole_profile_is_implicit_default_and_action_routes_may_require_explicit_selec
     }
     let registry = compile_project(&project, &[], CompileProfile::Authoring).unwrap();
     assert!(!registry.actions().routes.is_empty());
-    assert!(
-        registry
-            .actions()
-            .routes
-            .iter()
-            .all(|route| route.default_access_profile.is_none())
-    );
+    assert!(registry
+        .actions()
+        .routes
+        .iter()
+        .all(|route| route.default_access_profile.is_none()));
     for profile in &mut project.access_profiles {
         profile.default = true;
     }
     let failure = compile_project(&project, &[], CompileProfile::Authoring).unwrap_err();
-    assert!(
-        failure
-            .diagnostics()
-            .iter()
-            .any(|diagnostic| diagnostic.code == "breg.action.route-access-default-multiple")
-    );
+    assert!(failure
+        .diagnostics()
+        .iter()
+        .any(|diagnostic| diagnostic.code == "breg.action.route-access-default-multiple"));
 }

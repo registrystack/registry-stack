@@ -88,7 +88,7 @@ pub(crate) fn validate_access_requirements(
                         continue;
                     };
                     let location = format!(
-                        "{}.readPaths[path={}].requirements[entity={visited}]",
+                        "{}.readPaths[path={}].requirements[recordType={visited}]",
                         profile_path(&entity.id, &profile.id),
                         path.id
                     );
@@ -97,7 +97,7 @@ pub(crate) fn validate_access_requirements(
                     check_profile(&request_requirements, profile, &location, errors);
                     if !requirements.row_boundaries.is_empty() {
                         errors.push(Diagnostic::error("breg.access.requirements-read-path-row-boundary-unsupported", location,
-                            "this relationship route enforces root rows only; use a direct grant on the protected entity instead of this read-path grant"));
+                            "this relationship route enforces root rows only; use a direct grant on the protected record type instead of this read-path grant"));
                     }
                 }
             }
@@ -116,7 +116,7 @@ pub(crate) fn check_profile(
         .difference(&profile.required_scopes)
     {
         errors.push(Diagnostic::error("breg.access.requirements-scope-missing", format!("{path}.requiredScopes[value={scope}]"),
-            "add the entity's mandatory scope to this profile; granting other scopes does not satisfy it"));
+            "add the record type's mandatory scope to this profile; granting other scopes does not satisfy it"));
     }
     if !requirements.allowed_purposes.is_empty()
         && (profile.required_purposes.is_empty()
@@ -125,12 +125,12 @@ pub(crate) fn check_profile(
                 .is_subset(&requirements.allowed_purposes))
     {
         errors.push(Diagnostic::error("breg.access.requirements-purpose-widened", format!("{path}.requiredPurposes"),
-            "require a nonempty subset of the entity's allowedPurposes; an empty list allows every purpose"));
+            "require a nonempty subset of the record type's allowedPurposes; an empty list allows every purpose"));
     }
     for boundary in &requirements.row_boundaries {
         if !profile.row_boundaries.contains(boundary) {
             errors.push(Diagnostic::error("breg.access.requirements-row-boundary-missing", format!("{path}.rowBoundaries[field={}]", boundary.field),
-                "include the entity's exact field, claim, and operator binding; request filters and other claim names do not satisfy this requirement"));
+                "include the record type's exact field, claim, and operator binding; request filters and other claim names do not satisfy this requirement"));
         }
     }
 }
@@ -232,12 +232,12 @@ pub(crate) fn access_findings(entities: &BTreeMap<String, EntitySource>) -> Vec<
                         .any(|f| &f.id == field && f.classification > entity.classification)
                 {
                     findings.push(Diagnostic::finding("breg.access.profile-higher-classification", format!("{path}.readableFields[field={field}]"),
-                        "this field is more sensitive than its entity's classification; verify the profile's scope and purpose before disclosing it"));
+                        "this field is more sensitive than its record type's classification; verify the profile's scope and purpose before disclosing it"));
                 }
             }
             for permission in &profile.read_paths {
                 findings.push(Diagnostic::finding("breg.access.profile-related-disclosure", format!("{path}.readPaths[path={}]", permission.path),
-                    "this permission discloses related records using the root profile, not target direct-access profiles; review its fields and the target/through entity accessRequirements"));
+                    "this permission discloses related records using the root profile, not target direct-access profiles; review its fields and the target/through record type accessRequirements"));
             }
         }
     }
@@ -263,7 +263,7 @@ pub(crate) fn compiled_access_findings(
     }
     for reach in row_reach(entities, actions) {
         // Ordinary permissions retain their existing finding codes above.
-        if reach.surface == "entity" {
+        if reach.surface == "record" {
             continue;
         }
         // A `self` consent issuer's subject and record targets are bound
@@ -527,6 +527,7 @@ pub struct AccessExplanation {
     pub missing_claims: &'static str,
     pub evaluation: &'static str,
     pub routes: crate::model::CompiledAccessInventory,
+    #[serde(rename = "recordTypes")]
     pub entities: Vec<EntityAccessExplanation>,
     pub actions: CompiledActionInventory,
     pub row_reach: Vec<RowReachExplanation>,
@@ -602,6 +603,7 @@ pub struct ConsentClientExplanation {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConsentRecordExplanation {
+    #[serde(rename = "recordType")]
     pub entity: String,
     pub maximum_duration_days: u32,
     pub gives: Vec<String>,
@@ -614,6 +616,7 @@ pub struct ConsentRecordExplanation {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GatedPermissionExplanation {
+    #[serde(rename = "recordType")]
     pub entity: String,
     pub profile: String,
     pub source_path: String,
@@ -647,6 +650,7 @@ pub struct ConsentIssuerExplanation {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EntityAccessExplanation {
+    #[serde(rename = "recordType")]
     pub entity: String,
     pub classification: Classification,
     pub requirements: Option<AccessRequirementsSource>,
@@ -657,6 +661,7 @@ pub struct EntityAccessExplanation {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RowReachExplanation {
+    #[serde(rename = "recordType")]
     pub entity: String,
     pub profile: String,
     pub source_path: String,
@@ -703,7 +708,7 @@ fn row_reach(
                 &entity.id,
                 &profile.id,
                 format!("{path}.rowBoundaries"),
-                "entity",
+                "record",
                 &profile.row_boundaries,
                 &profile.membership_boundaries,
                 false,

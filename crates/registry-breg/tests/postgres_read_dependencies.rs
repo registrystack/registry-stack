@@ -10,23 +10,23 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use axum::body::{Body, to_bytes};
+use axum::body::{to_bytes, Body};
 use axum::http::{Method, Request, StatusCode};
 use postgres_harness::TestDatabase;
 use registry_breg::api::{
-    HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedClaimValue,
-    VerifiedRequestClaims, router,
+    router, HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedClaimValue,
+    VerifiedRequestClaims,
 };
-use registry_breg::compiler::{CompileProfile, compile_project_with_assets};
-use registry_breg::contract::{ModuleAssetSource, parse_project_json};
+use registry_breg::compiler::{compile_project_with_assets, CompileProfile};
+use registry_breg::contract::{parse_project_json, ModuleAssetSource};
 use registry_breg::cursor::CursorCodec;
 use registry_breg::postgres::{
+    begin_record_transaction, initialize_registry_state_for_catalog_test, install_compiled_schema,
     ClaimContext, ExpectedManagedCatalog, PostgresRecordReadService, RegistryLockKey,
-    RegistryStateTestIdentity, RowBoundaryContext, begin_record_transaction,
-    initialize_registry_state_for_catalog_test, install_compiled_schema,
+    RegistryStateTestIdentity, RowBoundaryContext,
 };
 use registry_platform_audit::AuditProfile;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use tower::Service as _;
 use zeroize::Zeroizing;
 

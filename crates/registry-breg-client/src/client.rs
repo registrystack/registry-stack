@@ -2902,7 +2902,7 @@ fn parse_breg_problem(body: &[u8]) -> Result<(ProblemDocument, BRegProblemExtens
             )
         });
     }
-    let declared_field = match (object.remove("entityId"), object.remove("fieldId")) {
+    let declared_field = match (object.remove("recordType"), object.remove("fieldId")) {
         (None, None) => false,
         (Some(serde_json::Value::String(entity)), Some(serde_json::Value::String(field)))
             if [&entity, &field].into_iter().all(|id| {

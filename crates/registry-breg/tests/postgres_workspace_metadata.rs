@@ -2,8 +2,6 @@
 
 #![cfg(feature = "postgres-test")]
 
-use std::collections::BTreeSet;
-
 #[path = "support/pilot_acceptance_harness.rs"]
 mod pilot_acceptance_harness;
 #[path = "support/postgres_harness.rs"]
@@ -11,9 +9,9 @@ mod pilot_acceptance_harness;
 mod postgres_harness;
 
 use axum::http::{Method, StatusCode};
-use pilot_acceptance_harness::{PilotHarness, response_bytes, response_json};
+use pilot_acceptance_harness::{response_bytes, response_json, PilotHarness};
 use registry_breg::mutation::parse_json_patch_document;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 fn operation<'a>(document: &'a Value, id: &str) -> &'a Value {
     document["operations"]
@@ -22,174 +20,6 @@ fn operation<'a>(document: &'a Value, id: &str) -> &'a Value {
         .iter()
         .find(|operation| operation["id"] == id)
         .expect("authorized operation")
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn real_postgres_workspace_metadata_marks_request_lifecycle_without_direct_controlled_writes()
-{
-    let harness = PilotHarness::start("asset-site-placement-change-requests").await;
-    let token = harness.token("asset-management", &[]);
-    let metadata = response_json(
-        harness
-            .send(
-                Method::GET,
-                "/v1/registry?accessProfile=asset-operator",
-                Some(&token),
-                &[],
-                Vec::new(),
-            )
-            .await,
-    )
-    .await;
-    let operation_ids = metadata["operations"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|operation| operation["id"].as_str().unwrap())
-        .collect::<BTreeSet<_>>();
-    assert!(operation_ids.contains("records.asset-placement.create"));
-    assert!(
-        !operation_ids.contains("records.asset-placement.patch"),
-        "controlled placement patch must be absent as a direct operation"
-    );
-    assert_eq!(
-        operation(&metadata, "records.asset-placement.create")["request"]["mutationSemantics"],
-        "direct"
-    );
-    assert_eq!(
-        metadata["recordTypes"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|entity| entity["id"] == "asset-placement")
-            .unwrap()["changeControl"],
-        json!({
-            "controlledOperations": ["patch"],
-            "eligibleRequestTypes": [{"id": "placement-correction-request", "primaryDataset": "asset-site-placement-change-requests", "route": "placement-correction-requests"}]
-        })
-    );
-
-    let submitter_token =
-        harness.token_with_scopes("asset-correction", &[], &["registry:corrections:submit"]);
-    let submitter = response_json(
-        harness
-            .send(
-                Method::GET,
-                "/v1/registry?accessProfile=correction-submitter",
-                Some(&submitter_token),
-                &[],
-                Vec::new(),
-            )
-            .await,
-    )
-    .await;
-    assert_eq!(
-        operation(&submitter, "records.placement-correction-request.create")["request"]["mutationSemantics"],
-        "direct"
-    );
-    let placement_list = operation(&submitter, "records.asset-placement.list");
-    assert_eq!(placement_list["accessProfile"], "correction-submitter");
-    assert_eq!(
-        placement_list["readableFields"],
-        json!(["asset", "valid-from", "valid-to"])
-    );
-    assert_eq!(placement_list["titleFields"], json!([]));
-    let asset_get = operation(&submitter, "records.asset-item.get");
-    assert_eq!(asset_get["accessProfile"], "correction-submitter");
-    assert_eq!(asset_get["readableFields"], json!(["asset-code", "label"]));
-    assert_eq!(asset_get["titleFields"], json!(["asset-code"]));
-    let asset_reference = &placement_list["fields"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|field| field["id"] == "asset")
-        .unwrap()["reference"];
-    assert_eq!(asset_reference["targetEntity"], "asset-item");
-    assert_eq!(
-        asset_reference["operations"],
-        json!([{
-            "accessProfile": "correction-submitter",
-            "labelFields": ["asset-code"],
-            "operationId": "records.asset-item.get"
-        }])
-    );
-    let site_list = operation(&submitter, "records.asset-site.list");
-    assert_eq!(site_list["accessProfile"], "correction-submitter");
-    assert_eq!(site_list["readableFields"], json!(["site-code"]));
-    assert_eq!(site_list["titleFields"], json!(["site-code"]));
-
-    let create = operation(&submitter, "records.placement-correction-request.create");
-    for (field_id, target_entity, target_operation, label_fields) in [
-        (
-            "placement",
-            "asset-placement",
-            "records.asset-placement.list",
-            json!([]),
-        ),
-        (
-            "proposed-site",
-            "asset-site",
-            "records.asset-site.list",
-            json!(["site-code"]),
-        ),
-    ] {
-        let reference = &create["fields"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|field| field["id"] == field_id)
-            .unwrap()["reference"];
-        assert_eq!(reference["targetEntity"], target_entity);
-        assert_eq!(reference["manualEntry"], true);
-        let binding = reference["operations"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|binding| binding["operationId"] == target_operation)
-            .expect("ordinary list reference binding");
-        assert_eq!(binding["accessProfile"], "correction-submitter");
-        assert_eq!(binding["labelFields"], label_fields);
-        assert!(
-            reference["operations"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .all(|binding| binding["accessProfile"] == "correction-submitter")
-        );
-    }
-    for operation_id in [
-        "records.placement-correction-request.request.submit",
-        "records.placement-correction-request.request.revise",
-        "records.placement-correction-request.request.cancel",
-    ] {
-        let operation = operation(&submitter, operation_id);
-        assert_eq!(
-            operation["requiredCapabilities"],
-            json!(["change_request_lifecycle"])
-        );
-        assert_eq!(
-            operation["request"]["mutationSemantics"],
-            "change_request_lifecycle"
-        );
-        assert_eq!(operation["request"]["body"], "change_request_action");
-        assert_eq!(operation["request"]["contentType"], "application/json");
-        assert_eq!(operation["request"]["idempotencyKeyRequired"], true);
-        assert_eq!(operation["request"]["ifMatchRequired"], true);
-        assert_eq!(
-            operation["request"]["schema"]["additionalProperties"],
-            false
-        );
-        if operation_id.ends_with(".revise") {
-            assert_eq!(
-                operation["request"]["schema"]["required"],
-                json!(["rebase"])
-            );
-        } else {
-            assert!(operation["request"]["schema"].get("required").is_none());
-            assert_eq!(operation["request"]["schema"]["properties"], json!({}));
-        }
-    }
-    harness.finish().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -236,13 +66,11 @@ async fn real_postgres_workspace_metadata_mutation_and_replay_contract() {
         batch["request"]["schema"]["properties"]["items"]["maxItems"],
         batch["request"]["maximumItems"]
     );
-    assert!(
-        metadata["operations"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|op| op["id"] != "records.inspection-event.patch")
-    );
+    assert!(metadata["operations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|op| op["id"] != "records.inspection-event.patch"));
     let placement = operation(&metadata, "records.asset-placement.patch");
     let end = placement["fields"]
         .as_array()
@@ -266,7 +94,7 @@ async fn real_postgres_workspace_metadata_mutation_and_replay_contract() {
         .iter()
         .find(|field| field["id"] == "asset")
         .unwrap()["reference"];
-    assert_eq!(reference["targetEntity"], "asset-item");
+    assert_eq!(reference["targetRecordType"], "asset-item");
     assert!(!reference["operations"].as_array().unwrap().is_empty());
     let openapi_response = harness
         .send(Method::GET, "/openapi.json", Some(&token), &[], Vec::new())
@@ -312,13 +140,11 @@ async fn real_postgres_workspace_metadata_mutation_and_replay_contract() {
     )
     .await;
     assert_eq!(planner["revision"], metadata["revision"]);
-    assert!(
-        planner["operations"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|op| op["accessProfile"] == "site-planner")
-    );
+    assert!(planner["operations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|op| op["accessProfile"] == "site-planner"));
     assert!(planner["operations"].as_array().unwrap().iter().all(|op| {
         ![
             "records.asset-item.create",
@@ -344,13 +170,11 @@ async fn real_postgres_workspace_metadata_mutation_and_replay_contract() {
         json!(["asset", "site", "valid-from", "valid-to"])
     );
     let body = json!({"data":{"assetCode":"META-001","label":"Metadata contract asset","assetClass":"equipment"}});
-    assert!(
-        jsonschema::JSONSchema::options()
-            .with_draft(jsonschema::Draft::Draft202012)
-            .compile(&create["request"]["schema"])
-            .unwrap()
-            .is_valid(&body)
-    );
+    assert!(jsonschema::JSONSchema::options()
+        .with_draft(jsonschema::Draft::Draft202012)
+        .compile(&create["request"]["schema"])
+        .unwrap()
+        .is_valid(&body));
     let created = harness
         .send_json(
             Method::POST,

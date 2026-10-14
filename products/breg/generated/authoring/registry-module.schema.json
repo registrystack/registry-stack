@@ -17,8 +17,8 @@
           "minLength": 1,
           "type": "string"
         },
-        "sourceEntity": {
-          "description": "Entity whose access profile authorizes the read. Omitted for direct reads of the logged entity.",
+        "sourceRecordType": {
+          "description": "Record type whose access profile authorizes the read. Omitted for direct reads of the logged record type.",
           "maxLength": 64,
           "minLength": 1,
           "pattern": "^[a-z][a-z0-9_-]*$",
@@ -416,258 +416,292 @@
       "type": "object"
     },
     "ActionInputSource": {
-      "oneOf": [
+      "anyOf": [
         {
-          "properties": {
-            "type": {
-              "const": "boolean",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "maximumLength": {
-              "format": "uint32",
-              "maximum": 1000000,
-              "minimum": 1,
-              "type": "integer"
-            },
-            "minimumLength": {
-              "default": 0,
-              "format": "uint32",
-              "maximum": 1000000,
-              "minimum": 0,
-              "type": "integer"
-            },
-            "type": {
-              "const": "string",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "maximumLength"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "maximumLength": {
-              "format": "uint32",
-              "maximum": 10000000,
-              "minimum": 1,
-              "type": "integer"
-            },
-            "type": {
-              "const": "text",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "maximumLength"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "type": {
-              "const": "int64",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "maximum": {
-              "type": "string"
-            },
-            "minimum": {
-              "type": "string"
-            },
-            "precision": {
-              "format": "uint32",
-              "maximum": 38,
-              "minimum": 1,
-              "type": "integer"
-            },
-            "scale": {
-              "format": "uint32",
-              "maximum": 38,
-              "minimum": 0,
-              "type": "integer"
-            },
-            "type": {
-              "const": "decimal",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "precision",
-            "scale"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "type": {
-              "const": "date",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "type": {
-              "const": "timestamp",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "type": {
-              "const": "uuid",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "type": {
-              "const": "vocabulary-code",
-              "type": "string"
-            },
-            "values": {
-              "default": [],
-              "items": {
-                "type": "string"
+          "oneOf": [
+            {
+              "properties": {
+                "type": {
+                  "const": "boolean",
+                  "type": "string"
+                }
               },
-              "type": "array"
+              "required": [
+                "type"
+              ],
+              "type": "object"
             },
-            "vocabulary": {
+            {
+              "properties": {
+                "maximumLength": {
+                  "format": "uint32",
+                  "maximum": 1000000,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "minimumLength": {
+                  "default": 0,
+                  "format": "uint32",
+                  "maximum": 1000000,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "type": {
+                  "const": "string",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "maximumLength"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "maximumLength": {
+                  "format": "uint32",
+                  "maximum": 10000000,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "type": {
+                  "const": "text",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "maximumLength"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "type": {
+                  "const": "int64",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "maximum": {
+                  "type": "string"
+                },
+                "minimum": {
+                  "type": "string"
+                },
+                "precision": {
+                  "format": "uint32",
+                  "maximum": 38,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "scale": {
+                  "format": "uint32",
+                  "maximum": 38,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "type": {
+                  "const": "decimal",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "precision",
+                "scale"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "type": {
+                  "const": "date",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "type": {
+                  "const": "timestamp",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "type": {
+                  "const": "uuid",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "type": {
+                  "const": "vocabulary-code",
+                  "type": "string"
+                },
+                "values": {
+                  "default": [],
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "vocabulary": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "vocabulary"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "onDelete": {
+                  "$ref": "#/$defs/ReferenceDelete",
+                  "default": "restrict"
+                },
+                "target": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "reference",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "target"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "bbox": {
+                  "$ref": "#/$defs/Crs84BboxSource"
+                },
+                "precision": {
+                  "format": "uint32",
+                  "maximum": 9,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "type": {
+                  "const": "crs84-point",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "precision"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "maximumBytes": {
+                  "format": "uint32",
+                  "maximum": 1048576,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "schema": {
+                  "x-registry-foreign": "json-schema-2020-12"
+                },
+                "type": {
+                  "const": "structured",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "maximumBytes",
+                "schema"
+              ],
+              "type": "object"
+            }
+          ],
+          "properties": {
+            "apiName": {
               "type": "string"
+            },
+            "classification": {
+              "$ref": "#/$defs/Classification"
+            },
+            "display": {
+              "$ref": "#/$defs/DisplaySource",
+              "default": {}
+            },
+            "id": {
+              "$ref": "#/$defs/LocalId"
+            },
+            "required": {
+              "default": false,
+              "type": "boolean"
             }
           },
           "required": [
-            "type",
-            "vocabulary"
+            "id",
+            "classification"
           ],
-          "type": "object"
+          "type": "object",
+          "unevaluatedProperties": false
         },
         {
+          "additionalProperties": false,
           "properties": {
-            "onDelete": {
-              "$ref": "#/$defs/ReferenceDelete",
-              "default": "restrict"
-            },
-            "target": {
+            "apiName": {
               "type": "string"
             },
-            "type": {
-              "const": "reference",
-              "type": "string"
+            "classification": {
+              "$ref": "#/$defs/Classification"
+            },
+            "display": {
+              "$ref": "#/$defs/DisplaySource"
+            },
+            "id": {
+              "$ref": "#/$defs/LocalId"
+            },
+            "required": {
+              "default": false,
+              "type": "boolean"
+            },
+            "typeRef": {
+              "$ref": "#/$defs/LocalId"
             }
           },
           "required": [
-            "type",
-            "target"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "bbox": {
-              "$ref": "#/$defs/Crs84BboxSource"
-            },
-            "precision": {
-              "format": "uint32",
-              "maximum": 9,
-              "minimum": 0,
-              "type": "integer"
-            },
-            "type": {
-              "const": "crs84-point",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "precision"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "maximumBytes": {
-              "format": "uint32",
-              "maximum": 1048576,
-              "minimum": 1,
-              "type": "integer"
-            },
-            "schema": {
-              "x-registry-foreign": "json-schema-2020-12"
-            },
-            "type": {
-              "const": "structured",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "maximumBytes",
-            "schema"
+            "id",
+            "typeRef",
+            "classification"
           ],
           "type": "object"
         }
-      ],
-      "properties": {
-        "apiName": {
-          "type": "string"
-        },
-        "classification": {
-          "$ref": "#/$defs/Classification"
-        },
-        "display": {
-          "$ref": "#/$defs/DisplaySource",
-          "default": {}
-        },
-        "id": {
-          "$ref": "#/$defs/LocalId"
-        },
-        "required": {
-          "default": false,
-          "type": "boolean"
-        }
-      },
-      "required": [
-        "id",
-        "classification"
-      ],
-      "type": "object",
-      "unevaluatedProperties": false
+      ]
     },
     "ActionPlanSource": {
       "oneOf": [
@@ -744,10 +778,14 @@
       "properties": {
         "atLeast": {
           "format": "int64",
+          "maximum": 9223372036854775807,
+          "minimum": -9223372036854775808,
           "type": "integer"
         },
         "atMost": {
           "format": "int64",
+          "maximum": 9223372036854775807,
+          "minimum": -9223372036854775808,
           "type": "integer"
         },
         "currentDate": {
@@ -927,6 +965,9 @@
         },
         "classification": {
           "$ref": "#/$defs/Classification"
+        },
+        "display": {
+          "$ref": "#/$defs/DisplaySource"
         },
         "id": {
           "$ref": "#/$defs/LocalId"
@@ -1490,6 +1531,9 @@
         "classification": {
           "$ref": "#/$defs/Classification"
         },
+        "display": {
+          "$ref": "#/$defs/DisplaySource"
+        },
         "id": {
           "$ref": "#/$defs/LocalId"
         },
@@ -1537,6 +1581,9 @@
         "classification": {
           "$ref": "#/$defs/Classification"
         },
+        "display": {
+          "$ref": "#/$defs/DisplaySource"
+        },
         "encrypted": {
           "default": false,
           "type": "boolean"
@@ -1576,6 +1623,9 @@
         },
         "classification": {
           "$ref": "#/$defs/Classification"
+        },
+        "display": {
+          "$ref": "#/$defs/DisplaySource"
         },
         "encrypted": {
           "default": false,
@@ -2270,6 +2320,59 @@
         },
         {
           "$ref": "#/$defs/StructuredFieldSourceSchema"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "apiName": {
+              "type": "string"
+            },
+            "classification": {
+              "$ref": "#/$defs/Classification"
+            },
+            "display": {
+              "$ref": "#/$defs/DisplaySource"
+            },
+            "encrypted": {
+              "default": false,
+              "type": "boolean"
+            },
+            "id": {
+              "$ref": "#/$defs/LocalId"
+            },
+            "lookup": {
+              "$ref": "#/$defs/FieldLookupSource"
+            },
+            "pattern": {
+              "type": "string"
+            },
+            "relationship": {
+              "additionalProperties": false,
+              "properties": {
+                "inverseName": {
+                  "pattern": "^[a-z][A-Za-z0-9]*$",
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
+            "required": {
+              "default": false,
+              "type": "boolean"
+            },
+            "typeRef": {
+              "$ref": "#/$defs/LocalId"
+            },
+            "validTimeRole": {
+              "$ref": "#/$defs/ValidTimeRole"
+            }
+          },
+          "required": [
+            "id",
+            "typeRef",
+            "classification"
+          ],
+          "type": "object"
         }
       ]
     },
@@ -2520,13 +2623,15 @@
         "maximumOperations": {
           "default": 10000,
           "format": "uint64",
-          "minimum": 0,
+          "maximum": 100000,
+          "minimum": 1,
           "type": "integer"
         },
         "maximumOutputBytes": {
           "default": 8192,
           "format": "uint32",
-          "minimum": 0,
+          "maximum": 2097152,
+          "minimum": 1,
           "type": "integer"
         }
       },
@@ -2551,7 +2656,7 @@
           "type": "string"
         },
         "id": {
-          "type": "string"
+          "$ref": "#/$defs/LocalId"
         },
         "limits": {
           "$ref": "#/$defs/FunctionLimitsSource",
@@ -2753,6 +2858,9 @@
         "classification": {
           "$ref": "#/$defs/Classification"
         },
+        "display": {
+          "$ref": "#/$defs/DisplaySource"
+        },
         "id": {
           "$ref": "#/$defs/LocalId"
         },
@@ -2924,7 +3032,13 @@
           "$ref": "#/$defs/Digest"
         },
         "id": {
-          "type": "string"
+          "$comment": "The review protocol also bounds UTF-8 bytes, which the reader checks without restricting externally issued identifiers to ASCII.",
+          "allOf": [
+            {
+              "$ref": "#/$defs/ExternalId"
+            }
+          ],
+          "maxLength": 128
         },
         "version": {
           "type": "string"
@@ -2957,9 +3071,9 @@
           "properties": {
             "maximumAttempts": {
               "default": 3,
-              "format": "uint16",
-              "maximum": 65535,
-              "minimum": 0,
+              "format": "uint32",
+              "maximum": 32,
+              "minimum": 1,
               "type": "integer"
             },
             "mode": {
@@ -2989,6 +3103,43 @@
       },
       "type": "object"
     },
+    "ProposalEventTransition": {
+      "enum": [
+        "started",
+        "edited",
+        "submitted",
+        "revised",
+        "rebased",
+        "retried",
+        "cancelled",
+        "applied"
+      ],
+      "type": "string"
+    },
+    "ProposalHookSource": {
+      "additionalProperties": false,
+      "properties": {
+        "handler": {
+          "$ref": "#/$defs/HookHandlerSource"
+        },
+        "id": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "transitions": {
+          "description": "Omit to observe every committed lifecycle transition.",
+          "items": {
+            "$ref": "#/$defs/ProposalEventTransition"
+          },
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "id",
+        "handler"
+      ],
+      "type": "object"
+    },
     "ProposalPolicySource": {
       "additionalProperties": false,
       "properties": {
@@ -3003,6 +3154,13 @@
           "default": [],
           "items": {
             "$ref": "#/$defs/AttachmentSlotSource"
+          },
+          "type": "array"
+        },
+        "hooks": {
+          "description": "Post-commit observers of the fixed, value-free Proposal lifecycle event.",
+          "items": {
+            "$ref": "#/$defs/ProposalHookSource"
           },
           "type": "array"
         },
@@ -3048,10 +3206,29 @@
           "additionalProperties": {
             "$ref": "#/$defs/ProposalContextValueSource"
           },
-          "type": "object"
+          "maxProperties": 64,
+          "propertyNames": {
+            "maxLength": 64,
+            "minLength": 1,
+            "not": {
+              "enum": [
+                "id",
+                "recordId",
+                "revision",
+                "createdAt",
+                "updatedAt",
+                "deletedAt"
+              ],
+              "x-registry-member-names": true
+            },
+            "pattern": "^[a-z][A-Za-z0-9]{0,63}$",
+            "type": "string"
+          },
+          "type": "object",
+          "x-registry-member-names": true
         },
         "id": {
-          "type": "string"
+          "$ref": "#/$defs/LocalId"
         }
       },
       "required": [
@@ -3192,12 +3369,25 @@
         "classification": {
           "$ref": "#/$defs/Classification"
         },
+        "display": {
+          "$ref": "#/$defs/DisplaySource"
+        },
         "id": {
           "$ref": "#/$defs/LocalId"
         },
         "onDelete": {
           "$ref": "#/$defs/ReferenceDelete",
           "default": "restrict"
+        },
+        "relationship": {
+          "additionalProperties": false,
+          "properties": {
+            "inverseName": {
+              "pattern": "^[a-z][A-Za-z0-9]*$",
+              "type": "string"
+            }
+          },
+          "type": "object"
         },
         "required": {
           "default": false,
@@ -3342,6 +3532,9 @@
         "classification": {
           "$ref": "#/$defs/Classification"
         },
+        "display": {
+          "$ref": "#/$defs/DisplaySource"
+        },
         "encrypted": {
           "default": false,
           "type": "boolean"
@@ -3398,6 +3591,9 @@
         },
         "classification": {
           "$ref": "#/$defs/Classification"
+        },
+        "display": {
+          "$ref": "#/$defs/DisplaySource"
         },
         "encrypted": {
           "default": false,
@@ -3473,6 +3669,9 @@
         "classification": {
           "$ref": "#/$defs/Classification"
         },
+        "display": {
+          "$ref": "#/$defs/DisplaySource"
+        },
         "encrypted": {
           "default": false,
           "type": "boolean"
@@ -3522,6 +3721,9 @@
         },
         "classification": {
           "$ref": "#/$defs/Classification"
+        },
+        "display": {
+          "$ref": "#/$defs/DisplaySource"
         },
         "id": {
           "$ref": "#/$defs/LocalId"
@@ -3633,6 +3835,9 @@
         "classification": {
           "$ref": "#/$defs/Classification"
         },
+        "display": {
+          "$ref": "#/$defs/DisplaySource"
+        },
         "id": {
           "$ref": "#/$defs/LocalId"
         },
@@ -3672,6 +3877,9 @@
         },
         "classification": {
           "$ref": "#/$defs/Classification"
+        },
+        "display": {
+          "$ref": "#/$defs/DisplaySource"
         },
         "id": {
           "$ref": "#/$defs/LocalId"
@@ -3768,6 +3976,9 @@
         "$ref": "#/$defs/FieldTypeSource"
       },
       "default": {},
+      "propertyNames": {
+        "$ref": "#/$defs/LocalId"
+      },
       "type": "object"
     },
     "version": {

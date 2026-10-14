@@ -367,7 +367,7 @@ fn unknown_problem(status: u16, change: Option<ProblemChange>) -> Response<Body>
             document["fieldPath"] = json!({"future": true});
             document["refusalCode"] = json!(null);
             document["reasonCode"] = json!(["future"]);
-            document["entityId"] = json!(42);
+            document["recordType"] = json!(42);
             document["future"] = json!({"annotation": true});
         }
         Some(ProblemChange::KnownExtraMember) => {

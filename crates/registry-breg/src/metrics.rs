@@ -34,12 +34,12 @@ use std::{
 };
 
 use axum::{
-    Router,
     body::Body,
     extract::{MatchedPath, State},
-    http::{HeaderValue, Request, StatusCode, header::CONTENT_TYPE},
+    http::{header::CONTENT_TYPE, HeaderValue, Request, StatusCode},
     response::{IntoResponse, Response},
     routing::get,
+    Router,
 };
 
 use crate::postgres::RuntimePool;

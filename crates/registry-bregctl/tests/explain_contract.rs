@@ -598,7 +598,7 @@ fn native_proposal_inspection_pins_review_and_system_apply_scope_without_sources
         .iter()
         .find(|t| t["operation"] == "patch")
         .unwrap();
-    assert_eq!(patch["entityId"], "facility");
+    assert_eq!(patch["recordType"], "facility");
     assert_eq!(
         patch["fields"],
         json!(["address-line", "city", "postal-code"])

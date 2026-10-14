@@ -1,20 +1,20 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Conforming authenticated loopback Review authority with synthetic values.
 use axum::{
-    Json, Router,
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::get,
+    Json, Router,
 };
 use registry_review_client::{
     PolicyBinding, ReviewCreateRequest, ReviewRequestAccepted, ReviewRequestLifecycle,
     ReviewRequestView, ReviewResult, ReviewResultStatus,
 };
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::sync::{
+    atomic::{AtomicBool, AtomicUsize, Ordering},
     Arc, Mutex,
-    atomic::{AtomicUsize, Ordering},
 };
 use uuid::Uuid;
 
@@ -30,11 +30,13 @@ impl registry_platform_httputil::TokenProvider for Token {
 }
 struct StateData {
     policy: PolicyBinding,
+    registry_id: String,
     accepted: Mutex<Option<ReviewRequestAccepted>>,
     result: Mutex<Option<ReviewResult>>,
     creates: AtomicUsize,
     reads: AtomicUsize,
     results: AtomicUsize,
+    results_unavailable: AtomicBool,
 }
 pub struct LocalAuthority {
     pub registry: Arc<registry_breg::review_store::ReviewAuthorityRegistry>,
@@ -48,13 +50,18 @@ impl Drop for LocalAuthority {
 }
 impl LocalAuthority {
     pub async fn start(policy: PolicyBinding) -> Self {
+        Self::start_for_registry(policy, "proposal-test").await
+    }
+    pub async fn start_for_registry(policy: PolicyBinding, registry_id: &str) -> Self {
         let state = Arc::new(StateData {
             policy,
+            registry_id: registry_id.into(),
             accepted: Mutex::new(None),
             result: Mutex::new(None),
             creates: 0.into(),
             reads: 0.into(),
             results: 0.into(),
+            results_unavailable: false.into(),
         });
         let router = Router::new()
             .route("/v1/review-requests", axum::routing::post(create))
@@ -98,6 +105,15 @@ impl LocalAuthority {
             task,
         }
     }
+    #[allow(
+        dead_code,
+        reason = "The reviewed-change target uses this outage control; other targets share the authority."
+    )]
+    pub fn set_results_unavailable(&self, unavailable: bool) {
+        self.state
+            .results_unavailable
+            .store(unavailable, Ordering::SeqCst);
+    }
     pub fn counts(&self) -> (usize, usize, usize) {
         (
             self.state.creates.load(Ordering::SeqCst),
@@ -130,10 +146,17 @@ async fn create(
     assert!(authenticated(&headers));
     assert!(headers.contains_key("idempotency-key"));
     request.check().unwrap();
+    assert_eq!(
+        request.policy, state.policy,
+        "submit the exact configured policy"
+    );
     state.creates.fetch_add(1, Ordering::SeqCst);
-    let digest =
-        registry_review_client::submission_digest("proposal-producer", "proposal-test", &request)
-            .unwrap();
+    let digest = registry_review_client::submission_digest(
+        "proposal-producer",
+        &state.registry_id,
+        &request,
+    )
+    .unwrap();
     let accepted = ReviewRequestAccepted {
         request_id: Uuid::new_v4(),
         subject: request.subject,
@@ -189,6 +212,9 @@ async fn result(
 ) -> Response {
     assert!(authenticated(&headers));
     state.results.fetch_add(1, Ordering::SeqCst);
+    if state.results_unavailable.load(Ordering::SeqCst) {
+        return response(StatusCode::SERVICE_UNAVAILABLE, json!({}));
+    }
     let result = state.result.lock().unwrap().clone().unwrap();
     assert_eq!(id, result.request_id);
     response(StatusCode::OK, json!(result))

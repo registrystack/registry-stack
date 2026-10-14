@@ -467,20 +467,55 @@ mod tests {
     }
 
     #[test]
-    fn planner_test_requirements_match_both_accepted_modes() {
+    fn action_test_requirements_match_the_native_action_input_contract() {
         let parser = registry_bregctl::command();
+        for with_expect in [false, true] {
+            let mut arguments = vec![
+                "bregctl",
+                "project",
+                "action-test",
+                "example-project",
+                "--action",
+                "register-person",
+                "--input",
+                "input.json",
+                "--format",
+                "json",
+            ];
+            if with_expect {
+                arguments.extend(["--expect", "expected.json"]);
+            }
+            parser
+                .clone()
+                .try_get_matches_from(arguments)
+                .expect("a native Action test accepts its bounded input and optional expectation");
+        }
         for arguments in [
             vec![
                 "bregctl",
                 "project",
-                "planner-test",
+                "action-test",
+                "example-project",
+                "--action",
+                "register-person",
+            ],
+            vec![
+                "bregctl",
+                "project",
+                "action-test",
+                "example-project",
+                "--input",
+                "input.json",
+            ],
+            vec![
+                "bregctl",
+                "project",
+                "action-test",
                 "example-project",
                 "--entity",
                 "change-request",
                 "--request",
                 "request.json",
-                "--format",
-                "json",
             ],
             vec![
                 "bregctl",
@@ -491,20 +526,15 @@ mod tests {
                 "register-person",
                 "--input",
                 "input.json",
-                "--expect",
-                "expected.json",
-                "--format",
-                "json",
             ],
         ] {
-            parser
-                .clone()
-                .try_get_matches_from(arguments)
-                .expect("documented planner-test mode parses");
+            assert!(
+                parser.clone().try_get_matches_from(arguments).is_err(),
+                "incomplete or removed planner inputs are refused"
+            );
         }
-
         let reference = command_reference(parser, None, None);
-        let planner_test = find_command(&[reference], "bregctl project planner-test")
+        let action_test = find_command(&[reference], "bregctl project action-test")
             .constraints
             .iter()
             .filter(|constraint| constraint.kind == ConstraintKind::RequiresAll)
@@ -518,8 +548,6 @@ mod tests {
             })
             .collect::<BTreeSet<_>>();
         let expected = [
-            ("--entity <ENTITY>", vec!["--request <JSON_FILE>"]),
-            ("--request <JSON_FILE>", vec!["--entity <ENTITY>"]),
             ("--action <ACTION>", vec!["--input <JSON_FILE>"]),
             ("--input <JSON_FILE>", vec!["--action <ACTION>"]),
             (
@@ -535,7 +563,7 @@ mod tests {
             )
         })
         .collect::<BTreeSet<_>>();
-        assert_eq!(planner_test, expected);
+        assert_eq!(action_test, expected);
     }
 
     #[test]

@@ -2,8 +2,8 @@
 
 use super::*;
 use crate::{
-    compiler::{CompileProfile, compile_project_with_assets},
-    contract::{ModuleAssetSource, parse_project_json},
+    compiler::{compile_project_with_assets, CompileProfile},
+    contract::{parse_project_json, ModuleAssetSource},
 };
 
 fn project() -> Value {
@@ -95,9 +95,7 @@ fn alternatives_keep_one_route_and_selected_identity_with_stable_inventories() {
     assert!(script.contains("value: \"code,status\""));
     assert!(script.contains("value: \"registrationNumber,status\""));
     assert!(!script.contains("code,registrationNumber,status"));
-    assert!(
-        script.contains("\"registrationNumber\": subject[\"values\"][\"registration-number\"]")
-    );
+    assert!(script.contains("\"registrationNumber\": subject[\"values\"][\"registration-number\"]"));
     let extract =
         std::str::from_utf8(file(&export, "adapters/registry-status-extract.rhai")).unwrap();
     assert!(extract.contains("fn extract(response, selectors, context)"));
@@ -138,11 +136,9 @@ fn alternatives_keep_one_route_and_selected_identity_with_stable_inventories() {
             .unwrap()
             .artifacts
     );
-    assert!(
-        !String::from_utf8(serde_json::to_vec(&manifest).unwrap())
-            .unwrap()
-            .contains("rowBoundaries")
-    );
+    assert!(!String::from_utf8(serde_json::to_vec(&manifest).unwrap())
+        .unwrap()
+        .contains("rowBoundaries"));
 }
 
 #[test]
@@ -343,8 +339,8 @@ fn reached_derived_source_consumes_its_membership_helper() {
     let mut selection = options();
     selection.fields = vec!["active".into()];
     let before = export_evidence_source(&compiled(&original, sql), &selection).unwrap();
-    original["accessProfiles"][0]["permissions"]["records"][1]["membershipBoundaries"][0]["principalField"] =
-        json!("other-principal");
+    original["accessProfiles"][0]["permissions"]["records"][1]["membershipBoundaries"][0]
+        ["principalField"] = json!("other-principal");
     assert_ne!(
         before.behavior_revision,
         export_evidence_source(&compiled(&original, sql), &selection)
@@ -365,13 +361,11 @@ fn refuses_ungiven_authority_and_incompatible_selector_semantics() {
         json!({"selector":"by-code","valueOrigin":"verified-claim","claimMapping":{"code":"code"}});
     assert!(export_evidence_source(&compiled(&claims, SQL), &options()).is_err());
     assert!(selector_schema(&FieldTypeSource::Int64).is_err());
-    assert!(
-        selector_schema(&FieldTypeSource::String {
-            min_length: 1,
-            max_length: 2049
-        })
-        .is_err()
-    );
+    assert!(selector_schema(&FieldTypeSource::String {
+        min_length: 1,
+        max_length: 2049
+    })
+    .is_err());
     let (unicode, maximum) = selector_schema(&FieldTypeSource::String {
         min_length: 5,
         max_length: 20,
@@ -390,13 +384,11 @@ fn refuses_ungiven_authority_and_incompatible_selector_semantics() {
 
 #[test]
 fn refuses_a_string_selector_field_that_accepts_the_empty_value() {
-    assert!(
-        selector_schema(&FieldTypeSource::String {
-            min_length: 0,
-            max_length: 32
-        })
-        .is_err()
-    );
+    assert!(selector_schema(&FieldTypeSource::String {
+        min_length: 0,
+        max_length: 32
+    })
+    .is_err());
     let mut empty_allowed = project();
     // Omitting `minimumLength` defaults it to 0, so `code` accepts the empty value.
     empty_allowed["recordTypes"][0]["fields"][0] = json!({"id":"code","type":"string","maximumLength":32,"required":true,"classification":"internal"});
@@ -434,13 +426,11 @@ fn scalar_documents_preserve_int64_and_nullable_vocabulary_bounds() {
     let actual: Value = serde_json::from_slice(&artifact.bytes).unwrap();
     assert_eq!(actual["minimum"].as_i64(), Some(i64::MIN));
     assert_eq!(actual["maximum"].as_i64(), Some(i64::MAX));
-    assert!(
-        scalar_schema(&FieldTypeSource::String {
-            min_length: 1,
-            max_length: 65_537
-        })
-        .is_err()
-    );
+    assert!(scalar_schema(&FieldTypeSource::String {
+        min_length: 1,
+        max_length: 65_537
+    })
+    .is_err());
     assert!(scalar_schema(&FieldTypeSource::Text { max_length: 65_537 }).is_err());
     let mut original = project();
     original["recordTypes"][0]["fields"][2] = json!({"id":"status","type":"vocabulary-code","vocabulary":"status","values":["active","retired"],"classification":"internal"});
@@ -589,12 +579,10 @@ fn long_eligible_selector_names_export_as_stable_distinct_bounded_profiles() {
     for profile in export.selector_profiles.values() {
         assert_eq!(profile.len(), 64);
         assert!(local_name(profile));
-        assert!(
-            export
-                .artifacts
-                .iter()
-                .any(|artifact| artifact.path == format!("selectors/{profile}.yaml"))
-        );
+        assert!(export
+            .artifacts
+            .iter()
+            .any(|artifact| artifact.path == format!("selectors/{profile}.yaml")));
     }
     selection.connection.replace_range(63.., "d");
     let other = export_evidence_source(&registry, &selection).unwrap();

@@ -1,7 +1,15 @@
 # `bregctl explain` wire contract
 
 `bregctl --format json explain <subject> <project>` returns a `SuccessReport`
-whose `explanation` field carries an envelope plus a subject-specific payload:
+whose `explanation` field carries an envelope plus a subject-specific payload.
+BReg-owned record references use `recordType`, the access groups use
+`recordTypes`, and ordinary record routes use `type: record`. Relationship
+inspection uses `sourceRecordType` and `targetRecordType`. Registry Record v1
+retains its independently owned `entityTypeIdentifier` member, and Manifest
+projection fields retain their own contract names. Removed BReg spellings are
+not aliases.
+
+Example report:
 
 ```json
 {

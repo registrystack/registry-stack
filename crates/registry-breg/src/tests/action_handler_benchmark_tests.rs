@@ -17,16 +17,16 @@ use std::time::{Duration, Instant};
 use crate::action_evidence_fixture as evidence_fixture;
 
 use super::{
-    ActionHandlerError, ActionHandlerOutcome, CachedActionHandlerProgram,
     compile_source_for_function, evaluate_admitted_action_detailed, evaluate_with_cached_program,
+    ActionHandlerError, ActionHandlerOutcome, CachedActionHandlerProgram,
 };
 use crate::{
-    compiler::{CompileProfile, compile_project_with_assets},
-    contract::{ModuleAssetSource, parse_project_json},
+    compiler::{compile_project_with_assets, CompileProfile},
+    contract::{parse_project_json, ModuleAssetSource},
     model::{CompiledAction, CompiledPlanMutation, CompiledPlanValue},
     rhai_planner,
 };
-use serde_json::{Map, Value, json};
+use serde_json::{json, Map, Value};
 
 fn deadline() -> Instant {
     Instant::now() + Duration::from_secs(5)
@@ -310,17 +310,15 @@ fn cached_program_refuses_evaluation_for_a_different_handler_source() {
     .unwrap_err();
     assert_eq!(error.kind, ActionHandlerError::Source);
     // The matching source still evaluates through the cached program.
-    assert!(
-        evaluate_with_cached_program(
-            &compiled,
-            &program,
-            &characterization_inputs(),
-            deadline(),
-            None,
-            None
-        )
-        .is_ok()
-    );
+    assert!(evaluate_with_cached_program(
+        &compiled,
+        &program,
+        &characterization_inputs(),
+        deadline(),
+        None,
+        None
+    )
+    .is_ok());
 }
 
 /// A fixed action without a handler has no program to cache.

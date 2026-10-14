@@ -9,8 +9,8 @@ use registry_evidence_client::{
     DefinitionResponseFormat, EvidenceDefinition, ExpectedFormDocument, ExpectedScalarFormDocument,
     ReviewedContracts, SelectorValueOrigin,
 };
-use registry_evidence_verifier::AssuranceProfile;
 use registry_evidence_verifier::model::SubjectBindingMode;
+use registry_evidence_verifier::AssuranceProfile;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};

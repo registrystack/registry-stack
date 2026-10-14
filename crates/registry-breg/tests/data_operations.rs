@@ -4,16 +4,16 @@ use std::future::Future;
 use std::pin::pin;
 use std::task::{Context, Poll, Waker};
 
-use registry_breg::compiler::{CompileProfile, compile_project};
+use registry_breg::compiler::{compile_project, CompileProfile};
 use registry_breg::contract::parse_project_json;
 use registry_breg::data::{
-    DataError, DataExportCheckpoint, DataExportOutputState, DataExportPlan, DataHttpResponse,
-    DataImportCheckpoint, DataImportOperation, DataImportPlan, EXPORT_CHECKPOINT_API_VERSION,
-    EXPORT_CHECKPOINT_KIND, IMPORT_CHECKPOINT_API_VERSION, IMPORT_CHECKPOINT_KIND,
-    MAX_DATA_EXPORT_PAGE_BYTES, MAX_DATA_HTTP_RESPONSE_BYTES, execute_export_page,
+    execute_export_page, DataError, DataExportCheckpoint, DataExportOutputState, DataExportPlan,
+    DataHttpResponse, DataImportCheckpoint, DataImportOperation, DataImportPlan,
+    EXPORT_CHECKPOINT_API_VERSION, EXPORT_CHECKPOINT_KIND, IMPORT_CHECKPOINT_API_VERSION,
+    IMPORT_CHECKPOINT_KIND, MAX_DATA_EXPORT_PAGE_BYTES, MAX_DATA_HTTP_RESPONSE_BYTES,
 };
 use registry_platform_canonical_json::{canonicalize_json, parse_json_strict};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
 const ENTITY: &str = "entity-canary-9f31";
@@ -195,11 +195,9 @@ fn data_export_requires_explicit_profile_permission() {
         base(json!(["list"]), json!([])),
     ] {
         let diagnostics = compile_source(invalid).expect_err("invalid export authority is refused");
-        assert!(
-            diagnostics
-                .iter()
-                .any(|code| code == "breg.access-profile.data-export-invalid")
-        );
+        assert!(diagnostics
+            .iter()
+            .any(|code| code == "breg.access-profile.data-export-invalid"));
     }
 
     let explicit = compiled(true);

@@ -4,11 +4,11 @@ use std::collections::BTreeMap;
 
 use chrono::NaiveDate;
 use registry_breg::statistics::{
-    Cell, CellStatus, DatasetDocument, DimensionDomain, DisclosureDocument, DisclosureParameters,
-    GroupedCell, LiveDocument, Measure, PeriodDocument, PeriodGranularity, PeriodKind,
-    ReleaseDocument, ReleaseStatus, StatisticsDocument, StatisticsError, TOTAL_CODE, UNKNOWN_CODE,
     apply_disclosure, build_exact_cells, canonical_document_and_digest, current_period,
-    document_csv, period_for_code, period_range,
+    document_csv, period_for_code, period_range, Cell, CellStatus, DatasetDocument,
+    DimensionDomain, DisclosureDocument, DisclosureParameters, GroupedCell, LiveDocument, Measure,
+    PeriodDocument, PeriodGranularity, PeriodKind, ReleaseDocument, ReleaseStatus,
+    StatisticsDocument, StatisticsError, TOTAL_CODE, UNKNOWN_CODE,
 };
 
 fn date(year: i32, month: u32, day: u32) -> NaiveDate {
@@ -355,10 +355,9 @@ fn disclosure_property_values_are_null_zero_or_a_rounding_multiple() {
             )
             .unwrap();
             for cell in cells {
-                assert!(
-                    cell.value
-                        .is_none_or(|value| value == 0 || value % rounding_base == 0)
-                );
+                assert!(cell
+                    .value
+                    .is_none_or(|value| value == 0 || value % rounding_base == 0));
                 assert_eq!(cell.value.is_none(), cell.status == CellStatus::Suppressed);
             }
         }
@@ -418,19 +417,15 @@ fn canonical_document_is_stable_has_allocated_version_and_no_self_digest() {
     assert_eq!(first, second);
     assert_eq!(first.content_digest.len(), 71);
     assert!(first.content_digest.starts_with("sha256:"));
-    assert!(
-        first.content_digest[7..]
-            .bytes()
-            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
-    );
+    assert!(first.content_digest[7..]
+        .bytes()
+        .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase()));
     let value: serde_json::Value = serde_json::from_slice(&first.bytes).unwrap();
     assert_eq!(value["release"]["version"], 7);
     assert!(value.get("contentDigest").is_none());
-    assert!(
-        !String::from_utf8(first.bytes)
-            .unwrap()
-            .contains(&first.content_digest)
-    );
+    assert!(!String::from_utf8(first.bytes)
+        .unwrap()
+        .contains(&first.content_digest));
 
     let mut unallocated = document;
     unallocated.release.as_mut().unwrap().version = 0;

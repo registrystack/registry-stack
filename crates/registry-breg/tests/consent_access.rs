@@ -11,8 +11,8 @@ use std::collections::BTreeSet;
 
 use consent_fixture::{compile, refusal_codes, self_issued_project, source};
 use registry_breg::contract::FieldTypeSource;
-use registry_breg::evidence_source::{EvidenceSourceOptions, export_evidence_source};
-use serde_json::{Value, json};
+use registry_breg::evidence_source::{export_evidence_source, EvidenceSourceOptions};
+use serde_json::{json, Value};
 
 const PERSON: usize = 0;
 const HOUSEHOLD: usize = 1;
@@ -312,12 +312,10 @@ fn a_consent_record_no_profile_requires_names_the_require_consent_step() {
             diagnostic.message
         );
     }
-    assert!(
-        !failure
-            .diagnostics()
-            .iter()
-            .any(|diagnostic| diagnostic.code.ends_with("vocabulary.unknown"))
-    );
+    assert!(!failure
+        .diagnostics()
+        .iter()
+        .any(|diagnostic| diagnostic.code.ends_with("vocabulary.unknown")));
 }
 
 #[test]
@@ -819,8 +817,8 @@ fn reserved_claims_never_select_lookup_values() {
 fn reserved_claims_never_bound_action_grants() {
     let target = |claim: &str| {
         let mut value = source();
-        value["accessProfiles"][STEWARD]["permissions"]["actions"][0]["targets"][0]["rowBoundaries"] =
-            json!([{"field":"district", "claim":claim, "operator":"in"}]);
+        value["accessProfiles"][STEWARD]["permissions"]["actions"][0]["targets"][0]
+            ["rowBoundaries"] = json!([{"field":"district", "claim":claim, "operator":"in"}]);
         value
     };
     compile(&target("districts")).unwrap();
@@ -844,7 +842,7 @@ mod startup {
     };
     use registry_platform_httputil::FetchUrlPolicy;
     use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig};
-    use registry_platform_testing::{MockIdp, oidc_verifier_config};
+    use registry_platform_testing::{oidc_verifier_config, MockIdp};
     use serde_json::json;
 
     use super::consent_fixture::{compile, source};
@@ -947,8 +945,8 @@ fn a_consent_record_needs_declared_recipients() {
 #[test]
 fn adding_a_recipient_requires_review_of_the_frozen_issuing_action() {
     use registry_breg::package::{
-        CompiledRegistryChangeClass, CompiledRegistryChangeCode,
         change_set_to_applicable_migration_plan, compiled_registry_change_set,
+        CompiledRegistryChangeClass, CompiledRegistryChangeCode,
     };
     let before = compile(&source()).unwrap();
     let mut added = source();
@@ -988,12 +986,10 @@ fn adding_a_recipient_requires_review_of_the_frozen_issuing_action() {
     renamed["actions"][0]["inputs"][6]["apiName"] = json!("expiry");
     let renamed = compile(&renamed).unwrap();
     let changes = compiled_registry_change_set(&before, &renamed, "prior-package");
-    assert!(
-        changes
-            .changes
-            .iter()
-            .any(|change| change.code == CompiledRegistryChangeCode::ActionChanged)
-    );
+    assert!(changes
+        .changes
+        .iter()
+        .any(|change| change.code == CompiledRegistryChangeCode::ActionChanged));
     assert!(change_set_to_applicable_migration_plan(&changes).is_err());
 }
 
@@ -1026,8 +1022,8 @@ fn change_codes(
 #[test]
 fn a_recipient_client_change_is_a_metadata_only_access_change() {
     use registry_breg::package::{
-        CompiledRegistryChangeClass, CompiledRegistryChangeCode, CompiledRegistryChangeTargetKind,
-        change_set_to_applicable_migration_plan,
+        change_set_to_applicable_migration_plan, CompiledRegistryChangeClass,
+        CompiledRegistryChangeCode, CompiledRegistryChangeTargetKind,
     };
     let mut added = source();
     added["recipients"]["organizations"][2]["clients"] = json!(["ngo-beta-portal"]);
@@ -1053,8 +1049,8 @@ fn a_recipient_client_change_is_a_metadata_only_access_change() {
 #[test]
 fn a_group_membership_change_is_a_metadata_only_access_change() {
     use registry_breg::package::{
-        CompiledRegistryChangeClass, CompiledRegistryChangeCode,
-        change_set_to_applicable_migration_plan,
+        change_set_to_applicable_migration_plan, CompiledRegistryChangeClass,
+        CompiledRegistryChangeCode,
     };
     let mut widened = source();
     widened["recipients"]["groups"][0]["members"] = json!(["wfp", "ngo-alpha", "ngo-beta"]);
@@ -1067,12 +1063,10 @@ fn a_group_membership_change_is_a_metadata_only_access_change() {
             Some("referral-network".to_owned()),
         )]
     );
-    assert!(
-        change_set_to_applicable_migration_plan(&changes)
-            .unwrap()
-            .statements
-            .is_empty()
-    );
+    assert!(change_set_to_applicable_migration_plan(&changes)
+        .unwrap()
+        .statements
+        .is_empty());
 }
 
 #[cfg(feature = "runtime")]
@@ -1199,8 +1193,8 @@ fn package_request(
 #[test]
 fn a_predecessor_package_carries_its_recipients_into_a_metadata_only_successor() {
     use registry_breg::package::{
-        CompiledRegistryChangeCode, CompiledRegistryMigrationBaseline, PackageLoadContext,
-        PackageMigrationPlanInput, load_predecessor_package, prepare_package,
+        load_predecessor_package, prepare_package, CompiledRegistryChangeCode,
+        CompiledRegistryMigrationBaseline, PackageLoadContext, PackageMigrationPlanInput,
     };
     let prepared = prepare_package(package_request(
         &source(),
@@ -1257,9 +1251,9 @@ fn package_sealed_with_an_earlier_duration(
     iso: &str,
     components: [u32; 7],
 ) {
-    use registry_breg::package::{PackageMigrationPlanInput, prepare_package};
+    use registry_breg::package::{prepare_package, PackageMigrationPlanInput};
     use registry_platform_canonical_json::canonicalize_json;
-    use registry_platform_config::package::{PackageLimits, SUM_FILE, write_sum_file};
+    use registry_platform_config::package::{write_sum_file, PackageLimits, SUM_FILE};
     use sha2::{Digest, Sha256};
     use std::fs;
 
@@ -1342,7 +1336,7 @@ fn package_sealed_with_an_earlier_duration(
 #[cfg(all(feature = "runtime", feature = "tooling"))]
 #[test]
 fn a_package_sealed_with_a_max_duration_member_is_refused() {
-    use registry_breg::package::{PackageLoadContext, load_package, load_predecessor_package};
+    use registry_breg::package::{load_package, load_predecessor_package, PackageLoadContext};
     let directory = tempfile::tempdir().unwrap();
     // The package writer refuses symlinked ancestors such as macOS /var.
     let root = directory.path().canonicalize().unwrap().join("package");

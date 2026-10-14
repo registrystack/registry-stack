@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use registry_platform_audit::AuditProfile;
 use registry_platform_canonical_json::{canonicalize_json, parse_json_strict};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use tokio_postgres::Transaction;
 use uuid::Uuid;
@@ -1318,13 +1318,11 @@ mod tests {
                 "{reserved}"
             );
         }
-        assert!(
-            IdempotencyPolicy::new(
-                "https://issuer.example.test",
-                DEFAULT_RECEIPT_RETENTION_DAYS
-            )
-            .is_ok()
-        );
+        assert!(IdempotencyPolicy::new(
+            "https://issuer.example.test",
+            DEFAULT_RECEIPT_RETENTION_DAYS
+        )
+        .is_ok());
         assert_eq!(
             IdempotencyPolicy::default().caller_issuer(),
             EMBEDDED_CALLER_ISSUER,

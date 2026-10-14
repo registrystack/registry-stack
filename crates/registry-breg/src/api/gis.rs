@@ -10,18 +10,18 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use axum::extract::{Path, RawQuery, State};
-use axum::http::StatusCode;
 use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE, VARY};
+use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Extension, Json, Router};
-use serde_json::{Map, Value, json};
+use serde_json::{json, Map, Value};
 
 use super::{
-    Authenticated, AuthorizedSurface, HttpService, MAX_RAW_QUERY_BYTES, QueryOptions,
-    QueryParseError, ReadQueryError, RecordReadKind, RecordReadRequest, VerifiedRequestClaims,
     audited_read_concealment, audited_read_refusal, authorize_route, concealed, data_field_type,
     exact_non_record_no_store, invalid_query, percent_decode, read_query, unavailable,
+    Authenticated, AuthorizedSurface, HttpService, QueryOptions, QueryParseError, ReadQueryError,
+    RecordReadKind, RecordReadRequest, VerifiedRequestClaims, MAX_RAW_QUERY_BYTES,
 };
 use crate::contract::{FieldTypeSource, Operation};
 use crate::correlation::RequestCorrelation;
@@ -756,15 +756,15 @@ fn field_type_name(field_type: &FieldTypeSource) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::compiler::{CompileProfile, compile_project};
+    use crate::compiler::{compile_project, CompileProfile};
     use crate::contract::parse_project_yaml;
 
     use std::collections::BTreeMap;
     use std::sync::Mutex;
     use std::time::Duration;
 
-    use axum::body::{Body, to_bytes};
-    use axum::http::{Method, Request, StatusCode, header};
+    use axum::body::{to_bytes, Body};
+    use axum::http::{header, Method, Request, StatusCode};
     use tower::ServiceExt;
     use zeroize::Zeroizing;
 
@@ -852,11 +852,9 @@ mod tests {
 
         let prefixed = collection.value("https://registry.example.test/registry-a");
         let links = prefixed["links"].as_array().expect("prefixed links");
-        assert!(
-            links.iter().all(|link| link["href"].as_str().is_some_and(
-                |href| href.starts_with("https://registry.example.test/registry-a/v1/gis")
-            ))
-        );
+        assert!(links.iter().all(|link| link["href"].as_str().is_some_and(
+            |href| href.starts_with("https://registry.example.test/registry-a/v1/gis")
+        )));
     }
 
     #[tokio::test]

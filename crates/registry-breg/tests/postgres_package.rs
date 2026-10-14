@@ -28,14 +28,14 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use postgres_harness::TestDatabase;
 use registry_breg::compiler::{
-    CompileProfile, compile_project, module_digest, module_digest_with_assets,
+    compile_project, module_digest, module_digest_with_assets, CompileProfile,
 };
-use registry_breg::contract::{ModuleAssetSource, parse_module_yaml, parse_project_yaml};
+use registry_breg::contract::{parse_module_yaml, parse_project_yaml, ModuleAssetSource};
 use registry_breg::event_destination::EventDestinationCompatibilityInventory;
 use registry_breg::migration::{
+    apply_verified_package, plan_verified_package, read_recorded_registry_state,
     ActivationDeployment, ApplyPrecondition, ApplyRoles, ApplyTimeouts,
-    ApplyVerifiedPackageRequest, MigrationError, PlannedActivation, apply_verified_package,
-    plan_verified_package, read_recorded_registry_state,
+    ApplyVerifiedPackageRequest, MigrationError, PlannedActivation,
 };
 #[cfg(feature = "tooling")]
 use registry_breg::migration_plan::{
@@ -43,25 +43,26 @@ use registry_breg::migration_plan::{
     ReviewedMigrationFile, ReviewedMigrationRecovery, ReviewedMigrationSource,
 };
 use registry_breg::package::{
-    CompiledRegistryChangeClass, CompiledRegistryChangeCode, MAX_PACKAGE_SOURCE_FILE_BYTES,
-    PackageBuildRequest, PackageEnvelope, PackageError, PackageFile, PackageFileRole,
-    PackageLoadContext, PackageManifest, PackageMigrationPlanInput, PackageModuleSource,
-    PackageSourceFile, change_set_to_applicable_migration_plan, compiled_registry_change_set,
-    load_package, load_package_with_verified_envelope, load_predecessor_package, prepare_package,
+    change_set_to_applicable_migration_plan, compiled_registry_change_set, load_package,
+    load_package_with_verified_envelope, load_predecessor_package, prepare_package,
+    CompiledRegistryChangeClass, CompiledRegistryChangeCode, PackageBuildRequest, PackageEnvelope,
+    PackageError, PackageFile, PackageFileRole, PackageLoadContext, PackageManifest,
+    PackageMigrationPlanInput, PackageModuleSource, PackageSourceFile,
+    MAX_PACKAGE_SOURCE_FILE_BYTES,
 };
 use registry_breg::postgres::{
-    ClaimContext, ExpectedManagedCatalog, ExpectedRegistryIdentity, RegistryLockKey,
-    begin_record_transaction, install_compiled_schema, managed_schema_fingerprint,
+    begin_record_transaction, install_compiled_schema, managed_schema_fingerprint, ClaimContext,
+    ExpectedManagedCatalog, ExpectedRegistryIdentity, RegistryLockKey,
 };
 use registry_breg::runtime_config::parse_runtime_config;
-use registry_breg::startup::{StartupError, prepare_startup};
+use registry_breg::startup::{prepare_startup, StartupError};
 use registry_platform_canonical_json::canonicalize_json;
 use registry_platform_config::package::{
-    PackageLimits as SharedPackageLimits, REVISION_FILE, SUM_FILE,
-    verify_package as verify_shared_package, write_sum_file,
+    verify_package as verify_shared_package, write_sum_file, PackageLimits as SharedPackageLimits,
+    REVISION_FILE, SUM_FILE,
 };
 use serde::Serialize;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use tokio_postgres::GenericClient;
 use uuid::Uuid;
@@ -191,50 +192,40 @@ fn package_layout_contract_conditional_manifest_projection_is_in_projected_closu
         migration_plan: PackageMigrationPlanInput::InitialCompiledDdl,
     }))
     .expect("maximal coherent package prepares");
-    assert!(
-        package
-            .manifest()
-            .files
-            .iter()
-            .any(|entry| entry.path == "manifest/registry-manifest.json"
-                && entry.role == PackageFileRole::LossyManifestProjection)
-    );
-    assert!(
-        package
-            .file_bytes()
-            .contains_key("manifest/registry-manifest.json")
-    );
+    assert!(package
+        .manifest()
+        .files
+        .iter()
+        .any(|entry| entry.path == "manifest/registry-manifest.json"
+            && entry.role == PackageFileRole::LossyManifestProjection));
+    assert!(package
+        .file_bytes()
+        .contains_key("manifest/registry-manifest.json"));
     assert!(package.manifest().files.iter().any(|entry| {
         entry.path == "manifest/dcat.jsonld" && entry.role == PackageFileRole::DcatCatalogProjection
     }));
     assert!(package.file_bytes().contains_key("manifest/dcat.jsonld"));
-    assert!(
-        package
-            .manifest()
-            .files
-            .iter()
-            .any(|entry| entry.path == "inventories/events.json"
-                && entry.role == PackageFileRole::EventInventory)
-    );
+    assert!(package
+        .manifest()
+        .files
+        .iter()
+        .any(|entry| entry.path == "inventories/events.json"
+            && entry.role == PackageFileRole::EventInventory));
     assert!(package.file_bytes().contains_key("inventories/events.json"));
     assert!(layout.contains("metadata/registry.json") && layout.contains("caller-safe-metadata"));
     assert!(layout.contains("tests/journeys.yaml") && layout.contains("fixture-journeys"));
-    assert!(
-        package
-            .manifest()
-            .files
-            .iter()
-            .any(|entry| entry.path == "metadata/registry.json"
-                && entry.role == PackageFileRole::CallerSafeMetadata)
-    );
-    assert!(
-        package
-            .manifest()
-            .files
-            .iter()
-            .any(|entry| entry.path == "tests/journeys.yaml"
-                && entry.role == PackageFileRole::FixtureJourneys)
-    );
+    assert!(package
+        .manifest()
+        .files
+        .iter()
+        .any(|entry| entry.path == "metadata/registry.json"
+            && entry.role == PackageFileRole::CallerSafeMetadata));
+    assert!(package
+        .manifest()
+        .files
+        .iter()
+        .any(|entry| entry.path == "tests/journeys.yaml"
+            && entry.role == PackageFileRole::FixtureJourneys));
     assert_eq!(
         package
             .file_bytes()
@@ -296,11 +287,9 @@ fn projection_free_package_omits_manifest_projection_from_signed_closure_and_loa
         entry.role,
         PackageFileRole::LossyManifestProjection | PackageFileRole::DcatCatalogProjection
     )));
-    assert!(
-        !first
-            .file_bytes()
-            .contains_key("manifest/registry-manifest.json")
-    );
+    assert!(!first
+        .file_bytes()
+        .contains_key("manifest/registry-manifest.json"));
     assert!(!first.file_bytes().contains_key("manifest/dcat.jsonld"));
 
     let exact_paths = first
@@ -442,11 +431,9 @@ fn derived_sql_assets_are_captured_and_bound_to_revisions() {
     let first = prepare_package(first).expect("first derived package prepares");
     let second = prepare_package(second).expect("second derived package prepares");
 
-    assert!(
-        first
-            .file_bytes()
-            .contains_key("source/modules/core/sql/summary.sql")
-    );
+    assert!(first
+        .file_bytes()
+        .contains_key("source/modules/core/sql/summary.sql"));
     assert!(first.manifest().files.iter().any(|entry| {
         entry.path == "source/modules/core/sql/summary.sql"
             && entry.role == PackageFileRole::SourceModuleAsset
@@ -935,7 +922,7 @@ fn successor_migration_plan_rederivation_rejects_tampered_closure() {
 #[cfg(unix)]
 #[test]
 fn package_refuses_symlinks_and_production_writable_permissions() {
-    use std::os::unix::fs::{PermissionsExt, symlink};
+    use std::os::unix::fs::{symlink, PermissionsExt};
 
     let local = PackageFixture::build(None, fingerprint(1), PlanChoice::Schema);
     let artifact = first_generated_path(local.root.path());
@@ -1211,13 +1198,11 @@ async fn policy_only_snapshot_grant_add_and_remove_apply_without_ddl() {
     let remove_context = local_context();
     let verified_remove = load_package(remove_snapshot.path(), &remove_context)
         .expect("snapshot revocation successor verifies");
-    assert!(
-        verified_remove
-            .manifest()
-            .migration_plan
-            .statements
-            .is_empty()
-    );
+    assert!(verified_remove
+        .manifest()
+        .migration_plan
+        .statements
+        .is_empty());
     let active_remove = apply_package(
         &database,
         &verified_remove,
@@ -1344,13 +1329,11 @@ async fn reviewed_metadata_only_query_access_change_applies_without_dummy_sql() 
     let successor_context = local_context();
     let verified_successor = load_package(successor.path(), &successor_context)
         .expect("reviewed metadata-only successor verifies");
-    assert!(
-        verified_successor
-            .manifest()
-            .migration_plan
-            .statements
-            .is_empty()
-    );
+    assert!(verified_successor
+        .manifest()
+        .migration_plan
+        .statements
+        .is_empty());
     let active_successor = apply_package(
         &database,
         &verified_successor,
@@ -1406,28 +1389,24 @@ fn assert_policy_only_snapshot_grant_delta_prepares_and_loads(
     }))
     .expect("snapshot policy delta prepares without reviewed migration");
 
-    assert!(
-        successor
-            .manifest()
-            .migration_plan
-            .changes
-            .iter()
-            .any(|change| change.code == CompiledRegistryChangeCode::QueryInventoryChanged)
-    );
-    assert!(
-        successor
-            .manifest()
-            .migration_plan
-            .changes
-            .iter()
-            .all(|change| {
-                matches!(
-                    change.class,
-                    CompiledRegistryChangeClass::CompatibleAdditive
-                        | CompiledRegistryChangeClass::AccessOrDisclosureChange
-                )
-            })
-    );
+    assert!(successor
+        .manifest()
+        .migration_plan
+        .changes
+        .iter()
+        .any(|change| change.code == CompiledRegistryChangeCode::QueryInventoryChanged));
+    assert!(successor
+        .manifest()
+        .migration_plan
+        .changes
+        .iter()
+        .all(|change| {
+            matches!(
+                change.class,
+                CompiledRegistryChangeClass::CompatibleAdditive
+                    | CompiledRegistryChangeClass::AccessOrDisclosureChange
+            )
+        }));
     assert!(successor.manifest().migration_plan.statements.is_empty());
 
     let root = TempRoot::create();
@@ -2801,13 +2780,11 @@ async fn successor_apply_refuses_to_strand_retained_webhook_work() {
         .map(|row| (row.get(0), row.get(1), row.get(2)))
         .collect();
     assert_eq!(ignored_pending.len(), 2);
-    assert!(
-        ignored_pending
-            .iter()
-            .all(|(state, payload_erased, payload_expired)| {
-                state == "pending" && (*payload_erased || *payload_expired)
-            })
-    );
+    assert!(ignored_pending
+        .iter()
+        .all(|(state, payload_erased, payload_expired)| {
+            state == "pending" && (*payload_erased || *payload_expired)
+        }));
 
     database.cleanup().await;
 }
@@ -3045,7 +3022,7 @@ fn temporal_policy_module_bytes_with(
         r#""get","list""#
     };
     format!(
-        r#"{{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","entities":[{{"id":"neutral-record","primaryDataset":"neutral-registry","route":"neutral-records","mutationMode":"create-only","fields":[{{"id":"code","type":"string","maximumLength":8,"classification":"internal"}}],"accessProfiles":[{{"requiredScopes":"unrestricted","rowBoundaries":"unrestricted", "id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["code"]}}]}},{{"id":"membership","primaryDataset":"neutral-registry","route":"memberships","mutationMode":"mutable","fields":[{{"id":"person","type":"string","maximumLength":32,"required":true,"classification":"internal"}},{{"id":"valid-from","type":"date","required":true,"classification":"internal"}},{{"id":"valid-to","type":"date","classification":"internal"}}{extra_membership_fields}],"temporal":{{"startField":"valid-from","endField":"valid-to"}},"constraints":[{{"id":"membership-window","type":"temporal-non-overlap","scopeFields":["person"],"startField":"valid-from","endField":"valid-to"}}],"accessProfiles":[{{"requiredScopes":"unrestricted","rowBoundaries":"unrestricted", "id":"reader","principalClaim":"principal","operations":[{operations}],"readableFields":["person","valid-from","valid-to"],"filterableFields":["person","valid-from"]{reader_profile_extra}}}]}}]}}"#
+        r#"{{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","recordTypes":[{{"id":"neutral-record","primaryDataset":"neutral-registry","route":"neutral-records","mutationMode":"create-only","fields":[{{"id":"code","type":"string","maximumLength":8,"classification":"internal"}}],"accessProfiles":[{{"requiredScopes":"unrestricted","rowBoundaries":"unrestricted", "id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["code"]}}]}},{{"id":"membership","primaryDataset":"neutral-registry","route":"memberships","mutationMode":"mutable","fields":[{{"id":"person","type":"string","maximumLength":32,"required":true,"classification":"internal"}},{{"id":"valid-from","type":"date","required":true,"classification":"internal"}},{{"id":"valid-to","type":"date","classification":"internal"}}{extra_membership_fields}],"temporal":{{"startField":"valid-from","endField":"valid-to"}},"constraints":[{{"id":"membership-window","type":"temporal-non-overlap","scopeFields":["person"],"startField":"valid-from","endField":"valid-to"}}],"accessProfiles":[{{"requiredScopes":"unrestricted","rowBoundaries":"unrestricted", "id":"reader","principalClaim":"principal","operations":[{operations}],"readableFields":["person","valid-from","valid-to"],"filterableFields":["person","valid-from"]{reader_profile_extra}}}]}}]}}"#
     )
     .into_bytes()
 }
@@ -3099,7 +3076,7 @@ fn module_bytes(plan: PlanChoice) -> Vec<u8> {
         ""
     };
     format!(
-        r#"{{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","entities":[{{"id":"neutral-record","primaryDataset":"neutral-registry","route":"neutral-records","mutationMode":"create-only","fields":[{{"id":"code","type":"string","maximumLength":8,"classification":"internal"}}],"accessProfiles":[{{"requiredScopes":"unrestricted","rowBoundaries":"unrestricted", "id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["code"]}}]{events}}}{second}{third}]}}"#
+        r#"{{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","recordTypes":[{{"id":"neutral-record","primaryDataset":"neutral-registry","route":"neutral-records","mutationMode":"create-only","fields":[{{"id":"code","type":"string","maximumLength":8,"classification":"internal"}}],"accessProfiles":[{{"requiredScopes":"unrestricted","rowBoundaries":"unrestricted", "id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["code"]}}]{events}}}{second}{third}]}}"#
     )
     .into_bytes()
 }

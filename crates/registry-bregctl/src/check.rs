@@ -1019,7 +1019,15 @@ impl Resolved {
 
 /// Members that name a list item, in the order an unkeyed selector tries
 /// them.
-const NAMING_MEMBERS: [&str; 7] = ["id", "entity", "field", "name", "effect", "profile", "path"];
+const NAMING_MEMBERS: [&str; 7] = [
+    "id",
+    "recordType",
+    "field",
+    "name",
+    "effect",
+    "profile",
+    "path",
+];
 
 fn resolve(root: &Node, steps: &[Step]) -> Resolved {
     let mut node = root;

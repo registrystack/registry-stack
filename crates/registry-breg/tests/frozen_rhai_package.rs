@@ -12,22 +12,22 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use registry_breg::CompiledRegistry;
-use registry_breg::action_handler::{ActionHandlerOutcome, evaluate_action_detailed};
+use registry_breg::action_handler::{evaluate_action_detailed, ActionHandlerOutcome};
 use registry_breg::compiler::{
-    AUTHORING_API_VERSION, AUTHORING_KIND, CompileProfile, compile_project_with_assets,
+    compile_project_with_assets, CompileProfile, AUTHORING_API_VERSION, AUTHORING_KIND,
 };
-use registry_breg::contract::{ModuleAssetSource, parse_project_yaml};
+use registry_breg::contract::{parse_project_yaml, ModuleAssetSource};
 use registry_breg::migration::{successor_plan_is_empty, successor_plan_is_empty_for_predecessor};
 use registry_breg::package::{
-    PACKAGE_API_VERSION, PACKAGE_KIND, PackageBuildRequest, PackageEnvelope, PackageError,
-    PackageLoadContext, PackageMigrationPlanInput, PackageSourceFile, RETIRED_PACKAGE_API_VERSION,
-    VerifiedPredecessorPackage, inspect_package_integrity, load_package, load_predecessor_package,
-    prepare_package_with_project_assets,
+    inspect_package_integrity, load_package, load_predecessor_package,
+    prepare_package_with_project_assets, PackageBuildRequest, PackageEnvelope, PackageError,
+    PackageLoadContext, PackageMigrationPlanInput, PackageSourceFile, VerifiedPredecessorPackage,
+    PACKAGE_API_VERSION, PACKAGE_KIND, RETIRED_PACKAGE_API_VERSION,
 };
+use registry_breg::CompiledRegistry;
 use registry_platform_canonical_json::canonicalize_json;
-use registry_platform_config::package::{PackageLimits, SUM_FILE, write_sum_file};
-use serde_json::{Map, Value, json};
+use registry_platform_config::package::{write_sum_file, PackageLimits, SUM_FILE};
+use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 
 const ENVIRONMENT: &str = "local";

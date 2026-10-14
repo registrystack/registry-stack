@@ -206,8 +206,7 @@ fn problem_code(code: &BRegProblemCode) -> ToolErrorCode {
         BRegProblemCode::RequestInvalid
         | BRegProblemCode::QueryInvalid
         | BRegProblemCode::QueryCursorInvalid
-        | BRegProblemCode::UnsupportedMediaType
-        | BRegProblemCode::RequestPlanRefused(_) => ToolErrorCode::InvalidArguments,
+        | BRegProblemCode::UnsupportedMediaType => ToolErrorCode::InvalidArguments,
         BRegProblemCode::RuntimeNotReady
         | BRegProblemCode::ServiceUnavailable
         | BRegProblemCode::SourceUnavailable

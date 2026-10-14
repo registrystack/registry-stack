@@ -9,41 +9,40 @@ mod postgres_harness;
 use std::fs;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use axum::body::{Body, to_bytes};
+use axum::body::{to_bytes, Body};
 use axum::http::header::AUTHORIZATION;
 use axum::http::{Request, StatusCode};
 use postgres_harness::TestDatabase;
-use registry_breg::compiler::{CompileProfile, compile_project, module_digest};
+use registry_breg::compiler::{compile_project, module_digest, CompileProfile};
 use registry_breg::contract::{parse_module_yaml, parse_project_yaml};
 use registry_breg::migration::{
-    ActivationDeployment, ApplyPrecondition, ApplyRoles, ApplyTimeouts,
-    ApplyVerifiedPackageRequest, apply_verified_package,
+    apply_verified_package, ActivationDeployment, ApplyPrecondition, ApplyRoles, ApplyTimeouts,
+    ApplyVerifiedPackageRequest,
 };
 use registry_breg::package::{
-    PackageBuildRequest, PackageLoadContext, PackageMigrationPlanInput, PackageModuleSource,
-    PackageSourceFile, VerifiedPackage, load_package, prepare_package,
+    load_package, prepare_package, PackageBuildRequest, PackageLoadContext,
+    PackageMigrationPlanInput, PackageModuleSource, PackageSourceFile, VerifiedPackage,
 };
 use registry_breg::postgres::{
-    ExpectedManagedCatalog, ExpectedRegistryIdentity, RegistryStateTestIdentity, RoleMode,
     initialize_registry_state_for_catalog_test, install_compiled_schema,
-    managed_schema_fingerprint, verify_runtime_role,
+    managed_schema_fingerprint, verify_runtime_role, ExpectedManagedCatalog,
+    ExpectedRegistryIdentity, RegistryStateTestIdentity, RoleMode,
 };
 use registry_breg::startup::{
-    PreparedServer, StartupError, check_with_connection_config_for_test,
-    prepare_with_connection_and_key_source_for_test, prepare_with_connection_config_for_test,
-    serve_until_shutdown,
+    check_with_connection_config_for_test, prepare_with_connection_and_key_source_for_test,
+    prepare_with_connection_config_for_test, serve_until_shutdown, PreparedServer, StartupError,
 };
 use registry_platform_crypto::PrivateJwk;
 use registry_platform_httputil::FetchUrlPolicy;
 use registry_platform_oidc::{
-    JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig, fetch_discovery_with_policy,
+    fetch_discovery_with_policy, JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig,
 };
 use registry_platform_testing::{
-    MockIdp, fixtures as testing_fixtures, jwks_from_private_jwk, sign_ed25519_compact_jwt,
+    fixtures as testing_fixtures, jwks_from_private_jwk, sign_ed25519_compact_jwt, MockIdp,
 };
 use serde_json::json;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
@@ -71,7 +70,7 @@ static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 static WASM_RUNTIME_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn runtime_startup_names_a_missing_authority_and_its_retained_submission_count() {
+async fn runtime_startup_preserves_retryable_submissions_when_review_authority_is_missing() {
     let _runtime_guard = WASM_RUNTIME_TEST_LOCK.lock().await;
     let database = TestDatabase::create(4).await;
     let (migration, migration_task) = database.connect_migration().await;
@@ -115,49 +114,49 @@ async fn runtime_startup_names_a_missing_authority_and_its_retained_submission_c
         .admin
         .batch_execute(&format!(
             "GRANT USAGE ON SCHEMA registry_internal TO \"{}\";
-             GRANT SELECT ON registry_internal.registry_request_state TO \"{}\";",
+             GRANT SELECT ON registry_internal.registry_proposal_state TO \"{}\";",
             database.runtime_role.as_str(),
             database.runtime_role.as_str()
         ))
         .await
         .expect("runtime review schema access");
-    for request_id in [uuid::Uuid::new_v4(), uuid::Uuid::new_v4()] {
+    for proposal_id in [uuid::Uuid::new_v4(), uuid::Uuid::new_v4()] {
         database
             .admin
             .execute(
-                "INSERT INTO registry_internal.registry_request_state
-                 (request_entity_id,request_id,owner_reference,state,proposal_version,
+                "INSERT INTO registry_internal.registry_proposal_state
+                 (action_id,proposal_id,owner_reference,state,submission_version,
                   workflow_revision)
-                 VALUES ('requests',$1,'owner-retained','submitted',1,1)",
-                &[&request_id],
+                 VALUES ('retained-action',$1,'owner-retained','submitted',1,1)",
+                &[&proposal_id],
             )
             .await
-            .expect("retained request state inserts");
+            .expect("retained native Proposal state inserts");
         database
             .admin
             .execute(
-                "INSERT INTO registry_internal.registry_request_proposals
-                 (request_entity_id,request_id,proposal_version,request_record_revision,
+                "INSERT INTO registry_internal.registry_proposal_submissions
+                 (action_id,proposal_id,submission_version,input_revision,
                   contract_fingerprint,effect_digest,snapshot)
-                 VALUES ('requests',$1,1,1,$2,$2,'{}'::jsonb)",
-                &[&request_id, &format!("sha256:{}", "a".repeat(64))],
+                 VALUES ('retained-action',$1,1,1,$2,$2,'{}'::jsonb)",
+                &[&proposal_id, &format!("sha256:{}", "a".repeat(64))],
             )
             .await
             .expect("retained proposal inserts");
         database
             .admin
             .execute(
-                "INSERT INTO registry_internal.registry_request_review_submissions
-                 (request_entity_id,request_id,proposal_version,proposal_digest,job_id,authority,
-                  producer_id,policy_id,idempotency_key,create_request,
+                "INSERT INTO registry_internal.registry_proposal_review_submissions
+                 (action_id,proposal_id,submission_version,proposal_digest,job_id,authority,
+                  producer_id,policy_id,expected_policy,idempotency_key,create_request,
                   expected_submission_digest,on_approved_mode,executor,state,accepted_binding)
-                 VALUES ('requests',$1,1,$2,$3,'casework-retained','producer-retained',
-                         'policy-retained',$4,'{}'::jsonb,$2,'manual',NULL,'accepted','{}'::jsonb)",
+                 VALUES ('retained-action',$1,1,$2,$3,'casework-retained','producer-retained',
+                         'policy-retained','{}'::jsonb,$4,'{}'::jsonb,$2,'manual',NULL,'accepted','{}'::jsonb)",
                 &[
-                    &request_id,
+                    &proposal_id,
                     &format!("sha256:{}", "a".repeat(64)),
                     &uuid::Uuid::new_v4(),
-                    &format!("submit-{request_id}"),
+                    &format!("submit-{proposal_id}"),
                 ],
             )
             .await
@@ -174,17 +173,33 @@ async fn runtime_startup_names_a_missing_authority_and_its_retained_submission_c
         &idp,
         Some("0123456789abcdef0123456789abcdef"),
     );
-    assert_eq!(
+    let prepared =
         prepare_with_connection_config_for_test(&config_path, database.runtime_config.clone())
             .await
-            .err(),
-        Some(StartupError::ReviewAuthorityMissing {
-            authority: "casework-retained".to_owned(),
-            retained_submissions: 2,
-        })
-    );
-
+            .expect("missing optional review authority leaves unrelated Registry work usable");
+    let retained = database
+        .admin
+        .query(
+            "SELECT s.state, w.state, w.blocked_reason, s.withdrawn, s.attempt_count
+               FROM registry_internal.registry_proposal_review_submissions s
+               JOIN registry_internal.registry_proposal_state w
+                 USING (action_id, proposal_id)
+              WHERE s.authority = 'casework-retained'",
+            &[],
+        )
+        .await
+        .expect("retained submissions remain available for dependency recovery");
+    assert_eq!(retained.len(), 2);
+    for row in retained {
+        assert_eq!(row.get::<_, String>(0), "accepted");
+        assert_eq!(row.get::<_, String>(1), "submitted");
+        assert_eq!(row.get::<_, Option<String>>(2), None);
+        assert!(!row.get::<_, bool>(3));
+        assert_eq!(row.get::<_, i32>(4), 0);
+    }
+    drop(prepared);
     database.cleanup().await;
+    idp.stop().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -811,8 +826,8 @@ async fn prepared_server_wires_services_and_static_jwks_readiness_tracks_databas
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn prepared_server_sessions_are_named_bounded_and_pg_stat_statements_stays_unavailable_until_preloaded()
- {
+async fn prepared_server_sessions_are_named_bounded_and_pg_stat_statements_stays_unavailable_until_preloaded(
+) {
     let _runtime_guard = WASM_RUNTIME_TEST_LOCK.lock().await;
     let database = TestDatabase::create(4).await;
     let (migration, migration_task) = database.connect_migration().await;
@@ -929,11 +944,9 @@ async fn prepared_server_sessions_are_named_bounded_and_pg_stat_statements_stays
         .iter()
         .find(|advisory| advisory.code() == "postgres.pg_stat_statements.unavailable")
         .expect("pg_stat_statements is installed but this server never preloaded it");
-    assert!(
-        pg_stat_statements
-            .message()
-            .contains("shared_preload_libraries")
-    );
+    assert!(pg_stat_statements
+        .message()
+        .contains("shared_preload_libraries"));
     drop(prepared);
 
     // A configured pg_stat_statements.max without the preload is only a
@@ -955,11 +968,9 @@ async fn prepared_server_sessions_are_named_bounded_and_pg_stat_statements_stays
         .iter()
         .find(|advisory| advisory.code() == "postgres.pg_stat_statements.unavailable")
         .expect("a placeholder setting does not mean the module is loaded");
-    assert!(
-        pg_stat_statements
-            .message()
-            .contains("shared_preload_libraries")
-    );
+    assert!(pg_stat_statements
+        .message()
+        .contains("shared_preload_libraries"));
     drop(prepared);
     idp.stop().await;
     database.cleanup().await;
@@ -1259,11 +1270,9 @@ async fn startup_refuses_an_unapplied_database_naming_the_initial_apply_and_writ
             .err();
 
     assert_eq!(refusal, Some(StartupError::DatabaseUninitialized));
-    assert!(
-        StartupError::DatabaseUninitialized
-            .to_string()
-            .contains("run `bregctl apply --package DIR --initial`")
-    );
+    assert!(StartupError::DatabaseUninitialized
+        .to_string()
+        .contains("run `bregctl apply --package DIR --initial`"));
     assert_eq!(
         managed_database_snapshot(&database.admin).await,
         before,
@@ -1308,11 +1317,9 @@ async fn startup_refuses_an_unrecognised_registry_state_and_writes_nothing() {
             .err();
 
     assert_eq!(refusal, Some(StartupError::UnrecognizedDatabase));
-    assert!(
-        StartupError::UnrecognizedDatabase
-            .to_string()
-            .contains("upgrade the database one release at a time")
-    );
+    assert!(StartupError::UnrecognizedDatabase
+        .to_string()
+        .contains("upgrade the database one release at a time"));
     assert_eq!(
         managed_database_snapshot(&database.admin).await,
         before,
@@ -1440,11 +1447,9 @@ async fn split_startup_refuses_a_runtime_role_that_can_write_the_ledger_and_writ
             Err(other) => panic!("{grant}: {other:?}"),
         }
     }
-    assert!(
-        StartupError::RuntimeWriteAuthority
-            .to_string()
-            .contains("run `bregctl apply --package DIR`")
-    );
+    assert!(StartupError::RuntimeWriteAuthority
+        .to_string()
+        .contains("run `bregctl apply --package DIR`"));
 
     // A revoked runtime grant is pending work the apply reissues.
     database
@@ -1458,11 +1463,9 @@ async fn split_startup_refuses_a_runtime_role_that_can_write_the_ledger_and_writ
             .await
             .err();
     assert_eq!(refusal, Some(StartupError::RuntimeGrantsMissing));
-    assert!(
-        StartupError::RuntimeGrantsMissing
-            .to_string()
-            .contains("run `bregctl apply --package DIR` to reissue them")
-    );
+    assert!(StartupError::RuntimeGrantsMissing
+        .to_string()
+        .contains("run `bregctl apply --package DIR` to reissue them"));
     assert_eq!(managed_database_snapshot(&database.admin).await, before);
     active = apply_startup_package_result(
         &database,
@@ -1486,11 +1489,9 @@ async fn split_startup_refuses_a_runtime_role_that_can_write_the_ledger_and_writ
     .await
     .err();
     assert_eq!(refusal, Some(StartupError::RoleModeChanged));
-    assert!(
-        StartupError::RoleModeChanged
-            .to_string()
-            .contains("run `bregctl apply --package DIR`")
-    );
+    assert!(StartupError::RoleModeChanged
+        .to_string()
+        .contains("run `bregctl apply --package DIR`"));
     assert_eq!(managed_database_snapshot(&database.admin).await, before);
     let single = apply_verified_package(ApplyVerifiedPackageRequest::new(
         &database.migration_config,
@@ -3087,7 +3088,7 @@ fn module_bytes(successor: bool) -> Vec<u8> {
         ""
     };
     format!(
-        r#"{{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","entities":[{{"id":"neutral-record","primaryDataset":"neutral-registry","route":"neutral-records","mutationMode":"create-only","fields":[{{"id":"code","type":"string","maximumLength":8,"classification":"internal"}}],"accessProfiles":[{{"requiredScopes":"unrestricted","rowBoundaries":"unrestricted", "id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["code"]}}]}}{second}]}}"#
+        r#"{{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","recordTypes":[{{"id":"neutral-record","primaryDataset":"neutral-registry","route":"neutral-records","mutationMode":"create-only","fields":[{{"id":"code","type":"string","maximumLength":8,"classification":"internal"}}],"accessProfiles":[{{"requiredScopes":"unrestricted","rowBoundaries":"unrestricted", "id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["code"]}}]}}{second}]}}"#
     )
     .into_bytes()
 }

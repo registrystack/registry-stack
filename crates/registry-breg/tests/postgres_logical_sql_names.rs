@@ -6,13 +6,13 @@
 #[allow(dead_code)]
 mod postgres_harness;
 
-use registry_breg::compiler::{CompileProfile, compile_project, compile_project_with_assets};
-use registry_breg::contract::{ModuleAssetSource, parse_project_json};
+use registry_breg::compiler::{compile_project, compile_project_with_assets, CompileProfile};
+use registry_breg::contract::{parse_project_json, ModuleAssetSource};
 use registry_breg::postgres::{
-    ExpectedManagedCatalog, RegistryStateTestIdentity, initialize_compiled_registry_state_for_test,
-    install_compiled_schema, verify_catalog_identity_for_catalog,
+    initialize_compiled_registry_state_for_test, install_compiled_schema,
+    verify_catalog_identity_for_catalog, ExpectedManagedCatalog, RegistryStateTestIdentity,
 };
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 fn compile(
     source: Value,
@@ -51,12 +51,10 @@ fn fields_that_only_differ_after_postgres_identifier_limit_are_refused() {
     }])))
     .expect_err("PostgreSQL would collapse the two source-view columns");
 
-    assert!(
-        failure
-            .diagnostics()
-            .iter()
-            .any(|diagnostic| diagnostic.code == "breg.field.sql-name-duplicate")
-    );
+    assert!(failure
+        .diagnostics()
+        .iter()
+        .any(|diagnostic| diagnostic.code == "breg.field.sql-name-duplicate"));
 }
 
 #[test]
@@ -80,12 +78,10 @@ fn entities_that_only_differ_after_postgres_identifier_limit_are_refused() {
     ])))
     .expect_err("PostgreSQL would collapse the two source-view names");
 
-    assert!(
-        failure
-            .diagnostics()
-            .iter()
-            .any(|diagnostic| diagnostic.code == "breg.entity.sql-name-duplicate")
-    );
+    assert!(failure
+        .diagnostics()
+        .iter()
+        .any(|diagnostic| diagnostic.code == "breg.record-type.sql-name-duplicate"));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -10,26 +10,26 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::body::{Body, to_bytes};
+use axum::body::{to_bytes, Body};
 use axum::http::{Method, Request, Response, StatusCode};
 use postgres_harness::TestDatabase;
 use registry_breg::api::{
-    HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedClaimValue,
-    VerifiedRequestClaims, router,
+    router, HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedClaimValue,
+    VerifiedRequestClaims,
 };
 use registry_breg::audit::RegistryAudit;
-use registry_breg::compiler::{CompileProfile, compile_project};
+use registry_breg::compiler::{compile_project, CompileProfile};
 use registry_breg::contract::parse_project_json;
 use registry_breg::cursor::CursorCodec;
-use registry_breg::history_schema::{HistorySchemaDescriptor, serialize_descriptor};
+use registry_breg::history_schema::{serialize_descriptor, HistorySchemaDescriptor};
 use registry_breg::postgres::{
-    ExpectedManagedCatalog, PostgresRecordReadService, PostgresRevisionReadService,
-    RegistryLockKey, RegistryStateTestIdentity, RevisionReadFaultPoint,
-    initialize_registry_state_for_catalog_test, install_compiled_schema,
+    initialize_registry_state_for_catalog_test, install_compiled_schema, ExpectedManagedCatalog,
+    PostgresRecordReadService, PostgresRevisionReadService, RegistryLockKey,
+    RegistryStateTestIdentity, RevisionReadFaultPoint,
 };
 use registry_platform_audit::AuditProfile;
 use registry_platform_canonical_json::canonicalize_json;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use tower::Service as _;
 use uuid::Uuid;
@@ -133,11 +133,9 @@ async fn real_postgres_revision_http_is_bounded_authorized_atomic_and_audit_gate
     assert_eq!(items[0]["requestReference"], REQUEST_REFERENCE);
     assert_eq!(items[0]["domainData"], json!({"label": "tombstoned"}));
     assert!(items.iter().all(|item| item.get("changeContext").is_none()));
-    assert!(
-        !String::from_utf8(list_bytes)
-            .expect("response is UTF-8")
-            .contains(SECRET_CANARY)
-    );
+    assert!(!String::from_utf8(list_bytes)
+        .expect("response is UTF-8")
+        .contains(SECRET_CANARY));
 
     let provenance = send(
         &app,
@@ -259,11 +257,9 @@ async fn real_postgres_revision_http_is_bounded_authorized_atomic_and_audit_gate
     let malformed = body_json(malformed).await;
     assert_eq!(malformed["code"], "source.unavailable");
     assert!(!malformed.to_string().contains("wrong-type"));
-    assert!(
-        !malformed
-            .to_string()
-            .contains("valid-row-must-not-be-released")
-    );
+    assert!(!malformed
+        .to_string()
+        .contains("valid-row-must-not-be-released"));
 
     let slow_statement = revision_router(
         pool.clone(),

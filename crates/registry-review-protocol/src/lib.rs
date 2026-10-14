@@ -615,27 +615,48 @@ mod tests {
     fn expected_policy_is_required_and_changes_submission_identity() {
         let original = request();
         let value = serde_json::to_value(&original).unwrap();
-        let mut legacy = value.clone();
-        legacy.as_object_mut().unwrap().remove("policy");
-        legacy["kind"] = json!("registry-correction");
-        assert!(serde_json::from_value::<ReviewCreateRequest>(legacy).is_err());
+        let mut missing = value.clone();
+        missing.as_object_mut().unwrap().remove("policy");
+        assert!(serde_json::from_value::<ReviewCreateRequest>(missing.clone()).is_err());
+        missing["kind"] = json!(original.policy.id);
+        assert!(serde_json::from_value::<ReviewCreateRequest>(missing).is_err());
+        let mut unknown = value.clone();
+        unknown["kind"] = json!(original.policy.id);
+        assert!(serde_json::from_value::<ReviewCreateRequest>(unknown).is_err());
+        let mut unknown_policy_field = value.clone();
+        unknown_policy_field["policy"]["other"] = json!(true);
+        assert!(serde_json::from_value::<ReviewCreateRequest>(unknown_policy_field).is_err());
+
         let digest = submission_digest("producer-a", "registry", &original).unwrap();
         for (field, changed) in [
-            ("id", json!("other")),
+            ("id", json!("other-policy")),
             ("version", json!("2")),
-            (
-                "digest",
-                json!(ContentDigest::for_bytes(b"changed-policy").to_string()),
-            ),
+            ("digest", json!(ContentDigest::for_bytes(b"changed-policy"))),
         ] {
             let mut changed_value = value.clone();
             changed_value["policy"][field] = changed;
             let changed: ReviewCreateRequest = serde_json::from_value(changed_value).unwrap();
             assert_ne!(
                 submission_digest("producer-a", "registry", &changed).unwrap(),
-                digest
+                digest,
+                "submission digest must bind policy {field}"
             );
         }
+    }
+
+    #[test]
+    fn create_request_validates_the_complete_policy_binding() {
+        for field in ["id", "version"] {
+            for invalid in [String::new(), "x".repeat(MAXIMUM_IDENTIFIER_BYTES + 1)] {
+                let mut value = serde_json::to_value(request()).unwrap();
+                value["policy"][field] = json!(invalid);
+                let request: ReviewCreateRequest = serde_json::from_value(value).unwrap();
+                assert!(request.check().is_err(), "invalid policy {field}");
+            }
+        }
+        let mut value = serde_json::to_value(request()).unwrap();
+        value["policy"]["digest"] = json!("not-a-digest");
+        assert!(serde_json::from_value::<ReviewCreateRequest>(value).is_err());
     }
 
     #[test]
@@ -703,7 +724,11 @@ mod tests {
         assert_eq!(explicit_null.result_constraints, Some(Value::Null));
 
         let omitted: ReviewCreateRequest = serde_json::from_value(json!({
-            "policy": {"id":"registry-correction","version":"1","digest":ContentDigest::for_bytes(b"policy")},
+            "policy": {
+                "id": "registry-correction",
+                "version": "1",
+                "digest": ContentDigest::for_bytes(b"policy").to_string()
+            },
             "subject": {
                 "source": "registry",
                 "type": "change-request",

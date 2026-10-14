@@ -11,27 +11,27 @@ mod postgres_harness;
 mod client_http;
 
 use axum::{
-    body::{Body, to_bytes},
+    body::{to_bytes, Body},
     http::{Request, StatusCode},
 };
 use postgres_harness::TestDatabase;
 use registry_breg::{
     api::{
-        HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedClaimValue,
-        VerifiedRequestClaims, router,
+        router, HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture,
+        VerifiedClaimValue, VerifiedRequestClaims,
     },
-    compiler::{CompileProfile, compile_project_with_assets},
-    contract::{ModuleAssetSource, parse_project_yaml},
+    compiler::{compile_project_with_assets, CompileProfile},
+    contract::{parse_project_yaml, ModuleAssetSource},
     cursor::CursorCodec,
     mutation::MutationFaultPoint,
     postgres::{
+        initialize_compiled_registry_state_for_test, install_compiled_schema,
         ExpectedRegistryIdentity, PostgresRecordMutationService, PostgresRecordReadService,
-        RegistryLockKey, RegistryStateTestIdentity, initialize_compiled_registry_state_for_test,
-        install_compiled_schema,
+        RegistryLockKey, RegistryStateTestIdentity,
     },
 };
 use registry_platform_audit::AuditProfile;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -387,7 +387,7 @@ async fn assert_direct_patch_pattern_diagnostic(mut app: axum::Router, record_id
     assert_eq!(response.status(), StatusCode::CONFLICT);
     let body: Value =
         serde_json::from_slice(&to_bytes(response.into_body(), 128 * 1024).await.unwrap()).unwrap();
-    assert_eq!(body["entityId"], "person");
+    assert_eq!(body["recordType"], "person");
     assert_eq!(body["fieldId"], "identifier");
     assert!(!body.to_string().contains("112345678901x"));
 }
@@ -562,7 +562,7 @@ async fn action_handlers_compute_refuse_retry_recover_and_preserve_compiled_auth
     );
     let invalid = call(simple, "invalid-pattern", input("112345678901x")).await;
     assert_eq!(invalid.0, StatusCode::CONFLICT, "{}", invalid.1);
-    assert_eq!(invalid.1["entityId"], "person");
+    assert_eq!(invalid.1["recordType"], "person");
     assert_eq!(invalid.1["fieldId"], "identifier");
     assert!(!invalid.1.to_string().contains("112345678901x"));
     assert!(problem_validator.is_valid(&invalid.1), "{}", invalid.1);
@@ -582,14 +582,14 @@ async fn action_handlers_compute_refuse_retry_recover_and_preserve_compiled_auth
         "{}",
         direct_invalid.1
     );
-    assert_eq!(direct_invalid.1["entityId"], "person");
+    assert_eq!(direct_invalid.1["recordType"], "person");
     assert_eq!(direct_invalid.1["fieldId"], "identifier");
     let batch_invalid = send(app.clone(), "POST", "/v1/records/people:batch?accessProfile=person-administrator", "batch-invalid", json!({"items":[
         {"operation":"create","data":{"identifier":"8123456789012","displayName":"Staged first"}},
         {"operation":"create","data":{"identifier":"912345678901x","displayName":"Invalid later"}}
     ]}), "person-administrator").await;
     assert_eq!(batch_invalid.0, StatusCode::CONFLICT, "{}", batch_invalid.1);
-    assert_eq!(batch_invalid.1["entityId"], "person");
+    assert_eq!(batch_invalid.1["recordType"], "person");
     assert_eq!(batch_invalid.1["fieldId"], "identifier");
     assert_eq!(
         after,

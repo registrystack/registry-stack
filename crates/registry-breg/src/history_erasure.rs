@@ -16,20 +16,20 @@
 use std::fmt;
 
 use registry_platform_audit::AuditEntry;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use tokio_postgres::Client;
 use uuid::Uuid;
 
 use crate::audit::RegistryAudit;
-use crate::history_commit::{HistoryCommitError, lock_history_head};
+use crate::history_commit::{lock_history_head, HistoryCommitError};
 use crate::history_maintenance::{
-    HistoryMaintenanceError, append_maintenance_entries, begin_maintenance_request, lock_registry,
-    profile_is_keyed, set_local_timeouts, verify_ready_identity,
+    append_maintenance_entries, begin_maintenance_request, lock_registry, profile_is_keyed,
+    set_local_timeouts, verify_ready_identity, HistoryMaintenanceError,
 };
-use crate::idempotency::{IdempotencyError, tombstone_erased_cached_responses};
+use crate::idempotency::{tombstone_erased_cached_responses, IdempotencyError};
 use crate::postgres::{
-    ConnectionConfig, ExpectedRegistryIdentity, PostgresKernelError, RegistryLockKey,
-    SqlIdentifier, verify_migration_role,
+    verify_migration_role, ConnectionConfig, ExpectedRegistryIdentity, PostgresKernelError,
+    RegistryLockKey, SqlIdentifier,
 };
 
 pub use crate::history_maintenance::HistoryMaintenanceTimeouts as HistoryErasureTimeouts;

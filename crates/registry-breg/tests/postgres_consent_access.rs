@@ -13,32 +13,32 @@ mod consent_fixture;
 #[allow(dead_code)]
 mod postgres_harness;
 
-use axum::body::{Body, to_bytes};
+use axum::body::{to_bytes, Body};
 use axum::http::{Method, Request, StatusCode};
-use registry_breg::CompiledRegistry;
 use registry_breg::api::{
-    HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, authenticated_router,
+    authenticated_router, HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture,
 };
 use registry_breg::auth::{AuthorityClaimConfig, RegistryAuthenticator};
 use registry_breg::cursor::CursorCodec;
 use registry_breg::postgres::{
-    ClaimContext, ExpectedManagedCatalog, ExpectedRegistryIdentity, PostgresRecordMutationService,
-    PostgresRecordReadService, PostgresRevisionReadService, PostgresSnapshotReadService,
-    RegistryLockKey, RegistryStateTestIdentity, RuntimePool, begin_record_transaction,
-    initialize_compiled_registry_state_for_test, install_compiled_schema,
-    verify_catalog_identity_for_catalog,
+    begin_record_transaction, initialize_compiled_registry_state_for_test, install_compiled_schema,
+    verify_catalog_identity_for_catalog, ClaimContext, ExpectedManagedCatalog,
+    ExpectedRegistryIdentity, PostgresRecordMutationService, PostgresRecordReadService,
+    PostgresRevisionReadService, PostgresSnapshotReadService, RegistryLockKey,
+    RegistryStateTestIdentity, RuntimePool,
 };
+use registry_breg::CompiledRegistry;
 use registry_platform_audit::AuditProfile;
 use registry_platform_httputil::FetchUrlPolicy;
 use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig};
-use registry_platform_testing::{MockIdp, oidc_verifier_config};
-use serde_json::{Value, json};
+use registry_platform_testing::{oidc_verifier_config, MockIdp};
+use serde_json::{json, Value};
 use std::collections::BTreeSet;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
-use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
+use time::OffsetDateTime;
 use tower::Service as _;
 use zeroize::Zeroizing;
 
@@ -1436,10 +1436,19 @@ async fn real_postgres_consent_successors_match_fresh_install_when_added_changed
     // the compiler-applicable plan removes the complete predecessor policy set
     // before retiring its consent helper.
     let mut gated = consent_fixture::source();
+    // Isolate the read-policy and consent-helper DDL from Action contract
+    // revisions, whose native migration policy requires separate review.
+    gated.as_object_mut().unwrap().remove("actions");
+    for profile in gated["accessProfiles"].as_array_mut().unwrap() {
+        profile["permissions"]
+            .as_object_mut()
+            .unwrap()
+            .remove("actions");
+    }
     gated["accessProfiles"][0]["permissions"]["records"]
         .as_array_mut()
         .unwrap()
-        .retain(|permission| permission["entity"] != "household");
+        .retain(|permission| permission["recordType"] != "household");
     let mut base = gated.clone();
     for permission in base["accessProfiles"][0]["permissions"]["records"]
         .as_array_mut()

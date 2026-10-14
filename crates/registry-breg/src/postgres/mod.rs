@@ -21,36 +21,36 @@ mod schema;
 mod statistics;
 
 pub use baseline::{
-    AdvisorySeverity, BaselineAdvisory, BaselineSettings, advise, inspect_baseline,
+    advise, inspect_baseline, AdvisorySeverity, BaselineAdvisory, BaselineSettings,
 };
-pub use catalog::{
-    CatalogIdentity, ExpectedManagedCatalog, ExpectedRegistryIdentity, install_kernel_schema,
-    kernel_schema_fingerprint, managed_schema_fingerprint, verify_catalog_identity,
-    verify_catalog_identity_for_catalog,
-};
-pub(crate) use catalog::{RegistryStateShape, registry_state_shape, runtime_grants_missing};
 #[cfg(feature = "postgres-test")]
 #[doc(hidden)]
 pub use catalog::{
-    RegistryStateTestIdentity, initialize_compiled_registry_state_for_test,
-    initialize_kernel_registry_state_for_test, initialize_registry_state_for_catalog_test,
-    test_activation_id, test_package_digest,
+    initialize_compiled_registry_state_for_test, initialize_kernel_registry_state_for_test,
+    initialize_registry_state_for_catalog_test, test_activation_id, test_package_digest,
+    RegistryStateTestIdentity,
 };
+pub use catalog::{
+    install_kernel_schema, kernel_schema_fingerprint, managed_schema_fingerprint,
+    verify_catalog_identity, verify_catalog_identity_for_catalog, CatalogIdentity,
+    ExpectedManagedCatalog, ExpectedRegistryIdentity,
+};
+pub(crate) use catalog::{registry_state_shape, runtime_grants_missing, RegistryStateShape};
 pub(crate) use config::MAX_POOL_TIMEOUT;
-pub use config::{ConnectionConfig, PoolBounds, RuntimePool, TlsPolicy, set_application_name};
+pub use config::{set_application_name, ConnectionConfig, PoolBounds, RuntimePool, TlsPolicy};
 pub(crate) use context::begin_registry_transaction;
 pub(crate) use context::{
-    ActionClaimContext, ImmediateActionLinkBinding, ImmediateActionLinkContext,
-    ImmediateActionTargetBinding, ImmediateActionTargetContext, begin_action_transaction,
-};
-pub use context::{
-    ClaimContext, GuardedTransaction, RowBoundaryContext, RowBoundaryOperator,
-    begin_record_transaction,
+    begin_action_transaction, ActionClaimContext, ImmediateActionLinkBinding,
+    ImmediateActionLinkContext, ImmediateActionTargetBinding, ImmediateActionTargetContext,
 };
 pub(crate) use context::{
-    ProposalAuthority, ProposalAuthorityOperation, ProposalTargetPhase, begin_proposal_transaction,
+    begin_proposal_transaction, ProposalAuthority, ProposalAuthorityOperation, ProposalTargetPhase,
 };
-pub(crate) use context::{SpatialBboxContext, install_spatial_bbox_context, validate_field_value};
+pub use context::{
+    begin_record_transaction, ClaimContext, GuardedTransaction, RowBoundaryContext,
+    RowBoundaryOperator,
+};
+pub(crate) use context::{install_spatial_bbox_context, validate_field_value, SpatialBboxContext};
 pub use failure::PostgresFailure;
 pub use history_read::PostgresSnapshotReadService;
 #[cfg(feature = "postgres-test")]
@@ -59,19 +59,19 @@ pub use history_read::SnapshotReadFaultPoint;
 pub use interlock::DedicatedApplyConnection;
 pub use interlock::RegistryLockKey;
 pub(crate) use interlock::{
+    covered_field_encryption_fields, field_plaintext_string, lock_wait_ended,
+    prepare_unique_blind_index_preflight, prior_plaintext_projection, read_activation_status,
+    record_unique_blind_index_page, recursive_member_path, set_force_row_security,
     ActivationStatusRead, DedicatedApplyConnection as VerifiedPackageApplyConnection,
     FieldEncryptionCoveredField, MaintenanceSnapshot, MaintenanceTransition, PackageDdlStatement,
     ReviewedExecutionOutcome, ReviewedFieldEncryptionContext, ReviewedMigrationProgress,
-    ReviewedPackageExecutionRequest, covered_field_encryption_fields, field_plaintext_string,
-    lock_wait_ended, prepare_unique_blind_index_preflight, prior_plaintext_projection,
-    read_activation_status, record_unique_blind_index_page, recursive_member_path,
-    set_force_row_security,
+    ReviewedPackageExecutionRequest,
+};
+pub(crate) use migration_ledger::{
+    statement_checksum, BackupReference, MigrationArtifactBinding, MigrationKind,
+    MigrationLedgerEntry, MigrationLedgerStep, MigrationLedgerStepKind,
 };
 pub use migration_ledger::{ActivationPlanKind, RoleMode};
-pub(crate) use migration_ledger::{
-    BackupReference, MigrationArtifactBinding, MigrationKind, MigrationLedgerEntry,
-    MigrationLedgerStep, MigrationLedgerStepKind, statement_checksum,
-};
 pub use mutation::{
     IngestionChunkSubmitInput, IngestionRunCreateInput, IngestionRunListQuery,
     IngestionServiceError, PostgresRecordMutationService,
@@ -81,15 +81,15 @@ pub use read::PostgresRecordReadService;
 pub use read::ReadFaultPoint;
 #[cfg(all(feature = "runtime", feature = "tooling"))]
 pub use rehearsal::{
-    BaselineFingerprintDrift, MigrationRehearsalError, RehearsalAssertionPhase, RehearsalOutcome,
-    SuccessorMigrationRehearsal, rehearse_successor_migration,
+    rehearse_successor_migration, BaselineFingerprintDrift, MigrationRehearsalError,
+    RehearsalAssertionPhase, RehearsalOutcome, SuccessorMigrationRehearsal,
 };
 pub use revision_read::PostgresRevisionReadService;
 #[cfg(feature = "postgres-test")]
 pub use revision_read::RevisionReadFaultPoint;
+pub(crate) use roles::find_runtime_write_authority;
 #[doc(hidden)]
 pub use roles::RuntimeRevoke;
-pub(crate) use roles::find_runtime_write_authority;
 
 #[cfg(feature = "postgres-test")]
 #[doc(hidden)]
@@ -100,12 +100,10 @@ pub async fn install_statistics_store_for_test(
     crate::statistics_store::install(migration, runtime_role).await
 }
 pub use roles::{
-    RuntimeWriteAuthority, SqlIdentifier, provision_managed_schemas,
-    provision_postgis_prerequisites, provision_spatial_bbox_role, spatial_bbox_role,
-    verify_btree_gist, verify_migration_role, verify_postgis, verify_runtime_role,
+    provision_managed_schemas, provision_postgis_prerequisites, provision_spatial_bbox_role,
+    spatial_bbox_role, verify_btree_gist, verify_migration_role, verify_postgis,
+    verify_runtime_role, RuntimeWriteAuthority, SqlIdentifier,
 };
-#[cfg(all(feature = "runtime", feature = "tooling"))]
-pub(crate) use schema::PreparedSchemaTestCatalogVerifier;
 pub(crate) use schema::compiled_pattern_field;
 pub use schema::install_compiled_schema;
 #[cfg(feature = "postgres-test")]
@@ -115,9 +113,11 @@ pub use schema::reconcile_compiled_runtime_acl_for_test;
 pub(crate) use schema::rehearse_schema_fingerprint_with_connection;
 pub(crate) use schema::verify_postgres_17_or_newer;
 #[cfg(all(feature = "runtime", feature = "tooling"))]
+pub(crate) use schema::PreparedSchemaTestCatalogVerifier;
+#[cfg(all(feature = "runtime", feature = "tooling"))]
 pub use schema::{
-    PreparedSchemaTestDatabase, SchemaTestDatabaseIdentity,
-    prepare_schema_test_database_with_connections,
+    prepare_schema_test_database_with_connections, PreparedSchemaTestDatabase,
+    SchemaTestDatabaseIdentity,
 };
 pub use statistics::{
     PostgresStatisticsService, StatisticsLiveRequest, StatisticsMutationOutcome,

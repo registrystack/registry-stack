@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::contract::{FieldTypeSource, ValidTimeRole};
-use crate::data::{FieldValue, validate_field_value};
+use crate::data::{validate_field_value, FieldValue};
 use crate::model::{CompiledEntity, CompiledRegistry};
 
 pub const HISTORY_SCHEMA_ENCODING_VERSION: &str = "breg-history-schema-v1";
@@ -759,7 +759,7 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
     use registry_platform_canonical_json::canonicalize_json;
-    use serde_json::{Value, json};
+    use serde_json::{json, Value};
 
     use super::*;
     use crate::contract::{Classification, MutationMode};

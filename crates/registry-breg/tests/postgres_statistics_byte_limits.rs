@@ -7,22 +7,22 @@
 mod postgres_harness;
 
 use axum::{
-    body::{Body, to_bytes},
+    body::{to_bytes, Body},
     http::{Request, StatusCode},
 };
 use chrono::{Days, Utc};
 use registry_breg::{
     api::{
-        HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedRequestClaims,
-        router,
+        router, HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture,
+        VerifiedRequestClaims,
     },
-    compiler::{CompileProfile, compile_project},
+    compiler::{compile_project, CompileProfile},
     contract::parse_project_json,
     cursor::CursorCodec,
     postgres::{
+        initialize_compiled_registry_state_for_test, install_compiled_schema,
         PostgresRecordReadService, PostgresStatisticsService, RegistryLockKey,
-        RegistryStateTestIdentity, initialize_compiled_registry_state_for_test,
-        install_compiled_schema,
+        RegistryStateTestIdentity,
     },
 };
 use registry_platform_audit::AuditProfile;

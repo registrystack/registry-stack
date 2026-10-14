@@ -10,10 +10,20 @@
 //! The cursor envelope bound in generated OpenAPI is part of the compiled
 //! artifact revision. Increasing that bound preserves the SQL and action
 //! fingerprints but deliberately moves the fixture revisions pinned below.
+//!
+//! BReg's record-type contract respelling changes serialized effect targets and
+//! commit guards in `immediate_actions::definition_revision`. The resulting
+//! Action revision is embedded in generated SQL contractFingerprint checks, so
+//! the three Action fixtures deliberately receive new SQL digests as well as
+//! Action pins. The membership-only fixture retains its exact SQL digest.
+//! Updated BReg metadata/schema/event artifacts also move every fixture's
+//! compiled artifact revision. These remain exact pins, not drift exemptions.
+//! Removing the retired planner Problem and the attachment uploader member
+//! from OpenAPI moves artifact revisions without changing SQL or Action pins.
 
-use registry_breg::CompiledRegistry;
-use registry_breg::compiler::{CompileProfile, compile_project};
+use registry_breg::compiler::{compile_project, CompileProfile};
 use registry_breg::contract::{parse_module_yaml, parse_project_yaml};
+use registry_breg::CompiledRegistry;
 use sha2::{Digest, Sha256};
 
 struct Fixture {
@@ -32,7 +42,7 @@ const FIXTURES: &[Fixture] = &[
         ),
         module: None,
         ddl_sha256: "da05fb62cb07ea689d7351c76d609a552a5a8fb9e1e5231877d103dd1e33fe88",
-        revision: "sha256:8e576d957aca815d99fab81127bdbaecebc5004364742c3bc43a8c56e02eef9c",
+        revision: "sha256:cde099a72cff82ab150cd37b58e756dfffb813201ed4257f928f32fdad03fdfd",
     },
     Fixture {
         name: "asset-registration-actions",
@@ -42,8 +52,8 @@ const FIXTURES: &[Fixture] = &[
         module: Some(include_bytes!(
             "fixtures/native-models/products/breg/fixtures/asset-registration-actions/modules/asset-registration-actions-core/module.yaml"
         )),
-        ddl_sha256: "eecd48ec822988a80abbd81aa79fd413037bd928af0223436451309c462d363b",
-        revision: "sha256:51867c573789e157d30aa15aed9acd012daeda543b57b890df4fc400d048c6db",
+        ddl_sha256: "dfb8cefaa8059cda62c5d2d39bb14fcbf33f589061ca6fe81402e948048caaf6",
+        revision: "sha256:b216dca850f889856d075e105d1004ac26bcfa3f10c854a3e6fa327f3dad04ea",
     },
     Fixture {
         name: "facility-registry-actions",
@@ -53,8 +63,8 @@ const FIXTURES: &[Fixture] = &[
         module: Some(include_bytes!(
             "fixtures/native-models/products/breg/fixtures/facility-registry-actions/modules/facility-registry-actions-core/module.yaml"
         )),
-        ddl_sha256: "ad9ae22df3e94dd82b7485096b60d18d08bd6e4b560a9215fc83a4159e6a5686",
-        revision: "sha256:ce17d54d37107e7c4af0e8818041310ad8c78c3890a79a785e162671e203110d",
+        ddl_sha256: "603a8c6c8ab8500fe5beff9b78657c667de7e90c91578700091086e2f1a82380",
+        revision: "sha256:624f1d72563e3db646118b922f50d4c37db99e550ec9669f1f17d1e0a830b3a8",
     },
     Fixture {
         name: "household-contact-actions",
@@ -64,8 +74,8 @@ const FIXTURES: &[Fixture] = &[
         module: Some(include_bytes!(
             "fixtures/native-models/products/breg/fixtures/household-contact-actions/modules/household-contact-actions-core/module.yaml"
         )),
-        ddl_sha256: "4bc36a9b815c33b743423030b26e96d87eac218999699fccb199857246272897",
-        revision: "sha256:08f17f3ba40fc524da2247156265bcd81ac23b471a1d652b9cb8d5f9479557ca",
+        ddl_sha256: "451d62c09089364c81f343acfbc175f82db449f00446886fedc6e8cc03ef86ad",
+        revision: "sha256:9fa5ad05c85cb03808de910b917ff0f877dcb2446f5e2e89072c145e2b45924d",
     },
 ];
 
@@ -123,8 +133,8 @@ fn fixtures_keep_their_action_contract_fingerprints() {
 }
 
 const ACTION_FINGERPRINTS: &[&str] = &[
-    "asset-registration-actions/register-asset-with-inspection: sha256:d3bf2f2920a50c7f21ea8938921753ee7750a40fac9d9c0df781095b3b365137",
-    "facility-registry-actions/register-facility: sha256:d856375f28ce2715c32fb442b2d35005c3cf0fecfaa41333084869aa18a82cdd",
-    "facility-registry-actions/transfer-facility: sha256:ee16eb40856e6dd7914f14bba6d5c0b4347ef47315f9e4b8ca623ca95f60cba9",
-    "household-contact-actions/register-household-contact: sha256:94a43555036a9922e390d31a7b81d7fe56e12c2d73fa668ab67c4b42e304096b",
+    "asset-registration-actions/register-asset-with-inspection: sha256:5a9937ab9d8654a366e89e31a098b93312bbacddbe74a2dbff09915aedbc5fcb",
+    "facility-registry-actions/register-facility: sha256:9aa777aea43dd8f2bdc43499bebae20fc5cd40d905ab614938a74da7652c243a",
+    "facility-registry-actions/transfer-facility: sha256:5f346eabb7d4a8f9bf959432ae47de3aaecaa07962d6fec954452848a31e84d4",
+    "household-contact-actions/register-household-contact: sha256:cb90f8518169dafc15d6d66ca467e9f1093b5d04afe68c970d91b966e7f7c905",
 ];

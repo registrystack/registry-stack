@@ -13,41 +13,41 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::body::{Body, to_bytes};
+use axum::body::{to_bytes, Body};
 use axum::http::{HeaderName, HeaderValue, Method, Request, StatusCode};
 use postgres_harness::TestDatabase;
-use registry_breg::CompiledRegistry;
 use registry_breg::api::{
-    HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedClaimValue,
-    VerifiedRequestClaims, router,
+    router, HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedClaimValue,
+    VerifiedRequestClaims,
 };
-use registry_breg::compiler::{CompileProfile, compile_project};
+use registry_breg::compiler::{compile_project, CompileProfile};
 use registry_breg::contract::parse_project_json;
 use registry_breg::cursor::CursorCodec;
 use registry_breg::migration::{
-    ActivationDeployment, ApplyPrecondition, ApplyRoles, ApplyTimeouts,
-    ApplyVerifiedPackageRequest, apply_verified_package,
+    apply_verified_package, ActivationDeployment, ApplyPrecondition, ApplyRoles, ApplyTimeouts,
+    ApplyVerifiedPackageRequest,
 };
 use registry_breg::migration_plan::{
     MigrationRehearsalReceipt, ReviewedChangeCover, ReviewedMigrationDescriptor,
     ReviewedMigrationFile, ReviewedMigrationRecovery, ReviewedMigrationSource,
 };
 use registry_breg::package::{
-    CompiledRegistryChangeClass, CompiledRegistryChangeCode, FIXTURE_JOURNEYS_PATH,
-    PackageBuildRequest, PackageLoadContext, PackageMigrationPlanInput, PackageSourceFile,
-    VerifiedPackage, compiled_registry_change_set, load_package, prepare_package,
+    compiled_registry_change_set, load_package, prepare_package, CompiledRegistryChangeClass,
+    CompiledRegistryChangeCode, PackageBuildRequest, PackageLoadContext, PackageMigrationPlanInput,
+    PackageSourceFile, VerifiedPackage, FIXTURE_JOURNEYS_PATH,
 };
 use registry_breg::postgres::{
-    BaselineFingerprintDrift, ExpectedManagedCatalog, ExpectedRegistryIdentity,
-    PostgresRecordMutationService, PostgresRecordReadService, RegistryLockKey,
-    SuccessorMigrationRehearsal, managed_schema_fingerprint,
-    reconcile_compiled_runtime_acl_for_test, rehearse_successor_migration,
+    managed_schema_fingerprint, reconcile_compiled_runtime_acl_for_test,
+    rehearse_successor_migration, BaselineFingerprintDrift, ExpectedManagedCatalog,
+    ExpectedRegistryIdentity, PostgresRecordMutationService, PostgresRecordReadService,
+    RegistryLockKey, SuccessorMigrationRehearsal,
 };
 use registry_breg::startup::prepare_startup;
+use registry_breg::CompiledRegistry;
 use registry_platform_audit::AuditProfile;
 use registry_platform_canonical_json::canonicalize_json;
 use serde::Serialize;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use tempfile::TempDir;
 use tower::Service as _;
 use uuid::Uuid;
@@ -234,8 +234,16 @@ async fn action_result_target_index_reaches_an_existing_activation_at_its_next_a
             successor_project.clone(),
             Some(active.package_digest.as_str()),
             &fresh_fingerprint,
-            PackageMigrationPlanInput::Successor {
+            PackageMigrationPlanInput::ReviewedSuccessor {
                 prior_registry: Box::new((*registry).clone()),
+                prior_schema_fingerprint: old_fingerprint.clone(),
+                migrations: vec![metadata_only_source(
+                    &registry,
+                    &successor_registry,
+                    &active.package_digest,
+                    &old_fingerprint,
+                    &fresh_fingerprint,
+                )],
             },
         )
     };
@@ -373,14 +381,13 @@ async fn reviewed_activation_updates_immediate_action_policies_and_consumed_keys
         .map(|statement| statement.sql.as_str())
         .collect::<Vec<_>>();
     assert!(
-        changed_sql
-            .iter()
-            .any(|sql| sql.starts_with("DROP POLICY "))
+        changed_sql.is_empty(),
+        "scope-only authority changes need no schema rewrite"
     );
-    assert!(
-        changed_sql
-            .iter()
-            .any(|sql| sql.starts_with("CREATE POLICY "))
+    assert_eq!(
+        action_registry.actions().actions[0].definition_revision,
+        changed_registry.actions().actions[0].definition_revision,
+        "current caller authority is separate from the unchanged Action plan meaning"
     );
     let active_changed = apply_package(
         &database,
@@ -446,16 +453,12 @@ async fn reviewed_activation_updates_immediate_action_policies_and_consumed_keys
         .iter()
         .map(|statement| statement.sql.as_str())
         .collect::<Vec<_>>();
-    assert!(
-        removed_sql
-            .iter()
-            .any(|sql| sql.starts_with("DROP POLICY "))
-    );
-    assert!(
-        !removed_sql
-            .iter()
-            .any(|sql| sql.starts_with("CREATE POLICY "))
-    );
+    assert!(removed_sql
+        .iter()
+        .any(|sql| sql.starts_with("DROP POLICY ")));
+    assert!(!removed_sql
+        .iter()
+        .any(|sql| sql.starts_with("CREATE POLICY ")));
     let active_removed = apply_package(
         &database,
         &removed_package.package,
@@ -589,8 +592,12 @@ async fn recipient_added_successor_matches_fresh_install_and_refuses_consumed_ke
             "entity.person.policy.registry_action_link_rls_lock_update_f8ce4ad62f29d16690131d38.drop",
             "entity.person.policy.registry_action_link_rls_select_28ce629670ff4cb963953600.drop",
             "entity.consent-decision.field.recipient.vocabulary",
+            "entity.consent-decision.policy.registry_action_rls_insert_18c2deac1df83f2bbf7c42e1",
+            "entity.consent-decision.policy.registry_action_rls_select_f13c1f2f332145d8ba2b99c4",
+            "entity.person.policy.registry_action_link_rls_lock_update_f8ce4ad62f29d16690131d38",
+            "entity.person.policy.registry_action_link_rls_select_28ce629670ff4cb963953600",
         ],
-        "a recipient addition retires changed action policies before replacing the recipient check"
+        "a recipient addition retires Action policies before replacing the check, then reinstalls them"
     );
     // The recipient widens the action contract, whose fingerprint the action
     // policies embed, so the rehearsal must reconcile policies as activation
@@ -1257,20 +1264,21 @@ fn project_bytes(variant: Variant) -> Vec<u8> {
     let actions = if required_scope.is_some() {
         r#""actions":[{
             "id":"register-household-contact",
+            "execution":{"mode":"immediate"},
             "inputs":[
               {"id":"household","apiName":"householdId","type":"reference","target":"household","required":true,"classification":"restricted"},
               {"id":"person-code","apiName":"personCode","type":"string","maximumLength":64,"required":true,"classification":"restricted"},
               {"id":"legal-name","apiName":"legalName","type":"string","maximumLength":160,"required":true,"classification":"restricted"},
               {"id":"jurisdiction","apiName":"jurisdiction","type":"string","maximumLength":64,"required":true,"classification":"restricted"}
             ],
-            "effects":[
+            "plan":{"type":"fixed","effects":[
               {"id":"person","target":{"recordType":"person"},"operation":"create",
-                "set":{"person-code":{"fromField":"person-code"},"legal-name":{"fromField":"legal-name"},"jurisdiction":{"fromField":"jurisdiction"}}},
+                "set":{"person-code":{"fromInput":"person-code"},"legal-name":{"fromInput":"legal-name"},"jurisdiction":{"fromInput":"jurisdiction"}}},
               {"id":"membership","target":{"recordType":"group-membership"},"operation":"create",
-                "set":{"person":{"fromEffect":"person"},"household":{"fromField":"household"},"jurisdiction":{"fromField":"jurisdiction"}}},
-              {"id":"household","target":{"fromField":"household"},"operation":"patch",
+                "set":{"person":{"fromEffect":"person"},"household":{"fromInput":"household"},"jurisdiction":{"fromInput":"jurisdiction"}}},
+              {"id":"household","target":{"fromInput":"household"},"operation":"patch",
                 "set":{"contact-person":{"fromEffect":"person"}}}
-            ]
+            ]}
           }],"#
             .to_owned()
     } else {
@@ -1306,7 +1314,8 @@ fn project_bytes(variant: Variant) -> Vec<u8> {
           "kind":"BRegProject",
           "project":{{"id":"{PACKAGE_ID}","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
           "package":{{"sourceRevision":"{SOURCE_REVISION}"}},
-          "entities":[{{
+          "datasets":[{{"id":"test-dataset"}}],
+          "recordTypes":[{{
             "id":"person","primaryDataset":"test-dataset","route":"people","mutationMode":"mutable",
             "constraints":[{{"type":"unique","fields":["person-code"]}}],
             "fields":[

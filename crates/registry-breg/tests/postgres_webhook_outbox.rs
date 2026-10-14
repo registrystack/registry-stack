@@ -13,24 +13,24 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use postgres_harness::TestDatabase;
-use registry_breg::compiler::{CompileProfile, compile_project};
+use registry_breg::compiler::{compile_project, CompileProfile};
 use registry_breg::contract::parse_project_json;
 use registry_breg::event_destination::ActivatedEventDestinationRegistry;
 use registry_breg::idempotency::PermittedResponseHeader;
 use registry_breg::model::CompiledEventDelivery;
 use registry_breg::mutation::{
-    MutationBody, MutationCoordinator, MutationError, MutationFaultPoint, MutationPlan,
-    MutationRequest, PatchOperation, install_mutation_schema,
+    install_mutation_schema, MutationBody, MutationCoordinator, MutationError, MutationFaultPoint,
+    MutationPlan, MutationRequest, PatchOperation,
 };
 use registry_breg::postgres::{
-    ClaimContext, ExpectedManagedCatalog, ExpectedRegistryIdentity, RegistryLockKey,
-    RegistryStateTestIdentity, RowBoundaryContext, initialize_compiled_registry_state_for_test,
-    install_compiled_schema, managed_schema_fingerprint,
+    initialize_compiled_registry_state_for_test, install_compiled_schema,
+    managed_schema_fingerprint, ClaimContext, ExpectedManagedCatalog, ExpectedRegistryIdentity,
+    RegistryLockKey, RegistryStateTestIdentity, RowBoundaryContext,
 };
 use registry_breg::runtime_config::parse_runtime_config;
 use registry_platform_audit::AuditProfile;
 use registry_platform_hooks::{Causation, EnvelopeLimits, HookEnvelope};
-use serde_json::{Map, Value, json};
+use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
 use tokio_postgres::Row;
@@ -54,8 +54,8 @@ const EXPECTED_EVENT_SOURCE: &str =
     "urn:registrystack:registry:webhook-outbox-registry:instance:webhook-outbox-instance";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn real_postgres_webhook_outbox_capture_is_atomic_package_bound_and_deterministically_identified()
- {
+async fn real_postgres_webhook_outbox_capture_is_atomic_package_bound_and_deterministically_identified(
+) {
     let database = TestDatabase::create(10).await;
     let (migration, migration_task) = database.connect_migration().await;
     let compiled = compiled_registry();
@@ -384,7 +384,7 @@ async fn real_postgres_webhook_outbox_capture_is_atomic_package_bound_and_determ
     assert_eq!(
         conditional_envelope.data,
         json!({
-            "entity": "case",
+            "recordType": "case",
             "recordId": raw_record_id,
             "revision": 3,
             "trigger": "patched",
@@ -1032,7 +1032,7 @@ fn assert_capture_matches(
 
 fn expected_event_data(record_id: &str) -> Value {
     json!({
-        "entity": "case",
+        "recordType": "case",
         "recordId": record_id,
         "revision": 1,
         "trigger": "created",

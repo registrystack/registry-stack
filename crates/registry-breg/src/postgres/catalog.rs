@@ -13,8 +13,8 @@ use crate::model::CompiledRegistry;
 #[cfg(feature = "postgres-test")]
 use super::schema::install_empty_history_baseline_for_compiled_registry;
 use super::{
-    PostgresKernelError, Result, RuntimeRevoke, SqlIdentifier,
     migration_ledger::install_migration_ledger, spatial_bbox_role, verify_btree_gist,
+    PostgresKernelError, Result, RuntimeRevoke, SqlIdentifier,
 };
 
 pub(super) const MANAGED_SCHEMAS: &[&str] = &[

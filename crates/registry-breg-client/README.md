@@ -267,8 +267,8 @@ one read and never schedule or mutate work. The caller combines receiver hints
 with its own observation interval, deadline and budget. `BRegObservation` Debug
 omits document contents.
 
-Automatic recovery Apply and Retry require an explicitly human access profile
-and a current human caller. An observing service gains no recovery authority.
+Automatic recovery Apply and Retry require an explicit current grant and a
+verified human caller. An observing service gains no recovery authority.
 The built-in executor uses its own governed system grant.
 
 ## Response security

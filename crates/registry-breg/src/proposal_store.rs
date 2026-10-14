@@ -16,10 +16,10 @@ use crate::mutation::MutationError;
 use crate::postgres::SqlIdentifier;
 use crate::proposal_prepare::ProposalTargetSnapshot;
 use crate::proposal_workflow::{
-    ApplicationId, ApplicationReceipt, ApplicationResultLink, EntityId,
-    MAX_PROPOSAL_SNAPSHOT_BYTES, MAX_PROPOSAL_TARGETS, ProposalDigest, ProposalKey,
-    ProposalSnapshot, ProposalState, ProposalWorkflow, RecordId, RecordRevision, StateRevision,
-    SubmissionVersion, TrustedActorRef, TrustedTimestamp,
+    ApplicationId, ApplicationReceipt, ApplicationResultLink, EntityId, ProposalDigest,
+    ProposalKey, ProposalSnapshot, ProposalState, ProposalWorkflow, RecordId, RecordRevision,
+    StateRevision, SubmissionVersion, TrustedActorRef, TrustedTimestamp,
+    MAX_PROPOSAL_SNAPSHOT_BYTES, MAX_PROPOSAL_TARGETS,
 };
 
 pub(crate) const PROPOSAL_TABLES: &[(&str, &[&str])] = &[
@@ -1192,7 +1192,7 @@ mod tests {
     use std::env;
 
     use registry_platform_canonical_json::canonicalize_json;
-    use serde_json::{Map, json};
+    use serde_json::{json, Map};
     use tokio_postgres::Client;
     use uuid::Uuid;
 
@@ -1324,26 +1324,22 @@ mod tests {
     }
 
     fn proposal(target_id: Uuid, before_site: &str, after_site: &str) -> PreparedProposal {
-        let effects = vec![
-            PreparedEffect::new(
-                EffectId::new("patch-placement").expect("effect id"),
-                Operation::Patch,
-                PreparedTarget::existing(
-                    entity(TARGET_ENTITY),
-                    record(target_id.to_string()),
-                    record_revision(3),
-                ),
-                vec![
-                    PreparedFieldChange::set(
-                        FieldId::new("site").expect("field id"),
-                        FieldValue::present(json!(before_site)),
-                        json!(after_site),
-                    )
-                    .expect("field change"),
-                ],
+        let effects = vec![PreparedEffect::new(
+            EffectId::new("patch-placement").expect("effect id"),
+            Operation::Patch,
+            PreparedTarget::existing(
+                entity(TARGET_ENTITY),
+                record(target_id.to_string()),
+                record_revision(3),
+            ),
+            vec![PreparedFieldChange::set(
+                FieldId::new("site").expect("field id"),
+                FieldValue::present(json!(before_site)),
+                json!(after_site),
             )
-            .expect("prepared effect"),
-        ];
+            .expect("field change")],
+        )
+        .expect("prepared effect")];
         let bytes = canonicalize_json(&serde_json::to_value(&effects).expect("effects serialize"))
             .expect("effects canonicalize")
             .len();

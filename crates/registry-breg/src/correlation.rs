@@ -275,7 +275,7 @@ pub(crate) fn finish_response(
             object.insert(name.to_owned(), Value::String(value.to_owned()));
         }
         if let Some((entity, field)) = &problem.declared_field {
-            object.insert("entityId".to_owned(), Value::String(entity.clone()));
+            object.insert("recordType".to_owned(), Value::String(entity.clone()));
             object.insert("fieldId".to_owned(), Value::String(field.clone()));
         }
         let body = serde_json::to_vec(&value).expect("ProblemBody serialization is infallible");

@@ -71,7 +71,7 @@ test('a declared refusal reaches the caller with its reason', async () => {
     assert.equal(error.refusalCode, problem.refusalCode);
     assert.equal(error.fieldPath, problem.fieldPath);
     assert.equal(error.traceId, TRACE_ID);
-    assert.equal(error.planRefusal, undefined);
+    assert.equal('planRefusal' in error, false);
   }
 });
 

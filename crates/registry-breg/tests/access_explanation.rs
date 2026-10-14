@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use registry_breg::{CompileProfile, compile_project, parse_project_json};
-use serde_json::{Value, json};
+use registry_breg::{compile_project, parse_project_json, CompileProfile};
+use serde_json::{json, Value};
 
 fn source() -> Value {
     json!({"datasets":[{"id": "test-dataset"}],
@@ -102,32 +102,28 @@ fn access_explanation_connects_row_reach_to_typed_claim_requirements() {
         "string"
     );
     assert_eq!(
-        explanation["claimContract"]["directClaims"]["districts"]["uses"][0]["entityId"],
+        explanation["claimContract"]["directClaims"]["districts"]["uses"][0]["recordType"],
         "entry"
     );
     assert!(explanation["claimContractError"].is_null());
-    assert!(
-        explanation["evaluation"]
-            .as_str()
-            .unwrap()
-            .contains("not evaluated")
-    );
+    assert!(explanation["evaluation"]
+        .as_str()
+        .unwrap()
+        .contains("not evaluated"));
 
     let mut broad = source();
     broad["accessProfiles"][0]["permissions"]["records"][0]["rowBoundaries"] =
         json!("unrestricted");
     let registry = compile(&broad);
-    assert!(
-        registry
-            .findings()
-            .iter()
-            .any(|finding| finding.code == "breg.access.profile-unrestricted-rows")
-    );
+    assert!(registry
+        .findings()
+        .iter()
+        .any(|finding| finding.code == "breg.access.profile-unrestricted-rows"));
     let explanation =
         serde_json::to_value(registry_breg::access::explain_access(&registry)).unwrap();
     assert_eq!(explanation["rowReach"][0]["rows"], "all");
     assert_eq!(
-        explanation["entities"][0]["profiles"][0]["operations"],
+        explanation["recordTypes"][0]["profiles"][0]["operations"],
         json!(["get", "patch"])
     );
 }
@@ -206,7 +202,7 @@ fn membership_row_reach_is_explicit_and_uses_the_selected_principal() {
 #[cfg(all(feature = "runtime", feature = "tooling"))]
 #[test]
 fn membership_changes_report_authority_narrowing_and_widening() {
-    use registry_breg::tooling::{AccessChangeDirection, classify_registry_diff};
+    use registry_breg::tooling::{classify_registry_diff, AccessChangeDirection};
 
     let mut source = membership_source();
     source["recordTypes"][2]["fields"]
@@ -216,11 +212,11 @@ fn membership_changes_report_authority_narrowing_and_widening() {
     let mut additional =
         source["accessProfiles"][0]["permissions"]["records"][0]["membershipBoundaries"][0].clone();
     additional["activeField"] = json!("approved");
-    let mut boundaries =
-        source["accessProfiles"][0]["permissions"]["records"][0]["membershipBoundaries"]
-            .as_array()
-            .unwrap()
-            .clone();
+    let mut boundaries = source["accessProfiles"][0]["permissions"]["records"][0]
+        ["membershipBoundaries"]
+        .as_array()
+        .unwrap()
+        .clone();
     boundaries.push(additional);
     let registries = (0..=2)
         .map(|count| {
@@ -254,9 +250,15 @@ fn synthetic_own_record_preview_reuses_principal_and_refuses_identity_override()
         json!([{"field":"district","claim":"registry_principal","operator":"equals"}]);
     let registry = compile(&source);
     let mut scenario = json!({
-        "entity":"entry", "accessProfile":"clerk", "operation":"get",
+        "recordType":"entry", "accessProfile":"clerk", "operation":"get",
         "claims":{"principalClaim":"registry_principal", "principal":"synthetic-clerk", "scopes":["entry:edit"]}
     });
+    let mut removed = scenario.clone();
+    removed.as_object_mut().unwrap().remove("recordType");
+    removed["entity"] = json!("entry");
+    assert!(
+        serde_json::from_value::<registry_breg::access_preview::AccessScenario>(removed).is_err()
+    );
     let preview = registry_breg::access_preview::preview_access(
         &registry,
         serde_json::from_value(scenario.clone()).unwrap(),
@@ -265,11 +267,9 @@ fn synthetic_own_record_preview_reuses_principal_and_refuses_identity_override()
     assert!(preview.admitted);
     assert_eq!(preview.record_access, "not-evaluated");
     scenario["claims"]["directClaims"] = json!({"registry_principal":"different-clerk"});
-    assert!(
-        registry_breg::access_preview::preview_access(
-            &registry,
-            serde_json::from_value(scenario).unwrap()
-        )
-        .is_err()
-    );
+    assert!(registry_breg::access_preview::preview_access(
+        &registry,
+        serde_json::from_value(scenario).unwrap()
+    )
+    .is_err());
 }

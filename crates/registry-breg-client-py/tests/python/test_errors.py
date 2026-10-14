@@ -110,7 +110,7 @@ class ProblemKindTests(unittest.TestCase):
                 self.assertEqual(error.status, status)
                 self.assertEqual(error.trace_id, TRACE_ID)
                 self.assertIsNone(error.code)
-                self.assertIsNone(error.plan_refusal)
+                self.assertFalse(hasattr(error, "plan_refusal"))
                 self.assertIsNone(error.refusal_code)
                 self.assertIsNone(error.reason_code)
                 self.assertIsNone(error.field_path)

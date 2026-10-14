@@ -15,8 +15,8 @@
 use std::convert::Infallible;
 use std::marker::PhantomData;
 
-use registry_platform_yaml::{Invalid, shape_union};
-use serde::{Deserialize, Deserializer, Serialize, Serializer, de::IgnoredAny};
+use registry_platform_yaml::{shape_union, Invalid};
+use serde::{de::IgnoredAny, Deserialize, Deserializer, Serialize, Serializer};
 
 use super::{
     AccessProfileSource, AccessRequirementsSource, ActorKindSource, CompiledTaskGrantSource,

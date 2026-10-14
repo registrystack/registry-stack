@@ -2,8 +2,8 @@
 use super::*;
 use crate as breg;
 use crate::{
-    compiler::{CompileProfile, compile_project_with_assets},
-    contract::{ModuleAssetSource, parse_project_yaml},
+    compiler::{compile_project_with_assets, CompileProfile},
+    contract::{parse_project_yaml, ModuleAssetSource},
 };
 use std::time::Duration;
 

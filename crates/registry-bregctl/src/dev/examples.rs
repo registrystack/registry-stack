@@ -1959,7 +1959,7 @@ journeys:
             cases.push((
                 scenario,
                 input,
-                "requires advertised revisions permission".into(),
+                "requires advertised revisions permission".to_owned(),
             ));
         }
         let samples = catalogue

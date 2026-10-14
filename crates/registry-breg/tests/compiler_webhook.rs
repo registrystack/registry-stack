@@ -1,15 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use registry_breg::compiler::{CompileProfile, compile_project, module_digest};
+use registry_breg::compiler::{compile_project, module_digest, CompileProfile};
 use registry_breg::contract::{
-    Classification, ModuleLockSource, RegistryModule, RegistryProject,
-    WebhookAuthenticationProfile, WebhookDeadLetterMode, parse_module_json, parse_project_json,
-    parse_project_yaml,
+    parse_module_json, parse_project_json, parse_project_yaml, Classification, ModuleLockSource,
+    RegistryModule, RegistryProject, WebhookAuthenticationProfile, WebhookDeadLetterMode,
 };
 use registry_breg::diagnostics::CompileFailure;
 use registry_breg::model::{CompiledWebhookDeliveryMode, CompiledWebhookRetryProfile};
 use registry_platform_canonical_json::{canonicalize_json, parse_json_strict};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 fn project_value() -> Value {
     json!({"datasets":[{"id": "test-dataset"}],
@@ -90,17 +89,17 @@ fn governed_webhook_compiles_to_deterministic_destination_neutral_inventory() {
     assert_eq!(inventory.deliveries.len(), 1);
     let delivery = &inventory.deliveries[0];
     assert_eq!(delivery.id, "events.case.case-created.webhook");
-    assert_eq!(delivery.entity_id, "case");
+    assert!(
+        matches!(&delivery.owner,registry_breg::model::CompiledEventOwner::RecordType {record_type,..} if record_type == "case")
+    );
     assert_eq!(delivery.event_id, "case-created");
     assert_eq!(delivery.destination_id.as_deref(), Some("case-operations"));
     assert_eq!(delivery.projection_fields, ["label", "region"]);
     assert_eq!(delivery.classification_ceiling, Classification::Internal);
     assert!(delivery.when.is_some());
-    assert!(
-        delivery
-            .data_schema
-            .starts_with("urn:breg:event-schema:webhook-contract:case:case-created:sha256:")
-    );
+    assert!(delivery
+        .data_schema
+        .starts_with("urn:breg:event-schema:webhook-contract:case:case-created:sha256:"));
     assert!(delivery.data_schema_fingerprint.starts_with("sha256:"));
     assert_eq!(
         delivery.data_schema_artifact_path,
@@ -125,8 +124,8 @@ fn governed_webhook_compiles_to_deterministic_destination_neutral_inventory() {
     assert_eq!(delivery.exponential_backoff_multiplier, 2);
     assert_eq!(delivery.retry_delays_ms, [1000, 2000, 4000, 8000]);
     // The data object's worst case plus the envelope wrapper this project's
-    // identifiers produce: 2288 + 644.
-    assert_eq!(delivery.maximum_payload_bytes, 2932);
+    // identifiers produce: 2292 + 644. The recordType key adds four bytes to data.
+    assert_eq!(delivery.maximum_payload_bytes, 2936);
     assert_eq!(delivery.dead_letter, WebhookDeadLetterMode::Required);
     assert!(delivery.operator_replay);
 
@@ -169,18 +168,14 @@ fn destination_auth_delivery_and_deployed_members_are_closed_and_value_free() {
         let mut source = project_value();
         webhook_mut(&mut source).insert("destinationId".to_owned(), json!(destination));
         let failure = compile(&source).expect_err("invalid logical destination is refused");
-        assert!(
-            failure
-                .diagnostics()
-                .iter()
-                .any(|diagnostic| diagnostic.code == "breg.event.webhook-destination-invalid")
-        );
+        assert!(failure
+            .diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.code == "breg.event.webhook-destination-invalid"));
         if !destination.is_empty() {
-            assert!(
-                !serde_json::to_string(&failure)
-                    .expect("failure serializes")
-                    .contains(destination)
-            );
+            assert!(!serde_json::to_string(&failure)
+                .expect("failure serializes")
+                .contains(destination));
         }
     }
 
@@ -285,7 +280,7 @@ fn webhook_projection_is_closed_and_classification_is_derived() {
     exact_envelope_boundary["recordTypes"][0]["fields"][0] = json!({
         "id": "label",
         "type": "structured",
-        "maximumBytes": 1_046_234,
+        "maximumBytes": 1_046_230,
         "schema": {
             "type": "object",
             "properties": {"value": {"type": "string"}},
@@ -307,7 +302,7 @@ fn webhook_projection_is_closed_and_classification_is_derived() {
             .maximum_payload_bytes,
         1_048_576
     );
-    exact_envelope_boundary["recordTypes"][0]["fields"][0]["maximumBytes"] = json!(1_046_235);
+    exact_envelope_boundary["recordTypes"][0]["fields"][0]["maximumBytes"] = json!(1_046_231);
     assert_compile_code(
         &exact_envelope_boundary,
         "breg.event.webhook-projection-too-large",
@@ -551,12 +546,10 @@ fn additive_modules_add_nonconflicting_subscriptions_deterministically_and_refus
         CompileProfile::Authoring,
     )
     .expect_err("module subscriptions cannot replace an existing event id");
-    assert!(
-        failure
-            .diagnostics()
-            .iter()
-            .any(|diagnostic| diagnostic.code == "breg.extension.event-duplicate")
-    );
+    assert!(failure
+        .diagnostics()
+        .iter()
+        .any(|diagnostic| diagnostic.code == "breg.extension.event-duplicate"));
 }
 
 #[test]
@@ -600,20 +593,16 @@ fn outbox_only_event_is_authoring_only_and_production_requires_delivery() {
         .get("compiled/event-deliveries.json")
         .expect("empty delivery inventory remains explicit");
     assert_eq!(artifact.bytes, br#"{"deliveries":[]}"#);
-    assert!(
-        compiled.entities()["case"].hooks["case-created"]
-            .handler
-            .is_none()
-    );
+    assert!(compiled.entities()["case"].hooks["case-created"]
+        .handler
+        .is_none());
 
     let failure = compile_project(&parse_project(&source), &[], CompileProfile::Production)
         .expect_err("production has no supported outbox-only consumer API");
-    assert!(
-        failure
-            .diagnostics()
-            .iter()
-            .any(|diagnostic| diagnostic.code == "breg.event.delivery-required")
-    );
+    assert!(failure
+        .diagnostics()
+        .iter()
+        .any(|diagnostic| diagnostic.code == "breg.event.delivery-required"));
 }
 
 fn webhook_module(id: &str, event_id: &str, destination_id: &str) -> RegistryModule {
@@ -653,7 +642,8 @@ const ENVELOPE_WRAPPER_BYTES: u32 = 584
     + 2 * "webhook-contract".len() as u32
     + "case".len() as u32
     + 2 * "case-created".len() as u32;
-const DATA_OBJECT_AT_THE_TRANSPORT_BOUND: u32 = 1_046_878;
+// The recordType key uses four more bytes than the former entity key.
+const DATA_OBJECT_AT_THE_TRANSPORT_BOUND: u32 = 1_046_874;
 
 fn structured_label(maximum_bytes: u32) -> Value {
     json!({

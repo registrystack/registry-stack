@@ -12,42 +12,40 @@ use std::time::Duration;
 use registry_platform_audit::AuditProfile;
 use registry_platform_canonical_json::canonicalize_json;
 use serde::Serialize;
-use serde_json::{Map, Value, json};
+use serde_json::{json, Map, Value};
 use tokio_postgres::types::Type;
 use uuid::Uuid;
 
 use crate::api::{
-    AuthorizedRequestContext, HeldReadResponse, LookupSelectorValue, ReadFilterExpr,
-    ReadFilterOperator, ReadFilterPredicate, ReadLogicalOp, ReadOrderClause, ReadProjectionField,
-    ReadServiceError, ReadSpatialQuery, RecordReadKind, RecordReadRequest, RecordReadService,
-    RowBoundaryOperator as ApiRowBoundaryOperator, ServiceFuture, valid_text_search_term,
+    valid_text_search_term, AuthorizedRequestContext, HeldReadResponse, LookupSelectorValue,
+    ReadFilterExpr, ReadFilterOperator, ReadFilterPredicate, ReadLogicalOp, ReadOrderClause,
+    ReadProjectionField, ReadServiceError, ReadSpatialQuery, RecordReadKind, RecordReadRequest,
+    RecordReadService, RowBoundaryOperator as ApiRowBoundaryOperator, ServiceFuture,
 };
 use crate::audit::{
-    PreIoAudit, PreIoAuditKind, ReadTerminalAudit, RegistryAudit, TerminalAudit,
-    TerminalAuditOutcome, begin_pre_io_audit, profile_is_keyed, read_terminal_entry,
-    record_pre_io_audit,
+    begin_pre_io_audit, profile_is_keyed, read_terminal_entry, record_pre_io_audit, PreIoAudit,
+    PreIoAuditKind, ReadTerminalAudit, RegistryAudit, TerminalAudit, TerminalAuditOutcome,
 };
 use crate::contract::{FieldTypeSource, Operation};
 use crate::cursor::{
-    CursorAdapter, CursorBboxQuery, CursorCodec, CursorContinuation, CursorFilterExpr,
-    CursorFilterOperator, CursorLogicalOp, CursorOrderClause, CursorProjectionField,
-    CursorQueryScope, CursorRepresentation, CursorSpatialQuery, now_unix_seconds,
+    now_unix_seconds, CursorAdapter, CursorBboxQuery, CursorCodec, CursorContinuation,
+    CursorFilterExpr, CursorFilterOperator, CursorLogicalOp, CursorOrderClause,
+    CursorProjectionField, CursorQueryScope, CursorRepresentation, CursorSpatialQuery,
 };
-use crate::field_encryption::{FieldEncryptionService, open_member_value};
+use crate::field_encryption::{open_member_value, FieldEncryptionService};
 use crate::history_schema::HistorySchemaCompatibility;
 use crate::model::{
     CompiledEntity, CompiledQueryKind, CompiledQueryOperation, CompiledQuerySortDirection,
     CompiledReadPath, CompiledRegistry,
 };
-use crate::mutation::{BoundValue, strong_record_etag_for_representation};
+use crate::mutation::{strong_record_etag_for_representation, BoundValue};
 use crate::query_binding::{CursorBindingQuery, CursorBindingReferences};
 use crate::record_profile::{self, RecordRepresentation};
 
 use super::cancellation::QueryCancellationGuard;
 use super::{
-    ClaimContext, ExpectedRegistryIdentity, RegistryLockKey, RowBoundaryContext, RuntimePool,
-    SpatialBboxContext, begin_record_transaction, install_spatial_bbox_context,
-    validate_field_value,
+    begin_record_transaction, install_spatial_bbox_context, validate_field_value, ClaimContext,
+    ExpectedRegistryIdentity, RegistryLockKey, RowBoundaryContext, RuntimePool, SpatialBboxContext,
 };
 
 const MAX_SQL_LIMIT: usize = 1000;
@@ -2994,15 +2992,15 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
     use std::time::Duration;
 
-    use serde_json::{Map, json};
+    use serde_json::{json, Map};
 
     use crate::api::{
         AuthorizedRequestContext, CompiledReadQuery, ReadBboxQuery, ReadFilterExpr,
         ReadFilterOperator, ReadFilterPredicate, ReadOrderClause, ReadProjectionField,
         ReadSpatialQuery, RecordReadKind, RecordReadRequest,
     };
-    use crate::compiler::{CompileProfile, compile_project};
-    use crate::contract::{FieldTypeSource, parse_project_json};
+    use crate::compiler::{compile_project, CompileProfile};
+    use crate::contract::{parse_project_json, FieldTypeSource};
     use crate::cursor::{
         CursorAdapter, CursorBboxQuery, CursorBinding, CursorCodec, CursorContinuation,
         CursorFilterExpr, CursorFilterOperator, CursorFilterPredicate, CursorOrderClause,
@@ -3017,9 +3015,9 @@ mod tests {
     use zeroize::Zeroizing;
 
     use super::{
-        ExpectedRegistryIdentity, ReadPlan, ReadRelations, ReadServiceError, RecordEnvelope,
         cursor_binding_references, feature_value, list_sql, open_history_row_members, projection,
-        quote_identifier, temporal_instant_expression,
+        quote_identifier, temporal_instant_expression, ExpectedRegistryIdentity, ReadPlan,
+        ReadRelations, ReadServiceError, RecordEnvelope,
     };
 
     #[test]
@@ -3626,11 +3624,9 @@ mod tests {
             "JOIN registry_context.{} AS candidate_record",
             quote_identifier(&candidate_view)
         )));
-        assert!(
-            relations
-                .from_sql
-                .contains("ON candidate_record.id = source_record.\"id\"")
-        );
+        assert!(relations
+            .from_sql
+            .contains("ON candidate_record.id = source_record.\"id\""));
         assert!(relations.base_predicates.is_empty());
 
         let code = entity

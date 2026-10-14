@@ -6,13 +6,13 @@ use std::time::Duration;
 
 use deadpool_postgres::{Client, Transaction};
 use registry_platform_canonical_json::canonicalize_json;
-use serde_json::{Value, json};
-use time::{OffsetDateTime, format_description::well_known::Rfc3339};
+use serde_json::{json, Value};
+use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 use tokio_postgres::types::Type;
 use uuid::Uuid;
 
 use crate::contract::{BoundaryOperator, Operation};
-use crate::data::{FieldValue, validate_field_value as validate_data_field_value};
+use crate::data::{validate_field_value as validate_data_field_value, FieldValue};
 use crate::model::{
     CompiledActionTargetUseSource, CompiledPlanEffect, CompiledPlanMutation,
     CompiledPlanTargetBinding, CompiledRegistry,
@@ -23,7 +23,7 @@ use super::{ExpectedRegistryIdentity, PostgresKernelError, RegistryLockKey, Resu
 #[path = "proposal_context.rs"]
 mod proposal;
 pub(crate) use proposal::{
-    ProposalAuthority, ProposalAuthorityOperation, ProposalTargetPhase, begin_proposal_transaction,
+    begin_proposal_transaction, ProposalAuthority, ProposalAuthorityOperation, ProposalTargetPhase,
 };
 
 const MAX_CONTEXT_VALUE_BYTES: usize = 512;
@@ -1665,8 +1665,8 @@ mod tests {
 
     use uuid::Uuid;
 
-    use crate::compiler::{CompileProfile, compile_project};
-    use crate::contract::{Operation, parse_project_json};
+    use crate::compiler::{compile_project, CompileProfile};
+    use crate::contract::{parse_project_json, Operation};
 
     use super::*;
 
@@ -1703,39 +1703,33 @@ mod tests {
         assert!(!debug.contains("principal-canary"));
         assert!(!debug.contains("tenant-a"));
 
-        assert!(
-            ClaimContext::for_compiled(
-                &registry,
-                "entry",
-                None,
-                "operator",
-                Some("operations".to_owned()),
-                boundaries.clone(),
-            )
-            .is_err()
-        );
-        assert!(
-            ClaimContext::for_compiled(
-                &registry,
-                "entry",
-                Some("principal".to_owned()),
-                "operator",
-                Some("wrong".to_owned()),
-                boundaries.clone(),
-            )
-            .is_err()
-        );
-        assert!(
-            ClaimContext::for_compiled(
-                &registry,
-                "entry",
-                Some("principal".to_owned()),
-                "operator",
-                Some("operations".to_owned()),
-                boundaries.into_iter().rev().collect(),
-            )
-            .is_err()
-        );
+        assert!(ClaimContext::for_compiled(
+            &registry,
+            "entry",
+            None,
+            "operator",
+            Some("operations".to_owned()),
+            boundaries.clone(),
+        )
+        .is_err());
+        assert!(ClaimContext::for_compiled(
+            &registry,
+            "entry",
+            Some("principal".to_owned()),
+            "operator",
+            Some("wrong".to_owned()),
+            boundaries.clone(),
+        )
+        .is_err());
+        assert!(ClaimContext::for_compiled(
+            &registry,
+            "entry",
+            Some("principal".to_owned()),
+            "operator",
+            Some("operations".to_owned()),
+            boundaries.into_iter().rev().collect(),
+        )
+        .is_err());
     }
 
     #[test]
@@ -1758,41 +1752,33 @@ mod tests {
             Uuid::parse_str("00000000-0000-0000-0000-000000000123").expect("record UUID parses");
 
         let omitted = serde_json::Map::from_iter([("tenant".to_owned(), json!("tenant-a"))]);
-        assert!(
-            !context
-                .authorizes_record_snapshot(entity, &omitted, record_id)
-                .expect("an omitted optional boundary is an ordinary mismatch")
-        );
+        assert!(!context
+            .authorizes_record_snapshot(entity, &omitted, record_id)
+            .expect("an omitted optional boundary is an ordinary mismatch"));
 
         let nullable = serde_json::Map::from_iter([
             ("tenant".to_owned(), json!("tenant-a")),
             ("region".to_owned(), Value::Null),
         ]);
-        assert!(
-            !context
-                .authorizes_record_snapshot(entity, &nullable, record_id)
-                .expect("a null optional boundary is an ordinary mismatch")
-        );
+        assert!(!context
+            .authorizes_record_snapshot(entity, &nullable, record_id)
+            .expect("a null optional boundary is an ordinary mismatch"));
 
         let malformed_optional = serde_json::Map::from_iter([
             ("tenant".to_owned(), json!("tenant-a")),
             ("region".to_owned(), json!(7)),
         ]);
-        assert!(
-            context
-                .authorizes_record_snapshot(entity, &malformed_optional, record_id)
-                .is_err()
-        );
+        assert!(context
+            .authorizes_record_snapshot(entity, &malformed_optional, record_id)
+            .is_err());
 
         let malformed_required = serde_json::Map::from_iter([
             ("tenant".to_owned(), Value::Null),
             ("region".to_owned(), json!("north")),
         ]);
-        assert!(
-            context
-                .authorizes_record_snapshot(entity, &malformed_required, record_id)
-                .is_err()
-        );
+        assert!(context
+            .authorizes_record_snapshot(entity, &malformed_required, record_id)
+            .is_err());
     }
 
     #[test]
@@ -1866,17 +1852,15 @@ mod tests {
             vec![equals("id", "123e4567-e89b-12d3-a456-426614174000")],
         )
         .expect("the compiled canonical UUID boundary is accepted");
-        assert!(
-            ClaimContext::for_compiled(
-                &registry,
-                "entry",
-                Some("principal".to_owned()),
-                "viewer",
-                None,
-                vec![equals("id", "not-a-uuid")],
-            )
-            .is_err()
-        );
+        assert!(ClaimContext::for_compiled(
+            &registry,
+            "entry",
+            Some("principal".to_owned()),
+            "viewer",
+            None,
+            vec![equals("id", "not-a-uuid")],
+        )
+        .is_err());
     }
 
     fn observed_at_matches(boundary: RowBoundaryContext, observed_at: &str) -> bool {
@@ -2011,27 +1995,23 @@ mod tests {
                 json!("123e4567-e89b-12d3-a456-426614174000"),
             ),
         ]);
-        assert!(
-            snapshot_matches_boundaries(
-                entity,
-                &row,
-                Uuid::nil(),
-                &[
-                    equals("amount", "1.20"),
-                    equals("identifier", "123e4567-e89b-12d3-a456-426614174000"),
-                ],
-            )
-            .expect("canonical values compare")
-        );
-        assert!(
-            !snapshot_matches_boundaries(
-                entity,
-                &row,
-                Uuid::nil(),
-                &[in_values("amount", &["1.21", "0.20"])],
-            )
-            .expect("a different decimal is an ordinary mismatch")
-        );
+        assert!(snapshot_matches_boundaries(
+            entity,
+            &row,
+            Uuid::nil(),
+            &[
+                equals("amount", "1.20"),
+                equals("identifier", "123e4567-e89b-12d3-a456-426614174000"),
+            ],
+        )
+        .expect("canonical values compare"));
+        assert!(!snapshot_matches_boundaries(
+            entity,
+            &row,
+            Uuid::nil(),
+            &[in_values("amount", &["1.21", "0.20"])],
+        )
+        .expect("a different decimal is an ordinary mismatch"));
 
         for (field, spelling) in [
             ("amount", "1.2"),
@@ -2086,11 +2066,9 @@ mod tests {
             ("notes".to_owned(), json!("abcdef")),
             ("color".to_owned(), json!("red")),
         ]);
-        assert!(
-            context
-                .authorizes_record_snapshot(entity, &row, Uuid::nil())
-                .expect("the typed snapshot is compared")
-        );
+        assert!(context
+            .authorizes_record_snapshot(entity, &row, Uuid::nil())
+            .expect("the typed snapshot is compared"));
         assert!(
             validate_snapshot_boundaries(entity, &row, Uuid::nil(), context.row_boundaries())
                 .is_ok()
@@ -2144,21 +2122,15 @@ mod tests {
             binding.clone(),
         )
         .expect("grouped action target context derives from compiled action permission");
-        assert!(
-            context
-                .canonical_context()
-                .contains("\"effectIds\":[\"household-code-update\",\"household-note-update\"]")
-        );
-        assert!(
-            context
-                .canonical_context()
-                .contains("\"fields\":[\"household-code\",\"status-note\"]")
-        );
-        assert!(
-            context
-                .canonical_context()
-                .contains("\"applicationId\":\"00000000-0000-4000-8000-000000000a11\"")
-        );
+        assert!(context
+            .canonical_context()
+            .contains("\"effectIds\":[\"household-code-update\",\"household-note-update\"]"));
+        assert!(context
+            .canonical_context()
+            .contains("\"fields\":[\"household-code\",\"status-note\"]"));
+        assert!(context
+            .canonical_context()
+            .contains("\"applicationId\":\"00000000-0000-4000-8000-000000000a11\""));
         let before = serde_json::Map::from_iter([
             ("household-code".to_owned(), json!("H-001")),
             ("jurisdiction".to_owned(), json!("zone-a")),
@@ -2179,54 +2151,46 @@ mod tests {
             .expect("the grouped field plan admits only its declared field changes");
         let mut escaped_after = after.clone();
         escaped_after.insert("jurisdiction".to_owned(), json!("zone-b"));
-        assert!(
-            context
-                .authorize_rows(
-                    &registry.entities()["household"],
-                    Some(&before),
-                    &escaped_after,
-                    target_id,
-                )
-                .is_err()
-        );
+        assert!(context
+            .authorize_rows(
+                &registry.entities()["household"],
+                Some(&before),
+                &escaped_after,
+                target_id,
+            )
+            .is_err());
 
         let mut subset_effects = binding.clone();
         subset_effects.effect_ids.remove("household-note-update");
-        assert!(
-            ImmediateActionTargetContext::for_effect(
-                &registry,
-                &claims,
-                vec![equals("jurisdiction", "zone-a")],
-                subset_effects,
-            )
-            .is_err()
-        );
+        assert!(ImmediateActionTargetContext::for_effect(
+            &registry,
+            &claims,
+            vec![equals("jurisdiction", "zone-a")],
+            subset_effects,
+        )
+        .is_err());
 
         let mut superset_effects = binding.clone();
         superset_effects
             .effect_ids
             .insert("unknown-effect".to_owned());
-        assert!(
-            ImmediateActionTargetContext::for_effect(
-                &registry,
-                &claims,
-                vec![equals("jurisdiction", "zone-a")],
-                superset_effects,
-            )
-            .is_err()
-        );
+        assert!(ImmediateActionTargetContext::for_effect(
+            &registry,
+            &claims,
+            vec![equals("jurisdiction", "zone-a")],
+            superset_effects,
+        )
+        .is_err());
 
         let mut mismatched_fields = binding;
         mismatched_fields.fields.insert("jurisdiction".to_owned());
-        assert!(
-            ImmediateActionTargetContext::for_effect(
-                &registry,
-                &claims,
-                vec![equals("jurisdiction", "zone-a")],
-                mismatched_fields,
-            )
-            .is_err()
-        );
+        assert!(ImmediateActionTargetContext::for_effect(
+            &registry,
+            &claims,
+            vec![equals("jurisdiction", "zone-a")],
+            mismatched_fields,
+        )
+        .is_err());
     }
 
     fn equals(field: &str, value: &str) -> RowBoundaryContext {

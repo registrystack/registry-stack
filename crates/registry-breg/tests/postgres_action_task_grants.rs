@@ -11,20 +11,20 @@ mod postgres_harness;
 use registry_breg::{
     api::{VerifiedClaimValue, VerifiedRequestClaims},
     auth::{AuthorityClaimConfig, RegistryAuthenticator},
-    compiler::{CompileProfile, compile_project},
+    compiler::{compile_project, CompileProfile},
     contract::parse_project_json,
     task_grant::{TaskGrantBinding, TaskGrantError, TaskGrantStatusChecker},
 };
 use registry_breg_client::{BRegActionInvocationRequest, BRegIdempotencyKey, BRegProblemCode};
 use registry_platform_httputil::FetchUrlPolicy;
 use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig};
-use registry_platform_testing::{MockIdp, oidc_verifier_config};
-use serde_json::{Value, json};
+use registry_platform_testing::{oidc_verifier_config, MockIdp};
+use serde_json::{json, Value};
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::{
-        Arc,
         atomic::{AtomicBool, AtomicUsize, Ordering},
+        Arc,
     },
     time::Duration,
 };
@@ -230,11 +230,9 @@ async fn task_action_scope_subjects_replay_and_fresh_revocation_are_enforced() {
         .get_record("contacts", &id, &options)
         .await
         .unwrap();
-    assert!(
-        !serde_json::to_string(&read.value)
-            .unwrap()
-            .contains("00000000-0000-4000-8000-0000000000aa")
-    );
+    assert!(!serde_json::to_string(&read.value)
+        .unwrap()
+        .contains("00000000-0000-4000-8000-0000000000aa"));
     let refused = reqwest::Client::new()
         .post(format!(
             "{}{}?accessProfile=task-creator",

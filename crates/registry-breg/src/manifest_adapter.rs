@@ -4,11 +4,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use registry_manifest_core::{
-    AccessRights, AdmsStatus, ApplicationProfile, AuthorityManifest, CatalogManifest,
-    CodelistConcept, CodelistManifest, DataServiceManifest, DatasetManifest, DistributionManifest,
-    FieldConstraints, FieldManifest, FieldType, IdentifierManifest, LocalizedText, MetadataError,
-    MetadataManifest, PublisherManifest, RelationshipManifest, Sensitivity, ServiceManifest,
-    StandardsManifest, compile_manifest, render_base_dcat,
+    compile_manifest, render_base_dcat, AccessRights, AdmsStatus, ApplicationProfile,
+    AuthorityManifest, CatalogManifest, CodelistConcept, CodelistManifest, DataServiceManifest,
+    DatasetManifest, DistributionManifest, FieldConstraints, FieldManifest, FieldType,
+    IdentifierManifest, LocalizedText, MetadataError, MetadataManifest, PublisherManifest,
+    RelationshipManifest, Sensitivity, ServiceManifest, StandardsManifest,
 };
 use registry_platform_canonical_json::canonicalize_json;
 use serde_json::Value;
@@ -651,12 +651,12 @@ fn manifest_canonicalization_diagnostic() -> Diagnostic {
 
 #[cfg(test)]
 mod tests {
-    use registry_manifest_core::{FieldType, compile_manifest};
+    use registry_manifest_core::{compile_manifest, FieldType};
     use serde_json::json;
 
     use super::{project_field, project_manifest};
-    use crate::compiler::{CompileProfile, compile_project};
-    use crate::contract::{Classification, FieldTypeSource, parse_project_json};
+    use crate::compiler::{compile_project, CompileProfile};
+    use crate::contract::{parse_project_json, Classification, FieldTypeSource};
     use crate::model::CompiledField;
 
     #[test]

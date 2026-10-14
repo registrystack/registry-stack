@@ -7,7 +7,7 @@ use std::time::{Duration, SystemTime};
 
 use registry_platform_hooks::delivery::DeliveryCapture;
 use registry_platform_hooks::{Causation, EnvelopeLimits, EventSubject, HookEnvelope};
-use serde_json::{Map, Value, json};
+use serde_json::{json, Map, Value};
 use time::OffsetDateTime;
 use tokio_postgres::Transaction;
 use uuid::Uuid;
@@ -607,7 +607,8 @@ mod tests {
             event_type: "permit.granted",
             created_at: OffsetDateTime::from_unix_timestamp_nanos(1_767_225_600_123_000_000)
                 .expect("capture instant"),
-            record_reference: "hmac-sha256:8f14e45fceea467a9cc18b2a4b9e2a1103b41d5ad4c88c8f2a0a9ac4f4c0d2b7",
+            record_reference:
+                "hmac-sha256:8f14e45fceea467a9cc18b2a4b9e2a1103b41d5ad4c88c8f2a0a9ac4f4c0d2b7",
             record_revision: 3,
             data,
         }

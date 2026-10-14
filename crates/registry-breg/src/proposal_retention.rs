@@ -4,12 +4,12 @@
 
 #[path = "proposal_retention/activation.rs"]
 mod activation;
-pub use activation::{
-    ProposalActivationCompatibilityInventory, prepare_proposal_activation_compatibility,
-};
 pub(crate) use activation::{
     install_activation_compatibility, submission_is_compatible,
     verify_activation_compatibility_freshness,
+};
+pub use activation::{
+    prepare_proposal_activation_compatibility, ProposalActivationCompatibilityInventory,
 };
 
 use std::collections::BTreeSet;
@@ -18,20 +18,20 @@ use std::time::Duration;
 
 use registry_platform_audit::{AuditEntry, AuditProfile};
 use serde::Serialize;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use tokio_postgres::GenericClient;
 use uuid::Uuid;
 
-use crate::audit::{RegistryAudit, TerminalAudit, TerminalAuditOutcome, terminal_entry};
+use crate::audit::{terminal_entry, RegistryAudit, TerminalAudit, TerminalAuditOutcome};
 use crate::correlation::RequestCorrelation;
-use crate::history_maintenance::{HistoryMaintenanceError, lock_registry};
+use crate::history_maintenance::{lock_registry, HistoryMaintenanceError};
 use crate::model::{
     CompiledActionExecution, CompiledProposalRetentionMode, CompiledRegistry, HttpMethod,
 };
 use crate::package::PackageError;
 use crate::postgres::{
-    ConnectionConfig, ExpectedManagedCatalog, ExpectedRegistryIdentity, RegistryLockKey,
-    SqlIdentifier, verify_catalog_identity_for_catalog, verify_migration_role,
+    verify_catalog_identity_for_catalog, verify_migration_role, ConnectionConfig,
+    ExpectedManagedCatalog, ExpectedRegistryIdentity, RegistryLockKey, SqlIdentifier,
 };
 use crate::runtime_config::load_runtime_config;
 

@@ -9,18 +9,18 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use registry_platform_script::wasm::{Backend, Budgets};
-use serde_json::{Map, Value, json};
+use serde_json::{json, Map, Value};
 
 use crate::action_handler::{
-    ActionHandlerError, ActionHandlerOutcome, evaluate_admitted_action_detailed,
+    evaluate_admitted_action_detailed, ActionHandlerError, ActionHandlerOutcome,
 };
-use crate::compiler::{CompileProfile, compile_project_with_assets};
-use crate::contract::{ModuleAssetSource, parse_project_json};
+use crate::compiler::{compile_project_with_assets, CompileProfile};
+use crate::contract::{parse_project_json, ModuleAssetSource};
 use crate::model::{CompiledAction, CompiledPlanFunction, CompiledPlanFunctionKind};
 use crate::wasm_handler::MAXIMUM_WASM_MODULE_BYTES;
 use crate::wasm_runtime::{
-    MAXIMUM_RETAINED_PREPARED_MODULES, WasmExecutionBudgets, WasmHandlerRuntime, install,
-    installed, shutdown,
+    install, installed, shutdown, WasmExecutionBudgets, WasmHandlerRuntime,
+    MAXIMUM_RETAINED_PREPARED_MODULES,
 };
 #[cfg(feature = "runtime")]
 use crate::wasm_runtime::{install_configured, install_default};

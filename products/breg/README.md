@@ -5,8 +5,12 @@ REST surface are compiled from governed configuration. It is intended for
 institutional registries that need reliable writes, history, access control,
 and a safe way to evolve their schema without building a bespoke service.
 
+Start with the [standalone examples](examples/refactor/README.md) for the current
+Record type, Action, and Proposal model and its runnable PostgreSQL journeys.
+The older project and starter catalogue and its accompanying guides await conversion.
+
 The runtime has no built-in business, facility, authority, permit, or asset model.
-An entity, relationship, route, field, access profile, and event exists only
+A Record type, relationship, route, field, access profile, and event exists only
 when an active Registry package declares it. For example, an establishment's
 assignment to its operating business is an ordinary configured relationship.
 

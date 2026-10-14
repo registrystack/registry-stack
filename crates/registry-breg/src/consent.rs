@@ -12,8 +12,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::contract::{
     AccessProfileSource, ActionSource, BoundaryOperator, ConsentIssuerSource, EntitySource,
-    FieldTypeSource, MAX_CONSENT_DURATION_DAYS, MutationMode, Operation,
-    ProjectAccessProfileSource, RegistryProject, RowBoundarySource,
+    FieldTypeSource, MutationMode, Operation, ProjectAccessProfileSource, RegistryProject,
+    RowBoundarySource, MAX_CONSENT_DURATION_DAYS,
 };
 use crate::diagnostics::Diagnostic;
 use crate::generated_ddl::{quote_identifier, quote_literal};
@@ -1208,8 +1208,8 @@ pub(crate) fn index_statements(entity: &CompiledEntity) -> Vec<(String, String, 
 mod tests {
     use std::collections::BTreeMap;
 
-    use super::{RowProbeForm, probe_body, validate};
-    use crate::contract::{EntitySource, parse_project_yaml};
+    use super::{probe_body, validate, RowProbeForm};
+    use crate::contract::{parse_project_yaml, EntitySource};
 
     /// The grammar refuses `encrypted` on reference, vocabulary-code and
     /// timestamp fields, so these rules are reached only by a source that
@@ -1255,10 +1255,8 @@ mod tests {
                 "{field}"
             );
         }
-        assert!(
-            codes_with_encrypted("enrolment", "person")
-                .contains(&"breg.consent.require-key".to_owned())
-        );
+        assert!(codes_with_encrypted("enrolment", "person")
+            .contains(&"breg.consent.require-key".to_owned()));
         let unrelated = codes_with_encrypted("enrolment", "programme");
         assert!(!unrelated.contains(&"breg.consent.require-key".to_owned()));
         assert!(!unrelated.contains(&"breg.consent.record-plaintext".to_owned()));
@@ -1318,15 +1316,13 @@ mod tests {
             "record_id IN (SELECT consented.subject FROM registry_context.\"{name}\"() AS consented(subject))"
         );
         assert_eq!(predicate, probe);
-        assert!(
-            crate::membership::predicate(
-                &registry.entities()["person"],
-                "food-targeting",
-                RowProbeForm::PerKey,
-                |_| "record_id".to_owned(),
-            )
-            .is_empty()
-        );
+        assert!(crate::membership::predicate(
+            &registry.entities()["person"],
+            "food-targeting",
+            RowProbeForm::PerKey,
+            |_| "record_id".to_owned(),
+        )
+        .is_empty());
         // After the one scan, the probe is a hash lookup per row, cheaper
         // than parsing the row-boundary context, so it is tested first.
         let policy = registry

@@ -24,6 +24,20 @@ def document():
                             'resultLinks': [{'recordType': 'person', 'recordId': TARGET, 'revision': 4}]}}
 
 
+def status_document(state):
+    value = document()
+    value['state'] = state if state in ('applied', 'cancelled') else 'submitted'
+    if state != 'applied':
+        del value['application']
+    status = {'state': state, 'mode': 'automatic'}
+    if state in ('pending', 'blocked'):
+        status['automaticRetry'] = {'scheduled': state == 'pending', 'attempts': 0 if state == 'pending' else 1, 'maximumAttempts': 3}
+    if state == 'blocked':
+        status.update(reason='dependency-outage', recovery='retry')
+    value['applicationStatus'] = status
+    return value
+
+
 class ProposalResultTests(unittest.TestCase):
     def setUp(self):
         self.value = document()
@@ -75,6 +89,22 @@ class ProposalResultTests(unittest.TestCase):
         self.assertEqual(self.client.get_proposal(self.binding, ID).document['application']['resultLinks'], [])
         del self.value['application']
         self.assertNotIn('application', self.client.get_proposal(self.binding, ID).document)
+
+    def test_application_status_preserves_current_progress_and_retained_evidence_absence(self):
+        for state in ('pending', 'blocked', 'applied', 'cancelled'):
+            self.value = status_document(state)
+            with self.subTest(state=state):
+                observed = self.client.get_proposal(self.binding, ID).document
+                self.assertEqual(observed['applicationStatus'], self.value['applicationStatus'])
+                self.assertEqual(observed['submissionVersion'], 2)
+                self.assertEqual(observed['effectDigest'], DIGEST)
+        for state in ('applied', 'cancelled'):
+            self.value = status_document(state)
+            for field in ('applicationStatus', 'application', 'effectDigest'):
+                self.value.pop(field, None)
+            with self.subTest(erased_state=state):
+                observed = self.client.get_proposal(self.binding, ID).document
+                self.assertNotIn('applicationStatus', observed)
 
     def test_malformed_and_widened_receipts_are_refused(self):
         for path, value in [(('submissionVersion',), 1), (('effectDigest',), 'sha256:UPPERCASE'),

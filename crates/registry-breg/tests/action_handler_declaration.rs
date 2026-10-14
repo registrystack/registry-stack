@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Named input-bound plan functions have one closed authored contract.
 
-use registry_breg::compiler::{CompileProfile, compile_project_with_assets};
-use registry_breg::contract::{ACTION_PLAN_ABI_V1, ModuleAssetSource, parse_project_json};
-use serde_json::{Value, json};
+use registry_breg::compiler::{compile_project_with_assets, CompileProfile};
+use registry_breg::contract::{parse_project_json, ModuleAssetSource, ACTION_PLAN_ABI_V1};
+use serde_json::{json, Value};
 
 fn project() -> Value {
     json!({
@@ -86,12 +86,10 @@ fn named_function_members_are_closed() {
     let mut value = project();
     value["functions"][0]["script"] = json!("plans/person.rhai");
     let failure = parse_project_json(&serde_json::to_vec(&value).unwrap()).unwrap_err();
-    assert!(
-        failure
-            .diagnostics()
-            .iter()
-            .any(|d| d.code == "config.unknown-key" && d.path.ends_with(".script"))
-    );
+    assert!(failure
+        .diagnostics()
+        .iter()
+        .any(|d| d.code == "config.unknown-key" && d.path.ends_with(".script")));
 }
 
 #[test]
@@ -124,12 +122,10 @@ fn source_path_and_abi_fail_at_the_named_function() {
     let mut value = project();
     value["functions"][0]["source"] = json!("plans/person.wasm");
     let failure = compile(value).unwrap_err();
-    assert!(
-        failure
-            .diagnostics()
-            .iter()
-            .any(|d| d.path == "functions[id=person-plan].source")
-    );
+    assert!(failure
+        .diagnostics()
+        .iter()
+        .any(|d| d.path == "functions[id=person-plan].source"));
     let mut value = project();
     value["functions"][0]["abi"] = json!("registry.action-handler/v1");
     assert!(compile(value).is_err());
@@ -139,11 +135,9 @@ fn source_path_and_abi_fail_at_the_named_function() {
 fn missing_named_function_is_a_compile_time_refusal() {
     let mut value = project();
     value["actions"][0]["plan"]["function"] = json!("absent");
-    assert!(
-        compile(value)
-            .unwrap_err()
-            .diagnostics()
-            .iter()
-            .any(|d| d.code == "breg.action.function-unknown")
-    );
+    assert!(compile(value)
+        .unwrap_err()
+        .diagnostics()
+        .iter()
+        .any(|d| d.code == "breg.action.function-unknown"));
 }

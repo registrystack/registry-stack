@@ -15,7 +15,7 @@
 use registry_platform_audit::{
     AuditEntry, AuditKeyHasher, AuditProfile, AuditRequest, AuditWriter,
 };
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use uuid::Uuid;
 
 use crate::correlation::RequestCorrelation;

@@ -69,6 +69,19 @@ fn model_and_actions_share_the_compiled_definition_inspector() {
         inspection["recordTypes"]
     );
     assert!(model["explanation"].get("entities").is_none());
+    let relationships = model["explanation"]["recordTypes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|record_type| record_type["relationships"].as_object().unwrap().values())
+        .collect::<Vec<_>>();
+    assert!(!relationships.is_empty());
+    for relationship in relationships {
+        assert!(relationship["sourceRecordType"].is_string());
+        assert!(relationship["targetRecordType"].is_string());
+        assert!(relationship.get("sourceEntityId").is_none());
+        assert!(relationship.get("targetEntityId").is_none());
+    }
     let actions = explain("actions");
     assert_eq!(actions["explanation"]["actions"], inspection["actions"]);
     assert!(actions["revision"].as_str().unwrap().starts_with("sha256:"));
@@ -124,7 +137,36 @@ fn lifecycle_catalogue_matches_the_engine_without_compiling_a_project() {
 fn ordinary_access_route_query_and_event_catalogues_remain_executable() {
     for subject in ["access", "routes", "queries", "events"] {
         let document = explain(subject);
-        assert!(document["explanation"].is_object());
+        let explanation = &document["explanation"];
+        assert!(explanation.is_object());
+        match subject {
+            "access" => {
+                assert!(explanation["recordTypes"].is_array());
+                assert!(explanation.get("entities").is_none());
+                for entry in explanation["routes"]["entries"].as_array().unwrap() {
+                    assert!(entry["recordType"].is_string());
+                    assert!(entry.get("entityId").is_none());
+                }
+            }
+            "routes" => {
+                let routes = explanation["routes"].as_array().unwrap();
+                assert!(routes.iter().any(|route| route["type"] == "record"));
+                for route in routes.iter().filter(|route| route["type"] == "record") {
+                    assert!(route["recordType"].is_string());
+                    assert!(route.get("entityId").is_none());
+                }
+            }
+            "queries" => {
+                let operations = explanation["operations"].as_array().unwrap();
+                assert!(!operations.is_empty());
+                for operation in operations {
+                    assert!(operation["recordType"].is_string());
+                    assert!(operation.get("entity").is_none());
+                }
+            }
+            "events" => {}
+            _ => unreachable!(),
+        }
         assert!(document["revision"]
             .as_str()
             .unwrap()
@@ -173,4 +215,41 @@ fn generated_proposal_paths_have_no_target_condition_operation() {
     assert!(!paths
         .keys()
         .any(|path| path.contains("correct-address") && path.contains("condition")));
+}
+
+#[test]
+fn record_schema_and_openapi_use_breg_terms_without_respelling_registry_record_v1() {
+    let registry = compiled();
+    let schema: Value = serde_json::from_slice(
+        &registry
+            .artifacts()
+            .get("generated/schemas/directory-entry.schema.json")
+            .unwrap()
+            .bytes,
+    )
+    .unwrap();
+    assert_eq!(schema["$id"], "urn:breg:record-type:directory-entry");
+    let openapi: Value = serde_json::from_slice(
+        &registry
+            .artifacts()
+            .get("generated/openapi.json")
+            .unwrap()
+            .bytes,
+    )
+    .unwrap();
+    let operation = &openapi["paths"]["/v1/records/directory-entries/{record_id}"]["get"];
+    assert_eq!(operation["x-registry-recordType"], "directory-entry");
+    assert_eq!(
+        operation["x-registry-responseRecordType"],
+        "directory-entry"
+    );
+    assert!(operation.get("x-registry-entity").is_none());
+    assert!(operation.get("x-registry-responseEntity").is_none());
+    let metadata = &operation["responses"]["200"]["content"]["application/json"]["schema"]
+        ["properties"]["meta"]["properties"];
+    assert_eq!(metadata["entityTypeIdentifier"]["const"], "directory-entry");
+    assert!(metadata.get("recordType").is_none());
+    let problem = &openapi["components"]["schemas"]["Problem"]["properties"];
+    assert!(problem["recordType"].is_object());
+    assert!(problem.get("entityId").is_none());
 }

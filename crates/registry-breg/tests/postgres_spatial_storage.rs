@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use registry_breg::compiler::{CompileProfile, compile_project, compile_project_with_assets};
-use registry_breg::contract::{ModuleAssetSource, parse_project_json};
+use registry_breg::compiler::{compile_project, compile_project_with_assets, CompileProfile};
+use registry_breg::contract::{parse_project_json, ModuleAssetSource};
 use registry_breg::generated_ddl::{
     DdlObjectOwner, DdlPolicyRole, DdlStatementKind, TablePrivilege,
 };
@@ -50,11 +50,9 @@ fn bbox_grant_derives_postgis_projection_policy_and_inventory() {
         .iter()
         .find(|table| table.entity_id == "site")
         .expect("site table inventory exists");
-    assert!(
-        table
-            .spatial_bbox_privileges
-            .contains(&TablePrivilege::Select)
-    );
+    assert!(table
+        .spatial_bbox_privileges
+        .contains(&TablePrivilege::Select));
     assert!(table.policies.iter().any(|policy| {
         policy.applies_to == DdlPolicyRole::Runtime
             && policy.command.as_sql() == "SELECT"
@@ -112,11 +110,9 @@ fn bbox_grant_derives_postgis_projection_policy_and_inventory() {
         .expect("candidate ID view is inventoried");
     assert_eq!(candidate_view.schema, "registry_context");
     assert_eq!(candidate_view.owner, DdlObjectOwner::SpatialBbox);
-    assert!(
-        candidate_view
-            .runtime_privileges
-            .contains(&TablePrivilege::Select)
-    );
+    assert!(candidate_view
+        .runtime_privileges
+        .contains(&TablePrivilege::Select));
     let candidate_sql = registry
         .ddl()
         .statements
@@ -273,11 +269,9 @@ fn bbox_derived_fields_grant_only_needed_view_inventory() {
         .filter(|view| view.schema == "registry_source")
         .collect::<Vec<_>>();
     assert!(!source_views.is_empty());
-    assert!(
-        source_views
-            .iter()
-            .all(|view| view.owner == DdlObjectOwner::Migration)
-    );
+    assert!(source_views
+        .iter()
+        .all(|view| view.owner == DdlObjectOwner::Migration));
 
     let derived_view = registry
         .ddl()
@@ -337,12 +331,10 @@ fn bbox_cross_entity_derived_dependency_keeps_ordinary_view_inventory() {
         .find(|table| table.entity_id == "zone")
         .expect("zone table inventory exists");
     assert!(zone_table.spatial_bbox_privileges.is_empty());
-    assert!(
-        zone_table
-            .policies
-            .iter()
-            .all(|policy| policy.applies_to != DdlPolicyRole::SpatialBbox)
-    );
+    assert!(zone_table
+        .policies
+        .iter()
+        .all(|policy| policy.applies_to != DdlPolicyRole::SpatialBbox));
 
     let site_table = registry
         .ddl()
@@ -404,14 +396,12 @@ fn crs84_point_without_bbox_keeps_non_gis_ddl_and_inventory_stable() {
     let script = registry.ddl().script();
     assert!(!script.contains("registry_spatial_ext"));
     assert!(!script.contains("breg_spgeom_"));
-    assert!(
-        registry
-            .ddl()
-            .tables
-            .iter()
-            .flat_map(|table| table.policies.iter())
-            .all(|policy| policy.applies_to == DdlPolicyRole::Public)
-    );
+    assert!(registry
+        .ddl()
+        .tables
+        .iter()
+        .flat_map(|table| table.policies.iter())
+        .all(|policy| policy.applies_to == DdlPolicyRole::Public));
 }
 
 #[cfg(feature = "postgres-test")]
@@ -428,10 +418,10 @@ mod live_postgres {
         compiled_spatial_registry, postgres_harness::TestDatabase,
     };
     use registry_breg::postgres::{
-        ClaimContext, ExpectedManagedCatalog, RegistryLockKey, RegistryStateTestIdentity,
-        SqlIdentifier, begin_record_transaction, initialize_registry_state_for_catalog_test,
+        begin_record_transaction, initialize_registry_state_for_catalog_test,
         install_compiled_schema, provision_postgis_prerequisites,
-        verify_catalog_identity_for_catalog, verify_postgis,
+        verify_catalog_identity_for_catalog, verify_postgis, ClaimContext, ExpectedManagedCatalog,
+        RegistryLockKey, RegistryStateTestIdentity, SqlIdentifier,
     };
     use tokio_postgres::GenericClient;
 
@@ -1035,8 +1025,8 @@ mod live_postgres {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn real_postgres_bbox_role_can_read_cross_entity_derived_dependency_with_same_profile_rls()
-     {
+    async fn real_postgres_bbox_role_can_read_cross_entity_derived_dependency_with_same_profile_rls(
+    ) {
         let installed = install_spatial_database_with_registry(
             2,
             compiled_spatial_cross_entity_derived_registry(),

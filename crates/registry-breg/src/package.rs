@@ -3116,6 +3116,10 @@ fn validate_declared_package_assets(
                 .flat_map(|entity| entity.hooks.iter())
                 .filter_map(hook_handler_source_path),
         )
+        .chain(
+            crate::proposal_hooks::source_hooks(&project.actions)
+                .filter_map(|(_, hook)| crate::proposal_hooks::handler_source_path(&hook.handler)),
+        )
         .collect::<BTreeSet<_>>();
     let supplied_project = project_assets
         .iter()
@@ -3138,6 +3142,10 @@ fn validate_declared_package_assets(
             .iter()
             .map(|function| function.source.as_str())
             .collect::<BTreeSet<_>>();
+        declared.extend(
+            crate::proposal_hooks::source_hooks(&module.actions)
+                .filter_map(|(_, hook)| crate::proposal_hooks::handler_source_path(&hook.handler)),
+        );
         for entity in &module.entities {
             declared.extend(entity.derived.iter().map(|derived| derived.sql.as_str()));
             declared.extend(entity.hooks.iter().filter_map(hook_handler_source_path));

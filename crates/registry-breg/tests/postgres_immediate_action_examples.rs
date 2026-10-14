@@ -12,27 +12,27 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use postgres_harness::TestDatabase;
-use registry_breg::CompiledRegistry;
-use registry_breg::compiler::{CompileProfile, compile_project_with_assets};
-use registry_breg::contract::{RegistryProject, parse_module_yaml, parse_project_yaml};
+use registry_breg::compiler::{compile_project_with_assets, CompileProfile};
+use registry_breg::contract::{parse_module_yaml, parse_project_yaml, RegistryProject};
 use registry_breg::fixtures::{
-    FixtureError, FixtureModuleSource, FixtureSourceFile, PostgresFixtureTestRunner,
-    SchemaTestSources, ValidatedFixtureJourneys, validate_fixture_journeys,
-    validate_schema_test_receipt_for_package,
+    validate_fixture_journeys, validate_schema_test_receipt_for_package, FixtureError,
+    FixtureModuleSource, FixtureSourceFile, PostgresFixtureTestRunner, SchemaTestSources,
+    ValidatedFixtureJourneys,
 };
 use registry_breg::package::{
-    FIXTURE_JOURNEYS_PATH, PackageBuildRequest, PackageLoadContext, PackageMigrationPlanInput,
-    PackageModuleSource, PackageSourceFile, PreparedPackage, VerifiedPackage, load_package,
-    prepare_package,
+    load_package, prepare_package, PackageBuildRequest, PackageLoadContext,
+    PackageMigrationPlanInput, PackageModuleSource, PackageSourceFile, PreparedPackage,
+    VerifiedPackage, FIXTURE_JOURNEYS_PATH,
 };
 use registry_breg::postgres::{
-    ExpectedManagedCatalog, RegistryStateTestIdentity, initialize_compiled_registry_state_for_test,
-    install_compiled_schema, managed_schema_fingerprint,
+    initialize_compiled_registry_state_for_test, install_compiled_schema,
+    managed_schema_fingerprint, ExpectedManagedCatalog, RegistryStateTestIdentity,
 };
-use registry_breg::startup::{PreparedServer, prepare_with_connection_config_for_test};
+use registry_breg::startup::{prepare_with_connection_config_for_test, PreparedServer};
+use registry_breg::CompiledRegistry;
 use registry_platform_crypto::PrivateJwk;
-use registry_platform_testing::{MockIdp, fixtures as testing_fixtures, jwks_from_private_jwk};
-use serde_json::{Value, json};
+use registry_platform_testing::{fixtures as testing_fixtures, jwks_from_private_jwk, MockIdp};
+use serde_json::{json, Value};
 use tempfile::TempDir;
 
 const AUDIENCE: &str = "urn:breg:immediate-action-examples";
@@ -295,7 +295,7 @@ struct ExampleModule {
 impl ExampleSources {
     fn load(name: &str) -> Self {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../products/breg/fixtures")
+            .join("tests/fixtures/native-models/products/breg/fixtures")
             .join(name);
         let project_bytes = fs::read(root.join("registry.yaml"))
             .expect("action example registry source is readable");
@@ -432,14 +432,13 @@ impl TestPackage {
         {
             String::new()
         } else {
-            assert!(
-                self.package
-                    .registry()
-                    .event_deliveries()
-                    .deliveries
-                    .iter()
-                    .all(|delivery| delivery.destination_id.as_deref() == Some("facility-events"))
-            );
+            assert!(self
+                .package
+                .registry()
+                .event_deliveries()
+                .deliveries
+                .iter()
+                .all(|delivery| delivery.destination_id.as_deref() == Some("facility-events")));
             write_private(&secrets.join("event-key"), &[0x65; 32]);
             "eventDestinations:
   facility-events:
@@ -1216,7 +1215,7 @@ async fn assert_immediate_action_success_bodies(
         );
         for result in results.values() {
             assert!(result.get("recordId").and_then(Value::as_str).is_some());
-            assert!(result.get("entity").and_then(Value::as_str).is_some());
+            assert!(result.get("recordType").and_then(Value::as_str).is_some());
             assert!(result.get("revision").and_then(Value::as_u64).is_some());
             assert_eq!(result.as_object().expect("result is object").len(), 3);
         }

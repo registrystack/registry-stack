@@ -6,13 +6,13 @@
 
 #![cfg(feature = "runtime")]
 
-use registry_breg::CompiledRegistry;
-use registry_breg::compiler::{CompileProfile, compile_project, module_digest};
+use registry_breg::compiler::{compile_project, module_digest, CompileProfile};
 use registry_breg::contract::{parse_module_yaml, parse_project_yaml};
 use registry_breg::package::{
-    CompiledRegistryChangeClass, CompiledRegistryChangeCode, CompiledRegistryChangeSet,
     change_set_to_applicable_migration_plan, compiled_registry_change_set,
+    CompiledRegistryChangeClass, CompiledRegistryChangeCode, CompiledRegistryChangeSet,
 };
+use registry_breg::CompiledRegistry;
 
 const CONSENT_PROJECT: &str = include_str!(
     "fixtures/native-models/products/breg/fixtures/consent-person-registry/registry.yaml"
@@ -93,12 +93,10 @@ fn a_withdraw_action_that_starts_accepting_given_is_a_reviewed_action_change() {
             CompiledRegistryChangeClass::AccessOrDisclosureChange
         )
     );
-    assert!(
-        !changes
-            .changes
-            .iter()
-            .any(|change| change.code == CompiledRegistryChangeCode::FieldVocabularyCodesAdded)
-    );
+    assert!(!changes
+        .changes
+        .iter()
+        .any(|change| change.code == CompiledRegistryChangeCode::FieldVocabularyCodesAdded));
     assert!(
         change_set_to_applicable_migration_plan(&changes).is_err(),
         "a withdraw action that can now give consent needs review"

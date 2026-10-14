@@ -31,6 +31,7 @@ pub struct DirectClaimExpectation {
 #[serde(rename_all = "camelCase")]
 pub struct AuthorityClaimUse {
     pub profile_id: String,
+    #[serde(rename = "recordType")]
     pub entity_id: String,
     pub surface: String,
     pub field_id: String,
@@ -42,7 +43,7 @@ pub struct AuthorityClaimUse {
 pub enum AuthorityInventoryError {
     #[error("a compiled authenticated grant has no principal claim")]
     PrincipalClaimMissing,
-    #[error("a compiled authority target entity does not exist")]
+    #[error("a compiled authority target record type does not exist")]
     TargetEntityNotCompiled,
     #[error("a compiled row boundary field does not exist")]
     BoundaryFieldNotCompiled,
@@ -67,7 +68,7 @@ pub fn authority_inventory(
                 Some(profile.principal_claim.as_str()),
                 &profile.required_purposes,
             )?;
-            let surface = format!("entities/{}/profiles/{}", entity.id, profile.id);
+            let surface = format!("recordTypes/{}/profiles/{}", entity.id, profile.id);
             inventory.boundaries(entity, &profile.id, &surface, &profile.row_boundaries)?;
             for lookup in profile
                 .lookups

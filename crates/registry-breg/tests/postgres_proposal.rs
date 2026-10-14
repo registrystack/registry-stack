@@ -84,7 +84,7 @@ fn registry_source(automatic: bool) -> Value {
                 {"id":"value","type":"string","required":true,"maximumLength":64,"classification":"internal"}],
             "commitGuards":{"targets":[{"input":"target","revision":"unchanged"}]},
             "plan":{"type":"fixed","effects":[{"id":"name","target":{"fromInput":"target"},"operation":"patch","set":{"name":{"fromInput":"value"}}}]}}],
-        "accessProfiles":[{"id":"clerk","default":true,"actorKind":"human","principalClaim":"sub","requiredScopes":["proposal:manage"],
+        "accessProfiles":[{"id":"clerk","default":true,"principalClaim":"sub","requiredScopes":["proposal:manage"],
             "requiredPurposes":["registry-administration"],"permissions":{
                 "records":[{"recordType":"target","operations":["create","get","list"],"readableFields":["name","jurisdiction"],
                     "writableFields":["name","jurisdiction"],"rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]}],
@@ -2587,13 +2587,15 @@ async fn compatibility_inventory_refuses_rebound_frozen_review_subject_context_a
         &next,
     )
     .await;
-    let saved=fixture.database.admin.query_one("SELECT p.snapshot,q.create_request,q.expected_submission_digest,r.completed_at
+    let saved=fixture.database.admin.query_one("SELECT p.snapshot,q.create_request,q.expected_submission_digest,r.completed_at,q.accepted_binding,r.result
         FROM registry_internal.registry_proposal_submissions p JOIN registry_internal.registry_proposal_review_submissions q USING(action_id,proposal_id,submission_version)
         JOIN registry_internal.registry_proposal_review_results r USING(action_id,proposal_id,submission_version)",&[]).await.unwrap();
     let original: Value = saved.get(0);
     let create: Value = saved.get(1);
     let expected: String = saved.get(2);
     let completed: chrono::DateTime<chrono::Utc> = saved.get(3);
+    let accepted_binding: Value = saved.get(4);
+    let retained_result: Value = saved.get(5);
     let packet_key = registry_breg::proposal_workflow::ProposalKey::new(
         registry_breg::proposal_workflow::EntityId::new("correct-name").unwrap(),
         registry_breg::proposal_workflow::RecordId::new(submitted.id()).unwrap(),
@@ -2666,11 +2668,23 @@ async fn compatibility_inventory_refuses_rebound_frozen_review_subject_context_a
         ),
         (
             "context",
-            json!({"strategy":"source","binding":{"reference":"breg:wrong:correct-name:other:1"}}),
+            json!({"mode":"current-source","binding":{"reference":"breg:wrong:correct-name:other:1"}}),
+        ),
+        ("policy-id", json!("other-policy")),
+        ("policy-version", json!("2")),
+        (
+            "policy-digest",
+            json!(registry_review_client::ContentDigest::for_bytes(
+                b"other-policy"
+            )),
         ),
     ] {
         let mut altered = create.clone();
-        altered[field] = value;
+        if let Some(policy_field) = field.strip_prefix("policy-") {
+            altered["policy"][policy_field] = value;
+        } else {
+            altered[field] = value;
+        }
         let request: registry_review_client::ReviewCreateRequest =
             serde_json::from_value(altered.clone()).unwrap();
         let recomputed = registry_review_client::submission_digest(
@@ -2679,8 +2693,24 @@ async fn compatibility_inventory_refuses_rebound_frozen_review_subject_context_a
             &request,
         )
         .unwrap();
-        fixture.database.admin.execute("UPDATE registry_internal.registry_proposal_review_submissions SET create_request=$1,expected_submission_digest=$2",
-            &[&altered,&recomputed.as_str()]).await.unwrap();
+        // Keep the local digest evidence internally consistent: the frozen
+        // expected policy must independently reject the substituted request.
+        let mut altered_binding = accepted_binding.clone();
+        altered_binding["submissionDigest"] = json!(recomputed);
+        let mut altered_result = retained_result.clone();
+        altered_result["submissionDigest"] = json!(recomputed);
+        fixture.database.admin.execute("UPDATE registry_internal.registry_proposal_review_submissions SET create_request=$1,expected_submission_digest=$2,accepted_binding=$3",
+            &[&altered,&recomputed.as_str(),&altered_binding]).await.unwrap();
+        fixture
+            .database
+            .admin
+            .execute(
+                "UPDATE registry_internal.registry_proposal_review_results SET result=$1",
+                &[&altered_result],
+            )
+            .await
+            .unwrap();
+        let calls = authority.counts();
         assert!(
             registry_breg::proposal_retention::prepare_proposal_activation_compatibility(
                 &fixture.pool,
@@ -2693,7 +2723,21 @@ async fn compatibility_inventory_refuses_rebound_frozen_review_subject_context_a
             .is_err(),
             "rebound {field} refuses"
         );
-        fixture.database.admin.execute("UPDATE registry_internal.registry_proposal_review_submissions SET create_request=$1,expected_submission_digest=$2",&[&create,&expected]).await.unwrap();
+        assert_eq!(
+            authority.counts(),
+            calls,
+            "reject {field} before remote proof"
+        );
+        fixture.database.admin.execute("UPDATE registry_internal.registry_proposal_review_submissions SET create_request=$1,expected_submission_digest=$2,accepted_binding=$3",&[&create,&expected,&accepted_binding]).await.unwrap();
+        fixture
+            .database
+            .admin
+            .execute(
+                "UPDATE registry_internal.registry_proposal_review_results SET result=$1",
+                &[&retained_result],
+            )
+            .await
+            .unwrap();
     }
     fixture.database.admin.execute("UPDATE registry_internal.registry_proposal_review_results SET completed_at=completed_at+interval '1 microsecond'",&[]).await.unwrap();
     assert!(
@@ -2893,20 +2937,15 @@ async fn incompatible_or_expired_inventory_cannot_activate_or_change_proposals_a
 }
 
 #[test]
-fn automatic_recovery_grants_require_explicit_human_profiles() {
-    for actor in [None, Some("service"), Some("agent")] {
+fn automatic_recovery_grants_refuse_known_service_and_agent_profiles() {
+    compile(registry_source(true));
+    for actor in ["service", "agent"] {
         let mut source = registry_source(true);
-        if let Some(actor) = actor {
-            source["accessProfiles"][0]["actorKind"] = json!(actor);
-        } else {
-            source["accessProfiles"][0]
-                .as_object_mut()
-                .unwrap()
-                .remove("actorKind");
-        }
+        source["accessProfiles"][0]["actorKind"] = json!(actor);
+        source["accessProfiles"][0]["requesterClients"] = json!(["synthetic-recovery-client"]);
         let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
         let error = compile_project(&project, &[], CompileProfile::Authoring).unwrap_err();
-        assert!(format!("{error:?}").contains("breg.proposal.automatic-recovery-human-required"));
+        assert!(format!("{error:?}").contains("breg.proposal.automatic-recovery-requires-human"));
     }
 }
 
@@ -2916,7 +2955,6 @@ async fn exact_application_status_exposes_bounded_block_and_human_recovery() {
     let mut service = source["accessProfiles"][0].clone();
     service["id"] = json!("coordinator");
     service["default"] = json!(false);
-    service["actorKind"] = json!("service");
     service["permissions"]["proposals"][0]["operations"] = json!(["get"]);
     service["permissions"]["proposals"][0]["writableAttachments"] = json!([]);
     service["permissions"]

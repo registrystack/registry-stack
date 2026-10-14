@@ -10,25 +10,24 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::body::{Body, to_bytes};
+use axum::body::{to_bytes, Body};
 use axum::http::{Method, Request, Response, StatusCode};
 
 use postgres_harness::TestDatabase;
-use registry_breg::CompiledRegistry;
 use registry_breg::api::{
-    HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedRequestClaims, router,
+    router, HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedRequestClaims,
 };
-use registry_breg::compiler::{CompileProfile, compile_project, module_digest};
+use registry_breg::compiler::{compile_project, module_digest, CompileProfile};
 use registry_breg::contract::{parse_module_json, parse_project_yaml};
 use registry_breg::cursor::CursorCodec;
 use registry_breg::history_erasure::{
-    HistoryErasureOutcome, HistoryErasureRequest, HistoryErasureTimeouts,
-    RecordHistoryErasureTarget, erase_record_history,
+    erase_record_history, HistoryErasureOutcome, HistoryErasureRequest, HistoryErasureTimeouts,
+    RecordHistoryErasureTarget,
 };
 use registry_breg::history_schema::HistorySchemaDescriptor;
 use registry_breg::migration::{
-    ActivationDeployment, ApplyPrecondition, ApplyRoles, ApplyTimeouts,
-    ApplyVerifiedPackageRequest, MigrationError, apply_verified_package,
+    apply_verified_package, ActivationDeployment, ApplyPrecondition, ApplyRoles, ApplyTimeouts,
+    ApplyVerifiedPackageRequest, MigrationError,
 };
 use registry_breg::migration_plan::{
     AffectedRowBounds, ArtifactDigestBinding, MigrationRehearsalReceipt, RehearsalFixture,
@@ -38,20 +37,21 @@ use registry_breg::migration_plan::{
     ReviewedMigrationStepDescriptor,
 };
 use registry_breg::package::{
-    CompiledRegistryChangeClass, CompiledRegistryChangeCode, PackageBuildRequest,
-    PackageLoadContext, PackageMigrationPlanInput, PackageModuleSource, PackageSourceFile,
-    VerifiedPackage, compiled_registry_change_set, load_package, prepare_package,
+    compiled_registry_change_set, load_package, prepare_package, CompiledRegistryChangeClass,
+    CompiledRegistryChangeCode, PackageBuildRequest, PackageLoadContext, PackageMigrationPlanInput,
+    PackageModuleSource, PackageSourceFile, VerifiedPackage,
 };
 use registry_breg::postgres::{
-    ExpectedManagedCatalog, ExpectedRegistryIdentity, PostgresRecordMutationService,
-    PostgresRecordReadService, PostgresRevisionReadService, RegistryLockKey,
-    RegistryStateTestIdentity, initialize_registry_state_for_catalog_test, install_compiled_schema,
-    managed_schema_fingerprint,
+    initialize_registry_state_for_catalog_test, install_compiled_schema,
+    managed_schema_fingerprint, ExpectedManagedCatalog, ExpectedRegistryIdentity,
+    PostgresRecordMutationService, PostgresRecordReadService, PostgresRevisionReadService,
+    RegistryLockKey, RegistryStateTestIdentity,
 };
+use registry_breg::CompiledRegistry;
 use registry_platform_audit::AuditProfile;
 use registry_platform_canonical_json::canonicalize_json;
 use serde::Serialize;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use tower::Service as _;
 use uuid::Uuid;
