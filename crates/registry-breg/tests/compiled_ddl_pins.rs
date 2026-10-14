@@ -20,6 +20,9 @@
 //! compiled artifact revision. These remain exact pins, not drift exemptions.
 //! Removing the retired planner Problem and the attachment uploader member
 //! from OpenAPI moves artifact revisions without changing SQL or Action pins.
+//! The portable Action contract and its schema are now packaged alongside the
+//! compiled inventory. Their addition changes the three Action fixture artifact
+//! revisions while preserving their SQL and Action definition fingerprints.
 
 use registry_breg::compiler::{compile_project, CompileProfile};
 use registry_breg::contract::{parse_module_yaml, parse_project_yaml};
@@ -53,7 +56,7 @@ const FIXTURES: &[Fixture] = &[
             "../../../products/breg/fixtures/asset-registration-actions/modules/asset-registration-actions-core/module.yaml"
         )),
         ddl_sha256: "dfb8cefaa8059cda62c5d2d39bb14fcbf33f589061ca6fe81402e948048caaf6",
-        revision: "sha256:b216dca850f889856d075e105d1004ac26bcfa3f10c854a3e6fa327f3dad04ea",
+        revision: "sha256:eb25be6a3ab809af482d53f760875492c86614bcb41c17fc05e6a666c2b3d243",
     },
     Fixture {
         name: "facility-registry-actions",
@@ -64,7 +67,7 @@ const FIXTURES: &[Fixture] = &[
             "../../../products/breg/fixtures/facility-registry-actions/modules/facility-registry-actions-core/module.yaml"
         )),
         ddl_sha256: "603a8c6c8ab8500fe5beff9b78657c667de7e90c91578700091086e2f1a82380",
-        revision: "sha256:624f1d72563e3db646118b922f50d4c37db99e550ec9669f1f17d1e0a830b3a8",
+        revision: "sha256:83081da3719f9edf298148b2557081300574360761abbe51d98fb647ea963160",
     },
     Fixture {
         name: "household-contact-actions",
@@ -75,7 +78,7 @@ const FIXTURES: &[Fixture] = &[
             "../../../products/breg/fixtures/household-contact-actions/modules/household-contact-actions-core/module.yaml"
         )),
         ddl_sha256: "451d62c09089364c81f343acfbc175f82db449f00446886fedc6e8cc03ef86ad",
-        revision: "sha256:9fa5ad05c85cb03808de910b917ff0f877dcb2446f5e2e89072c145e2b45924d",
+        revision: "sha256:1611b3566ed44885e6285682ee4e9bb9b532d89b6fe81677016d7878ffd19cf0",
     },
 ];
 
