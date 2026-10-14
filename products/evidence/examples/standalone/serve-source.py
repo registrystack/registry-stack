@@ -35,12 +35,17 @@ def main():
             self.wfile.write(data)
 
         def do_GET(self):
+            target = urlsplit(self.path)
+            # Readiness reveals no records and stays usable before credentials.
+            if target.path == "/healthz" and not target.query:
+                self.reply(200, {"status": "ready"})
+                return
             if token is not None:
                 supplied = self.headers.get("Authorization", "").encode()
                 if not hmac.compare_digest(supplied, b"Bearer " + token):
                     self.reply(401, {"error": "source.denied"})
                     return
-            path = urlsplit(self.path).path
+            path = target.path
             if len(path) > 256:
                 self.reply(400, {"error": "source.invalid-request"})
                 return
