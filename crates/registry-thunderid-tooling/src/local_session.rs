@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 use std::io::Read;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
@@ -23,6 +23,18 @@ fn cancelled_error() -> ToolingError {
     ToolingError::CommandFailed {
         step: "local issuer startup was cancelled",
     }
+}
+
+/// Identify the failed upstream setup phase without accepting any command
+/// output or secret value that could be relayed into the caller's log.
+fn setup_failure_status(is_setup: bool, status: ExitStatus) -> Option<String> {
+    if status.success() || !is_setup {
+        return None;
+    }
+    Some(match status.code() {
+        Some(code) => format!("ThunderID setup one-shot exited with status {code}"),
+        None => "ThunderID setup one-shot terminated without a numeric exit status".to_owned(),
+    })
 }
 
 struct DockerRunner<'a> {
@@ -141,7 +153,7 @@ impl CommandRunner for DockerRunner<'_> {
         let deadline = Instant::now() + timeout;
         let result = loop {
             match child.try_wait() {
-                Ok(Some(status)) => break Ok(status.success()),
+                Ok(Some(status)) => break Ok(status),
                 Ok(None) => {}
                 Err(_) => {
                     break Err(ToolingError::CommandFailed {
@@ -173,7 +185,13 @@ impl CommandRunner for DockerRunner<'_> {
             }
         }
         let bytes = drain.join().unwrap_or_default();
-        if diagnostics && !result.as_ref().is_ok_and(|success| *success) {
+        if let Ok(status) = result.as_ref() {
+            let is_setup = args.last().is_some_and(|arg| arg == "./setup.sh");
+            if let Some(diagnostic) = setup_failure_status(is_setup, *status) {
+                eprintln!("{diagnostic}");
+            }
+        }
+        if diagnostics && !result.as_ref().is_ok_and(|status| status.success()) {
             let diagnostic = diagnostic_drain
                 .and_then(|drain| drain.join().ok())
                 .unwrap_or_default();
@@ -189,8 +207,9 @@ impl CommandRunner for DockerRunner<'_> {
         } else if let Some(drain) = diagnostic_drain {
             let _ = drain.join();
         }
+        let success = result?.success();
         Ok(CommandOutcome {
-            success: result?,
+            success,
             container_ids: String::from_utf8(bytes).unwrap_or_default(),
         })
     }
@@ -517,6 +536,37 @@ mod tests {
             Err(ToolingError::Filesystem { .. })
         ));
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn setup_failure_reports_only_its_numeric_status() {
+        let status = Command::new("sh")
+            .args(["-c", "exit 37"])
+            .status()
+            .expect("the test shell runs");
+        let secret = "synthetic-admin-password-never-reported";
+
+        // The formatter accepts only the phase bit and process status. It has
+        // no channel for command output, arguments, environment or values.
+        let diagnostic = setup_failure_status(true, status).expect("setup failure is diagnosed");
+
+        assert_eq!(diagnostic, "ThunderID setup one-shot exited with status 37");
+        assert!(!diagnostic.contains(secret));
+    }
+
+    #[test]
+    fn setup_status_diagnostic_is_limited_to_failed_setup_one_shots() {
+        let failed = Command::new("sh")
+            .args(["-c", "exit 1"])
+            .status()
+            .expect("the test shell runs");
+        let succeeded = Command::new("sh")
+            .args(["-c", "exit 0"])
+            .status()
+            .expect("the test shell runs");
+
+        assert!(setup_failure_status(false, failed).is_none());
+        assert!(setup_failure_status(true, succeeded).is_none());
     }
     #[test]
     fn jwks_without_the_pinned_signing_algorithm_is_refused() {
