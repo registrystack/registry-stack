@@ -94,6 +94,7 @@ CRATE = "registry-breg"
 INVOCATION_SOURCES = (
     ".github/workflows/ci.yml",
     "products/breg/scripts/check-client-contract.sh",
+    "products/breg/scripts/check-contracts.sh",
     "products/breg/scripts/test-attachment-s3.sh",
     "products/breg/scripts/test-postgres-tls.sh",
     "products/breg/scripts/test-postgres.sh",
@@ -131,8 +132,7 @@ KNOWN_UNSELECTED: dict[str, str] = {
     "src/postgres/interlock.rs::failed_resume_and_ddl_timeout_are_fail_closed_on_real_postgres": _NO_LIBRARY_RUN,
     "src/postgres/mod.rs::mod stored_bytes_probe": _NO_LIBRARY_RUN,
     "src/postgres/revision_read.rs::mod tests": _NO_LIBRARY_RUN,
-    "src/request_store.rs::mod tests": _NO_LIBRARY_RUN,
-    "src/review_store.rs::mod transaction_instant_tests": _NO_LIBRARY_RUN,
+    "src/proposal_store.rs::mod tests": _NO_LIBRARY_RUN,
     "src/task_grant/tests.rs::write_idempotency_separates_grants_without_changing_read_authority": _NO_LIBRARY_RUN,
 }
 

@@ -1014,7 +1014,7 @@ class RepositoryTests(unittest.TestCase):
             )
         )
         for key in (
-            "tests/action_evidence_compiler.rs::published_authoring_schema_accepts_farmer_and_rejects_every_other_abi",
+            "tests/action_evidence_compiler.rs::published_authoring_schema_accepts_evidence_action_and_rejects_every_other_abi",
             "src/lib.rs::mod schema",
             "src/runtime_config.rs::mod schema_tests",
         ):
