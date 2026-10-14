@@ -1,7 +1,7 @@
-//! Local access-policy and client authoring.
+//! Governed target access profiles and local client credentials.
 //!
-//! Governed, reviewable policy and public client membership live under
-//! `access/`. The only private client artifact is the locally generated key
+//! Complete access profiles live in the target authority document. Public client
+//! membership lives under `access/clients/`. The only private client artifact is the locally generated key
 //! under `.evidence/clients/<id>/private.jwk`; revoking a client removes that
 //! directory so no private state outlives the client it authenticated.
 
@@ -17,26 +17,23 @@ use std::{
 use anyhow::{anyhow, bail, Context as _, Result};
 use clap::{Args, Subcommand};
 use registry_evidence_authoring::formats::{
-    decode_authored, envelope_lines, read_authored, ACCESS_CLIENT, ACCESS_CLIENT_API_VERSION,
-    ACCESS_CLIENT_KIND, ACCESS_POLICY, ACCESS_POLICY_API_VERSION, ACCESS_POLICY_KIND, QUESTION,
+    decode_authored, envelope_lines, ACCESS_CLIENT, ACCESS_CLIENT_API_VERSION, ACCESS_CLIENT_KIND,
 };
+use registry_evidence_authoring::target::AccessProfile;
 use registry_platform_crypto::{PrivateJwk, PublicJwk};
-use registry_platform_yaml::{FormatSpec, LocalId, NodeValue};
+use registry_platform_yaml::FormatSpec;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::{authoring, dev, keygen, OutputFormat};
 
 const ACCESS_DIRECTORY: &str = "access";
-const POLICIES_DIRECTORY: &str = "policies";
 const CLIENTS_DIRECTORY: &str = "clients";
 const PRIVATE_STATE_DIRECTORY: &str = ".evidence";
 const PRIVATE_KEY_FILENAME: &str = "private.jwk";
 const MAX_DOCUMENT_BYTES: u64 = 64 * 1024;
-const MAX_POLICIES: usize = 128;
-const MAX_QUESTIONS: usize = 128;
 const MAX_CLIENTS: usize = 4_096;
-const MAX_POLICIES_PER_CLIENT: usize = 32;
+const MAX_PROFILES_PER_CLIENT: usize = 32;
 const PUBLIC_DIRECTORY_MODE: u32 = 0o755;
 const PUBLIC_FILE_MODE: u32 = 0o644;
 const PRIVATE_DIRECTORY_MODE: u32 = 0o700;
@@ -44,19 +41,17 @@ const PRIVATE_FILE_MODE: u32 = 0o600;
 
 #[derive(Debug, Subcommand)]
 pub enum AccessCommand {
-    /// Define which authored questions a policy may request.
+    /// Inspect complete access profiles from the target authority.
     #[command(subcommand)]
-    Policy(PolicyCommand),
+    Profile(ProfileCommand),
     /// Register and revoke local Evidence Gateway clients.
     #[command(subcommand)]
     Client(ClientCommand),
 }
 
 #[derive(Debug, Subcommand)]
-pub enum PolicyCommand {
-    /// Add one governed access policy.
-    Add(PolicyAddArgs),
-    /// List governed access policies.
+pub enum ProfileCommand {
+    /// List governed target access profiles.
     List(ProjectArgs),
 }
 
@@ -64,7 +59,7 @@ pub enum PolicyCommand {
 pub enum ClientCommand {
     /// Add one local client and generate its private key.
     Add(ClientAddArgs),
-    /// List local clients and their policy membership.
+    /// List local clients and their access-profile membership.
     List(ProjectArgs),
     /// Revoke one local client.
     Revoke(ClientRevokeArgs),
@@ -78,24 +73,15 @@ pub struct ProjectArgs {
 }
 
 #[derive(Debug, Args)]
-pub struct PolicyAddArgs {
-    /// Lowercase policy identifier.
-    policy: String,
-    /// Authored question granted by this policy. Repeat for more than one.
-    #[arg(long, required = true)]
-    question: Vec<String>,
-    /// Project root. Defaults to the current directory.
-    #[arg(long, default_value = ".", hide = true)]
-    project: PathBuf,
-}
-
-#[derive(Debug, Args)]
 pub struct ClientAddArgs {
     /// Lowercase client identifier.
     client: String,
-    /// Access policy assigned to this client. Repeat for more than one.
+    /// Existing target access profile assigned to this client. Repeat for disjoint grants.
     #[arg(long, required = true)]
-    policy: Vec<String>,
+    access_profile: Vec<String>,
+    /// Audience inside every selected definition ceiling. Inferred when exactly one fits.
+    #[arg(long)]
+    evidence_audience: Option<String>,
     /// Generate an owner-only P-256 key for local client authentication.
     #[arg(long, required = true)]
     generate_local_key: bool,
@@ -138,7 +124,23 @@ pub(crate) fn client_document_schema() -> serde_json::Value {
     serde_json::to_value(schemars::schema_for!(ClientDocument)).expect("a derived schema is JSON")
 }
 
-type AccessPolicyDocument = registry_evidence_authoring::model::AccessPolicy;
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub(crate) struct TaskGrantBinding {
+    pub(crate) requester_clients: Vec<String>,
+    pub(crate) source_issuer: registry_platform_yaml::Url,
+}
+
+struct LoadedProfile {
+    profile: AccessProfile,
+    digest: String,
+    audiences: BTreeSet<String>,
+}
+
+pub(crate) fn profile_digest(profile: &Value) -> Result<String> {
+    let bytes = registry_platform_crypto::canonicalize_json(profile)
+        .context("canonicalizing the complete access profile")?;
+    Ok(registry_platform_config::sha256_uri(&bytes))
+}
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -154,7 +156,7 @@ enum ClientStatus {
 struct ClientDocument {
     client_id: String,
     status: ClientStatus,
-    policies: Vec<String>,
+    access_profiles: Vec<String>,
     principal: String,
     evidence_audience: String,
     keys: Vec<Value>,
@@ -163,7 +165,7 @@ struct ClientDocument {
 }
 
 /// Local issuer wiring for a client whose Evidence authority comes from a task
-/// assertion. This does not grant access or change the governed task policy.
+/// assertion. This does not grant access or change the governed task profile.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -203,7 +205,7 @@ impl ActiveClientExchange {
         }
         match self.kind {
             ActiveClientExchangeKind::InstitutionalGrant if self.source_issuer.is_some() => {
-                bail!("institutional grant issuer comes from its governed task policy")
+                bail!("institutional grant issuer comes from its governed task profile")
             }
             ActiveClientExchangeKind::FirstParty
                 if self.bootstrap_resource.is_none()
@@ -231,14 +233,16 @@ pub(crate) struct ActiveClientRegistration {
     pub(crate) client_id: String,
     pub(crate) public_jwks: String,
     pub(crate) requester_tags: Vec<String>,
+    pub(crate) actor_kind: String,
     pub(crate) evidence_audience: String,
     pub(crate) exchange: Option<ActiveClientExchange>,
 }
 
 pub fn run(command: AccessCommand, format: OutputFormat) -> Result<ExitCode> {
     match command {
-        AccessCommand::Policy(PolicyCommand::Add(args)) => add_policy(&args, format),
-        AccessCommand::Policy(PolicyCommand::List(args)) => list_policies(&args.project, format),
+        AccessCommand::Profile(ProfileCommand::List(args)) => {
+            list_access_profiles(&args.project, format)
+        }
         AccessCommand::Client(ClientCommand::Add(args)) => add_client(&args, format),
         AccessCommand::Client(ClientCommand::List(args)) => list_clients(&args.project, format),
         AccessCommand::Client(ClientCommand::Revoke(args)) => revoke_client(&args, format),
@@ -250,90 +254,32 @@ fn private_client_directory(client_id: &str) -> String {
     format!("{PRIVATE_STATE_DIRECTORY}/{CLIENTS_DIRECTORY}/{client_id}")
 }
 
-fn add_policy(args: &PolicyAddArgs, format: OutputFormat) -> Result<ExitCode> {
-    let project = canonical_project(&args.project)?;
-    validate_identifier(&args.policy, "policy")?;
-    let questions = sorted_unique(&args.question, "questions", MAX_QUESTIONS)?;
-    for question in &questions {
-        validate_identifier(question, "question")?;
-    }
-    let _lifecycle = dev::lock_project_lifecycle(&project)?;
-    if dev::try_load_ready_state(&project)?.is_some() {
-        bail!("stop the local development session before changing access policies");
-    }
-    for question in &questions {
-        validate_authored_question(&project, question)?;
-    }
-
-    let directory = project.join(ACCESS_DIRECTORY).join(POLICIES_DIRECTORY);
-    ensure_public_directory(&project.join(ACCESS_DIRECTORY))?;
-    ensure_public_directory(&directory)?;
-    if load_policy_documents_if_present(&project)?.len() >= MAX_POLICIES {
-        bail!("a project may define at most {MAX_POLICIES} access policies");
-    }
-    let path = directory.join(format!("{}.yaml", args.policy));
-    let document = AccessPolicyDocument {
-        id: LocalId::new(args.policy.clone())
-            .map_err(|_| anyhow!("access policy id must be a lowercase local identifier"))?,
-        questions,
-        task_grant: None,
-    };
-    write_new_yaml_atomic(
-        &path,
-        &envelope_lines(ACCESS_POLICY_API_VERSION, ACCESS_POLICY_KIND),
-        &document,
-        PUBLIC_FILE_MODE,
-    )?;
-    match format {
-        OutputFormat::Human => println!(
-            "Added access policy {} for {}.",
-            document.id,
-            document.questions.join(", ")
-        ),
-        OutputFormat::Json => crate::print_report(&crate::command_report(
-            "access policy add",
-            json!({
-                "policy": document.id,
-                "questions": document.questions,
-                "files": [path.display().to_string()],
-            }),
-        )),
-    }
-    Ok(ExitCode::SUCCESS)
-}
-
-fn list_policies(project: &Path, format: OutputFormat) -> Result<ExitCode> {
+fn list_access_profiles(project: &Path, format: OutputFormat) -> Result<ExitCode> {
     let project = canonical_project(project)?;
-    let policies = load_policy_documents_if_present(&project)?;
-    if policies.is_empty() {
-        match format {
-            OutputFormat::Human => println!("No access policies configured."),
-            OutputFormat::Json => crate::print_report(&crate::command_report(
-                "access policy list",
-                json!({"entries": []}),
-            )),
-        }
-        return Ok(ExitCode::SUCCESS);
-    }
+    let profiles = load_access_profiles(&project)?;
     if format == OutputFormat::Human {
-        println!("POLICY\tQUESTIONS");
-        for policy in policies.values() {
-            println!("{}\t{}", policy.id, policy.questions.join(", "));
+        println!("PROFILE\tACTOR\tDEFINITIONS");
+        for (id, loaded) in &profiles {
+            let definitions = loaded
+                .profile
+                .grants
+                .iter()
+                .map(|grant| grant.definition.as_str())
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect::<Vec<_>>()
+                .join(", ");
+            println!("{id}\t{}\t{definitions}", loaded.profile.actor_kind);
         }
-        return Ok(ExitCode::SUCCESS);
+    } else {
+        crate::print_report(&crate::command_report(
+            "access profile list",
+            json!({"entries": profiles.iter()
+            .map(|(id, loaded)| json!({"id":id,"actorKind":loaded.profile.actor_kind,
+                "definitions":loaded.profile.grants.iter().map(|grant| &grant.definition).collect::<BTreeSet<_>>(),
+                "digest":loaded.digest})).collect::<Vec<_>>()}),
+        ));
     }
-    crate::print_report(&crate::command_report(
-        "access policy list",
-        json!({
-            "entries": policies
-                .values()
-                .map(|policy| json!({
-                    "id": policy.id,
-                    "questions": policy.questions,
-                }))
-                .collect::<Vec<_>>(),
-        }),
-    ));
     Ok(ExitCode::SUCCESS)
 }
 
@@ -374,17 +320,44 @@ fn add_client(args: &ClientAddArgs, format: OutputFormat) -> Result<ExitCode> {
     if let Some(exchange) = &exchange {
         exchange.validate()?;
     }
-    let policy_ids = sorted_unique(&args.policy, "policies", MAX_POLICIES_PER_CLIENT)?;
-    for policy_id in &policy_ids {
-        validate_identifier(policy_id, "policy")?;
+    let profile_ids = sorted_unique(
+        &args.access_profile,
+        "access profiles",
+        MAX_PROFILES_PER_CLIENT,
+    )?;
+    for profile_id in &profile_ids {
+        validate_identifier(profile_id, "access profile")?;
     }
     let _lifecycle = dev::lock_project_lifecycle(&project)?;
     require_stopped_or_absent_session(&project)?;
-    let policies = load_policy_documents(&project)?;
-    validate_client_policies(&policy_ids, &policies)?;
+    let access_profiles = load_access_profiles(&project)?;
+    validate_client_profiles(&profile_ids, &access_profiles)?;
+    let allowed_audiences = profile_audiences(&profile_ids, &access_profiles)?;
+    let evidence_audience = match &args.evidence_audience {
+        Some(audience) if allowed_audiences.contains(audience) => audience.clone(),
+        Some(_) => bail!("--evidence-audience must be inside every selected definition ceiling"),
+        None if allowed_audiences.len() == 1 => {
+            allowed_audiences.first().expect("one audience").clone()
+        }
+        None => bail!(
+            "choose --evidence-audience from the selected definitions' common audience ceiling"
+        ),
+    };
+    validate_client_identity(
+        &ClientDocument {
+            client_id: args.client.clone(),
+            status: ClientStatus::Active,
+            access_profiles: profile_ids.clone(),
+            principal: local_client_uri(&args.client),
+            evidence_audience: evidence_audience.clone(),
+            keys: Vec::new(),
+            exchange: exchange.clone(),
+        },
+        &access_profiles,
+    )?;
     let existing_clients = load_client_documents_if_present(&project)?;
     for existing in existing_clients.values() {
-        validate_client_policies(&existing.policies, &policies)?;
+        validate_client_profiles(&existing.access_profiles, &access_profiles)?;
     }
     if existing_clients.len() >= MAX_CLIENTS {
         bail!("a project may define at most {MAX_CLIENTS} clients");
@@ -422,9 +395,9 @@ fn add_client(args: &ClientAddArgs, format: OutputFormat) -> Result<ExitCode> {
     let document = ClientDocument {
         client_id: args.client.clone(),
         status: ClientStatus::Active,
-        policies: policy_ids,
+        access_profiles: profile_ids,
         principal: format!("urn:registrystack:evidence:local:client:{}", args.client),
-        evidence_audience: format!("urn:registrystack:evidence:local:client:{}", args.client),
+        evidence_audience,
         keys: vec![public_key],
         exchange,
     };
@@ -448,7 +421,7 @@ fn add_client(args: &ClientAddArgs, format: OutputFormat) -> Result<ExitCode> {
         OutputFormat::Human => println!(
             "Added client {} with {}.",
             document.client_id,
-            joined_policies(&document.policies)
+            joined_profiles(&document.access_profiles)
         ),
         OutputFormat::Json => {
             let kid = document.keys[0]
@@ -459,7 +432,7 @@ fn add_client(args: &ClientAddArgs, format: OutputFormat) -> Result<ExitCode> {
                 "access client add",
                 json!({
                     "client": document.client_id,
-                    "policies": document.policies,
+                    "accessProfiles": document.access_profiles,
                     "kid": kid,
                     "files": [
                         private_client_path.join(PRIVATE_KEY_FILENAME).display().to_string(),
@@ -474,7 +447,6 @@ fn add_client(args: &ClientAddArgs, format: OutputFormat) -> Result<ExitCode> {
 
 fn list_clients(project: &Path, format: OutputFormat) -> Result<ExitCode> {
     let project = canonical_project(project)?;
-    let policies = load_policy_documents_if_present(&project)?;
     let clients = load_client_documents_if_present(&project)?;
     if clients.is_empty() {
         match format {
@@ -486,10 +458,11 @@ fn list_clients(project: &Path, format: OutputFormat) -> Result<ExitCode> {
         }
         return Ok(ExitCode::SUCCESS);
     }
+    let access_profiles = load_access_profiles(&project)?;
     if format == OutputFormat::Human {
-        println!("CLIENT\tSTATUS\tPOLICIES");
+        println!("CLIENT\tSTATUS\tACCESS PROFILES");
         for client in clients.values() {
-            validate_client_policies(&client.policies, &policies)?;
+            validate_client_profiles(&client.access_profiles, &access_profiles)?;
             let status = match client.status {
                 ClientStatus::Active => "active",
                 ClientStatus::Revoked => "revoked",
@@ -498,14 +471,14 @@ fn list_clients(project: &Path, format: OutputFormat) -> Result<ExitCode> {
                 "{}\t{}\t{}",
                 client.client_id,
                 status,
-                client.policies.join(", ")
+                client.access_profiles.join(", ")
             );
         }
         return Ok(ExitCode::SUCCESS);
     }
     let mut entries = Vec::with_capacity(clients.len());
     for client in clients.values() {
-        validate_client_policies(&client.policies, &policies)?;
+        validate_client_profiles(&client.access_profiles, &access_profiles)?;
         let status = match client.status {
             ClientStatus::Active => "active",
             ClientStatus::Revoked => "revoked",
@@ -513,7 +486,7 @@ fn list_clients(project: &Path, format: OutputFormat) -> Result<ExitCode> {
         entries.push(json!({
             "id": client.client_id,
             "status": status,
-            "policies": client.policies,
+            "accessProfiles": client.access_profiles,
         }));
     }
     crate::print_report(&crate::command_report(
@@ -528,10 +501,8 @@ fn revoke_client(args: &ClientRevokeArgs, format: OutputFormat) -> Result<ExitCo
     validate_identifier(&args.client, "client")?;
     let _lifecycle = dev::lock_project_lifecycle(&project)?;
     require_stopped_or_absent_session(&project)?;
-    let policies = load_policy_documents(&project)?;
     let path = client_document_path(&project, &args.client);
     let mut document = read_client_document(&path)?;
-    validate_client_policies(&document.policies, &policies)?;
     if document.status == ClientStatus::Revoked {
         bail!("client {} is already revoked", args.client);
     }
@@ -591,15 +562,15 @@ fn revoke_client(args: &ClientRevokeArgs, format: OutputFormat) -> Result<ExitCo
     Ok(ExitCode::SUCCESS)
 }
 
-/// Resolve one client against the exact access-policy generation currently
+/// Resolve one client against the exact access-profile generation currently
 /// active in local development.
 pub(crate) fn resolve_ready_client(
     project: &Path,
     client_id: &str,
-    policy_tags: &BTreeMap<String, String>,
+    profile_digests: &BTreeMap<String, String>,
 ) -> Result<ActiveClient> {
     validate_identifier(client_id, "client")?;
-    let registration = load_active_clients(project, policy_tags)?
+    let registration = load_active_clients(project, profile_digests)?
         .into_iter()
         .find(|registration| registration.client_id == client_id)
         .ok_or_else(|| anyhow::anyhow!("unknown or revoked active client {client_id}"))?;
@@ -618,10 +589,11 @@ pub(crate) fn resolve_ready_client(
 /// compiles, to state in the bundle which clients that bundle admits.
 pub(crate) fn active_client_ids(project: &Path) -> Result<Vec<String>> {
     let project = canonical_project(project)?;
-    let policies = load_policy_documents_if_present(&project)?;
+    let access_profiles = load_access_profiles(&project)?;
     let mut ids = Vec::new();
     for document in load_client_documents_if_present(&project)?.values() {
-        validate_client_policies(&document.policies, &policies)?;
+        validate_client_profiles(&document.access_profiles, &access_profiles)?;
+        validate_client_identity(document, &access_profiles)?;
         if document.status == ClientStatus::Revoked {
             continue;
         }
@@ -633,43 +605,39 @@ pub(crate) fn active_client_ids(project: &Path) -> Result<Vec<String>> {
 /// Load active editable clients as exact local issuer registrations.
 pub(crate) fn load_active_clients(
     project: &Path,
-    policy_tags: &BTreeMap<String, String>,
+    profile_digests: &BTreeMap<String, String>,
 ) -> Result<Vec<ActiveClientRegistration>> {
     let project = canonical_project(project)?;
-    let policies = load_policy_documents_if_present(&project)?;
-    if policy_tags.len() != policies.len() {
-        bail!("compiled access policies do not match the editable project policies");
+    let profiles = load_access_profiles(&project)?;
+    if profile_digests.len() != profiles.len()
+        || profiles
+            .iter()
+            .any(|(id, profile)| profile_digests.get(id) != Some(&profile.digest))
+    {
+        bail!("target access profiles differ from the active generation; stop and restart the session");
     }
-    for policy in policies.values() {
-        let expected = authoring::access_policy_requester_tag_for(policy)?;
-        if policy_tags.get(policy.id.as_str()) != Some(&expected) {
-            bail!(
-                "editable access policy {} differs from the active generation",
-                policy.id
-            );
-        }
-    }
-    let clients = load_client_documents_if_present(&project)?;
     let mut registrations = Vec::new();
-    for document in clients.values() {
-        validate_client_policies(&document.policies, &policies)?;
+    for document in load_client_documents_if_present(&project)?.values() {
+        validate_client_profiles(&document.access_profiles, &profiles)?;
+        validate_client_identity(document, &profiles)?;
         if document.status == ClientStatus::Revoked {
             continue;
         }
         let requester_tags = document
-            .policies
+            .access_profiles
             .iter()
-            .map(|id| {
-                policy_tags
-                    .get(id)
-                    .cloned()
-                    .ok_or_else(|| anyhow::anyhow!("client names an unknown compiled policy"))
-            })
-            .collect::<Result<Vec<_>>>()?;
+            .flat_map(|id| profiles[id].profile.requester_tags.iter().cloned())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
         registrations.push(ActiveClientRegistration {
             client_id: document.client_id.clone(),
-            public_jwks: serde_json::to_string(&json!({"keys": document.keys}))?,
+            public_jwks: serde_json::to_string(&json!({"keys":document.keys}))?,
             requester_tags,
+            actor_kind: profiles[&document.access_profiles[0]]
+                .profile
+                .actor_kind
+                .clone(),
             evidence_audience: document.evidence_audience.clone(),
             exchange: document.exchange.clone(),
         });
@@ -679,18 +647,13 @@ pub(crate) fn load_active_clients(
 
 /// Public, editable client admission for local bundle compilation. Private
 /// keys are checked separately when `dev` registers the issuer generation.
-pub(crate) fn active_client_policies(project: &Path) -> Result<BTreeMap<String, Vec<String>>> {
-    let project = canonical_project(project)?;
-    let policies = load_policy_documents_if_present(&project)?;
-    let clients = load_client_documents_if_present(&project)?;
-    let mut admitted = BTreeMap::new();
-    for document in clients.values() {
-        validate_client_policies(&document.policies, &policies)?;
-        if document.status == ClientStatus::Active {
-            admitted.insert(document.client_id.clone(), document.policies.clone());
-        }
+pub(crate) fn generated_caller_audience(project: &Path, profile: &str) -> Result<String> {
+    let profiles = load_access_profiles(project)?;
+    let allowed = profile_audiences(&[profile.to_owned()], &profiles)?;
+    if allowed.len() != 1 {
+        bail!("profile {profile} has multiple audiences; register an access client with --evidence-audience before dev start");
     }
-    Ok(admitted)
+    Ok(allowed.first().expect("one audience").clone())
 }
 
 fn require_stopped_or_absent_session(project: &Path) -> Result<()> {
@@ -700,67 +663,200 @@ fn require_stopped_or_absent_session(project: &Path) -> Result<()> {
     Ok(())
 }
 
-fn validate_client_policies(
-    policy_ids: &[String],
-    policies: &BTreeMap<String, AccessPolicyDocument>,
+fn validate_client_profiles(
+    ids: &[String],
+    profiles: &BTreeMap<String, LoadedProfile>,
 ) -> Result<()> {
-    if policy_ids.is_empty() || policy_ids.len() > MAX_POLICIES_PER_CLIENT {
-        bail!("a client must have 1..={MAX_POLICIES_PER_CLIENT} policies");
+    if ids.is_empty() || ids.len() > MAX_PROFILES_PER_CLIENT {
+        bail!("a client must reference 1..={MAX_PROFILES_PER_CLIENT} access profiles");
     }
-    let mut covered_questions = BTreeMap::<&str, &str>::new();
-    for policy_id in policy_ids {
-        validate_identifier(policy_id, "policy")?;
-        let policy = policies
-            .get(policy_id)
-            .ok_or_else(|| anyhow::anyhow!("unknown access policy {policy_id}"))?;
-        for question in &policy.questions {
-            if let Some(existing) = covered_questions.insert(question, policy_id) {
-                bail!(
-                    "policies {existing} and {policy_id} grant the same authored entitlement for question {question}"
-                );
+    let mut shapes = BTreeSet::new();
+    let mut tags = BTreeSet::new();
+    let mut actors = BTreeSet::new();
+    for id in ids {
+        validate_identifier(id, "access profile")?;
+        let loaded = profiles
+            .get(id)
+            .with_context(|| format!("unknown target access profile {id}"))?;
+        actors.insert(loaded.profile.actor_kind.as_str());
+        tags.extend(loaded.profile.requester_tags.iter().map(String::as_str));
+        for grant in &loaded.profile.grants {
+            let subjects = grant
+                .subjects
+                .iter()
+                .map(|subject| (subject.role.as_str(), subject.selector_profile.as_str()))
+                .collect::<BTreeSet<_>>();
+            if !shapes.insert((grant.definition.as_str(), grant.purpose.as_str(), subjects)) {
+                bail!("selected access profiles contain overlapping complete grant tuples");
             }
+        }
+    }
+    if actors.len() != 1 {
+        bail!("one local client must use one actor kind across its access profiles");
+    }
+    for (id, loaded) in profiles {
+        if loaded
+            .profile
+            .requester_tags
+            .iter()
+            .all(|tag| tags.contains(tag.as_str()))
+            && actors.contains(loaded.profile.actor_kind.as_str())
+            && !ids.contains(id)
+        {
+            bail!("selected profile tags also match unassigned access profile {id}; use distinct identity tags");
         }
     }
     Ok(())
 }
 
-fn load_policy_documents(project: &Path) -> Result<BTreeMap<String, AccessPolicyDocument>> {
-    let policies = load_policy_documents_if_present(project)?;
-    if policies.is_empty() {
-        bail!("no access policies are configured");
+fn profile_audiences(
+    ids: &[String],
+    profiles: &BTreeMap<String, LoadedProfile>,
+) -> Result<BTreeSet<String>> {
+    let mut audiences: Option<BTreeSet<String>> = None;
+    for id in ids {
+        let profile = profiles
+            .get(id)
+            .context("client names an unknown target access profile")?;
+        audiences = Some(match audiences {
+            None => profile.audiences.clone(),
+            Some(current) => current.intersection(&profile.audiences).cloned().collect(),
+        });
     }
-    Ok(policies)
+    let audiences = audiences.unwrap_or_default();
+    if audiences.is_empty() {
+        bail!("selected access profiles have no common permitted audience");
+    }
+    Ok(audiences)
 }
 
-fn load_policy_documents_if_present(
-    project: &Path,
-) -> Result<BTreeMap<String, AccessPolicyDocument>> {
-    validate_optional_access_root(project)?;
-    let directory = project.join(ACCESS_DIRECTORY).join(POLICIES_DIRECTORY);
-    let paths = yaml_paths_if_present(&directory, MAX_POLICIES, "access policies")?;
-    let mut policies = BTreeMap::new();
-    for path in paths {
-        let mut document: AccessPolicyDocument =
-            read_yaml(&path, PUBLIC_FILE_MODE, &ACCESS_POLICY)?;
-        if !registry_evidence_authoring::validate::validate_access_policy(&document).is_empty() {
-            bail!("access policy does not satisfy the authored policy contract");
-        }
-        validate_identifier(&document.id, "policy")?;
-        validate_filename_id(&path, &document.id, "access policy")?;
-        document.questions =
-            canonical_sorted_unique(&document.questions, "questions", MAX_QUESTIONS)?;
-        for question in &document.questions {
-            validate_identifier(question, "question")?;
-            validate_authored_question(project, question)?;
-        }
-        if policies
-            .insert(document.id.as_str().to_owned(), document)
-            .is_some()
+fn validate_client_identity(
+    document: &ClientDocument,
+    profiles: &BTreeMap<String, LoadedProfile>,
+) -> Result<()> {
+    if !profile_audiences(&document.access_profiles, profiles)?
+        .contains(&document.evidence_audience)
+    {
+        bail!("client audience is outside a selected definition ceiling");
+    }
+    for id in &document.access_profiles {
+        let profile = &profiles[id].profile;
+        let task = profile.grants.iter().any(|grant| {
+            grant
+                .subjects
+                .iter()
+                .any(|subject| subject.value_origin == "authenticated-grant")
+        });
+        if task
+            && (profile
+                .requester_clients
+                .as_ref()
+                .is_none_or(|clients| !clients.iter().any(|id| id == &document.client_id))
+                || profile.grant_source_issuer.is_none())
         {
-            bail!("access policy ids must be unique");
+            bail!("task client must be explicitly named by the target profile and trusted source issuer");
+        }
+        match document.exchange.as_ref().map(|exchange| exchange.kind) {
+            Some(ActiveClientExchangeKind::InstitutionalGrant)
+                if !task || profile.actor_kind != "agent" =>
+            {
+                bail!("institutional exchange requires an assigned agent task-grant profile")
+            }
+            Some(ActiveClientExchangeKind::FirstParty)
+                if task || !matches!(profile.actor_kind.as_str(), "service" | "human") =>
+            {
+                bail!("first-party exchange cannot replace task-grant authority")
+            }
+            None if task || !matches!(profile.actor_kind.as_str(), "service" | "agent") => bail!(
+                "human and task-grant profiles require their explicit signed-context exchange"
+            ),
+            _ => {}
         }
     }
-    Ok(policies)
+    Ok(())
+}
+
+fn load_access_profiles(project: &Path) -> Result<BTreeMap<String, LoadedProfile>> {
+    let project_path = project.join("evidence.yaml");
+    let text = read_bounded_file(
+        &project_path,
+        registry_platform_yaml::MAXIMUM_DOCUMENT_BYTES as u64,
+        None,
+    )?;
+    let project_doc = registry_evidence_authoring::project::read_project(
+        &project_path.display().to_string(),
+        text.as_bytes(),
+    )?
+    .value;
+    let target_path = project.join("local-target.yaml");
+    let text = read_bounded_file(
+        &target_path,
+        registry_platform_yaml::MAXIMUM_DOCUMENT_BYTES as u64,
+        None,
+    )?;
+    let target = registry_evidence_authoring::target::read_target(
+        &target_path.display().to_string(),
+        text.as_bytes(),
+    )?
+    .value;
+    if target.project != project_doc.id {
+        bail!("local-target.yaml must name this EvidenceProject");
+    }
+    let relative = Path::new(&target.authority);
+    if relative.is_absolute()
+        || relative
+            .components()
+            .any(|part| !matches!(part, std::path::Component::Normal(_)))
+    {
+        bail!("target authority must be a project-relative file path without parent traversal");
+    }
+    let authority_path = project.join(relative);
+    let text = read_bounded_file(
+        &authority_path,
+        registry_platform_yaml::MAXIMUM_DOCUMENT_BYTES as u64,
+        None,
+    )?;
+    let authority = registry_evidence_authoring::target::read_authority(
+        &authority_path.display().to_string(),
+        text.as_bytes(),
+        &project_doc,
+    )?
+    .value;
+    if authority.target != target.id {
+        bail!("target authority must name the selected local target");
+    }
+    let compiled = registry_evidence_authoring::target::compile_authority(&authority, &project_doc)
+        .map_err(|_| {
+            anyhow!("target authority must contain complete grants within every definition ceiling")
+        })?;
+    authority
+        .access_profiles
+        .into_iter()
+        .map(|(id, profile)| {
+            let mut audiences: Option<BTreeSet<String>> = None;
+            for grant in &profile.grants {
+                let allowed = project_doc.assertion_definitions[&grant.definition]
+                    .grant_ceiling
+                    .audiences
+                    .iter()
+                    .cloned()
+                    .collect::<BTreeSet<_>>();
+                audiences = Some(match audiences {
+                    None => allowed,
+                    Some(current) => current.intersection(&allowed).cloned().collect(),
+                });
+            }
+            let digest = profile_digest(&compiled["accessProfiles"][id.as_str()])?;
+            Ok((
+                id.to_string(),
+                LoadedProfile {
+                    profile,
+                    digest,
+                    audiences: audiences.unwrap_or_default(),
+                },
+            ))
+        })
+        .collect()
 }
 
 fn load_client_documents_if_present(project: &Path) -> Result<BTreeMap<String, ClientDocument>> {
@@ -780,26 +876,19 @@ fn load_client_documents_if_present(project: &Path) -> Result<BTreeMap<String, C
     Ok(clients)
 }
 
-/// Read one local client document's text through the shared reader, as
-/// `evidencectl check` does: its envelope and every member, without the
-/// cross-file conditions a compile settles.
-pub(crate) fn check_client_document(
-    file: &str,
-    bytes: &[u8],
-) -> std::result::Result<registry_platform_yaml::Document, registry_platform_yaml::Report> {
-    decode_authored::<ClientDocument>(file, bytes, &ACCESS_CLIENT).map(|decoded| decoded.document)
-}
-
 fn read_client_document(path: &Path) -> Result<ClientDocument> {
     let mut document: ClientDocument = read_yaml(path, PUBLIC_FILE_MODE, &ACCESS_CLIENT)?;
     validate_identifier(&document.client_id, "client")?;
     validate_filename_id(path, &document.client_id, "client")?;
-    document.policies =
-        canonical_sorted_unique(&document.policies, "policies", MAX_POLICIES_PER_CLIENT)?;
+    document.access_profiles = canonical_sorted_unique(
+        &document.access_profiles,
+        "access profiles",
+        MAX_PROFILES_PER_CLIENT,
+    )?;
     if document.principal != local_client_uri(&document.client_id)
-        || document.evidence_audience != local_client_uri(&document.client_id)
+        || !authoring::valid_local_audience(&document.evidence_audience)
     {
-        bail!("local client principal and evidence audience must match its client id");
+        bail!("local client principal must match its client id and evidence audience must be a bounded URI");
     }
     if document.keys.len() != 1 {
         bail!("a local client must contain exactly one public key");
@@ -854,29 +943,6 @@ fn read_public_jwk(path: &Path) -> Result<Value> {
     Ok(value)
 }
 
-fn validate_authored_question(project: &Path, question_id: &str) -> Result<()> {
-    let directory = project.join("questions");
-    validate_visible_directory(&directory, "questions")?;
-    let path = directory.join(format!("{question_id}.yaml"));
-    let text = read_bounded_file(
-        &path,
-        registry_evidence_authoring::layout::MAX_QUESTION_BYTES,
-        None,
-    )?;
-    let document = read_authored(&path.display().to_string(), text.as_bytes(), &QUESTION)?;
-    let written_id = document
-        .root()
-        .pointer("/id")
-        .and_then(|node| match &node.value {
-            NodeValue::String(text) => Some(text.text.as_str()),
-            _ => None,
-        });
-    if written_id != Some(question_id) {
-        bail!("question id must match its questions/<id>.yaml filename");
-    }
-    Ok(())
-}
-
 fn yaml_paths_if_present(directory: &Path, maximum: usize, label: &str) -> Result<Vec<PathBuf>> {
     match fs::symlink_metadata(directory) {
         Ok(metadata) => metadata,
@@ -912,19 +978,6 @@ fn validate_optional_access_root(project: &Path) -> Result<()> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(error.into()),
     }
-}
-
-fn validate_visible_directory(path: &Path, label: &str) -> Result<()> {
-    let metadata = fs::symlink_metadata(path)
-        .with_context(|| format!("inspecting {label} directory {}", path.display()))?;
-    if metadata.file_type().is_symlink()
-        || !metadata.is_dir()
-        || metadata.uid() != rustix::process::geteuid().as_raw()
-        || metadata.permissions().mode() & 0o022 != 0
-    {
-        bail!("{label} must be held in a plain owner-controlled directory");
-    }
-    Ok(())
 }
 
 /// Read one authored access document through the shared reader, which
@@ -1172,11 +1225,11 @@ fn local_client_uri(client_id: &str) -> String {
     format!("urn:registrystack:evidence:local:client:{client_id}")
 }
 
-fn joined_policies(policies: &[String]) -> String {
-    if policies.len() == 1 {
-        format!("policy {}", policies[0])
+fn joined_profiles(access_profiles: &[String]) -> String {
+    if access_profiles.len() == 1 {
+        format!("access profile {}", access_profiles[0])
     } else {
-        format!("policies {}", policies.join(", "))
+        format!("access profiles {}", access_profiles.join(", "))
     }
 }
 
