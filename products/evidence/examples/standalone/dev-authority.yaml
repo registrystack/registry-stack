@@ -1,0 +1,54 @@
+apiVersion: id.registrystack.org/formats/evidence/target-authority/v1alpha1
+kind: EvidenceTargetAuthority
+target: local
+project: standalone-evidence
+accessProfiles:
+  standalone-service:
+    authority: organizational
+    actorKind: service
+    requesterTags:
+    - standalone-service
+    grants:
+    - definition: adult-status
+      purpose: age-check
+      audienceFrom: authenticated-requester
+      representations:
+      - signed-jws
+      subjectBinding: audience-scoped
+      subjects:
+      - role: subject
+        selectorProfile: record-by-id
+        valueOrigin: request
+    - definition: residence-region
+      purpose: residence-check
+      audienceFrom: authenticated-requester
+      representations:
+      - signed-jws
+      subjectBinding: audience-scoped
+      subjects:
+      - role: subject
+        selectorProfile: record-by-id
+        valueOrigin: request
+    - definition: professional-licence-status
+      purpose: licence-check
+      audienceFrom: authenticated-requester
+      representations:
+      - signed-jws
+      subjectBinding: audience-scoped
+      subjects:
+      - role: licence
+        selectorProfile: record-by-id
+        valueOrigin: request
+    - definition: legal-parent-relationship
+      purpose: relationship-check
+      audienceFrom: authenticated-requester
+      representations:
+      - signed-jws
+      subjectBinding: audience-scoped
+      subjects:
+      - role: child
+        selectorProfile: record-by-id
+        valueOrigin: request
+      - role: candidate-parent
+        selectorProfile: record-by-id
+        valueOrigin: request

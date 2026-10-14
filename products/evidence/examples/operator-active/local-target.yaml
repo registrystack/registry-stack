@@ -1,0 +1,57 @@
+apiVersion: id.registrystack.org/formats/evidence/target/v1alpha1
+kind: EvidenceTarget
+id: local
+project: operator-evidence
+package:
+  root: .generated/package
+authority: dev-authority.yaml
+service:
+  providerId: urn:example:provider:operator-evidence
+  issuer: urn:example:issuer:operator-evidence
+  publicOrigin: http://127.0.0.1:8080
+  trustDomain: urn:example:trust:operator-evidence
+listener:
+  bind: 127.0.0.1:8080
+  trustProxyIdentityHeaders: false
+authentication:
+  oidc:
+    issuer: http://127.0.0.1:8082
+    audience: urn:example:resource:operator-evidence
+    tokenTypes:
+    - at+jwt
+    algorithms:
+    - RS256
+    jwksSource:
+      type: uri
+      uri: http://127.0.0.1:8082/oauth2/jwks
+    principalClaim: sub
+    requesterTagsClaim: evidence_tags
+    evidenceAudienceClaim: evidence_audience
+    requiredScopes:
+    - evidence:request
+    maximumTokenLifetimeSeconds: 300
+connections:
+  operator-http:
+    origin: http://127.0.0.1:8081
+    authentication:
+      type: bearer
+      tokenRef: secret:file/operator-source-token
+secretProviders:
+  file:
+    root: .generated/secrets
+signer:
+  type: local-jwk
+  algorithm: ES256
+  privateKeyRef: secret:file/signing-p256-private-jwk
+  publicJwkFile: .generated/secrets/signing-p256-public.jwk.json
+subjectBinding:
+  secretRef: secret:file/subject-binding-hmac-key
+  keyVersion: 1
+audit:
+  path: .generated/audit/evidence.jsonl
+  hashKeyRef: secret:file/audit-hmac-key
+  hashKeyVersion: 1
+rateLimits:
+  requestsPerPrincipalPerMinute: 60
+  burstPerPrincipal: 16
+  failedSelectorAttemptsPerPrincipalAuthorityPerMinute: 10

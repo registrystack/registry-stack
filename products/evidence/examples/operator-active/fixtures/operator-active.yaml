@@ -1,0 +1,95 @@
+apiVersion: id.registrystack.org/formats/evidence/fixture/v1alpha1
+kind: EvidenceFixture
+synthetic_only: true
+common:
+  observed_at: '2026-10-14T00:00:00Z'
+  selectors:
+    operator:
+      profile: operator-by-id
+      values:
+        operator-id: operator
+cases:
+- id: positive
+  source:
+    total: 1
+    record:
+      operator_id: operator
+      active: true
+      status: active
+      address_canary: synthetic-address-private-canary
+  expected_value: true
+  expected_lookup: match
+  derivation_runs: true
+  signed_success: true
+- id: negative-inactive
+  source:
+    total: 1
+    record:
+      operator_id: operator
+      active: false
+      status: inactive
+      address_canary: synthetic-address-private-canary
+  expected_value: false
+  expected_lookup: match
+  derivation_runs: true
+  signed_success: true
+- id: boundary-suspended-active-flag
+  source:
+    total: 1
+    record:
+      operator_id: operator
+      active: true
+      status: suspended
+      address_canary: synthetic-address-private-canary
+  expected_value: false
+  expected_lookup: match
+  derivation_runs: true
+  signed_success: true
+- id: no-match
+  source:
+    total: 0
+  expected_lookup: no_match
+  expected_public_problem: evidence.unavailable
+  derivation_runs: false
+  signed_success: false
+- id: ambiguous
+  source:
+    total: 2
+  expected_lookup: ambiguous
+  expected_public_problem: evidence.unavailable
+  derivation_runs: false
+  signed_success: false
+- id: source-failure
+  source_failure: timeout
+  expected_public_problem: source.unavailable
+  signed_success: false
+- id: negative-undeclared-private-output
+  injected_derivation:
+  - concept_id: urn:example:concept:operator-active:v1
+    value: true
+  - concept_id: urn:example:concept:private-address
+    value: synthetic-address-private-canary
+  expected: output-gate-rejection
+- id: missing-required-fact
+  source:
+    total: 1
+    record:
+      operator_id: operator
+      status: active
+      address_canary: synthetic-address-private-canary
+  derivation_runs: false
+  signed_success: false
+  expected_public_problem: source.unavailable
+- id: anti-reconstruction
+  companion_bundle: threshold-ladder
+  expected: bundle-rejection
+privacy_expectation:
+  diagnostics_exclude:
+  - synthetic-address-private-canary
+  evidence_excludes:
+  - synthetic-address-private-canary
+  - address_canary
+  - address-canary
+  evidence_contains:
+  - urn:example:concept:operator-active:v1
+coequal_acceptance_definition: true
