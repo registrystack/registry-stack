@@ -28,16 +28,16 @@ use serde_json::{json, Value};
 
 use crate::{dev, report, source_import, OutputFormat};
 
-type Check = fn(&str, &[u8]) -> Result<(), Failure>;
+type Check = fn(&str, &[u8]) -> Result<Report, Failure>;
 
 /// The `schema` header a client profile and a reviewed contracts file opened
 /// with before the envelope, and the reader that refuses it by name.
 const REMOVED_SCHEMA_HEADERS: [(&str, Check); 2] = [
     ("registry.evidence-client-contracts/v1", |file, bytes| {
-        Ok(read_reviewed_contracts(file, bytes).map(drop)?)
+        Ok(read_reviewed_contracts(file, bytes).map(|_| one_file(Vec::new()))?)
     }),
     ("registry.evidence-client-profile/v1", |file, bytes| {
-        Ok(read_client_profile(file, bytes).map(drop)?)
+        Ok(read_client_profile(file, bytes).map(|_| one_file(Vec::new()))?)
     }),
 ];
 
@@ -47,13 +47,13 @@ const REMOVED_SCHEMA_HEADERS: [(&str, Check); 2] = [
 /// itself and the reader never sees them.
 const FORMATS: [(&str, bool, Check); 7] = [
     (EVIDENCE_CLIENT_CONTRACTS_KIND, false, |file, bytes| {
-        Ok(read_reviewed_contracts(file, bytes).map(drop)?)
+        Ok(read_reviewed_contracts(file, bytes).map(|_| one_file(Vec::new()))?)
     }),
     (EVIDENCE_CLIENT_PROFILE_KIND, false, |file, bytes| {
-        Ok(read_client_profile(file, bytes).map(drop)?)
+        Ok(read_client_profile(file, bytes).map(|_| one_file(Vec::new()))?)
     }),
     (dev::DEV_STATE_KIND, false, |file, bytes| {
-        Ok(dev::check_state_document(file, bytes)?)
+        Ok(dev::check_state_document(file, bytes).map(|()| one_file(Vec::new()))?)
     }),
     (source_import::JOURNAL_KIND, true, |file, bytes| {
         let text = utf8(file, bytes)?;
@@ -64,10 +64,10 @@ const FORMATS: [(&str, bool, Check); 7] = [
         source_import_refusal(file, source_import::check_state_file(text))
     }),
     (source_import::RESOLUTION_KIND, false, |file, bytes| {
-        Ok(source_import::check_resolution_file(file, bytes)?)
+        Ok(source_import::check_resolution_file(file, bytes).map(|()| one_file(Vec::new()))?)
     }),
     (source_import::EXPORT_KIND, false, |file, bytes| {
-        Ok(source_import::check_export_manifest(file, bytes)?)
+        Ok(source_import::check_export_manifest(file, bytes).map(|()| one_file(Vec::new()))?)
     }),
 ];
 
@@ -93,10 +93,10 @@ impl From<source_import::DocumentRefused> for Failure {
 
 /// Check one file and write the verdict. Exits 0 when the file passes, 1
 /// when it is refused, and 3 when the check could not run.
-pub(crate) fn run(file: &Path, format: OutputFormat) -> ExitCode {
+pub(crate) fn run(file: &Path, format: OutputFormat, deny_warnings: bool) -> ExitCode {
     let label = file.display().to_string();
-    let (lead, report, exit) = match check(file, &label) {
-        Ok(()) => (None, one_file(Vec::new()), report::SUCCESS_EXIT),
+    let (lead, report, exit) = match apply_warning_policy(check(file, &label), deny_warnings) {
+        Ok(report) => (None, report, report::SUCCESS_EXIT),
         Err(Failure::Refused(report)) => (
             Some("evidencectl check refused the file."),
             report,
@@ -142,7 +142,20 @@ pub(crate) fn run(file: &Path, format: OutputFormat) -> ExitCode {
     ExitCode::from(exit)
 }
 
-fn check(file: &Path, label: &str) -> Result<(), Failure> {
+fn apply_warning_policy(
+    outcome: Result<Report, Failure>,
+    deny_warnings: bool,
+) -> Result<Report, Failure> {
+    outcome.and_then(|diagnostics| {
+        if crate::check::refuses_warnings(&diagnostics, deny_warnings) {
+            Err(Failure::Refused(diagnostics))
+        } else {
+            Ok(diagnostics)
+        }
+    })
+}
+
+fn check(file: &Path, label: &str) -> Result<Report, Failure> {
     let bytes = read(file)?;
     let (kind, schema) = if bytes.len() <= MAXIMUM_DOCUMENT_BYTES {
         let root = Reader::new(label).scan(&bytes)?;
@@ -251,8 +264,8 @@ fn utf8<'a>(label: &str, bytes: &'a [u8]) -> Result<&'a str, Failure> {
 
 /// The importer's refusals are static sentences that name their fix; carry
 /// one as the file's diagnostic.
-fn source_import_refusal(file: &str, outcome: anyhow::Result<()>) -> Result<(), Failure> {
-    outcome.map_err(|error| {
+fn source_import_refusal(file: &str, outcome: anyhow::Result<()>) -> Result<Report, Failure> {
+    outcome.map(|()| one_file(Vec::new())).map_err(|error| {
         Failure::Refused(one_file(vec![in_file(
             Diagnostic::error(
                 "evidence.check.source-import-file",
@@ -280,4 +293,29 @@ fn in_file(mut diagnostic: Diagnostic, label: &str) -> Diagnostic {
         });
     }
     diagnostic
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn standalone_file_warnings_are_preserved_and_obey_the_requested_policy() {
+        let warning = || {
+            one_file(vec![Diagnostic::warning(
+                "config.retired-api-version",
+                "/apiVersion",
+                "this file uses a retired format version",
+                "Use the current format version.",
+            )])
+        };
+        let allowed = apply_warning_policy(Ok(warning()), false)
+            .unwrap_or_else(|_| panic!("warnings may pass without denial"));
+        assert_eq!(allowed.warning_count(), 1);
+        let Err(Failure::Refused(refused)) = apply_warning_policy(Ok(warning()), true) else {
+            panic!("the standalone file warning must refuse under --deny-warnings");
+        };
+        assert_eq!(refused.warning_count(), 1);
+        assert_eq!(refused.diagnostics()[0].code, "config.retired-api-version");
+    }
 }

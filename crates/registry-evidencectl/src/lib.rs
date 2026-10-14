@@ -457,8 +457,10 @@ fn run_entry() -> ExitCode {
         }
         Command::Types(args) => normalized::generate_types(args, format),
         Command::Check(CheckArgs {
-            file: Some(file), ..
-        }) => Ok(file_check::run(&file, format)),
+            file: Some(file),
+            deny_warnings,
+            ..
+        }) => Ok(file_check::run(&file, format, deny_warnings)),
         Command::Check(args) => {
             let artifact = project_of(&args).display().to_string();
             safe_command(
