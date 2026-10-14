@@ -47,8 +47,8 @@
 //!
 //! **What none of it proves.** Not that this crate performs no input or output.
 //! It proves that no path this configuration names is reachable by name from
-//! this crate's compiled source, that the crates it links are the seven listed
-//! here, that the one rhai engine it builds has given up its module resolver
+//! this crate's compiled source, that its nine direct normal dependencies are
+//! listed here, that the one rhai engine it builds has given up its module resolver
 //! and both of its printing handlers, and that reading an authored `import`
 //! does not open the file it names. A capability arriving by a route none of
 //! these lists covers is not covered.
@@ -194,6 +194,12 @@ const FORBIDDEN: &[(&str, &str)] = &[
 /// `registry-platform-yaml` is the shared configuration reader: it reads from
 /// the bytes its caller hands it, so the caller stays the one that opened the
 /// file.
+///
+/// sha2 computes a digest over bytes this crate already holds. Locked sha2
+/// 0.11.0 enables only its default alloc and oid features; its normal closure
+/// is the no_std digest, block-buffer, crypto-common, const-oid and cpufeatures
+/// libraries plus the cfg-if macro, with no randomness, file, socket, process,
+/// environment or standard-stream feature.
 const PERMITTED_DEPENDENCIES: &[&str] = &[
     "anyhow",
     "registry-platform-yaml",
@@ -202,6 +208,7 @@ const PERMITTED_DEPENDENCIES: &[&str] = &[
     "serde",
     "serde_json",
     "serde_norway",
+    "sha2",
     "url",
 ];
 
